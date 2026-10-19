@@ -881,6 +881,69 @@ describe("client frames", () => {
     assert.equal(reply.problem.outcome, "unknown")
     assert.deepEqual(heard, [["thread", "urn:mako:problem:forbidden"]])
   })
+  test("a connection that goes silent, as after a sleep on a network the wake didn't keep, ends at the next heartbeat", async () => {
+    let far
+    const session = clientSessionOverSockets(
+      () => {
+        const [near, other] = socketPair()
+        far = other
+        return near
+      },
+      { heartbeatMs: 40, silentMs: 100 }
+    )
+    let answering = true
+    const pinged = []
+    const replied = session.call({ ...operation, input: Payload.of({}) })
+    const subscription = session.subscribe({ stream: "thread:th-1", after: 0 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    far.addEventListener("message", (event) => {
+      if (event.data !== PING) return
+      pinged.push(Date.now())
+      if (answering) far.send(PONG)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    assert.equal(far.readyState, 1, "answered pongs keep it open")
+    // The far end stops answering and never closes: a socket the client would otherwise wait on for minutes.
+    answering = false
+    const silent = Date.now()
+    const reply = await replied
+    assert.equal(reply.problem.outcome, "unknown", "the call in flight is answered unknown, to be repeated under its id")
+    await assert.rejects(subscription.next(), "the subscription ends, for its reader to follow again")
+    assert.ok(Date.now() - silent < 250, `ended within a heartbeat of the silence (${Date.now() - silent} ms)`)
+    assert.ok(pinged.length >= 4)
+  })
+  test("waking ends a connection not heard from within a heartbeat at once, and one that doesn't answer a ping soon", async () => {
+    let answering = true
+    const session = clientSessionOverSockets(
+      () => {
+        const [near, far] = socketPair()
+        far.addEventListener("message", (event) => event.data === PING && answering && far.send(PONG))
+        return near
+      },
+      { heartbeatMs: 25_000, wakeProbeMs: 60 }
+    )
+    const quiet = session.subscribe({ stream: "thread:th-1", after: 0 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    session.wake()
+    const live = await Promise.race([quiet.next(), new Promise((resolve) => setTimeout(() => resolve("open"), 150))])
+    assert.equal(live, "open", "it answered the wake's ping: kept")
+    // A short sleep on a network the wake didn't keep: heard moments ago, and nothing comes back now.
+    answering = false
+    session.wake()
+    await assert.rejects(quiet.next(), "unanswered, it ends within the probe")
+    const again = session.subscribe({ stream: "thread:th-1", after: 0 })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const realNow = Date.now
+    // The wall clock moves on while the machine sleeps; nothing was heard in that time.
+    Date.now = () => realNow() + 10 * 60_000
+    try {
+      session.wake()
+    } finally {
+      Date.now = realNow
+    }
+    await assert.rejects(again.next(), "quiet for the length of the sleep: ended without waiting for a ping")
+    session.close()
+  })
   test("a call whose connection closes before its reply is answered unavailable, with an unknown outcome", async () => {
     let far
     const session = clientSessionOverSockets(() => {

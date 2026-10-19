@@ -1,5 +1,6 @@
+import { spawn } from "node:child_process"
 import { createHash } from "node:crypto"
-import { lstat, mkdir, readFile, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { lstat, mkdir, readFile, readlink, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join, normalize, sep } from "node:path"
 import { z } from "zod"
 import type { CloudSignIn, CloudSignInChain } from "../contracts/cloud-sign-ins.js"
@@ -53,9 +54,16 @@ export interface CloudSignInMirror {
   /**
    * Writes `chain` where the harness reads it under `env`, only if the refresh token there still has fingerprint
    * `expected` (null: none). False when the store moved on meanwhile, or the harness is mid-refresh; the next check
-   * reads it again.
+   * reads it again. `held`: the caller holds the harness's refresh lock (`hold`), so the write doesn't take it again.
    */
-  write(env: NodeJS.ProcessEnv, chain: CloudSignInChain, expected: string | null): Promise<boolean>
+  write(env: NodeJS.ProcessEnv, chain: CloudSignInChain, expected: string | null, held?: boolean): Promise<boolean>
+  /**
+   * Runs `work` holding the lock the harness itself refreshes under, as another of its own processes would: none of
+   * its processes refreshes meanwhile, and each reads its store again once it has the lock, so it runs on the pair
+   * `work` wrote. Undefined when the harness keeps the lock past `waitMs` (it's refreshing now). A harness that
+   * refreshes under no lock has no `hold`.
+   */
+  hold?<T>(env: NodeJS.ProcessEnv, work: () => Promise<T>, waitMs: number): Promise<T | undefined>
 }
 
 /** A refresh token by the first 8 characters of its SHA-256, as Mako Cloud names it: compared and logged, never the value. */
@@ -65,8 +73,9 @@ export function chainFingerprint(token: string): string {
 
 /**
  * Runs `work` holding the lock a harness takes with proper-lockfile: a folder made atomically at `path`, stale once
- * unchanged for `staleMs`, as that package judges it. Undefined when it stays held for `waitMs`: the harness is in
- * the middle of its own write, and the caller tries again later.
+ * unchanged for `staleMs`, as that package judges it, and kept fresh while held as that package keeps its own.
+ * Undefined when it stays held for `waitMs`: the harness is in the middle of its own write, and the caller tries
+ * again later.
  */
 export async function withFolderLock<T>(path: string, staleMs: number, work: () => Promise<T>, waitMs = 2_000): Promise<T | undefined> {
   const until = Date.now() + waitMs
@@ -85,10 +94,58 @@ export async function withFolderLock<T>(path: string, staleMs: number, work: () 
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
   }
+  const fresh = setInterval(() => {
+    const now = new Date()
+    void utimes(path, now, now).catch(() => undefined)
+  }, Math.max(1_000, Math.floor(staleMs / 4)))
+  fresh.unref()
   try {
     return await work()
   } finally {
+    clearInterval(fresh)
     await rm(path, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Takes an exclusive `flock` on `path` as `perl`, since Node has none, writes the holder there as `pid:seconds` (as
+ * Grok does, which reads it to tell a live holder from a dead one), and holds it while `work` runs. A host that dies
+ * meanwhile closes the holder's input, and the lock goes with it. Undefined when it stays held for `waitMs`.
+ */
+const FLOCK_HOLDER = String.raw`
+use Fcntl qw(:flock);
+use IO::Handle;
+use Time::HiRes qw(time sleep);
+open(my $lock, "+>>", $ARGV[0]) or exit 2;
+my $until = time + $ARGV[1];
+until (flock($lock, LOCK_EX | LOCK_NB)) { exit 3 if time > $until; sleep 0.05; }
+truncate($lock, 0);
+print $lock "$$:" . int(time);
+$lock->flush;
+STDOUT->autoflush(1);
+print "held
+";
+<STDIN>;
+`
+
+export async function withFlock<T>(path: string, work: () => Promise<T>, waitMs = 2_000): Promise<T | undefined> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  const holder = spawn("/usr/bin/perl", ["-e", FLOCK_HOLDER, path, String(waitMs / 1000)], { stdio: ["pipe", "pipe", "ignore"] })
+  const held = await new Promise<boolean>((resolve) => {
+    holder.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString().startsWith("held")))
+    holder.once("exit", () => resolve(false))
+    holder.once("error", () => resolve(false))
+  })
+  const released = new Promise<void>((resolve) => {
+    if (holder.exitCode !== null || holder.signalCode !== null) resolve()
+    else holder.once("exit", () => resolve())
+  })
+  try {
+    if (!held) return undefined
+    return await work()
+  } finally {
+    holder.stdin.end()
+    await released
   }
 }
 

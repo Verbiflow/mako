@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import { lstat, mkdir, mkdtemp, readFile, readlink, rm, writeFile } from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
 import os from "node:os"
@@ -496,6 +497,67 @@ else process.exit(1);
   await woken.inStep()
   woken.stop()
   console.log("ok  after a wake the check is retried until the cloud answers, and launches wait for it")
+
+  // Overnight: Claude's and Grok's tokens lapsed while the Mac slept, and the cloud held their refresh for its return.
+  // Its first read after waking refreshes them (the gateway's `returned`), while each harness refreshes as soon as it
+  // reaches its provider. The wake holds each harness's own refresh lock until the cloud's pair is written, so the
+  // harness, waiting on the lock as on another of its own processes, reads the new pair under it, never the old.
+  await sync.check()
+  const overnight = { claude: "", grok: "" }
+  let offlineReads = 2
+  const returning = {
+    ...store,
+    list: async () => {
+      if (offlineReads-- > 0) throw new Error("offline")
+      if (!overnight.claude) overnight.claude = refresh("claude")
+      if (!overnight.grok) overnight.grok = refresh("grok")
+      return store.list()
+    },
+  }
+  const morning = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store: returning, dataRoot: join(root, "data"), onChange: () => {}, wakeRetryMs: [150, 150, 150, 150], wakeHoldMs: 3_000 })
+  const claudeLock = join(mac, ".claude", ".oauth_refresh.lock")
+  const grokLock = join(mac, ".grok", "auth.json.lock")
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  const wokeAt2 = performance.now()
+  morning.wake()
+  while (!(await lstat(claudeLock).catch(() => null))) await pause(5)
+  let holder = ""
+  while (!/^\d+:\d+$/.test(holder)) {
+    await pause(5)
+    holder = await readFile(grokLock, "utf8").catch(() => "")
+  }
+  assert.doesNotThrow(() => process.kill(Number(holder.split(":")[0]), 0), "Grok's lock names a holder that's alive, as Grok checks")
+  // Claude, refreshing as Claude does: its lock first, then its store read again.
+  const claudeRefreshes = (async () => {
+    for (;;) {
+      try {
+        await mkdir(claudeLock)
+        break
+      } catch {
+        await pause(10)
+      }
+    }
+    const item = JSON.parse(JSON.parse(await readFile(storePath, "utf8"))["Claude Code-credentials"])
+    await rm(claudeLock, { recursive: true, force: true })
+    return { token: item.claudeAiOauth.refreshToken, ms: performance.now() - wokeAt2 }
+  })()
+  // Grok, refreshing as Grok does: an exclusive flock on its lock file, then its auth file read again.
+  const grokRefreshes = new Promise<{ token: string; ms: number }>((resolve, reject) => {
+    const grok = spawn("/usr/bin/perl", ["-e", 'use Fcntl qw(:flock); use Time::HiRes qw(sleep); open(my $l, "+>>", $ARGV[0]) or exit 2; until (flock($l, LOCK_EX | LOCK_NB)) { sleep 0.01 } $| = 1; print "locked\n"; <STDIN>;', grokLock], { stdio: ["pipe", "pipe", "ignore"] })
+    grok.stdout.once("data", async () => {
+      const auth = JSON.parse(await readFile(join(mac, ".grok", "auth.json"), "utf8"))
+      grok.stdin.end()
+      resolve({ token: auth["https://auth.x.ai::client"].refresh_token, ms: performance.now() - wokeAt2 })
+    })
+    grok.once("error", reject)
+  })
+  const [claudeAfter, grokAfter] = await Promise.all([claudeRefreshes, grokRefreshes])
+  assert.equal(claudeAfter.token, overnight.claude, "Claude reads the cloud's new pair under its lock, never the one the cloud moved past")
+  assert.equal(grokAfter.token, overnight.grok, "and so does Grok")
+  await morning.inStep()
+  assert.ok(offlineReads < 0, "the cloud was reached once the network was back")
+  assert.equal(await lstat(claudeLock).catch(() => null), null, "every lock let go")
+  console.log(`ok  after an overnight sleep each harness's refresh waits on its own lock and runs on the cloud's new pair: Claude ${claudeAfter.ms.toFixed(0)} ms, Grok ${grokAfter.ms.toFixed(0)} ms after waking, two checks without network included`)
 
   // A store this Mac can't write: the cloud must never move a pair the Mac can't follow, so a new run proves the
   // write before anything else, and on a refusal takes the sign-in back from the cloud and sends access alone.

@@ -27,7 +27,7 @@ import type { JsonValue } from "../../contracts/json.js"
 import { resolveExecutable } from "../../base/executable.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
-import { chainFingerprint, instant, objectValue, placeSecret, removeSecret, replaceFile, without, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
+import { chainFingerprint, instant, objectValue, placeSecret, removeSecret, replaceFile, withFlock, without, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { grokHome } from "@mako/sessions"
 import { heavy } from "../../base/heavy-packages.js"
 
@@ -313,8 +313,10 @@ function grokRefreshToken(payload: Record<string, JsonValue>): string | null {
 }
 
 /**
- * Grok's auth file. Grok takes a `flock` beside it, which Node can't, but every refresh of Grok's reads the file
- * again first, under that lock, and runs on a newer pair it finds; the check and one rename are what a write needs.
+ * Grok's auth file. Grok takes a `flock` beside it, and every refresh of Grok's reads the file again first, under
+ * that lock, and runs on a newer pair it finds; the check and one rename are what a write needs. One that finds the
+ * lock held past its wait refreshes nothing ("returning transient to avoid refresh token reuse", Grok 1.0.46), so
+ * holding it while the cloud's pair is written is Grok's own protocol between its processes.
  */
 const grokMirror: CloudSignInMirror = {
   token: grokRefreshToken,
@@ -322,6 +324,7 @@ const grokMirror: CloudSignInMirror = {
     const entries = xaiEntries(objectValue(payload.auth) ?? {})
     return entries.length === 1 ? (entries[0]?.entry.user_id ?? entries[0]?.entry.email ?? null) : null
   },
+  hold: (env, work, waitMs) => withFlock(`${authPath(env)}.lock`, work, waitMs),
   async write(env, chain, expected) {
     const given = xaiEntries(objectValue(chain.payload.auth) ?? {})
     if (given.length !== 1 || !grokRefreshToken(chain.payload)) throw new Error("Grok's sign-in from Mako Cloud has no single x.ai entry")

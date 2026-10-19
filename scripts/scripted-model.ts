@@ -111,7 +111,11 @@ export interface ScriptedModelOptions {
 export async function scriptedModel(options: ScriptedModelOptions) {
   /** Every request, and whether the script had a step for it. */
   const requests: { path: string; conversation: boolean; unscripted?: boolean }[] = []
+  /** The bearer token each request carried, in order: which sign-in a harness ran on. */
+  const bearers: string[] = []
   const server = createServer((request, response) => {
+    const bearer = /^Bearer (.+)$/.exec(request.headers.authorization ?? "")?.[1]
+    if (bearer) bearers.push(bearer)
     const chunks: Buffer[] = []
     request.on("data", (chunk: Buffer) => chunks.push(chunk))
     request.on("end", () => {
@@ -189,6 +193,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
   return {
     url: `http://127.0.0.1:${port}`,
     requests,
+    bearers,
     close: () => new Promise<void>((resolve) => {
       for (const socket of sockets) socket.destroy()
       server.closeAllConnections()

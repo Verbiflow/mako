@@ -90,6 +90,7 @@ interface LateParts {
   agentServers?: ConversationMcp
   controlService?: ControlService
   cloud?: CloudAccount
+  cloudConversations?: CloudConversations
   automations?: Automations
   updates?: Updates
   attribution?: Attribution
@@ -252,6 +253,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     hostLog("host", "woke", { source })
     web()?.terminal({ type: "wake" })
     late.cloud?.wake()
+    late.cloudConversations?.wake()
   })
   const telemetry = await declareTelemetryMethods(methods, {
     environment,
@@ -302,6 +304,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         },
         repositoryOf: (cwd) => folderRepository(git, cwd),
       })
+  late.cloudConversations = cloudConversations
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
   /** Each reason is told once per host; every failed start is still logged. */
   const controlUnavailableNotices = new Set<string>()

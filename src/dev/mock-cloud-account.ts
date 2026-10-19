@@ -85,10 +85,10 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     }
     return [
       rotating("claude", shared("claude", refused ? "needs-reconnect" : "connected", 2)),
-      rotating("codex", shared("codex", "connected", 40)),
+      rotating("codex", { ...shared("codex", "connected", 40), refreshedBecause: "returned", waitedFrom: minutesAgo(60 * 7) }),
       key("cursor", "ada@example.com", null),
       { harness: "opencode", status: "signed-out", label: null, expiresAt: null },
-      rotating("grok", shared("grok", refused ? "retrying" : "connected", 60 * 5)),
+      rotating("grok", { ...shared("grok", refused ? "retrying" : "connected", 60 * 5), refreshedBecause: "machines" }),
       key("devin", null, null),
     ]
   }

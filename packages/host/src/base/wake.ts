@@ -23,7 +23,9 @@ export interface WakeWatch {
 export function watchWake(
   jobs: HostJobs,
   onWake: (source: WakeSource) => void,
-  { tickMs = 5_000, gapMs = 30_000, quietMs = 10_000, now = Date.now } = {}
+  // A tick a second: with no desktop app to hear the resume, a harness mid-turn at the sleep resumes with the host,
+  // and the sign-ins' wake must hold its refresh lock before it reaches its provider.
+  { tickMs = 1_000, gapMs = 30_000, quietMs = 10_000, now = Date.now } = {}
 ): WakeWatch {
   let last = now()
   let woke = -Infinity
