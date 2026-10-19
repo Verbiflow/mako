@@ -98,7 +98,7 @@ const fs = require('node:fs'), security = require(${JSON.stringify(securityStand
 const stores = JSON.parse(fs.readFileSync(${JSON.stringify(storePath)}, 'utf8'));
 const id = args[args.indexOf('-s')+1];
 if (args[0] === 'find-generic-password') { if (!stores[id]) process.exit(44); if (args.includes('-g')) process.stderr.write(security.report(stores[id])); else process.stdout.write(stores[id]); }
-else if (args[0] === 'add-generic-password') { stores[id] = security.value(args); fs.writeFileSync(${JSON.stringify(storePath)}, JSON.stringify(stores)); }
+else if (args[0] === 'add-generic-password') { if (fs.existsSync(${JSON.stringify(join(root, "refuse-writes"))})) process.exit(1); stores[id] = security.value(args); fs.writeFileSync(${JSON.stringify(storePath)}, JSON.stringify(stores)); }
 else process.exit(1);
 `, { mode: 0o700 })
   process.env.PATH = `${bin}:${original.PATH ?? ""}`
@@ -239,10 +239,14 @@ else process.exit(1);
 
   // The sync. Mako Cloud here keeps each rotating sign-in as the gateway does: by fingerprint, with every refresh
   // token the chain has had, refreshing it when told, and answering a share with seeded, adopted, current or stale.
+  // Twenty MCP servers' tokens beside the sign-in, as a Claude used every day holds: past what `security -i` reads
+  // whole, where a write once saved the item cut short and Claude read it as signed out.
+  const servers = Object.fromEntries(Array.from({ length: 20 }, (_, index) => [`server-${index}`, { accessToken: "a".repeat(120), refreshToken: "r".repeat(120) }]))
   stores["Claude Code-credentials"] = JSON.stringify({
     claudeAiOauth: { accessToken: "claude-access", refreshToken: "claude-refresh-secret", expiresAt: claudeExpiry, scopes: ["user:inference"], subscriptionType: "max" },
-    mcpOAuth: { linear: { accessToken: "mcp-token-secret" } },
+    mcpOAuth: { linear: { accessToken: "mcp-token-secret" }, ...servers },
   })
+  assert.ok(stores["Claude Code-credentials"].length > 2_100, "past the interactive limit")
   await saveStore()
   await write(join(mac, ".grok", "auth.json"), JSON.stringify({
     "https://auth.x.ai::client": { key: "grok-key", refresh_token: "grok-refresh-secret", expires_at: grokExpiry, email: "grok@example.invalid", oidc_issuer: "https://auth.x.ai", oidc_client_id: "client" },
@@ -370,6 +374,7 @@ else process.exit(1);
   assert.equal(local.claude.claudeAiOauth.accessToken, cloudTokens.claude.replace("refresh", "access"))
   assert.equal(local.claude.claudeAiOauth.subscriptionType, "max", "Claude's other fields are kept")
   assert.equal(local.claude.mcpOAuth.linear.accessToken, "mcp-token-secret", "MCP servers' tokens beside it are kept")
+  assert.deepEqual(local.claude.mcpOAuth["server-19"], servers["server-19"], "a long item is written whole, not cut short")
   assert.equal(local.codex.tokens.refresh_token, cloudTokens.codex)
   assert.equal(local.codex.auth_mode, "chatgpt", "Codex's other fields are kept")
   assert.equal(local.grok["https://auth.x.ai::client"].refresh_token, cloudTokens.grok)
@@ -491,6 +496,27 @@ else process.exit(1);
   await woken.inStep()
   woken.stop()
   console.log("ok  after a wake the check is retried until the cloud answers, and launches wait for it")
+
+  // A store this Mac can't write: the cloud must never move a pair the Mac can't follow, so a new run proves the
+  // write before anything else, and on a refusal takes the sign-in back from the cloud and sends access alone.
+  await writeFile(join(root, "refuse-writes"), "")
+  const refusing = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, dataRoot: join(root, "data"), onChange: () => {} })
+  calls.length = 0
+  const refusedState = await refusing.check()
+  const claudeRow = row(refusedState, "claude")
+  assert.equal(claudeRow?.status, "failed")
+  assert.match(claudeRow?.problem ?? "", /can't update this sign-in on this Mac/)
+  assert.ok(calls.includes("disconnect claude"), "the cloud stops refreshing what this Mac can't write")
+  assert.ok(calls.includes("put claude"), "and gets access alone, as before")
+  assert.ok(!cloud.has("claude"))
+  assert.ok(!calls.includes("share claude"))
+  await rm(join(root, "refuse-writes"))
+  const writing = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, dataRoot: join(root, "data"), onChange: () => {} })
+  calls.length = 0
+  const writingState = await writing.check()
+  assert.equal(row(writingState, "claude")?.kept?.state, "connected", "once it writes again, a run shares it again")
+  assert.ok(calls.includes("share claude"))
+  console.log("ok  a store this Mac can't write is never left to the cloud to move: taken back, and sent as access alone")
 
   // Off: everything this Mac gave the cloud goes, and the choice is kept.
   calls.length = 0
