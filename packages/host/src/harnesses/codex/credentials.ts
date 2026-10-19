@@ -20,21 +20,35 @@ async function optionalFile(path: string): Promise<string | null> {
 }
 
 /** Native storage policy; never let a stale auth.json shadow the chosen Keychain source. */
-export async function readCodexCredentials(home: string): Promise<string | null> {
+/** Where a Codex home keeps its sign-in, as its config names: its `auth.json`, or a Keychain item. */
+export type CodexCredentialStore =
+  | { kind: "file"; path: string }
+  | { kind: "keychain"; service: string; account: string; fallback?: string }
+
+/** The store a home's config names, or null for `ephemeral`, which keeps nothing. */
+export async function codexCredentialStore(home: string): Promise<CodexCredentialStore | null> {
   const contents = await optionalFile(join(home, "config.toml"))
   const config = AuthConfig.parse(contents === null ? {} : parse(contents))
   const store = config.cli_auth_credentials_store
-  if (store === "file") return optionalFile(join(home, "auth.json"))
+  if (store === "file") return { kind: "file", path: join(home, "auth.json") }
   if (store === "ephemeral") return null
   if (store !== "keyring" && store !== "auto") throw new Error("Codex credential storage is not recognized.")
   const secrets = config.features?.secret_auth_storage === true
   if (!onMac() || secrets)
     throw new Error("Mako cannot capture this Codex credential-store backend yet. Use native Codex sign-in with file storage to save this account.")
   const canonical = await realpath(home).catch(() => home)
-  const key = `cli|${createHash("sha256").update(canonical).digest("hex").slice(0, 16)}`
-  const keychain = await readKeychain("Codex Auth", key, "required")
-  if (keychain !== null || store === "keyring") return keychain
-  return optionalFile(join(home, "auth.json"))
+  const account = `cli|${createHash("sha256").update(canonical).digest("hex").slice(0, 16)}`
+  // `auto` reads the Keychain item first and the file when there is none.
+  return store === "auto" ? { kind: "keychain", service: "Codex Auth", account, fallback: join(home, "auth.json") } : { kind: "keychain", service: "Codex Auth", account }
+}
+
+export async function readCodexCredentials(home: string): Promise<string | null> {
+  const store = await codexCredentialStore(home)
+  if (!store) return null
+  if (store.kind === "file") return optionalFile(store.path)
+  const keychain = await readKeychain(store.service, store.account, "required")
+  if (keychain !== null || !store.fallback) return keychain
+  return optionalFile(store.fallback)
 }
 
 /** The provider a home's sessions run on; Codex's own default when its config names none. */

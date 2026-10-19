@@ -1,3 +1,4 @@
+import { z } from "zod"
 import {
   byDefault,
   harnessLacks,
@@ -23,8 +24,21 @@ export {
   type LiveCapabilityKey,
 } from "../contracts/harness-capabilities.js"
 
-const absent = (value: DriverAbsent): Extract<Capability, { state: "absent" }> =>
-  ({ state: "absent", by: value.kind === "unavailable" ? "harness" : "mako", reason: value.reason })
+const DriverAbsentSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("unavailable"), reason: z.string().min(1) }),
+  z.object({ kind: z.literal("not-built"), reason: z.string().min(1) }),
+])
+
+/**
+ * A capability the harness or Mako doesn't have, with why. A declaration of a kind this build doesn't read (a
+ * definition written for a retired kind, such as the `import` fork) fails here by name, rather than reading as a gap
+ * with no reason.
+ */
+const absent = (value: DriverAbsent): Extract<Capability, { state: "absent" }> => {
+  const declared = DriverAbsentSchema.safeParse(value)
+  if (!declared.success) throw new Error(`A live driver declares a capability Mako doesn't read: ${JSON.stringify(value)}`)
+  return { state: "absent", by: declared.data.kind === "unavailable" ? "harness" : "mako", reason: declared.data.reason }
+}
 
 /**
  * Every capability of one harness, read from its live driver alone. Mako's

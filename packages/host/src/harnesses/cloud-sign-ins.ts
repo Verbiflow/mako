@@ -3,11 +3,12 @@ import { dirname, join } from "node:path"
 import { z } from "zod"
 import { childProcessEnv } from "../base/child-environment.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import type { AccountLogin } from "../contracts/accounts.js"
 import {
   CloudSignInHarnessSchema,
   CloudSignInSchema,
   type CloudKeptSignIn,
+  type CloudShareOutcome,
+  type CloudSharedChain,
   type CloudSignIn,
   type CloudSignInChain,
   type CloudSignInHarness,
@@ -16,11 +17,10 @@ import {
   type CloudSignInRow,
   type CloudSignInsState,
 } from "../contracts/cloud-sign-ins.js"
-import type { HandOn } from "./account-login.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
 import type { HarnessAccounts } from "./accounts.js"
 import { credentialFingerprint } from "./accounts-common.js"
-import type { CloudSignInPlace } from "./cloud-sign-in.js"
+import { chainFingerprint, type CloudSignInCapability, type CloudSignInMirror, type CloudSignInPlace } from "./cloud-sign-in.js"
 import type { ProviderRegistry } from "./registry.js"
 
 /** How often this Mac reads every harness's sign-in; a harness refreshes in place, and Mako Cloud follows within this. */
@@ -31,6 +31,10 @@ const RENEW_BEFORE_MS = 10 * 60_000
 const RENEW_GAP_MS = 5 * 60_000
 /** While nothing checks on a timer, a state older than this is read again when asked for. */
 const FRESH_MS = 30_000
+/** After a wake the network may not be back: checks follow at these waits until the cloud answers. */
+const WAKE_RETRY_MS = [2_000, 4_000, 8_000, 16_000, 32_000, 32_000]
+/** The longest a harness's launch waits for the check after a wake, so it starts on the cloud's newest pair. */
+const LAUNCH_WAIT_MS = 5_000
 
 /**
  * Writes each sign-in a cloud machine is given where its harness reads it,
@@ -78,72 +82,99 @@ function problemOf(cause: unknown): string {
 export interface CloudSignInStore {
   /** Why nothing can be sent now, or undefined when it can. */
   blocked(): Promise<CloudSignInsState["blocked"]>
-  /** What devices shared, and the sign-ins the cloud keeps by itself. */
+  /** What devices shared, and the sign-ins the cloud keeps and refreshes. */
   list(): Promise<{ signIns: CloudSignInListing[]; kept: CloudKeptSignIn[] }>
   put(signIn: CloudSignIn): Promise<void>
   remove(harness: CloudSignInHarness): Promise<void>
-  /** Hands the cloud a whole sign-in made for it, to keep and refresh by itself. */
-  connect(harness: CloudSignInHarness, chain: CloudSignInChain): Promise<CloudKeptSignIn>
+  /** Hands the cloud this Mac's whole sign-in, for it to refresh for both: it takes it, has it, or has a newer one. */
+  share(harness: CloudSignInHarness, chain: CloudSignInChain): Promise<CloudShareOutcome>
+  /** The whole pair of a sign-in this Mac shares, as the cloud last refreshed it; null when it holds none for this Mac. */
+  pull(harness: CloudSignInHarness): Promise<CloudSharedChain | null>
   disconnect(harness: CloudSignInHarness): Promise<void>
 }
 
-/** Runs a harness's own sign-in into a profile made for it, handing the profile on once it's proven. */
-export type CloudLogin = (harness: CloudSignInHarness, handOn: HandOn) => Promise<AccountLogin>
-
-const ChoiceSchema = z.object({ version: z.literal(1), sharing: z.boolean() })
+/**
+ * The person's choice, and for each sign-in this Mac shares the refresh token both sides last had, by fingerprint:
+ * what tells a sign-in signed out here apart from one a stale refresh cleared while this Mac was behind.
+ */
+const ChoiceSchema = z.union([
+  z.object({ version: z.literal(2), sharing: z.boolean().optional(), inStep: z.record(z.string(), z.object({ token: z.string(), at: z.string() })).default({}) }),
+  // Version 1 shared access only; a choice of "off" then was a choice about that, so it isn't carried over.
+  z.object({ version: z.literal(1), sharing: z.boolean() }).transform(({ sharing }) => ({ version: 2 as const, sharing: sharing ? true : undefined, inStep: {} })),
+])
+type InStep = { token: string; at: string }
 
 type Sent = { fingerprint: string; at: string }
 
 /**
- * Keeps Mako Cloud holding the sign-in each harness on this Mac runs under,
- * once the person has said to share them. Every minute it reads each
- * harness's store (no prompt, no network), has a harness whose sign-in is
- * about to lapse refresh it the way running it would, and sends what changed.
- * A harness signed out here is removed there. Values go from the store to
- * the cloud and nowhere else: Settings sees names, times and problems.
+ * Keeps Mako Cloud holding the sign-in each harness on this Mac runs under. Sharing is on unless the person turns it
+ * off, and does anything only for an account with the cloud. Every minute, and on wake, it reads each harness's store
+ * (no prompt, no network):
+ *
+ * - A sign-in that rotates (Claude Code, Codex, Grok) is one sign-in for this Mac and the cloud, which refreshes it
+ *   for both. This Mac's seeds it; each refresh the cloud makes is written into the harness's own store before the
+ *   harness would refresh by itself; a refresh the harness made anyway is sent up. Every harness reads its store
+ *   again before it refreshes and runs on a newer pair it finds, as for another of its own processes.
+ * - Any other sign-in (a key) is sent as it is, and a harness whose sign-in is about to lapse is asked to refresh it.
+ *
+ * A harness signed out here is signed out there. Values go between the store and the cloud and nowhere else:
+ * Settings and the log see names, times, fingerprints and problems.
  */
 export class CloudSignInSync {
   readonly #accounts: HarnessAccounts
   readonly #capabilities: ProviderRegistry<ProviderAccountCapability>
   readonly #store: CloudSignInStore
-  readonly #login: CloudLogin
   readonly #choicePath: string
   readonly #onChange: (state: CloudSignInsState) => void
-  #sharing = false
-  #state: CloudSignInsState = { sharing: false, harnesses: [] }
+  #sharing: boolean | undefined
+  #inStep: Record<string, InStep> = {}
+  #state: CloudSignInsState = { sharing: true, harnesses: [] }
   readonly #sent = new Map<CloudSignInHarness, Sent>()
   readonly #renewedAt = new Map<CloudSignInHarness, number>()
   #timer: NodeJS.Timeout | undefined
   #checking: Promise<CloudSignInsState> | undefined
   #next: Promise<CloudSignInsState> | undefined
   #loaded: Promise<void>
+  /** Whether the last check reached the cloud. */
+  #reached = false
+  /** The checks after a wake, until one reaches the cloud. */
+  #waking: Promise<void> | undefined
+  readonly #wakeRetryMs: readonly number[]
 
   constructor(options: {
     accounts: HarnessAccounts
     capabilities: ProviderRegistry<ProviderAccountCapability>
     store: CloudSignInStore
-    login: CloudLogin
     /** Where the person's choice is kept. */
     dataRoot: string
     onChange: (state: CloudSignInsState) => void
+    /** The waits between checks after a wake; shorter in tests. */
+    wakeRetryMs?: readonly number[]
   }) {
+    this.#wakeRetryMs = options.wakeRetryMs ?? WAKE_RETRY_MS
     this.#accounts = options.accounts
     this.#capabilities = options.capabilities
     this.#store = options.store
-    this.#login = options.login
     this.#choicePath = join(options.dataRoot, "cloud", "sign-ins.json")
     this.#onChange = options.onChange
     this.#loaded = readFile(this.#choicePath, "utf8").then(
       (text) => {
-        this.#sharing = ChoiceSchema.parse(JSON.parse(text)).sharing
+        const choice = ChoiceSchema.parse(JSON.parse(text))
+        this.#sharing = choice.sharing
+        this.#inStep = choice.inStep
       },
       () => undefined,
     )
   }
 
+  /** On unless the person turned it off. */
+  get #shares(): boolean {
+    return this.#sharing ?? true
+  }
+
   start(): void {
     void this.#loaded.then(() => {
-      if (!this.#sharing) return
+      if (!this.#shares) return
       void this.check()
       this.#schedule()
     })
@@ -155,9 +186,38 @@ export class CloudSignInSync {
   }
 
   /**
-   * The last check, or a new one when there's none or it's stale. Without sharing nothing checks on a timer, yet the
-   * cloud refreshes what it keeps on its own schedule; Settings asks again each minute it's open, and is read anew.
+   * The machine woke. While it slept the cloud may have refreshed a sign-in this Mac shares, so this Mac takes the
+   * pair before anything runs on the old one: it checks now, and again shortly while the network comes back.
    */
+  wake(): void {
+    const waking = (async () => {
+      await this.check()
+      for (const wait of this.#wakeRetryMs) {
+        if (this.#reached || !this.#shares) return
+        await new Promise((resolve) => setTimeout(resolve, wait).unref())
+        await this.check()
+      }
+      if (!this.#reached) hostWarn("cloud", "Mako Cloud wasn't reached after waking; the minute's check goes on")
+    })()
+    const settled = waking.catch(() => undefined).finally(() => {
+      if (this.#waking === settled) this.#waking = undefined
+    })
+    this.#waking = settled
+  }
+
+  /**
+   * Resolves once a harness may start on its sign-in: at once, or after a wake when the check has taken the cloud's
+   * newest pair, waiting at most `LAUNCH_WAIT_MS`. A harness started on the pair before that would refresh it itself.
+   */
+  async inStep(): Promise<void> {
+    const waking = this.#waking
+    if (!waking) return
+    let timer: NodeJS.Timeout | undefined
+    await Promise.race([waking, new Promise((resolve) => { timer = setTimeout(resolve, LAUNCH_WAIT_MS) })])
+    clearTimeout(timer)
+  }
+
+  /** The last check, or a new one when there's none or it's stale. */
   async state(): Promise<CloudSignInsState> {
     await this.#loaded
     const checkedAt = this.#state.checkedAt ? Date.parse(this.#state.checkedAt) : 0
@@ -165,52 +225,24 @@ export class CloudSignInSync {
     return this.#state
   }
 
-  /** The person's choice. Turning it off removes from Mako Cloud every sign-in this Mac sent. */
+  /** The person's choice. Turning it off takes back from Mako Cloud every sign-in this Mac gave it. */
   async share(sharing: boolean): Promise<CloudSignInsState> {
     await this.#loaded
     this.#sharing = sharing
-    await mkdir(dirname(this.#choicePath), { recursive: true, mode: 0o700 })
-    await writeFile(`${this.#choicePath}.tmp`, JSON.stringify({ version: 1, sharing }), { mode: 0o600 })
-    await rename(`${this.#choicePath}.tmp`, this.#choicePath)
+    await this.#save()
     hostLog("cloud", sharing ? "sharing sign-ins with Mako Cloud" : "no longer sharing sign-ins")
     if (sharing) this.#schedule()
     else {
       this.stop()
-      if ((await this.#store.blocked()) === undefined)
-        for (const listing of (await this.#store.list()).signIns) if (listing.mine) await this.#store.remove(listing.harness)
+      if ((await this.#store.blocked()) === undefined) {
+        const listed = await this.#store.list()
+        for (const listing of listed.signIns) if (listing.mine) await this.#store.remove(listing.harness)
+        for (const kept of listed.kept) if (kept.source === "shared" && kept.mine) await this.#store.disconnect(kept.harness)
+      }
       this.#sent.clear()
+      this.#inStep = {}
+      await this.#save()
     }
-    return this.check()
-  }
-
-  /**
-   * Signs `harness` in once more, for Mako Cloud alone: its own login, in a profile this Mac never lists, handed
-   * whole to the cloud and removed. From then the cloud refreshes it and machines run with it, whether or not
-   * this Mac is awake or shares its own; this Mac's login stays as it was.
-   */
-  async connect(harness: CloudSignInHarness): Promise<AccountLogin> {
-    const capability = this.#capabilities.get(harness)
-    const chain = capability?.cloudSignIn?.chain?.bind(capability.cloudSignIn)
-    if (!capability || !chain) throw new Error(`Mako Cloud can't keep ${capability?.label ?? harness}'s sign-in by itself. Share this Mac's instead.`)
-    const blocked = await this.#store.blocked()
-    if (blocked === "signed-out") throw new Error("Sign in to Mako first.")
-    if (blocked === "no-cloud") throw new Error("Your account can't run Threads in Mako's cloud yet.")
-    return this.#login(harness, async (env) => {
-      const whole = await chain(env)
-      if (!whole) throw new Error(`${capability.label} finished, but no sign-in was saved. Connect again.`)
-      const kept = await this.#store.connect(harness, whole)
-      hostLog("cloud", "Mako Cloud keeps a sign-in of its own", { harness, state: kept.state, lapses: kept.expiresAt ?? "never" })
-      this.#keeps(harness, kept)
-      void this.check()
-      return whole.label ? { email: whole.label } : {}
-    })
-  }
-
-  /** Mako Cloud forgets the sign-in it kept; machines go back to what this Mac shares, if it does. */
-  async disconnect(harness: CloudSignInHarness): Promise<CloudSignInsState> {
-    await this.#store.disconnect(harness)
-    hostLog("cloud", "Mako Cloud no longer keeps a sign-in of its own", { harness })
-    this.#keeps(harness, undefined)
     return this.check()
   }
 
@@ -233,52 +265,48 @@ export class CloudSignInSync {
     return this.#checking
   }
 
-  /** Shows what the cloud now keeps for `harness` at once; the next check reads every row again. */
-  #keeps(harness: CloudSignInHarness, kept: CloudKeptSignIn | undefined): void {
-    this.#state = {
-      ...this.#state,
-      harnesses: this.#state.harnesses.map((row) => {
-        if (row.harness !== harness) return row
-        const shown: CloudSignInRow = { ...row }
-        if (kept) shown.kept = kept
-        else delete shown.kept
-        return shown
-      }),
-    }
-    this.#onChange(this.#state)
-  }
-
   #schedule(): void {
     if (this.#timer) return
     this.#timer = setInterval(() => void this.check(), CHECK_MS)
     this.#timer.unref()
   }
 
+  async #save(): Promise<void> {
+    await mkdir(dirname(this.#choicePath), { recursive: true, mode: 0o700 })
+    const choice: z.input<typeof ChoiceSchema> = { version: 2, inStep: this.#inStep }
+    if (this.#sharing !== undefined) choice.sharing = this.#sharing
+    await writeFile(`${this.#choicePath}.tmp`, JSON.stringify(choice), { mode: 0o600 })
+    await rename(`${this.#choicePath}.tmp`, this.#choicePath)
+  }
+
   async #check(): Promise<CloudSignInsState> {
     await this.#loaded
     const blocked = await this.#store.blocked().catch(() => "signed-out" as const)
-    const send = this.#sharing && !blocked
+    const send = this.#shares && !blocked
     const listed = blocked ? undefined : await this.#listed()
+    this.#reached = blocked !== undefined || listed !== undefined
     // What this Mac sent before it last started, so a harness signed out meanwhile is removed there too.
     const mine = new Set<CloudSignInHarness>(send && !this.#sent.size ? (listed?.signIns ?? []).filter((listing) => listing.mine).map((listing) => listing.harness) : [])
     const kept = new Map((listed?.kept ?? []).map((signIn) => [signIn.harness, signIn]))
+    const inStepBefore = JSON.stringify(this.#inStep)
     const harnesses = await Promise.all(
       this.#capabilities.list().flatMap((capability) => {
         const harness = CloudSignInHarnessSchema.safeParse(capability.provider)
-        if (!harness.success || !capability.cloudSignIn) return []
-        const connectable = capability.cloudSignIn.chain !== undefined
-        const ownSignIn = kept.get(harness.data)
-        return [
-          this.#sync(harness.data, send, mine.has(harness.data)).then((row) => {
-            const shown: CloudSignInRow = { ...row }
-            if (connectable) shown.connectable = true
-            if (ownSignIn) shown.kept = ownSignIn
-            return shown
-          }),
-        ]
+        const adapter = capability.cloudSignIn
+        if (!harness.success || !adapter) return []
+        const read = adapter.mirror && adapter.chain
+          ? this.#mirror(harness.data, { chain: adapter.chain.bind(adapter), mirror: adapter.mirror }, send, kept.get(harness.data), mine.has(harness.data))
+          : this.#sync(harness.data, send, mine.has(harness.data))
+        return [read]
       }),
     )
-    const state: CloudSignInsState = { sharing: this.#sharing, checkedAt: new Date().toISOString(), harnesses }
+    if (JSON.stringify(this.#inStep) !== inStepBefore)
+      try {
+        await this.#save()
+      } catch (error) {
+        hostWarn("cloud", "the sign-ins' state wasn't saved", { problem: problemOf(error) })
+      }
+    const state: CloudSignInsState = { sharing: this.#shares, checkedAt: new Date().toISOString(), harnesses }
     if (blocked) state.blocked = blocked
     this.#state = state
     this.#onChange(this.#state)
@@ -293,6 +321,121 @@ export class CloudSignInSync {
       hostWarn("cloud", "Mako Cloud's sign-ins weren't read", { problem: problemOf(error) })
       return undefined
     }
+  }
+
+  /**
+   * One rotating sign-in, kept the same here and in the cloud. Which side moved is read from the fingerprint both
+   * last had (`inStep`): the cloud refreshed (written here), the harness refreshed or signed in again here (sent
+   * up; the cloud says if it's behind), a refresh the harness made on a token the cloud had moved past cleared it
+   * here (written back), or the person signed out here (taken back from the cloud).
+   */
+  async #mirror(
+    harness: CloudSignInHarness,
+    adapter: { chain: NonNullable<CloudSignInCapability["chain"]>; mirror: CloudSignInMirror },
+    send: boolean,
+    kept: CloudKeptSignIn | undefined,
+    sentBefore: boolean,
+  ): Promise<CloudSignInRow> {
+    try {
+      const launch = await this.#accounts.launch(harness, childProcessEnv(process.env), { trackCredential: false })
+      const env = launch.env
+      // A read that fails (a locked keychain, a file mid-write) is a problem to show, never a sign-out to pass on.
+      const local = await adapter.chain(env)
+      const held = local ? adapter.mirror.token(local.payload) : null
+      const here = held ? chainFingerprint(held) : null
+      const label = local?.label ?? (await this.#email(harness, launch.account.name))
+      const row = (shown: CloudKeptSignIn | undefined, status: CloudSignInRow["status"] = here ? "sent" : "signed-out"): CloudSignInRow => {
+        const result: CloudSignInRow = { harness, status, label: shown?.label ?? label, expiresAt: shown?.expiresAt ?? null, rotates: true }
+        if (shown) result.kept = shown
+        const step = this.#inStep[harness]
+        if (step && shown?.token === step.token) result.inStepAt = step.at
+        return result
+      }
+      if (!send) return row(kept?.source === "shared" && kept.mine ? kept : undefined, here ? "waiting" : "signed-out")
+      // What an earlier build sent of it, access alone, goes: the cloud now has the whole of it.
+      if (sentBefore || this.#sent.has(harness)) {
+        await this.#store.remove(harness)
+        this.#sent.delete(harness)
+      }
+      const ours = kept?.source === "shared" && kept.mine ? kept : undefined
+      if (!ours) {
+        // Another Mac's, still working: cloud Threads run on it, and this Mac's own stays this Mac's.
+        if (kept?.source === "shared" && !kept.mine && kept.state !== "needs-reconnect") return row(kept, "waiting")
+        if (!local || !here) return row(undefined)
+        return row(await this.#send(harness, adapter, env, local, here))
+      }
+      const cloud = ours.token ?? null
+      if (here && here === cloud) {
+        this.#agree(harness, here)
+        return row(ours)
+      }
+      const step = this.#inStep[harness]
+      if (!here) {
+        if (step?.token === cloud || ours.state === "needs-reconnect") {
+          // In step, and gone here: the person signed out on this Mac, and the cloud's copy goes with it.
+          if (step?.token === cloud) {
+            await this.#store.disconnect(harness)
+            delete this.#inStep[harness]
+            hostLog("cloud", "signed out on this Mac; Mako Cloud no longer keeps the sign-in", { harness, token: cloud })
+            return row(undefined)
+          }
+          return row(ours, "signed-out")
+        }
+        // Behind, and cleared: the harness refreshed on a token the cloud had moved past. The cloud's goes back.
+        const restored = await this.#take(harness, adapter, env, null, "restored a sign-in a stale refresh had cleared")
+        return restored ? row(restored, "sent") : row(ours, "signed-out")
+      }
+      // Unchanged here since both last agreed: the cloud refreshed, and this Mac takes its pair.
+      if (step?.token === here) return row(await this.#take(harness, adapter, env, here, "took Mako Cloud's refresh") ?? ours)
+      // Changed here: the harness refreshed or signed in again. The cloud takes it, or says it's behind.
+      return row(await this.#send(harness, adapter, env, local!, here))
+    } catch (error) {
+      const problem = problemOf(error)
+      hostWarn("cloud", "a sign-in wasn't kept in step with Mako Cloud", { harness, problem })
+      const failed: CloudSignInRow = { harness, status: "failed", label: null, expiresAt: kept?.expiresAt ?? null, problem, rotates: true }
+      if (kept) failed.kept = kept
+      return failed
+    }
+  }
+
+  /** Sends this Mac's sign-in; one the cloud has moved past is replaced here by the cloud's. */
+  async #send(
+    harness: CloudSignInHarness,
+    adapter: { mirror: CloudSignInMirror },
+    env: NodeJS.ProcessEnv,
+    local: CloudSignInChain,
+    here: string,
+  ): Promise<CloudKeptSignIn | undefined> {
+    const shared = await this.#store.share(harness, local)
+    hostLog("cloud", "shared a sign-in with Mako Cloud", { harness, outcome: shared.outcome, token: here, cloud: shared.signIn.token ?? null })
+    if (shared.outcome !== "stale") {
+      this.#agree(harness, shared.signIn.token ?? here)
+      return shared.signIn
+    }
+    return (await this.#take(harness, adapter, env, here, "took Mako Cloud's newer sign-in")) ?? shared.signIn
+  }
+
+  /** Writes the cloud's pair into the harness's store, if the store still holds `expected`. */
+  async #take(
+    harness: CloudSignInHarness,
+    adapter: { mirror: CloudSignInMirror },
+    env: NodeJS.ProcessEnv,
+    expected: string | null,
+    why: string,
+  ): Promise<CloudKeptSignIn | undefined> {
+    const pulled = await this.#store.pull(harness)
+    if (!pulled) return undefined
+    const written = await adapter.mirror.write(env, { label: pulled.label, payload: pulled.payload }, expected)
+    hostLog("cloud", written ? why : "the harness's sign-in moved while Mako wrote it; read again next check", { harness, from: expected, to: pulled.token })
+    if (!written) return undefined
+    this.#agree(harness, pulled.token)
+    const listed = (await this.#listed())?.kept.find((signIn) => signIn.harness === harness)
+    return listed
+  }
+
+  #agree(harness: CloudSignInHarness, token: string): void {
+    if (this.#inStep[harness]?.token === token) return
+    this.#inStep[harness] = { token, at: new Date().toISOString() }
   }
 
   async #sync(harness: CloudSignInHarness, send: boolean, sentBefore: boolean): Promise<CloudSignInRow> {

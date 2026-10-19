@@ -58,6 +58,16 @@ export function RuntimeRow({
     }
   }
 
+  // Versions are read only for executables that changed, so reading every one again costs one spawn here.
+  const check = async () => {
+    setPending(true)
+    try {
+      await providers.loadRuntimeUpdates(true)
+    } finally {
+      setPending(false)
+    }
+  }
+
   return (
     <div
       aria-label={info.label ?? `${harnessLabel(provider)} installation`}
@@ -91,9 +101,11 @@ export function RuntimeRow({
             tone="outline"
             disabled={pending || updating}
             aria-label={`${view.action.label} ${info.label ?? harnessLabel(provider)}`}
-            onClick={() => void runUpdate()}
+            onClick={() => void (view.action?.kind === "check" ? check() : runUpdate())}
           >
-            {pending
+            {view.action.kind === "check"
+              ? view.action.label
+              : pending
               ? "Updating…"
               : info.result?.outcome === "failed"
                 ? "Retry"

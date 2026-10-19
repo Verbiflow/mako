@@ -185,30 +185,6 @@ else signIn();
       assert.deepEqual(await managedDirs("claude"), [name])
     }
 
-    // Signed in for Mako Cloud: proven, handed on whole, then removed. As the same person as an account here, it
-    // isn't a duplicate, and nothing is listed.
-    const cloudDirs = async () => (await readdir(join(root, ".mako", "accounts", capability.provider)).catch((): string[] => [])).filter(entry => entry.startsWith("cloud-"))
-    const pasteIfAsked = (id: string) => { if (capability.provider === "claude") logins.submitCode(id, "fixture-code") }
-    loginEnv(capability.provider === "claude" ? "code" : undefined, "separate@example.invalid")
-    let handed = ""
-    const connecting = await logins.start(capability.provider, undefined, async (env) => {
-      assert.deepEqual(await cloudDirs(), [env[capability.provider === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME"]?.split("/").at(-1)], "it's handed the profile made for it")
-      handed = await readFile(join(env[capability.provider === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME"] ?? "", filename), "utf8")
-      return { email: "separate@example.invalid" }
-    })
-    assert.equal(connecting.cloud, true)
-    assert.deepEqual(await managedNames(capability), [name], "a sign-in for the cloud is never listed while it runs")
-    pasteIfAsked(connecting.id)
-    assert.deepEqual(await logins.wait(connecting.id), { status: "connected", email: "separate@example.invalid" })
-    assert.match(handed, /independent-native-login/, "the profile's own sign-in is what's handed on")
-    assert.deepEqual(await managedNames(capability), [name], "nothing is added, and the account already here stays")
-    assert.deepEqual(await cloudDirs(), [], "the profile is removed once handed on")
-    const refusing = await logins.start(capability.provider, undefined, async () => { throw new Error("Mako Cloud refused it") })
-    pasteIfAsked(refusing.id)
-    await assert.rejects(logins.wait(refusing.id), /Mako Cloud refused it/)
-    assert.deepEqual(await cloudDirs(), [], "a sign-in the cloud didn't take leaves no profile")
-    await assert.rejects(logins.start(capability.provider, name, async () => ({})), /always a new one/)
-
     // The login expires: the profile stays, and signing in again restores it in place.
     await rm(join(dir, filename))
     if (capability.provider === "claude") {

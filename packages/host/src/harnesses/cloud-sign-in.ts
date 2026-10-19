@@ -1,4 +1,5 @@
-import { lstat, mkdir, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { lstat, mkdir, readFile, readlink, rename, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join, normalize, sep } from "node:path"
 import { z } from "zod"
 import type { CloudSignIn, CloudSignInChain } from "../contracts/cloud-sign-ins.js"
@@ -27,14 +28,73 @@ export interface CloudSignInCapability {
    */
   export(env: NodeJS.ProcessEnv): Promise<CloudSignInExport | null>
   /**
-   * The whole sign-in, refresh token included, from a profile signed in for Mako Cloud alone: the cloud keeps it
-   * and is its only refresher, so nothing else may hold it. Only a harness whose sign-in rotates has one.
+   * The whole sign-in the store `env` points at, refresh token included, for Mako Cloud to refresh for this Mac (see
+   * `mirror`), or null when it's signed out. Only a harness whose sign-in rotates has one.
    */
   chain?(env: NodeJS.ProcessEnv): Promise<CloudSignInChain | null>
+  /** This Mac's own store read whole and written back, for a sign-in that rotates and that Mako Cloud refreshes for it. */
+  mirror?: CloudSignInMirror
   /** Writes `payload` where the harness reads it, replacing what an earlier install wrote. */
   install(payload: CloudSignInPayload, place: CloudSignInPlace): Promise<void>
   /** Takes back what `install` wrote, signing the harness out; true when there was something to take. */
   remove(place: CloudSignInPlace): Promise<boolean>
+}
+
+/**
+ * A rotating sign-in shared with Mako Cloud, which refreshes it for both: each refresh is written back here, before
+ * the harness would refresh by itself. Every harness re-reads its store before it refreshes and runs on a newer pair
+ * it finds there, as it does for another of its own processes, so it never presents a token the cloud moved past.
+ */
+export interface CloudSignInMirror {
+  /** The refresh token in a `chain` payload of this harness's shape; null for none (cleared, signed out, a key). */
+  token(payload: CloudSignInPayload): string | null
+  /** Who the payload signs in as, by the provider's account id; null when it doesn't say. */
+  principal(payload: CloudSignInPayload): string | null
+  /**
+   * Writes `chain` where the harness reads it under `env`, only if the refresh token there still has fingerprint
+   * `expected` (null: none). False when the store moved on meanwhile, or the harness is mid-refresh; the next check
+   * reads it again.
+   */
+  write(env: NodeJS.ProcessEnv, chain: CloudSignInChain, expected: string | null): Promise<boolean>
+}
+
+/** A refresh token by the first 8 characters of its SHA-256, as Mako Cloud names it: compared and logged, never the value. */
+export function chainFingerprint(token: string): string {
+  return createHash("sha256").update(token).digest("base64url").slice(0, 8)
+}
+
+/**
+ * Runs `work` holding the lock a harness takes with proper-lockfile: a folder made atomically at `path`, stale once
+ * unchanged for `staleMs`, as that package judges it. Undefined when it stays held for `waitMs`: the harness is in
+ * the middle of its own write, and the caller tries again later.
+ */
+export async function withFolderLock<T>(path: string, staleMs: number, work: () => Promise<T>, waitMs = 2_000): Promise<T | undefined> {
+  const until = Date.now() + waitMs
+  for (;;) {
+    try {
+      await mkdir(path)
+      break
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error
+      const held = await stat(path).catch(() => null)
+      if (held && Date.now() - held.mtimeMs > staleMs) {
+        await rm(path, { recursive: true, force: true })
+        continue
+      }
+      if (Date.now() >= until) return undefined
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+  try {
+    return await work()
+  } finally {
+    await rm(path, { recursive: true, force: true })
+  }
+}
+
+/** Replaces `path` with `text` in one rename, so a harness reading it sees the old file or the new, never half. */
+export async function replaceFile(path: string, text: string): Promise<void> {
+  await writeAtomic(path, text, 0o600)
 }
 
 /** The refresh token's place in a payload: kept empty, so a harness that insists on the field still parses. */

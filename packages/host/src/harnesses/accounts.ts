@@ -132,6 +132,7 @@ export class HarnessAccounts {
   private readonly mutations = new Map<string, Promise<unknown>>()
   private readonly removalListeners = new Set<(harness: string, name: string, event: AccountRemovalEvent) => void>()
   private readonly suggestedAt = new Map<string, number>()
+  private gate: ((provider: string) => Promise<void>) | undefined
   private readonly capabilities: ProviderRegistry<ProviderAccountCapability>
 
   constructor(capabilities: ProviderRegistry<ProviderAccountCapability>) {
@@ -339,31 +340,6 @@ export class HarnessAccounts {
     })
   }
 
-  /**
-   * The native sign-in finished into a profile made for someone else to keep: prove it as `finishLogin` does, hand
-   * its environment to `use`, then remove the profile. Nothing is listed here, and nothing stays.
-   */
-  async useLogin(
-    harness: AccountHarness,
-    target: AccountLoginTarget,
-    options: { verify?: (env: NodeJS.ProcessEnv) => Promise<void>; confirmed?: boolean },
-    use: (env: NodeJS.ProcessEnv) => Promise<{ email?: string }>
-  ): Promise<AccountLoginResult> {
-    if (target.renew) throw new Error("A sign-in handed on is always a new profile")
-    return this.mutate(harness, async () => {
-      const capability = this.nativeLogin(harness)
-      try {
-        if (!options.confirmed) await capability.confirmAccountLogin?.(target)
-        const env = await capability.accountEnv(target.name, childProcessEnv(process.env))
-        await options.verify?.(env)
-        const { email } = await use(env)
-        return email === undefined ? { status: "connected" as const } : { status: "connected" as const, email }
-      } finally {
-        await capability.removeAccount(target.name)
-      }
-    })
-  }
-
   /** A sign-in that will not finish leaves nothing behind; an account being signed in again keeps what it had. */
   async discardLogin(harness: AccountHarness, target: AccountLoginTarget): Promise<void> {
     await this.mutate(harness, async () => {
@@ -431,11 +407,20 @@ export class HarnessAccounts {
    * A `holder` keeps the account from being removed until it releases the
    * launch's `hold`; work that outlives the call must pass one.
    */
+  /**
+   * What a harness's launch waits for first: after a wake, the sign-in Mako Cloud refreshed meanwhile, so a harness
+   * never starts on a pair the cloud moved past. Reads that track no credential (the cloud's own sync) don't wait.
+   */
+  gateLaunches(gate: (provider: string) => Promise<void>): void {
+    this.gate = gate
+  }
+
   async launch(
     provider: string,
     base: NodeJS.ProcessEnv,
     options: { trackCredential?: boolean; holder?: AccountHolder } = {}
   ): Promise<AccountLaunch> {
+    if (options.trackCredential !== false) await this.gate?.(provider)
     const env = childProcessEnv(base)
     const capability = this.capabilities.get(provider)
     if (!capability) return { env, account: { name: "default" }, selection: { kind: "unavailable" } }

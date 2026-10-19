@@ -37,6 +37,21 @@ export function formatRelative(value?: string | number) {
   return formatDay(date.getTime())
 }
 
+/**
+ * How long until a time to come: "in 12 min", "in 5 h", "in 89 days", or "expired" once it has passed.
+ * `formatRelative` reads only the past; a future time there reads "now".
+ */
+export function formatUntil(value?: string | number, now = Date.now()) {
+  const date = toDate(value)
+  if (!date) return ""
+  const minutes = (date.getTime() - now) / 60_000
+  if (minutes <= 0) return "expired"
+  if (minutes < 60) return `in ${Math.max(1, Math.floor(minutes))} min`
+  if (minutes < 48 * 60) return `in ${Math.floor(minutes / 60)} h`
+  if (minutes < 365 * 24 * 60) return `in ${Math.floor(minutes / (24 * 60))} days`
+  return `on ${formatDay(date.getTime())}`
+}
+
 /** Day buckets for the session rail. */
 export function bucketFor(value?: string | number) {
   const date = toDate(value)

@@ -12,7 +12,7 @@ import type { CloudAccount, CloudDevice, CloudSignInsState } from "@/lib/types"
  * A failed action keeps its sentence here, next to the action that asked,
  * because the section shows it inline where the person clicked.
  */
-type Action = "sign-in" | "cancel" | "sign-out" | "devices" | `remove:${string}` | "share-sign-ins" | `disconnect:${string}`
+type Action = "sign-in" | "cancel" | "sign-out" | "devices" | `remove:${string}` | "share-sign-ins"
 
 interface CloudAccountState {
   account?: CloudAccount
@@ -96,12 +96,6 @@ export const cloudAccount = {
   shareSignIns: (sharing: boolean) =>
     run("share-sign-ins", async () => {
       cloudAccountStore.set({ signIns: await getMako().cloudSignInsShare(sharing) })
-    }),
-
-  /** Mako Cloud forgets the sign-in it keeps for `harness`; cloud Threads use this Mac's again, if it shares it. */
-  disconnectSignIn: (harness: string) =>
-    run(`disconnect:${harness}`, async () => {
-      cloudAccountStore.set({ signIns: await getMako().cloudSignInsDisconnect(harness) })
     }),
 
   dismissFailure() {

@@ -42,9 +42,15 @@ export const providerConnections = {
     if (!hasBridge()) return
     const { loadedAt } = providerConnectionsStore.get()
     if (!force && loadedAt && Date.now() - loadedAt < STALE_MS) return
+    void providerConnections.reload(force)
+  },
+
+  /** Read every connection now; resolves once it, or its failure, is in the store. */
+  async reload(fresh = true) {
+    if (!hasBridge()) return
     providerConnectionsStore.set({ loadedAt: Date.now() })
-    void getMako()
-      .providerConnections(force)
+    await getMako()
+      .providerConnections(fresh)
       .then((connections) => providerConnectionsStore.set({ connections }))
       .catch(() => providerConnectionsStore.set({ loadedAt: undefined }))
   },

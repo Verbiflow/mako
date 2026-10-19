@@ -2,15 +2,15 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
-import type { CloudSignIn } from "@mako/host/contracts/cloud-sign-ins"
-import { CloudSignInSync } from "@mako/host/harnesses/cloud-sign-ins"
+import { childProcessEnv } from "@mako/host/base/child-environment"
+import { CloudSignInHarnessSchema, CloudSignInSchema, type CloudSignIn } from "@mako/host/contracts/cloud-sign-ins"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 
 /**
- * This computer's harness sign-ins exactly as the host shares them with Mako Cloud: `CloudSignInSync` itself,
- * renewing one about to lapse through its harness, with a store that collects what it would send. Written to
- * stdout as JSON for a run to give a test account, piped, never to a file; no refresh token is in it. Each
- * harness's outcome goes to stderr as its name, who it's signed in as and when it lapses.
+ * This computer's harness sign-ins as a machine is given them: each adapter's own `export`, the refresh token
+ * withheld, read from the store each harness runs under here. Written to stdout as JSON for a run to give a test
+ * account, piped, never to a file. Each harness's outcome goes to stderr as its name, who it's signed in as and
+ * when it lapses.
  *
  *   npx tsx scripts/export-cloud-sign-ins.ts | (cd ../mako-backend && npm run machines -- agent-e2e … --sign-ins -)
  */
@@ -22,25 +22,23 @@ const dataRoot = await mkdtemp(join(tmpdir(), "mako-export-sign-ins-"))
 try {
   const host = createHarnessHost(detachedHarnessContext(new NativeStores(false), dataRoot))
   const collected: CloudSignIn[] = []
-  const sync = new CloudSignInSync({
-    accounts: host.accounts,
-    capabilities: host.accountCapabilities,
-    store: {
-      blocked: async () => undefined,
-      list: async () => ({ signIns: [], kept: [] }),
-      put: async (signIn) => void collected.push(signIn),
-      remove: async () => {},
-      connect: () => Promise.reject(new Error("An export only reads this Mac's sign-ins")),
-      disconnect: async () => {},
-    },
-    login: () => Promise.reject(new Error("An export only reads this Mac's sign-ins")),
-    dataRoot,
-    onChange: () => {},
-  })
-  const state = await sync.share(true)
-  sync.stop()
-  for (const row of state.harnesses)
-    console.error(`${row.harness}: ${row.status}${row.label ? ` as ${row.label}` : ""}${row.expiresAt ? `, lapses ${row.expiresAt}` : ""}${row.problem ? ` (${row.problem})` : ""}`)
+  for (const capability of host.accountCapabilities.list()) {
+    const harness = CloudSignInHarnessSchema.safeParse(capability.provider)
+    if (!harness.success || !capability.cloudSignIn) continue
+    try {
+      const launch = await host.accounts.launch(harness.data, childProcessEnv(process.env), { trackCredential: false })
+      const exported = await capability.cloudSignIn.export(launch.env)
+      if (!exported) {
+        console.error(`${harness.data}: signed out`)
+        continue
+      }
+      const signIn = CloudSignInSchema.parse({ harness: harness.data, ...exported, label: exported.label ?? (await host.accounts.principal(harness.data, launch.account.name)) ?? null })
+      collected.push(signIn)
+      console.error(`${harness.data}: exported${signIn.label ? ` as ${signIn.label}` : ""}${signIn.expiresAt ? `, lapses ${signIn.expiresAt}` : ""}`)
+    } catch (error) {
+      console.error(`${harness.data}: failed (${error instanceof Error ? error.message : String(error)})`)
+    }
+  }
   process.stdout.write(`${JSON.stringify(collected)}\n`)
 } finally {
   await rm(dataRoot, { recursive: true, force: true })

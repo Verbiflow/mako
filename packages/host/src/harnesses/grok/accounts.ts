@@ -27,7 +27,7 @@ import type { JsonValue } from "../../contracts/json.js"
 import { resolveExecutable } from "../../base/executable.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
-import { instant, objectValue, placeSecret, removeSecret, without, type CloudSignInCapability } from "../cloud-sign-in.js"
+import { chainFingerprint, instant, objectValue, placeSecret, removeSecret, replaceFile, without, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { grokHome } from "@mako/sessions"
 import { heavy } from "../../base/heavy-packages.js"
 
@@ -287,7 +287,59 @@ const GrokEntrySchema = z.object({ key: z.string().min(1) }).catchall(z.json())
  * file when a refresh is refused, so a machine never tries one. Its key
  * lapses at the entry's `expires_at`, about six hours after Grok refreshed.
  */
+/** The only issuer whose sign-in Mako Cloud refreshes; entries for others stay this Mac's alone. */
+const XAI_ISSUER = "https://auth.x.ai"
+
+/** An x.ai entry, as the mirror reads it: who it is and its refresh token, every other field kept. */
+const XaiEntrySchema = z.object({
+  oidc_issuer: z.literal(XAI_ISSUER),
+  refresh_token: z.string().min(1).optional(),
+  user_id: z.string().min(1).optional(),
+  email: z.string().min(1).optional(),
+}).catchall(z.json())
+type XaiEntry = { id: string; entry: z.infer<typeof XaiEntrySchema> }
+
+/** The auth file's x.ai entries: the one the cloud can share, when there's exactly one. */
+function xaiEntries(auth: Record<string, JsonValue>): XaiEntry[] {
+  return Object.entries(auth).flatMap(([id, value]): XaiEntry[] => {
+    const parsed = XaiEntrySchema.safeParse(value)
+    return parsed.success ? [{ id, entry: parsed.data }] : []
+  })
+}
+
+function grokRefreshToken(payload: Record<string, JsonValue>): string | null {
+  const entries = xaiEntries(objectValue(payload.auth) ?? {})
+  return entries.length === 1 ? (entries[0]?.entry.refresh_token ?? null) : null
+}
+
+/**
+ * Grok's auth file. Grok takes a `flock` beside it, which Node can't, but every refresh of Grok's reads the file
+ * again first, under that lock, and runs on a newer pair it finds; the check and one rename are what a write needs.
+ */
+const grokMirror: CloudSignInMirror = {
+  token: grokRefreshToken,
+  principal(payload) {
+    const entries = xaiEntries(objectValue(payload.auth) ?? {})
+    return entries.length === 1 ? (entries[0]?.entry.user_id ?? entries[0]?.entry.email ?? null) : null
+  },
+  async write(env, chain, expected) {
+    const given = xaiEntries(objectValue(chain.payload.auth) ?? {})
+    if (given.length !== 1 || !grokRefreshToken(chain.payload)) throw new Error("Grok's sign-in from Mako Cloud has no single x.ai entry")
+    const path = authPath(env)
+    const contents = await readOptionalFile(path)
+    const current = contents === null ? {} : (objectValue(JSON.parse(contents)) ?? {})
+    if (xaiEntries(current).length > 1) return false
+    const held = grokRefreshToken({ auth: current })
+    if ((held ? chainFingerprint(held) : null) !== expected) return false
+    const others = Object.fromEntries(Object.entries(current).filter(([, value]) => objectValue(value)?.oidc_issuer !== XAI_ISSUER))
+    const [{ id, entry }] = given
+    await replaceFile(path, JSON.stringify({ ...others, [id]: { ...objectValue(current[id]), ...entry } }, null, 2))
+    return true
+  },
+}
+
 export const grokCloudSignIn: CloudSignInCapability = {
+  mirror: grokMirror,
   async export(env) {
     const path = authPath(env)
     const contents = await readOptionalFile(path)
@@ -309,7 +361,8 @@ export const grokCloudSignIn: CloudSignInCapability = {
     const path = authPath(env)
     const contents = await readOptionalFile(path)
     if (contents === null) return null
-    const auth = Object.fromEntries(Object.entries(objectValue(JSON.parse(contents)) ?? {}).filter(([, entry]) => GrokEntrySchema.safeParse(entry).success))
+    // The cloud refreshes x.ai's sign-in alone; another issuer's entry stays here.
+    const auth = Object.fromEntries(Object.entries(objectValue(JSON.parse(contents)) ?? {}).filter(([, entry]) => GrokEntrySchema.safeParse(entry).success && objectValue(entry)?.oidc_issuer === XAI_ISSUER))
     if (!Object.keys(auth).length) return null
     return { label: parseGrokAccounts(contents, path)[0]?.email ?? null, payload: { auth } }
   },

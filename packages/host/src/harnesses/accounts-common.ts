@@ -337,11 +337,13 @@ export async function keychainWrittenAt(service: string, account?: string): Prom
 
 export async function writeKeychain(
   service: string,
-  contents: string
+  contents: string,
+  /** The item's account, when its owner names it otherwise than the login user (Claude's `$USER`, Codex's home key). */
+  account = userInfo().username
 ): Promise<void> {
   if (!onMac()) return
   try {
-    await securityKeychain().write({ service, account: userInfo().username }, contents)
+    await securityKeychain().write({ service, account }, contents)
   } catch (error) {
     throw new Error(
       "Could not save the account to macOS Keychain. Unlock Keychain and try again.",

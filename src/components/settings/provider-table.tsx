@@ -41,9 +41,9 @@ export function ProviderTable({
   const refresh = async () => {
     setRefreshing(true)
     try {
-      accounts.load(true)
-      providerConnections.load(true)
       await Promise.all([
+        accounts.reload(),
+        providerConnections.reload(),
         providers.loadRuntimeUpdates(true),
         providers.loadAll(true).then(() => providers.loadStatus()),
       ])
@@ -138,6 +138,16 @@ function ProviderRow({
     !connection.actions.includes("sign-in-key") &&
     connection.actions.includes("sign-in-browser")
   const working = connectionBusy?.provider === agent.id
+  // Everything the row shows is read again: the sign-in and the installation beside it.
+  const [rechecking, setRechecking] = useState(false)
+  const recheck = async () => {
+    setRechecking(true)
+    try {
+      await Promise.all([accounts.reload(), providerConnections.reload(), providers.loadRuntimeUpdates(true)])
+    } finally {
+      setRechecking(false)
+    }
+  }
   const detailsId = `provider-${agent.id}-accounts`
   return (
     <div role="listitem" aria-label={agent.name}>
@@ -239,13 +249,11 @@ function ProviderRow({
                 </span>
                 <Action
                   size="xs"
-                  disabled={Boolean(connectionBusy)}
-                  onClick={() => {
-                    accounts.load(true)
-                    providerConnections.load(true)
-                  }}
+                  disabled={Boolean(connectionBusy) || rechecking}
+                  aria-busy={rechecking}
+                  onClick={() => void recheck()}
                 >
-                  Refresh connection
+                  {rechecking ? "Checking…" : "Refresh connection"}
                 </Action>
               </div>
               {connection ? (

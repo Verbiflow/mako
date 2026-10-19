@@ -196,7 +196,6 @@ function taskSession(launch: AccountLoginTask): Session {
 }
 
 /** What a sign-in made for Mako Cloud does with the profile once it's proven, before the profile is removed. */
-export type HandOn = (env: NodeJS.ProcessEnv) => Promise<{ email?: string }>
 
 /** This host's running sign-ins, one per provider, each ending added, renewed, connected, cancelled or failed. */
 export class AccountLogins {
@@ -213,16 +212,14 @@ export class AccountLogins {
    * Start a sign-in for `harness`: into a new profile, or into the account
    * `renew` names when its login expired. Resolves once the provider has named
    * its sign-in page (or has had time to), with what the card needs to show;
-   * `wait` resolves when it ends. With `handOn`, the new profile is never
-   * listed: it is handed on once proven, and removed.
+   * `wait` resolves when it ends.
    */
-  async start(harness: AccountHarness, renew?: string, handOn?: HandOn): Promise<AccountLogin> {
-    if (handOn && renew !== undefined) throw new Error("A sign-in for Mako Cloud is always a new one")
+  async start(harness: AccountHarness, renew?: string): Promise<AccountLogin> {
     // One per provider: a second would race the first for the CLI's callback port.
     for (const login of this.logins.values())
       if (login.info.harness === harness && !login.done) await this.cancel(login.info.id)
     const target: AccountLoginTarget = renew === undefined
-      ? { name: `${handOn ? "cloud" : "account"}-${randomUUID().slice(0, 8)}`, renew: false }
+      ? { name: `account-${randomUUID().slice(0, 8)}`, renew: false }
       : { name: renew, renew: true }
     const { launch, previousEmail } = await this.accounts.prepareLogin(harness, target)
     const id = randomUUID()
@@ -240,7 +237,7 @@ export class AccountLogins {
     let expired = false
     const timer = setTimeout(() => { expired = true; session.stop() }, LOGIN_TIMEOUT_MS)
     const name = this.accounts.label(harness)
-    const again = target.renew ? "Sign in again" : handOn ? "Connect again" : "Add the account again"
+    const again = target.renew ? "Sign in again" : "Add the account again"
 
     const result = session.ended.then(async (ending): Promise<AccountLoginResult> => {
       clearTimeout(timer)
@@ -271,7 +268,6 @@ export class AccountLogins {
               })
             }
           }
-          if (handOn) return await this.accounts.useLogin(harness, target, options, handOn)
           return await this.accounts.finishLogin(harness, target, options)
         } catch (failure) {
           await this.accounts.discardLogin(harness, target).catch(() => {})
@@ -291,7 +287,6 @@ export class AccountLogins {
       openPage: launch.kind === "task" || launch.opensBrowser === false,
     }
     if (target.renew) info.renew = target.name
-    if (handOn) info.cloud = true
     if (launch.kind === "command" && launch.paste) {
       info.paste = launch.paste
       if (launch.pasteOnly) info.pasteOnly = true

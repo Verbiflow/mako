@@ -2,15 +2,6 @@ import type { CloudAccount, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSign
 
 type CloudSignInHarness = CloudSignInRow["harness"]
 
-/** Harnesses whose sign-in rotates, which Mako Cloud can keep by itself. */
-const CONNECTABLE = new Set<CloudSignInHarness>(["claude", "codex", "grok"])
-
-/** The mock account sign-ins hand a finished cloud sign-in here, as the host hands it to the cloud. */
-export interface MockCloudKeeper {
-  connect(harness: CloudSignInHarness, label: string): void
-}
-export const mockCloudKeeper: MockCloudKeeper = { connect: () => {} }
-
 /** The mock gh CLI's user, so a mock account signed in with GitHub is the same person. */
 export const MOCK_GITHUB_USER_ID = "583231"
 
@@ -70,52 +61,42 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
   }
 
   const hoursFromNow = (hours: number) => new Date(Date.now() + hours * 3_600_000).toISOString()
-  const rows = (sending: boolean): CloudSignInsState["harnesses"] => {
-    const shared = (harness: CloudSignInHarness, label: string | null, expiresAt: string | null, sentMinutesAgo: number): CloudSignInRow => {
-      const row: CloudSignInRow = { harness, status: sending ? "sent" : "waiting", label, expiresAt }
-      if (sending) row.sentAt = minutesAgo(sentMinutesAgo)
-      return row
-    }
-    const grok: CloudSignInRow = { harness: "grok", status: sending ? "failed" : "waiting", label: "ada@example.com", expiresAt: hoursFromNow(0.1) }
-    if (sending) grok.problem = "Grok didn't refresh its sign-in. Open Grok on this Mac to sign in again."
-    return [
-      shared("claude", "ada@example.com", hoursFromNow(7.5), 3),
-      shared("codex", "ada@example.com", hoursFromNow(24 * 6), 40),
-      shared("cursor", "ada@example.com", null, 40),
-      { harness: "opencode", status: "signed-out", label: null, expiresAt: null },
-      grok,
-      shared("devin", null, null, 40),
-    ]
-  }
-  const kept = new Map<CloudSignInHarness, CloudKeptSignIn>()
-  const keep = (harness: CloudSignInHarness, label: string | null, state: CloudKeptSignIn["state"], refreshedMinutesAgo: number | null) => {
-    const signIn: CloudKeptSignIn = { harness, label, state, expiresAt: hoursFromNow(6), connectedAt: minutesAgo(60 * 24 * 3), refreshedAt: refreshedMinutesAgo === null ? null : minutesAgo(refreshedMinutesAgo), problem: null }
+  // `refused`: Claude Code's sign-in signed out by its provider, Grok's provider not answering.
+  const refused = params.has("refused")
+  const shared = (harness: CloudSignInHarness, state: CloudKeptSignIn["state"], refreshedMinutesAgo: number): CloudKeptSignIn => {
+    const signIn: CloudKeptSignIn = { harness, label: "ada@example.com", state, expiresAt: hoursFromNow(6), connectedAt: minutesAgo(60 * 24 * 3), refreshedAt: minutesAgo(refreshedMinutesAgo), problem: null, token: `${harness}-fp`, source: "shared", mine: true }
     if (state === "needs-reconnect") signIn.problem = { reason: "revoked", detail: "the provider refused the refresh token (400: invalid_grant)", at: minutesAgo(30) }
     if (state === "retrying") signIn.problem = { reason: "unavailable", detail: "the provider answered 503", at: minutesAgo(1) }
-    kept.set(harness, signIn)
+    return signIn
   }
-  if (params.has("kept")) {
-    keep("codex", "ada@example.com", "connected", 130)
-    keep("grok", "ada@example.com", "retrying", 300)
-    keep("claude", "ada@example.com", "needs-reconnect", 60 * 8)
+  const rows = (sending: boolean): CloudSignInsState["harnesses"] => {
+    const key = (harness: CloudSignInHarness, label: string | null, expiresAt: string | null): CloudSignInRow => {
+      const row: CloudSignInRow = { harness, status: sending ? "sent" : "waiting", label, expiresAt }
+      if (sending) row.sentAt = minutesAgo(40)
+      return row
+    }
+    const rotating = (harness: CloudSignInHarness, kept: CloudKeptSignIn): CloudSignInRow => {
+      const row: CloudSignInRow = { harness, status: sending ? "sent" : "waiting", label: kept.label, expiresAt: kept.expiresAt, rotates: true }
+      if (sending) {
+        row.kept = kept
+        row.inStepAt = kept.refreshedAt ?? kept.connectedAt
+      }
+      return row
+    }
+    return [
+      rotating("claude", shared("claude", refused ? "needs-reconnect" : "connected", 2)),
+      rotating("codex", shared("codex", "connected", 40)),
+      key("cursor", "ada@example.com", null),
+      { harness: "opencode", status: "signed-out", label: null, expiresAt: null },
+      rotating("grok", shared("grok", refused ? "retrying" : "connected", 60 * 5)),
+      key("devin", null, null),
+    ]
   }
-  const withKept = (harnesses: CloudSignInRow[]): CloudSignInRow[] =>
-    harnesses.map((row) => {
-      const next: CloudSignInRow = { ...row }
-      if (CONNECTABLE.has(row.harness)) next.connectable = true
-      const own = kept.get(row.harness)
-      if (own) next.kept = own
-      return next
-    })
-  let signIns: CloudSignInsState = { sharing: params.has("sharing"), checkedAt: minutesAgo(0), harnesses: withKept(rows(params.has("sharing"))) }
+  let signIns: CloudSignInsState = { sharing: !params.has("unshared"), checkedAt: minutesAgo(0), harnesses: rows(!params.has("unshared")) }
   const changed = () => {
-    signIns = { ...signIns, checkedAt: new Date().toISOString(), harnesses: withKept(rows(signIns.sharing)) }
+    signIns = { ...signIns, checkedAt: new Date().toISOString(), harnesses: rows(signIns.sharing) }
     emit({ type: "cloud-sign-ins", signIns })
     return signIns
-  }
-  mockCloudKeeper.connect = (harness, label) => {
-    keep(harness, label, "connected", 0)
-    changed()
   }
 
   return {
@@ -124,11 +105,6 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     cloudSignInsShare: async (sharing: boolean) => {
       await new Promise((resolve) => setTimeout(resolve, 500))
       signIns = { ...signIns, sharing }
-      return changed()
-    },
-    cloudSignInsDisconnect: async (harness: string) => {
-      await new Promise((resolve) => setTimeout(resolve, 400))
-      kept.delete(harness)
       return changed()
     },
     cloudSignIn: async () => {

@@ -697,8 +697,8 @@ test("a grant or a revoke while signed in reads the sign-ins again, with nothing
         if (event.type === "cloud-sign-ins") shown.push(event.signIns)
       },
       fixture: false,
-      // Sharing stays off, so the sign-ins are read on no timer of their own.
-      harnessSignIns: (options) => new CloudSignInSync({ ...options, accounts: new HarnessAccounts(registry), capabilities: registry, login: unused }),
+      // Sharing is on by default; with no harnesses here, there's nothing of this Mac's to read.
+      harnessSignIns: (options) => new CloudSignInSync({ ...options, accounts: new HarnessAccounts(registry), capabilities: registry }),
     }
   )
   after(() => account.stop())
@@ -713,7 +713,7 @@ test("a grant or a revoke while signed in reads the sign-ins again, with nothing
   await cloud.approve(opened[0] ?? "")
   while (!(await account.deviceId())) await sleep(10)
   // As Settings reads it: an account without the cloud can't keep sign-ins there.
-  const read = z.object({ sharing: z.literal(false), blocked: z.string().optional() }).loose()
+  const read = z.object({ sharing: z.literal(true), blocked: z.string().optional() }).loose()
   assert.equal(read.parse(JSON.parse(z.string().parse(await methods.invoke("mako:cloud-sign-ins", [], "web", true)))).blocked, "no-cloud")
   shown.length = 0
   cloud.account.entitlements = ["cloud"]

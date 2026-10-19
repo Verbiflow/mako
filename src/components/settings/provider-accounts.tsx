@@ -37,7 +37,7 @@ export function ProviderAccounts({
     accountGroups(state).find((entry) => entry.provider.provider === providerId)
   )
   const signIn = useAccounts((state) =>
-    state.signIn?.harness === providerId && !state.signIn.cloud ? state.signIn : undefined
+    state.signIn?.harness === providerId ? state.signIn : undefined
   )
   if (!provider) return null
 
@@ -174,13 +174,13 @@ export function SignInCard({ signIn, label, who }: { signIn: AccountSignIn; labe
         <TriangleAlertIcon className="mt-0.5 size-4 shrink-0 text-caution" aria-hidden />
         <div className="min-w-0 flex-1">
           <p className="text-ui font-medium text-foreground">
-            {signIn.cloud ? "Mako Cloud wasn't connected" : signIn.renew ? "You weren't signed in again" : "The account wasn't added"}
+            {signIn.renew ? "You weren't signed in again" : "The account wasn't added"}
           </p>
           <p className="mt-0.5 text-label leading-relaxed text-muted-foreground">
             {signIn.message}
           </p>
           <div className="mt-3 flex flex-wrap gap-1.5">
-            <Action tone="solid" size="xs" onClick={() => void accountActions.signIn(signIn.harness, signIn.renew, signIn.cloud)}>
+            <Action tone="solid" size="xs" onClick={() => void accountActions.signIn(signIn.harness, signIn.renew)}>
               Try again
             </Action>
             <Action size="xs" onClick={() => accountActions.cancelSignIn()}>
@@ -199,9 +199,7 @@ export function SignInCard({ signIn, label, who }: { signIn: AccountSignIn; labe
     : pasteFirst
       ? "Sign in, then paste the code"
       : "Continue in your browser"
-  const body = signIn.cloud
-    ? `Sign in with the ${label} account cloud Threads should use. Mako Cloud keeps it signed in by itself, and this Mac's login stays as it is.`
-    : signIn.renew
+  const body = signIn.renew
     ? `Sign in as ${who ?? "this account"} to bring it back. Sessions already running keep the login they started with.`
     : `Sign in with the ${label} account you want to add. It shows up here when you're done, and your current login stays as it is.`
   return (

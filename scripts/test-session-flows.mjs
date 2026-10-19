@@ -595,6 +595,8 @@ async function sideCopiesGone(provider, since) {
 function forkWay(forked, requestId) {
   const state = forked.control?.transfers.at(-1)?.state
   if (forked.control?.ancestry?.nativeFork && !state?.nativeForkDeclined) return "native fork"
+  // A harness whose fork is a transcript by its declaration: no native fork to decline, the transcript carried.
+  if (!forked.control?.ancestry?.nativeFork && forked.requests.find((request) => request.id === requestId)?.context?.[0]?.includesBase) return "transcript"
   if (!state?.nativeForkDeclined) throw new Error(`The fork neither forked natively nor says why it couldn't (${state?.kind ?? "no transfer"})`)
   if (!forked.requests.find((request) => request.id === requestId)?.context?.[0]?.includesBase) throw new Error(`The native fork was declined (${state.nativeForkDeclined}) and its first request carried no transcript`)
   return `transcript (native fork declined: ${state.nativeForkDeclined})`
