@@ -11,6 +11,14 @@ export interface DiscoveryOptions {
   cwd?: string
   timeoutMs?: number
   priority?: "launch" | "background"
+  /**
+   * When `timeoutMs` starts counting. `queued` (the default) bounds the whole
+   * query, for discovery that answers from its last snapshot meanwhile.
+   * `started` bounds only the process, for a reading nothing stands in for:
+   * a version or a sign-in check waits its turn instead of failing behind
+   * slower discovery. The wait stays bounded, because every slot's own process is.
+   */
+  deadline?: "queued" | "started"
   /** Cancellation belongs to this query; never terminates another slot's child. */
   signal?: AbortSignal
 }
@@ -88,16 +96,19 @@ export class DiscoveryProcesses {
           const reason: unknown = options.signal?.reason
           refuse(reason instanceof Error ? reason : new Error("Provider discovery was cancelled"))
         }
-        const timer = setTimeout(() => refuse(new Error(`${label} discovery timed out in the queue after ${timeout} ms`)), timeout)
+        const timer = options.deadline === "started"
+          ? undefined
+          : setTimeout(() => refuse(new Error(`${label} discovery timed out in the queue after ${timeout} ms`)), timeout)
         queue.push(resume)
         options.signal?.addEventListener("abort", abort, { once: true })
       })
     }
     const startedAt = performance.now()
+    const waited = options.deadline === "started" ? 0 : startedAt - queuedAt
     let release: (() => Promise<void>) | undefined
     try {
       options.signal?.throwIfAborted()
-      if (startedAt - queuedAt >= timeout)
+      if (waited >= timeout)
         throw new Error(`${label} discovery timed out in the queue after ${timeout} ms`)
       const grouped = !onWindows()
       const child = spawnProviderProcess(executable, options.args, {
@@ -135,7 +146,7 @@ export class DiscoveryProcesses {
                 `${label} discovery timed out during ${phase} after ${timeout} ms`
               )
             ),
-          Math.max(0, timeout - (startedAt - queuedAt))
+          Math.max(0, timeout - waited)
         )
         const abort = () => reject(options.signal?.reason)
         options.signal?.addEventListener("abort", abort, { once: true })

@@ -18,8 +18,8 @@ export interface RuntimeRowView {
   version?: string
   /** The reading's status in a few words, after the version. */
   detail: string
-  /** The row's one control, when Mako can run something for this runtime. */
-  action?: { label: string }
+  /** The row's one control, when Mako can run something for this runtime: its update, or reading it again. */
+  action?: { label: string; kind?: "update" | "check" }
   /** The detail names work still in flight: a check or an update. */
   busy: boolean
   /** A failed update's own words, under the row. */
@@ -47,14 +47,18 @@ export function runtimeRowView(
     }
   if (!info.installed && info.phase === "checking")
     return { detail: "Checking…", busy: true, tone: "faint" }
-  if (info.error)
+  if (info.error) {
+    const checking = info.phase === "checking"
     return {
       version: info.installed ?? "—",
-      detail: info.error,
-      busy: false,
-      tone: "negative",
+      // Without a version the executable's own words stay in the host log; the row says what they mean.
+      detail: checking ? "Checking…" : info.installed ? info.error : "Couldn’t read the installed version",
+      action: checking || info.installed ? undefined : { label: "Check again", kind: "check" },
+      busy: checking,
+      tone: checking ? "faint" : "caution",
       note,
     }
+  }
   const version = info.installed ?? "—"
   // Too old to run: the one standing that asks for anything, said plainly.
   if (info.versions?.standing === "below-oldest") {

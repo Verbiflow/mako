@@ -613,7 +613,14 @@ assert.equal(
   "Current",
   "a finished update is named for five minutes, then the row is merely current"
 )
-assert.equal(runtimeRowView({ binary: "/x/codex", error: "codex --version exited with 1", checkedAt: now }, now).tone, "negative")
+const unread = runtimeRowView({ binary: "/x/codex", error: "codex --version exited with 1", checkedAt: now }, now)
+assert.equal(unread.detail, "Couldn’t read the installed version", "the executable's own words stay in the host log")
+assert.deepEqual(unread.action, { label: "Check again", kind: "check" }, "the row that failed is the row that reads again")
+assert.equal(unread.tone, "caution")
+const rereading = runtimeRowView({ binary: "/x/codex", error: "codex --version exited with 1", checkedAt: now, phase: "checking" }, now)
+assert.equal(rereading.detail, "Checking…")
+assert.equal(rereading.action, undefined)
+assert.equal(rereading.busy, true)
 assert.deepEqual(
   runtimeRows({ codex: { binary: "/x", installed: "1" }, devin: { checkedAt: now }, claude: { binary: "/y" } }).map(([id]) => id),
   ["claude", "codex"],

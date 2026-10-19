@@ -152,12 +152,18 @@ const queuedBackground = processes.run(work, async () => {
   queuedBackgroundStarted = true
   await held.promise
 })
+let turnSettled = false
+let turnStarted = false
+const turn = processes.run({ ...work, timeoutMs: 100, deadline: "started" }, async () => { turnStarted = true })
+  .finally(() => { turnSettled = true })
 try {
   let expiredStarted = false
   const expiredAt = performance.now()
   await assert.rejects(processes.run({ ...work, timeoutMs: 100 }, async () => { expiredStarted = true }), /timed out in the queue/)
   assert.equal(expiredStarted, false, "expired queued work must not spawn")
   assert.ok(performance.now() - expiredAt < 2_000, "queue time consumes the same bounded discovery budget")
+  // Queued before the query just refused, with the same budget: it has waited longer, and waits on.
+  assert.equal(turnSettled, false, "a reading with nothing in its place waits its turn instead of failing")
   const cancelled = new AbortController()
   let cancelledStarted = false
   const cancelledQuery = processes.run({ ...work, signal: cancelled.signal }, async () => { cancelledStarted = true })
@@ -186,6 +192,8 @@ try {
   held.resolve()
   await Promise.all([...backgroundJobs, queuedBackground])
 }
+await turn
+assert.equal(turnStarted, true, "the waiting reading runs once a slot frees, its budget counted from its own start")
 const activeAbort = new AbortController()
 let abortedPid: number | undefined
 await assert.rejects(processes.run({ ...work, signal: activeAbort.signal }, async ({ child, exited }) => {

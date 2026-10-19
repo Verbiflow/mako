@@ -49,6 +49,7 @@ export async function readGrokConnection(
       env: { ...env, GROK_DISABLE_AUTOUPDATER: "1" },
       cwd: homedir(),
       timeoutMs: 20_000,
+      deadline: "started",
     },
     async ({ child }) => {
       const connection = new ClientSideConnection(
@@ -83,6 +84,9 @@ async function runLoginCommand(
       env: { ...env, GROK_DISABLE_AUTOUPDATER: "1" },
       cwd: homedir(),
       timeoutMs: 120_000,
+      // The person is waiting in their browser: never behind background discovery.
+      priority: "launch",
+      deadline: "started",
     },
     async ({ child, exited }) => {
       // The provider opens its browser and owns credential persistence. Do not relay auth output.

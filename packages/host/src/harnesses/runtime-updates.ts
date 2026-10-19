@@ -631,7 +631,9 @@ export class RuntimeUpdates {
       return { version }
     } catch (error) {
       this.signatures.delete(provider)
-      return { error: error instanceof Error ? error.message : String(error) }
+      const message = error instanceof Error ? error.message : String(error)
+      hostWarn("runtime", "version read failed", { provider, binary, error: message })
+      return { error: message }
     }
   }
 
@@ -1061,6 +1063,9 @@ export async function readRuntimeVersion(
       env,
       timeoutMs: DEFAULTS.versionTimeoutMs,
       priority,
+      // A launch goes on without the version rather than wait; the settings
+      // reading has nothing to show in its place, so it waits its turn.
+      deadline: priority === "launch" ? "queued" : "started",
     },
     async ({ child, exited }) => {
       const chunks: Buffer[] = []

@@ -22,7 +22,9 @@ providers.loadStatus = async () => {}
 providers.refreshAccount = async () => {}
 providers.loadRuntimeUpdates = async () => {}
 accounts.load = () => {}
+accounts.reload = async () => {}
 providerConnections.load = () => {}
+providerConnections.reload = async () => {}
 export const calls: string[] = []
 const versions: HarnessUpdates = {
   claude: {
@@ -256,4 +258,18 @@ export function grokConnected() {
         : entry
     ),
   }))
+}
+
+/** Claude's version could not be read; reading again settles on its reading after a moment, as the host does. */
+export function unreadVersion() {
+  const reading = versions.claude
+  const unread = { binary: reading.binary, channel: reading.channel, checkedAt: Date.now(), error: "claude --version exited with 1" }
+  providerStore.set({ runtimeUpdates: { ...providerStore.get().runtimeUpdates, claude: unread } })
+  providers.loadRuntimeUpdates = async () => {
+    calls.push("check:runtimes")
+    providerStore.set({ runtimeUpdates: { ...providerStore.get().runtimeUpdates, claude: { ...unread, phase: "checking" } } })
+    // Long enough for the review to photograph the reading in flight.
+    await new Promise((resolve) => setTimeout(resolve, 1_500))
+    providerStore.set({ runtimeUpdates: { ...providerStore.get().runtimeUpdates, claude: { ...reading, checkedAt: Date.now() } } })
+  }
 }
