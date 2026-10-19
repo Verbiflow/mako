@@ -17,6 +17,9 @@ import { conversationCallId, type ConversationRoutingResult } from "./shared-con
 const KEPT = 50
 const RETRY_MS = 1_000
 const RETRY_MAX_MS = 30_000
+/** For this long after a wake, a follow tries again this often: the network comes back within a second or two. */
+const WOKEN_MS = 15_000
+const WOKEN_RETRY_MS = 250
 const SAVE_MS = 1_000
 
 const SummaryIdentitySchema = z.object({ session: z.object({ id: z.string(), status: z.string() }).loose(), revision: z.number(), createdAt: z.number() }).loose()
@@ -88,6 +91,7 @@ export class CloudConversations {
   #closed = false
   /** Counts wakes, so a follow that was waiting out its backoff, or lost its stream to one, follows again at once. */
   #wakes = 0
+  #wokeAt = Number.NEGATIVE_INFINITY
   readonly #pauses = new Set<() => void>()
 
   constructor(options: CloudConversationsOptions) {
@@ -127,6 +131,7 @@ export class CloudConversations {
    */
   wake(): void {
     this.#wakes += 1
+    this.#wokeAt = performance.now()
     this.#session?.session.wake()
     for (const resume of this.#pauses) resume()
   }
@@ -237,7 +242,8 @@ export class CloudConversations {
           if (!failing) hostWarn("cloud-conversations", "a cloud Thread's events stopped; following again", { threadId: entry.threadId, error: error instanceof Error ? error.message : String(error) })
           failing = true
         }
-        if (this.#wakes === wakes) await this.#pause(wait)
+        const woken = performance.now() - this.#wokeAt < WOKEN_MS
+        if (this.#wakes === wakes) await this.#pause(woken ? WOKEN_RETRY_MS : wait)
         if (this.#wakes !== wakes) {
           // Woken: the stream that ended went with the sleep, and the network may be back; no backoff carried over.
           wakes = this.#wakes

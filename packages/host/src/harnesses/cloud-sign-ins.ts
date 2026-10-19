@@ -230,18 +230,23 @@ export class CloudSignInSync {
     const taken = this.#taken
     const waking = (async () => {
       const release = await this.#holdRefreshes()
+      const heldMs = Math.round(performance.now() - woke)
+      let checks = 0
       try {
+        checks += 1
         await this.check()
         for (const wait of this.#wakeRetryMs) {
           if (this.#reached || !this.#shares) break
           await new Promise((resolve) => setTimeout(resolve, wait).unref())
           if (performance.now() - woke > this.#wakeHoldMs) release.now()
+          checks += 1
           await this.check()
         }
       } finally {
         release.now()
       }
-      const fields = { ms: Math.round(performance.now() - woke), held: release.harnesses.join(",") || "none", took: this.#taken - taken }
+      // How long taking the locks took, and how many checks it took to reach the cloud: what a slow wake is read by.
+      const fields = { ms: Math.round(performance.now() - woke), heldMs, checks, held: release.harnesses.join(",") || "none", took: this.#taken - taken }
       if (this.#reached) hostLog("cloud", "in step with Mako Cloud after waking", fields)
       else hostWarn("cloud", "Mako Cloud wasn't reached after waking; the minute's check goes on", fields)
     })()
