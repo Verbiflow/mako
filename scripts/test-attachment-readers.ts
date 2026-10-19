@@ -53,8 +53,9 @@ try {
     store.exec("CREATE TABLE data (key TEXT PRIMARY KEY, compression_type INTEGER, value BLOB)")
     store.close()
   }
-  folder(safari)
-  chmodSync(safari, 0o000)
+  // Readable here, so a read would find it: Safari's container must never be listed (macOS asks the person each time).
+  folder(safari, "salt", "http_127.0.0.1_5173", "LocalStorage")
+  writeFileSync(join(safari, "salt", "http_127.0.0.1_5173", "LocalStorage", "localstorage.sqlite3"), "")
 
   const input = { appData, app: "mako", dataRoot: join(appData, "mako-dev"), sessionMemory: ledger, home, platform: "darwin" as const }
   const before = Date.now()
@@ -64,7 +65,8 @@ try {
   assert.deepEqual(found.browsers.filter((store) => store.kind === "firefox").map((store) => store.path.split("/").at(-3)).sort(), ["http+++127.0.0.1+5173", "http+++fix.thread.localhost+5174^userContextId=1"], "only Firefox's loopback origins")
   assert.equal(firefoxOrigin("http+++127.0.0.1+5173"), "http://127.0.0.1:5173")
   assert.equal(firefoxOrigin("https+++example.com"), "https://example.com")
-  assert.equal(found.holds.length, 1, "Safari can't be read, but nothing says a desk ran there")
+  assert.ok(!found.browsers.some((store) => store.path.includes("com.apple.Safari")), "Safari's container is never read")
+  assert.equal(found.holds.length, 1, "Safari isn't read, but nothing says a desk ran there")
   assert.deepEqual(found.holds[0]!.kinds, ["staged"])
   assert.ok(found.holds[0]!.through >= before, "with no record, every staged file there is now is held")
 
