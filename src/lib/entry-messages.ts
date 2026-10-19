@@ -69,21 +69,117 @@ export function locateShown(blocks: readonly Entry[], start: number, index: numb
 }
 
 export function entriesToMessages(entries: readonly Entry[], source: EntrySource): EntryMessages {
-  const live = source.kind === "live"
-  const cursor = live ? source.cursor : undefined
-  const offset = live ? (cursor?.offset ?? 0) : (source.start ?? 0)
-  const messages: ChatMessage[] = []
-  const starts: number[] = []
-  let plan = cursor?.plan ?? []
-  let turn = cursor?.turn ?? 0
-  let turnProvider = source.provider
-  let reply: { message: ChatMessage; last: number; ended: boolean } | null = null
+  return new EntryDrawing(entries, source).draw()
+}
 
-  const path = live ? undefined : source.path
-  // Entries of a live conversation's view are read by their address in it, by its host.
-  const viewed = Boolean(live ? cursor?.token : source.token)
-  const drew = (message: ChatMessage, entry: Entry, at: number) => {
-    const address: LiveHistoryAddress | undefined = !viewed ? undefined : live ? { kind: "live", index: at } : entry.id ? { kind: "base", id: entry.id } : undefined
+/** The assistant message being drawn: the absolute index of its last entry, and whether an entry's usage ended it. */
+interface Reply {
+  message: ChatMessage
+  last: number
+  ended: boolean
+}
+
+/**
+ * One conversion's state, with its steps as methods. The live projection
+ * converts on every update, so a step made as a closure is made again on
+ * each, and tsx's `keepNames` names every named closure with a
+ * `defineProperty`: six of them cost the projection rows a third more time.
+ */
+class EntryDrawing {
+  private readonly entries: readonly Entry[]
+  private readonly source: EntrySource
+  private readonly live: boolean
+  private readonly offset: number
+  private readonly path: string | undefined
+  /** Entries of a live conversation's view are read by their address in it, by its host. */
+  private readonly viewed: boolean
+  private readonly messages: ChatMessage[] = []
+  private readonly starts: number[] = []
+  private plan: PlanStep[]
+  private turn: number
+  private turnProvider: string | undefined
+  private reply: Reply | null = null
+
+  constructor(entries: readonly Entry[], source: EntrySource) {
+    this.entries = entries
+    this.source = source
+    this.live = source.kind === "live"
+    const cursor = source.kind === "live" ? source.cursor : undefined
+    this.offset = source.kind === "live" ? (cursor?.offset ?? 0) : (source.start ?? 0)
+    this.path = source.kind === "live" ? undefined : source.path
+    this.viewed = Boolean(source.kind === "live" ? cursor?.token : source.token)
+    this.plan = cursor?.plan ?? []
+    this.turn = cursor?.turn ?? 0
+    this.turnProvider = source.provider
+  }
+
+  draw(): EntryMessages {
+    const { entries, source, live, offset } = this
+    for (let index = source.kind === "live" ? (source.cursor?.start ?? 0) : 0; index < entries.length; index += 1) {
+      const entry = entries[index]!
+      const at = index + offset
+      switch (entry.type) {
+        case "user": {
+          this.close()
+          this.turnProvider = entry.provider ?? source.provider
+          if (!entry.steeringFor) this.turn += 1
+          const message: ChatMessage = {
+            id: live && entry.requestId ? `acp-request-${entry.requestId}` : this.named("user", entry, at),
+            role: "user",
+            blocks: [{ type: "text", text: entry.text }, ...(entry.attachments ?? [])],
+          }
+          if (entry.requestId) message.requestId = entry.requestId
+          if (entry.steeringFor) message.steeringFor = live ? `acp-request-${entry.steeringFor}` : `native-user-${entry.steeringFor}`
+          if (entry.at !== undefined) message.timestamp = entry.at
+          const anchored = this.anchor(entry, at)
+          if (anchored) message.anchor = anchored
+          this.drew(message, entry, at)
+          this.messages.push(message)
+          this.starts.push(at)
+          break
+        }
+        case "provider-turn":
+          this.turnProvider = source.provider
+          this.turn += 1
+          this.marker(entry, at, { label: entry.reason, ...entry.detail !== undefined && { detail: entry.detail }, ...entry.cause && { cause: entry.cause }, ...entry.body && { body: entry.body }, ...entry.tone && { tone: entry.tone }, ...entry.source && { source: entry.source } }, true)
+          break
+        case "event":
+          this.marker(entry, at, { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, setup: entry.setup, source: entry.source, cause: entry.cause, limit: entry.limit }, false)
+          break
+        case "unread":
+          this.marker(entry, at, unreadNote(entry), false)
+          break
+        case "plan":
+          this.plan = entry.entries
+          this.append(entry, at, [{ type: "toolResult", id: `plan-${at}`, name: AGENT_PLAN_TOOL, text: "", details: [{ type: "plan", entries: entry.entries }] }])
+          break
+        case "proposed-plan":
+          this.append(entry, at, [proposedPlan(entry)])
+          break
+        case "text":
+          this.append(entry, at, [{ type: "text", text: entry.text }])
+          break
+        case "thinking":
+          this.append(entry, at, [{ type: "thinking", thinking: entry.text }])
+          break
+        case "attachment":
+          this.append(entry, at, [entry.attachment])
+          break
+        case "tool":
+          // A call's blocks are named by the reply that holds them, so it opens first.
+          this.append(entry, at, toolBlocks(entry, this.turn, this.turnProvider, source, this.open(entry, at).message.id))
+          break
+      }
+    }
+    this.close()
+    const last = this.messages.at(-1)
+    if (source.kind === "live" && source.running && last?.role === "assistant") last.streaming = true
+    return { messages: this.messages, starts: this.starts, plan: this.plan }
+  }
+
+  private drew(message: ChatMessage, entry: Entry, at: number): void {
+    const address: LiveHistoryAddress | undefined = !this.viewed ? undefined : this.live ? { kind: "live", index: at } : entry.id ? { kind: "base", id: entry.id } : undefined
+    const path = this.path
     if (!(path && entry.id) && !(address && entry.stream)) return
     const origin: OriginEntry = { type: entry.type }
     if (entry.id) origin.id = entry.id
@@ -95,110 +191,63 @@ export function entriesToMessages(entries: readonly Entry[], source: EntrySource
     if (message.origin) message.origin.entries.push(origin)
     else message.origin = path ? { path, entries: [origin] } : { entries: [origin] }
   }
-  const named = (kind: string, entry: Entry, at: number) =>
-    live ? `acp-${kind}-${at}` : entry.id ? `native-${kind}-${entry.id}` : `foreign-entry-${at}`
-  const anchor = (entry: Entry, at: number): MessageAnchor | undefined => {
-    if (live) return undefined
+
+  private named(kind: string, entry: Entry, at: number): string {
+    return this.live ? `acp-${kind}-${at}` : entry.id ? `native-${kind}-${entry.id}` : `foreign-entry-${at}`
+  }
+
+  private anchor(entry: Entry, at: number): MessageAnchor | undefined {
+    if (this.live) return undefined
     const anchor: MessageAnchor = { index: at }
     if (entry.id) anchor.id = entry.id
     if (entry.at !== undefined) anchor.at = entry.at
     return anchor
   }
-  const close = () => {
-    if (reply && !live) reply.message.anchor = anchor(entries[reply.last - offset]!, reply.last)
-    reply = null
+
+  private close(): void {
+    const reply = this.reply
+    if (reply && !this.live) reply.message.anchor = this.anchor(this.entries[reply.last - this.offset]!, reply.last)
+    this.reply = null
   }
-  const append = (entry: ReplyEntry | EntryOf<"plan">, at: number, blocks: (message: ChatMessage) => Block[]) => {
-    if (reply && (reply.ended || (entry.type !== "plan" && entry.model !== undefined && reply.message.blocks.length > 0))) close()
-    if (!reply) {
-      const message: ChatMessage = { id: named("assistant", entry, at), role: "assistant", blocks: [] }
-      if (turnProvider) message.provider = turnProvider
-      if (entry.type !== "plan" && entry.model) message.model = entry.model
-      if (entry.at !== undefined) message.timestamp = entry.at
-      messages.push(message)
-      starts.push(at)
-      reply = { message, last: at, ended: false }
-    }
-    reply.message.blocks.push(...blocks(reply.message))
-    drew(reply.message, entry, at)
+
+  /** The reply `entry` belongs to: the open one, or a new one when that one ended or `entry` names a model after it began. */
+  private open(entry: ReplyEntry | EntryOf<"plan">, at: number): Reply {
+    const current = this.reply
+    if (current && !current.ended && (entry.type === "plan" || entry.model === undefined || current.message.blocks.length === 0)) return current
+    this.close()
+    const message: ChatMessage = { id: this.named("assistant", entry, at), role: "assistant", blocks: [] }
+    if (this.turnProvider) message.provider = this.turnProvider
+    if (entry.type !== "plan" && entry.model) message.model = entry.model
+    if (entry.at !== undefined) message.timestamp = entry.at
+    this.messages.push(message)
+    this.starts.push(at)
+    this.reply = { message, last: at, ended: false }
+    return this.reply
+  }
+
+  private append(entry: ReplyEntry | EntryOf<"plan">, at: number, blocks: Block[]): void {
+    const reply = this.open(entry, at)
+    reply.message.blocks.push(...blocks)
+    this.drew(reply.message, entry, at)
     reply.last = at
     if (entry.type !== "plan" && entry.usage) reply.ended = true
   }
-  const marker = (entry: Entry, at: number, note: TranscriptEvent, opensTurn: boolean) => {
-    close()
+
+  private marker(entry: Entry, at: number, note: TranscriptEvent, opensTurn: boolean): void {
+    this.close()
     const message: ChatMessage = {
       // Saved provider turns keep the `native-event-` ids earlier builds gave their exchanges.
-      id: named(opensTurn && live ? "turn" : "event", entry, at),
+      id: this.named(opensTurn && this.live ? "turn" : "event", entry, at),
       role: "system",
       blocks: [{ type: "text", text: opensTurn ? note.label : eventText(note) }],
       note,
     }
     if (opensTurn) message.opensTurn = true
     if (opensTurn && entry.at !== undefined) message.timestamp = entry.at
-    drew(message, entry, at)
-    messages.push(message)
-    starts.push(at)
+    this.drew(message, entry, at)
+    this.messages.push(message)
+    this.starts.push(at)
   }
-
-  for (let index = cursor?.start ?? 0; index < entries.length; index += 1) {
-    const entry = entries[index]!
-    const at = index + offset
-    switch (entry.type) {
-      case "user": {
-        close()
-        turnProvider = entry.provider ?? source.provider
-        if (!entry.steeringFor) turn += 1
-        const message: ChatMessage = {
-          id: live && entry.requestId ? `acp-request-${entry.requestId}` : named("user", entry, at),
-          role: "user",
-          blocks: [{ type: "text", text: entry.text }, ...(entry.attachments ?? [])],
-        }
-        if (entry.requestId) message.requestId = entry.requestId
-        if (entry.steeringFor) message.steeringFor = live ? `acp-request-${entry.steeringFor}` : `native-user-${entry.steeringFor}`
-        if (entry.at !== undefined) message.timestamp = entry.at
-        const anchored = anchor(entry, at)
-        if (anchored) message.anchor = anchored
-        drew(message, entry, at)
-        messages.push(message)
-        starts.push(at)
-        break
-      }
-      case "provider-turn":
-        turnProvider = source.provider
-        turn += 1
-        marker(entry, at, { label: entry.reason, ...entry.detail !== undefined && { detail: entry.detail }, ...entry.cause && { cause: entry.cause }, ...entry.body && { body: entry.body }, ...entry.tone && { tone: entry.tone }, ...entry.source && { source: entry.source } }, true)
-        break
-      case "event":
-        marker(entry, at, { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, setup: entry.setup, source: entry.source, cause: entry.cause, limit: entry.limit }, false)
-        break
-      case "unread":
-        marker(entry, at, unreadNote(entry), false)
-        break
-      case "plan":
-        plan = entry.entries
-        append(entry, at, () => [{ type: "toolResult", id: `plan-${at}`, name: AGENT_PLAN_TOOL, text: "", details: [{ type: "plan", entries: entry.entries }] }])
-        break
-      case "proposed-plan":
-        append(entry, at, () => [proposedPlan(entry)])
-        break
-      case "text":
-        append(entry, at, () => [{ type: "text", text: entry.text }])
-        break
-      case "thinking":
-        append(entry, at, () => [{ type: "thinking", thinking: entry.text }])
-        break
-      case "attachment":
-        append(entry, at, () => [entry.attachment])
-        break
-      case "tool":
-        append(entry, at, (message) => toolBlocks(entry, turn, turnProvider, source, message.id))
-        break
-    }
-  }
-  close()
-  const last = messages.at(-1)
-  if (live && source.running && last?.role === "assistant") last.streaming = true
-  return { messages, starts, plan }
 }
 
 /** A call and, once it returned or is shown cut short, its result. */

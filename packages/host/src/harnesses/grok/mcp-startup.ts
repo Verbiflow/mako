@@ -30,7 +30,12 @@ const ServerStatus = z.object({
   detail: z.string().nullish(),
 })
 const Session = z.object({ sessionId: z.string() })
-const ResponseCompleted = z.object({ sessionId: z.string(), update: z.looseObject({ sessionUpdate: z.literal("response_completed") }) })
+/**
+ * Undefined for every other session notification, rather than a failed
+ * `safeParse`, which builds an `Error`: until the first turn completes,
+ * each notification is read here.
+ */
+const ResponseCompleted = z.object({ sessionId: z.string(), update: z.looseObject({ sessionUpdate: z.literal("response_completed") }) }).optional().catch(undefined)
 
 const QUIET = new Set(["_x.ai/mcp/init_progress", "_x.ai/mcp_initialized"])
 
@@ -62,7 +67,7 @@ export function grokMcpStartup(): AcpMcpStartupDecoder {
         return { sessionId: status.sessionId, kind, notices: [{ kind: "event", event: mcpServerFailedEvent(status.name, reason) }] }
       }
       if (settled || method !== "_x.ai/session_notification") return undefined
-      const completed = ResponseCompleted.safeParse(params).data
+      const completed = ResponseCompleted.parse(params)
       if (!completed) return undefined
       settled = true
       const unlaunched = configured.filter((name) => !reported.has(name))

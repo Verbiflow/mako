@@ -3095,7 +3095,14 @@ first update after the A/B landed failed on rows it couldn't measure. On a per-m
 recorder a tenth of its time in collection and an `AsyncLocalStorage.run`
 per message a fifth of the host rows': carry a value on the object a caller
 already passes (`RecordedLine`), and scope one for a synchronous call with
-`SyncScope`.
+`SyncScope`. Six named helper closures built per call cost the window's
+projection a fifth of its time, each a property definition under tsx
+(`EntryDrawing` holds them as methods); a schema parse that fails on nearly
+every message builds an `Error` each time (Grok's MCP startup read every
+update that way); and a reference copied whole per update grows with its
+stream (`joinedRanges` shares the ranges before the last). The full run
+warms these paths with earlier rows, so measure a suspect row alone beside
+its reference (`--rows … --ab`) before trusting that it held.
 
 Journal text appends remain in the same SQLite transaction as metadata;
 publish only after commit. The journal and the requests store run WAL with
