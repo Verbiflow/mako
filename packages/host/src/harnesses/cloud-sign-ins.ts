@@ -29,6 +29,8 @@ const CHECK_MS = 60_000
 const RENEW_BEFORE_MS = 10 * 60_000
 /** A harness asked to refresh isn't asked again sooner: a refresh it refused stays refused. */
 const RENEW_GAP_MS = 5 * 60_000
+/** While nothing checks on a timer, a state older than this is read again when asked for. */
+const FRESH_MS = 30_000
 
 /**
  * Writes each sign-in a cloud machine is given where its harness reads it,
@@ -152,9 +154,14 @@ export class CloudSignInSync {
     this.#timer = undefined
   }
 
+  /**
+   * The last check, or a new one when there's none or it's stale. Without sharing nothing checks on a timer, yet the
+   * cloud refreshes what it keeps on its own schedule; Settings asks again each minute it's open, and is read anew.
+   */
   async state(): Promise<CloudSignInsState> {
     await this.#loaded
-    if (!this.#state.harnesses.length) return this.check()
+    const checkedAt = this.#state.checkedAt ? Date.parse(this.#state.checkedAt) : 0
+    if (!this.#state.harnesses.length || (!this.#timer && Date.now() - checkedAt > FRESH_MS)) return this.check()
     return this.#state
   }
 

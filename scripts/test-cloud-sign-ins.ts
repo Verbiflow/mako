@@ -314,6 +314,21 @@ else process.exit(1);
   assert.equal(row("codex")?.kept, undefined)
   assert.ok(row("codex")?.connectable)
   console.log("ok  connecting hands Mako Cloud a rotating harness's whole sign-in; the rest stay this Mac's to share")
+
+  // Not sharing, nothing checks on a timer, yet the cloud refreshes what it keeps by itself: Settings' own reads follow it.
+  const fresh = await sync.state()
+  const refreshedAt = new Date(Date.now() + hour).toISOString()
+  kept.set("grok", { ...kept.get("grok")!, refreshedAt })
+  assert.equal((await sync.state()).checkedAt, fresh.checkedAt, "a recent check is answered as it is")
+  mock.timers.enable({ apis: ["Date"], now: Date.now() + 31_000 })
+  try {
+    shown = await sync.state()
+  } finally {
+    mock.timers.reset()
+  }
+  assert.notEqual(shown.checkedAt, fresh.checkedAt)
+  assert.equal(row("grok")?.kept?.refreshedAt, refreshedAt, "an older one is read again, with what the cloud keeps now")
+  console.log("ok  without sharing, an older state is read again when asked for")
 } finally {
   runAs(platform)
   process.env = original

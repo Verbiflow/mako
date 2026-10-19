@@ -84,9 +84,24 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   harnessSignIns?: (options: { dataRoot: string; store: HarnessSignInStore; onChange: (signIns: CloudSignInsState) => void }) => HarnessSignInSharing
 }): CloudAccount {
   let status: string | undefined
+  /** What the sign-ins depend on in the account: who it is and whether it has the cloud. */
+  let standing: string | undefined
   let described: Promise<{ name: string; platform: string; appVersion: string }> | undefined
   const { dataRoot } = environment
   secrets.adoptLegacy(cloudLegacyFiles(dataRoot))
+  // The sign-ins reach the account through `cloud`, made next, and read nothing until they start below it.
+  const sync = harnessSignIns?.({
+    dataRoot,
+    store: {
+      blocked: () => cloud.signInsBlocked(),
+      list: () => cloud.signIns(),
+      put: (signIn) => cloud.saveSignIn(signIn),
+      remove: (harness) => cloud.removeSignIn(harness),
+      connect: (harness, chain) => cloud.connectSignIn(harness, chain),
+      disconnect: (harness) => cloud.disconnectSignIn(harness),
+    },
+    onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
+  })
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -98,6 +113,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       if (status === "signing-in" && account.state.status === "signed-in") signedIn?.()
       status = account.state.status
       emit({ type: "cloud-account", account })
+      // A grant, a revoke, a sign-in or a sign-out changes what the sign-ins may do; read them again then,
+      // or Settings keeps saying "no cloud" after the grant until something else asks.
+      const next = account.state.status === "signed-in" ? `${account.state.account.id}:${account.state.account.entitlements.join(",")}` : account.state.status
+      if (standing !== undefined && next !== standing) void sync?.check()
+      standing = next
     },
     log: (message, fields) => hostLog("cloud", message, fields),
     onRequest: request,
@@ -122,20 +142,6 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   methods.handle("mako:cloud-device-remove", (id: string) => cloud.removeDevice(id))
   methods.handle("mako:cloud-sign-out", () => cloud.signOut())
 
-  const sync =
-    harnessSignIns &&
-    harnessSignIns({
-      dataRoot,
-      store: {
-        blocked: () => cloud.signInsBlocked(),
-        list: () => cloud.signIns(),
-        put: (signIn) => cloud.saveSignIn(signIn),
-        remove: (harness) => cloud.removeSignIn(harness),
-        connect: (harness, chain) => cloud.connectSignIn(harness, chain),
-        disconnect: (harness) => cloud.disconnectSignIn(harness),
-      },
-      onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
-    })
   sync?.start()
   const unsharable = () => Promise.reject(new Error("This Mac can't share sign-ins with Mako Cloud."))
   methods.handle("mako:cloud-sign-ins", () => sync?.state() ?? unsharable())

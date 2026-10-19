@@ -15,6 +15,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
+import { z } from "zod"
 import {
   PING,
   PONG,
@@ -32,6 +33,15 @@ import {
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
+import { declareCloudAccountMethods } from "@mako/host/usage/cloud-account-methods"
+import { HostMethods } from "@mako/host/transport/methods"
+import { unwatchedWork } from "@mako/host/base/event-loop"
+import { CloudSignInSync } from "@mako/host/harnesses/cloud-sign-ins"
+import { HarnessAccounts } from "@mako/host/harnesses/accounts"
+import { ProviderRegistry } from "@mako/host/harnesses/registry"
+import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
+import type { Machine } from "@mako/host/base/machine"
+import type { CloudSignInsState } from "@mako/host/contracts/cloud-sign-ins"
 import type { CloudAccount, CloudAccountState, CloudDevice } from "@mako/host/contracts/cloud-account"
 import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
 import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
@@ -124,6 +134,7 @@ async function fakeCloud() {
     if (!caller) return send(401, JSON.stringify({ title: "The connection token isn't valid here" }))
     if (request.method === "GET" && url.pathname === "/v1/devices")
       return send(200, JSON.stringify({ devices: [...devices.values()].filter((device) => !device.removed).map(publicDevice), current: caller.id }))
+    if (request.method === "GET" && url.pathname === `/v1/accounts/${account.id}/sign-ins`) return send(200, JSON.stringify({ signIns: [], kept: [] }))
     const removing = /^\/v1\/devices\/([\w-]+)$/.exec(url.pathname)?.[1]
     if (request.method === "DELETE" && removing) {
       const device = devices.get(removing)
@@ -660,4 +671,54 @@ test("a device removed while its session is open signs out, and its session's co
   while (cloud.clients().length) await sleep(10)
   const later = await callThrough(session, studio.accounts, runtimeId)
   assert.equal(later.ok, false, "a signed-out device's session calls nothing")
+})
+
+test("a grant or a revoke while signed in reads the sign-ins again, with nothing else asking", async () => {
+  const cloud = await fakeCloud()
+  cloud.account.entitlements = []
+  cloud.options.tokenSeconds = 2
+  delete process.env.MAKO_CLOUD_URL
+  const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
+  const opened: string[] = []
+  const shown: CloudSignInsState[] = []
+  const unused = async (): Promise<never> => {
+    throw new Error("Not used by the account")
+  }
+  const machine: Machine = { kind: "present", offer: unused, reveal: unused, open: unused, openUrl: async (url) => void opened.push(url), copy: unused, chooseFolder: unused, defaultBrowser: unused, thumbnail: unused }
+  const registry = new ProviderRegistry<ProviderAccountCapability>()
+  const dataRoot = join(scratch, randomUUID())
+  const account = declareCloudAccountMethods(
+    methods,
+    {
+      environment: { dataRoot, version: "0.4.0", build: { makoCloud: cloud.url } },
+      secrets: { secrets: secrets(), adoptLegacy: () => {} },
+      machine,
+      emit: (event) => {
+        if (event.type === "cloud-sign-ins") shown.push(event.signIns)
+      },
+      fixture: false,
+      // Sharing stays off, so the sign-ins are read on no timer of their own.
+      harnessSignIns: (options) => new CloudSignInSync({ ...options, accounts: new HarnessAccounts(registry), capabilities: registry, login: unused }),
+    }
+  )
+  after(() => account.stop())
+  const until = async (blocked: string | undefined, label: string) => {
+    const deadline = Date.now() + 5_000
+    while (!shown.length || shown.at(-1)?.blocked !== blocked) {
+      if (Date.now() > deadline) assert.fail(`Timed out waiting for ${label}; last shown ${JSON.stringify(shown.at(-1))}`)
+      await sleep(20)
+    }
+  }
+  await methods.invoke("mako:cloud-sign-in", [])
+  await cloud.approve(opened[0] ?? "")
+  while (!(await account.deviceId())) await sleep(10)
+  // As Settings reads it: an account without the cloud can't keep sign-ins there.
+  const read = z.object({ sharing: z.literal(false), blocked: z.string().optional() }).loose()
+  assert.equal(read.parse(JSON.parse(z.string().parse(await methods.invoke("mako:cloud-sign-ins", [], "web", true)))).blocked, "no-cloud")
+  shown.length = 0
+  cloud.account.entitlements = ["cloud"]
+  // The grant reaches this Mac with its next token, a second or so on here, and the sign-ins follow it.
+  await until(undefined, "the grant")
+  cloud.account.entitlements = []
+  await until("no-cloud", "the revoke")
 })
