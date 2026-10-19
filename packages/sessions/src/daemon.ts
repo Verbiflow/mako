@@ -25,6 +25,7 @@
  * client; if something answers the ping, it exits quietly.
  */
 
+import type { InstalledReading } from "./record-writers.js"
 import {
   createConnection,
   createServer,
@@ -389,7 +390,7 @@ function catalogService(
             reply({ id: frame.id, ok: true, result: await catalog.hold(frame.path) })
             return
           case "restore":
-            reply({ id: frame.id, ok: true, result: await catalog.restoreKept(frame.path) })
+            reply({ id: frame.id, ok: true, result: await catalog.restoreKept(frame.path, frame.installed) })
             return
           case "follow": {
             const mine = follows.get(link)
@@ -574,8 +575,8 @@ export interface DaemonClient {
   children(path: string): Promise<ChildTranscripts | null>
   /** Takes the session into the record store now (`SessionCatalog.hold`). */
   hold(path: string): Promise<boolean>
-  /** Puts a session its harness deleted back into the harness's store (`SessionCatalog.restoreKept`). */
-  restoreKept(path: string): Promise<KeptRestore>
+  /** Puts a session its harness deleted back into the harness's store (`SessionCatalog.restoreKept`), when `installed` may read its records. */
+  restoreKept(path: string, installed?: string | InstalledReading | null): Promise<KeptRestore>
   follow(path: string, fromByte: number): Promise<void>
   unfollow(path?: string): Promise<void>
   /** Ask the daemon to exit — used to replace an older vintage. */
@@ -829,12 +830,12 @@ async function connectDaemonLink(
     })
 
   // A restore writes the session whole, as a hold reads it whole.
-  const requestRestore = (path: string): Promise<KeptRestore> =>
+  const requestRestore = (path: string, installed?: string | InstalledReading | null): Promise<KeptRestore> =>
     new Promise((resolve, reject) => {
       const id = nextId++
       const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))
       pending.set(id, { kind: "restore", resolve, reject, timer })
-      send({ id, op: "restore", path })
+      send(installed === undefined ? { id, op: "restore", path } : { id, op: "restore", path, installed })
     })
 
   const requestAck = (

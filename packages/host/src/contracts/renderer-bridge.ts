@@ -52,6 +52,7 @@ import type { LiveAction, LiveActionInput } from "./live-actions.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ChildTranscripts } from "@mako/sessions/children"
 import type { EntryOriginal } from "@mako/sessions/record-original"
+import type { RecordRef } from "@mako/sessions/entries"
 import type { NativeRequest, NativeRequestInput } from "./native-requests.js"
 import type { ForkInput, TransferInput } from "./conversation-control.js"
 import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
@@ -67,6 +68,8 @@ import type { Entry, ModelInfo, SessionState, SessionSummary, Thread, ThreadCont
 import type { BootPayload, ExternalThreadActivity, HostEvent, TabSnapshot } from "./host-events-boot.js"
 import type { Capabilities, IntegrationCatalogSnapshot, MakoComputerPermissions, McpRegistrySnapshot, McpSyncPreview, McpSyncTarget, SkillReference, SkillRegistrySnapshot, SkillSyncPreview, SkillSyncTarget } from "./mcp-skills-integrations.js"
 import type { ContinuationPlan, ContinuationResolution } from "./thread-continuation.js"
+import type { RestorePlan } from "./restore-plan.js"
+import type { UnreadReport } from "./unread-records.js"
 import type { StoreFormats } from "./store-formats.js"
 import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSnapshot } from "./terminal.js"
 
@@ -251,8 +254,15 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<Extract<ContinuationResolution, { transport: "attached" }> | null>("mako:thread-owner-resolve", path),
     continuationPlan: (path: string) =>
       invokeTrustedHost<ContinuationPlan>("mako:thread-continuation-plan", path),
+    /** Records Mako couldn't read, by harness, version, kind and reason, saved and live (`UnreadReport`). */
+    unreadRecords: () => invokeTrustedHost<UnreadReport>("mako:unread-records"),
     /** Each shared store's format for this build: which this one only reads because a newer Mako changed it (`StoreFormats`). */
     storeFormats: () => invokeTrustedHost<StoreFormats>("mako:store-formats"),
+    /** The stream lines a live record came in, as Show original reads them. */
+    streamOriginal: (frame: RecordRef) => invokeTrustedHost<EntryOriginal>("mako:stream-original", frame),
+    /** What a reply to a session Mako keeps the records of will do: restore it natively, or wait for an update (`RestorePlan`). */
+    restorePlan: (path: string) =>
+      invokeTrustedHost<RestorePlan>("mako:thread-restore-plan", path),
     rememberThreadMode: (path: string, modeId: string) =>
       invokeTrustedHost<ThreadRef | null>("mako:thread-remember-mode", path, modeId),
     threadRun: (path: string) =>

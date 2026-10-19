@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import type { SQLInputValue, SQLOutputValue } from "node:sqlite"
 import { openReadOnly } from "./read-only-sqlite.js"
+import type { RecordWriterRule } from "./record-writers.js"
 
 /**
  * Where a harness keeps one session (`SessionProvider.records`): its files,
@@ -66,6 +67,8 @@ export interface SessionRecords {
   lines?: RecordLines[]
   /** A file's key and places, by its plain path as the store names it (`codex:sessions/…`); unset, or null for a path, keys a file by where it is. */
   place?: (path: string) => RecordPlace | null
+  /** Where these records state the build of the harness that wrote them (`record-writers.ts`); unset where they state none. */
+  writer?: RecordWriterRule
   /**
    * The paths the session's child agents are read at (`ChildTranscript.path`),
    * whose files and rows are among these records. The store keeps each with

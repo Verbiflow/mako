@@ -63,6 +63,7 @@ import type { SessionSettings } from "../settings.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { filesUnder, type SessionRecords } from "../harness-records.js"
 import { extraRoot } from "../record-roots.js"
+import { fieldScan, type RecordWriterRule } from "../record-writers.js"
 import type { ChildTranscript } from "../children.js"
 import { ClaudeChildren, claudeChildPath } from "./claude-children.js"
 import { basename, dirname, join } from "node:path"
@@ -433,6 +434,8 @@ function userContent(content: ClaudeContent | undefined): PromptAttachmentProjec
 }
 
 export class ClaudeProvider implements SessionProvider {
+  /** Where its records state the build that wrote them. */
+  readonly recordWriter = CLAUDE_WRITER
   harness = "claude" as const
   displayName = "Claude Code"
   /** How a session is written again as its own fork (`claude-fork.ts`). */
@@ -599,7 +602,7 @@ export class ClaudeProvider implements SessionProvider {
     }
     const roots = [root === this.roots()[0] ? { name: "claude", path: config } : extraRoot("claude", config)]
     const children = files.filter((file) => claudeChildPath(file, this.roots())?.parentPath === path)
-    return { roots, files, databases: [], children }
+    return { roots, files, databases: [], writer: CLAUDE_WRITER, children }
   }
 
   /** Remove a session file; Claude Code keeps no index that names it. */
@@ -1245,3 +1248,14 @@ function fillClaudeRef(ref: ThreadRef, line: ClaudeLine, named: TitleSource): vo
       ref.title = titleFrom(text)
   }
 }
+
+/**
+ * Claude Code states its version on every transcript line it writes for a
+ * turn, right after the session's id (`"sessionId":"…","version":"2.1.283"`);
+ * bookkeeping lines (titles, the queue, the last prompt) state none. A
+ * subagent's transcript does the same.
+ */
+const CLAUDE_WRITER: RecordWriterRule = {
+  file: (key) => (key.endsWith(".jsonl") ? claudeVersions() : null),
+}
+const claudeVersions = fieldScan('","version":"', /"sessionId":"[^"]{1,80}","version":"([^"]{1,64})"/, { before: 96, after: 72 })

@@ -9,6 +9,7 @@ import { RecordCapture } from "../packages/sessions/src/record-capture.ts"
 import type { RecordRoot } from "../packages/sessions/src/harness-records.ts"
 import { RecordStore, taggedRow } from "../packages/sessions/src/record-store.ts"
 import { makoRecords, streamFiles, streamsOf, streamsRoot, STREAMS_ROOT, withStreams } from "../packages/sessions/src/record-streams.ts"
+import { newestWriter, outdatedText, writersOf } from "../packages/sessions/src/record-writers.ts"
 import { storeReader } from "./decode-compare.ts"
 
 /**
@@ -17,7 +18,8 @@ import { storeReader } from "./decode-compare.ts"
  *
  *   tsx scripts/records.ts [--store <dir>] <command>
  *
- *   sessions [harness]                     every session kept, with its units and bytes
+ *   sessions [harness]                     every session kept, with its units, bytes and the harness versions that wrote it
+ *   writers <harness> <native id>          every harness version that wrote the session, each from its records or observed running it, the newest first
  *   captures [harness [native id]] [--limit n]   the newest captures that took versions or were slow
  *   units <harness> <native id>            a session's units: role, versions, size, newest kind
  *   versions <harness> <unit key>          a unit's versions
@@ -27,11 +29,13 @@ import { storeReader } from "./decode-compare.ts"
  *   backfill [harness] [--pending n]       the backfill's last pass, then every session in the rail (read
  *                                          read-only, as the catalog lists it) against the store's stamps:
  *                                          held as it stands, held at an older stamp, or not held, newest first
- *   restore <harness> <native id> --home <dir> [--root <name>=<dir>]… [--dry-run] [--fork]
+ *   restore <harness> <native id> --home <dir> [--root <name>=<dir>]… [--dry-run] [--fork] [--installed <version>]
  *                                          a root kept outside the session's home (`units` prints
  *                                          each key's root before its colon) goes where --root says;
  *                                          with --fork, a copy there that went on without Mako stays
- *                                          as it is and the arriving version becomes the harness's own fork
+ *                                          as it is and the arriving version becomes the harness's own fork;
+ *                                          with --installed, nothing is written when that version of the harness
+ *                                          is older than the newest that wrote the records (`restoreGate`)
  *   archive [--archive <dir>] [--migrate]  the archive's migration: rows dropped, Mako's copies kept, rows
  *                                          still to look at, and the file's size; --migrate runs a pass now
  *   attachments [--archive <dir>] [--app-data <dir>] [--sweep | --restore-trash]
@@ -71,6 +75,7 @@ for (let root = option("--root"); root !== undefined; root = option("--root")) {
   roots.push({ name: root.slice(0, at), path: resolve(root.slice(at + 1)) })
 }
 const dryRun = flag("--dry-run")
+const installed = option("--installed")
 const forking = flag("--fork")
 const limit = Number(option("--limit") ?? 50)
 const pending = Number(option("--pending") ?? 10)
@@ -138,8 +143,8 @@ try {
   switch (command) {
     case "sessions": {
       const sessions = store.sessions(rest[0])
-      if (json) print(sessions)
-      else for (const session of sessions) console.log(`${session.harness.padEnd(9)} ${session.nativeId}  ${session.units} units  ${mib(session.bytes)}`)
+      if (json) print(sessions.map((session) => ({ ...session, writers: store.writers(session.harness, session.nativeId) })))
+      else for (const session of sessions) console.log(`${session.harness.padEnd(9)} ${session.nativeId}  ${session.units} units  ${mib(session.bytes)}  ${wroteBy(session.harness, session.nativeId)}`)
       break
     }
     case "captures": {
@@ -147,6 +152,25 @@ try {
       const captures = store.captures({ harness, nativeId, limit })
       if (json) print(captures)
       else for (const capture of captures) console.log(`${new Date(capture.at).toISOString()} ${capture.harness.padEnd(9)} ${capture.nativeId}  ${String(capture.versions).padStart(4)} versions  ${mib(capture.newBytes).padStart(10)} → ${mib(capture.storedBytes).padStart(10)}  ${capture.ms} ms${capture.waitedMs ? ` (and ${capture.waitedMs} ms letting others go first)` : ""}${capture.reads ? `, ${capture.rowsRead} rows read whole in ${capture.reads} database reads, the longest ${capture.longestReadMs} ms` : ""}${capture.rowsMatched ? `, ${capture.rowsMatched} held rows matched by their keys' digest` : ""}`)
+      break
+    }
+    case "writers": {
+      const [harness, nativeId] = need(2, "writers <harness> <native id>")
+      const writers = store.writers(harness, nativeId)
+      if (!writers) throw new Error(`Mako holds no records of ${harness} session ${nativeId}`)
+      if (json) print({ ...writers, newest: newestWriter(writers) })
+      else {
+        const all = writersOf(writers).reverse()
+        const words = { record: "stated by its records", observed: "observed running it", log: "named by its harness's log", install: "the only install while it was written" }
+        for (const writer of all) console.log(`${writer.version.padEnd(20)} ${words[writer.source]}`)
+        const evidence = writers.evidence
+        if (evidence) {
+          if (evidence.source === "range") console.log(`range: no newer than ${evidence.upTo}${evidence.from ? `, no older than ${evidence.from}` : ""}${evidence.line ? ` (${evidence.line})` : ""}, bound by ${evidence.bound ?? "its harness's evidence"}`)
+          if (evidence.source === "unknown") console.log("unknown: nothing names or bounds the version that wrote it, so a restore goes only into an install provably newer")
+          if (evidence.writes) console.log(`written ${new Date(evidence.writes.first).toISOString()} to ${new Date(evidence.writes.last).toISOString()}`)
+          console.log(`why: ${evidence.why}`)
+        } else if (!all.length) console.log("Nothing known yet: the backfill's next pass looks (`fillWriters`)")
+      }
       break
     }
     case "units": {
@@ -160,7 +184,7 @@ try {
       const [harness, key] = need(2, "versions <harness> <unit key>")
       const versions = store.versions(harness, unshown(key))
       if (json) print(versions)
-      else for (const version of versions) console.log(`${String(version.seq).padStart(4)} ${version.kind.padEnd(7)} at ${version.at} → ${version.size} bytes, ${version.chunks} chunks, ${version.capturedAt}${version.digest ? ` ${version.digest.slice(0, 16)}` : ""}`)
+      else for (const version of versions) console.log(`${String(version.seq).padStart(4)} ${version.kind.padEnd(7)} at ${version.at} → ${version.size} bytes, ${version.chunks} chunks, ${version.capturedAt}${version.digest ? ` ${version.digest.slice(0, 16)}` : ""}${version.writer ? `, written by ${version.writer.versions.join(" then ")} (${version.writer.source})` : ""}`)
       break
     }
     case "cat": {
@@ -185,13 +209,13 @@ try {
         const records = withStreams(own, streams, await streamsOf(streams, harness, ref.nativeId))
         const report = await store.capture({ harness, nativeId: ref.nativeId, home, records })
         if (json) print({ nativeId: ref.nativeId, ...report })
-        else console.log(`${ref.nativeId}: ${report.taken} versions (${summary(report.versions.map((version) => version.kind))}${report.taken > report.versions.length ? `, the first ${report.versions.length} listed` : ""}), ${report.unchanged} unchanged, ${report.newChunks} new chunks, ${mib(report.newBytes)} → ${mib(report.storedBytes)}, ${report.rowsRead} rows read whole in ${report.reads} database reads (the longest ${report.longestReadMs} ms), ${report.rowsMatched} held rows matched by their keys' digest, ${report.ms} ms`)
+        else console.log(`${ref.nativeId}: ${wroteIn(report.writers)}${report.taken} versions (${summary(report.versions.map((version) => version.kind))}${report.taken > report.versions.length ? `, the first ${report.versions.length} listed` : ""}), ${report.unchanged} unchanged, ${report.newChunks} new chunks, ${mib(report.newBytes)} → ${mib(report.storedBytes)}, ${report.rowsRead} rows read whole in ${report.reads} database reads (the longest ${report.longestReadMs} ms), ${report.rowsMatched} held rows matched by their keys' digest, ${report.ms} ms`)
       }
       break
     }
     case "restore": {
       const [harness, nativeId] = need(2, "restore <harness> <native id> --home <dir> [--root <name>=<dir>]… [--dry-run] [--fork]")
-      const report = await store.restore({ harness, nativeId, home, roots, dryRun, ...forking && { fork: storeReader(harness, home).fork } })
+      const report = await store.restore({ harness, nativeId, home, roots, dryRun, ...forking && { fork: storeReader(harness, home).fork }, ...installed !== undefined && { installed } })
       if (json) print(report)
       else {
         for (const action of report.actions) if (action.action !== "skip") console.log(`${action.action.padEnd(11)} ${mib(action.bytes).padStart(10)} ${shown(action.unit)}`)
@@ -208,7 +232,8 @@ try {
           for (const rows of report.fork.rows) console.log(`  ${"rows".padEnd(11)} ${mib(rows.bytes).padStart(10)} ${rows.path} ${rows.table}: ${rows.insert} inserted, ${rows.skip} already there`)
           for (const diverged of report.fork.diverged) console.log(`  FORK WENT ON ${shown(diverged.unit)}: ${diverged.reason}`)
         }
-        console.log(report.written ? `Restored under ${home}` : dryRun ? "Dry run: nothing written" : report.diverged.length ? "Nothing written" : "Already there: nothing to write")
+        if (report.outdated) console.log(`OUTDATED ${outdatedText(harness, report.outdated)} Nothing written`)
+        console.log(report.written ? `Restored under ${home}` : dryRun ? "Dry run: nothing written" : report.diverged.length || report.outdated ? "Nothing written" : "Already there: nothing to write")
       }
       break
     }
@@ -337,6 +362,21 @@ try {
   }
 } finally {
   await store.close()
+}
+
+/** The harness versions that wrote a session, newest first, each marked where only observed. */
+function wroteBy(harness: string, nativeId: string): string {
+  const writers = store.writers(harness, nativeId)
+  const all = writersOf(writers).reverse()
+  if (all.length) return `written by ${all.map((writer) => `${writer.version}${writer.source === "record" ? "" : ` (${writer.source})`}`).join(", ")}`
+  const evidence = writers?.evidence
+  return evidence?.source === "range" ? `written by ${evidence.upTo} or older (range, ${evidence.bound ?? "evidence"})` : evidence ? "writer unknown" : "writer not looked for yet"
+}
+
+/** The versions a capture stamped, for its line. */
+function wroteIn(writers: { record: string[]; observed: string[] }): string {
+  const parts = [...writers.record.map((version) => `${version}`), ...writers.observed.map((version) => `${version} observed`)]
+  return parts.length ? `by ${parts.join(", ")}: ` : ""
 }
 
 function need(count: number, usage: string): string[] {

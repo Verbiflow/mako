@@ -21,6 +21,7 @@ const WORDS = {
   threads: { noun: "your Threads", reads: "can show them but not change them", update: "Update Mako to edit.", plural: true },
   "session-memory": { noun: "how Mako keeps track of sessions", reads: "can show your sessions but can't resume them", update: "Update Mako to resume them.", plural: false },
   records: { noun: "your session records", reads: "can read and restore them but not take new ones", update: "Update Mako to keep taking them.", plural: true },
+  unread: { noun: "the unread record counts", reads: "can show them but not count new ones", update: "Update Mako to count them.", plural: true },
   outputs: { noun: "the kept command output", reads: "can show it but not keep new output", update: "Update Mako to keep it.", plural: false },
   archive: { noun: "Mako's copies of sessions", reads: "can show them but not change them", update: "Update Mako to change them.", plural: true },
 } satisfies Record<SharedStore, StoreWords>

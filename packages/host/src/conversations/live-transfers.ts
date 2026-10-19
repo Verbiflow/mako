@@ -282,6 +282,8 @@ export class LiveTransfers {
         includesBase: !nativeFork && !prior?.includesBase,
         bundles: this.host.bundles,
       })
+      // Records the harness here is too old to restore go as the transcript, and the line above the reply says why.
+      if (verdict?.kind === "closed" && verdict.outdated) manifest.outdated = verdict.outdated
       if (resident.generation !== generation) return
       const driver = this.host.dependencies.driver(transfer.input.provider)
       if (!driver) throw new Error("The destination provider was removed")

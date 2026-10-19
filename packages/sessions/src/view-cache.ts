@@ -6,7 +6,8 @@ import { join } from "node:path"
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib"
 import { z } from "zod"
-import { EntrySchema, type Entry } from "./entries.js"
+import { EntrySchema, type Entry, type EntryOf } from "./entries.js"
+import type { UnreadIndex } from "./unread-index.js"
 import { entryChars, trimToolOutput, VIEWER_PAGE, type Thread, type ThreadPageOptions, type ThreadTail } from "./format.js"
 import type { ResumePoint } from "./jsonl.js"
 import { ResumePointSchema, ThreadRefSchema, UnreadRecordSchema } from "./thread-schema.js"
@@ -234,6 +235,11 @@ export class View implements SessionView {
     return { entries: this.range(start, end, cut === undefined ? "body" : "brief"), start }
   }
 
+  /** Every record the decoder couldn't read, in order. */
+  unreadEntries(): Entry[] {
+    return this.prepare("SELECT body FROM entries WHERE type = 'unread' ORDER BY seq").all().map((row) => decodeEntry(row["body"]))
+  }
+
   /** The entry `id` whole. */
   entry(id: string): Entry | null {
     const row = this.prepare("SELECT body FROM entries WHERE id = ?").get(id)
@@ -429,11 +435,12 @@ export class ViewCache {
   /** A catalog without a folder keeps its views here, newest use last. */
   private memory = new Map<string, { view: View | WholeView; bytes: number }>()
 
-  /** `folder` null keeps the views in memory. */
+  /** `folder` null keeps the views in memory. `unread` is told each view's unread records as it's written (`UnreadIndex`). */
   constructor(
     private readonly folder: string | null,
     private readonly translator: () => string,
-    private readonly budget = VIEW_CACHE_BYTES
+    private readonly budget = VIEW_CACHE_BYTES,
+    private readonly unread: UnreadIndex | null = null
   ) {}
 
   /** The view of `path` made from exactly `stamp`: by this build, or by any when `current` is false. */
@@ -518,6 +525,7 @@ export class ViewCache {
   async remove(path: string): Promise<void> {
     await this.writes
     this.forget(path)
+    this.unread?.forget(path)
     if (this.folder) await rm(this.file(path), { force: true })
   }
 
@@ -619,6 +627,7 @@ export class ViewCache {
   }
 
   private async writeNow(meta: Omit<ViewMeta, "total" | "chars">, thread: Thread): Promise<void> {
+    this.noteUnread(meta, thread.entries)
     if (!this.folder || newerViewFile(this.file(meta.path))) {
       this.forget(meta.path)
       const chars = thread.entries.reduce((sum, entry) => sum + entryChars(entry), 0)
@@ -682,7 +691,22 @@ export class ViewCache {
       throw error
     }
     this.forget(meta.path)
+    if (this.unread) {
+      // The kept part's unread records and the tail's: what the view holds now, read from it.
+      const view = await this.opened(meta.path)
+      if (view instanceof View) this.noteUnread(meta, view.unreadEntries())
+    }
     await this.evict()
+  }
+
+  /** Tells the unread index what this view holds; a failure there never fails the view. */
+  private noteUnread(meta: Omit<ViewMeta, "total" | "chars">, entries: Iterable<Entry>): void {
+    if (!this.unread) return
+    try {
+      this.unread.note({ path: meta.path, harness: meta.ref.harness, nativeId: meta.ref.nativeId }, meta.translator, unreadOf(entries))
+    } catch (error) {
+      console.warn("The unread index could not be written", meta.path, error instanceof Error ? error.message : error)
+    }
   }
 
   private async evict(): Promise<void> {
@@ -722,4 +746,8 @@ export class ViewCache {
   private file(path: string): string {
     return join(this.folder ?? "", `${createHash("sha256").update(path).digest("hex").slice(0, 40)}${EXTENSION}`)
   }
+}
+
+function* unreadOf(entries: Iterable<Entry>): Generator<EntryOf<"unread">> {
+  for (const entry of entries) if (entry.type === "unread") yield entry
 }

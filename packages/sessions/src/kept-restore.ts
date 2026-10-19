@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { OutdatedRuntimeSchema } from "./record-writers.js"
 
 /**
  * What putting a session its harness deleted back into the harness's own
@@ -16,6 +17,12 @@ export const KeptRestoreSchema = z.discriminatedUnion("kind", [
    * fork, `nativeId`.
    */
   z.object({ kind: z.literal("forked"), nativeId: z.string() }),
+  /**
+   * The harness installed here is older than the newest version that wrote
+   * the records (`restoreGate`): nothing was written, since it may not read
+   * them. An update, then the same restore, resumes it natively.
+   */
+  OutdatedRuntimeSchema.extend({ kind: z.literal("outdated") }),
   z.object({ kind: z.literal("refused"), reason: z.string() }),
 ])
 export type KeptRestore = z.infer<typeof KeptRestoreSchema>

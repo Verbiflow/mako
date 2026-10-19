@@ -1,4 +1,6 @@
 import { readPromptAttachments } from "../prompt-attachments.js"
+import type { WriterEvidenceLookups } from "../record-evidence.js"
+import type { WriterEvidence } from "../record-writers.js"
 import { cursorModelSettings } from "./cursor-settings.js"
 import { CursorDesktopStore } from "./cursor-desktop.js"
 import { cursorFailure, cursorTaskOpener, isCursorTaskNotification } from "./cursor-presentation.js"
@@ -376,6 +378,11 @@ async function nativeFiles(paths: string[]): Promise<NativeFile[]> {
 }
 
 export class CursorProvider implements SessionProvider {
+  /** Its records state no version: what its harness leaves beside them says (`record-evidence.ts`). */
+  writerEvidence(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null> {
+    return reader.cursorStore(path)
+  }
+
   harness = "cursor" as const
   displayName = "Cursor"
   /** How a session is written again as its own fork (`cursor-fork.ts`). */

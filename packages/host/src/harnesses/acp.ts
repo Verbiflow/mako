@@ -69,7 +69,7 @@ import { basename } from "node:path"
 import { applyAcpSettings } from "./acp-config.js"
 import { acpObservedSettings } from "@mako/sessions/acp-decoder"
 import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecord, type AcpResponseRecord } from "./acp-decoder.js"
-import { frameOf, nativeStream, withFrame, type NativeStream, type StreamFrame } from "./native-stream.js"
+import { frameOf, nativeStream, streamRuntime, withFrame, type NativeStream, type StreamFrame } from "./native-stream.js"
 import { deliverDecoded } from "../contracts/native-decoding.js"
 import { normalizeAcpOptions } from "@mako/sessions/model-catalog"
 import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpProviderTurnCause, AcpSidePeer, AcpTuning, ProviderAcpSource } from "./acp-source.js"
@@ -708,6 +708,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         const output = await trace.step("runtime-discovery", () => readRuntimeVersion(dependencies.processes, executable, versionArgs, env, "launch")).catch(() => undefined)
         runtime = reportedRuntime(output === undefined ? undefined : parseVersion(output), "launch executable version query")
       }
+      streamRuntime(live.stream, runtime)
       update(live, { executionContext: { ...context, runtime } })
       const advertised = initialized.agentCapabilities?.promptCapabilities ?? {}
       live.promptCapabilities = source.readsUnadvertised?.image ? { ...advertised, image: true } : advertised

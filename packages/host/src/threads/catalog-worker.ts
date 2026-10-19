@@ -23,6 +23,8 @@ const catalogWorkerData = z.object({
   archivePath: z.string().min(1),
   recordsPath: z.string().min(1),
   viewsPath: z.string().min(1),
+  /** The host's installed readings, which stamp a write heard as it lands. */
+  runtimeReadings: z.string().min(1).optional(),
   readOnly: z.boolean(),
   /** Runs a large record's decode as Node in a child process: Electron's Helper inside the app. */
   decodeExecutable: z.string().min(1),
@@ -55,6 +57,7 @@ async function main(): Promise<void> {
     archivePath: data.data.archivePath,
     recordsPath: data.data.recordsPath,
     viewsPath: data.data.viewsPath,
+    ...data.data.runtimeReadings && { runtimeReadings: data.data.runtimeReadings },
     readOnly: data.data.readOnly,
     // Off the host's main thread, so the worker takes every session in the rail into the record store; never a read-only (fixture) catalog.
     backfill: !data.data.readOnly,

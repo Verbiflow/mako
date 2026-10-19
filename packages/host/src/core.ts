@@ -17,6 +17,8 @@ import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
+import { makoViews } from "@mako/sessions"
+import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, type CloudSignInPlace } from "./harnesses/index.js"
@@ -24,7 +26,7 @@ import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { nodePlatform } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
-import { openThreads, declareThreadMethods } from "./threads/index.js"
+import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
 import { openConversations, declareConversationMethods, CloudConversations, folderRepository, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
@@ -256,6 +258,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     crashes,
     unknown,
     mismatches,
+    unread: () => unreadCounts({ views: makoViews(), records: makoRecords() }).groups,
     fixture: fixtureDesk,
     token: () => late.cloud?.token() ?? Promise.resolve(undefined),
     account: () => late.cloud?.id() ?? Promise.resolve(undefined),
@@ -266,6 +269,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       threads: catalog.list().length,
     }),
   })
+  declareUnreadRecordMethods(methods, { views: makoViews(), records: makoRecords(), live: () => unknown.kinds(), since: Date.now(), streams })
   late.cloud = declareCloudAccountMethods(methods, {
     environment,
     secrets: fixtureDesk ? detachedSecrets() : secrets,

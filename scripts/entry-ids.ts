@@ -4,20 +4,17 @@
  * how many entries say which record they came from. A read that starts
  * mid-file is noted where it names a record otherwise than the whole read:
  * it decodes without the turn before it, so an entry a turn folds several
- * records into (a plan) is named by the first of them it saw. `--save` keeps
- * every session's ids; `--against` compares a later build's with them, which
- * is how ids are shown not to depend on decoder code. Read-only.
+ * records into (a plan) is named by the first of them it saw. Read-only.
+ * Whether ids, and everything else an entry holds, hold across two decoder
+ * builds is `scripts/decode-diff.ts`'s (`--base <ref>`).
  *
  *   npx tsx scripts/entry-ids.ts                      12 sessions of each reader, largest first
  *   npx tsx scripts/entry-ids.ts --per 40 --only codex
- *   npx tsx scripts/entry-ids.ts --save <file>        keep the ids
- *   npx tsx scripts/entry-ids.ts --against <file>     the same sessions' ids, beside a kept run
  */
 import { createHash } from "node:crypto"
-import { open, readFile, writeFile } from "node:fs/promises"
+import { open } from "node:fs/promises"
 import { homedir } from "node:os"
 import { parseArgs } from "node:util"
-import { z } from "zod"
 import { SessionCatalog, translatorBuild, type SessionProvider } from "@mako/sessions"
 import { storeReader } from "./decode-compare"
 
@@ -25,8 +22,6 @@ const { values: options } = parseArgs({
   options: {
     per: { type: "string", default: "12" },
     only: { type: "string" },
-    save: { type: "string" },
-    against: { type: "string" },
     /** Session files past this many bytes are left out, so a run stays quick. */
     "max-bytes": { type: "string", default: String(512 * 1024 * 1024) },
   },
@@ -34,11 +29,6 @@ const { values: options } = parseArgs({
 
 const READERS = ["claude", "codex", "cursor", "devin", "devin-ide", "grok", "opencode"]
 
-const KeptSchema = z.object({
-  translator: z.string(),
-  sessions: z.record(z.string(), z.object({ reader: z.string(), ids: z.array(z.string()) })),
-})
-type Kept = z.infer<typeof KeptSchema>
 
 interface Finding {
   reader: string
@@ -52,13 +42,10 @@ interface Finding {
   /** Why the session could not be read at all. */
   failed?: string
   tail?: { entries: number; foreign: string[] }
-  against?: { kept: number; same: number; gone: string[]; added: number }
 }
 
 const home = homedir()
 const translator = translatorBuild()
-const kept: Kept = { translator, sessions: {} }
-const earlier = options.against ? KeptSchema.parse(JSON.parse(await readFile(options.against, "utf8"))) : undefined
 const findings: Finding[] = []
 
 for (const reader of READERS) {
@@ -68,14 +55,12 @@ for (const reader of READERS) {
   await catalog.scan()
   const sized = catalog.list().map((ref) => ({ path: ref.path, bytes: ref.bytes ?? 0 }))
   await catalog.stop()
-  const paths = earlier
-    ? Object.entries(earlier.sessions).flatMap(([path, session]) => (session.reader === reader ? [path] : []))
-    : sized
-        // A database session's bytes are its record's position, not a size.
-        .filter((session) => session.path.includes("#") || session.bytes <= Number(options["max-bytes"]))
-        .sort((a, b) => b.bytes - a.bytes)
-        .slice(0, Number(options.per))
-        .map((session) => session.path)
+  const paths = sized
+    // A database session's bytes are its record's position, not a size.
+    .filter((session) => session.path.includes("#") || session.bytes <= Number(options["max-bytes"]))
+    .sort((a, b) => b.bytes - a.bytes)
+    .slice(0, Number(options.per))
+    .map((session) => session.path)
   for (const path of paths) {
     const finding = await check(reader, provider, path)
     if (finding) findings.push(finding)
@@ -107,18 +92,6 @@ async function check(reader: string, provider: SessionProvider, path: string): P
     // A tail decodes its first turn without the lines before it, so only ids that name a record are compared.
     if (tail) finding.tail = { entries: tail.entries.length, foreign: tail.entries.flatMap((entry) => (entry.record && entry.id && !seen.has(entry.id) ? [entry.id] : [])) }
   }
-  const before = earlier?.sessions[path]
-  if (before) {
-    const now = new Set(ids)
-    const was = new Set(before.ids)
-    finding.against = {
-      kept: before.ids.length,
-      same: before.ids.filter((id) => now.has(id)).length,
-      gone: before.ids.filter((id) => !now.has(id)),
-      added: ids.filter((id) => !was.has(id)).length,
-    }
-  }
-  kept.sessions[path] = { reader, ids }
   return finding
 }
 
@@ -156,11 +129,9 @@ for (const finding of findings) {
   if (finding.unstable) notes.push("a second read gave other ids")
   const noted: string[] = []
   if (finding.tail?.foreign.length) noted.push(`tail named ${finding.tail.foreign.length} of ${finding.tail.entries} otherwise (${finding.tail.foreign.slice(0, 2).join(", ")})`)
-  if (finding.against && finding.against.gone.length) notes.push(`${finding.against.gone.length} of ${finding.against.kept} kept ids gone (${finding.against.gone.slice(0, 2).join(", ")}), ${finding.against.added} added`)
   if (notes.length) failed = true
   notes.push(...noted)
   const share = finding.entries ? `${Math.round((100 * finding.recorded) / finding.entries)}%` : "-"
   console.log(`${finding.reader.padEnd(9)} ${short(finding.path).padEnd(44)} ${String(finding.entries).padStart(8)} ${share.padStart(9)} ${String(finding.unread).padStart(7)}  ${notes.join("; ") || "ok"}`)
 }
-if (options.save) await writeFile(options.save, JSON.stringify(kept))
 process.exitCode = failed ? 1 : 0

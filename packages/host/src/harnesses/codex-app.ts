@@ -32,7 +32,7 @@ import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { mergeWindows } from "../contracts/account-usage.js"
 import { CodexDecoder } from "./codex/decoder.js"
-import { nativeStream, type NativeStream } from "./native-stream.js"
+import { nativeStream, streamRuntime, type NativeStream } from "./native-stream.js"
 import { environmentForExecutable } from "../base/executable.js"
 import { codexMcpConfig, mergeCodexConfig } from "../tools/index.js"
 import {
@@ -653,10 +653,9 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       capabilities: CODEX_CLIENT_CAPABILITIES,
     })))
     sendRpc(live, { jsonrpc: "2.0", method: "initialized" })
-    if (live.state.executionContext) updateState(live, { executionContext: {
-      ...live.state.executionContext,
-      runtime: reportedRuntime(codexRuntimeVersion(initialized.userAgent), "app-server initialize.userAgent"),
-    } })
+    const runtime = reportedRuntime(codexRuntimeVersion(initialized.userAgent), "app-server initialize.userAgent")
+    streamRuntime(live.stream, runtime)
+    if (live.state.executionContext) updateState(live, { executionContext: { ...live.state.executionContext, runtime } })
     const identityObservation = observeNativeIdentity(async () => {
       const { account } = await rpcRequest(live, "account/read", { refreshToken: false })
       return reportedIdentity(account?.type === "chatgpt" ? account.email : undefined, account?.type ?? "signed-out", CODEX_NATIVE_IDENTITY.via)

@@ -49,6 +49,7 @@ import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
 import { AUTO_CONTINUE_NOTE, savedMakoPrompt, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { viewer } from "@/state/viewer"
+import { carriedBecause } from "@/lib/restore-plan"
 import { AnswerTimeContext, useTranscriptSource } from "./source-context"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -272,13 +273,16 @@ function Continued({ continued, provider, said, timestamp, origin }: { continued
 function CarriedLine({ carried, time }: { carried: CarriedHistory; time?: number }) {
   const from = carried.from.map((harness) => harnessLabel(harness)).join(" and ")
   const turns = carried.turns === undefined ? undefined : `${carried.turns} turn${carried.turns === 1 ? "" : "s"}`
+  // Why the harness didn't resume its own session: the version here is older than the one that wrote it.
+  const because = carried.outdated ? carriedBecause(harnessLabel(carried.outdated.harness), carried.outdated) : undefined
   return (
     <EventLine
       align="end"
       icon={HistoryIcon}
       time={time}
       data-carried-history=""
-      words={{ title: from ? `Continued from ${from}` : "Continued with the conversation so far", detail: [turns].filter(Boolean).join(" · ") || undefined }}
+      data-carried-outdated={carried.outdated ? "" : undefined}
+      words={{ title: from ? `Continued from ${from}` : "Continued with the conversation so far", detail: [turns, because].filter(Boolean).join(" · ") || undefined }}
       action={
         <button
           type="button"

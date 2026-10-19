@@ -7,6 +7,7 @@ import { hostLog } from "../base/host-log.js"
 import { HostTelemetry, type HostTelemetrySources } from "./host-telemetry.js"
 import type { NativeUnknown } from "../base/native-unknown.js"
 import type { StreamMismatches } from "../base/stream-mismatches.js"
+import type { UnreadGroup } from "@mako/sessions/unread-index"
 import { Telemetry, telemetryOff } from "./telemetry.js"
 import { telemetryMachineId } from "../base/machine-id.js"
 import type { MethodTable } from "../base/methods.js"
@@ -22,6 +23,7 @@ export async function declareTelemetryMethods(methods: MethodTable, {
   crashes,
   unknown,
   mismatches,
+  unread,
   fixture,
   token,
   ...sources
@@ -32,6 +34,8 @@ export async function declareTelemetryMethods(methods: MethodTable, {
   unknown: Pick<NativeUnknown, "kinds">
   /** Where streams and records disagreed. */
   mismatches: Pick<StreamMismatches, "kinds">
+  /** The saved unread records' groups, by the version that wrote them. */
+  unread: () => readonly UnreadGroup[]
   fixture: boolean
   /** A connection token while this Mac is signed in to Mako. */
   token: () => Promise<string | undefined>
@@ -47,7 +51,7 @@ export async function declareTelemetryMethods(methods: MethodTable, {
   })
   methods.handle("mako:telemetry", () => telemetry.state())
   methods.handle("mako:telemetry-choose", (choice) => telemetry.choose(choice))
-  return new HostTelemetry(telemetry, { ...sources, crashesAfter: (id) => crashes.after(id), crashIdAt, unknownKinds: () => unknown.kinds(), mismatchKinds: () => mismatches.kinds() })
+  return new HostTelemetry(telemetry, { ...sources, crashesAfter: (id) => crashes.after(id), crashIdAt, unknownKinds: () => unknown.kinds(), mismatchKinds: () => mismatches.kinds(), unreadGroups: unread })
 }
 
 function describeApp({ version, build: stamped, packaged, appRoot }: Pick<HostEnvironment, "appRoot" | "version" | "build" | "packaged">): TelemetryApp {

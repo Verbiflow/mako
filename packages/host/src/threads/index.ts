@@ -24,7 +24,7 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import type { ThreadHarnesses } from "./harnesses.js"
 import type { ThreadChildContext, ThreadContextOptions } from "../contracts/conversation-session.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
-import { defaultCatalogIdentity, loadedCatalogCode } from "@mako/sessions"
+import { defaultCatalogIdentity, loadedCatalogCode, makoViews } from "@mako/sessions"
 
 export type { ThreadCatalog, ThreadFileHomes } from "./catalog.js"
 export type { ThreadLifecycle, LiveThreads, NativeQueue } from "./lifecycle.js"
@@ -100,6 +100,7 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
     memory,
     memoryPath: sessionMemoryPath(),
     records: makoRecords(),
+    views: makoViews(),
     archive: join(homedir(), ".mako", "archive"),
   })
   const stopFollowing = store
@@ -107,7 +108,7 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
       jobs,
       subscribed,
       formats: {
-        // Every shared store: the record store and kept outputs are another process's to write, so their files are read.
+        // Every shared store: the record store, unread index and kept outputs are another process's to write, so their files are read.
         key: () => formatsKey(formats()),
         changed: () => emit({ type: "store-formats", formats: formats() }),
       },
@@ -236,3 +237,4 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   declareChatFolderMethods(methods)
   return lifecycle
 }
+export { declareUnreadRecordMethods, unreadReport } from "./unread-records.js"

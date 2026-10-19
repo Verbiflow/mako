@@ -9,6 +9,7 @@ import { PROVIDER_FAILURE_KINDS } from "./provider-failure.js"
 import { MessageAnchorSchema } from "./message-anchor.js"
 import { ActorSchema } from "./thread-identity.js"
 import { INTERRUPTION_REASONS } from "./live-conversations.js"
+import { OutdatedRestoreSchema, type OutdatedRestore } from "./restore-plan.js"
 export { PromptAttachmentSchema } from "./prompt-attachments.js"
 
 export const ProviderSelectionSchema = SessionSettingsSchema
@@ -74,8 +75,11 @@ export type ResumeVerdict =
    * The harness keeps this record closed to resumes (a Codex archive, a
    * Cursor desktop chat) and the catalog says so; continuing it starts a new
    * session of the same harness from the conversation, the record untouched.
+   * `outdated`: the records are Mako's, and the harness installed here is
+   * older than the version that wrote them, so they weren't restored; an
+   * update makes the same resume native.
    */
-  | { kind: "closed"; reason: string }
+  | { kind: "closed"; reason: string; outdated?: OutdatedRestore }
 
 /** An absent baseline permits no claim that native history is unchanged. */
 export function compareNativeCheckpoint(previous: string | undefined, current: string): "same" | "moved" | "unknown" {
@@ -98,6 +102,12 @@ export const ContextManifestSchema = z.object({
   turns: z.number().int().nonnegative().optional(),
   /** The harnesses that wrote the carried turns, in the order they first appear. */
   from: z.array(z.string()).optional(),
+  /**
+   * Why a harness that could have resumed its own session was given the
+   * transcript instead: Mako keeps that session's records, and the version
+   * installed here is older than the one that wrote them (`restoreGate`).
+   */
+  outdated: OutdatedRestoreSchema.optional(),
 })
 export type ContextManifest = z.infer<typeof ContextManifestSchema>
 export const TransferStateSchema = z.discriminatedUnion("kind", [

@@ -11,6 +11,7 @@ import { KeptOutputs, keptOutputsStanding } from "../dist/kept-outputs.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 import { RecordStore, recordStoreStanding } from "../dist/record-store.js"
 import { archiveStanding } from "../dist/archive.js"
+import { UnreadIndex, UNREAD_INDEX_FILE, unreadCounts, unreadIndexStanding } from "../dist/unread-index.js"
 import { ViewCache } from "../dist/view-cache.js"
 import {
   declareStoreFormat,
@@ -208,6 +209,41 @@ try {
   assert.equal(recordStoreStanding(recordsPath).access, "refused")
   assert.equal(dump(recordsFile), refused, "and left as it is")
   console.log("PASS: the record store is read and restored from in a newer format, and refused past it with the version named")
+
+  // The unread index: a newer one is counted and never written.
+  {
+    const views = join(root, "views")
+    await mkdir(views, { recursive: true })
+    const file = join(views, UNREAD_INDEX_FILE)
+    const index = new UnreadIndex(file)
+    index.note({ path: "/s/a.jsonl", harness: "codex", nativeId: "a" }, "build-1", [{ type: "unread", kind: "response_item new_thing", reason: "unknown", raw: {}, id: "@1" }])
+    index.close()
+    raise(file, "meta", { writableBy: 2, readableBy: 1, column: { table: "unread", name: "detail", value: "newer" }, guarded: ["unread"] })
+    const kept = dump(file)
+    const older = new UnreadIndex(file)
+    older.note({ path: "/s/b.jsonl", harness: "codex", nativeId: "b" }, "build-1", [{ type: "unread", kind: "other", reason: "unknown", raw: {}, id: "@2" }])
+    older.forget("/s/a.jsonl")
+    older.close()
+    assert.equal(dump(file), kept, "this build writes nothing into a newer index")
+    // Raised under an index this build has open: it stops noting from its next note.
+    const running = join(root, "views-running")
+    await mkdir(running, { recursive: true })
+    const runningFile = join(running, UNREAD_INDEX_FILE)
+    const open = new UnreadIndex(runningFile, { writer: "0.161.2" })
+    open.note({ path: "/s/c.jsonl", harness: "codex", nativeId: "c" }, "build-1", [{ type: "unread", kind: "k", reason: "unknown", raw: {}, id: "@1" }])
+    raise(runningFile, "meta", { writableBy: 2, readableBy: 1, guarded: ["unread"] })
+    const raisedIndex = dump(runningFile)
+    open.note({ path: "/s/d.jsonl", harness: "codex", nativeId: "d" }, "build-1", [{ type: "unread", kind: "k", reason: "unknown", raw: {}, id: "@2" }])
+    open.forget("/s/c.jsonl")
+    open.close()
+    assert.equal(dump(runningFile), raisedIndex, "an index raised while open is written no more")
+    assert.equal(unreadCounts({ views }).records, 1, "and still counts what it holds")
+    assert.equal(unreadIndexStanding(file).access, "read")
+    raise(file, "meta", { writableBy: 3, readableBy: 3, writer: "0.170.0" })
+    assert.equal(unreadCounts({ views }).records, 0, "past reads it counts nothing it might misread")
+    assert.equal(unreadIndexStanding(file).access, "refused")
+    console.log("PASS: the unread index is counted in a newer format and never written")
+  }
 
   // Kept outputs: copies are read, none is kept, the newer layout stays.
   {

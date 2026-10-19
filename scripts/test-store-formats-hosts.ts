@@ -22,6 +22,7 @@ import { formatsKey, storeFormats } from "@mako/host/threads/store-formats"
 import { CodexProvider, KeptOutputs, SessionCatalog } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { RecordStore } from "@mako/sessions/record-store"
+import { UNREAD_INDEX_FILE, UnreadIndex } from "@mako/sessions/unread-index"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 /**
@@ -121,9 +122,9 @@ function dump(file: string, except: readonly string[] = []): string {
 
 /**
  * The stores the catalog worker writes: this build's catalog captures a
- * session and keeps a command's output; a newer
- * Mako's worker raises both in its own process. From then on nothing
- * is captured or kept, the host's windows are told, and nothing is
+ * session, notes its unread records and keeps a command's output; a newer
+ * Mako's worker raises all three in its own process. From then on nothing
+ * is captured, noted or kept, the host's windows are told, and nothing is
  * written into the newer layout.
  */
 async function sessionStoresRaisedWhileRunning(): Promise<void> {
@@ -150,6 +151,8 @@ async function sessionStoresRaisedWhileRunning(): Promise<void> {
   await catalog.scan({ emitChanges: true })
   const look = new RecordStore(records, new NativeStores(false))
   await until(() => look.sessions().length === 1, "the first capture")
+  const unread = new UnreadIndex(join(views, UNREAD_INDEX_FILE), { writer: "0.161.2" })
+  unread.note({ path: live, harness: "codex", nativeId: id }, "build-1", [{ type: "unread", kind: "response_item new_kind", reason: "unknown", raw: {}, id: "@1" }])
   const outputs = new KeptOutputs(join(archive, "outputs.sqlite"))
   outputs.keep({ harness: "claude", session: "s", task: "t1" }, { output: "one\n", exitCode: 0 })
   const sources = { threads: null, threadsPath: join(root, "unused-threads.sqlite"), memory: null, memoryPath: join(root, "unused-memory.sqlite"), records, views, archive }
@@ -162,9 +165,9 @@ async function sessionStoresRaisedWhileRunning(): Promise<void> {
   const told: string[] = []
   const stop = followOtherHosts(followed, () => {}, { jobs, subscribed, everyMs: 20, formats: { key: () => formatsKey(storeFormats(sources)), changed: () => told.push(formatsKey(storeFormats(sources))) } })
 
-  assert.equal(await newerHost("migrate-records", join(records, "records.sqlite"), join(archive, "outputs.sqlite")), JSON.stringify({ migrated: true }))
-  const raised = { records: dump(join(records, "records.sqlite")), outputs: dump(join(archive, "outputs.sqlite")) }
-  await until(() => told.some((key) => ["records", "outputs"].every((store) => key.includes(`"store":"${store}","access":"read"`))), "the host's windows to be told")
+  assert.equal(await newerHost("migrate-records", join(records, "records.sqlite"), join(views, UNREAD_INDEX_FILE), join(archive, "outputs.sqlite")), JSON.stringify({ migrated: true }))
+  const raised = { records: dump(join(records, "records.sqlite")), unread: dump(join(views, UNREAD_INDEX_FILE)), outputs: dump(join(archive, "outputs.sqlite")) }
+  await until(() => told.some((key) => ["records", "unread", "outputs"].every((store) => key.includes(`"store":"${store}","access":"read"`))), "the host's windows to be told")
   assert.equal(look.access, "read", "the record store reads as read-only to this build now")
   const warned: string[] = []
   const warn = console.warn
@@ -175,6 +178,7 @@ async function sessionStoresRaisedWhileRunning(): Promise<void> {
       await catalog.scan({ emitChanges: true })
       await delay(300)
     }
+    unread.note({ path: live, harness: "codex", nativeId: id }, "build-1", [])
     outputs.keep({ harness: "claude", session: "s", task: "t2" }, { output: "two\n", exitCode: 0 })
   } finally {
     console.warn = warn
@@ -184,10 +188,12 @@ async function sessionStoresRaisedWhileRunning(): Promise<void> {
   followed.close()
   await catalog.stop()
   await look.close()
+  unread.close()
   outputs.close()
   assert.equal(warned.filter((said) => said.startsWith("Session records read only")).length, 1, `capture stopped, said once: ${JSON.stringify(warned)}`)
   assert.ok(!warned.some((said) => said.includes("failed")), "with no failed writes")
   assert.equal(dump(join(records, "records.sqlite")), raised.records, "nothing captured into the newer record store")
+  assert.equal(dump(join(views, UNREAD_INDEX_FILE)), raised.unread, "nothing noted into the newer index")
   assert.equal(dump(join(archive, "outputs.sqlite")), raised.outputs, "nothing kept into the newer copies")
 }
 
@@ -281,7 +287,7 @@ try {
   assert.deepEqual(read.remembered?.settings, { model: "claude-fable-5-1" }, "what this build remembered before the migration reads back")
   assert.deepEqual(read.sources, ["newer"])
   await sessionStoresRaisedWhileRunning()
-  console.log("store formats across hosts: a newer Mako migrating the shared stores under a running host turns them read-only there (the Thread store, the ledger, the record store and the kept outputs), the host keeps working, says so and writes nothing, and the newer host reads everything back")
+  console.log("store formats across hosts: a newer Mako migrating the shared stores under a running host turns them read-only there (the Thread store, the ledger, the record store, the unread index and the kept outputs), the host keeps working, says so and writes nothing, and the newer host reads everything back")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

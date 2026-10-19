@@ -37,7 +37,7 @@ import { claudeContextBreakdown } from "./context-breakdown.js"
 import { mergeWindows } from "../../contracts/account-usage.js"
 import { deliverDecoded, type DecodedSink } from "../../contracts/native-decoding.js"
 import type { SelectedAccount } from "../../contracts/accounts.js"
-import { nativeStream, withFrame, type NativeStream } from "../native-stream.js"
+import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { spawnClaudeProcess } from "./sdk-process.js"
 import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
@@ -391,11 +391,11 @@ async function pump(engine: Engine, live: Live): Promise<void> {
   try {
     for await (const message of live.query) {
       if (live.closed) return
-      if (message.type === "system" && message.subtype === "init" && live.state.executionContext)
-        engine.patch(live, { executionContext: {
-          ...live.state.executionContext,
-          runtime: reportedRuntime(message.claude_code_version, "system/init.claude_code_version"),
-        } })
+      if (message.type === "system" && message.subtype === "init" && live.state.executionContext) {
+        const runtime = reportedRuntime(message.claude_code_version, "system/init.claude_code_version")
+        streamRuntime(live.stream, runtime)
+        engine.patch(live, { executionContext: { ...live.state.executionContext, runtime } })
+      }
       if (live.state.status === "starting" && message.type === "system" &&
         (message.subtype === "hook_started" || message.subtype === "hook_response"))
         hostLog("claude-sdk", "startup event", {

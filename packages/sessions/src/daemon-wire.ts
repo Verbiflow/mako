@@ -14,6 +14,7 @@ import type {
 } from "./format.js"
 import { ChildTranscriptsSchema, type ChildTranscripts } from "./children.js"
 import { KeptRestoreSchema, type KeptRestore } from "./kept-restore.js"
+import { InstalledReadingSchema, type InstalledReading } from "./record-writers.js"
 
 /**
  * Splits a socket's chunks into NDJSON lines, scanning each chunk once.
@@ -115,7 +116,8 @@ export type DaemonRequestFrame =
   | { id: number; op: "original"; path: string; entry: string }
   | { id: number; op: "children"; path: string }
   | { id: number; op: "hold"; path: string }
-  | { id: number; op: "restore"; path: string }
+  /** `installed`: the version of the harness here, which the restore gate compares with the records' writers (`restoreGate`). */
+  | { id: number; op: "restore"; path: string; installed?: string | InstalledReading | null }
   /** `reloads`: the client takes a `reload` event, where a follow would otherwise read a large session whole in the daemon. */
   | { id: number; op: "follow"; path: string; fromByte: number; reloads?: true }
   | { id: number; op: "unfollow"; path?: string }
@@ -297,7 +299,9 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
     case "restore": {
       const path = readString(record, "path")
       if (!path) return null
-      return { id, op, path }
+      const reading = InstalledReadingSchema.safeParse(record.installed)
+      const installed = record.installed === null ? null : reading.success ? reading.data : readString(record, "installed")
+      return installed === undefined ? { id, op, path } : { id, op, path, installed }
     }
     case "follow": {
       const path = readString(record, "path")

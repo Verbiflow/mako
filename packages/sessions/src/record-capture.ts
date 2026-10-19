@@ -70,6 +70,14 @@ export interface RecordCaptureOptions {
    * session is a few rows of a 5 GB database with a 15 GB write-ahead log.
    */
   rowBytesOf?: (ref: ThreadRef) => Promise<number | null>
+  /**
+   * The version of `harness` installed as a write lands, where every
+   * installation the host read agrees (`observedInstall`), or null. Asked
+   * only for a write heard as it landed, of records whose harness declares
+   * that its installed CLI is what writes them (`RecordWriterRule.installed`),
+   * and stamped on what states no version of its own.
+   */
+  observedInstall?: (harness: string) => string | null
 }
 
 /** What a backfill asked of one session came to (`RecordCapture.backfill`). */
@@ -322,7 +330,9 @@ export class RecordCapture {
         const records = this.options.carried ? withCarried(streamed, await carriedFiles(this.options.carried, ref.harness, ref.nativeId)) : streamed
         const listed = Date.now() - started
         const listing = this.options.listingOf?.(ref) ?? null
-        const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path, ...held !== null && { stamp: held }, ...listing !== null && { listing } })
+        // Only a write heard as it landed was made by what's installed now; a backfill reads what older builds wrote.
+        const observed = paced && own.writer?.installed ? this.options.observedInstall?.(ref.harness) ?? null : null
+        const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path, ...held !== null && { stamp: held }, ...listing !== null && { listing }, ...observed !== null && { observed } })
         took = listed + report.ms
         state.failures = 0
         this.options.onCaptured?.(ref, report)

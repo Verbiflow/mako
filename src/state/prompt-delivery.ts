@@ -6,6 +6,7 @@ import type {
   PromptAttachment,
 } from "@/lib/types"
 import type { Entry } from "@mako/sessions/entries"
+import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { LiveHistoryWindow } from "@mako/host/contracts/live-history"
 import { continueTurnPrompt, savedContinuation, type ContinuationSender } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
@@ -87,6 +88,8 @@ export interface CarriedHistory {
   file: string
   from: readonly string[]
   turns?: number
+  /** The harness here was older than the version that wrote the session Mako kept, so it went on from this transcript (`ContextManifest.outdated`). */
+  outdated?: OutdatedRestore
 }
 
 /** The history each request carried, by request id: what the transcript draws as "Continued from …" above the person's words. */
@@ -94,7 +97,7 @@ export function carriedHistories(requests: readonly LiveRequest[]): Map<string, 
   const carried = new Map<string, CarriedHistory>()
   for (const request of requests) {
     const manifest = request.context?.find((item) => item.includesBase || item.toBlock > item.fromBlock)
-    if (manifest) carried.set(request.id, { file: manifest.file, from: manifest.from ?? [], ...manifest.turns !== undefined && { turns: manifest.turns } })
+    if (manifest) carried.set(request.id, { file: manifest.file, from: manifest.from ?? [], ...manifest.turns !== undefined && { turns: manifest.turns }, ...manifest.outdated && { outdated: manifest.outdated } })
   }
   return carried
 }

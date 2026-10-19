@@ -13,12 +13,12 @@ import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
  * table this build doesn't know, and every table guarded.
  *
  *   tsx scripts/fixtures/newer-mako-host.ts migrate <threads> <ledger> <thread id>
- *   tsx scripts/fixtures/newer-mako-host.ts migrate-records <records.sqlite> <outputs.sqlite>
+ *   tsx scripts/fixtures/newer-mako-host.ts migrate-records <records.sqlite> <unread.sqlite> <outputs.sqlite>
  *   tsx scripts/fixtures/newer-mako-host.ts read <threads> <ledger>
  *   tsx scripts/fixtures/newer-mako-host.ts held <now> <ledger> <provider> <native id>
  *
  * `migrate-records` plays the newer build's catalog worker raising the
- * record store and the kept outputs (each `meta`).
+ * record store, the unread index and the kept outputs (each `meta`).
  *
  * Prints one JSON line of what it read.
  */
@@ -66,8 +66,8 @@ if (command === "migrate") {
   migrate(ledgerPath, LEDGER.writableBy, { table: "memory", name: "source" }, ["memory", "holds", "conversation_bindings", "conversation_journals", "runtime_hosts"], SESSION_MEMORY_SHARED)
   console.log(JSON.stringify({ migrated: true }))
 } else if (command === "migrate-records") {
-  const [records = "", outputs = ""] = [threadsPath, ledgerPath]
-  for (const [file, guarded] of [[records, ["sessions", "units", "versions", "chunks", "captures"]], [outputs, ["outputs"]]] as const) {
+  const [records = "", unread = "", outputs = ""] = [threadsPath, ledgerPath, threadId]
+  for (const [file, guarded] of [[records, ["sessions", "units", "versions", "chunks", "captures"]], [unread, ["unread"]], [outputs, ["outputs"]]] as const) {
     const db = new DatabaseSync(file, { timeout: 5_000 })
     try {
       const writableBy = Number(z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM meta WHERE key = 'schema'").get()).value) + 1

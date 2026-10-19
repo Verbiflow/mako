@@ -2,6 +2,7 @@ import type { LiveSnapshot } from "./live-conversations.js"
 import type { ThreadRef } from "@mako/sessions"
 import type { ExternalThreadActivity } from "./host-events-boot.js"
 import { heldReason } from "./session-hold.js"
+import type { OutdatedRestore } from "./restore-plan.js"
 
 /** Host-selected transport for a catalogued native session. */
 export type ContinuationPlan =
@@ -10,9 +11,10 @@ export type ContinuationPlan =
   | { transport: "live"; provider: string; nativeId: string }
   | { transport: "native"; provider: string }
   /**
+   * `outdated`: a session Mako keeps the records of that the harness here is too old to restore; Update makes it `native`.
    * `makoUpdate`: a newer Mako changed the session ledger, so this build doesn't resume the session (`resumeLedger`); updating Mako does.
    */
-  | { transport: "handoff"; provider: string; reason: string; makoUpdate?: true; notice?: LedgerNotice }
+  | { transport: "handoff"; provider: string; reason: string; outdated?: OutdatedRestore; makoUpdate?: true; notice?: LedgerNotice }
   | { transport: "refused"; reason: string; makoUpdate?: true; notice?: LedgerNotice }
   | { transport: "unavailable"; reason: string }
 

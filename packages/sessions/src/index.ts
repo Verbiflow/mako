@@ -194,6 +194,8 @@ export function defaultCatalog(
     readers?: readonly SavedHistoryReader[]
     /** Runs a large record's decode as Node in a child process (`DecodeAside`); this process's own executable by default. */
     decodeExecutable?: string
+    /** The host's installed readings, which stamp a write heard as it lands (`makoRuntimeReadings()`). */
+    runtimeReadings?: string
     /** How this build stamps a store format it sets (`storeWriter`). */
     writer?: string
     /** Every reader's stores on this machine, for the backfill's sweep of Mako's attachment files (`AttachmentSweep`). */

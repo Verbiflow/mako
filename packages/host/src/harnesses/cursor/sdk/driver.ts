@@ -34,7 +34,7 @@ import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./
 import { cursorUnfinishedToolNote, type CursorSdkModelSelection, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../../contracts/native-decoding.js"
-import { nativeStream, withFrame, type NativeStream } from "../../native-stream.js"
+import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../../native-stream.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
 import { cursorForkDeclined } from "./fork.js"
 import type {
@@ -565,10 +565,9 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       void live.client.exited.then(() => live.stream?.ended(), () => live.stream?.ended())
       try {
         const hello = await trace.step("handshake", () => live.client.hello())
-        engine.patch(live, { executionContext: {
-          ...context,
-          runtime: reportedRuntime(hello.sdkVersion, "SDK child hello.sdkVersion"),
-        } })
+        const runtime = reportedRuntime(hello.sdkVersion, "SDK child hello.sdkVersion")
+        streamRuntime(live.stream, runtime)
+        engine.patch(live, { executionContext: { ...context, runtime } })
         if (hello.ripgrep === false)
           hostWarn("cursor-sdk", "the child has no bundled ripgrep; Grep and Glob need one on PATH", { conversation: live.state.id })
         await trace.step("authentication", () => ensureSignedIn(live, trace, account))

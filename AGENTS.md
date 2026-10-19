@@ -216,8 +216,9 @@ A decoder turns one native message into the shared `Decoded` events in
 `packages/host/src/contracts/native-decoding.ts` and touches no process, clock or host,
 so recorded messages always decode the same way. An empty list means "known,
 deliberately silent"; `unknown` carries the raw record, which the engine
-keeps (first of each kind per host life) in `native-unknown.jsonl` beside the
-host log. Every harness is on this contract, and `test-harness-definitions.ts`
+keeps (first of each kind and harness version per host life, with the version
+the launch's handshake reported and the stream line it came in) in
+`native-unknown.jsonl` beside the host log. Every harness is on this contract, and `test-harness-definitions.ts`
 requires a decoder and fixtures of each, so a new harness ships with both
 (build order: `docs/meta-harness/harness-integration.md`). A driver keeps
 what is not the message's own meaning: binding turns, answering requests,
@@ -317,7 +318,85 @@ switches in short turns, so a crash at any step loses nothing. `tsx
 scripts/records.ts backfill` compares the rail with the store's stamps and
 prints the last pass, and `records.ts repack` runs one by hand. `npm run
 bench:backfill` measures it all on this Mac's newest sessions in a scratch
-store.
+store (`--no-writers` leaves out the version rules below, to see what they cost).
+
+Every version the store captures says which build of its harness wrote it
+(`@mako/sessions/record-writers`; the `writer` and `writer_source` columns,
+and a per-session `writers` mark the store reads in one query). It comes
+from one of two places and says which, and is never guessed. `record`: the
+harness's records state it, where each provider declares (`SessionRecords.writer`):
+Claude Code's `version` on every transcript line, Codex's `cli_version` in
+`session_meta` and its `threads` row, OpenCode's session row. `observed`:
+the records say nothing (Grok, Devin, Cursor), so it's what ran the session
+as it was captured: the `runtime` line each driver writes into its launch's
+stream once its handshake reports a version (`NativeStream.runtime`), or,
+for a write heard as it lands (never the backfill), the version the host
+read off the installed binary (`observedInstall` over
+`~/.mako/runtime-updates.json`), only while every installation of that
+harness agrees and the binary is unchanged since it was read. A provider
+opts in with `writer.installed`; Cursor doesn't, because Mako's Cursor
+sessions are written by the SDK it bundles, not by `cursor-agent`. Capture
+finds versions by searching the bytes it takes (`fieldScan`, about as fast
+as the chunk hash beside it), never by parsing them. A session updated
+mid-conversation keeps every version. `tsx scripts/records.ts writers
+<harness> <native id>` lists them with their source and any range;
+`sessions`, `versions` and `capture` show them too.
+
+A session written outside Mako whose records state no version (Devin CLI,
+Devin.app, `cursor-agent`, Cursor's editor, Grok run in its own TUI) gets
+what its harness leaves beside its store (`WriterEvidence`,
+`record-evidence.ts`, declared per store as `SessionProvider.writerEvidence`),
+read by the backfill's pass once every session is taken (`fillWriters`),
+never guessed: `log`, a log line naming the session and the version of its
+process (Devin CLI's per-launch `cli/logs/devin_*.log[.gz]`, whose gzipped
+files are indexed once into `records/evidence/devin-logs.json`; Grok's
+`logs/unified.jsonl`, a short rolling window); `install`, when every install
+of the harness, on PATH and in its own folders (Grok's `bin/grok-<v>` and its
+npm package, `cursor-agent`'s `versions/<v>/`, Devin.app's CLI by the host's
+reading), is known over the whole time the session was written and all held
+one version, or when every launch over the writes names one build (Cursor's
+editor's `logs/<launch>/main.log`; Devin.app's `Devin ACP.log`, which names
+the CLI it spawned); a `range` whose `bound` says what sets it: `build-day`
+(`cursor-agent` names builds by their day), `releases` (the newest release
+npm had published by a day after the last write, from
+`records/evidence/releases.json`, which `ReleaseTimelines` reads at most
+daily for each harness declaring `HarnessVersions.releases`, through the same
+bounded fetch as the public version, `registry-fetch.ts`), or `pins` (Mako's
+own SDK agents: the newest `@cursor/sdk` the repository pinned by then,
+`record-pins.ts`, which `test-restore-versions.ts` holds to `git log --all`;
+history, not proof); else `unknown`. Cursor publishes no dated list of its
+editor's versions, so editor chats from before the oldest launch log stay
+`unknown`; none resumes natively. The same pass reads versions a session's
+records state from what the store holds (`rescanWriters`), for captures
+taken before a harness's rule, and looks again at evidence from older rules
+(`EVIDENCE_RULES`) and at `unknown` once newer release dates land. Records
+of another program of the harness (`WriterEvidence.line`) are compared in
+that program's numbering with what reads them here (`RestoreRuntime.lines`):
+the Cursor SDK imports `cursor-agent`'s stores, so a store is weighed
+against the day npm published the SDK Mako ships (`bundled.released`,
+`imports`), while `cursor-agent` still holds it too (`restoringResume`,
+`restorePlan`), with the reader named ("Mako's @cursor/sdk 1.0.31, published
+2026.09.03, may not read it") and no Update. That "newer" is a build made
+after the SDK's publication day is evidence, not assumption:
+`scripts/cursor-store-fields.ts` compares the fields of the store's messages
+in each build's and each SDK release's generated code, and no build made by
+an SDK's day writes a field that SDK lacks (but ones later builds dropped);
+`test/fixtures/cursor-store-fields.json` keeps the comparison for
+`record-evidence.mjs`. The gate's policy (`restoreGate`): a known writer, the
+install must be at least as new; a range, at least its upper bound; nothing
+known, only the only install there is, put there before the session's first
+write and unchanged since (`InstalledReading.since`, `sole`); anything else
+is `unproven` and gated, and the offer says so ("Mako can't tell which Devin
+version wrote this session…"), with Update only where it could settle it.
+On this Mac (2026-10-17, 1,183 sessions in the rail): Claude Code 59, Codex
+178 and OpenCode 80 `record`; Devin 80 `log`, 4 `install` (Devin.app); Grok
+27 `install`, 26 `releases`; Cursor 207 `build-day`, 64 `pins`, 458
+`unknown` (457 editor chats, 1 SDK agent from before the first pin). `npx
+tsx scripts/writer-evidence.ts` counts them read-only (`--list` names each,
+`--store <dir>` fills a scratch store); `packages/sessions/test/record-evidence.mjs`
+covers every path on recorded shapes. Devin's log index costs 4.1 s cold
+and 0.3 s warm; a pass over 72 sessions took 8.1 s cold, one with nothing
+left 3 ms, and a release timeline 153 ms to read (Grok's, 610 releases).
 
 The store's own format is two numbers in `meta`, as SQLite keeps its own:
 `schema`, the format a build must know to write it, and `reads`, the oldest
@@ -352,8 +431,9 @@ build added keeps its values through an older build's writes. Every
 SQLite store rereads its format after any other build's commit (`PRAGMA
 data_version`), so one raised under a running host turns read-only there:
 the Thread store and the session ledger; the record store's `access`, so
-capture and the backfill stop, said once (`RecordCapture.declined`); the kept outputs
-(`outputs.sqlite`, its own `meta` now), which keep nothing more.
+capture and the backfill stop, said once (`RecordCapture.declined`); the
+unread index (still counted by diagnostics) and the kept outputs
+(`outputs.sqlite`, its own `meta` now), which note and keep nothing more.
 `followOtherHosts` reads every store's standing and sends `store-formats`
 to the windows when one changes. The catalog worker, the in-process
 catalog and the sync daemon (`MAKO_STORE_WRITER`) stamp formats with the
@@ -401,7 +481,39 @@ harness's own store (`SessionCatalog.restoreKept`; only when nothing holds
 it; idempotent; a copy that went on without Mako gets the fork rule), and
 the harness resumes the same session. `scripts/test-kept-resume.ts` covers
 it, and `scripts/prove-kept-resume.ts` runs it against the real CLIs in a
-scratch home. `tsx scripts/records.ts
+scratch home. Records go only into the version of their harness that wrote
+them or a newer one: every restore takes the version installed where it
+goes (`RestoreInput.installed`) and writes nothing when that's older than
+the newest writer (`restoreGate`, the one rule; an install whose version
+can't be read blocks nothing, and a writer nothing names is gated unless the
+install is provably newer, below). `restoringResume` passes it the version the
+host reads (`RuntimeUpdates.restoreRuntime`: the session runtime's reading,
+or for Claude Code and Cursor, whose sessions run the SDK build Mako ships,
+that build), and an `outdated` restore becomes a `closed` verdict carrying
+the update offer (Mako's npm, bun, pnpm, Homebrew or self update; the
+owning app, Mako itself for a bundled SDK; or the command for a manual
+install), so a reply goes on from the transcript and its "Continued from"
+line says why (`ContextManifest.outdated`). Before any reply the composer
+asks the same rule (`mako:thread-restore-plan`, `restorePlan` in
+`kept-resume.ts`) and shows the offer above itself
+(`restore-version-notice.tsx`); Update runs the runtime's update and the
+plan turns native once the reading lands. `scripts/test-restore-versions.ts`
+covers the readings, the gate and the words, `test-versions-ui.mjs` the
+offer, and `scripts/prove-restore-versions.ts` installs an older and a
+newer Codex, OpenCode, Grok and Claude Code into scratch npm prefixes:
+the newer writes a session, the older refuses it and offers the update,
+and after the update the session resumes natively. A proof installs only
+through `scratchInstall` (`scripts/scratch-harness-home.ts`), which refuses,
+before spawning, an environment whose `HOME`, or any folder a harness or npm
+writes under, is the person's own: run with their home, Grok's npm
+postinstall once put a build in their `~/.grok/bin`, repointed their `grok`
+and rewrote their `config.toml`. `scripts/test-scratch-home.ts` covers the
+refusals and holds every `prove-*.ts` to it. Devin (one CLI, inside
+Devin.app) and Cursor (the bundled SDK) are proven on recorded stores
+(`packages/sessions/test/restore-gate-fixtures.mjs`). A cloud machine picks
+what to install for a session's records with `cloudRuntime` in
+`contracts/harness-versions.ts`: the version that wrote them, or the
+laptop's if newer, never below `oldest`. `tsx scripts/records.ts
 archive` shows migrated, kept and pending (`--migrate` runs a pass), and
 `npm run bench:archive-migration` measures it on a clone of this Mac's
 archive.
@@ -521,6 +633,32 @@ for drafts from before the record, 6 MiB kept by hash and none
 reclaimable. A cold pass took 11.9 s and added 68 MiB to the worker's RSS,
 with a 177 MiB child; read in-process it took 10.6 s and added 679 MiB. A
 warm pass took 0.7 s, and one with nothing changed 62 ms.
+
+What the saved readers couldn't read is counted where views are written:
+each view, in memory or on disk, notes its `unread` entries (kind, reason,
+id, the record they name, never their content) in
+`~/.mako/views/unread.sqlite` (`@mako/sessions/unread-index`), replaced
+with every decode. `unreadCounts` adds them up by harness, the version that
+wrote each record's bytes (`RecordWriterLookup`: a session one version wrote
+takes it whole; one several wrote, the version that captured the record's
+first offset) and reason. Settings › Diagnostics shows them beside this
+host's live unknown kinds (`mako:unread-records`, `unread-records.tsx`),
+each row opening the newest one's bytes as Show original does (a live one
+from its stream line, `mako:stream-original`); `npm run harness:doctor`
+prints the same under `unread` and `live`; the day's totals go with the
+heartbeat as `records.unread`, and live kinds as `native.unknown` with
+their version. `scripts/bench-unread.ts` measures it. Once a pass of the
+backfill has taken every session, it decodes again every view and every
+unread record an earlier decoder build made (`rebuildStaleViews`, newest use
+first, yielding to the person), so a decoder that learns a kind brings its
+count to zero in every past session without each being opened. When a
+harness ships a release: run it (capture and the counts go on), re-record
+the fixtures (`bump-harness-versions.ts`), fix the decoder, and run `npm
+run decode-diff -- --base HEAD`: it builds `HEAD`'s `@mako/sessions` in a
+temporary worktree, decodes the newest 100 sessions with both builds, and
+lists every entry that draws differently (by id, with the fields that
+changed), entries added or gone, and the unread kinds now read
+(`--show <path>` prints both builds' JSON; `--save`/`--against` keep a run).
 
 What Mako itself did in a conversation is its log, a `log` table in the
 conversation's journal (`packages/host/src/conversations/mako-log.ts`):
@@ -2780,8 +2918,9 @@ for the rest of the host's life). The public version is
 `registry.npmjs.org/<pkg>/latest` with a four-second deadline and a bounded
 body, held an hour, a failure ten minutes; it never blocks the installed
 reading and leaves it standing with `latestError` beside it. Versions are
-ordered by `compareVersions` in `packages/host/src/contracts/runtime-version.ts`, the
-same function on both sides, so `0.154.0-alpha.6.2` is behind `0.154.0`
+ordered by `compareVersions` in `@mako/sessions/runtime-version` (re-exported
+by `contracts/runtime-version.ts`), the same function in the host, the
+window and the record store's restore gate, so `0.154.0-alpha.6.2` is behind `0.154.0`
 everywhere. The channel is read off the binary's real path in evidence
 order — another app's registry, an app bundle, the CLI's own install root,
 bun, pnpm, npm, Homebrew, else `manual` — and the plan follows: `npm install

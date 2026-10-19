@@ -1148,6 +1148,21 @@ const inputs = {
   "mako:stage-file": () => z.tuple([z.string(), z.string()]),
   "mako:stage-file-path": () => z.tuple([z.string()]),
   "mako:store-formats": () => z.tuple([]),
+  "mako:stream-original": () =>
+    z.tuple([
+      z.object({
+        file: z.string().optional(),
+        ranges: z.array(z.tuple([z.number(), z.number()])).optional(),
+        rows: z
+          .array(
+            z.object({
+              table: z.string(),
+              key: z.record(z.string(), z.union([z.string(), z.number()])),
+            })
+          )
+          .optional(),
+      }),
+    ]),
   "mako:surface-window": () => z.tuple([]),
   "mako:telemetry": () => z.tuple([]),
   "mako:telemetry-choose": () =>
@@ -1259,6 +1274,7 @@ const inputs = {
       z.union([z.null(), z.string()]),
       z.string().optional(),
     ]),
+  "mako:thread-restore-plan": () => z.tuple([z.string()]),
   "mako:thread-run": () => z.tuple([z.string()]),
   "mako:thread-stop": () =>
     z.tuple([
@@ -1293,6 +1309,7 @@ const inputs = {
       ]),
       z.union([z.literal("full"), z.literal("concise")]),
     ]),
+  "mako:unread-records": () => z.tuple([]),
   "mako:unwatch-file": () => z.tuple([]),
   "mako:update-state": () => z.tuple([]),
   "mako:usage": () => z.tuple([]),
@@ -1630,6 +1647,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:stage-file", "workspaces"],
   ["mako:stage-file-path", "workspaces"],
   ["mako:store-formats", "threads"],
+  ["mako:stream-original", "threads"],
   ["mako:telemetry", "usage"],
   ["mako:telemetry-choose", "usage"],
   ["mako:terminal-acknowledge", "terminals"],
@@ -1676,6 +1694,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-purposes", "threads"],
   ["mako:thread-remember-mode", "threads"],
   ["mako:thread-rename", "threads"],
+  ["mako:thread-restore-plan", "conversations"],
   ["mako:thread-run", "conversations"],
   ["mako:thread-stop", "threads"],
   ["mako:thread-titles", "threads"],
@@ -1683,6 +1702,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-unfollow", "threads"],
   ["mako:threads", "threads"],
   ["mako:transcript-document", "conversations"],
+  ["mako:unread-records", "threads"],
   ["mako:unwatch-file", "workspaces"],
   ["mako:update-state", "application"],
   ["mako:usage", "usage"],

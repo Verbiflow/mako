@@ -7,6 +7,8 @@ import { diagnostics } from "@/state/diagnostics"
 import { formatBytes, formatRelative } from "@/lib/format"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
+import type { UnreadReport } from "@mako/host/contracts/unread-records"
+import { UnreadRecords } from "@/components/settings/unread-records"
 import { StoreFormatLine } from "@/components/shell/store-format-line"
 import { changedStores } from "@/lib/store-formats"
 import { loadStoreFormats, useStoreFormats } from "@/state/store-formats"
@@ -26,6 +28,7 @@ export function DiagnosticsSection() {
   const [residency, setResidency] =
     useState<ProviderResidencySnapshot | null>(null)
   const [openId, setOpenId] = useState<string>()
+  const [unread, setUnread] = useState<UnreadReport | null>(null)
   const stores = useStoreFormats((state) => state.stores)
 
   const load = useCallback(() => {
@@ -36,6 +39,7 @@ export function DiagnosticsSection() {
       .providerResidency()
       .then(setResidency)
       .catch(() => setResidency(null))
+    void diagnostics.unreadRecords().then(setUnread).catch(() => setUnread(null))
     // Asked again here, so a store another Mako changed since the window opened is said.
     void loadStoreFormats().catch(() => undefined)
   }, [])
@@ -132,6 +136,8 @@ export function DiagnosticsSection() {
           </IfCanReveal>
         </div>
       ) : null}
+
+      <UnreadRecords report={unread} />
 
       {residency ? (
         <div className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">

@@ -4,6 +4,7 @@ import type { HarnessUpdates } from "../contracts/harness-updates.js"
 import type { DiagnosticEvents, ProductEvents, TelemetryTokens, TurnTuning } from "../contracts/telemetry.js"
 import type { CrashReport } from "../contracts/crash-report.js"
 import type { UnknownKind } from "../base/native-unknown.js"
+import type { UnreadGroup } from "@mako/sessions/unread-index"
 import type { StreamMismatchKindCount } from "../base/stream-mismatches.js"
 
 /**
@@ -169,10 +170,31 @@ export function unknownSince(kinds: readonly UnknownKind[], reported: Map<string
     const harness = harnessId(entry.harness)
     const kind = /^tool .*(?:mcp|__)/i.test(entry.kind) ? "tool <mcp>" : entry.kind
     if (!harness || kind.length > 120 || !/^[\w .:/@<>-]+$/.test(kind)) continue
-    const key = `${harness}\0${entry.kind}\0${entry.reason}`
+    const key = `${harness}\0${entry.version ?? ""}\0${entry.kind}\0${entry.reason}`
     const count = entry.count - (reported.get(key) ?? 0)
     reported.set(key, entry.count)
-    if (count > 0) events.push({ harness, kind, reason: entry.reason, count })
+    const version = reportedVersion(entry.version)
+    if (count > 0) events.push({ harness, ...version && { version }, kind, reason: entry.reason, count })
+  }
+  return events
+}
+
+/** A version as telemetry carries one: version-shaped and short, or none. */
+function reportedVersion(version: string | null | undefined): string | undefined {
+  const found = version?.match(/\d+(?:\.\d+)+[\w.+-]*/)?.[0]
+  return found && found.length <= 40 ? found : undefined
+}
+
+/** The saved unread records' totals, by harness, version, kind and reason, at most `limit` of them, the largest first. */
+export function unreadTotals(groups: readonly UnreadGroup[], limit = 40): Array<DiagnosticEvents["records.unread"]> {
+  const events: Array<DiagnosticEvents["records.unread"]> = []
+  for (const group of [...groups].sort((a, b) => b.count - a.count)) {
+    const harness = harnessId(group.harness)
+    if (!harness || (group.reason !== "unknown" && group.reason !== "unreadable")) continue
+    if (group.kind.length > 120 || !/^[\w .:/@<>()-]+$/.test(group.kind)) continue
+    const version = reportedVersion(group.version)
+    events.push({ harness, ...version && { version }, ...version && group.source && { source: group.source }, kind: group.kind, reason: group.reason, count: group.count, sessions: group.sessions })
+    if (events.length >= limit) break
   }
   return events
 }

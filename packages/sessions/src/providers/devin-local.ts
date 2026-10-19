@@ -19,6 +19,8 @@ import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
 import { openReadOnly, type NativeStores } from "../read-only-sqlite.js"
+import type { WriterEvidenceLookups } from "../record-evidence.js"
+import type { WriterEvidence } from "../record-writers.js"
 import { placeholders, tableColumns, type RecordDatabase, type SessionRecords } from "../harness-records.js"
 import { agentTitleFrom, titleFrom, type NativeRecordSample, type Thread, type ThreadRef, type ThreadTail, type UnreadRecord } from "../format.js"
 import type { TurnState } from "../entry-sink.js"
@@ -149,6 +151,11 @@ interface DevinTranslator extends RecordTranslator {
 const DevinTurnStateSchema = z.object({ started: z.boolean(), title: z.string().optional() })
 
 export class DevinLocalProvider implements SessionProvider {
+  /** Devin.app's records state no version: its launch logs name the CLI it ran them with (`record-evidence.ts`). */
+  writerEvidence(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null> {
+    return reader.devinApp(path)
+  }
+
   harness = "devin" as const
   displayName = "Devin"
   peekVersion = 2

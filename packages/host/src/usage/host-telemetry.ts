@@ -4,7 +4,8 @@ import type { DiagnosticEvents, ProductEvents, TelemetryFeature } from "../contr
 import type { CrashReport } from "../contracts/crash-report.js"
 import type { UnknownKind } from "../base/native-unknown.js"
 import type { Telemetry } from "./telemetry.js"
-import { errorReported, harnessId, harnessInventory, mismatchesSince, turnChanges, turnCompleted, turnStarted, unknownSince } from "./telemetry-events.js"
+import { errorReported, harnessId, harnessInventory, mismatchesSince, turnChanges, turnCompleted, turnStarted, unknownSince, unreadTotals } from "./telemetry-events.js"
+import type { UnreadGroup } from "@mako/sessions/unread-index"
 import type { StreamMismatchKindCount } from "../base/stream-mismatches.js"
 import type { HostJobs } from "../base/host-jobs.js"
 
@@ -27,6 +28,8 @@ export interface HostTelemetrySources {
   crashIdAt(at: number): string
   unknownKinds(): UnknownKind[]
   mismatchKinds(): StreamMismatchKindCount[]
+  /** The saved unread records' groups (`unreadCounts`), read when the day's heartbeat goes. */
+  unreadGroups(): readonly UnreadGroup[]
   /** The signed-in Mako account's ID, or undefined while signed out. */
   account(): Promise<string | undefined>
   /** A window is open on this host. The heartbeat counts days someone used Mako, not days a host ran. */
@@ -129,6 +132,7 @@ export class HostTelemetry {
         signedIn: account !== undefined,
       })
       if (account) await this.telemetry.linkAccount(account)
+      if (this.telemetry.collects("errors")) for (const props of unreadTotals(this.#sources.unreadGroups())) this.telemetry.report("records.unread", props)
     }
   }
 

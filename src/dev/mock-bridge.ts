@@ -29,6 +29,9 @@ import type { SessionSettings } from "@mako/sessions/settings"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { mcpServerFailedEvent } from "@mako/sessions/events"
 import type { RecordRef } from "@mako/sessions/entries"
+import { restoreGate } from "@mako/sessions/record-writers"
+import type { RestorePlan } from "@mako/host/contracts/restore-plan"
+import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import type { StoreFormats } from "@mako/host/contracts/store-formats"
 import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original"
 import type { LiveHistoryAddress, LiveHistoryRead } from "@mako/host/contracts/live-history"
@@ -331,6 +334,19 @@ export function installMockBridge() {
    */
   const keptScene = scene === "kept"
   /**
+   * `?app=kept&outdated=1`: Codex 0.163.0 wrote the kept session's records,
+   * and this Mac has 0.159.3, so the host's restore plan offers Update; the
+   * update takes the reading to 0.163.0 and the plan turns native.
+   */
+  const outdatedScene = keptScene && "location" in window && new URLSearchParams(window.location.search).get("outdated") === "1"
+  /** `?app=kept&outdated=unknown`: nothing names the version that wrote the kept session (written outside Mako, its harness left no trace), so Mako can't show the install here reads it. */
+  const unknownWriterScene = keptScene && "location" in window && new URLSearchParams(window.location.search).get("outdated") === "unknown"
+  /** `?app=kept&outdated=import`: a `cursor-agent` store last written after the Cursor SDK Mako ships was published, which the SDK would import to continue it. */
+  const importScene = keptScene && "location" in window && new URLSearchParams(window.location.search).get("outdated") === "import"
+  let keptCodexInstalled = "0.159.3"
+  /** `?app=unread`: records Mako couldn't read, saved and live, for Settings › Diagnostics. */
+  const unreadScene = scene === "unread"
+  /**
    * `?app=newer-stores`: Mako 0.163.0 changed the Thread store and the
    * session ledger, which this build reads and doesn't change, and Mako
    * 0.170.0 changed the record store past what it reads. This build is a
@@ -345,6 +361,7 @@ export function installMockBridge() {
       { store: "threads", access: "read", build: 1, writableBy: 2, readableBy: 1, writtenBy: "0.163.0", readableFrom: "0.140.0" },
       { store: "session-memory", access: "read", build: 1, writableBy: 2, readableBy: 1, writtenBy: "0.163.0", readableFrom: "0.150.0" },
       { store: "records", access: "refused", build: 2, writableBy: 4, readableBy: 3, writtenBy: "0.170.0", readableFrom: "0.170.0" },
+      { store: "unread", access: "write", build: 1, writableBy: 1, readableBy: 1 },
       { store: "outputs", access: "write", build: 1, writableBy: 1, readableBy: 1 },
       { store: "archive", access: "write", build: 1, writableBy: 1, readableBy: 1 },
     ],
@@ -352,9 +369,39 @@ export function installMockBridge() {
   const ownStores: StoreFormats = { stores: newerStores.stores.map((row) => ({ store: row.store, access: "write", build: row.build, writableBy: row.build, readableBy: row.build })) }
   if (storesLater) setTimeout(() => emit({ type: "store-formats", formats: { stores: [newerStores.stores[0]!, ...ownStores.stores.slice(1)] } }), 1500)
   let mockUpdate: "current" | "ready" = "current"
+  const outdatedCodexReading = () => ({
+    provider: "codex",
+    primary: true,
+    binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/codex",
+    installed: keptCodexInstalled,
+    latest: "0.163.0",
+    channel: "npm" as const,
+    update: { label: "Update with npm", command: "npm", args: ["install", "-g", "--allow-scripts=@openai/codex", "@openai/codex@latest"] },
+    checkedAt: Date.now() - 90_000,
+    latestCheckedAt: Date.now() - 90_000,
+    versions: { oldest: "0.146.0", tested: "0.159.3", standing: keptCodexInstalled === "0.159.3" ? "tested" as const : "newer" as const },
+  })
+  /** The records `?app=unread` counts: two saved kinds a newer Codex and Claude Code wrote, one with no version yet, and a live Grok kind. */
+  const unreadReport = (): UnreadReport => unreadScene ? {
+    rows: [
+      { harness: "codex", version: "0.163.0", source: "record", from: "saved", kind: "response_item web_search_preview_call", reason: "unknown", count: 14, sessions: 3, newestAt: Date.now() - 4 * 60_000, example: { kind: "entry", path: "/mock/unread/codex-rollout.jsonl", id: "@48213", record: { ranges: [[48213, 48391]] } } },
+      { harness: "codex", version: "0.159.3", source: "record", from: "saved", kind: "event_msg collab_waiting_begin", reason: "unreadable", count: 2, sessions: 1, newestAt: Date.now() - 3 * 3_600_000, example: { kind: "entry", path: "/mock/unread/codex-older.jsonl", id: "@9120", record: { ranges: [[9120, 9241]] } } },
+      { harness: "claude", version: "2.1.295", source: "record", from: "saved", kind: "attachment hook_progress", reason: "unknown", count: 6, sessions: 2, newestAt: Date.now() - 26 * 60_000, example: { kind: "entry", path: "/mock/unread/claude-session.jsonl", id: "@3310", record: { ranges: [[3310, 3502]] } } },
+      { harness: "claude", version: null, source: null, from: "saved", kind: "system scheduled_wakeup", reason: "unknown", count: 1, sessions: 1, newestAt: Date.now() - 2 * 86_400_000, example: { kind: "entry", path: "/mock/unread/claude-older.jsonl", id: "@120", record: { ranges: [[120, 260]] } } },
+      { harness: "grok", version: "1.0.62", source: "reported", from: "live", kind: "_x.ai/session/checkpoint", reason: "unknown", count: 3, newestAt: Date.now() - 9 * 60_000, example: { kind: "stream", frame: { file: "mako-streams:grok/7f1e@2026-10-17T09-00-00-000Z-c.jsonl", ranges: [[4100, 4290]] } } },
+    ],
+    sessions: 7,
+    records: 23,
+    unattributed: 1,
+    liveSince: Date.now() - 3 * 3_600_000,
+  } : { rows: [], sessions: 0, records: 0, unattributed: 0, liveSince: Date.now() }
+  const unreadSample = (path: string, from: number): string => `${JSON.stringify(path.includes("claude")
+    ? { type: "attachment", attachment: { type: "hook_progress", hookName: "PostToolUse", status: "running" }, sessionId: "6676d8e9", version: "2.1.295" }
+    : { timestamp: "2026-10-17T09:12:44.120Z", type: "response_item", payload: { type: "web_search_preview_call", id: "ws_0c7", status: "completed", action: { query: "zod 4 discriminated unions" } }, at: from })}\n`
   const keptThreads = (): ThreadRef[] => keptScene ? [
     { harness: "claude", nativeId: "cl-kept-copy", path: "/mock/claude-kept-copy.jsonl", cwd: "/Users/you/api", title: "Plan the billing ledger migration", model: "claude-opus-5", updatedAt: new Date(Date.now() - 60_000).toISOString(), archived: true, copyOnly: true, locked: false },
     { harness: "codex", nativeId: "cx-kept-records", path: "/mock/codex-kept-records.jsonl", cwd: "/Users/you/api", title: "Audit the webhook signatures", model: "gpt-5.2-codex", updatedAt: new Date(Date.now() - 120_000).toISOString(), archived: true, locked: false },
+    ...importScene ? [{ harness: "cursor", nativeId: "39fc58cb-7793-4e80-b5d1-343da0f42fea", path: "/mock/.cursor/chats/68cb518f/39fc58cb-7793-4e80-b5d1-343da0f42fea/store.db", cwd: "/Users/you/api", title: "Trace the flaky upload retry", updatedAt: new Date(Date.now() - 180_000).toISOString(), locked: false }] : [],
   ] : []
   /** `?start=behind|ahead|diverged|level|alone|detached|offline` picks how the project folder's branch stands. */
   const mockStartPoint = (): WorktreeStartPoint => {
@@ -1382,6 +1429,11 @@ export function installMockBridge() {
     // The fixture has no native files: an entry's original is the entry
     // itself, written as a JSONL line at the place its record names.
     threadOriginal: async (path: string, id: string) => {
+      if (path.startsWith("/mock/unread/")) {
+        const from = Number(id.slice(1))
+        const text = unreadSample(path, from)
+        return { kept: false, parts: [{ kind: "range" as const, file: path, from, to: from + new TextEncoder().encode(text).length, text }] }
+      }
       const thread = await window.mako?.openThread(path)
       const entry = thread?.entries.find((each) => each.id === id)
       if (!entry) return null
@@ -1737,7 +1789,7 @@ export function installMockBridge() {
     // One harness at each version standing: Codex below its oldest, OpenCode
     // between oldest and tested, Devin at tested and Grok newer than tested.
     harnessUpdates: async () => ({
-      codex: {
+      codex: outdatedScene || unknownWriterScene ? outdatedCodexReading() : {
         provider: "codex",
         binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/codex",
         installed: "0.140.0",
@@ -1808,6 +1860,11 @@ export function installMockBridge() {
     // An update goes to the tested version, so the reading comes back at it.
     runHarnessUpdate: async (provider: string) => {
       await new Promise((resolve) => setTimeout(resolve, 1_200))
+      if (outdatedScene && provider === "codex") {
+        const from = keptCodexInstalled
+        keptCodexInstalled = "0.163.0"
+        return { ...outdatedCodexReading(), result: { at: Date.now() - 1_200, outcome: "updated" as const, from, to: keptCodexInstalled } }
+      }
       return {
         provider,
         binary: `/Users/you/.nvm/versions/node/v24.19.0/bin/${provider}`,
@@ -1850,7 +1907,24 @@ export function installMockBridge() {
       const snapshot = await window.mako!.liveAttach(path)
       return snapshot ? { transport: "attached", provider: snapshot.session.harness, conversationId: snapshot.session.id, snapshot } : null
     },
+    restorePlan: async (path: string): Promise<RestorePlan> => {
+      const ref = keptThreads().find((thread) => thread.path === path)
+      if (!ref || ref.copyOnly) return { kind: "none" }
+      if (importScene && ref.harness === "cursor") return { kind: "update", outdated: { harness: "cursor", upTo: "2026.10.15", installed: "2026.09.03", line: "cursor-agent", reader: "Mako's @cursor/sdk 1.0.31, published 2026.09.03", offer: { kind: "owner", owner: "Mako" } } }
+      if (unknownWriterScene && ref.harness === "codex") return { kind: "update", outdated: { harness: "codex", installed: keptCodexInstalled, offer: { kind: "update", runtimeId: "codex", label: "Update with npm" } } }
+      if (!outdatedScene || ref.harness !== "codex") return { kind: "native" }
+      const gate = restoreGate({ record: ["0.163.0"], observed: [] }, keptCodexInstalled)
+      return gate.kind === "older"
+        ? { kind: "update", outdated: { harness: "codex", wrote: gate.wrote, installed: gate.installed, offer: { kind: "update", runtimeId: "codex", label: "Update with npm" } } }
+        : { kind: "native" }
+    },
+    unreadRecords: async () => unreadReport(),
     storeFormats: async (): Promise<StoreFormats> => newerStoresScene && !storesLater ? newerStores : ownStores,
+    streamOriginal: async (frame: RecordRef): Promise<EntryOriginal> => {
+      const from = frame.ranges?.[0]?.[0] ?? 0
+      const text = `${JSON.stringify({ at: "2026-10-17T09:31:02.481Z", message: { jsonrpc: "2.0", method: "_x.ai/session/checkpoint", params: { sessionId: "7f1e", checkpoint: { turn: 4, files: 2 } } } })}\n`
+      return { kept: false, parts: [], stream: [{ kind: "range", file: `/Users/you/.mako/records/streams/${(frame.file ?? "").split(":")[1] ?? ""}`, from, to: from + new TextEncoder().encode(text).length, text }] }
+    },
     continuationPlan: async (path: string) => {
       const thread = await window.mako?.openThread(path)
       if (!thread)

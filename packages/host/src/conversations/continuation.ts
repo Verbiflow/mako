@@ -70,7 +70,7 @@ export function createContinuationPlanner<Snapshot>(
       ? await dependencies.assessResume?.(ref) ?? { kind: "unavailable" as const, reason: "Native session recovery evidence is unavailable. Reconnect the host before replying." } : undefined
     if (assessment?.kind === "held") return { transport: "refused", reason: `This session is open in ${assessment.by}. Wait for it to finish before replying.` }
     if (assessment?.kind === "unavailable") return { transport: "unavailable", reason: assessment.reason }
-    if (assessment?.kind === "closed") return { transport: "handoff", provider: ref.harness, reason: assessment.reason }
+    if (assessment?.kind === "closed") return { transport: "handoff", provider: ref.harness, reason: assessment.reason, ...assessment.outdated && { outdated: assessment.outdated } }
     const owned = owner?.kind === "unowned" ? { ...ref, heldBy: undefined } : ref
     // Restored, the session is its harness's own again.
     const currentRef = kept && assessment?.kind === "resumable" ? { ...owned, archived: undefined } : owned

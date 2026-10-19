@@ -1,4 +1,6 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk"
+import type { WriterEvidenceLookups } from "../record-evidence.js"
+import type { WriterEvidence } from "../record-writers.js"
 import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
 import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, grokHostCommand, GrokTaskSnapshot, grokTokens, GrokTurnUsage, grokUpdateReading } from "../harnesses/grok.js"
@@ -523,6 +525,11 @@ export function grokWorkspaceCwd(folder: string): string | undefined {
 }
 
 export class GrokProvider implements SessionProvider {
+  /** Its records state no version: what its harness leaves beside them says (`record-evidence.ts`). */
+  writerEvidence(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null> {
+    return reader.grokSession(path)
+  }
+
   harness = "grok" as const
   displayName = "Grok"
   /** How a session is written again as its own fork (`grok-fork.ts`). */
@@ -603,8 +610,9 @@ export class GrokProvider implements SessionProvider {
     const directory = dirname(path)
     if (dirname(dirname(directory)) !== this.root || !(await stat(path).catch(() => null))?.isFile()) return null
     // Its subagents' sessions sit elsewhere in the tree and are never rows: they come with it.
+    // Grok's records state no version of the CLI that wrote them (`summary.json` has only its chat format's): what wrote them is the CLI installed as a write lands.
     const subagents = await this.childLinks.recordsOf(path)
-    return { roots: [{ name: "grok", path: dirname(this.root) }], files: [...await filesUnder(directory), ...subagents.files], databases: [], children: subagents.children }
+    return { roots: [{ name: "grok", path: dirname(this.root) }], files: [...await filesUnder(directory), ...subagents.files], databases: [], writer: { installed: true }, children: subagents.children }
   }
 
   /** Its subagents, from `subagents/` beside it and its own updates. */

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { UNREAD_INDEX_FILE, UnreadIndex } from "@mako/sessions/unread-index"
 import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -25,13 +26,13 @@ try {
   await mkdir(logs, { recursive: true })
   const streams = join(root, "streams")
   await mkdir(join(streams, "codex"), { recursive: true })
-  const unknown = (at: string, harness: string, kind: string, reason = "unknown") =>
-    JSON.stringify({ at, harness, kind, reason, record: { type: kind, authorization: BEARER } })
+  const unknown = (at: string, harness: string, kind: string, reason = "unknown", version?: string) =>
+    JSON.stringify({ at, harness, ...version && { version }, kind, reason, record: { type: kind, authorization: BEARER } })
   await writeFile(join(logs, "native-unknown.jsonl"), [
     unknown(ago(30), "codex", "item/ancient"),
-    unknown(ago(3), "codex", "item/frobnicated"),
+    unknown(ago(3), "codex", "item/frobnicated", "unknown", "0.163.0"),
     unknown(ago(2), "grok", "_x.ai/session/setup"),
-    unknown(ago(1), "codex", "item/frobnicated"),
+    unknown(ago(1), "codex", "item/frobnicated", "unknown", "0.163.0"),
     unknown(ago(1), "codex", "thread/odd", "unreadable"),
     "not json",
   ].join("\n") + "\n")
@@ -72,7 +73,16 @@ try {
     harness === "codex" ? { version: "9.9.9", from: "/bin/codex", sdk: null }
       : harness === "cursor" ? { version: "1.0.31", from: "node_modules/@cursor/sdk", sdk: { name: "@cursor/sdk", version: "1.0.31" } }
         : { version: null, from: null, sdk: null, problem: "not installed" }
-  const report = await doctorReport({ dataDir: root, days: 7, now, installed, streams })
+  // Saved records the readers couldn't read, as the views noted them; no record store here, so no version is known.
+  const views = join(root, "views")
+  const index = new UnreadIndex(join(views, UNREAD_INDEX_FILE))
+  index.note({ path: "/rollouts/a.jsonl", harness: "codex", nativeId: "a" }, "build", [
+    { type: "unread", kind: "response_item future_item", reason: "unknown", id: "@10", at: Date.parse(ago(2)) },
+    { type: "unread", kind: "response_item future_item", reason: "unknown", id: "@20", at: Date.parse(ago(1)) },
+    { type: "unread", kind: "response_item image_generation_call", reason: "undrawn", id: "@30" },
+  ])
+  index.close()
+  const report = await doctorReport({ dataDir: root, days: 7, now, installed, streams, views, records: join(root, "no-records") })
   const harness = (name: string) => {
     const found = report.harnesses.find((entry) => entry.harness === name)
     assert.ok(found, `reports ${name}`)
@@ -81,9 +91,16 @@ try {
 
   const codex = harness("codex")
   assert.deepEqual(codex.logs.unknown, [
-    { kind: "item/frobnicated", reason: "unknown", count: 2, newest: ago(1) },
-    { kind: "thread/odd", reason: "unreadable", count: 1, newest: ago(1) },
-  ], "unknown records group by kind inside the window")
+    { version: "0.163.0", kind: "item/frobnicated", reason: "unknown", count: 2, newest: ago(1) },
+    { version: "unknown", kind: "thread/odd", reason: "unreadable", count: 1, newest: ago(1) },
+  ], "unknown records group by the version their launch reported and kind inside the window")
+  assert.deepEqual(codex.unread?.groups.map((group) => [group.version, group.kind, group.count, group.newest.id]), [[null, "response_item future_item", 2, "@20"]], "saved records count by version, and a declared gap isn't one")
+  assert.equal(codex.unread?.unattributed, 2)
+  const codexText = formatReport({ ...report, harnesses: [codex] })
+  assert.match(codexText, /unread {6}2 saved records in 1 session the readers couldn't read, by the version that wrote them \(2 not yet in the record store/)
+  assert.match(codexText, /version unknown {2}response_item future_item {2}unknown ×2 in 1 session {2}newest @20 in \/rollouts\/a\.jsonl/)
+  assert.match(codexText, /0\.163\.0 +item\/frobnicated {2}unknown ×2/)
+  assert.equal(harness("grok").unread?.groups.length, 0)
   assert.deepEqual(codex.logs.mismatches, [
     { version: "0.159.3", kind: "stream-only", type: "text", count: 2, newest: ago(1), conversation: OTHER },
     { version: "0.159.3", kind: "changed", type: "provider-turn", count: 1, newest: ago(2), conversation: CONVERSATION },
@@ -153,7 +170,7 @@ try {
   const empty = await doctorReport({ dataDir: join(root, "missing"), days: 7, now, installed, harness: "claude", streams: join(root, "missing") })
   assert.equal(empty.harnesses.length, 1)
   assert.deepEqual(empty.harnesses[0]?.logs, { unknown: null, mismatches: null, hostLog: null, streams: 0, signIn: { scope: "claude-auth", count: 0, latest: null } })
-  assert.match(formatReport(empty), /unknown {5}none recorded/)
+  assert.match(formatReport(empty), /live {8}no unread live records \(no native-unknown\.jsonl\)/)
   assert.match(formatReport(empty), /merge {7}no differences recorded \(no stream-mismatches\.jsonl\)/)
   assert.match(formatReport(empty), /claude-auth none recorded/)
 

@@ -69,6 +69,31 @@ const PROGRESS_MS = 30_000
 const SLOW_SESSION_MS = 1_000
 export const BACKFILL_PROGRESS = "backfill.json"
 
+/** What a pass's rebuild of stale views came to. */
+export const ViewRebuildSchema = z.object({
+  /** Views and unread records an earlier build made, newest use first. */
+  stale: z.number().int().nonnegative(),
+  rebuilt: z.number().int().nonnegative(),
+  /** Sessions no longer in the rail: their unread records are forgotten. */
+  gone: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  ms: z.number().nonnegative(),
+})
+export type ViewRebuild = z.infer<typeof ViewRebuildSchema>
+
+/** What a pass's look for the writers of sessions nothing named one for came to (`fillWriters`), by where each was found. */
+export const WriterFillSchema = z.object({
+  looked: z.number().int().nonnegative(),
+  record: z.number().int().nonnegative(),
+  log: z.number().int().nonnegative(),
+  install: z.number().int().nonnegative(),
+  range: z.number().int().nonnegative(),
+  unknown: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  ms: z.number().nonnegative(),
+})
+export type WriterFill = z.infer<typeof WriterFillSchema>
+
 /** What a pass's linking of children's paths for sessions captured before captures named them came to (`SessionCatalog.linkChildren`). */
 export const ChildLinkFillSchema = z.object({
   looked: z.number().int().nonnegative(),
@@ -113,6 +138,10 @@ export const BackfillProgressSchema = z.object({
   repack: z.object({ dropped: z.number(), droppedBytes: z.number(), scrubbedBytes: z.number(), grouped: z.number(), alreadyGrouped: z.number(), copied: z.number(), copiedBytes: z.number(), packsWritten: z.number(), packsRemoved: z.number(), packBytesBefore: z.number(), packBytesAfter: z.number(), ms: z.number(), longestTurnMs: z.number(),
     orphans: z.object({ scanned: z.boolean(), sweep: z.boolean(), scanMs: z.number(), turnMs: z.number(), unnamed: z.number(), forgotten: z.number(), abandoned: z.number(), swept: z.number(), running: z.number(), waiting: z.number(), intentsCleared: z.number() }).optional(),
     trim: z.object({ pack: z.number().nullable(), bytes: z.number(), resumed: z.boolean(), skipped: z.string().nullable() }).optional() }).optional(),
+  /** Views an earlier decoder build made, decoded again by this one, when the pass ran it. */
+  views: ViewRebuildSchema.optional(),
+  /** Writers read for sessions nothing named one for, when the pass ran it. */
+  writers: WriterFillSchema.optional(),
   /** Children's paths linked for sessions captured before captures named them, when the pass ran it. */
   children: ChildLinkFillSchema.optional(),
   /** The archive's migration (`ArchiveMigrationReport`), when the pass ran it. */
@@ -154,6 +183,20 @@ export interface RecordBackfillOptions {
   archive?: ArchiveMigration
   /** Mako's attachment files, swept right after the archive's migration (`AttachmentSweep`). */
   assets?: { pass(control: AttachmentSweepControl, options: { sweep: true }): Promise<AttachmentSweepReport> }
+  /**
+   * Views an earlier decoder build made, decoded again by this one once a
+   * pass has taken every session (`SessionCatalog`'s rebuild): after an
+   * update, every past session's view and unread records come to what this
+   * build reads, without waiting for each to be opened.
+   */
+  views?: { rebuild(control: { stopped(): boolean; yieldToPerson(): Promise<void> }): Promise<ViewRebuild> }
+  /**
+   * The writers of sessions nothing names one for yet, read once a pass has
+   * taken every session (`SessionCatalog`'s `fillWriters`): what their
+   * records state, from what the store holds, else what their harness
+   * leaves beside its store.
+   */
+  writers?: { fill(control: { stopped(): boolean; yieldToPerson(): Promise<void> }): Promise<WriterFill> }
   /**
    * The paths of the children of sessions captured before captures named
    * them, kept once per session once a pass has taken every session
@@ -287,8 +330,12 @@ export class RecordBackfill {
       if (archive) progress.archive = archive
       const assets = await this.sweepAssets()
       if (assets) progress.assets = assets
+      const writers = await this.fillWriters()
+      if (writers) progress.writers = writers
       const children = await this.linkChildren()
       if (children) progress.children = children
+      const views = await this.rebuildViews()
+      if (views) progress.views = views
       const repack = await this.repack()
       if (repack?.ran) {
         const { ran: _ran, leftovers: _leftovers, ...counts } = repack
@@ -332,6 +379,20 @@ export class RecordBackfill {
     }
   }
 
+  /** The writers of sessions nothing named one for; null without a catalog to ask, or when it failed. */
+  private async fillWriters(): Promise<WriterFill | null> {
+    const writers = this.options.writers
+    if (!writers) return null
+    try {
+      const report = await writers.fill({ stopped: () => this.stopped, yieldToPerson: () => this.yieldToPerson() })
+      if (report.looked) this.log("Session writers read", { ...report })
+      return report
+    } catch (error) {
+      this.log("Session writers could not be read", { error: error instanceof Error ? error.message : String(error) })
+      return null
+    }
+  }
+
   /** Children's paths kept for sessions captured before captures named them; null without a catalog to ask, or when it failed. */
   private async linkChildren(): Promise<ChildLinkFill | null> {
     const children = this.options.children
@@ -342,6 +403,20 @@ export class RecordBackfill {
       return report
     } catch (error) {
       this.log("Session children could not be linked", { error: error instanceof Error ? error.message : String(error) })
+      return null
+    }
+  }
+
+  /** Stale views decoded again by this build; null without a catalog to ask, or when it failed. */
+  private async rebuildViews(): Promise<ViewRebuild | null> {
+    const views = this.options.views
+    if (!views) return null
+    try {
+      const report = await views.rebuild({ stopped: () => this.stopped, yieldToPerson: () => this.yieldToPerson() })
+      if (report.stale) this.log("Session views rebuilt by this decoder build", { ...report })
+      return report
+    } catch (error) {
+      this.log("Session views rebuild failed", { error: error instanceof Error ? error.message : String(error) })
       return null
     }
   }
@@ -464,7 +539,7 @@ function assetFields(report: AttachmentSweepReport) {
 
 /** A pass's progress as a log line's fields. */
 function fields(progress: BackfillProgress) {
-  const { prune, repack, archive, assets, children, endedAt, longest, firstRefusal, firstFailure, ...counts } = progress
+  const { prune, repack, archive, assets, views, writers, children, endedAt, longest, firstRefusal, firstFailure, ...counts } = progress
   return {
     ...counts,
     endedAt: endedAt ?? null,
@@ -476,7 +551,9 @@ function fields(progress: BackfillProgress) {
     ...prune && { streamFiles: prune.files, streamsPruned: prune.pruned, streamsPrunedEnded: prune.prunedEnded, streamsRestamped: prune.restamped, streamBytesPruned: prune.bytes, streamsLive: prune.live, streamsUnnamed: prune.unnamed, streamsNotHeld: prune.notHeld, streamsDiffer: prune.differs, pruneMs: prune.ms },
     ...archive && { archiveMigrated: archive.migrated, archiveCopies: archive.left.copies, archivePending: archive.left.pending },
     ...assets && { assetsTrashed: assets.trashed, assetsTrashedBytes: assets.trashedBytes, assetsDeleted: assets.deleted, assetsDeletedBytes: assets.deletedBytes, assetsRestored: assets.restored, assetsStopped: assets.stopped ?? null },
+    ...writers && { writersLooked: writers.looked, writersRecord: writers.record, writersLog: writers.log, writersInstall: writers.install, writersRange: writers.range, writersUnknown: writers.unknown, writersMs: writers.ms },
     ...children && { childrenLooked: children.looked, childrenParents: children.parents, childrenLinked: children.children, childrenKept: children.kept, childrenFailed: children.failed, childrenMs: children.ms },
+    ...views && { viewsStale: views.stale, viewsRebuilt: views.rebuilt, viewsGone: views.gone, viewsFailed: views.failed, viewsMs: views.ms },
     ...repack?.orphans?.scanned && { orphansForgotten: repack.orphans.forgotten, orphansAbandoned: repack.orphans.abandoned, orphansSwept: repack.orphans.swept, orphansRunning: repack.orphans.running, orphansWaiting: repack.orphans.waiting, orphansScanMs: repack.orphans.scanMs },
     ...repack?.trim && { tailTrimmedBytes: repack.trim.bytes, tailTrimSkipped: repack.trim.skipped },
     ...repack && { chunksDropped: repack.dropped, sessionsGrouped: repack.grouped, chunksCopied: repack.copied, packsRemoved: repack.packsRemoved, packBytesBefore: repack.packBytesBefore, packBytesAfter: repack.packBytesAfter, repackMs: repack.ms, repackLongestTurnMs: repack.longestTurnMs },

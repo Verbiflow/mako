@@ -10,7 +10,7 @@ import { formatBytes } from "@/lib/format"
 import { homeRelative } from "@/lib/skill-matrix"
 import type { MessageOrigin, OriginEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { canReadOriginals, readEntryOriginal, type OriginalReading } from "@/state/thread-viewing"
+import { canReadOriginals, readEntryOriginal, readStreamLines, type OriginalReading } from "@/state/thread-viewing"
 import { readLiveOriginal } from "@/state/live-history"
 import { useTranscriptSource } from "./source-context"
 
@@ -41,7 +41,9 @@ interface Recorded { path?: string; live?: string; entry: OriginEntry }
 function recorded(origins: readonly (MessageOrigin | undefined)[], live: string | undefined): Recorded[] {
   return origins.flatMap((origin) => origin?.entries.flatMap((entry): Recorded[] => {
     const inLive = live !== undefined && entry.at !== undefined && Boolean(entry.record || entry.stream)
-    if (!inLive && !(origin.path && entry.id && entry.record)) return []
+    // A record known only by the stream line it came in (a live record no decoder read, in Settings › Diagnostics) is read from the stream.
+    const streamOnly = !inLive && !origin.path && entry.at === undefined && entry.stream !== undefined
+    if (!inLive && !streamOnly && !(origin.path && entry.id && entry.record)) return []
     return [{ ...origin.path && { path: origin.path }, ...inLive && { live }, entry }]
   }) ?? [])
 }
@@ -82,6 +84,7 @@ const keyOf = ({ path, entry }: Recorded) => `${path ?? ""}\u0000${entry.id ?? J
 function read({ path, live, entry }: Recorded): Promise<OriginalReading> {
   const saved = path && entry.id && entry.record ? { path, id: entry.id } : undefined
   if (live && entry.at) return readLiveOriginal(live, { at: entry.at, type: entry.type, ...entry.stream && { stream: entry.stream } }, saved)
+  if (!path && entry.stream) return readStreamLines(entry.stream)
   return saved ? readEntryOriginal(saved.path, saved.id) : Promise.resolve({ state: "read", original: { kept: false, parts: [] } })
 }
 
@@ -203,13 +206,15 @@ function OriginalBody({ reading, recorded }: { reading: Promise<OriginalReading>
     if (!original.parts.length) return <p className="text-label text-faint">No record names this entry.</p>
     return <Parts parts={original.parts} kept={original.kept} />
   }
+  // A record known only by its stream line (a live one no decoder read) has no record side to speak of.
+  const streamOnly = !recorded.path && !recorded.live && !original.parts.length
   return (
     <div className="flex flex-col gap-5">
-      <section data-original-side="record" className="flex flex-col gap-2">
+      {streamOnly ? null : <section data-original-side="record" className="flex flex-col gap-2">
         <SideHead title="In the session's record" />
         {original.parts.length ? <Parts parts={original.parts} kept={original.kept} />
           : <p className="text-label text-faint">{recorded.entry.record ? "The record no longer holds these bytes." : recorded.path ? "The harness's record doesn't keep this; only its live stream said it." : "Not in the record yet: the harness hasn't written this turn."}</p>}
-      </section>
+      </section>}
       <section data-original-side="stream" className="flex flex-col gap-2">
         <SideHead title="As it streamed" file={original.stream.find((part) => part.kind !== "row")?.file} />
         <Parts parts={original.stream} kept={false} />

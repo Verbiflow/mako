@@ -8,7 +8,7 @@ import { z } from "zod"
  * and only one older than both leaves it. Settings › Diagnostics and the
  * rail say so in one line each, with Update.
  */
-export const SharedStoreSchema = z.enum(["threads", "session-memory", "records", "outputs", "archive"])
+export const SharedStoreSchema = z.enum(["threads", "session-memory", "records", "unread", "outputs", "archive"])
 export type SharedStore = z.infer<typeof SharedStoreSchema>
 
 export const StoreStandingRowSchema = z.object({

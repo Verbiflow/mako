@@ -4,6 +4,7 @@ import { appendFile, mkdir, open, rename } from "node:fs/promises"
 import { basename, dirname } from "node:path"
 import type { RecordRef } from "@mako/sessions/entries"
 import { claimStreamWriter, STREAMS_ROOT, streamPath } from "@mako/sessions/record-streams"
+import type { ExecutionContext } from "../contracts/execution-context.js"
 import type { JsonObject } from "../contracts/json.js"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
 import { hostLog } from "../base/host-log.js"
@@ -61,6 +62,13 @@ export interface NativeStream<Frame> {
    * own clock, which no decoder draws, so a replay draws it where it was.
    */
   drawn(update: JsonObject): StreamFrame | undefined
+  /**
+   * The harness reported its version in its handshake: a `{ "at", "runtime",
+   * "via" }` line, once per version a launch reports. The record store reads
+   * it back as the version observed running the session, where the
+   * harness's own records state none (`@mako/sessions/record-writers`).
+   */
+  runtime(version: string, via: string): void
   /** This launch resumes the session: what follows until `opened` is history the harness replays. */
   opening(): void
   opened(): void
@@ -312,6 +320,7 @@ export function nativeStream<Frame>(
   }
 
   const line = (body: JsonObject) => append(`${nativeStreamJson({ at: new Date().toISOString(), ...body })}\n`)
+  let reported: string | undefined
 
   return {
     get path() {
@@ -344,6 +353,11 @@ export function nativeStream<Frame>(
     },
     steered: (text, shown) => line(shown === undefined || shown === text ? { steered: true, text } : { steered: true, text, shown }),
     drawn: (update) => line({ drawn: update }),
+    runtime: (version, via) => {
+      if (version === reported) return
+      reported = version
+      line({ runtime: version, via })
+    },
     opening: () => line({ opening: true }),
     opened: () => line({ opened: true }),
     closed: () => line({ closed: true }),
@@ -357,4 +371,9 @@ export function nativeStream<Frame>(
       while (writing || queue.length) await drain()
     },
   }
+}
+
+/** Keeps a launch's reported runtime version in its stream (`NativeStream.runtime`); nothing for a version the harness didn't report. */
+export function streamRuntime(stream: Pick<NativeStream<unknown>, "runtime"> | null | undefined, runtime: ExecutionContext["runtime"]): void {
+  if (runtime.kind === "reported") stream?.runtime(runtime.version, runtime.via)
 }

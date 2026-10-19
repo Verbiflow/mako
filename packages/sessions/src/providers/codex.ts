@@ -36,6 +36,7 @@ import {
   type ResumePoint,
 } from "../jsonl.js"
 import { PlainSizes, recordEncoding, statRecord } from "../record-files.js"
+import { fieldScan, statedVersion, type RecordWriterRule } from "../record-writers.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 import { followCurrentCwd } from "./current-cwd.js"
 import { CodexRollouts, namedRollout, rolloutThread } from "./codex-rollouts.js"
@@ -101,7 +102,21 @@ export function codexRecordPlace(path: string): RecordPlace | null {
   return { key: `${root}rollouts/${name}`, places: [`${root}sessions/${year}/${month}/${day}/${name}`, `${root}archived_sessions/${name}`] }
 }
 
+/**
+ * Codex states the version that started a rollout in its `session_meta`
+ * (`cli_version`), and the version that last wrote a thread in its
+ * `threads` row; a turn's own lines state none, so a rollout a newer Codex
+ * resumed shows that version only in the row.
+ */
+const CODEX_WRITER: RecordWriterRule = {
+  file: (key) => (key.includes(":rollouts/") ? codexVersions() : null),
+  row: (table, row) => (table === "threads" ? statedVersion(row.cli_version) : null),
+}
+const codexVersions = fieldScan('"cli_version":"', /"cli_version":"([^"]{1,64})"/, { before: 0, after: 80 })
+
 export class CodexProvider implements SessionProvider {
+  /** Where its records state the build that wrote them. */
+  readonly recordWriter = CODEX_WRITER
   harness = "codex" as const
   /** 1: the service tier is read from `thread_settings_applied`. 2: rows carry `currentCwd` from the latest `turn_context`. 3: archived rows carry `nativeArchiveStamp`. 4: that stamp is the rollout's mtime. 5: archived rows carry `resumeUnavailable`. */
   peekVersion = 5
@@ -473,6 +488,7 @@ export class CodexProvider implements SessionProvider {
       databases: databases.filter((database) => database !== null),
       lines: ids.map((value) => ({ path: this.nameLog, field: "id", value })),
       place: codexRecordPlace,
+      writer: CODEX_WRITER,
       children: spawned.children,
     }
   }

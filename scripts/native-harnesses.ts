@@ -6,11 +6,15 @@ import { z } from "zod"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { storeReader } from "./decode-compare.ts"
 
-/** Each harness's CLI, driven headless on this machine's sign-ins, for the record-store proofs. */
+/**
+ * Each harness's CLI, driven headless on this machine's sign-ins, for the
+ * record-store proofs. `env` runs it in another home
+ * (`scratch-harness-home.ts`); unset, it runs in the shell's own.
+ */
 export interface Harness {
   /** Starts a session in `cwd`; its native id. */
-  start(cwd: string, prompt: string): Promise<{ id: string; out: string }>
-  resume(cwd: string, id: string, prompt: string): Promise<string>
+  start(cwd: string, prompt: string, env?: NodeJS.ProcessEnv): Promise<{ id: string; out: string }>
+  resume(cwd: string, id: string, prompt: string, env?: NodeJS.ProcessEnv): Promise<string>
   /** The session's transcript is an append-only file. */
   appends?: true
 }
@@ -18,9 +22,9 @@ export interface Harness {
 const devin = devinExecutable() ?? "devin"
 const DevinSessionsSchema = z.array(z.object({ id: z.string() }))
 
-export function run(command: string, argv: string[], cwd: string): Promise<string> {
+export function run(command: string, argv: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, argv, { cwd, stdio: ["ignore", "pipe", "pipe"], timeout: 600_000 })
+    const child = spawn(command, argv, { cwd, env: env ?? process.env, stdio: ["ignore", "pipe", "pipe"], timeout: 600_000 })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk))
@@ -45,54 +49,55 @@ const jsonLines = (out: string) => out.split("\n").flatMap((line) => {
 export const HARNESSES = {
   claude: {
     appends: true,
-    async start(cwd, prompt) {
-      const out = await run("claude", ["-p", prompt, "--output-format", "json"], cwd)
+    async start(cwd, prompt, env) {
+      const out = await run("claude", ["-p", prompt, "--output-format", "json"], cwd, env)
       return { id: JSON.parse(out).session_id, out }
     },
-    resume: async (cwd, id, prompt) => JSON.parse(await run("claude", ["-p", "--resume", id, prompt, "--output-format", "json"], cwd)).result,
+    resume: async (cwd, id, prompt, env) => JSON.parse(await run("claude", ["-p", "--resume", id, prompt, "--output-format", "json"], cwd, env)).result,
   },
   codex: {
     appends: true,
-    async start(cwd, prompt) {
-      const out = await run("codex", ["exec", "--json", "--skip-git-repo-check", "-s", "read-only", prompt], cwd)
+    async start(cwd, prompt, env) {
+      const out = await run("codex", ["exec", "--json", "--skip-git-repo-check", "-s", "read-only", prompt], cwd, env)
       return { id: jsonLines(out).find((event) => event.type === "thread.started").thread_id, out }
     },
-    resume: async (cwd, id, prompt) => jsonLines(await run("codex", ["exec", "resume", id, "--json", "--skip-git-repo-check", prompt], cwd))
+    resume: async (cwd, id, prompt, env) => jsonLines(await run("codex", ["exec", "resume", id, "--json", "--skip-git-repo-check", prompt], cwd, env))
       .filter((event) => event.type === "item.completed" && event.item.type === "agent_message").map((event) => event.item.text).join("\n"),
   },
   cursor: {
-    async start(cwd, prompt) {
-      const out = await run("cursor-agent", ["-p", "--output-format", "json", "--trust", prompt], cwd)
+    async start(cwd, prompt, env) {
+      const out = await run("cursor-agent", ["-p", "--output-format", "json", "--trust", prompt], cwd, env)
       return { id: JSON.parse(out).session_id, out }
     },
-    resume: async (cwd, id, prompt) => JSON.parse(await run("cursor-agent", ["-p", "--output-format", "json", "--trust", "--resume", id, prompt], cwd)).result,
+    resume: async (cwd, id, prompt, env) => JSON.parse(await run("cursor-agent", ["-p", "--output-format", "json", "--trust", "--resume", id, prompt], cwd, env)).result,
   },
   opencode: {
-    async start(cwd, prompt) {
-      const out = await run("opencode", ["run", "--format", "json", prompt], cwd)
+    async start(cwd, prompt, env) {
+      // A home of its own runs a private server: the background service's port is the person's.
+      const out = await run("opencode", ["run", ...(env ? ["--standalone"] : []), "--format", "json", prompt], cwd, env)
       return { id: jsonLines(out).find((event) => event.sessionID)?.sessionID, out }
     },
-    resume: async (cwd, id, prompt) => jsonLines(await run("opencode", ["run", "--format", "json", "-s", id, prompt], cwd))
+    resume: async (cwd, id, prompt, env) => jsonLines(await run("opencode", ["run", ...(env ? ["--standalone"] : []), "--format", "json", "-s", id, prompt], cwd, env))
       .filter((event) => event.type === "text").map((event) => event.part?.text ?? "").join("\n"),
   },
   grok: {
     appends: true,
-    async start(cwd, prompt) {
+    async start(cwd, prompt, env) {
       const id = randomUUID()
-      const out = await run("grok", ["-p", prompt, "-s", id, "--always-approve"], cwd)
+      const out = await run("grok", ["-p", prompt, "-s", id, "--always-approve"], cwd, env)
       return { id, out }
     },
-    resume: (cwd, id, prompt) => run("grok", ["-r", id, "-p", prompt, "--always-approve"], cwd),
+    resume: (cwd, id, prompt, env) => run("grok", ["-r", id, "-p", prompt, "--always-approve"], cwd, env),
   },
   devin: {
-    async start(cwd, prompt) {
-      const out = await run(devin, ["-p", prompt, "--respect-workspace-trust", "false"], cwd)
-      const listed = await run(devin, ["list", "--format", "json"], cwd)
+    async start(cwd, prompt, env) {
+      const out = await run(devin, ["-p", prompt, "--respect-workspace-trust", "false"], cwd, env)
+      const listed = await run(devin, ["list", "--format", "json"], cwd, env)
       const [newest] = DevinSessionsSchema.parse(JSON.parse(listed))
       if (!newest) throw new Error("devin lists no session after starting one")
       return { id: newest.id, out }
     },
-    resume: (cwd, id, prompt) => run(devin, ["-r", id, "-p", prompt, "--respect-workspace-trust", "false"], cwd),
+    resume: (cwd, id, prompt, env) => run(devin, ["-r", id, "-p", prompt, "--respect-workspace-trust", "false"], cwd, env),
   },
 } satisfies Record<string, Harness>
 

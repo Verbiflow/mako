@@ -11,8 +11,11 @@
  * the same working directory. No provider can inherit another's private state;
  * it can inherit the conversation, and that is what this hands over.
  */
+import { makoRuntimeReadings } from "@mako/sessions/record-observed"
 import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE, type KeptRestore } from "@mako/sessions"
 import { makoRecords } from "@mako/sessions/record-streams"
+import { recordWritersAt } from "@mako/sessions/record-store"
+import type { InstalledReading, SessionWriters } from "@mako/sessions/record-writers"
 import { isReplyEntry } from "@mako/sessions/entries"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { existsSync } from "node:fs"
@@ -52,7 +55,6 @@ import { daemonIsForeign } from "./daemon-vintage.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { HostJobs } from "../base/host-jobs.js"
-import { retainUnread } from "../base/native-unknown.js"
 import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
 import type { WorktreeOrigins } from "./worktree-origins.js"
 import type { Lineage } from "./lineage.js"
@@ -271,9 +273,12 @@ export interface ThreadCatalog {
   /**
    * Puts a session its harness deleted back into the harness's own store
    * from Mako's records (`SessionCatalog.restoreKept`), so the harness can
-   * resume it as the same session.
+   * resume it as the same session, unless the harness `installed` here is
+   * older than the newest version that wrote them (`restoreGate`).
    */
-  restoreKept(path: string): Promise<KeptRestore>
+  restoreKept(path: string, installed?: InstalledReading | null): Promise<KeptRestore>
+  /** Every harness version that wrote the session at `path`, as the record store keeps them, read without writing; null when it holds none. */
+  recordWriters(path: string): SessionWriters | null
   /** A page for the viewer; a tool row fetches its whole output (`block`) when it opens. */
   viewPage(path: string, before?: number, limit?: number): Promise<ThreadPage | null>
   /**
@@ -827,6 +832,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       archivePath: join(homedir(), ".mako", "archive"),
       recordsPath: makoRecords(),
       viewsPath: makoViews(),
+      runtimeReadings: makoRuntimeReadings(),
       readOnly: catalogReadOnly,
       decodeExecutable: headlessNodeExecutable(),
       ...deps.writer && { writer: deps.writer },
@@ -1033,6 +1039,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       archivePath: join(homedir(), ".mako", "archive"),
       recordsPath: makoRecords(),
       viewsPath: makoViews(),
+      runtimeReadings: makoRuntimeReadings(),
       readOnly: catalogReadOnly,
       decodeExecutable: headlessNodeExecutable(),
       ...deps.writer && { writer: deps.writer },
@@ -1196,9 +1203,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     signal.throwIfAborted()
     const page = await source.page(path, before, limit, options)
     if (!page) return null
-    const { unread, ...shown } = page
-    retainUnread(page.ref, unread)
-    return { ...shown, ref: annotate(page.ref) }
+    // Unread records are counted where views are written (`@mako/sessions/unread-index`), not as a page is shown.
+    const shown = { ...page, ref: annotate(page.ref) }
+    delete shown.unread
+    return shown
   }
 
   async function readThreadRef(path: string): Promise<ThreadRef | null> {
@@ -1229,10 +1237,20 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return source.original(path, id)
   }
 
-  async function restoreKept(path: string): Promise<KeptRestore> {
+  async function restoreKept(path: string, installed?: InstalledReading | null): Promise<KeptRestore> {
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
-    return source.restoreKept(path)
+    return source.restoreKept(path, installed)
+  }
+
+  function recordWriters(path: string): SessionWriters | null {
+    try {
+      return recordWritersAt(makoRecords(), path)?.writers ?? null
+    } catch (error) {
+      // A store being made or replaced, or a newer Mako's: nothing is known of its writers.
+      hostWarn("records", "a session's writers could not be read", { path, error: error instanceof Error ? error.message : String(error) })
+      return null
+    }
   }
 
   async function holdThread(path: string): Promise<boolean> {
@@ -1275,9 +1293,9 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         ? await openThreadViaDaemon(path)
         : await source.open(path)
     if (!thread) return null
-    const { unread, ...shown } = thread
-    retainUnread(thread.ref, unread)
-    return { ...shown, ref: annotate(thread.ref) }
+    const shown = { ...thread, ref: annotate(thread.ref) }
+    delete shown.unread
+    return shown
   }
 
   async function openThreadViaDaemon(path: string): Promise<Thread | null> {
@@ -1505,6 +1523,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     page: pageThread,
     hold: holdThread,
     restoreKept,
+    recordWriters,
     viewPage: viewThreadPage,
     viewPreview: viewThreadPreview,
     entry: threadEntry,

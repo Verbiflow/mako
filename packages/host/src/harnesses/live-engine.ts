@@ -19,7 +19,7 @@ import {
   decodedNotices,
   type DecodedSink,
 } from "../contracts/native-decoding.js"
-import { retainUndeclaredTools, retainUnknown, type UnknownReason } from "../base/native-unknown.js"
+import { retainUndeclaredTools, retainUnknown, type UnknownReason, type UnknownSeen } from "../base/native-unknown.js"
 import { topic } from "../base/topic.js"
 import { frameOf, frameTime } from "./native-stream.js"
 import { liveEffectsStatus } from "@mako/sessions/tool-effect-reading"
@@ -358,8 +358,14 @@ export function createLiveEngine<
     observeCalls(live, updates)
     live.emit({ type: "live-updates", id: live.state.id, updates: updates.map(stamped) })
   }
+  /** The version the launch's handshake reported, and the stream line being decoded: where an unknown record was seen. */
+  const seen = (live: Live): UnknownSeen => {
+    const runtime = live.state.executionContext?.runtime
+    const frame = frameOf()
+    return { ...runtime?.kind === "reported" && { version: runtime.version }, ...frame && { frame } }
+  }
   const unhandledEvent = (live: Live, kind: string): void => {
-    retainUnknown(live.state.harness, kind, "unknown")
+    retainUnknown(live.state.harness, kind, "unknown", undefined, 1, seen(live))
   }
 
   return {
@@ -403,7 +409,7 @@ export function createLiveEngine<
       reason: UnknownReason,
       raw: JsonValue
     ): void {
-      retainUnknown(live.state.harness, kind, reason, raw)
+      retainUnknown(live.state.harness, kind, reason, raw, 1, seen(live))
     },
     sink(live, handlers) {
       return {
@@ -419,7 +425,7 @@ export function createLiveEngine<
         rewound: (run) => live.emit({ type: "live-rewound", id: live.state.id, run }),
         goal: (goal) => live.emit({ type: "live-goal", id: live.state.id, goal }),
         unknown: (kind, reason, raw) =>
-          retainUnknown(live.state.harness, kind, reason, raw),
+          retainUnknown(live.state.harness, kind, reason, raw, 1, seen(live)),
         effect: (effect) => handlers.effect(effect),
       }
     },

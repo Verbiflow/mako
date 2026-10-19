@@ -21,7 +21,7 @@ import type { LiveSessionState, PromptAttachment } from "../../contracts/provide
 import type { McpRegistrySnapshot } from "../../contracts/mcp-skills-integrations.js"
 import { createLiveEngine, type LiveEngineApi } from "../live-engine.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../contracts/native-decoding.js"
-import { nativeStream, withFrame, type NativeStream } from "../native-stream.js"
+import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { errorMessage } from "../../base/error-message.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
@@ -852,6 +852,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const contextSize = () => live.model ? live.catalog?.limits.get(openCodeLaunchId(live.model)) : undefined
         const decoder = live.decoder = new OpenCodeDecoder(session.id, cwd, { launchAccess, contextSize })
         live.nativeStream = nativeStream("opencode", options.conversationId, () => ({ root: decoder.root, cwd, launchAccess, contextSize: contextSize() ?? null }), dependencies.streams, () => live.state.nativeId)
+        streamRuntime(live.nativeStream, context.runtime)
         live.interactions = new OpenCodeInteractions({
           client: api.client, root: approvalRoot, conversationId: live.state.id,
           emit: event => { if (!live.closed) live.emit(event) },

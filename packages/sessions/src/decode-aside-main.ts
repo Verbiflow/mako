@@ -7,6 +7,8 @@ import { AsideJobSchema, type AsideJob, type AsideReply } from "./decode-aside.j
 import { NativeStores } from "./read-only-sqlite.js"
 import { SAVED_HISTORY_READERS } from "./readers.js"
 import { ViewCache } from "./view-cache.js"
+import { UNREAD_INDEX_FILE, UnreadIndex } from "./unread-index.js"
+import { join } from "node:path"
 
 async function decode(job: AsideJob): Promise<AsideReply> {
   const reader = SAVED_HISTORY_READERS[job.reader]
@@ -17,9 +19,15 @@ async function decode(job: AsideJob): Promise<AsideReply> {
     const thread = await provider.read(job.path)
     if (!thread) return { ok: false, error: "the record doesn't read" }
     const decodeMs = performance.now() - started
-    const views = new ViewCache(job.viewsPath, () => job.translator)
-    await views.write(job.path, job.stamp, thread, decodeMs)
-    await views.settled()
+    // The catalog's index, beside the views: a large session's unread records are counted like any other's.
+    const unread = new UnreadIndex(join(job.viewsPath, UNREAD_INDEX_FILE))
+    try {
+      const views = new ViewCache(job.viewsPath, () => job.translator, undefined, unread)
+      await views.write(job.path, job.stamp, thread, decodeMs)
+      await views.settled()
+    } finally {
+      unread.close()
+    }
     return { ok: true, entries: thread.entries.length, decodeMs }
   } finally {
     provider.close?.()

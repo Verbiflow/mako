@@ -1,5 +1,6 @@
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { EntryOriginal } from "@mako/sessions/record-original"
+import type { RecordRef } from "@mako/sessions/entries"
 import type {
   Entry,
   Thread,
@@ -331,6 +332,11 @@ export const canReadOriginals = hasBridge
  */
 export function readEntryOriginal(path: string, id: string): Promise<OriginalReading> {
   return originalReading(getMako().threadOriginal(path, id))
+}
+
+/** The stream lines `stream` names, read by the host from Mako's streams: a live record known by nothing else. */
+export function readStreamLines(stream: RecordRef): Promise<OriginalReading> {
+  return originalReading(getMako().streamOriginal(stream))
 }
 
 export function originalReading(original: Promise<EntryOriginal | null>): Promise<OriginalReading> {

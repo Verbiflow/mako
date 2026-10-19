@@ -1,5 +1,6 @@
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
+import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { getMako } from "@/lib/bridge"
 
 export const diagnostics = {
@@ -17,6 +18,11 @@ export const diagnostics = {
 
   providerResidency(): Promise<ProviderResidencySnapshot> {
     return getMako().providerResidency()
+  },
+
+  /** Records Mako couldn't read, saved and live, by harness version. */
+  unreadRecords(): Promise<UnreadReport> {
+    return getMako().unreadRecords()
   },
 
   clear(): Promise<void> {

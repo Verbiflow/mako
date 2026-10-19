@@ -17,6 +17,9 @@
  *     costs one positional read of only the appended bytes per flush.
  */
 
+import type { InstalledReading } from "./record-writers.js"
+import { UNREAD_INDEX_FILE, UnreadIndex } from "./unread-index.js"
+import { observedInstall } from "./record-observed.js"
 import { existsSync, realpathSync, watch, watchFile, unwatchFile, type FSWatcher, type Stats } from "node:fs"
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -53,7 +56,10 @@ import { boundedChildren, type ChildTranscript, type ChildTranscripts } from "./
 import { NativeStores, ReadOnlyStoreError } from "./read-only-sqlite.js"
 import { DECODE_ASIDE_BYTES, type AsideJob, type DecodeAside } from "./decode-aside.js"
 import type { FollowStart } from "./jsonl.js"
-import { RecordBackfill, type BackfillLog, type ChildLinkFill } from "./record-backfill.js"
+import { RecordBackfill, type BackfillLog, type ChildLinkFill, type ViewRebuild, type WriterFill } from "./record-backfill.js"
+import { WriterEvidenceReader } from "./record-evidence.js"
+import { readReleaseTimelines } from "./record-releases.js"
+import { EVIDENCE_RULES, type WriterEvidence } from "./record-writers.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore } from "./record-store.js"
@@ -338,6 +344,8 @@ export class SessionCatalog {
   private aside: DecodeAside | null = null
   /** Sessions decoded too fast to keep on disk, or decoded by a catalog that writes nothing. */
   private memoryViews: ViewCache
+  /** The unread records of every session this catalog decoded (`UnreadIndex`); in memory for a catalog that writes nothing. */
+  readonly unread: UnreadIndex
   /** The record store capture writes, and sessions read back from it. */
   private recordStore: RecordStore | null = null
   /** Where each session last read back from the record store was restored, which its entries' records name. */
@@ -345,6 +353,7 @@ export class SessionCatalog {
   private recordReads: RecordReads | null = null
   /** The home record keys are relative to, where a session its harness deleted is restored (`restoreKept`). */
   private readonly recordsHome: string
+  private readonly runtimeReadings: string | null
   /** How the harnesses' own stores are opened (`ReadBack.stores`): a restore for a harness to resume writes them; a strict host's refuse. */
   private readonly harnessStores: NativeStores | null
   /** Restores running, by path: a second ask shares the first. */
@@ -378,8 +387,14 @@ export class SessionCatalog {
       backfill?: boolean
       /** Where the backfill's progress lines go; the console by default. */
       log?: BackfillLog
+      /**
+       * The host's installed readings (`makoRuntimeReadings()`): a write
+       * heard as it lands is stamped with the version installed then, where
+       * its harness's records state none (`observedInstall`).
+       */
+      runtimeReadings?: string
       translator?: string
-      /** How this build stamps a store format it sets (`storeWriter`): the record store's. */
+      /** How this build stamps a store format it sets (`storeWriter`): the record store's and the unread index's. */
       writer?: string
       /**
        * Large records decode in a child process (`DecodeAside`), for a
@@ -406,16 +421,19 @@ export class SessionCatalog {
       this.archive = new SessionArchive(options.archivePath, { readOnly: this.readOnly })
     this.recordsHome = options.recordsHome ?? homedir()
     this.harnessStores = options.readBack?.stores ?? null
+    this.runtimeReadings = options.runtimeReadings ?? null
     this.writer = options.writer
     this.attachments = options.attachmentReaders ? { readers: options.attachmentReaders, views: options.viewsPath, ...options.decodeAside && { aside: options.decodeAside.executable } } : null
     if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome, options.readBack, options.backfill ? options.log ?? null : undefined)
     const build = () => this.translator ??= translatorBuild()
+    // Every view's unread records, the large ones on disk and the small ones held in memory alike (`unread-index.ts`).
+    this.unread = openUnreadIndex(options.viewsPath && !this.readOnly ? join(options.viewsPath, UNREAD_INDEX_FILE) : null, options.writer)
     if (options.viewsPath) {
-      this.views = new ViewCache(options.viewsPath, build)
+      this.views = new ViewCache(options.viewsPath, build, undefined, this.unread)
       this.viewsPath = options.viewsPath
       this.aside = options.decodeAside ?? null
     }
-    this.memoryViews = new ViewCache(null, build, MEMORY_VIEW_BYTES)
+    this.memoryViews = new ViewCache(null, build, MEMORY_VIEW_BYTES, this.unread)
   }
 
   /**
@@ -449,6 +467,7 @@ export class SessionCatalog {
           return listed ? JSON.stringify(railRow(listed)) : null
         },
         rowBytesOf: async (ref) => (await this.ownerOf(ref.path)?.recordBytes?.(ref.path)) ?? null,
+        observedInstall: (harness) => (this.runtimeReadings ? observedInstall(this.runtimeReadings, harness) : null),
         onError: (ref, message) => console.error("Session record capture failed", ref.path, message),
       })
       this.streams = streams
@@ -463,6 +482,8 @@ export class SessionCatalog {
           ...this.archive && readBack && { archive: new ArchiveMigration(this.archive, this.migrationSource()) },
           // Swept where the migration runs, under the same lock, once it has dropped what it can.
           ...this.archive && this.attachments && { assets: new AttachmentSweep({ archive: this.archive.folder, ...this.attachments }) },
+          views: { rebuild: (control) => this.rebuildStaleViews(control) },
+          writers: { fill: (control) => this.fillWriters(store, folder, control) },
           ...readBack && { children: { link: (control) => this.linkChildren(control) } },
         })
       return capture
@@ -472,6 +493,15 @@ export class SessionCatalog {
     }
   }
 
+  /**
+   * The writers of sessions nothing named one for yet: what their own
+   * records state, read from what the store holds of them (a session
+   * captured before its harness's rule, or deleted by its harness since), and
+   * else the evidence its harness leaves beside its store
+   * (`WriterEvidenceReader`: logs, installs, a range). One reader per pass,
+   * so each harness's logs and installs are read once; yields to the person
+   * between sessions.
+   */
   /**
    * The children's paths of sessions captured before captures named them
    * (`RecordStore.sessionsWithoutChildLinks`), kept once per session: from
@@ -506,6 +536,78 @@ export class SessionCatalog {
         await store.keepChildPaths(session.harness, session.nativeId, paths, { linked: true })
         if (paths.length) report.parents += 1
         report.children += paths.length
+      } catch {
+        report.failed += 1
+      }
+    }
+    report.ms = Date.now() - started
+    return report
+  }
+
+  async fillWriters(store: RecordStore, folder: string, control: { stopped(): boolean; yieldToPerson(): Promise<void> }): Promise<WriterFill> {
+    const started = Date.now()
+    const report: WriterFill = { looked: 0, record: 0, log: 0, install: 0, range: 0, unknown: 0, failed: 0, ms: 0 }
+    const evidence = join(folder, "evidence")
+    const releases = readReleaseTimelines(evidence)
+    const reader = new WriterEvidenceReader({ home: this.recordsHome, readings: this.runtimeReadings, cache: evidence, releases })
+    // Release dates read since a session was found to have no evidence may bound it now.
+    const unknownBefore = Math.max(0, ...Object.values(releases).map((timeline) => timeline.checkedAt))
+    for (const session of store.sessionsWithoutWriters({ unknownBefore })) {
+      if (control.stopped()) break
+      await control.yieldToPerson()
+      report.looked += 1
+      try {
+        const rule = this.providers.find((provider) => provider.harness === session.harness && provider.recordWriter)?.recordWriter
+        if (rule && (await store.rescanWriters(session.harness, session.nativeId, rule)).length) {
+          report.record += 1
+          continue
+        }
+        let evidence: WriterEvidence | null = null
+        for (const path of session.paths) {
+          const provider = this.ownerOf(path) ?? this.providers.find((each) => each.harness === session.harness)
+          evidence = provider ? await reader.evidence(provider, path) : null
+          if (evidence) break
+        }
+        evidence ??= { source: "unknown", why: rule ? "its records state no version where its harness writes one" : "its records state none, Mako never ran it, and its harness leaves nothing that names one", at: Date.now(), rules: EVIDENCE_RULES }
+        await store.noteEvidence(session.harness, session.nativeId, evidence)
+        report[evidence.source] += 1
+      } catch {
+        report.failed += 1
+      }
+    }
+    report.ms = Date.now() - started
+    return report
+  }
+
+  /**
+   * Every view an earlier decoder build made, and every session whose unread
+   * records one noted, decoded again by this build, the most recently used
+   * first, one at a time, yielding to the person between sessions. A view
+   * stamped with another build is never served as current anyway (it's
+   * decoded again when opened); this does it before anyone asks, so after an
+   * update every past session reads as this build reads it, and the unread
+   * counts in diagnostics drop as a decoder learns a kind.
+   */
+  private async rebuildStaleViews(control: { stopped(): boolean; yieldToPerson(): Promise<void> }): Promise<ViewRebuild> {
+    const build = this.translator ??= translatorBuild()
+    const started = Date.now()
+    const paths = new Set<string>()
+    for (const view of (await this.views?.list()) ?? []) if (view.translator !== build) paths.add(view.path)
+    for (const path of this.unread.stalePaths(build)) paths.add(path)
+    const listed = new Set(this.list().map((ref) => ref.path))
+    const report: ViewRebuild = { stale: paths.size, rebuilt: 0, gone: 0, failed: 0, ms: 0 }
+    for (const path of paths) {
+      if (control.stopped()) break
+      await control.yieldToPerson()
+      if (control.stopped()) break
+      if (!listed.has(path)) {
+        await Promise.all([this.views?.remove(path), this.memoryViews.remove(path)])
+        report.gone += 1
+        continue
+      }
+      try {
+        if (await this.open(path, false)) report.rebuilt += 1
+        else report.failed += 1
       } catch {
         report.failed += 1
       }
@@ -779,18 +881,20 @@ export class SessionCatalog {
    * a unit already there is skipped. A copy in the harness's store that went
    * on without Mako is never overwritten: Mako's version is written beside
    * it as the harness's own fork (`forked`). Whether something else holds
-   * the session open is the caller's to have asked first.
+   * the session open is the caller's to have asked first. `installed` is the
+   * version of the harness here: an older one than the newest that wrote the
+   * records gets nothing written (`outdated`, `restoreGate`).
    */
-  restoreKept(path: string): Promise<KeptRestore> {
-    const key = `${path}`
+  restoreKept(path: string, installed?: string | InstalledReading | null): Promise<KeptRestore> {
+    const key = `${path}\0${JSON.stringify(installed ?? null)}`
     const running = this.restoring.get(key)
     if (running) return running
-    const work = this.restoreKeptNow(path).finally(() => this.restoring.delete(key))
+    const work = this.restoreKeptNow(path, installed).finally(() => this.restoring.delete(key))
     this.restoring.set(key, work)
     return work
   }
 
-  private async restoreKeptNow(path: string): Promise<KeptRestore> {
+  private async restoreKeptNow(path: string, installed: string | InstalledReading | null | undefined): Promise<KeptRestore> {
     const refused = (reason: string): KeptRestore => ({ kind: "refused", reason })
     const store = this.recordStore
     const provider = this.ownerOf(path)
@@ -803,9 +907,11 @@ export class SessionCatalog {
     const report = await store.restore({
       harness: session.harness, nativeId: session.nativeId, home: this.recordsHome, stores: this.harnessStores,
       ...destination && { destination }, ...provider.fork && { fork: provider.fork },
+      ...installed !== undefined && { installed },
     })
     // What its reader listed of the store before is stale: the session and its children are there the moment this returns.
     if (report.written || report.fork?.written) provider.storeWritten?.()
+    if (report.outdated) return { kind: "outdated", ...report.outdated }
     if (report.fork) {
       if (rescansFor(provider, path)) await this.scan({ emitChanges: true })
       return report.fork.written || !report.fork.diverged.length
@@ -1478,6 +1584,7 @@ export class SessionCatalog {
     ])
     this.views?.close()
     this.memoryViews.close()
+    this.unread.close()
     if (this.saveTimer) {
       clearTimeout(this.saveTimer)
       this.saveTimer = null
@@ -2069,5 +2176,15 @@ export class SessionCatalog {
     } catch {
       // A failed cache write costs the next start a re-peek, nothing more.
     }
+  }
+}
+
+/** The index at `file`, or one in memory where it can't be opened: unread counts are diagnostics, never a reason a catalog doesn't start. */
+function openUnreadIndex(file: string | null, writer: string | undefined): UnreadIndex {
+  try {
+    return new UnreadIndex(file, { writer })
+  } catch (error) {
+    console.warn("Unread records kept in memory:", error instanceof Error ? error.message : error)
+    return new UnreadIndex(null)
   }
 }

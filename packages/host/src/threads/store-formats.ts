@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { archiveStanding, keptOutputsStanding } from "@mako/sessions"
 import { recordStoreStanding } from "@mako/sessions/record-store"
+import { UNREAD_INDEX_FILE, unreadIndexStanding } from "@mako/sessions/unread-index"
 import { inspectStoreFormat, storeAccess, type StoreStanding } from "@mako/sessions/store-format"
 import { hostWarn } from "../base/host-log.js"
 import type { SharedStore, StoreFormats, StoreStandingRow } from "../contracts/store-formats.js"
@@ -14,8 +15,9 @@ export interface StoreFormatSources {
   threadsPath: string
   memory: SessionMemory | null
   memoryPath: string
-  /** The record store's folder and the archive's folder. */
+  /** The record store's folder, the views folder and the archive's folder. */
   records: string
+  views: string
   archive: string
 }
 
@@ -36,6 +38,7 @@ export function storeFormats(sources: StoreFormatSources): StoreFormats {
   add("threads", () => sources.threads?.standing() ?? fileStanding(sources.threadsPath, THREAD_STORE_SCHEMA))
   add("session-memory", () => sources.memory?.standing() ?? fileStanding(sources.memoryPath, SESSION_MEMORY_SCHEMA))
   add("records", () => recordStoreStanding(sources.records))
+  add("unread", () => unreadIndexStanding(join(sources.views, UNREAD_INDEX_FILE)))
   add("outputs", () => keptOutputsStanding(join(sources.archive, "outputs.sqlite")))
   add("archive", () => archiveStanding(sources.archive))
   return { stores }

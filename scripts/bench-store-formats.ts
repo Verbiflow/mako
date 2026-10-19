@@ -53,7 +53,7 @@ try {
   const threads = new ThreadStore(threadsPath, { realPath: (path) => path })
   const memory = new SessionMemory(ledgerPath, host)
   const mako = join(root, "home", ".mako")
-  rows.push(["Diagnostics report of every shared store", time(() => void storeFormats({ threads, threadsPath, memory, memoryPath: ledgerPath, records: join(mako, "records"), archive: join(mako, "archive") }))])
+  rows.push(["Diagnostics report of every shared store", time(() => void storeFormats({ threads, threadsPath, memory, memoryPath: ledgerPath, records: join(mako, "records"), views: join(mako, "views"), archive: join(mako, "archive") }))])
   rows.push(["Thread store standing (in memory, the follower's tick)", time(() => void threads.standing())])
   rows.push(["session ledger standing (one PRAGMA data_version)", time(() => void memory.standing())])
   threads.close()

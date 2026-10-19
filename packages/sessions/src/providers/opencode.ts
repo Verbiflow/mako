@@ -8,6 +8,7 @@ import { tokenSum } from "../harnesses/tokens.js"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { openReadOnly, type NativeStores } from "../read-only-sqlite.js"
 import { ownedRows, placeholders, type SessionRecords } from "../harness-records.js"
+import { statedVersion, type RecordWriterRule } from "../record-writers.js"
 import type { ChildTranscript } from "../children.js"
 import { openCodeChildren, openCodeParent } from "./opencode-children.js"
 import { READ_BUSY_TIMEOUT_MS } from "./sqlite-busy.js"
@@ -108,7 +109,15 @@ function openDatabase(stores: NativeStores, path: string): DatabaseSync | null {
   }
 }
 
+/** OpenCode states the version that wrote a session in its row: `version` of `session`, or of `session_v2` in the second generation. Messages state none. */
+const OPENCODE_WRITER: RecordWriterRule = {
+  row: (table, row) => (table === "session" || table === "session_v2" ? statedVersion(row.version) : null),
+  installed: true,
+}
+
 export class OpenCodeProvider implements SessionProvider {
+  /** Where its records state the build that wrote them. */
+  readonly recordWriter = OPENCODE_WRITER
   harness = "opencode" as const
   displayName = "OpenCode"
   /** How a session is written again as its own fork (`opencode-fork.ts`). */
@@ -425,7 +434,7 @@ export class OpenCodeProvider implements SessionProvider {
       ],
     })
     const children = ids.filter((id) => id !== target.id).map((id) => sessionPath(target.database, id, target.v2))
-    return database && { roots: [{ name: "opencode", path: dirname(target.database) }], files: [], databases: [database], children }
+    return database && { roots: [{ name: "opencode", path: dirname(target.database) }], files: [], databases: [database], writer: OPENCODE_WRITER, children }
   }
 
   /** Its subagents: the sessions under it by `parent_id`, and the calls that started them. */

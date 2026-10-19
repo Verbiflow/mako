@@ -9,6 +9,8 @@
  * button.
  */
 
+import type { RecordWriterRule, WriterEvidence } from "../record-writers.js"
+import type { WriterEvidenceLookups } from "../record-evidence.js"
 import type { Entry, Harness, Thread, ThreadRef, ThreadTail } from "../format.js"
 import type { FollowStart, ResumePoint } from "../jsonl.js"
 import type { RecordFork, SessionRecords } from "../harness-records.js"
@@ -183,6 +185,21 @@ export interface SessionProvider {
    * no session of this store.
    */
   records(path: string): Promise<SessionRecords | null>
+
+  /**
+   * Where this store's records state the build that wrote them, the rule
+   * `records` hands each capture (`SessionRecords.writer`), here too so a
+   * session captured before the rule, or one its harness has since deleted,
+   * is read for it from the record store (`RecordStore.rescanWriters`).
+   */
+  readonly recordWriter?: RecordWriterRule
+
+  /**
+   * What this store's harness leaves beside it about which build wrote a
+   * session its records name none for (`record-evidence.ts`): its logs, its
+   * installs, a bound. Unset where the records or Mako's streams always say.
+   */
+  writerEvidence?(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null>
 
   /**
    * How the harness writes one of its sessions again as its own fork, under

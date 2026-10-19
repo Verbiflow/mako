@@ -28,6 +28,7 @@ import { streamPath, streamsRoot } from "../packages/sessions/src/record-streams
  *   npm run bench:backfill -- --only <id> --no-live   one session, nothing written beside it
  *   npm run bench:backfill -- --keep            keep the scratch store (records.ts --store <dir> backfill)
  *   npm run bench:backfill -- --json
+ *   npm run bench:backfill -- --no-writers       without the harnesses' rules for the version that wrote each record (`record-writers.ts`), to see what stamping costs
  *
  * Measures sessions/s and MiB/s taken, what the store keeps of it, peak
  * memory, the longest harness database read and the longest the event loop
@@ -49,6 +50,7 @@ const { values: options } = parseArgs({
     "no-live": { type: "boolean", default: false },
     keep: { type: "boolean", default: false },
     json: { type: "boolean", default: false },
+    "no-writers": { type: "boolean", default: false },
   },
 })
 const limit = Number(options.sessions)
@@ -74,7 +76,8 @@ say(`The rail: ${rail.length} sessions, discovered in ${Date.now() - scanned} ms
 const ownerOf = (path: string): SessionProvider | null => providers.find((provider) => provider.roots().some((root) => path === root || path.startsWith(`${root}/`))) ?? null
 const recordsOf = async (ref: ThreadRef) => {
   const records = (await ownerOf(ref.path)?.records(ref.path)) ?? null
-  return records
+  // Without the writer rules, a capture reads no version from the bytes it takes: the cost they add is the difference.
+  return records && options["no-writers"] ? { ...records, writer: undefined } : records
 }
 
 /** What a session's records come to on disk: its own rows where the reader can say, else its files and databases whole. */

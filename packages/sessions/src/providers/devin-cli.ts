@@ -1,4 +1,6 @@
 import { z } from "zod"
+import type { WriterEvidenceLookups } from "../record-evidence.js"
+import type { WriterEvidence } from "../record-writers.js"
 import {
   devinReferences,
   devinPromptImages,
@@ -136,6 +138,11 @@ function isoOf(value: StoredTimestamp): string | undefined {
 }
 
 export class DevinCliProvider implements SessionProvider {
+  /** Its records state no version: what its harness leaves beside them says (`record-evidence.ts`). */
+  writerEvidence(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null> {
+    return reader.devinCli(path)
+  }
+
   harness = "devin" as const
   displayName = "Devin"
   /** How a session is written again as its own fork (`devin-fork.ts`). */
@@ -326,7 +333,8 @@ export class DevinCliProvider implements SessionProvider {
     const database = ownedRows(this.dbPath(), [id], { owner: "session_id", keyed: { sessions: "id" }, shared: ["refinery_schema_history"] })
     // Its subagents are chains in its own rows: the paths they're read at come with them.
     const children = ((await this.children(path).catch(() => null)) ?? []).flatMap((child) => (child.path ? [child.path] : []))
-    return database && { roots: [{ name: "devin-cli", path: this.dir }], files: [], databases: [database], children }
+    // Devin's rows state no CLI version (only its schema's, in `refinery_schema_history`): what wrote them is the CLI installed as a write lands.
+    return database && { roots: [{ name: "devin-cli", path: this.dir }], files: [], databases: [database], writer: { installed: true }, children }
   }
 
   async remove(path: string): Promise<boolean> {

@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto"
 import { mkdir, readFile, rm, stat, truncate } from "node:fs/promises"
-import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -9,10 +8,12 @@ import { placeIn } from "../packages/sessions/src/record-roots.ts"
 import { RecordStore, taggedRow, type RestoreReport } from "../packages/sessions/src/record-store.ts"
 import { storeReader } from "./decode-compare.ts"
 import { HARNESSES, harnessNamed, nativePath as findSession, removeSession, type Harness } from "./native-harnesses.ts"
+import { scratchHarnessHome } from "./scratch-harness-home.ts"
 
 /**
- * The record store against the harnesses themselves, on this machine's
- * sign-ins. For each harness: a real
+ * The record store against the harnesses themselves, in a scratch home
+ * signed in as this machine's person (`scratch-harness-home.ts`): their own
+ * homes and sessions are never read or written. For each harness: a real
  * session plants a codeword, a resume plants a second, and each turn is
  * captured. The session is deleted from the harness's store, restored from
  * Mako's, and resumed natively, which must recall both. Where a session is
@@ -29,14 +30,21 @@ import { HARNESSES, harnessNamed, nativePath as findSession, removeSession, type
  *
  *   tsx --tsconfig tsconfig.app.json scripts/prove-native-restore.ts [--store <dir>] [harness…]
  *
- * It runs model turns on each harness's own account and deletes its test
- * sessions afterwards.
+ * It runs model turns on each harness's own account. The scratch home, its
+ * sessions and its copied credentials are removed afterwards.
  */
 
 const args = process.argv.slice(2)
 const storeAt = args.indexOf("--store")
-const folder = storeAt >= 0 ? args.splice(storeAt, 2)[1]! : join(process.env["MAKO_THREAD_DATA_DIR"] ?? "/tmp", "native-restore-proof")
-const home = homedir()
+const data = process.env["MAKO_THREAD_DATA_DIR"] ?? "/tmp"
+const folder = storeAt >= 0 ? args.splice(storeAt, 2)[1]! : join(data, "native-restore-proof")
+const chosen = args.length ? args : Object.keys(HARNESSES)
+const scratchRoot = join(data, "native-restore-proof-home")
+await rm(scratchRoot, { recursive: true, force: true })
+const cwds = new Map(chosen.map((harness) => [harness, join(scratchRoot, "work", harness)]))
+const scratch = await scratchHarnessHome(scratchRoot, [...cwds.values()])
+if (scratch.expiresInHours < 0.5) throw new Error(`A credential the scratch home holds expires in ${(scratch.expiresInHours * 60).toFixed(0)} minutes; sign the harness in again first`)
+const { home, env } = scratch
 const nativeStores = new NativeStores(false)
 const store = new RecordStore(folder, nativeStores)
 const sha = async (path: string) => createHash("sha256").update(await readFile(path)).digest("hex")
@@ -84,7 +92,7 @@ const forkWritten = (report: RestoreReport) => report.fork ? `${report.fork.acti
 async function prove(harness: string, spec: Harness): Promise<string[]> {
   const steps: string[] = []
   const note = (ok: boolean, what: string) => steps.push(`${ok ? "PASS" : "FAIL"} ${what}`)
-  const cwd = join("/tmp", `mako-restore-${harness}`)
+  const cwd = cwds.get(harness)!
   await rm(cwd, { recursive: true, force: true })
   await mkdir(cwd, { recursive: true })
   const word = (label: string) => `${label}-${harness.toUpperCase()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`
@@ -97,14 +105,14 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
   let path = ""
   let forkId = ""
   try {
-    ;({ id } = await spec.start(cwd, `Remember this codeword for later: ${first}. Reply with just OK. Don't run any tools.`))
+    ;({ id } = await spec.start(cwd, `Remember this codeword for later: ${first}. Reply with just OK. Don't run any tools.`, env))
     path = await nativePath(harness, id)
     const v1 = await capture(harness, id, path)
     note(v1.versions.length > 0, `first turn captured: ${v1.versions.length} versions, ${v1.newChunks} chunks, ${v1.ms} ms`)
     const transcript = spec.appends ? transcriptUnit(harness, id) : null
     const firstSize = transcript ? (await stat(transcript.path)).size : 0
 
-    await spec.resume(cwd, id, `Also remember this second codeword: ${second}. Reply with just OK. Don't run any tools.`)
+    await spec.resume(cwd, id, `Also remember this second codeword: ${second}. Reply with just OK. Don't run any tools.`, env)
     const v2 = await capture(harness, id, await nativePath(harness, id))
     const kinds = [...new Set(v2.versions.map((version) => version.kind))].join(", ")
     note(v2.versions.length > 0 && (!spec.appends || v2.versions.some((version) => version.kind === "append" && version.unit === transcript?.key)), `second turn captured as ${v2.versions.length} versions (${kinds})`)
@@ -115,7 +123,7 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
     note(gone, "deleted from the harness's own store")
     const restored = await store.restore({ harness, nativeId: id, home })
     note(restored.written && !restored.diverged.length, `restored whole: ${written(restored)} written${restored.diverged.length ? `, diverged at ${restored.diverged[0]!.unit}: ${restored.diverged[0]!.reason}` : ""}`)
-    const recalled = await spec.resume(cwd, id, ask)
+    const recalled = await spec.resume(cwd, id, ask, env)
     note(recalled.includes(first) && recalled.includes(second), `native resume after restore recalls both codewords: ${JSON.stringify(recalled.trim().slice(0, 120))}`)
 
     if (spec.appends && transcript) {
@@ -123,12 +131,12 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
       await truncate(transcript.path, firstSize)
       const onto = await store.restore({ harness, nativeId: id, home })
       note(onto.actions.some((action) => action.action === "append" && action.unit === transcript.key) && !onto.diverged.length, `a copy cut back to the first turn is restored by appending (${[...new Set(onto.actions.map((action) => action.action))].join(", ")})`)
-      const again = await spec.resume(cwd, id, ask)
+      const again = await spec.resume(cwd, id, ask, env)
       note(again.includes(first) && again.includes(second), `native resume after the append recalls both: ${JSON.stringify(again.trim().slice(0, 120))}`)
 
       await capture(harness, id, await nativePath(harness, id))
       await truncate(transcript.path, firstSize)
-      await spec.resume(cwd, id, `Remember this codeword instead: ${third}. Reply with just OK. Don't run any tools.`)
+      await spec.resume(cwd, id, `Remember this codeword instead: ${third}. Reply with just OK. Don't run any tools.`, env)
       const before = await sha(transcript.path)
       const diverged = await store.restore({ harness, nativeId: id, home })
       const after = await sha(transcript.path)
@@ -136,7 +144,7 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
     } else {
       // The arriving version holds both codewords and the recall; then the session goes on here, uncaptured.
       await capture(harness, id, await nativePath(harness, id))
-      await spec.resume(cwd, id, `Remember this codeword instead: ${third}. Reply with just OK. Don't run any tools.`)
+      await spec.resume(cwd, id, `Remember this codeword instead: ${third}. Reply with just OK. Don't run any tools.`, env)
     }
 
     const localPath = await nativePath(harness, id)
@@ -163,7 +171,7 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
     const again = await store.restore({ harness, nativeId: id, home, destination: localRecords, fork: reader.fork })
     note(!again.written && again.fork?.nativeId === forkId && !again.fork.written && !again.fork.diverged.length, `a second restore finds the fork and writes nothing (${forkWritten(again)})`)
     if (forkId) {
-      const fromFork = await spec.resume(cwd, forkId, ask)
+      const fromFork = await spec.resume(cwd, forkId, ask, env)
       note(fromFork.includes(first) && fromFork.includes(second) && !fromFork.includes(third), `native resume of the fork recalls the arriving codewords and not the destination's own: ${JSON.stringify(fromFork.trim().slice(0, 120))}`)
       note(await fingerprint(localRecords) === before, "resuming the fork leaves the destination's copy as it was")
     }
@@ -177,7 +185,6 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
   return steps.map((step) => `${harness.padEnd(8)} ${step}`)
 }
 
-const chosen = args.length ? args : Object.keys(HARNESSES)
 try {
   const results = await Promise.all(chosen.map((harness) => prove(harness, harnessNamed(harness))))
   const lines = results.flat()
@@ -185,4 +192,5 @@ try {
   if (lines.some((line) => line.includes(" FAIL "))) process.exitCode = 1
 } finally {
   await store.close()
+  await rm(scratchRoot, { recursive: true, force: true })
 }

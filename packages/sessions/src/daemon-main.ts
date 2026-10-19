@@ -16,6 +16,7 @@
  * which would retry a failure that can't pass every ten seconds.
  */
 
+import { makoRuntimeReadings } from "./record-observed.js"
 import { chmod, mkdir } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -67,6 +68,7 @@ async function main(): Promise<void> {
     archivePath,
     recordsPath: makoRecords(),
     viewsPath: makoViews(),
+    runtimeReadings: makoRuntimeReadings(),
     // The build that launched it, so a store format it sets names that build (`storeWriter`).
     ...process.env.MAKO_STORE_WRITER && { writer: process.env.MAKO_STORE_WRITER },
     // No backfill here: a first capture of a large database session holds far more than this

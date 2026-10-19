@@ -118,6 +118,7 @@ import {
 } from "@/state/session"
 import { skills } from "@/state/skills"
 import { threads, threadsStore, useThreads } from "@/state/threads"
+import { useRestorePlans } from "@/state/restore-plan"
 import { descriptorFor } from "@/state/descriptors"
 import { XIcon, Maximize2Icon, Minimize2Icon } from "lucide-react"
 
@@ -1033,6 +1034,8 @@ export function Composer() {
   const viewingKept = useThreads((state) =>
     state.viewing?.ref.archived ? (state.viewing.ref.copyOnly ? "copy" : "records") : null
   )
+  // A session whose records a newer version of its harness wrote goes on from its transcript until the harness is updated (`RestorePlan`).
+  const viewingOutdated = useRestorePlans((state) => viewingPath !== undefined && state.plans[viewingPath]?.kind === "update")
   const newHarness = useThreads((state) => state.composerHarness)
   const placeholder = planDecision && !opening
     ? `Tell ${harnessTitle(planDecision.harness ?? newHarness)} what to change in the plan`
@@ -1059,6 +1062,8 @@ export function Composer() {
             ? `Reply — continues in a new ${harnessTitle(routedHarness)} session`
             : viewingKept === "copy"
               ? `Reply — continues from this transcript in a new ${harnessTitle(routedHarness)} session`
+              : viewingKept === "records" && viewingOutdated
+              ? `Reply — continues from its transcript in a new ${harnessTitle(routedHarness)} session`
               : viewingKept === "records"
               ? `Reply — Mako restores this session and ${harnessTitle(routedHarness)} resumes it`
               : viewingRunning

@@ -5,7 +5,7 @@ import { dirname, join } from "node:path"
 import type { DatabaseSync, StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { Chunker, chunkHash, HASH_BYTES, Packs } from "./record-chunks.js"
-import { plainRecordPath, recordChunks, statRecord } from "./record-files.js"
+import { plainRecordPath, recordChunks, recordFilePath, statRecord } from "./record-files.js"
 import type { ForkFile, ForkIds, ForkRow, RecordDatabase, RecordFork, RecordLines, RecordRoot, RecordRow, RecordTable, RecordValue, SessionRecords } from "./harness-records.js"
 import { forkIds, forkLines } from "./record-fork.js"
 import { checkRoots, placeIn, qualify, RootPlaces, rootFolders } from "./record-roots.js"
@@ -18,6 +18,8 @@ import { declareStoreFormat, inspectStoreFormat, NewerStoreError, readStoreForma
 import { STREAMS_ROOT } from "./record-streams.js"
 import { DROPPED, repackStore, type RepackOptions, type RepackReport } from "./record-repack.js"
 import { IntentOwner } from "./record-intents.js"
+import { EVIDENCE_RULES, mergeWriters, outdatedOf, restoreGate, STREAM_RUNTIME_SCAN, writersOf, type InstalledReading, type OutdatedRuntime, type RecordWriter, type RecordWriterRule, type SessionWriters, SessionWritersSchema, type WriterEvidence, type WriterScan, type WriterSource } from "./record-writers.js"
+import type { RecordRef } from "./entries.js"
 
 export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
 
@@ -65,7 +67,7 @@ export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
  */
 const SCHEMA_VERSION = 2
 /** Additive changes this build made to the format, each a name in `meta.additions`; a build that doesn't know one ignores what it added. */
-const ADDITIONS = ["children", "intents"]
+const ADDITIONS = ["writers", "children", "intents"]
 /** The most of a deferred file's first line a restore writes (`RestoreInput.files`). */
 const HEAD_BYTES = 1024 * 1024
 /** How many files a restore writes at once. */
@@ -89,6 +91,8 @@ const VERSIONS_LISTED = 1_000
 const HELD_STAMP = "held stamp"
 /** The mark (`marks`) that keeps `CaptureInput.listing`. */
 const LISTING = "listing"
+/** The mark (`marks`) that keeps every version that wrote the session (`SessionWriters`), as its versions' `writer` columns say. */
+const WRITERS = "writers"
 /** The mark (`marks`) that says the session's children's paths are kept (`child_paths`): by a capture whose records named them, or the backfill's link (`keepChildPaths`). */
 const CHILDREN_LINKED = "children linked"
 
@@ -119,6 +123,14 @@ export interface CaptureInput {
    * store.
    */
   listing?: string
+  /**
+   * The harness version observed writing the session as this capture runs,
+   * for a write heard as it landed (`observedInstall`): stamped, as
+   * `observed`, on each version this capture takes whose bytes state no
+   * version of their own. A backfill gives none: it reads what was written
+   * long ago, by whichever build was installed then.
+   */
+  observed?: string
 }
 
 export interface CaptureReport {
@@ -143,6 +155,8 @@ export interface CaptureReport {
   rowsMatched: number
   /** The longest any one of them was open, during which its harness couldn't checkpoint past it. */
   longestReadMs: number
+  /** The harness versions the versions taken were stamped with, by where each is known from. */
+  writers: { record: string[]; observed: string[] }
 }
 
 export interface RestoreInput {
@@ -173,6 +187,17 @@ export interface RestoreInput {
    * store, for the harness to resume a session it deleted, with the host's.
    */
   stores?: NativeStores
+  /**
+   * The version of the harness installed where the session goes. Records go
+   * only into the same version or a newer one (`restoreGate`): when this is
+   * older than the newest version that wrote them, nothing is written and
+   * the report says so (`RestoreReport.outdated`). Unset, or a version
+   * that's unknown, blocks nothing; Mako's own private homes, which no
+   * harness resumes from, give none. A reading with when its binary was put
+   * there lets a session nothing names the writer of go into an install
+   * provably at least as new (`restoreGate`).
+   */
+  installed?: string | InstalledReading | null
   /**
    * Which of the session's files to write, by where each goes; the rest
    * are left as the destination has them and listed in
@@ -225,6 +250,8 @@ export interface RestoreReport {
   /** Values in rows that named a path in one of the session's roots, moved to where the root is in the destination. */
   movedPaths: number
   written: boolean
+  /** The destination's harness is older than the newest version that wrote the records (`RestoreInput.installed`): nothing was written. */
+  outdated?: OutdatedRuntime
   /** Where the files `RestoreInput.files` left out would have gone. */
   deferred?: string[]
 }
@@ -273,11 +300,130 @@ export function recordedPaths(folder: string): Map<string, RecordedPath> {
   }
 }
 
+/**
+ * Every harness version that wrote the session the catalog read at `path`
+ * (`RecordStore.writers`), read without writing: what the host's continuation
+ * plan weighs against the installed version before it offers a restore.
+ * Null when the store holds no session at `path`; a store an older build
+ * made, with no writers, names none.
+ */
+export function recordWritersAt(folder: string, path: string): { harness: string; nativeId: string; writers: SessionWriters } | null {
+  const file = join(folder, "records.sqlite")
+  if (!existsSync(file)) return null
+  const { database } = openReadOnly(file, { timeout: 5_000 })
+  try {
+    const session = z.object({ id: z.number(), harness: z.string(), nativeId: z.string() }).optional().parse(database.prepare(`
+      SELECT s.id, s.harness, s.native_id AS nativeId FROM session_paths p JOIN sessions s ON s.id = p.session WHERE p.path = ?`).get(path))
+    if (!session) return null
+    const kept = FingerprintSchema.optional().parse(database.prepare("SELECT fingerprint FROM marks WHERE session = ? AND name = ?").get(session.id, WRITERS))
+    return { harness: session.harness, nativeId: session.nativeId, writers: kept ? SessionWritersSchema.parse(JSON.parse(kept.fingerprint)) : { record: [], observed: [] } }
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * Which harness version wrote the bytes an entry names (`Entry.record`),
+ * read from a record store without writing: what counts an unread record
+ * by version (`unread-index.ts`). A session one version wrote takes that
+ * version whole; one several wrote (its harness was updated mid-session)
+ * takes the version that captured the bytes at the record's first offset,
+ * or a row's newest version. Null where the store doesn't hold the session
+ * or nothing stated or observed a version: never a guess.
+ */
 /** Where the record store in `folder` stands for this build, read without writing: for Settings › Diagnostics. */
 export function recordStoreStanding(folder: string): StoreStanding {
   const format = inspectStoreFormat(join(folder, "records.sqlite"), "meta")
   return format ? { access: storeAccess(format, SCHEMA_VERSION), build: SCHEMA_VERSION, format } : { access: "write", build: SCHEMA_VERSION }
 }
+
+export class RecordWriterLookup {
+  private readonly db: DatabaseSync
+  private readonly sessions = new Map<string, LookupSession | null>()
+
+  constructor(folder: string) {
+    this.db = openReadOnly(join(folder, "records.sqlite"), { timeout: 5_000 }).database
+  }
+
+  writerOf(harness: string, nativeId: string, sessionPath: string, record: RecordRef | null): RecordWriter | null {
+    const session = this.session(harness, nativeId)
+    if (!session) return null
+    if (session.writers.length <= 1) return session.writers[0] ?? null
+    const file = recordFilePath(sessionPath, record ?? {})
+    let name: string
+    try {
+      name = qualify(session.roots, plainRecordPath(file))
+    } catch {
+      // Read back from a copy elsewhere, or a file under no root the capture named.
+      return null
+    }
+    const row = record?.rows?.[0]
+    if (row) {
+      const unit = this.db.prepare("SELECT id FROM units WHERE harness = ? AND key = ?").get(harness, rowUnitKey(name, row.table, Object.keys(row.key), row.key))
+      return unit ? this.newestWriter(Number(unit["id"])) : null
+    }
+    const unit = session.files.get(name)
+    if (unit === undefined) return null
+    const offset = record?.ranges?.[0]?.[0] ?? 0
+    let owner: RecordWriter | null = null
+    for (const version of WriterVersionSchema.array().parse(this.db.prepare("SELECT kind, at, size, writer, writer_source FROM versions WHERE unit = ? ORDER BY seq").all(unit))) {
+      const covers = version.kind === "replace" ? offset < version.size : version.kind === "append" && version.at <= offset && offset < version.size
+      if (covers) owner = version.writer && version.writer_source ? { version: version.writer.split(" ").at(-1)!, source: version.writer_source } : null
+    }
+    return owner
+  }
+
+  /** The newest version that could have written a session nothing names the writer of, where its harness's evidence bounds it (`WriterEvidence.upTo`). */
+  upToOf(harness: string, nativeId: string): string | null {
+    return this.session(harness, nativeId)?.upTo ?? null
+  }
+
+  /** What sets that bound (`WriterEvidence.bound`). */
+  boundOf(harness: string, nativeId: string): WriterEvidence["bound"] | null {
+    return this.session(harness, nativeId)?.bound ?? null
+  }
+
+  close(): void {
+    if (this.db.isOpen) this.db.close()
+  }
+
+  private session(harness: string, nativeId: string): LookupSession | null {
+    const key = `${harness}\n${nativeId}`
+    if (this.sessions.has(key)) return this.sessions.get(key) ?? null
+    const found = z.object({ id: z.number(), layout: z.string().nullable() }).optional().parse(this.db.prepare("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
+    let session: LookupSession | null = null
+    if (found) {
+      const kept = FingerprintSchema.optional().parse(this.db.prepare("SELECT fingerprint FROM marks WHERE session = ? AND name = ?").get(found.id, WRITERS))
+      const parsed = kept ? SessionWritersSchema.parse(JSON.parse(kept.fingerprint)) : null
+      const writers = writersOf(parsed)
+      const layout = found.layout ? SessionLayoutSchema.parse(JSON.parse(found.layout)) : null
+      const files = new Map<string, number>()
+      if (writers.length > 1)
+        for (const unit of z.object({ id: z.number(), seen_path: z.string().nullable() }).array().parse(this.db.prepare("SELECT u.id, u.seen_path FROM session_units su JOIN units u ON u.id = su.unit WHERE su.session = ? AND u.role = 'file'").all(found.id)))
+          if (unit.seen_path) files.set(plainRecordPath(unit.seen_path), unit.id)
+      session = { writers, roots: Object.entries(layout?.roots ?? {}).map(([name, path]) => ({ name, path })), files, ...parsed?.evidence?.source === "range" && parsed.evidence.upTo && { upTo: parsed.evidence.upTo, ...parsed.evidence.bound && { bound: parsed.evidence.bound } } }
+    }
+    this.sessions.set(key, session)
+    return session
+  }
+
+  private newestWriter(unit: number): RecordWriter | null {
+    const row = z.object({ writer: z.string().nullable(), writer_source: z.enum(["record", "observed"]).nullable() }).optional()
+      .parse(this.db.prepare("SELECT writer, writer_source FROM versions WHERE unit = ? AND writer IS NOT NULL ORDER BY seq DESC LIMIT 1").get(unit))
+    return row?.writer && row.writer_source ? { version: row.writer.split(" ").at(-1)!, source: row.writer_source } : null
+  }
+}
+
+interface LookupSession {
+  writers: RecordWriter[]
+  roots: RecordRoot[]
+  /** Each file unit by its plain path as the store names it, for a session several versions wrote. */
+  files: Map<string, number>
+  upTo?: string
+  bound?: WriterEvidence["bound"]
+}
+
+const WriterVersionSchema = z.object({ kind: VersionKindSchema, at: z.number(), size: z.number(), writer: z.string().nullable(), writer_source: z.enum(["record", "observed"]).nullable() })
 
 const UnitSummarySchema = z.object({
   id: z.number(), key: z.string(), role: UnitRoleSchema, path: z.string().nullable(), versions: z.number(), size: z.number(), kind: VersionKindSchema,
@@ -318,6 +464,7 @@ const UnitHeadSchema = z.object({ id: z.number(), key: z.string(), role: UnitRol
 const HeadRowSchema = z.object({ kind: VersionKindSchema, size: z.number(), digest: Blob.nullable(), tail: Blob.nullable() })
 const VersionRowSchema = z.object({
   seq: z.number(), kind: VersionKindSchema, at: z.number(), size: z.number(), chunkBytes: z.number(), captured_at: z.number(), digest: Blob.nullable(),
+  writer: z.string().nullable(), writer_source: z.enum(["record", "observed"]).nullable(),
 })
 const ContentVersionSchema = z.object({ seq: z.number(), kind: VersionKindSchema, chunks: Blob })
 const SizedVersionSchema = z.object({ kind: VersionKindSchema, size: z.number() })
@@ -329,6 +476,7 @@ const NewestSeqSchema = z.object({ seq: z.number().nullable() })
 const DataVersionSchema = z.object({ data_version: z.number() })
 const MetaValueSchema = z.object({ value: z.string() })
 const HeldChunkSchema = z.object({ intent: z.number().nullable(), stored: z.number(), unnamed: z.number() })
+const WriterRowSchema = z.object({ writer: z.string() })
 const FingerprintSchema = z.object({ fingerprint: z.string() })
 const PathRowSchema = z.object({ path: z.string() })
 /** A table's mark: the session's highest rowid and the digest of its keys, when the capture that set it took every row it listed. */
@@ -364,6 +512,8 @@ export interface VersionSummary {
   chunks: number
   capturedAt: string
   digest: string | null
+  /** The harness version that wrote what the version took, and where that's known from; null when nothing says. */
+  writer: { versions: string[]; source: WriterSource } | null
 }
 
 interface Head {
@@ -515,6 +665,20 @@ interface ReadRow {
   key: string
   bytes: Buffer
   digest: Buffer
+  /** The version the row's own columns state (`RecordWriterRule.row`). */
+  writer?: string | null
+}
+
+/** What a version is stamped with: the harness versions its bytes state, or the one observed, and which. */
+interface Writer {
+  versions: readonly string[]
+  source: WriterSource
+}
+
+/** What one capture knows of the versions it takes as it goes: the version observed running the session, once known, and what it stamped. */
+interface Taking {
+  observed: string | null
+  writers: CaptureReport["writers"]
 }
 
 /** A capture's intent (`record-intents.ts`): its session, as the readout names it, and the intent's id once registered. */
@@ -554,6 +718,8 @@ export class RecordStore {
   private closed = false
   /** The repack's drop generation (`DROPPED`) each capture in progress began under. */
   private readonly generations = new WeakMap<CaptureReport, string>()
+  /** What each capture in progress observed of its session's writers. */
+  private readonly takings = new WeakMap<CaptureReport, Taking>()
   /** This open store as the owner of its captures' intents (`record-intents.ts`). */
   private readonly owner: IntentOwner
   /** Each capture's session, and its intent once it has stored or claimed a chunk. */
@@ -934,10 +1100,110 @@ export class RecordStore {
   versions(harness: string, key: string): VersionSummary[] {
     const unit = this.unitByKey(harness, key)
     if (!unit) return []
-    return VersionRowSchema.array().parse(this.prepared("SELECT seq, kind, at, size, length(chunks) AS chunkBytes, captured_at, digest FROM versions WHERE unit = ? ORDER BY seq").all(unit.id)).map((row) => ({
+    return VersionRowSchema.array().parse(this.prepared("SELECT seq, kind, at, size, length(chunks) AS chunkBytes, captured_at, digest, writer, writer_source FROM versions WHERE unit = ? ORDER BY seq").all(unit.id)).map((row) => ({
       seq: row.seq, kind: row.kind, at: row.at, size: row.size, chunks: row.chunkBytes / HASH_BYTES,
       capturedAt: new Date(row.captured_at).toISOString(), digest: row.digest ? Buffer.from(row.digest).toString("hex") : null,
+      writer: row.writer && row.writer_source ? { versions: row.writer.split(" "), source: row.writer_source } : null,
     }))
+  }
+
+  /**
+   * Every harness version that wrote the session, as its captured versions
+   * were stamped (`record-writers.ts`), from one read: null when the store
+   * holds no such session, empty lists when nothing stated or observed one.
+   */
+  writers(harness: string, nativeId: string): SessionWriters | null {
+    const session = this.sessionId(harness, nativeId, false)
+    if (session === null) return null
+    const kept = this.mark(session, WRITERS)
+    return kept ? SessionWritersSchema.parse(JSON.parse(kept)) : { record: [], observed: [] }
+  }
+
+  /**
+   * Sessions nothing names a writer of yet: no version their records state
+   * or Mako observed, and no evidence beside the store, or only `unknown`
+   * or `range` evidence read before the session's last capture (a log or an
+   * install may since say more), by older rules (`EVIDENCE_RULES`), or, for
+   * `unknown`, before `unknownBefore`. What the backfill's pass looks at
+   * (`fillWriters`), newest capture first.
+   */
+  sessionsWithoutWriters(options: { unknownBefore?: number } = {}): { harness: string; nativeId: string; paths: string[] }[] {
+    const rows = z.object({ id: z.number(), harness: z.string(), nativeId: z.string(), writers: z.string().nullable(), captured: z.number().nullable() }).array().parse(this.prepared(`
+      SELECT s.id, s.harness, s.native_id AS nativeId, (SELECT fingerprint FROM marks m WHERE m.session = s.id AND m.name = ?) AS writers,
+        (SELECT max(c.at) FROM captures c WHERE c.session = s.id) AS captured
+      FROM sessions s ORDER BY captured DESC`).all(WRITERS))
+    return rows.flatMap((row) => {
+      const writers = row.writers ? SessionWritersSchema.parse(JSON.parse(row.writers)) : null
+      if (writers && (writers.record.length || writers.observed.length)) return []
+      const evidence = writers?.evidence
+      // Named versions stand. A range or nothing is looked at again once the session is captured anew, once the rules learn more, or, for nothing, once there's newer evidence to read (`unknownBefore`: the release dates were read again).
+      const settled = evidence && (evidence.source === "log" || evidence.source === "install")
+      const stale = evidence && ((row.captured ?? 0) > evidence.at || (evidence.rules ?? 1) < EVIDENCE_RULES || (evidence.source === "unknown" && evidence.at < (options.unknownBefore ?? 0)))
+      if (evidence && (settled || !stale)) return []
+      return [{ harness: row.harness, nativeId: row.nativeId, paths: PathRowSchema.array().parse(this.prepared("SELECT path FROM session_paths WHERE session = ? ORDER BY path").all(row.id)).map((path) => path.path) }]
+    })
+  }
+
+  /**
+   * Reads the versions a session's own records state from what the store
+   * holds of them (`rule`, its harness's `RecordWriterRule`), for versions
+   * captured before the rule existed: each version still unstamped is
+   * scanned whole, a file's appended bytes or a row as it was, and stamped
+   * `record`. Returns the versions found.
+   */
+  rescanWriters(harness: string, nativeId: string, rule: RecordWriterRule): Promise<string[]> {
+    this.writable()
+    return this.serially(async () => {
+      const session = this.sessionId(harness, nativeId, false)
+      if (session === null) return []
+      const versions = z.object({ unit: z.number(), seq: z.number(), key: z.string(), role: UnitRoleSchema, kind: VersionKindSchema }).array().parse(this.prepared(`
+        SELECT v.unit, v.seq, u.key, u.role, v.kind FROM session_units su JOIN units u ON u.id = su.unit JOIN versions v ON v.unit = u.id
+        WHERE su.session = ? AND v.writer IS NULL AND v.kind != 'delete' AND u.role IN ('file', 'row') ORDER BY v.unit, v.seq`).all(session))
+      const found: string[] = []
+      const stamps: { unit: number; seq: number; versions: string[] }[] = []
+      for (const version of versions) {
+        let stated: string[] = []
+        if (version.role === "file") {
+          const scan = rule.file?.(version.key)
+          if (!scan) continue
+          scan.push(await this.versionBytes(version.unit, version.seq))
+          stated = scan.end()
+        } else if (rule.row) {
+          const table = rowKeyOf(version.key).table
+          const value = rule.row(table, decodeRow(await this.versionBytes(version.unit, version.seq)))
+          if (value) stated = [value]
+        }
+        if (!stated.length) continue
+        note(found, stated)
+        stamps.push({ unit: version.unit, seq: version.seq, versions: stated })
+      }
+      if (!stamps.length) return found
+      this.db.exec("BEGIN IMMEDIATE")
+      try {
+        const stamp = this.prepared("UPDATE versions SET writer = ?, writer_source = 'record' WHERE unit = ? AND seq = ? AND writer IS NULL")
+        for (const each of stamps) stamp.run(each.versions.join(" "), each.unit, each.seq)
+        const known = this.mark(session, WRITERS)
+        this.setMark(session, WRITERS, JSON.stringify(mergeWriters(known ? SessionWritersSchema.parse(JSON.parse(known)) : null, { record: found })))
+        this.db.exec("COMMIT")
+      } catch (error) {
+        if (this.db.isTransaction) this.db.exec("ROLLBACK")
+        throw error
+      }
+      return found
+    })
+  }
+
+  /** Keeps what the harness left beside its store about who wrote the session (`WriterEvidence`), with whatever its records or Mako already said. */
+  noteEvidence(harness: string, nativeId: string, evidence: WriterEvidence): Promise<boolean> {
+    this.writable()
+    return this.serially(async () => {
+      const session = this.sessionId(harness, nativeId, false)
+      if (session === null) return false
+      const known = this.mark(session, WRITERS)
+      const writers = known ? SessionWritersSchema.parse(JSON.parse(known)) : { record: [], observed: [] }
+      this.setMark(session, WRITERS, JSON.stringify({ ...writers, evidence }))
+      return true
+    })
   }
 
   /** A unit's bytes as of version `seq` (the newest by default): a file's content, a row or schema in its encoding, a session's lines. */
@@ -1038,6 +1304,10 @@ export class RecordStore {
       );
       CREATE TABLE IF NOT EXISTS orphans (hash BLOB PRIMARY KEY) WITHOUT ROWID;
     `)
+    // Additions: each version's writer (`record-writers.ts`), the harness version that wrote what the version took and where that's known from.
+    const columns = new Set(z.object({ name: z.string() }).array().parse(this.db.prepare("PRAGMA table_info(versions)").all()).map((column) => column.name))
+    if (!columns.has("writer")) this.db.exec("ALTER TABLE versions ADD COLUMN writer TEXT")
+    if (!columns.has("writer_source")) this.db.exec("ALTER TABLE versions ADD COLUMN writer_source TEXT")
     // Additions: the intent of each capture in progress, the chunks it stored and claimed, and chunks a sweep found unnamed (`record-orphans.ts`).
     // An older build inserts chunks without an intent; the repack's sweep judges those by how long they stay unnamed.
     this.db.exec(`
@@ -1175,13 +1445,14 @@ export class RecordStore {
 
   // Capture
 
-  private async captureNow({ harness, nativeId, home, records, path: read, stamp, listing }: CaptureInput): Promise<CaptureReport> {
+  private async captureNow({ harness, nativeId, home, records, path: read, stamp, listing, observed }: CaptureInput): Promise<CaptureReport> {
     checkRoots(records.roots)
     const folders = rootFolders(records.roots)
     const started = Date.now()
-    const report: CaptureReport = { versions: [], taken: 0, unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0, waitedMs: 0, reads: 0, longestReadMs: 0, rowsRead: 0, rowsMatched: 0 }
+    const report: CaptureReport = { versions: [], taken: 0, unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0, waitedMs: 0, reads: 0, longestReadMs: 0, rowsRead: 0, rowsMatched: 0, writers: { record: [], observed: [] } }
     await this.begin()
     this.generations.set(report, this.dropGeneration())
+    this.takings.set(report, { observed: observed ?? null, writers: report.writers })
     const intent: CaptureIntent = { session: `${harness} ${nativeId}`, id: null }
     this.intents.set(report, intent)
     try {
@@ -1193,14 +1464,21 @@ export class RecordStore {
       for (const child of records.children ?? [])
         if (child !== read) this.prepared("INSERT INTO child_paths (path, session) VALUES (?, ?) ON CONFLICT (path) DO UPDATE SET session = excluded.session WHERE session != excluded.session").run(child, session)
       const seen = new Set<number>()
-      for (const path of records.files) {
+      // A launch's stream names the version that ran it, which stamps what the capture takes after it where the records state none: streams go first.
+      const streams = `${STREAMS_ROOT}:`
+      const files = [...records.files.filter((path) => qualify(records.roots, path).startsWith(streams)), ...records.files.filter((path) => !qualify(records.roots, path).startsWith(streams))]
+      for (const path of files) {
         const unit = await this.captureFile(harness, session, records, path, report)
         if (unit !== null) seen.add(unit)
         await this.slice(report)
       }
       await this.captureGoneFiles(session, folders, seen, report)
       for (const lines of records.lines ?? []) await this.captureLines(harness, session, records.roots, lines, report)
-      for (const database of records.databases) await this.captureDatabase(harness, session, records.roots, database, report)
+      for (const database of records.databases) await this.captureDatabase(harness, session, records, database, report)
+      if (report.writers.record.length || report.writers.observed.length) {
+        const known = this.mark(session, WRITERS)
+        this.setMark(session, WRITERS, JSON.stringify(mergeWriters(known ? SessionWritersSchema.parse(JSON.parse(known)) : null, report.writers)))
+      }
       report.ms = Date.now() - started - report.waitedMs
       if (report.taken || report.ms >= SLOW_CAPTURE_MS)
         this.prepared("INSERT INTO captures (session, at, versions, new_bytes, stored_bytes, ms, waited_ms, reads, longest_read_ms, rows_read, rows_matched) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
@@ -1252,18 +1530,21 @@ export class RecordStore {
     }
     const head = this.head(unit)
     const tail = head && head.kind !== "delete" && info.bytes >= head.size && appendsOnly(seenPath) ? head.tail : null
+    // A launch's stream states the version that ran it; the harness's own files state theirs where its rule says.
+    const stream = seenPath.startsWith(`${STREAMS_ROOT}:`)
+    const scan = stream ? STREAM_RUNTIME_SCAN() : records.writer?.file?.(unit.key) ?? null
     if (head && tail && (await tailHash(path, head.size)).equals(tail)) {
       if (info.bytes > head.size) {
-        const { chunks } = await this.storeStream(recordChunks(path, head.size, info.bytes), report, true)
-        this.addVersion(unit, "append", head.size, info.bytes, null, await tailHash(path, info.bytes), chunks, { path: seenPath })
+        const { chunks } = await this.storeStream(recordChunks(path, head.size, info.bytes), report, true, scan)
+        this.addVersion(unit, "append", head.size, info.bytes, null, await tailHash(path, info.bytes), chunks, { path: seenPath }, this.stamped(report, unit.id, scan, stream))
         countVersion(report, { unit: unit.key, kind: "append", bytes: info.bytes - head.size })
         if (this.step) await this.step("versioned")
       } else report.unchanged += 1
     } else {
-      const { chunks, digest, tail } = await this.storeStream(recordChunks(path, 0, info.bytes), report, true)
+      const { chunks, digest, tail } = await this.storeStream(recordChunks(path, 0, info.bytes), report, true, scan)
       if (head && head.kind !== "delete" && head.digest?.equals(digest) && head.size === info.bytes) report.unchanged += 1
       else {
-        this.addVersion(unit, "replace", 0, info.bytes, digest, tail, chunks, { path: seenPath })
+        this.addVersion(unit, "replace", 0, info.bytes, digest, tail, chunks, { path: seenPath }, this.stamped(report, unit.id, scan, stream))
         countVersion(report, { unit: unit.key, kind: "replace", bytes: info.bytes })
         if (this.step) await this.step("versioned")
       }
@@ -1324,7 +1605,8 @@ export class RecordStore {
     this.setMark(session, key, fingerprint)
   }
 
-  private async captureDatabase(harness: string, session: number, roots: readonly RecordRoot[], database: RecordDatabase, report: CaptureReport): Promise<void> {
+  private async captureDatabase(harness: string, session: number, records: SessionRecords, database: RecordDatabase, report: CaptureReport): Promise<void> {
+    const roots = records.roots
     if (!existsSync(database.path)) return
     const name = qualify(roots, database.path)
     // A database neither written nor checkpointed since the last whole capture, asked for the same rows, holds nothing new.
@@ -1344,7 +1626,7 @@ export class RecordStore {
       const settled = this.mark(session, `${name}\tschema`) === schemaDigest.toString("hex")
       const tables = new Set(TableNameSchema.array().parse(source.statement("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map((row) => row.name))
       for (const table of database.tables) {
-        if (tables.has(table.table)) await this.captureTable(harness, session, name, source, table, settled, report)
+        if (tables.has(table.table)) await this.captureTable(harness, session, name, source, table, settled, report, records.writer?.row)
       }
       // Only a capture that read every table marks the database, so a restore can tell one cut short, and the next capture rereads what this one didn't reach.
       this.setMark(session, `${name}\tschema`, schemaDigest.toString("hex"))
@@ -1370,7 +1652,7 @@ export class RecordStore {
    * the same below that rowid, only rows above it, where SQLite puts each new
    * row, are listed. Anything else lists the table as if unmarked.
    */
-  private async captureTable(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, settled: boolean, report: CaptureReport): Promise<void> {
+  private async captureTable(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, settled: boolean, report: CaptureReport, writerOf?: RecordWriterRule["row"]): Promise<void> {
     const keys = keyColumns(source.db, table.table)
     const located = positionColumns(source.db, table.table, keys)
     const positions = located?.columns
@@ -1406,7 +1688,7 @@ export class RecordStore {
     const read = (row: RecordRow) => {
       report.rowsRead += 1
       const bytes = encodeRow(row)
-      page.push({ key: rowUnitKey(name, table.table, keys, row), bytes, digest: sha256(bytes) })
+      page.push({ key: rowUnitKey(name, table.table, keys, row), bytes, digest: sha256(bytes), writer: writerOf?.(table.table, row) ?? null })
       pageBytes += bytes.length
     }
     const store = async () => {
@@ -1497,7 +1779,7 @@ export class RecordStore {
       }
     }
     if (page.length) await store()
-    if (above === null && await this.captureMissing(harness, session, name, source, table, known, report)) whole = false
+    if (above === null && await this.captureMissing(harness, session, name, source, table, known, report, writerOf)) whole = false
     if (digests && digests.through !== null && whole) this.setMark(session, marked, JSON.stringify({ through: String(digests.through), keys: digests.keys.all }))
   }
 
@@ -1506,7 +1788,7 @@ export class RecordStore {
    * again under the key after the listing), taken now; still there but
    * another's, no longer this session's; gone, deleted. True when it took one.
    */
-  private async captureMissing(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, known: Map<string, KnownUnit>, report: CaptureReport): Promise<boolean> {
+  private async captureMissing(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, known: Map<string, KnownUnit>, report: CaptureReport, writerOf?: RecordWriterRule["row"]): Promise<boolean> {
     const prefix = `${name}\trow\t${table.table}\t`
     const params = table.params ?? []
     let took = false
@@ -1517,8 +1799,9 @@ export class RecordStore {
       if (own) {
         took = true
         report.rowsRead += 1
-        const bytes = encodeRow({ ...own })
-        await this.captureRow(harness, session, { key, bytes, digest: sha256(bytes) }, have, report)
+        const row: RecordRow = { ...own }
+        const bytes = encodeRow(row)
+        await this.captureRow(harness, session, { key, bytes, digest: sha256(bytes), writer: writerOf?.(table.table, row) ?? null }, have, report)
       } else if (source.statement(lookupSql(table.table, lookup.columns)).get(...lookup.values)) {
         this.prepared("DELETE FROM session_units WHERE session = ? AND unit = ?").run(session, have.id)
       } else {
@@ -1541,13 +1824,13 @@ export class RecordStore {
         return
       }
       const chunks = await this.storeValue(row.bytes, report)
-      this.addVersion(have, "replace", 0, row.bytes.length, row.digest, null, chunks, null)
+      this.addVersion(have, "replace", 0, row.bytes.length, row.digest, null, chunks, null, this.stated(report, row.writer ? [row.writer] : []))
       have.kind = "replace"
       have.digest = row.digest
       countVersion(report, { unit: row.key, kind: "replace", bytes: row.bytes.length })
       return
     }
-    await this.captureValue(harness, session, row.key, "row", row.bytes, row.digest, report)
+    await this.captureValue(harness, session, row.key, "row", row.bytes, row.digest, report, row.writer)
   }
 
   /** The newest version of each of a session's units with keys in [from, to), in one read. */
@@ -1562,7 +1845,7 @@ export class RecordStore {
     return known
   }
 
-  private async captureValue(harness: string, session: number, key: string, role: UnitRole, bytes: Buffer, digest: Buffer, report: CaptureReport): Promise<void> {
+  private async captureValue(harness: string, session: number, key: string, role: UnitRole, bytes: Buffer, digest: Buffer, report: CaptureReport, writer?: string | null): Promise<void> {
     const unit = this.unit(harness, key, role, session)
     const head = this.head(unit)
     if (head && head.kind !== "delete" && head.digest?.equals(digest)) {
@@ -1570,14 +1853,47 @@ export class RecordStore {
       return
     }
     const chunks = await this.storeValue(bytes, report)
-    this.addVersion(unit, "replace", 0, bytes.length, digest, null, chunks, null)
+    this.addVersion(unit, "replace", 0, bytes.length, digest, null, chunks, null, this.stated(report, writer ? [writer] : []))
     countVersion(report, { unit: key, kind: "replace", bytes: bytes.length })
   }
 
-  private addVersion(unit: { id: number; head: number }, kind: VersionKind, at: number, size: number, digest: Buffer | null, tail: Buffer | null, chunks: Buffer, detail: { path: string } | null): void {
+  /**
+   * What a file's version is stamped with: the versions its bytes state, or
+   * else the version observed running the session. A launch's stream states
+   * the version that ran it (`runtime`) once, as it starts; what it appends
+   * later is that same launch's, so it takes the version an earlier version
+   * of the stream stated. Either is the observed version for the rest of the
+   * capture, ahead of the install the host read.
+   */
+  private stamped(report: CaptureReport, unit: number, scan: WriterScan | null, stream: boolean): Writer | null {
+    const versions = scan?.end() ?? []
+    if (!stream) return versions.length ? this.stated(report, versions) : this.observedWriter(report)
+    const ran = versions.length ? versions : [WriterRowSchema.optional().parse(this.prepared("SELECT writer FROM versions WHERE unit = ? AND writer IS NOT NULL ORDER BY seq DESC LIMIT 1").get(unit))?.writer.split(" ").at(-1)].filter((version): version is string => Boolean(version))
+    if (!ran.length) return this.observedWriter(report)
+    const taking = this.takings.get(report)
+    if (taking) taking.observed = ran.at(-1)!
+    note(report.writers.observed, ran)
+    return { versions: ran, source: "observed" }
+  }
+
+  /** A version stamped with what its own bytes or columns state, or else with the version observed. */
+  private stated(report: CaptureReport, versions: readonly string[]): Writer | null {
+    if (!versions.length) return this.observedWriter(report)
+    note(report.writers.record, versions)
+    return { versions, source: "record" }
+  }
+
+  private observedWriter(report: CaptureReport): Writer | null {
+    const observed = this.takings.get(report)?.observed
+    if (!observed) return null
+    note(report.writers.observed, [observed])
+    return { versions: [observed], source: "observed" }
+  }
+
+  private addVersion(unit: { id: number; head: number }, kind: VersionKind, at: number, size: number, digest: Buffer | null, tail: Buffer | null, chunks: Buffer, detail: { path: string } | null, writer: Writer | null = null): void {
     const seq = unit.head + 1
-    this.prepared("INSERT INTO versions (unit, seq, kind, at, size, digest, tail, chunks, captured_at, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(unit.id, seq, kind, at, size, digest, tail, chunks, Date.now(), detail ? JSON.stringify(detail) : null)
+    this.prepared("INSERT INTO versions (unit, seq, kind, at, size, digest, tail, chunks, captured_at, detail, writer, writer_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(unit.id, seq, kind, at, size, digest, tail, chunks, Date.now(), detail ? JSON.stringify(detail) : null, writer?.versions.length ? writer.versions.join(" ") : null, writer?.versions.length ? writer.source : null)
     this.prepared("UPDATE units SET head = ? WHERE id = ?").run(seq, unit.id)
     unit.head = seq
   }
@@ -1587,7 +1903,7 @@ export class RecordStore {
    * list, the whole digest and the tail hash. A long stream is `sliced`: what
    * it stored so far commits, and waiting work runs, between its chunks.
    */
-  private async storeStream(source: AsyncIterable<{ bytes: Buffer }> | Iterable<{ bytes: Buffer }>, report: CaptureReport, sliced: boolean): Promise<{ chunks: Buffer; digest: Buffer; tail: Buffer }> {
+  private async storeStream(source: AsyncIterable<{ bytes: Buffer }> | Iterable<{ bytes: Buffer }>, report: CaptureReport, sliced: boolean, scan: WriterScan | null = null): Promise<{ chunks: Buffer; digest: Buffer; tail: Buffer }> {
     const chunker = new Chunker()
     const digest = createHash("sha256")
     const hashes: Buffer[] = []
@@ -1595,6 +1911,7 @@ export class RecordStore {
     let window: Buffer = Buffer.alloc(0)
     for await (const { bytes } of source) {
       digest.update(bytes)
+      scan?.push(bytes)
       size += bytes.length
       window = keepTail(window, bytes)
       for (const chunk of chunker.push(bytes)) await this.storeChunk(chunk, hashes, report, sliced)
@@ -1729,6 +2046,12 @@ export class RecordStore {
     const layout = SessionLayoutSchema.parse(JSON.parse(found.layout))
     const places = new RootPlaces({ home: layout.home, roots: new Map(Object.entries(layout.roots)) }, { home: input.home, roots: input.roots ?? input.destination?.roots })
     const report: RestoreReport = { actions: [], rows: [], diverged: places.missing.map(({ root, reason }) => ({ unit: `${root}:`, reason })), kept: [], movedPaths: 0, written: false }
+    // Records go only into the version of their harness that wrote them, or a newer one: asked first, so the answer never depends on where they'd go.
+    const outdated = input.installed === undefined ? null : outdatedOf(restoreGate(this.writers(harness, nativeId), input.installed))
+    if (outdated) {
+      report.outdated = outdated
+      return report
+    }
     if (report.diverged.length) return report
 
     let plan = await this.planRestore(input, session, layout, places, report, null)
@@ -2761,4 +3084,9 @@ async function tailHash(path: string, size: number): Promise<Buffer> {
   let window: Buffer = Buffer.alloc(0)
   for await (const { bytes } of recordChunks(path, Math.max(0, size - TAIL_BYTES), size)) window = keepTail(window, bytes)
   return windowHash(window, size)
+}
+
+/** Adds each of `versions` to `list` once, in the order they first come. */
+function note(list: string[], versions: readonly string[]): void {
+  for (const version of versions) if (!list.includes(version)) list.push(version)
 }

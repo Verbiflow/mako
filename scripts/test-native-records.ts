@@ -10,7 +10,8 @@ import { CodexRolloutTail } from "@mako/host/harnesses/codex/rollout-tail"
 import { credentialFreeJson, nativeStreamJson } from "@mako/host/base/native-diagnostic-json"
 import { STREAMS_ROOT, streamOwner, streamsOf, streamsRoot } from "@mako/sessions/record-streams"
 import { readStreamOriginal } from "@mako/sessions/record-original"
-import { NativeUnknown, retainUnknown, retainUnread } from "@mako/host/base/native-unknown"
+import { NativeUnknown, retainUnknown } from "@mako/host/base/native-unknown"
+import type { RecordRef } from "@mako/sessions/entries"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { decoderFor, decodeSession, FIXTURE_ROOT, readRecording } from "./native-decoding.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -79,21 +80,18 @@ unknown.follow()
 }
 
 {
-  const unread = [
-    { kind: "response_item future_item", reason: "unknown" as const, count: 3, sample: { type: "response_item", payload: { type: "future_item", token: "fixture-token" } } },
-    { kind: "response_item image_generation_call", reason: "undrawn" as const, count: 2 },
-  ]
-  retainUnread({ harness: "codex", path: "/rollouts/a.jsonl" }, unread)
-  retainUnread({ harness: "codex", path: "/rollouts/a.jsonl" }, unread)
-  retainUnread({ harness: "codex", path: "/rollouts/b.jsonl" }, unread.slice(0, 1))
+  // Each version a launch reported counts apart, with the stream line its newest came in.
+  const frame: RecordRef = { file: "mako-streams:grok/s@launch.jsonl", ranges: [[120, 260]] }
+  retainUnknown("grok", "_x.ai/session/checkpoint", "unknown", { method: "_x.ai/session/checkpoint" }, 1, { version: "1.0.62", frame })
+  retainUnknown("grok", "_x.ai/session/checkpoint", "unknown", undefined, 1, { version: "1.0.62" })
+  retainUnknown("grok", "_x.ai/session/checkpoint", "unknown", { method: "_x.ai/session/checkpoint" }, 1, { version: "1.0.63", frame })
   await unknown.flush()
-  assert.deepEqual(unknown.kinds().filter((kind) => kind.kind.startsWith("saved ")).map((kind) => [kind.kind, kind.reason, kind.count]), [
-    ["saved response_item future_item", "unknown", 6],
-  ], "each thread's count lands once however often it is paged, and a declared gap isn't news")
-  const saved = (await readFile(unknown.path, "utf8")).trim().split("\n").map((line) => z.object({ kind: z.string(), record: z.json() }).parse(JSON.parse(line)))
-    .filter((line) => line.kind.startsWith("saved "))
-  assert.deepEqual(saved.map((line) => line.record), [{ type: "response_item", payload: { type: "future_item", token: "[redacted]" } }], "the first saved record is kept, scrubbed")
-  console.log("PASS: saved records history couldn't read are kept beside live ones, once per thread")
+  const checkpoint = unknown.kinds().filter((kind) => kind.kind === "_x.ai/session/checkpoint").map((kind) => [kind.version, kind.count, Boolean(kind.newest.frame)])
+  assert.deepEqual(checkpoint.sort(), [["1.0.62", 2, false], ["1.0.63", 1, true]], "counted by version; the newest names its stream line when it has one")
+  const lines = (await readFile(unknown.path, "utf8")).trim().split("\n").map((line) => z.object({ kind: z.string(), version: z.string().optional(), frame: z.json().optional() }).parse(JSON.parse(line)))
+    .filter((line) => line.kind === "_x.ai/session/checkpoint")
+  assert.deepEqual(lines.map((line) => [line.version, line.frame]), [["1.0.62", frame], ["1.0.63", frame]], "the first of each version is kept with its version and line")
+  console.log("PASS: unread live records count by the version each launch reported, and keep the line they came in")
 }
 
 {

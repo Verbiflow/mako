@@ -23,7 +23,8 @@ import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { resumingUnder } from "./live-ledger.js"
-import { restoringResume } from "./kept-resume.js"
+import { restorePlan, restoringResume } from "./kept-resume.js"
+import type { RestorePlan } from "../contracts/restore-plan.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { HostTelemetry } from "../usage/index.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
@@ -55,6 +56,13 @@ export interface Conversations {
   route(channel: string, args: unknown[]): Promise<ConversationRoutingResult>
   /** A harness's id as people read it, as the registry labels it. */
   harnessLabel(harness: string): string
+  /**
+   * What a reply to the session at `path` will do, for a session its
+   * harness deleted that Mako keeps the records of: restore and resume
+   * natively, or wait for the update the restore gate asks for. Reads, never
+   * writes; the restore applies the same rule (`restoreGate`).
+   */
+  restorePlan(path: string): Promise<RestorePlan>
   /** Every host's conversations, once the socket can carry their events. */
   share(send: ConstructorParameters<typeof SharedConversations>[1]): void
   /** Stops the conversations; the native requests and the harnesses' own sessions stop after them. */
@@ -94,7 +102,9 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     assess: (binding) => harnesses.assessResume(binding),
     ref: (path) => catalog.ref(path),
     heldElsewhere: (provider, nativeId) => memory?.heldBy(provider, nativeId)?.hostLabel ?? null,
-    restore: (path) => catalog.restoreKept(path),
+    installed: (harness) => harnesses.updates.restoreRuntime(harness),
+    restore: (path, installed) => catalog.restoreKept(path, installed),
+    writers: (path) => catalog.recordWriters(path),
     label: (harness) => harnessLabel(host, harness),
   })
   const assessResume = resumingUnder(memory ?? undefined, restoring)
@@ -207,6 +217,12 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     history,
     route: (channel, args) => shared ? shared.route(channel, args) : Promise.resolve({ handled: false }),
     harnessLabel: (harness) => harnessLabel(host, harness),
+    async restorePlan(path) {
+      const ref = catalog.ref(path)
+      if (!ref) return { kind: "none" }
+      await harnesses.updates.load()
+      return restorePlan(ref, catalog.recordWriters(path), harnesses.updates.restoreRuntime(ref.harness))
+    },
     share(send) {
       if (!memory) return
       shared = new SharedConversations(memory, send, {
@@ -257,6 +273,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:thread-continuation-resolve", (path: string) => continuation.resolve(path))
   methods.handle("mako:thread-owner-resolve", (path: string) => continuation.owner(path))
   methods.handle("mako:thread-continuation-plan", (path: string) => continuation.plan(path))
+  methods.handle("mako:thread-restore-plan", (path: string) => conversations.restorePlan(path))
   methods.handle("mako:live-locate", (provider: string, nativeId: string) => live.connectedSession(provider, nativeId))
   methods.handle("mako:live-attach", async (path: string) => {
     const result = await continuation.resolve(path)

@@ -19,10 +19,13 @@ import {
 } from "../contracts/harness-updates.js"
 import { compareVersions, parseVersion } from "../contracts/runtime-version.js"
 import { runtimeVersions } from "../contracts/harness-versions.js"
+import type { RuntimeUpdateOffer } from "../contracts/restore-plan.js"
+import type { InstalledReading } from "@mako/sessions/record-writers"
 import { JsonObjectSchema, JsonValueSchema, jsonStoreAccess, unknownFields, type JsonObject } from "@mako/sessions/store-format"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { DiscoveryProcesses } from "./discovery-process.js"
+import { registryJson } from "./registry-fetch.js"
 import {
   npmUpdate,
   pinnedPolicy,
@@ -170,7 +173,6 @@ const DEFAULTS: Timing = {
 
 /** The tail of an updater's output kept for the receipt and the log. */
 const OUTPUT_TAIL = 16 * 1024
-const REGISTRY_TIMEOUT_MS = 4_000
 const REGISTRY_BODY_LIMIT = 256 * 1024
 
 export class RuntimeUpdates {
@@ -271,6 +273,52 @@ export class RuntimeUpdates {
       if (versions) reading.versions = versions
       return [key, reading]
     })))
+  }
+
+  /**
+   * The version of `harness` a native restore here resumes under, from the
+   * reading of the installation its sessions run (the primary one, else the
+   * harness's own row), and how that installation is updated. A harness
+   * whose sessions run a build Mako ships (`versions.bundled`: Claude Code's
+   * Agent SDK, Cursor's SDK) resumes under that build, `tested`, whatever CLI
+   * the person installed beside it, and only Mako's own update moves it.
+   * The restore gate (`restoreGate`) weighs this against the records.
+   */
+  restoreRuntime(harness: string): RestoreRuntime {
+    const sources = this.sources().filter((source) => source.provider === harness)
+    const runtime = sources.find((source) => source.primary) ?? sources.find((source) => source.key === harness)
+    if (!runtime) return { harness, version: null, offer: { kind: "manual" } }
+    const installed = sources.filter((source) => this.updates[source.key]?.installed && this.updates[source.key]?.binary)
+    // When the binary a version was read off was put there (its mtime, as the reading's signature holds it while unchanged), and whether it's the only install.
+    const reading = (key: string): InstalledReading | null => {
+      const info = this.updates[key]
+      if (!info?.installed) return null
+      const signature = this.signatures.get(key)
+      const since = signature && signature.binary === info.binary && signature.installed === info.installed ? signature.mtimeMs : undefined
+      return { version: info.installed, ...since !== undefined && { since }, sole: installed.length === 1 }
+    }
+    if (runtime.versions?.bundled) {
+      // Sessions run the build Mako ships. Another program of the harness is compared in its own numbering: its install, or, for one whose stores the bundled build imports (`cursor-agent`), that build, placed on the program's day numbering by the day npm published it.
+      const bundled = runtime.versions.bundled
+      const lines: Record<string, InstalledReading> = Object.fromEntries(installed.flatMap((source) => {
+        const line = reading(source.key)
+        const binary = this.updates[source.key]?.binary
+        return line && binary ? [[basename(binary), line]] : []
+      }))
+      if (bundled.imports && bundled.released) {
+        // Dotted like the program's own builds, so the two read side by side.
+        const day = new Date(bundled.released).toISOString().slice(0, 10).replaceAll("-", ".")
+        lines[bundled.imports] = { version: day, reader: `Mako's ${bundled.package} ${bundled.version}, published ${day}` }
+      }
+      return { harness, version: runtime.versions.tested, offer: { kind: "owner", owner: "Mako" }, ...Object.keys(lines).length && { lines } }
+    }
+    const info = this.updates[runtime.key]
+    const own = reading(runtime.key)
+    const known = own ? { version: own.version, ...own.since !== undefined && { since: own.since }, ...own.sole !== undefined && { sole: own.sole } } : { version: null }
+    if (info?.update) return { harness, ...known, offer: { kind: "update", runtimeId: runtime.key, label: info.update.label } }
+    if (info?.managedBy) return { harness, ...known, offer: { kind: "owner", owner: info.managedBy.replace(/\.app$/, "") } }
+    const install = runtime.install[0]
+    return { harness, ...known, offer: install ? { kind: "manual", command: commandText(install) } : { kind: "manual" } }
   }
 
   /**
@@ -895,6 +943,27 @@ export class RuntimeUpdates {
  * root comes before package managers because its installer may symlink into
  * a directory a manager also uses; among managers the real path decides.
  */
+/** The installed version a native restore resumes under, and how it's updated (`RuntimeUpdates.restoreRuntime`). */
+export interface RestoreRuntime {
+  harness: string
+  /** Null when no installation's version could be read: then nothing is refused. */
+  version: string | null
+  /** When the binary was put there, unchanged since (`restoreGate`'s rule for a session nothing names the writer of). */
+  since?: number
+  /** It's the only install of the harness the host reads. */
+  sole?: boolean
+  /** Other programs of the harness and their installs, for records they wrote (`WriterEvidence.line`). */
+  lines?: Record<string, InstalledReading>
+  offer: RuntimeUpdateOffer
+}
+
+/** A plan as a person types it: the script of a `bash -c`, else the command and its arguments. */
+function commandText(plan: HarnessUpdateCommand): string {
+  const script = plan.args.indexOf("-c")
+  if (basename(plan.command) === "bash" && script >= 0 && plan.args[script + 1]) return plan.args[script + 1]!
+  return [basename(plan.command), ...plan.args].join(" ")
+}
+
 export function resolveRuntimeChannel(
   source: RuntimeUpdateSource,
   binary: string,
@@ -1020,55 +1089,21 @@ async function npmRegistryLatest(
   npmPackage: string,
   tag = "latest"
 ): Promise<string> {
-  const response = await fetch(
+  const answer = await registryJson(
     `https://registry.npmjs.org/${npmPackage.replace("/", "%2F")}/${encodeURIComponent(tag)}`,
-    {
-      headers: { accept: "application/json" },
-      signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
-    }
+    z.object({ version: z.string() }),
+    { limit: REGISTRY_BODY_LIMIT, what: "npm registry" }
   )
-  if (!response.ok) throw new Error(`npm registry answered ${response.status}`)
-  const length = Number(response.headers.get("content-length") ?? 0)
-  if (length > REGISTRY_BODY_LIMIT)
-    throw new Error("npm registry answer too large")
-  const text = await response.text()
-  if (text.length > REGISTRY_BODY_LIMIT)
-    throw new Error("npm registry answer too large")
-  const parsed = z.object({ version: z.string() }).safeParse(JSON.parse(text))
-  if (!parsed.success) throw new Error("npm registry answer had no version")
-  return parsed.data.version
+  return answer.version
 }
 
 async function githubLatest(repository: string): Promise<string> {
-  const response = await fetch(
+  const answer = await registryJson(
     `https://api.github.com/repos/${repository}/releases/latest`,
-    {
-      signal: AbortSignal.timeout(REGISTRY_TIMEOUT_MS),
-      headers: { Accept: "application/vnd.github+json" },
-    }
+    z.object({ tag_name: z.string() }),
+    { limit: REGISTRY_BODY_LIMIT, headers: { Accept: "application/vnd.github+json" }, what: "Release server" }
   )
-  if (!response.ok)
-    throw new Error(`Release server answered ${response.status}`)
-  const reader = response.body?.getReader()
-  if (!reader) throw new Error("Release server returned no body")
-  const chunks: Uint8Array[] = []
-  let bytes = 0
-  try {
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      bytes += value.length
-      if (bytes > REGISTRY_BODY_LIMIT)
-        throw new Error("Release response too large")
-      chunks.push(value)
-    }
-  } finally {
-    await reader.cancel()
-  }
-  const parsed = z
-    .object({ tag_name: z.string() })
-    .parse(JSON.parse(Buffer.concat(chunks).toString("utf8")))
-  const version = parseVersion(parsed.tag_name)
+  const version = parseVersion(answer.tag_name)
   if (!version) throw new Error("Release server returned no version")
   return version
 }
