@@ -6,7 +6,11 @@ import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 
 if (process.versions.electron) {
-  void checkElectron()
+  // A failure before checkElectron's own try (a module that won't import) must end the run, not leave Electron open.
+  checkElectron().catch((error) => {
+    console.error(error)
+    process.exit(1)
+  })
 } else {
   await buildAndCheck()
 }
