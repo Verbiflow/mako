@@ -1,10 +1,30 @@
-import { persistThreadAttachments } from "./attachment-storage.js"
-/** Durable normalized history. Metadata and content commit in the same SQLite row. */
+/**
+ * Mako's copies of sessions, as earlier builds read them: `~/.mako/archive`.
+ *
+ * Until the record store kept every session's own records, the archive kept
+ * each session Mako noticed as Mako's translation, one row per session,
+ * with no stamp of the decoder that made it. It writes no new copies now.
+ * The catalog worker's migration (`archive-migration.ts`) drops each row
+ * once the session is safe without it, and what stays is a session no
+ * harness and no record store holds any more: Mako's copy is all that's
+ * left of it (`ThreadRef.copyOnly`), read as it was kept.
+ *
+ * Why the copies stay here rather than in the view store: views are a cache
+ * that a newer build rebuilds and that drops the least read first
+ * (`VIEW_CACHE_BYTES`). A copy can't be rebuilt from anything, so it lives
+ * where nothing evicts it.
+ *
+ * The database keeps the schema older builds read and write (`user_version`
+ * 1, the writer triggers), so an older Mako sharing the folder still reads
+ * it. A dropped row is marked deleted in `archive_captures`, which every
+ * older build checks before it captures, so none brings it back.
+ */
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { mkdir, readdir, readFile, rm } from "node:fs/promises"
+import { readdir, readFile, rm, stat, statfs } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
+import { Worker } from "node:worker_threads"
 import { z } from "zod"
 import { DatabaseSync } from "node:sqlite"
 import { StoredEntriesSchema, ThreadRefSchema } from "./thread-schema.js"
@@ -15,12 +35,7 @@ import type { StoreStanding } from "./store-format.js"
 import { EntrySchema, type Entry } from "./entries.js"
 
 const ArchiveIndexRow = z.object({ ref: z.string() })
-const CaptureStateRow = z.object({
-  token: z.string(),
-  deleted: z.union([z.literal(0), z.literal(1)]),
-  revision: z.string().nullable(),
-  observedRevision: z.string().nullable(),
-})
+const CaptureStateRow = z.object({ deleted: z.union([z.literal(0), z.literal(1)]) })
 const ArchiveContentRow = z.object({ ref: z.string(), entries: z.string() })
 const CountRow = z.object({ count: z.number() })
 const ArchivedThreadRefSchema = ThreadRefSchema.extend({
@@ -32,79 +47,68 @@ const ArchivedThreadRefSchema = ThreadRefSchema.extend({
   }).optional(),
 })
 
-/**
- * A capture re-translates and rewrites the whole thread, so it waits for the
- * session to go quiet rather than following every burst: nothing is lost by
- * waiting, since the native store is still the source until then.
- */
-const SETTLE_MS = 3_000
-/** A session an agent streams into for minutes is still captured this often. */
-const MAX_WAIT_MS = 60_000
 const ARCHIVE_FILE = "archive.sqlite"
+/** Free space under which reclaiming isn't worth a rewrite. */
+const RECLAIM_MIN_BYTES = 32 * 1024 * 1024
+/** What a rewrite leaves free on the disk, beside the two copies of the kept rows it needs while it runs. */
+const RECLAIM_KEEPS_FREE = 2 * 1024 ** 3
 
-interface Capture {
-  ref: ThreadRef
-  /** Read current native state on every call, including conflict retries.
-   * Do not close over an already translated snapshot. */
-  read: () => Promise<Thread | null>
+/** How a dropped row's session is kept now: by its harness and the record store, or by the record store alone. */
+export type ArchiveDropVia = "harness" | "records"
+
+/** Where the archive's migration stands, from its own tables. */
+export interface ArchiveMigrationCounts {
+  /** Rows left: kept copies and those still to look at. */
+  rows: number
+  /** Rows dropped by the migration, ever. */
+  migrated: number
+  /** Rows the migration found nothing else holds: Mako's copy is all that's left. */
+  copies: number
+  /** Rows not yet dropped or found to be copies. */
+  pending: number
 }
 
-interface Scheduled {
-  timer: NodeJS.Timeout
-  /** When the first uncaptured change of this run was noted. */
-  since: number
+/** What reclaiming the dropped rows' space did. */
+export interface ArchiveReclaim {
+  ran: boolean
+  /** Why it didn't run. */
+  why?: string
+  bytesBefore: number
+  bytesAfter: number
+  freeBytes: number
+  ms: number
 }
-
-/**
- * Which kept copies to drop. An evicted copy is forgotten the way a user
- * deletion is: its row goes and it is not captured again.
- */
-export interface EvictionPolicy {
-  select(kept: readonly ThreadRef[], now: Date): readonly string[]
-}
-
-/** Keeps every copy. The default until a retention schedule is designed. */
-export const keepEverything: EvictionPolicy = { select: () => [] }
 
 export interface SessionArchiveOptions {
   /**
    * Read the copies other hosts keep without writing: nothing is created or
-   * migrated, `note` captures nothing, and `forget` throws
-   * `ReadOnlyStoreError`.
+   * migrated, and every change throws `ReadOnlyStoreError`.
    */
   readOnly?: boolean
 }
 
 export class SessionArchive {
   private readonly root: string
-  private eviction: EvictionPolicy
   /** Set for a reader of another host's copies, and for an archive in a newer Mako's format, which this build reads and never writes. */
   private readOnly: boolean
   private reader: ReadOnlyConnection | null = null
   private database: DatabaseSync | null = null
   private index = new Map<string, ThreadRef>()
   private dataVersion = -1
-  private latest = new Map<string, Capture>()
   private loaded: Promise<void> | null = null
-  private timers = new Map<string, Scheduled>()
-  private pending = new Map<string, Capture>()
-  private deleted = new Set<string>()
-  private queue: Promise<void> = Promise.resolve()
-  private stopping: Promise<void> | null = null
 
-  constructor(root: string, eviction: EvictionPolicy = keepEverything, options: SessionArchiveOptions = {}) {
+  constructor(root: string, options: SessionArchiveOptions = {}) {
     this.root = root
-    this.eviction = eviction
     this.readOnly = options.readOnly ?? false
   }
 
-  /** Forget the copies the eviction policy selects; returns how many went. */
-  async evict(now = new Date()): Promise<number> {
-    await this.load()
-    this.refreshIndex()
-    const paths = this.eviction.select([...this.index.values()], now)
-    for (const path of paths) await this.forget(path)
-    return paths.length
+  get folder(): string {
+    return this.root
+  }
+
+  /** Whether this build may change the archive: false for another host's reader, and for a newer Mako's format, which it reads only. */
+  get writable(): boolean {
+    return !this.readOnly
   }
 
   load(): Promise<void> {
@@ -128,15 +132,14 @@ export class SessionArchive {
       }
       return
     }
-    await mkdir(this.root, { recursive: true })
-    const database = new DatabaseSync(join(this.root, "archive.sqlite"))
+    // Nothing is created for a person who never had copies: the archive only shrinks now.
+    if (!existsSync(join(this.root, ARCHIVE_FILE)) && !(await legacyDirectories(this.root)).length) return
+    const database = new DatabaseSync(join(this.root, ARCHIVE_FILE))
     try {
-      // Persisted triggers reject writes from older hosts while leaving their reads intact.
+      // Persisted triggers reject writes from builds that predate them while leaving their reads intact.
       database.function("mako_archive_writer", () => 1)
       database.exec("PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL")
       await enableWal(database)
-      // Migration and writer fencing become visible together. No asynchronous work
-      // or source/attachment reads occur while SQLite's write lock is held.
       database.exec("BEGIN IMMEDIATE")
       try {
         const version = pragma(database, "user_version")
@@ -182,18 +185,20 @@ export class SessionArchive {
           }
           database.exec("PRAGMA user_version=1")
         }
-        // Capture admission needs the revision, never the transcript payload.
-        // The primary path index still fetches a potentially huge sessions row.
+        // Older builds read these two to decide what to capture; they stay for them.
         database.exec("CREATE INDEX IF NOT EXISTS sessions_capture_revision ON sessions(path, revision)")
-        // Discovery can be cheaper/less detailed than a complete read. Record
-        // the observation that produced a snapshot separately from its full ref.
-        // A peer write changes the capture token and invalidates this evidence,
-        // including writes by older builds that know nothing about this table.
         database.exec(`CREATE TABLE IF NOT EXISTS archive_observations (
           path TEXT PRIMARY KEY,
           observed_revision TEXT NOT NULL,
           capture_token TEXT NOT NULL
         )`)
+        // The migration's own ledger: each row it dropped and why, and each it found to be all that's left.
+        database.exec(`CREATE TABLE IF NOT EXISTS archive_migration (
+          path TEXT PRIMARY KEY,
+          state TEXT NOT NULL CHECK (state IN ('migrated', 'copy')),
+          via TEXT,
+          at INTEGER NOT NULL
+        ) WITHOUT ROWID`)
         database.exec("COMMIT")
       } catch (error) {
         database.exec("ROLLBACK")
@@ -228,26 +233,12 @@ export class SessionArchive {
     return reader.database
   }
 
-  /** Existing archives remain readable. Upgrade each lazily on its next capture. */
+  /** Copies the oldest builds kept as folders (`ref.json`, `entries.jsonl`), read until the migration folds them into the database. */
   private async indexLegacyCopies(): Promise<void> {
-    const dirs = await readdir(this.root, { withFileTypes: true })
-    for (const dir of dirs) {
-      if (!dir.isDirectory()) continue
-      try {
-        const ref = ArchivedThreadRefSchema.parse(
-          JSON.parse(
-            await readFile(join(this.root, dir.name, "ref.json"), "utf8")
-          )
-        )
-        if (
-          ref.path &&
-          !this.index.has(ref.path) &&
-          !this.captureState(ref.path)?.deleted
-        )
-          this.index.set(ref.path, { ...ref, locked: false, archived: true })
-      } catch {
-        // Incomplete legacy directories have no committed history to expose.
-      }
+    for (const name of await legacyDirectories(this.root)) {
+      const ref = await legacyRef(join(this.root, name))
+      if (ref && !this.index.has(ref.path) && !this.captureState(ref.path)?.deleted)
+        this.index.set(ref.path, keptRef(ref))
     }
   }
 
@@ -281,45 +272,10 @@ export class SessionArchive {
     return this.index.get(path)
   }
 
-  /** Schedule a capture of `ref`; true when this revision of it isn't saved yet. */
-  note(ref: ThreadRef, read: () => Promise<Thread | null>): boolean {
-    if (this.readOnly || this.stopping || this.deleted.has(ref.path)) return false
-    const state = this.captureState(ref.path)
-    if (state?.deleted || (state?.revision === revisionOf(ref) || state?.observedRevision === revisionOf(ref))) {
-      this.cancel(ref.path)
-      return false
-    }
-    const heldCapture = this.latest.get(ref.path)
-    if (heldCapture && revisionOf(heldCapture.ref) === revisionOf(ref)) return false
-    const capture = { ref, read }
-    this.latest.set(ref.path, capture)
-    this.pending.set(ref.path, capture)
-    // Each change restarts the settle window, but the deadline set by the
-    // first change of the run holds: repeated updates never postpone a
-    // capture past it.
-    const now = Date.now()
-    const held = this.timers.get(ref.path)
-    if (held) clearTimeout(held.timer)
-    const since = held?.since ?? now
-    const delay = Math.max(0, Math.min(SETTLE_MS, since + MAX_WAIT_MS - now))
-    const timer = setTimeout(() => {
-      this.timers.delete(ref.path)
-      const capture = this.pending.get(ref.path)
-      this.pending.delete(ref.path)
-      if (capture) this.enqueue(capture)
-    }, delay)
-    timer.unref()
-    this.timers.set(ref.path, { timer, since })
-    return true
-  }
-
-  /** Wait until all currently scheduled captures have committed. */
-  async flush(): Promise<void> {
-    for (const held of this.timers.values()) clearTimeout(held.timer)
-    this.timers.clear()
-    for (const capture of this.pending.values()) this.enqueue(capture)
-    this.pending.clear()
-    await this.queue
+  /** Every copy, newest first: what the migration looks at. */
+  copies(): ThreadRef[] {
+    this.refreshIndex()
+    return [...this.index.values()].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
   }
 
   async read(path: string): Promise<Thread | null> {
@@ -330,34 +286,40 @@ export class SessionArchive {
     if (value) {
       const row = ArchiveContentRow.parse(value)
       const ref = ArchivedThreadRefSchema.parse(JSON.parse(row.ref))
-      return { ref: { ...ref, locked: false, archived: true }, entries: storedEntries(JSON.parse(row.entries)) }
+      return { ref: keptRef(ref), entries: storedEntries(JSON.parse(row.entries)) }
     }
     if (this.captureState(path)?.deleted) return null
     this.refreshIndex()
     const ref = this.index.get(path)
     if (!ref) return null
-    try {
-      const raw = await readFile(
-        join(this.legacyDir(path), "entries.jsonl"),
-        "utf8"
-      )
-      const entries = StoredEntriesSchema.parse(raw
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line)))
-      return { ref, entries }
-    } catch {
-      return null
-    }
+    return readLegacyEntries(this.legacyDir(path)).then((entries) => entries && { ref, entries })
   }
 
+  /** How many entries the copy at `path` holds, counted by SQLite without parsing them here; 0 for none. */
+  entryCount(path: string): number {
+    const row = this.database?.prepare("SELECT coalesce(json_array_length(entries), 0) AS count FROM sessions WHERE path = ?").get(path)
+    return row ? CountRow.parse(row).count : 0
+  }
+
+  /** The person deleted the session: its copy goes and is never captured again, by this build or an older one. */
   async forget(path: string): Promise<void> {
+    await this.remove(path, null)
+  }
+
+  /**
+   * Drops the copy at `path` once the session is held elsewhere (`via`), in
+   * one transaction with the migration's note of it. Older builds see the
+   * row deleted and never capture it again.
+   */
+  async drop(path: string, via: ArchiveDropVia): Promise<void> {
+    await this.remove(path, via)
+  }
+
+  private async remove(path: string, via: ArchiveDropVia | null): Promise<void> {
     if (this.readOnly) throw new ReadOnlyStoreError("The session archive")
-    this.deleted.add(path)
-    this.cancel(path)
     await this.load()
     const database = this.database
-    if (!database) throw new Error("Session archive is closed")
+    if (!database) return
     database.exec("BEGIN IMMEDIATE")
     try {
       database.prepare("DELETE FROM sessions WHERE path = ?").run(path)
@@ -370,6 +332,8 @@ export class SessionArchive {
       `
         )
         .run(path)
+      if (via) database.prepare("INSERT OR REPLACE INTO archive_migration (path, state, via, at) VALUES (?, 'migrated', ?, ?)").run(path, via, Date.now())
+      else database.prepare("DELETE FROM archive_migration WHERE path = ?").run(path)
       database.exec("COMMIT")
     } catch (error) {
       database.exec("ROLLBACK")
@@ -379,119 +343,96 @@ export class SessionArchive {
     await rm(this.legacyDir(path), { recursive: true, force: true })
   }
 
-  stop(): Promise<void> {
-    this.stopping ??= this.flush().finally(() => this.closeDatabase())
-    return this.stopping
+  /** Notes that nothing but this copy holds the session at `path`; true when it wasn't noted yet. */
+  markCopy(path: string): boolean {
+    if (this.readOnly) throw new ReadOnlyStoreError("The session archive")
+    const database = this.database
+    if (!database) return false
+    return Number(database.prepare("INSERT INTO archive_migration (path, state, at) SELECT path, 'copy', ? FROM sessions WHERE path = ? ON CONFLICT(path) DO NOTHING").run(Date.now(), path).changes) > 0
   }
 
-  private enqueue(capture: Capture): void {
-    this.queue = this.queue
-      .catch(() => {})
-      .then(() => this.write(capture))
-      .finally(() => {
-        if (this.latest.get(capture.ref.path) === capture)
-          this.latest.delete(capture.ref.path)
-      })
-    void this.queue.catch((error: Error) =>
-      console.error("Session archive capture failed", error.message)
-    )
+  /** Takes back a `markCopy`: the session is held elsewhere again. */
+  unmarkCopy(path: string): void {
+    if (this.readOnly || !this.database) return
+    this.database.prepare("DELETE FROM archive_migration WHERE path = ? AND state = 'copy'").run(path)
   }
 
-  private async write(capture: Capture): Promise<void> {
-    await this.load()
-    const { ref, read } = capture
-    // Conflicts reread the source rather than reusing a previously translated snapshot.
-    // Bound contention: the caller sees failure and a later observation may retry.
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (this.latest.get(ref.path) !== capture) return
-      const before = this.captureState(ref.path)
-      if (before?.deleted || (before?.revision === revisionOf(ref) || before?.observedRevision === revisionOf(ref))) return
-      const native = await read()
-      if (
-        !native ||
-        native.ref.archived ||
-        this.latest.get(ref.path) !== capture
-      )
-        return
-      const parsed = ThreadRefSchema.parse(native.ref)
-      if (parsed.path !== ref.path)
-        throw new Error("Archive capture returned a different native path")
-      if (this.captureState(ref.path)?.token !== before?.token) continue
-      const thread = await persistThreadAttachments(
-        { ...native, ref: parsed },
-        join(this.root, "assets"),
-        await this.read(ref.path)
-      )
-      if (this.latest.get(ref.path) !== capture) return
-      const revision = revisionOf(thread.ref)
-      const metadata = JSON.stringify(thread.ref)
-      z.array(EntrySchema).parse(thread.entries)
-      const entries = JSON.stringify(thread.entries)
-      const database = this.database
-      if (!database) throw new Error("Session archive is closed")
-      database.exec("BEGIN IMMEDIATE")
-      try {
-        const current = this.captureState(ref.path)
-        if (current?.deleted) {
-          database.exec("ROLLBACK")
-          return
-        }
-        if (current?.token !== before?.token) {
-          database.exec("ROLLBACK")
-          continue
-        }
-        // Skip identical rows, even when discovery offered a noisy revision hint.
-        // Equal entry counts, timestamps or byte lengths are not content identity.
-        database
-          .prepare(
-            `
-          INSERT INTO sessions (path, ref, entries, revision) VALUES (?, ?, ?, ?)
-          ON CONFLICT(path) DO UPDATE SET ref=excluded.ref, entries=excluded.entries, revision=excluded.revision
-          WHERE sessions.ref != excluded.ref OR sessions.entries != excluded.entries OR sessions.revision != excluded.revision
-        `
-          )
-          .run(ref.path, metadata, entries, revision)
-        database.prepare(`
-          INSERT INTO archive_observations (path, observed_revision, capture_token)
-          SELECT path, ?, token FROM archive_captures WHERE path = ? AND deleted = 0
-          ON CONFLICT(path) DO UPDATE SET
-            observed_revision=excluded.observed_revision, capture_token=excluded.capture_token
-          WHERE archive_observations.observed_revision != excluded.observed_revision
-            OR archive_observations.capture_token != excluded.capture_token
-        `).run(revisionOf(ref), ref.path)
-        database.exec("COMMIT")
-      } catch (error) {
-        database.exec("ROLLBACK")
-        throw error
-      }
-      this.index.set(ref.path, { ...thread.ref, locked: false, archived: true })
-      return
+  /** Where the migration stands; zeros for an archive with no database. */
+  counts(): ArchiveMigrationCounts {
+    return this.database ? migrationCounts(this.database) : { rows: 0, migrated: 0, copies: 0, pending: 0 }
+  }
+
+  /**
+   * Moves the copies the oldest builds kept as folders into the database,
+   * so every copy is one row the migration can drop or keep. A folder whose
+   * session already has a row, or was deleted, is removed. The row commits
+   * before the folder goes, so a crash between leaves a folder the next
+   * pass removes.
+   */
+  async foldLegacy(): Promise<{ folded: number; removed: number }> {
+    const database = this.database
+    if (this.readOnly || !database) return { folded: 0, removed: 0 }
+    let folded = 0
+    let removed = 0
+    for (const name of await legacyDirectories(this.root)) {
+      const folder = join(this.root, name)
+      const ref = await legacyRef(folder)
+      if (!ref) continue
+      const held = Boolean(database.prepare("SELECT 1 FROM sessions WHERE path = ?").get(ref.path)) || this.captureState(ref.path)?.deleted
+      if (!held) {
+        const entries = await readLegacyEntries(folder)
+        // An unreadable folder was never readable here either; it stays for a person to look at.
+        if (!entries) continue
+        database.prepare("INSERT INTO sessions (path, ref, entries, revision) VALUES (?, ?, ?, ?) ON CONFLICT(path) DO NOTHING")
+          .run(ref.path, JSON.stringify(ref), JSON.stringify(entries), JSON.stringify(ref))
+        folded += 1
+      } else removed += 1
+      await rm(folder, { recursive: true, force: true })
     }
-    throw new Error(
-      "Session archive changed during three capture attempts; retry on the next observation"
-    )
+    if (folded || removed) {
+      this.dataVersion = -1
+      this.index.clear()
+      this.refreshIndex()
+    }
+    return { folded, removed }
   }
 
-  private cancel(path: string): void {
-    const held = this.timers.get(path)
-    if (held) clearTimeout(held.timer)
-    this.timers.delete(path)
-    this.pending.delete(path)
-    this.latest.delete(path)
+  /**
+   * Gives the space of dropped rows back to the disk. SQLite's `VACUUM`
+   * rewrites the file in a thread of its own, so this thread (the catalog
+   * worker, which answers the rail) is never held by it, and it's one
+   * transaction: a crash leaves the database as it was before or after.
+   * The rewrite passes through the write-ahead log, so it waits until the
+   * disk has room for the rows kept twice over and `RECLAIM_KEEPS_FREE`.
+   *
+   * Incremental vacuuming was tried on a clone of a real archive and
+   * dropped: each 8 MiB step held this thread up to 566 ms, and keeping its
+   * page map made each drop 225 ms instead of 10.
+   */
+  async reclaim(options: { minBytes?: number } = {}): Promise<ArchiveReclaim> {
+    const database = this.database
+    if (this.readOnly || !database) return { ran: false, bytesBefore: 0, bytesAfter: 0, freeBytes: 0, ms: 0 }
+    const file = join(this.root, ARCHIVE_FILE)
+    const pageSize = pragma(database, "page_size")
+    const freeBytes = pragma(database, "freelist_count") * pageSize
+    const keptBytes = pragma(database, "page_count") * pageSize - freeBytes
+    const bytesBefore = await fileBytes(file)
+    const skipped = (why: string): ArchiveReclaim => ({ ran: false, why, bytesBefore, bytesAfter: bytesBefore, freeBytes, ms: 0 })
+    if (freeBytes < (options.minBytes ?? RECLAIM_MIN_BYTES) || freeBytes === 0) return skipped("too little is free to be worth a rewrite")
+    const disk = await statfs(this.root)
+    if (disk.bavail * disk.bsize < keptBytes * 2 + RECLAIM_KEEPS_FREE) return skipped("the disk lacks room for the rewrite")
+    const started = performance.now()
+    await vacuumAside(file)
+    return { ran: true, bytesBefore, bytesAfter: await fileBytes(file), freeBytes, ms: performance.now() - started }
+  }
+
+  stop(): Promise<void> {
+    this.closeDatabase()
+    return Promise.resolve()
   }
 
   private captureState(path: string) {
-    const row = this.database
-      ?.prepare(
-        `
-      SELECT token, deleted, revision, observed_revision AS observedRevision FROM archive_captures
-      LEFT JOIN sessions INDEXED BY sessions_capture_revision USING (path)
-      LEFT JOIN archive_observations ON archive_observations.path = archive_captures.path
-        AND archive_observations.capture_token = archive_captures.token
-      WHERE archive_captures.path = ?
-    `
-      )
-      .get(path)
+    const row = this.database?.prepare("SELECT deleted FROM archive_captures WHERE path = ?").get(path)
     return row ? CaptureStateRow.parse(row) : null
   }
 
@@ -509,9 +450,9 @@ export class SessionArchive {
     for (const value of database.prepare("SELECT ref FROM sessions").all()) {
       const row = ArchiveIndexRow.parse(value)
       const ref = ArchivedThreadRefSchema.parse(JSON.parse(row.ref))
-      next.set(ref.path, { ...ref, locked: false, archived: true })
+      next.set(ref.path, keptRef(ref))
     }
-    // Legacy directory captures have not yet acquired a database row.
+    // Legacy folders that have no database row yet.
     for (const [path, ref] of this.index)
       if (!next.has(path) && !this.captureState(path)) next.set(path, ref)
     this.index = next
@@ -519,40 +460,47 @@ export class SessionArchive {
   }
 
   private legacyDir(path: string): string {
-    return join(
-      this.root,
-      createHash("sha1").update(path).digest("hex").slice(0, 24)
-    )
+    return join(this.root, legacyName(path))
   }
 }
 
-function revisionOf(ref: ThreadRef): string {
-  // Include all retained metadata, including native settings and lineage. Runtime
-  // activity is presentation state, not a new source revision. Sort top-level keys
-  // so a parsed ref and a provider's differently ordered object compare equally.
-  const {
-    active: _active,
-    locked: _locked,
-    archived: _archived,
-    ...source
-  } = ref
-  if (source.settings) {
-    source.settings = {
-      model: source.settings.model,
-      options: source.settings.options
-        ? Object.fromEntries(
-            Object.entries(source.settings.options).sort(([a], [b]) =>
-              a.localeCompare(b)
-            )
-          )
-        : undefined,
-    }
+/** A kept copy as the catalog serves it: not the harness's, and Mako's copy only. */
+function keptRef(ref: ThreadRef): ThreadRef {
+  return { ...ref, locked: false, archived: true, copyOnly: true }
+}
+
+function legacyName(path: string): string {
+  return createHash("sha1").update(path).digest("hex").slice(0, 24)
+}
+
+/** The folders the oldest builds kept a copy in, by the hash of its path. */
+async function legacyDirectories(root: string): Promise<string[]> {
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => [])
+  return entries.filter((entry) => entry.isDirectory() && /^[0-9a-f]{24}$/.test(entry.name)).map((entry) => entry.name)
+}
+
+async function legacyRef(folder: string): Promise<ThreadRef | null> {
+  try {
+    const ref = ArchivedThreadRefSchema.parse(JSON.parse(await readFile(join(folder, "ref.json"), "utf8")))
+    // A folder belongs to the path it hashes; any other was never this archive's.
+    return ref.path && legacyName(ref.path) === folder.slice(-24) ? ref : null
+  } catch {
+    return null
   }
-  return JSON.stringify(
-    Object.fromEntries(
-      Object.entries(source).sort(([a], [b]) => a.localeCompare(b))
-    )
-  )
+}
+
+async function readLegacyEntries(folder: string): Promise<Thread["entries"] | null> {
+  try {
+    const raw = await readFile(join(folder, "entries.jsonl"), "utf8")
+    return StoredEntriesSchema.parse(raw.split("\n").filter(Boolean).map((line) => JSON.parse(line)))
+  } catch {
+    return null
+  }
+}
+
+async function fileBytes(file: string): Promise<number> {
+  const sizes = await Promise.all(["", "-wal"].map((suffix) => stat(`${file}${suffix}`).then((info) => info.size, () => 0)))
+  return sizes[0]! + sizes[1]!
 }
 
 /** A numeric `PRAGMA`'s value. */
@@ -560,6 +508,66 @@ function pragma(database: DatabaseSync, name: string): number {
   const value = z.record(z.string(), z.number()).parse(database.prepare(`PRAGMA ${name}`).get())[name]
   if (value === undefined) throw new Error(`PRAGMA ${name} gave no value`)
   return value
+}
+
+function migrationCounts(database: DatabaseSync): ArchiveMigrationCounts {
+  const ledger = Boolean(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'archive_migration'").get())
+  const rows = CountRow.parse(database.prepare("SELECT count(*) AS count FROM sessions").get()).count
+  if (!ledger) return { rows, migrated: 0, copies: 0, pending: rows }
+  const migrated = CountRow.parse(database.prepare("SELECT count(*) AS count FROM archive_migration WHERE state = 'migrated'").get()).count
+  const copies = CountRow.parse(database.prepare("SELECT count(*) AS count FROM archive_migration m JOIN sessions s ON s.path = m.path WHERE m.state = 'copy'").get()).count
+  return { rows, migrated, copies, pending: rows - copies }
+}
+
+/** Where the migration of the archive at `root` stands, read without writing; null without a database. */
+export function archiveMigrationStatus(root: string): (ArchiveMigrationCounts & { bytes: number; freeBytes: number }) | null {
+  const file = join(root, ARCHIVE_FILE)
+  if (!existsSync(file)) return null
+  const { database } = openReadOnly(file, { timeout: 5_000 })
+  try {
+    const pageSize = pragma(database, "page_size")
+    const pages = pragma(database, "page_count")
+    const free = pragma(database, "freelist_count")
+    return { ...migrationCounts(database), bytes: pages * pageSize, freeBytes: free * pageSize }
+  } finally {
+    database.close()
+  }
+}
+
+/**
+ * `VACUUM` of the archive at `file` in a thread of its own, so the caller's
+ * thread (the catalog worker, which answers the rail) is never held by it.
+ */
+function vacuumAside(file: string): Promise<void> {
+  const code = `
+    const { workerData, parentPort } = require("node:worker_threads")
+    const { DatabaseSync } = require("node:sqlite")
+    const database = new DatabaseSync(workerData.file)
+    try {
+      database.exec("PRAGMA busy_timeout=30000")
+      database.exec("VACUUM")
+      // The rewrite went through the write-ahead log: copied back and the log emptied here, not on the caller's thread.
+      database.exec("PRAGMA wal_checkpoint(TRUNCATE)")
+      parentPort.postMessage({ ok: true })
+    } catch (error) {
+      parentPort.postMessage({ ok: false, message: String(error && error.message || error) })
+    } finally {
+      database.close()
+    }
+  `
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(code, { eval: true, workerData: { file } })
+    let answered = false
+    worker.once("message", (message: { ok: boolean; message?: string }) => {
+      answered = true
+      if (message.ok) resolve()
+      else reject(new Error(`The archive could not be vacuumed: ${message.message}`))
+    })
+    worker.once("error", reject)
+    worker.once("exit", (code) => {
+      if (!answered) reject(new Error(`The archive's vacuum stopped with code ${code}`))
+    })
+  })
 }
 
 /**
@@ -604,7 +612,7 @@ function readableArchive(database: DatabaseSync): boolean {
 }
 
 /** A concurrent journal-mode change can return SQLITE_BUSY before busy_timeout.
- * Recheck the desired state and retry only that safe operation, never a capture.
+ * Recheck the desired state and retry only that safe operation.
  */
 async function enableWal(database: DatabaseSync): Promise<void> {
   for (let attempt = 0; ; attempt++) {

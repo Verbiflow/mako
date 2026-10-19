@@ -111,6 +111,7 @@ export const ThreadRefSchema = z.object({
   active: z.boolean().optional(),
   clientCopy: z.literal(true).optional(),
   archived: z.boolean().optional(),
+  copyOnly: z.literal(true).optional(),
   nativeArchived: z.boolean().optional(),
   nativeArchiveStamp: z.string().regex(/^\d+$/).optional(),
   resumeUnavailable: z.string().optional(),

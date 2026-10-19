@@ -324,7 +324,9 @@ export class DevinCliProvider implements SessionProvider {
     const id = idOf(path)
     if (!id || path.slice(0, path.lastIndexOf("#")) !== this.dbPath()) return null
     const database = ownedRows(this.dbPath(), [id], { owner: "session_id", keyed: { sessions: "id" }, shared: ["refinery_schema_history"] })
-    return database && { roots: [{ name: "devin-cli", path: this.dir }], files: [], databases: [database] }
+    // Its subagents are chains in its own rows: the paths they're read at come with them.
+    const children = ((await this.children(path).catch(() => null)) ?? []).flatMap((child) => (child.path ? [child.path] : []))
+    return database && { roots: [{ name: "devin-cli", path: this.dir }], files: [], databases: [database], children }
   }
 
   async remove(path: string): Promise<boolean> {

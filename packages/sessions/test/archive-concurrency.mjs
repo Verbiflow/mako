@@ -1,220 +1,82 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import fs from 'node:fs/promises'
-import { syncBuiltinESMExports } from 'node:module'
 import { fork } from 'node:child_process'
 import { once } from 'node:events'
 import { DatabaseSync } from 'node:sqlite'
 import { SessionArchive } from '../dist/archive.js'
+import { keepCopies } from './fixtures/archive-copies.mjs'
+
+/**
+ * The archive shared between hosts: a writer of this build only drops rows,
+ * other hosts see each drop without restarting, older builds see a dropped
+ * row deleted and can't bring it back, connections from before the writer
+ * triggers can read but not write, and several processes open and drop
+ * from the same archive at once.
+ */
 
 const root = await mkdtemp(join(tmpdir(), 'mako-archive-concurrency-'))
-const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r }); return { promise, resolve } }
 const ref = (revision = 'one', extra = {}) => ({ harness:'fixture',nativeId:'native',path:'/fixture/native',revision,bytes:100,...extra })
 const thread = (revision='one', text=revision, extra={}) => ({ref:ref(revision,extra),entries:[{type:'user',text}]})
 const cases = []
 const test = (name, run) => cases.push({name,run})
-const capture = async (archive, value) => { archive.note(value.ref,async()=>value);await archive.flush() }
 
-test('capture admission reads the revision index without fetching transcript rows', async(a,b,location)=>{
-  const value=thread('indexed','x'.repeat(4*1024*1024))
-  await capture(a,value)
-  const db=new DatabaseSync(join(location,'archive.sqlite'),{readOnly:true})
-  const prepare=DatabaseSync.prototype.prepare
-  const plans=[]
-  try {
-    DatabaseSync.prototype.prepare=function(sql,...args) {
-      if(/SELECT token, deleted, revision, observed_revision AS observedRevision FROM archive_captures/.test(sql)) {
-        plans.push(prepare.call(db,'EXPLAIN QUERY PLAN '+sql).all(value.ref.path))
-      }
-      return prepare.call(this,sql,...args)
-    }
-    let reads=0
-    b.note(value.ref,async()=>{reads++;return value})
-    await b.flush()
-    assert.equal(reads,0,'another connection sees the committed revision without retranslating')
-    assert.ok(plans.length>0,'observe the production admission query')
-    for(const plan of plans)assert.ok(plan.some(row=>/COVERING INDEX sessions_capture_revision/.test(row.detail)),JSON.stringify(plan))
-  } finally {
-    DatabaseSync.prototype.prepare=prepare
-    db.close()
-  }
-  assert.equal((await a.read(value.ref.path)).entries[0].text,value.entries[0].text)
-})
-
-test('existing archives gain the index without changing contents, tokens or format',async(a,_b,location)=>{
-  await capture(a,thread('existing','Retained history'))
-  await a.stop()
+test('an existing archive gains the migration ledger without changing contents, tokens or format',async(a,_b,location)=>{
+  await keepCopies(location,[thread('existing','Retained history')])
   const database=new DatabaseSync(join(location,'archive.sqlite'))
   let before
   try {
     database.exec('DROP INDEX sessions_capture_revision')
     before={row:database.prepare('SELECT * FROM sessions').get(),capture:database.prepare('SELECT * FROM archive_captures').get(),version:database.prepare('PRAGMA user_version').get()}
   } finally {database.close()}
-  const reopened=new SessionArchive(location)
+  await a.load()
+  const reader=new DatabaseSync(join(location,'archive.sqlite'),{readOnly:true})
   try {
-    await reopened.load()
-    const reader=new DatabaseSync(join(location,'archive.sqlite'),{readOnly:true})
-    try {
-      assert.deepEqual(reader.prepare('SELECT * FROM sessions').get(),before.row)
-      assert.deepEqual(reader.prepare('SELECT * FROM archive_captures').get(),before.capture)
-      assert.deepEqual(reader.prepare('PRAGMA user_version').get(),before.version)
-      assert.ok(reader.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='sessions_capture_revision'").get())
-    } finally {reader.close()}
-    let reads=0
-    reopened.note(thread('existing').ref,async()=>{reads++;return thread('existing')})
-    await reopened.flush()
-    assert.equal(reads,0)
-    assert.equal((await reopened.read('/fixture/native')).entries[0].text,'Retained history')
-  } finally {await reopened.stop()}
+    assert.deepEqual(reader.prepare('SELECT * FROM sessions').get(),before.row)
+    assert.deepEqual(reader.prepare('SELECT * FROM archive_captures').get(),before.capture)
+    assert.deepEqual(reader.prepare('PRAGMA user_version').get(),before.version,'older builds still read it')
+    assert.ok(reader.prepare("SELECT 1 FROM sqlite_master WHERE type='index' AND name='sessions_capture_revision'").get(),'the index older builds admit captures by')
+    assert.ok(reader.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='archive_migration'").get())
+  } finally {reader.close()}
+  const kept=await a.read('/fixture/native')
+  assert.equal(kept.entries[0].text,'Retained history')
+  assert.deepEqual([kept.ref.archived,kept.ref.copyOnly],[true,true],'a copy is served as Mako\'s copy only')
 })
 
-test('all-six cheap discovery observations retain enriched snapshots without repeated translation', async(a,b,location)=>{
-  for(const harness of ['claude','codex','cursor','grok','devin','opencode']) {
-    const observed={...ref('source-one'),harness,path:'/fixture/'+harness}
-    const complete={ref:{...observed,model:'native-model'},entries:[{type:'user',text:'Retain every turn'}]}
-    let reads=0
-    a.note(observed,async()=>{reads++;return complete});await a.flush()
-    assert.equal((await a.read(observed.path)).ref.model,'native-model')
-    b.note(observed,async()=>{reads++;return complete});await b.flush()
-    assert.equal(reads,1,'peer does not translate an already-captured observation')
-    const restarted=new SessionArchive(location)
-    try {
-      await restarted.load()
-      restarted.note(observed,async()=>{reads++;return complete});await restarted.flush()
-      assert.equal(reads,1,'observation evidence survives process lifetime')
-      const changed={...observed,revision:'source-two',settings:{model:'new-model'}}
-      restarted.note(changed,async()=>({ref:{...changed,model:'new-model'},entries:complete.entries}));await restarted.flush()
-      assert.equal((await b.read(observed.path)).ref.model,'new-model','changed metadata is still captured')
-    }finally{await restarted.stop()}
-  }
-})
-
-test('a legacy peer write invalidates discovery observation evidence through its capture token', async(a,b,location)=>{
-  const observed=ref('hint'),complete=thread('hint','old',{model:'enriched'})
-  a.note(observed,async()=>complete);await a.flush()
-  const legacy=new DatabaseSync(join(location,'archive.sqlite'))
-  legacy.function('mako_archive_writer',()=>1)
-  legacy.prepare('UPDATE sessions SET entries=?, revision=? WHERE path=?').run(JSON.stringify([{kind:'user',text:'peer'}]),'peer-revision',observed.path)
-  legacy.close()
-  let reads=0
-  b.note(observed,async()=>{reads++;return {...complete,entries:[{type:'user',text:'current native state'}]}});await b.flush()
-  assert.equal(reads,1,'a different committed token requires a current read')
-  assert.equal((await a.read(observed.path)).entries[0].text,'current native state')
-})
-
-test('settings-only and equal-length content corrections are retained', async (a) => {
-  await capture(a,thread('one','old',{settings:{model:'model',options:{effort:'low'}}}))
-  await capture(a,thread('one','old',{settings:{model:'model',options:{effort:'high'}}}))
-  assert.equal((await a.read('/fixture/native')).ref.settings.options.effort,'high')
-  await capture(a,thread('correction','new',{settings:{model:'model',options:{effort:'high'}}}))
-  assert.equal((await a.read('/fixture/native')).entries[0].text,'new')
-})
-
-test('a delayed reader cannot overwrite a newer peer commit', async(a,b)=>{
-  await capture(a,thread())
-  let current=thread('two')
-  const entered=deferred(), release=deferred()
-  let reads=0
-  a.note(current.ref,async()=>{reads++; const result=current;if(reads===1){entered.resolve();await release.promise}return result})
-  const held=a.flush()
-  await entered.promise
-  current=thread('three')
-  await capture(b,current)
-  release.resolve()
-  await held
-  assert.equal((await a.read('/fixture/native')).entries[0].text,'three')
-  assert.equal(reads,2,'a conflict must reread native state, not replay the stale snapshot')
-})
-
-test('a newer delayed read catches up after an older peer commit', async(a,b)=>{
-  await capture(a,thread())
-  const current=thread('three')
-  const entered=deferred(),release=deferred()
-  let reads=0
-  a.note(current.ref,async()=>{reads++;if(reads===1){entered.resolve();await release.promise}return current})
-  const held=a.flush();await entered.promise
-  await capture(b,thread('two'))
-  release.resolve();await held
-  assert.equal((await b.read('/fixture/native')).entries[0].text,'three')
-})
-
-test('queued duplicate work is skipped after another host captures it',async(a,b,location)=>{
-  await Promise.all([a.load(),b.load()])
-  const value=thread()
-  let reads=0
-  a.note(value.ref,async()=>{reads++;return value})
-  await capture(b,value)
-  const observer=new DatabaseSync(join(location,'archive.sqlite'))
-  const before=observer.prepare('PRAGMA data_version').get().data_version
-  await a.flush()
-  assert.equal(reads,0,'committed peer revision prevents redundant translation/attachment work')
-  assert.equal(observer.prepare('PRAGMA data_version').get().data_version,before,'duplicate work does not mutate SQLite')
-  observer.close()
-})
-
-test('a newer local observation invalidates an in-flight older capture',async(a)=>{
-  const entered=deferred(),release=deferred()
-  a.note(ref('one'),async()=>{entered.resolve();await release.promise;return thread('one')})
-  const first=a.flush();await entered.promise
-  a.note(ref('two'),async()=>thread('two'))
-  release.resolve();await first
-  assert.equal(await a.read('/fixture/native'),null,'superseded snapshot never commits')
-  await a.flush()
-  assert.equal((await a.read('/fixture/native')).entries[0].text,'two')
-})
-
-test('forget fences another host in-flight and survives restart',async(a,b,location)=>{
-  await capture(a,thread())
-  const entered=deferred(),release=deferred()
-  b.note(ref('two'),async()=>{entered.resolve();await release.promise;return thread('two')})
-  const held=b.flush();await entered.promise
-  await a.forget('/fixture/native')
-  release.resolve();await held
-  assert.equal(await b.read('/fixture/native'),null)
-  assert.equal(b.has('/fixture/native'),false)
-  assert.deepEqual(b.orphans(new Set()),[])
-  const fresh=new SessionArchive(location)
-  try{await capture(fresh,thread('three'));assert.equal(await fresh.read('/fixture/native'),null)}finally{await fresh.stop()}
-})
-
-test('other hosts observe new archive rows without restarting',async(a,b)=>{
+test('a drop is seen by other hosts without restarting, and by older builds as deleted',async(a,b,location)=>{
+  await keepCopies(location,[thread(),thread('other','other',{path:'/fixture/other',nativeId:'other'})])
   await b.load()
-  await capture(a,thread())
   assert.equal(b.has('/fixture/native'),true)
-  assert.equal(b.orphans(new Set())[0].revision,'one')
-  await capture(a,thread('two'))
-  assert.equal(b.orphans(new Set())[0].revision,'two')
-})
-
-test('a peer commit during attachment copying invalidates the prepared snapshot',async(a,b,location)=>{
-  await capture(a,thread())
-  const source=join(location,'image.txt')
-  await writeFile(source,'retained bytes')
-  let current=thread('two')
-  current.entries[0].attachments=[{type:'attachment',name:'image.txt',mimeType:'text/plain',source:{kind:'file',path:source}}]
-  const entered=deferred(),release=deferred()
-  const copy=fs.copyFile
-  let held=false,reads=0,running
-  fs.copyFile=async(from,to,...args)=>{
-    if(from===source && !held){held=true;entered.resolve();await release.promise}
-    return copy(from,to,...args)
-  }
-  syncBuiltinESMExports()
+  await a.drop('/fixture/native','harness')
+  assert.equal(b.has('/fixture/native'),false)
+  assert.deepEqual(b.orphans(new Set()).map((kept)=>kept.path),['/fixture/other'])
+  assert.equal(await b.read('/fixture/native'),null)
+  const observer=new DatabaseSync(join(location,'archive.sqlite'),{readOnly:true})
   try {
-    a.note(current.ref,async()=>{reads++;return current})
-    running=a.flush()
-    await entered.promise
-    current=thread('three')
-    await capture(b,current)
-    release.resolve();await running
-    assert.equal(reads,2)
-    assert.equal((await a.read('/fixture/native')).entries[0].text,'three')
-  }finally{release.resolve();await running?.catch(()=>{});fs.copyFile=copy;syncBuiltinESMExports()}
+    // What an older build asks before it captures: a deleted path is never captured again.
+    assert.equal(observer.prepare('SELECT deleted FROM archive_captures WHERE path=?').get('/fixture/native').deleted,1)
+    assert.deepEqual({...observer.prepare("SELECT state, via FROM archive_migration WHERE path=?").get('/fixture/native')},{state:'migrated',via:'harness'})
+  } finally {observer.close()}
 })
 
-test('old connections retain reads but cannot insert, update or delete after migration',async(a,_b,location)=>{
+test('the person forgetting a copy takes it out of the ledger too, and a repeat writes nothing',async(a,_b,location)=>{
+  await keepCopies(location,[thread()])
+  await a.load()
+  assert.equal(a.markCopy('/fixture/native'),true)
+  assert.equal(a.markCopy('/fixture/native'),false,'noted once')
+  assert.deepEqual(a.counts(),{rows:1,migrated:0,copies:1,pending:0})
+  const observer=new DatabaseSync(join(location,'archive.sqlite'))
+  try {
+    await a.forget('/fixture/native')
+    assert.deepEqual(a.counts(),{rows:0,migrated:0,copies:0,pending:0})
+    const before=observer.prepare('PRAGMA data_version').get().data_version
+    await a.forget('/fixture/native')
+    assert.equal(observer.prepare('PRAGMA data_version').get().data_version,before,'a repeated forget commits nothing')
+  } finally {observer.close()}
+})
+
+test('old connections retain reads but cannot insert, update or delete once a writer opened it',async(a,_b,location)=>{
   await mkdir(location,{recursive:true})
   const old = new DatabaseSync(join(location,'archive.sqlite'))
   old.exec('CREATE TABLE sessions (path TEXT PRIMARY KEY, ref TEXT NOT NULL, entries TEXT NOT NULL, revision TEXT NOT NULL)')
@@ -224,73 +86,12 @@ test('old connections retain reads but cannot insert, update or delete after mig
   try {
     await a.load()
     assert.equal((await a.read(value.ref.path)).entries[0].text,'one')
-    assert.equal(JSON.parse(old.prepare('SELECT entries FROM sessions').get().entries)[0].text,'one')
     assert.throws(()=>prepared.run('[]',value.ref.path),/mako_archive_writer/)
     assert.throws(()=>old.prepare('INSERT INTO sessions VALUES (?,?,?,?)').run('/other','{}','[]','old'),/mako_archive_writer/)
     assert.throws(()=>old.prepare('DELETE FROM sessions').run(),/mako_archive_writer/)
-    await capture(a,thread('two'))
-    assert.equal(JSON.parse(old.prepare('SELECT entries FROM sessions').get().entries)[0].text,'two')
+    await a.drop(value.ref.path,'harness')
+    assert.equal(old.prepare('SELECT count(*) AS n FROM sessions').get().n,0)
   } finally {old.close()}
-})
-
-test('noisy discovery records admission once without rewriting retained content',async(a,_b,location)=>{
-  const value=thread()
-  await capture(a,value)
-  const observer=new DatabaseSync(join(location,'archive.sqlite'))
-  const row=observer.prepare('SELECT * FROM sessions').get()
-  const token=observer.prepare('SELECT * FROM archive_captures').get()
-  let reads=0
-  a.note(ref('noisy-discovery'),async()=>{reads++;return value})
-  await a.flush()
-  assert.equal(reads,1)
-  assert.deepEqual(observer.prepare('SELECT * FROM sessions').get(),row)
-  assert.deepEqual(observer.prepare('SELECT * FROM archive_captures').get(),token)
-  const before=observer.prepare('PRAGMA data_version').get().data_version
-  a.note(ref('noisy-discovery'),async()=>{reads++;return value});await a.flush()
-  assert.equal(reads,1,'repeated observation performs no translation')
-  assert.equal(observer.prepare('PRAGMA data_version').get().data_version,before,'no repeated metadata write')
-  observer.close()
-})
-
-test('wrong native paths and invalid entries cannot poison committed history',async(a)=>{
-  await capture(a,thread())
-  a.note(ref('two'),async()=>thread('two','two',{path:'/different'}))
-  await assert.rejects(a.flush(),/different native path/)
-  a.note(ref('three'),async()=>({...thread('three'),entries:[{type:'user',text:123}]}))
-  await assert.rejects(a.flush(),/text/)
-  assert.equal((await a.read('/fixture/native')).entries[0].text,'one')
-  await capture(a,thread('four'))
-  assert.equal((await a.read('/fixture/native')).entries[0].text,'four')
-})
-
-test('repeated conflicts are bounded and a later observation can retry',async(a,b)=>{
-  await capture(a,thread())
-  let reads=0
-  a.note(ref('attempt'),async()=>{
-    reads++
-    await capture(b,thread('peer-'+reads))
-    return thread('attempt')
-  })
-  await assert.rejects(a.flush(),/three capture attempts/)
-  assert.equal(reads,3)
-  assert.equal((await a.read('/fixture/native')).entries[0].text,'peer-3')
-  await capture(a,thread('later'))
-  assert.equal((await a.read('/fixture/native')).entries[0].text,'later')
-})
-
-test('settings key order and repeated deletion make no extra commit',async(a,_b,location)=>{
-  await capture(a,thread('one','one',{settings:{model:'model',options:{effort:'high',fast:false}}}))
-  const observer=new DatabaseSync(join(location,'archive.sqlite'))
-  try {
-    let before=observer.prepare('PRAGMA data_version').get().data_version
-    a.note(ref('one',{settings:{options:{fast:false,effort:'high'},model:'model'}}),async()=>{throw Error('Equivalent settings should skip native reading')})
-    await a.flush()
-    assert.equal(observer.prepare('PRAGMA data_version').get().data_version,before)
-    await a.forget('/fixture/native')
-    before=observer.prepare('PRAGMA data_version').get().data_version
-    await a.forget('/fixture/native')
-    assert.equal(observer.prepare('PRAGMA data_version').get().data_version,before)
-  }finally{observer.close()}
 })
 
 async function worker(location) {
@@ -319,66 +120,28 @@ async function worker(location) {
   }}
 }
 
-test('independent processes reconcile stale reads and deletion, with no lock left by a crash',async(a,_b,location)=>{
-  await a.load()
-  const source=join(location,'native.json')
-  await writeFile(source,JSON.stringify(thread('one')))
-  const first=await worker(location), second=await worker(location)
+test('independent processes open the same archive and drop rows side by side, with no lock left by a crash',async(a,_b,location)=>{
+  const paths=Array.from({length:8},(_,index)=>`/fixture/s${index}`)
+  await keepCopies(location,paths.map((path,index)=>thread(String(index),String(index),{path,nativeId:`s${index}`})))
+  const workers=await Promise.all(Array.from({length:4},()=>worker(location)))
   try {
-    first.send({type:'capture',ref:ref('one'),source,hold:true})
-    await first.next('reading')
-    await writeFile(source,JSON.stringify(thread('two')))
-    second.send({type:'capture',ref:ref('two'),source})
-    await second.next('done')
-    first.send({type:'release'})
-    assert.equal((await first.next('done')).reads,2)
-    assert.equal((await a.read('/fixture/native')).entries[0].text,'two')
-    await writeFile(source,JSON.stringify(thread('three')))
-    first.send({type:'capture',ref:ref('three'),source,hold:true})
-    await first.next('reading')
-    second.send({type:'forget',path:'/fixture/native'})
-    await second.next('done')
-    first.send({type:'release'})
-    await first.next('done')
-    assert.equal(await a.read('/fixture/native'),null)
-    const other=thread('other','other',{path:'/fixture/other'})
-    await writeFile(source,JSON.stringify(other))
-    first.send({type:'capture',ref:other.ref,source,hold:true})
-    await first.next('reading')
-    const exited=once(first.child,'exit');first.child.kill('SIGKILL');await exited
-    second.send({type:'capture',ref:other.ref,source})
-    await second.next('done')
-    assert.equal((await a.read('/fixture/other')).entries[0].text,'other')
+    await Promise.all(workers.map(async(each,index)=>{
+      for(const path of paths.filter((_,at)=>at%4===index)){each.send({type:'drop',path});await each.next('done')}
+    }))
+    const crashed=workers.pop()
+    const exited=once(crashed.child,'exit');crashed.child.kill('SIGKILL');await exited
+    await a.load()
+    assert.deepEqual(a.counts(),{rows:0,migrated:8,copies:0,pending:0})
   } finally {
-    if(first.child.exitCode===null && first.child.signalCode===null)await first.stop()
-    await second.stop()
+    for(const each of workers)if(each.child.exitCode===null && each.child.signalCode===null)await each.stop()
   }
-})
-
-test('independent processes can initialize the same new archive',async(_a,_b,location)=>{
-  for(let round=0;round<Number(process.env.MAKO_ARCHIVE_TEST_ROUNDS??1);round++) {
-    const cold=join(location,'round-'+round)
-    const results=await Promise.allSettled(Array.from({length:4},()=>worker(cold)))
-    await Promise.all(results.filter(r=>r.status==='fulfilled').map(r=>r.value.stop()))
-    for (const result of results) if(result.status==='rejected')throw result.reason
-  }
-  const reopened=new SessionArchive(location)
-  try{await capture(reopened,thread());assert.equal((await reopened.read('/fixture/native')).entries[0].text,'one')}finally{await reopened.stop()}
-})
-
-test('initialization failure can be retried without restarting the archive owner',async(a,_b,location)=>{
-  await writeFile(location,'not a directory')
-  await assert.rejects(a.load())
-  await rm(location)
-  await capture(a,thread())
-  assert.equal((await a.read('/fixture/native')).entries[0].text,'one')
 })
 
 let failures=0
 try {
   for (const {name,run} of cases) {
     const location=join(root,String(cases.findIndex(c=>c.name===name)))
-    const a=new SessionArchive(location),b=new SessionArchive(location)
+    const a=new SessionArchive(location),b=new SessionArchive(location,{readOnly:true})
     try{await run(a,b,location);console.log('PASS '+name)}catch(error){failures++;console.error('FAIL '+name+'\n'+error.stack)}finally{await a.stop().catch(()=>{});await b.stop().catch(()=>{})}
   }
 }finally{await rm(root,{recursive:true,force:true})}

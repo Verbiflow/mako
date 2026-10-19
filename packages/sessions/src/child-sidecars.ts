@@ -173,7 +173,10 @@ export class ChildSidecars {
   ): Promise<{ child: TranscriptChild; files: string[]; how: "rendered" | "reused" | "unreadable" }> {
     const bundled = transcriptChild(child, harness)
     if (!child.path) return { child: bundled, files: [], how: "unreadable" }
-    const stamp = await sourceStamp(child.path)
+    let stamp = await sourceStamp(child.path)
+    // One its harness deleted is read from Mako's records, which no longer change: what they hold is its stamp.
+    const kept = stamp === null ? await source.open(child.path).catch(() => null) : undefined
+    if (kept) stamp = `kept:${kept.entries.length}:${kept.checkpoint ?? ""}:${kept.ref.bytes ?? ""}:${kept.ref.updatedAt ?? ""}`
     if (stamp === null) return { child: { ...bundled, unreadable: "Its record couldn't be read." }, files: [], how: "unreadable" }
     // Nested children are linked from its transcript, so their folders are part of what it is.
     const digest = createHash("sha256").update(`${RENDERING}\0${stamp}`)
@@ -183,7 +186,7 @@ export class ChildSidecars {
     const link = `../${basename(this.root)}/${name}/transcript.md`
     const held = await this.summary(folder)
     if (held) return { child: withSummary(bundled, link, held), files: held.files.map((file) => join(folder, file)), how: "reused" }
-    const thread = await source.open(child.path).catch(() => null)
+    const thread = kept ?? (await source.open(child.path).catch(() => null))
     if (!thread) return { child: { ...bundled, unreadable: "Its harness's reader opened no transcript at its path." }, files: [], how: "unreadable" }
     const rendered = renderTranscriptBundle(thread, {
       from: harness,

@@ -62,6 +62,7 @@ import type {
   ThreadRef,
 } from "./format.js"
 import type { ChildTranscripts } from "./children.js"
+import type { KeptRestore } from "./kept-restore.js"
 import { onMac, onWindows } from "./platform.js"
 
 export type { DaemonEvent, DaemonStats } from "./daemon-wire.js"
@@ -387,6 +388,9 @@ function catalogService(
           case "hold":
             reply({ id: frame.id, ok: true, result: await catalog.hold(frame.path) })
             return
+          case "restore":
+            reply({ id: frame.id, ok: true, result: await catalog.restoreKept(frame.path) })
+            return
           case "follow": {
             const mine = follows.get(link)
             mine?.get(frame.path)?.()
@@ -570,6 +574,8 @@ export interface DaemonClient {
   children(path: string): Promise<ChildTranscripts | null>
   /** Takes the session into the record store now (`SessionCatalog.hold`). */
   hold(path: string): Promise<boolean>
+  /** Puts a session its harness deleted back into the harness's store (`SessionCatalog.restoreKept`). */
+  restoreKept(path: string): Promise<KeptRestore>
   follow(path: string, fromByte: number): Promise<void>
   unfollow(path?: string): Promise<void>
   /** Ask the daemon to exit — used to replace an older vintage. */
@@ -679,6 +685,9 @@ async function connectDaemonLink(
           response.pending.resolve(response.result)
           break
         case "hold":
+          response.pending.resolve(response.result)
+          break
+        case "restore":
           response.pending.resolve(response.result)
           break
         case "ack":
@@ -819,6 +828,15 @@ async function connectDaemonLink(
       send({ id, op: "hold", path })
     })
 
+  // A restore writes the session whole, as a hold reads it whole.
+  const requestRestore = (path: string): Promise<KeptRestore> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))
+      pending.set(id, { kind: "restore", resolve, reject, timer })
+      send({ id, op: "restore", path })
+    })
+
   const requestAck = (
     frame: (id: number) => DaemonRequestFrame
   ): Promise<void> =>
@@ -841,6 +859,7 @@ async function connectDaemonLink(
       original: requestOriginal,
       children: requestChildren,
       hold: requestHold,
+      restoreKept: requestRestore,
       follow: (path, fromByte) =>
         requestAck((id) => ({ id, op: "follow", path, fromByte, reloads: true })),
       unfollow: (path) => requestAck((id) => ({ id, op: "unfollow", path })),

@@ -9,6 +9,7 @@ import { SessionCatalog } from "../dist/catalog.js"
 import { CATALOG_CACHE_VERSION } from "../dist/catalog-cache.js"
 import { DevinCliProvider } from "../dist/providers/devin-cli.js"
 import { proposedPlan } from "../dist/entries.js"
+import { keepCopies } from "./fixtures/archive-copies.mjs"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 
 const nativeStores = new NativeStores(false)
@@ -285,9 +286,8 @@ try {
   assert.ok(unconfigured)
   assert.equal(unconfigured.ref.model, undefined, "an empty native model is unknown")
   assert.equal(unconfigured.ref.settings.model, undefined, "an empty native model is not a selection")
-  const archived = new SessionCatalog([provider], { archivePath: join(home, "archive") })
-  await archived.scan()
-  await archived.stop()
+  // A copy an earlier build kept of it reads back with its model unknown.
+  await keepCopies(join(home, "archive"), [unconfigured])
   const restarted = new SessionCatalog([], { archivePath: join(home, "archive") })
   try {
     assert.equal((await restarted.scan()).length, 1)

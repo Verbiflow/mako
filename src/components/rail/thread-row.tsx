@@ -38,6 +38,7 @@ import { togglePinned, usePrefs } from "@/state/prefs"
 import { actions, shallowEqual, useSession } from "@/state/session"
 import { useTabs, type TabInfo } from "@/state/tabs"
 import { acpForThread, activeAcp, useAcp } from "@/state/acp"
+import { keptSessionText } from "@/lib/kept-session"
 import { sameThreadStatus, threadStatus, threads, useThreads } from "@/state/threads"
 
 /**
@@ -282,9 +283,7 @@ export const ThreadRow = memo(function ThreadRow({
                 ...foldState.sessions.map((session) => `${harnessLabel(session.harness)} · ${sessionStateText(session.status)}`),
               ].join("\n")
             : undefined,
-          ref.archived
-            ? "Archived: the native store lost this; Mako kept it. Reply to bring it back to life."
-            : undefined,
+          keptSessionText(ref)?.line,
           ref.nativeArchived && !ref.archived ? `Archived in ${harnessLabel(ref.harness)}` : undefined,
           [
             ...(ref.lineage ?? []).map((origin) => harnessLabel(origin.harness)),
@@ -382,8 +381,9 @@ export const ThreadRow = memo(function ThreadRow({
         <Attached path={ref.path} />
         {ref.archived ? (
           <ArchiveIcon
+            data-kept={ref.copyOnly ? "copy" : "records"}
             className="size-3 shrink-0 text-faint/70"
-            aria-label="Saved copy: the native session is gone; Mako kept the conversation"
+            aria-label={keptSessionText(ref)?.line}
           />
         ) : null}
         {/* The row's controls float over its trailing edge on hover or focus

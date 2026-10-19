@@ -144,6 +144,25 @@ function askHolder(name: string): Promise<number | null> {
   })
 }
 
+/**
+ * The live process holding the data root's host lock, read without taking
+ * it (a take, however brief, could turn a starting host away): the pid the
+ * lock file names while that process runs on macOS, the listener's answer
+ * elsewhere. Null when nothing holds it. A pid the kernel gave to another
+ * process since reads as held, which a caller deciding to wait can live with.
+ */
+export async function hostLockHolder(dataRoot: string, platform: NodeJS.Platform = nodePlatform()): Promise<number | null> {
+  if (platform !== "darwin") return askHolder(hostLockName(dataRoot, platform))
+  let text: string
+  try {
+    text = readFileSync(hostLockName(dataRoot, "darwin"), "utf8")
+  } catch {
+    return null
+  }
+  const pid = pidIn(text)
+  return pid !== null && running(pid) ? pid : null
+}
+
 function pidIn(text: string): number | null {
   const pid = Number(text.trim())
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null

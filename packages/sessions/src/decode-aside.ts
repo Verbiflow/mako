@@ -43,7 +43,7 @@ export class DecodeAside {
   private readonly script = fileURLToPath(new URL("./decode-aside-main.js", import.meta.url))
 
   /** `executable` runs the child as Node: Electron's Helper inside the app, which shows no Dock icon. */
-  constructor(private readonly executable = process.execPath) {}
+  constructor(readonly executable = process.execPath) {}
 
   /** Decodes `job`'s record into its view, after the decodes asked before it. */
   decode(job: AsideJob): Promise<AsideOutcome> {

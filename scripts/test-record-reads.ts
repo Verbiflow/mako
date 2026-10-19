@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
 import { appendFile, cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
 import { z } from "zod"
-import { DECODE_ASIDE_BYTES, DecodeAside, pageOf, SessionArchive, SAVED_HISTORY_READERS, SessionCatalog, VIEWER_PAGE, ViewCache, type AsideJob, type AsideOutcome, type NativeFile, type Thread, type ThreadPageOptions } from "@mako/sessions"
+import { DECODE_ASIDE_BYTES, DecodeAside, pageOf, SAVED_HISTORY_READERS, SessionCatalog, VIEWER_PAGE, ViewCache, type AsideJob, type AsideOutcome, type NativeFile, type Thread, type ThreadPageOptions } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { ThreadSchema } from "@mako/sessions/thread-schema"
 import { FIXTURE_ROOT } from "./native-decoding.ts"
@@ -353,7 +354,7 @@ async function decodesAside(): Promise<void> {
       await here.stop()
     }
 
-    // The archive translates a session whole, so it leaves one this large to the record store.
+    // The archive keeps no new copies: the record store holds the session, large or small.
     const small = join(folder, `${randomUUID()}.jsonl`)
     await writeFile(small, `${lines.slice(0, 2).join("\n")}\n`)
     const archivePath = join(home, ".mako", "archive")
@@ -362,13 +363,9 @@ async function decodesAside(): Promise<void> {
       recordsPath: join(home, ".mako", "records"), recordsHome: home, readBack: { readers: SAVED_HISTORY_READERS, stores },
     })
     await archiving.scan()
-    await new Promise((resolve) => setTimeout(resolve, 3400))
     await archiving.stop()
-    const archive = new SessionArchive(archivePath)
-    assert.equal((await archive.read(small))?.entries.length, 2, "the archive keeps a small session")
-    assert.equal(await archive.read(path), null, "and leaves a large one to the record store")
-    await archive.stop()
-    console.log("PASS: a large record decodes in a child process, whose view serves as a decode in this one would; its follow reloads where it would read it whole; the archive leaves it to the record store")
+    assert.equal(existsSync(join(archivePath, "archive.sqlite")), false, "the archive copies neither a small session nor a large one")
+    console.log("PASS: a large record decodes in a child process, whose view serves as a decode in this one would; its follow reloads where it would read it whole; and the archive copies nothing")
   } finally {
     process.env["HOME"] = was
     await rm(home, { recursive: true, force: true })

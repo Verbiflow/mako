@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { SessionArchive } from '../dist/archive.js'
+import { keepCopies } from './fixtures/archive-copies.mjs'
 import { NativeStores, ReadOnlyConnection, ReadOnlyStoreError, openReadOnly } from '../dist/read-only-sqlite.js'
 import { removeSessionRows } from '../dist/sqlite-removal.js'
 import { emitClaudeSession, emitCodexSession, emitCursorSession, emitDevinSession } from '../dist/emit.js'
@@ -110,27 +111,23 @@ try {
   {
     const location = join(root, 'archive')
     const writer = new SessionArchive(location)
-    const reader = new SessionArchive(location, undefined, { readOnly: true })
+    const reader = new SessionArchive(location, { readOnly: true })
     const value = (name) => ({ ref: { harness: 'fixture', nativeId: name, path: `/fixture/${name}`, revision: name, bytes: 1 }, entries: [{ type: 'user', text: name }] })
-    const missing = new SessionArchive(join(root, 'no-archive'), undefined, { readOnly: true })
+    const missing = new SessionArchive(join(root, 'no-archive'), { readOnly: true })
     await missing.load()
     assert.equal(missing.has('/fixture/one'), false)
     assert.equal(existsSync(join(root, 'no-archive')), false, 'a read-only archive creates nothing')
     await missing.stop()
 
-    writer.note(value('one').ref, async () => value('one'))
-    await writer.flush()
+    await keepCopies(location, [value('one'), value('three')])
+    await writer.load()
     await reader.load()
-    assert.equal((await reader.read('/fixture/one'))?.entries[0].text, 'one', 'a read-only archive reads what a writer kept')
-    let captured = false
-    reader.note(value('two').ref, async () => { captured = true; return value('two') })
-    await reader.flush()
-    assert.equal(captured, false, 'a read-only archive captures nothing')
+    assert.equal((await reader.read('/fixture/one'))?.entries[0].text, 'one', 'a read-only archive reads what was kept')
     await assert.rejects(reader.forget('/fixture/one'), ReadOnlyStoreError)
+    assert.throws(() => reader.markCopy('/fixture/one'), ReadOnlyStoreError)
     assert.equal(writer.has('/fixture/one'), true, 'and forgets nothing')
-    writer.note(value('three').ref, async () => value('three'))
-    await writer.flush()
-    assert.equal(reader.has('/fixture/three'), true, "the writer's later copy is listed")
+    await writer.drop('/fixture/three', 'harness')
+    assert.equal(reader.has('/fixture/three'), false, "the writer's drop is seen")
     await reader.stop()
     await writer.stop()
   }

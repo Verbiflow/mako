@@ -50,7 +50,7 @@ export function commandRoute(cwd: string | undefined, words: CommandWords): Comm
   if (viewing && (!live || viewing.path !== conversation?.threadPath)) {
     if (harness !== viewing.harness)
       return { kind: "elsewhere", reason: `Send a message to move this conversation to ${harnessLabel(harness)} first, then ${words.act}.` }
-    return viewing.archived || viewing.resumeUnavailable
+    return viewing.copyOnly || viewing.resumeUnavailable
       ? { kind: "elsewhere", reason: `Send a message to reopen this conversation first, then ${words.act}.` }
       : { kind: "thread", ref: viewing }
   }

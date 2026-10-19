@@ -570,6 +570,11 @@ export class ClaudeProvider implements SessionProvider {
     return ref.nativeId && (ref.cwd || spoke) ? ref : null
   }
 
+  /** Its account roots are read again: a restore may have made one (`SessionProvider.storeWritten`). */
+  storeWritten(): void {
+    this.extraRoots = null
+  }
+
   /** Its subagents, from the transcripts beside it and the calls that started them. */
   async children(path: string): Promise<ChildTranscript[] | null> {
     if (!path.endsWith(".jsonl") || claudeChildPath(path, this.roots()) || !this.roots().some((root) => path.startsWith(`${root}/`))) return null
@@ -593,7 +598,8 @@ export class ClaudeProvider implements SessionProvider {
       files.push(...(await filesUnder(join(config, "todos"))).filter((file) => basename(file).startsWith(`${id}-`)))
     }
     const roots = [root === this.roots()[0] ? { name: "claude", path: config } : extraRoot("claude", config)]
-    return { roots, files, databases: [] }
+    const children = files.filter((file) => claudeChildPath(file, this.roots())?.parentPath === path)
+    return { roots, files, databases: [], children }
   }
 
   /** Remove a session file; Claude Code keeps no index that names it. */

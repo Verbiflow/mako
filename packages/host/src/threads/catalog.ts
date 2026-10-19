@@ -11,7 +11,7 @@
  * the same working directory. No provider can inherit another's private state;
  * it can inherit the conversation, and that is what this hands over.
  */
-import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE } from "@mako/sessions"
+import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE, type KeptRestore } from "@mako/sessions"
 import { makoRecords } from "@mako/sessions/record-streams"
 import { isReplyEntry } from "@mako/sessions/entries"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
@@ -59,7 +59,7 @@ import { retainUnread } from "../base/native-unknown.js"
 import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
 import type { WorktreeOrigins } from "./worktree-origins.js"
 import type { Lineage } from "./lineage.js"
-import type { SessionMemory } from "./session-memory.js"
+import { sessionMemoryPath, type SessionMemory } from "./session-memory.js"
 import type { ThreadStore } from "./store.js"
 import type { Actor, ThreadId } from "../contracts/thread-identity.js"
 import {
@@ -341,6 +341,12 @@ export interface ThreadFileHomes {
 export interface ThreadCatalogDeps {
   /** Where this host keeps its catalog cache. */
   dataRoot: string
+  /**
+   * Where every profile's data root sits (`appData`) and what the app's
+   * are named: the worker's backfill reads every reader's stores before it
+   * sweeps Mako's attachment files (`attachmentReaders`).
+   */
+  profiles?: { appData: string; app: string }
   /** The app whose sync daemon serves the catalog, which only an installed one registers at login. */
   app: DaemonApp
   /** The per-user ledger every served ref is read through. */
@@ -409,6 +415,12 @@ export interface ThreadCatalog {
    * whatever its harness does with its own.
    */
   hold(path: string): Promise<boolean>
+  /**
+   * Puts a session its harness deleted back into the harness's own store
+   * from Mako's records (`SessionCatalog.restoreKept`), so the harness can
+   * resume it as the same session.
+   */
+  restoreKept(path: string): Promise<KeptRestore>
   /** A page for the viewer; a tool row fetches its whole output (`block`) when it opens. */
   viewPage(path: string, before?: number, limit?: number): Promise<ThreadPage | null>
   /**
@@ -598,7 +610,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let catalogLifetime: AbortController | null = null
 
   async function awaitCatalogReady(): Promise<{
-    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold">
+    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept">
     signal: AbortSignal
   }> {
     const signal = catalogLifetime?.signal
@@ -964,14 +976,15 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const data: CatalogWorkerData = {
       port: channel.port2,
       cachePath: join(deps.dataRoot, "threads-catalog.json"),
-      // Same archive the daemon uses — whichever process runs the catalog,
-      // the durable copy lands in one place.
+      // Same archive the daemon reads: Mako's copies of sessions nothing else
+      // holds, which this worker's backfill migrates onto the record store.
       archivePath: join(homedir(), ".mako", "archive"),
       recordsPath: makoRecords(),
       viewsPath: makoViews(),
       readOnly: catalogReadOnly,
       decodeExecutable: headlessNodeExecutable(),
       ...deps.writer && { writer: deps.writer },
+      ...deps.profiles && { profiles: { ...deps.profiles, dataRoot: deps.dataRoot, sessionMemory: sessionMemoryPath(), home: homedir() } },
     }
     const compiled = new URL("./catalog-worker.js", import.meta.url)
     const worker = new Worker(compiled, {
@@ -1370,6 +1383,12 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return source.original(path, id)
   }
 
+  async function restoreKept(path: string): Promise<KeptRestore> {
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    return source.restoreKept(path)
+  }
+
   async function holdThread(path: string): Promise<boolean> {
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
@@ -1685,6 +1704,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     readFile: readThreadFile,
     page: pageThread,
     hold: holdThread,
+    restoreKept,
     viewPage: viewThreadPage,
     viewPreview: viewThreadPreview,
     entry: threadEntry,

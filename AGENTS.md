@@ -272,7 +272,8 @@ restamps the session, so no capture follows (a removed stream file is no
 write to the catalog's watch, which on Linux heard the prune's own removals),
 and `readStreamOriginal` reads
 pruned lines from the store. A session the person deletes
-(`SessionCatalog.remove`) leaves the store too. The pass
+(`SessionCatalog.remove`) leaves the store too; one its harness deletes stays, and
+the person's delete of that one forgets it with its children (below). The pass
 ends with a repack (`record-repack.ts`): it drops the chunks no version
 names and overwrites them in place with zeros (`record-orphans.ts`): those
 only deleted sessions named, those a capture stored and never named because
@@ -366,6 +367,153 @@ newer build in a process of its own migrating both stores under a running
 host) cover it, `test-store-formats-ui.mjs` the lines, and `npm run
 bench:store-formats` measures the check: about 13 µs on an open
 connection, against 300 µs to open the Thread store.
+
+The archive (`~/.mako/archive/archive.sqlite`, `archive.ts`) holds Mako's
+translations of sessions as earlier builds read them, with no decoder stamp,
+and takes no new ones. A pass that took every session ends by migrating it
+(`archive-migration.ts`), one row at a time, newest first: a row goes once
+its session's harness still has it (by path or by its own id), a capture of
+it finished in the record store and this build decodes it; or once its
+harness deleted it and this build decodes it back from the record store,
+whose kept row (`RecordStore.keepListing`) lists it in the rail from then
+on. A failure keeps the row; each drop and its reason commit together in
+`archive_migration`, and the row is marked deleted for older builds, which
+never capture it again. What nothing else holds stays, served with
+`ThreadRef.copyOnly` (the rail tip, the history's first line and the
+composer say "Mako's copy"; a reply continues from the transcript). Copies
+stay in the archive, not the view store, because views are a cache that
+evicts. Child agents' copies stay: a child is read through its parent. The
+pass then gives the space back with a `VACUUM` in a thread of its own, once
+32 MiB or more is free and the disk has room (incremental vacuuming held the
+worker 566 ms a step and made each drop 20 times slower). Every capture keeps the
+rail's row of its session (`CaptureInput.listing`), so a session its harness
+deletes stays listed, read back from the store. Every resume verdict goes
+through `restoringResume` (`conversations/kept-resume.ts`), so a reply to
+such a session, a reconnect or a wake first writes it back into the
+harness's own store (`SessionCatalog.restoreKept`; only when nothing holds
+it; idempotent; a copy that went on without Mako gets the fork rule), and
+the harness resumes the same session. `scripts/test-kept-resume.ts` covers
+it, and `scripts/prove-kept-resume.ts` runs it against the real CLIs in a
+scratch home. `tsx scripts/records.ts
+archive` shows migrated, kept and pending (`--migrate` runs a pass), and
+`npm run bench:archive-migration` measures it on a clone of this Mac's
+archive.
+
+A session's child agents are part of its records. Each harness's `records()`
+takes their files and rows with the session (Claude Code's `subagents/`;
+Codex's spawned threads, and its reviews, threads of their own that only their
+meta's `parent_thread_id` names; Grok's subagent sessions, whether
+`subagents/` or only the updates name them; a Cursor Task's store and an SDK
+agent's plain transcripts; OpenCode's sessions under it by `parent_id`;
+Devin's chains and journal) and names the path each child is read at
+(`SessionRecords.children`). The store keeps those paths with the session
+(`child_paths`, `RecordStore.parentAt`). Once its harness deletes the
+session, its children are read as it is: `SessionCatalog.children` lists
+them with the same reader over the records read back (`keptChildren`), at
+the paths they had, and a child's path opens from its parent's records
+(`restored`). So a child's transcript, a bundle (`ChildSidecars` stamps a
+child it can't stat by what its records hold) and Show original draw as they
+did live, and a link to a child resolves. A home a session is read back
+into (`RecordReads`) takes its children's transcripts last: each is there
+by its first line, which is what a listing reads (a rollout's meta), and is
+written whole the first time it's read (`RestoreInput.files`,
+`writeChild`), so the parent and its list never wait on dozens of
+subagents. Captures from before captures named children are linked once
+per session by the backfill's pass (`linkChildren`, the `children linked`
+mark), and by listing the parent before that. Every restore writes the
+children with the parent, since they're its units, under the same fork
+rule (where a child's units are shared), then tells the reader its store
+changed (`SessionProvider.storeWritten`: Codex's rollout listing, Cursor's
+child index and Claude Code's account roots are read again), so a child is
+there the moment the restore returns. The person's delete of a kept
+session (`removeKept`) forgets its records, its children's paths and every
+home it was read back into, and removes any child its harness still keeps.
+`packages/sessions/test/kept-children.mjs` runs all of it on every harness's
+recorded store; `scripts/prove-kept-children.ts` runs it against the real
+CLIs in a scratch home, with a Claude Code Agent, a Codex spawn and a `codex
+exec review`, a Cursor Task, an OpenCode task, a Devin subagent and a Grok
+subagent; and `npm run bench:kept-children` measures it on this Mac's newest
+parents. On 2026-10-18, children added 0.80 s to capturing a Claude Code
+session with 49 subagents (0.13 s without them) and a few ms elsewhere.
+That kept parent opened in 0.76 s (1.18 s when its home took every
+transcript; 0.44 s to read it back with no children at all), and a kept
+child in 60 to 80 ms cold, as live, and under 16 ms warm. Linking took 4 ms
+a session over the rail's newest 200, and 13 ms a kept parent.
+
+Mako's attachment files go once no reader on the machine names them
+(`attachment-sweep.ts`). There are three kinds: the archive's `assets/`
+(saved beside its copies until 2026-10-18, and still by older builds),
+each profile's `LiveAssets` (`<data root>/conversations/assets`), and the
+staged `~/.mako/attachments` (`<time>-<random>-<name>`, or an earlier
+translation's `<sha256>-<name>`, which harness records name and so is
+kept). The sweep runs right after the archive's migration, in the same
+worker and under the same lock. A pass marks every store a reader can name
+one in, for every build and profile sharing `~/.mako`: the archive's rows
+(read a row at a time by the capture token its triggers move, so an older
+build's new copy costs one row), its legacy folders, the stores beside it,
+the view store, and each profile's journals, native requests, own stores
+and renderer localStorage. It also marks the localStorage of every browser
+a development desk may have opened in. That is every Chromium-family
+profile (`base/chromium-profiles.ts`), whose loopback origins it reads,
+since Vite's port moves and the registrations go when a launcher exits;
+Firefox's per-origin stores; and Safari's, when its container can be read.
+`attachmentReaders` (`threads/attachment-readers.ts`) finds them all: every
+`<appData>/mako*`, and each host the session ledger lists outside
+`appData`. `leveldb-text.ts` reads a LevelDB folder in place, file by
+file, and lists it again until the listing holds still through a
+compaction. A name is a path's tail (`archive/assets/`,
+`conversations/assets/`, `.mako/attachments/`, in any spelling) followed
+by the head of a name (a hash, a UUID, a staging time), and it marks every
+file with that head.
+
+What can't be read names everything: a source, or a root that can't be
+listed, stops the pass, and the trash comes back. A browser a desk is known
+to have run in whose storage can't be read holds every file that existed at
+its last run. Which browsers a desk opened in is recorded by the web
+launchers' proxy in `~/.mako/desk-clients.json` (`base/desk-clients.ts`),
+by user-agent family. Before that record began nobody can say, so every
+staged file from before then is held; drafts have no retention. A file no
+mark or hold names, whose newest time is more than an hour old, moves into
+`<folder>-trash`. The stores are then marked again, and anything named since
+comes back. A pass a day later deletes it if it's still named by nothing.
+`LiveAssets` restarts a reused file's times, so a prompt that reuses an old
+file by its hash keeps it through the grace. A build that does says so on
+its launch in the session ledger (`liveAssetsTouch`). While a profile's
+host holds its data root's lock (`hostLockHolder`, read without taking it)
+and its launch doesn't say so, or the ledger has no launch for it, that
+profile's `LiveAssets` is held for the pass, and the readout and the log
+say which host. A source is read again only
+when its stamp moves, and a pass with nothing changed costs a stat of each.
+Cold reads run in a child process (`attachment-names-main.ts`, under the
+decode's executable) with `MallocLargeCache=0` and `--expose-gc`. SQLite
+holds a large value whole while it searches it, and the allocator keeps
+what it freed, so the memory goes with the child, which is replaced once it
+holds over 128 MiB. Values come over in 4 MiB pieces. A file the record
+store holds the bytes of is kept while anything names its path, since no
+reader of these paths reads the store; once nothing names it, it goes, and
+a restore writes the session's own copy back. Harness records aren't read:
+every prompt Mako sent with a file is in a journal or the native requests,
+which aren't deleted, and a transcript carries its own copies.
+`~/.mako/attachment-sweep.json` keeps the marks and the trash's times. A
+newer build that marks a reader this one doesn't know raises its
+`version`, and this build then sweeps nothing.
+
+`tsx scripts/records.ts attachments` is a dry run showing each folder,
+what's named or held and by whom, what a sweep takes, what the store also
+holds, and the trash; `--sweep` runs a pass and `--restore-trash` undoes
+one. `npm run test:attachment-sweep` covers it
+(`packages/sessions/test/attachment-sweep.mjs`, in the sessions `npm test`,
+and `scripts/test-attachment-readers.ts`). `npm run
+bench:attachment-sweep` runs the dry run on this Mac's stores (`--here`
+reads in-process, to compare) and the sweep on a clone. On 2026-10-18
+there were 1,422 MiB in 13,272 files. The archive's 984 MiB had 583 named
+and 401 reclaimable, and 867 MiB goes once the whole migration has run.
+`LiveAssets` held 393 MiB in four profiles, all but 0.3 MiB named by their
+journals. The staged files came to 45 MiB, with 33 MiB named, 5 MiB held
+for drafts from before the record, 6 MiB kept by hash and none
+reclaimable. A cold pass took 11.9 s and added 68 MiB to the worker's RSS,
+with a 177 MiB child; read in-process it took 10.6 s and added 679 MiB. A
+warm pass took 0.7 s, and one with nothing changed 62 ms.
 
 What Mako itself did in a conversation is its log, a `log` table in the
 conversation's journal (`packages/host/src/conversations/mako-log.ts`):
@@ -601,8 +749,7 @@ covers all of them. Logs, shell transcripts and extension storage beside a store
 are ignored, never a reason to rescan. Refreshes are throttled with a settle
 window (`rescanDebounceMs`, at most four windows of latency under a
 continuous stream), a refresh that changes nothing a rail can show emits no
-event, and the archive captures a live session when it settles for three
-seconds or once a minute while it streams. Cursor's follower reads the root
+event. Cursor's follower reads the root
 blob's hash list and re-folds only from the exchange that moved; this once
 re-read the whole provider — every store stat-ed, the desktop header table
 queried, the followed store folded entirely — on each write of each running

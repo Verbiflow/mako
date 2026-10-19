@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { createReadStream, existsSync, mkdirSync } from "node:fs"
-import { mkdir, open, rename, rm, stat } from "node:fs/promises"
+import { mkdir, open, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import type { DatabaseSync, StatementSync } from "node:sqlite"
 import { z } from "zod"
@@ -65,7 +65,11 @@ export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
  */
 const SCHEMA_VERSION = 2
 /** Additive changes this build made to the format, each a name in `meta.additions`; a build that doesn't know one ignores what it added. */
-const ADDITIONS = ["intents"]
+const ADDITIONS = ["children", "intents"]
+/** The most of a deferred file's first line a restore writes (`RestoreInput.files`). */
+const HEAD_BYTES = 1024 * 1024
+/** How many files a restore writes at once. */
+const FILES_AT_ONCE = 8
 /** How long a restore waits for a running harness to release its database's write lock. */
 const WRITE_BUSY_TIMEOUT_MS = 30_000
 /** How far back from an append cursor a capture checks that nothing before it was rewritten. */
@@ -83,6 +87,10 @@ const FETCH_ROWS = 128
 const VERSIONS_LISTED = 1_000
 /** The mark (`marks`) that keeps `CaptureInput.stamp`. */
 const HELD_STAMP = "held stamp"
+/** The mark (`marks`) that keeps `CaptureInput.listing`. */
+const LISTING = "listing"
+/** The mark (`marks`) that says the session's children's paths are kept (`child_paths`): by a capture whose records named them, or the backfill's link (`keepChildPaths`). */
+const CHILDREN_LINKED = "children linked"
 
 const UnitRoleSchema = z.enum(["file", "row", "schema", "lines"])
 const VersionKindSchema = z.enum(["append", "replace", "delete"])
@@ -104,6 +112,13 @@ export interface CaptureInput {
    * backfill passes it by without reading it.
    */
   stamp?: string
+  /**
+   * The rail's row for the session as the catalog lists it now (a
+   * `ThreadRef`, as JSON), kept with the capture: once the harness deletes
+   * the session, the catalog lists it from this and reads it back from the
+   * store.
+   */
+  listing?: string
 }
 
 export interface CaptureReport {
@@ -151,6 +166,21 @@ export interface RestoreInput {
    */
   fork?: RecordFork
   dryRun?: boolean
+  /**
+   * How the destination's databases are opened for writing, when not as the
+   * store's own (`RecordStore`'s `stores`): a catalog whose store reads
+   * sessions back only into its private homes restores into a harness's own
+   * store, for the harness to resume a session it deleted, with the host's.
+   */
+  stores?: NativeStores
+  /**
+   * Which of the session's files to write, by where each goes; the rest
+   * are left as the destination has them and listed in
+   * `RestoreReport.deferred`. Unset writes every one. A private home a
+   * session is read back into writes its children's transcripts only once
+   * one is opened (`RecordReads`).
+   */
+  files?: (target: string) => boolean
 }
 
 export type RestoreActionKind = "skip" | "write" | "append" | "write-plain" | "delete"
@@ -195,6 +225,8 @@ export interface RestoreReport {
   /** Values in rows that named a path in one of the session's roots, moved to where the root is in the destination. */
   movedPaths: number
   written: boolean
+  /** Where the files `RestoreInput.files` left out would have gone. */
+  deferred?: string[]
 }
 
 /** What a restore wrote as a fork: enough for the caller to log it (`fork` in Mako's log) and bind it. */
@@ -298,6 +330,7 @@ const DataVersionSchema = z.object({ data_version: z.number() })
 const MetaValueSchema = z.object({ value: z.string() })
 const HeldChunkSchema = z.object({ intent: z.number().nullable(), stored: z.number(), unnamed: z.number() })
 const FingerprintSchema = z.object({ fingerprint: z.string() })
+const PathRowSchema = z.object({ path: z.string() })
 /** A table's mark: the session's highest rowid and the digest of its keys, when the capture that set it took every row it listed. */
 const KeysMarkSchema = z.object({ through: z.string().regex(/^-?\d+$/).transform((value) => BigInt(value)), keys: z.string() })
 type KeysMark = z.infer<typeof KeysMarkSchema>
@@ -528,6 +561,8 @@ export class RecordStore {
   private intentsTaken = 0
   private readonly step: RecordStoreOptions["step"]
 
+  /** How the restore running opens its destination's databases (`RestoreInput.stores`). */
+  private writer: NativeStores
   /**
    * `read` for a store a newer Mako's format holds that this build can read
    * but not write (`SCHEMA_VERSION`): it lists and restores what it holds,
@@ -554,6 +589,7 @@ export class RecordStore {
   constructor(folder: string, private readonly stores: NativeStores, options: RecordStoreOptions = {}) {
     this.formatWriter = options.writer
     this.step = options.step
+    this.writer = stores
     this.folder = folder
     this.owner = new IntentOwner(folder)
     mkdirSync(folder, { recursive: true })
@@ -592,7 +628,14 @@ export class RecordStore {
   /** Writes a session into a home; waits for a capture of it in progress, so it never restores half of one. */
   async restore(input: RestoreInput): Promise<RestoreReport> {
     await this.capturing.get(`${input.harness}\n${input.nativeId}`)?.catch(() => undefined)
-    return this.serially(() => this.restoreNow(input))
+    return this.serially(async () => {
+      this.writer = input.stores ?? this.stores
+      try {
+        return await this.restoreNow(input)
+      } finally {
+        this.writer = this.stores
+      }
+    })
   }
 
   /**
@@ -731,6 +774,55 @@ export class RecordStore {
     return new Map(rows.map((row) => [`${row.harness}\n${row.nativeId}`, row.stamp]))
   }
 
+  /** The rail's row kept with the session's captures (`CaptureInput.listing`), or null when none was. */
+  listing(harness: string, nativeId: string): string | null {
+    const session = this.sessionId(harness, nativeId, false)
+    return session === null ? null : this.mark(session, LISTING) ?? null
+  }
+
+  /** Every session's kept row (`CaptureInput.listing`), in one read: what the catalog lists once a harness deletes a session. */
+  listings(): string[] {
+    return FingerprintSchema.array().parse(this.prepared("SELECT fingerprint FROM marks WHERE name = ?").all(LISTING)).map((row) => row.fingerprint)
+  }
+
+  /**
+   * Keeps `listing` as the session's row, and `path` as a place it's found
+   * by (`sessionAt`), without a capture: the row of a session its harness
+   * deleted before captures kept one. False when the store holds no such
+   * session.
+   */
+  keepListing(harness: string, nativeId: string, path: string, listing: string): Promise<boolean> {
+    this.writable()
+    return this.serially(async () => {
+      const session = this.sessionId(harness, nativeId, false)
+      if (session === null) return false
+      this.db.exec("BEGIN IMMEDIATE")
+      try {
+        this.prepared("INSERT INTO session_paths (path, session) VALUES (?, ?) ON CONFLICT (path) DO UPDATE SET session = excluded.session").run(path, session)
+        this.setMark(session, LISTING, listing)
+        this.db.exec("COMMIT")
+        return true
+      } catch (error) {
+        if (this.db.isTransaction) this.db.exec("ROLLBACK")
+        throw error
+      }
+    })
+  }
+
+  /** Whether a capture of the session ever finished: one kept its stamp, or recorded itself. Slices of a capture that stopped don't count. */
+  captured(harness: string, nativeId: string): boolean {
+    const session = this.sessionId(harness, nativeId, false)
+    if (session === null) return false
+    return this.mark(session, HELD_STAMP) !== undefined || Boolean(this.prepared("SELECT 1 FROM captures WHERE session = ? LIMIT 1").get(session))
+  }
+
+  /** The paths captures of the session named (`CaptureInput.path`). */
+  pathsOf(harness: string, nativeId: string): string[] {
+    const session = this.sessionId(harness, nativeId, false)
+    if (session === null) return []
+    return PathRowSchema.array().parse(this.prepared("SELECT path FROM session_paths WHERE session = ? ORDER BY path").all(session)).map((row) => row.path)
+  }
+
   /** The keys of `harness`'s units matching a GLOB `pattern`: a stream's file by its launch, once the session's id took it. */
   unitKeys(harness: string, pattern: string): string[] {
     return KeySchema.array().parse(this.prepared("SELECT key FROM units WHERE harness = ? AND key GLOB ? ORDER BY key").all(harness, pattern)).map((row) => row.key)
@@ -760,7 +852,7 @@ export class RecordStore {
         }
         const versions = Number(this.prepared(`DELETE FROM versions WHERE unit IN (${own})`).run(session).changes)
         const units = Number(this.prepared(`DELETE FROM units WHERE id IN (${own})`).run(session).changes)
-        for (const table of ["session_units", "session_paths", "marks", "captures"]) this.prepared(`DELETE FROM ${table} WHERE session = ?`).run(session)
+        for (const table of ["session_units", "session_paths", "child_paths", "marks", "captures"]) this.prepared(`DELETE FROM ${table} WHERE session = ?`).run(session)
         this.prepared("DELETE FROM sessions WHERE id = ?").run(session)
         // A capture that found one of these chunks held before they became candidates, and hasn't named it yet, starts over.
         this.prepared(`INSERT INTO meta (key, value) VALUES (?, '1') ON CONFLICT (key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)`).run(DROPPED)
@@ -777,6 +869,57 @@ export class RecordStore {
   sessionAt(path: string): { harness: string; nativeId: string } | null {
     return SessionAtSchema.optional().parse(this.prepared(`
       SELECT s.harness, s.native_id AS nativeId FROM session_paths p JOIN sessions s ON s.id = p.session WHERE p.path = ?`).get(path)) ?? null
+  }
+
+  /** The session whose records hold the child agent read at `path` (`SessionRecords.children`): a child is read through its parent. */
+  parentAt(path: string): { harness: string; nativeId: string } | null {
+    return SessionAtSchema.optional().parse(this.prepared(`
+      SELECT s.harness, s.native_id AS nativeId FROM child_paths p JOIN sessions s ON s.id = p.session WHERE p.path = ?`).get(path)) ?? null
+  }
+
+  /**
+   * Keeps `paths` as the session's child agents' (`parentAt`) without a
+   * capture: the children of a session captured before captures named
+   * them, once they're listed from its records. Returns how many were new.
+   */
+  keepChildPaths(harness: string, nativeId: string, paths: readonly string[], options: { linked?: true } = {}): Promise<number> {
+    this.writable()
+    return this.serially(async () => {
+      const session = this.sessionId(harness, nativeId, false)
+      if (session === null || (!paths.length && !options.linked)) return 0
+      this.db.exec("BEGIN IMMEDIATE")
+      try {
+        let added = 0
+        for (const path of paths) added += Number(this.prepared("INSERT INTO child_paths (path, session) VALUES (?, ?) ON CONFLICT (path) DO NOTHING").run(path, session).changes)
+        if (options.linked) this.setMark(session, CHILDREN_LINKED, "1")
+        this.db.exec("COMMIT")
+        return added
+      } catch (error) {
+        if (this.db.isTransaction) this.db.exec("ROLLBACK")
+        throw error
+      }
+    })
+  }
+
+  /**
+   * Sessions whose children's paths nothing has kept yet: captured before
+   * captures named them, and not linked since (`keepChildPaths` with
+   * `linked`), newest capture first, with the paths captures read them at.
+   */
+  sessionsWithoutChildLinks(): { harness: string; nativeId: string; paths: string[] }[] {
+    const rows = z.object({ id: z.number(), harness: z.string(), nativeId: z.string() }).array().parse(this.prepared(`
+      SELECT s.id, s.harness, s.native_id AS nativeId FROM sessions s
+      WHERE NOT EXISTS (SELECT 1 FROM marks m WHERE m.session = s.id AND m.name = ?)
+      ORDER BY (SELECT max(c.at) FROM captures c WHERE c.session = s.id) DESC`).all(CHILDREN_LINKED))
+    const paths = this.prepared("SELECT path FROM session_paths WHERE session = ? ORDER BY path")
+    return rows.map((row) => ({ harness: row.harness, nativeId: row.nativeId, paths: PathRowSchema.array().parse(paths.all(row.id)).map((path) => path.path) }))
+  }
+
+  /** The paths of the session's child agents its captures named. */
+  childPaths(harness: string, nativeId: string): string[] {
+    const session = this.sessionId(harness, nativeId, false)
+    if (session === null) return []
+    return PathRowSchema.array().parse(this.prepared("SELECT path FROM child_paths WHERE session = ? ORDER BY path").all(session)).map((row) => row.path)
   }
 
   units(harness: string, nativeId: string): UnitSummary[] {
@@ -884,6 +1027,8 @@ export class RecordStore {
       );
       CREATE TABLE IF NOT EXISTS session_units (session INTEGER NOT NULL, unit INTEGER NOT NULL, PRIMARY KEY (session, unit)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS session_paths (path TEXT PRIMARY KEY, session INTEGER NOT NULL) WITHOUT ROWID;
+      CREATE TABLE IF NOT EXISTS child_paths (path TEXT PRIMARY KEY, session INTEGER NOT NULL) WITHOUT ROWID;
+      CREATE INDEX IF NOT EXISTS child_paths_by_session ON child_paths (session);
       CREATE INDEX IF NOT EXISTS session_units_by_unit ON session_units (unit);
       CREATE TABLE IF NOT EXISTS marks (session INTEGER NOT NULL, name TEXT NOT NULL, fingerprint TEXT NOT NULL, PRIMARY KEY (session, name)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS captures (
@@ -1030,7 +1175,7 @@ export class RecordStore {
 
   // Capture
 
-  private async captureNow({ harness, nativeId, home, records, path: read, stamp }: CaptureInput): Promise<CaptureReport> {
+  private async captureNow({ harness, nativeId, home, records, path: read, stamp, listing }: CaptureInput): Promise<CaptureReport> {
     checkRoots(records.roots)
     const folders = rootFolders(records.roots)
     const started = Date.now()
@@ -1044,6 +1189,9 @@ export class RecordStore {
       const session = this.sessionId(harness, nativeId, true)!
       this.prepared("UPDATE sessions SET layout = ? WHERE id = ?").run(JSON.stringify(layoutOf(home, records)), session)
       if (read) this.prepared("INSERT INTO session_paths (path, session) VALUES (?, ?) ON CONFLICT (path) DO UPDATE SET session = excluded.session").run(read, session)
+      // Its child agents' paths, read through it once its harness deletes it; a child the harness drops later keeps its path, and its records' last version.
+      for (const child of records.children ?? [])
+        if (child !== read) this.prepared("INSERT INTO child_paths (path, session) VALUES (?, ?) ON CONFLICT (path) DO UPDATE SET session = excluded.session WHERE session != excluded.session").run(child, session)
       const seen = new Set<number>()
       for (const path of records.files) {
         const unit = await this.captureFile(harness, session, records, path, report)
@@ -1058,6 +1206,8 @@ export class RecordStore {
         this.prepared("INSERT INTO captures (session, at, versions, new_bytes, stored_bytes, ms, waited_ms, reads, longest_read_ms, rows_read, rows_matched) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
           .run(session, started, report.taken, report.newBytes, report.storedBytes, report.ms, report.waitedMs, report.reads, report.longestReadMs, report.rowsRead, report.rowsMatched)
       if (stamp !== undefined) this.setMark(session, HELD_STAMP, stamp)
+      if (listing !== undefined) this.setMark(session, LISTING, listing)
+      if (records.children) this.setMark(session, CHILDREN_LINKED, "1")
       // Every chunk it stored is named now, with the stamp: the intent goes in the same transaction.
       if (intent.id !== null) this.prepared("DELETE FROM intents WHERE id = ?").run(intent.id)
       if (this.step) await this.step("stamped")
@@ -1606,10 +1756,19 @@ export class RecordStore {
       report.diverged.push({ unit: nativeId, reason: "Something on this machine holds the session open" })
       return report
     }
-    for (const unit of plan.files) {
-      const filePlan = plan.filePlans.get(unit.id)
-      if (filePlan) await this.applyFile(unit, filePlan)
-    }
+    // Several files at a time: each waits on its own sync, which is most of restoring a session of many small files (its subagents' transcripts).
+    // A file left out is there by its first line, which is what a reader listing it reads (a rollout's meta); the rest follows when it's restored.
+    const files = [
+      ...plan.files.flatMap((unit) => {
+        const filePlan = plan.filePlans.get(unit.id)
+        return filePlan ? [() => this.applyFile(unit, filePlan)] : []
+      }),
+      ...plan.deferred.flatMap(({ unit, target }) => (existsSync(target) ? [] : [() => this.writeHead(unit, target)])),
+    ]
+    let next = 0
+    await Promise.all(Array.from({ length: Math.min(FILES_AT_ONCE, files.length) }, async () => {
+      for (let write = files[next++]; write; write = files[next++]) await write()
+    }))
     for (const linePlan of plan.linePlans) await this.applyLines(linePlan)
     for (const [name, rowPlan] of plan.rowPlans) await this.applyDatabase(places, name, rowPlan)
     if (forkPlan && report.fork) await this.applyFork(owners!, places, forkPlan, report.fork)
@@ -1625,7 +1784,7 @@ export class RecordStore {
    * the destination's own turns, which the fork leaves.
    */
   private async planRestore(input: RestoreInput, session: number, layout: SessionLayout, places: RootPlaces, report: RestoreReport, own: ForkOwners | null): Promise<RestorePlan> {
-    const plan: RestorePlan = { files: [], filePlans: new Map(), linePlans: [], rowPlans: new Map(), incomplete: false, own: { files: [], lines: [], rows: [] }, destinationRows: new Map() }
+    const plan: RestorePlan = { files: [], filePlans: new Map(), linePlans: [], rowPlans: new Map(), incomplete: false, own: { files: [], lines: [], rows: [] }, destinationRows: new Map(), deferred: [] }
     plan.files = UnitRowSchema.array().parse(this.prepared("SELECT u.* FROM session_units su JOIN units u ON u.id = su.unit WHERE su.session = ? AND u.role = 'file' ORDER BY u.key").all(session))
     for (const unit of plan.files) {
       if (!unit.seen_path || this.lastContentSeq(unit.id) < 0) continue
@@ -1636,6 +1795,13 @@ export class RecordStore {
       }
       if (rule && rule !== "shared") {
         plan.own.files.push({ unit, rule })
+        continue
+      }
+      // A file its harness deleted is planned as one: nothing is written for it, deferred or not.
+      const target = input.files && this.head(unit)?.kind !== "delete" && places.place(plainRecordPath(unit.seen_path))
+      if (target && !input.files?.(target)) {
+        (report.deferred ??= []).push(target)
+        plan.deferred.push({ unit, target })
         continue
       }
       const filePlan = await this.planFile(places, unit, report)
@@ -1994,7 +2160,7 @@ export class RecordStore {
     if (!plan.rows.length) return
     const target = places.place(plan.forkName)
     await mkdir(dirname(target), { recursive: true })
-    const db = this.stores.openForWriting(target)
+    const db = this.writer.openForWriting(target)
     db.exec(`PRAGMA busy_timeout = ${WRITE_BUSY_TIMEOUT_MS}`)
     db.exec("PRAGMA foreign_keys = OFF")
     db.exec("BEGIN IMMEDIATE")
@@ -2090,6 +2256,23 @@ export class RecordStore {
     }
     record("write-plain", size)
     return { action: "write-plain", target, from: 0, existing }
+  }
+
+  /** A file's first line, at most `HEAD_BYTES` of it, where it goes. */
+  private async writeHead(unit: UnitRow, target: string): Promise<void> {
+    const parts: Buffer[] = []
+    let held = 0
+    for await (const chunk of this.unitContent(unit.id, this.lastContentSeq(unit.id))) {
+      const end = chunk.indexOf(0x0a)
+      const piece = end === -1 ? chunk : chunk.subarray(0, end + 1)
+      parts.push(piece)
+      held += piece.length
+      if (end !== -1 || held >= HEAD_BYTES) break
+    }
+    const head = Buffer.concat(parts, held)
+    const line = head.indexOf(0x0a)
+    await mkdir(dirname(target), { recursive: true })
+    await writeFile(target, line === -1 ? Buffer.alloc(0) : head.subarray(0, line + 1))
   }
 
   /** Whether the destination's first `length` bytes are the store's. */
@@ -2272,7 +2455,7 @@ export class RecordStore {
     if (!plan.rows.length) return
     const target = places.place(name)
     await mkdir(dirname(target), { recursive: true })
-    const db = this.stores.openForWriting(target)
+    const db = this.writer.openForWriting(target)
     // The harness may be running and writing the same database; its write lock is waited for, then held for the whole restore.
     db.exec(`PRAGMA busy_timeout = ${WRITE_BUSY_TIMEOUT_MS}`)
     // Rows arrive table by table, children before parents, and replacing a parent row must not cascade into rows already restored.
@@ -2382,6 +2565,8 @@ interface RestorePlan {
   own: OwnUnits
   /** Rows the destination holds that Mako never captured, by unit key, so the fork rule can say whose they are. */
   destinationRows: Map<string, RecordRow>
+  /** Files `RestoreInput.files` left out, with where each would go. */
+  deferred: { unit: UnitRow; target: string }[]
 }
 
 interface OwnUnits {

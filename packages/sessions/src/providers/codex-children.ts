@@ -210,17 +210,19 @@ export class CodexChildren {
 
   /**
    * The rollouts of the thread's agents and reviews, and their agents', for
-   * its records.
+   * its records: every file of each, and the one each is read at.
    */
-  async rolloutsOf(parentPath: string): Promise<{ ids: string[]; files: string[] }> {
+  async rolloutsOf(parentPath: string): Promise<{ ids: string[]; files: string[]; children: string[] }> {
     const parentId = rolloutThread(parentPath)
-    if (!parentId) return { ids: [], files: [] }
+    if (!parentId) return { ids: [], files: [], children: [] }
     const rollouts = await this.source.rollouts.list()
     const edges = this.edges(parentId)
     const reviews = (await this.reviews(parentId, rollouts)).filter((review) => !edges.some((edge) => edge.child === review.id))
     const ids = [...edges.map((edge) => edge.child), ...reviews.map((review) => review.id)]
     const files = await this.source.rollouts.filesOfThreads(ids)
-    return { ids, files }
+    const read = await Promise.all(edges.map((edge) => currentRollout(rollouts, edge.child, edge.rolloutPath)))
+    const children = [...read, ...reviews.map((review) => review.path)].filter((path) => path !== undefined)
+    return { ids, files, children }
   }
 
   /**

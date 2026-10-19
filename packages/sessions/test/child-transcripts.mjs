@@ -14,6 +14,7 @@ import { DevinCliProvider } from "../dist/providers/devin-cli.js"
 import { DevinLocalProvider } from "../dist/providers/devin-local.js"
 import { GrokProvider } from "../dist/providers/grok.js"
 import { OpenCodeProvider } from "../dist/providers/opencode.js"
+import { keepCopies } from "./fixtures/archive-copies.mjs"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 
 /**
@@ -168,7 +169,7 @@ try {
     claude: [4, 3, 1], codex: [4, 3, 1], cursor: [2, 2, 0], grok: [1, 1, 0], opencode: [1, 1, 0], devin: [4, 3, 1],
   })
 
-  // The catalog lists a session's children, opens one like any session, and keeps it when its harness drops it.
+  // The catalog lists a session's children, opens one like any session, and lists a copy an earlier build kept once its harness drops it.
   const archivePath = join(root, "archive")
   const first = new SessionCatalog([new ClaudeProvider(home("claude"))], { archivePath })
   await first.scan()
@@ -177,13 +178,15 @@ try {
   assert.equal(listed.children.length, 3)
   const page = await first.page(listed.children.find((child) => child.nativeId === "a5c530d641cdf5d79").path)
   assert.ok(page.entries.length > 0 && page.ref.childOf.nativeId === "b225fcff-5836-4c8a-b1ac-9429eb0c8ac8", "a child's path pages like any session's")
-  await first.stop()
   const dropped = listed.children.find((child) => child.nativeId === "a5c530d641cdf5d79")
+  const copied = await first.open(dropped.path)
+  await keepCopies(archivePath, [{ ...copied, ref: { ...copied.ref, childOf: { nativeId: listed.parent.nativeId, path: background, toolId: dropped.toolId, ended: true } } }])
+  await first.stop()
   await rm(dropped.path)
   const after = new SessionCatalog([new ClaudeProvider(home("claude"))], { archivePath })
   await after.scan()
   const kept = (await after.children(background)).children.find((child) => child.nativeId === "a5c530d641cdf5d79")
-  assert.deepEqual([kept.archived, kept.state.kind, kept.toolId], [true, "complete", "toolu_01SJNsU4DAPq889b4D5SHP19"], "the archive keeps a child its harness dropped, under its parent, with how it ended")
+  assert.deepEqual([kept.archived, kept.state.kind, kept.toolId], [true, "complete", "toolu_01SJNsU4DAPq889b4D5SHP19"], "a kept copy of a child its harness dropped lists under its parent, with how it ended")
   const fromArchive = await after.open(kept.path)
   assert.equal(fromArchive.ref.archived, true)
   assert.ok(fromArchive.entries.length > 0)
@@ -229,7 +232,7 @@ try {
   assert.equal(wideChildren.length, 21, "twenty unreadable transcripts list from their links alone")
   assert.ok(elapsed < 500, `listing twenty children took ${Math.round(elapsed)} ms`)
   for (const name of await readdir(folder)) await chmod(join(folder, name), 0o644)
-  console.log(`child transcripts: every harness lists, links and reads its children; the archive keeps a dropped one; a follow reads only the appended line; twenty 2 MB children list in ${Math.round(elapsed)} ms without a read`)
+  console.log(`child transcripts: every harness lists, links and reads its children; a kept copy of a dropped one lists under its parent; a follow reads only the appended line; twenty 2 MB children list in ${Math.round(elapsed)} ms without a read`)
 } finally {
   await rm(root, { recursive: true, force: true })
 }

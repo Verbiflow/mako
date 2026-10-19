@@ -55,6 +55,12 @@ export interface RecordCaptureOptions {
    */
   stampOf?: (ref: ThreadRef) => string | null
   /**
+   * The rail's row for `ref` as the catalog lists it now, as JSON, or null
+   * when it lists none: kept with each capture (`CaptureInput.listing`), so
+   * a session its harness deletes stays in the rail, read back from the store.
+   */
+  listingOf?: (ref: ThreadRef) => string | null
+  /**
    * The bytes of the session's own rows in a database it shares with other
    * sessions (`SessionProvider.recordBytes`), or null where the reader can't
    * say. The disk check counts these, not the whole database: a Devin CLI
@@ -206,6 +212,9 @@ export class RecordCapture {
     const stamp = await this.stamp(ref)
     if (stamp === null) return { kind: "gone" }
     if (stamp === this.store.heldStamp(ref.harness, ref.nativeId)) {
+      // Held before captures kept the rail's row: the row is kept now, without a capture.
+      const listing = this.options.listingOf?.(ref) ?? null
+      if (listing !== null && this.store.listing(ref.harness, ref.nativeId) === null) await this.store.keepListing(ref.harness, ref.nativeId, ref.path, listing)
       return { kind: "held" }
     }
     const tooFull = await this.tooFullFor(ref)
@@ -307,7 +316,8 @@ export class RecordCapture {
         if (!own) return { kind: "gone" }
         const records = this.streams ? withStreams(own, this.streams.root, await this.streams.of(ref.harness, ref.nativeId)) : own
         const listed = Date.now() - started
-        const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path, ...held !== null && { stamp: held } })
+        const listing = this.options.listingOf?.(ref) ?? null
+        const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path, ...held !== null && { stamp: held }, ...listing !== null && { listing } })
         took = listed + report.ms
         state.failures = 0
         this.options.onCaptured?.(ref, report)

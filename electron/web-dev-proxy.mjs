@@ -58,8 +58,12 @@ function callChannel(body) {
  * `refuse`, when given, names why a call may not be forwarded. The body is read
  * whole, checked, and the same bytes are forwarded, so the host parses exactly
  * what was checked. A fixture host refuses the same calls again itself.
+ *
+ * `clients`, when given (a `DeskClients`), notes which browser each trusted
+ * call came from: a desk's drafts live in that browser's storage, and the
+ * attachments' sweep holds what a browser it can't read may name.
  */
-export function webHostProxy(socket, { refuse } = {}) {
+export function webHostProxy(socket, { refuse, clients } = {}) {
   const configure = (server) => {
       server.middlewares.use((request, response, next) => {
         if (!request.url?.startsWith("/__mako/")) return next()
@@ -92,6 +96,7 @@ export function webHostProxy(socket, { refuse } = {}) {
           response.writeHead(404).end()
           return
         }
+        clients?.note(request.headers["user-agent"], origin)
         const headers = { "content-type": "application/json" }
         if (request.headers.accept === "application/vnd.mako.preview.v1") headers.accept = request.headers.accept
         if (request.headers["x-mako-window"]) headers["x-mako-window"] = request.headers["x-mako-window"]

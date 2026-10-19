@@ -6,6 +6,8 @@ import { LockUnavailableError, takeLock } from "./record-locks.js"
 import type { BackfillOutcome, RecordCapture } from "./record-capture.js"
 import type { RecordStore } from "./record-store.js"
 import type { RepackReport } from "./record-repack.js"
+import type { ArchiveMigration, ArchiveMigrationReport } from "./archive-migration.js"
+import { totals, type AttachmentSweepControl, type AttachmentSweepReport } from "./attachment-sweep.js"
 import { pruneStreams, PruneMemory, type PruneReport } from "./record-stream-prune.js"
 
 /**
@@ -46,6 +48,14 @@ import { pruneStreams, PruneMemory, type PruneReport } from "./record-stream-pru
  * `RecordCapture.forget` drops it from the store; a pass never brings it
  * back. One its harness deletes leaves the list too, and its records stay.
  *
+ * The archive: once a pass has taken every session, the archive's copies
+ * of the sessions it now holds are dropped (`archive-migration.ts`), one at
+ * a time, yielding as captures do; what's left of the archive is Mako's
+ * copy of sessions nothing else holds. Then the attachment files Mako keeps
+ * (beside the archive's copies, each profile's `LiveAssets`, the staged
+ * files) that no reader on this machine names any more go to a trash
+ * folder, and a later pass deletes them (`attachment-sweep.ts`).
+ *
  * A pass's progress is logged (counts, bytes, ms) and written to
  * `backfill.json` beside the store for `records.ts backfill`, which compares
  * the rail with the store's stamps itself.
@@ -58,6 +68,19 @@ const PROGRESS_MS = 30_000
 /** Captures slower than this are logged one by one. */
 const SLOW_SESSION_MS = 1_000
 export const BACKFILL_PROGRESS = "backfill.json"
+
+/** What a pass's linking of children's paths for sessions captured before captures named them came to (`SessionCatalog.linkChildren`). */
+export const ChildLinkFillSchema = z.object({
+  looked: z.number().int().nonnegative(),
+  /** Sessions with a child, and the children whose paths were kept. */
+  parents: z.number().int().nonnegative(),
+  children: z.number().int().nonnegative(),
+  /** Sessions its harness deleted, linked from their records read back. */
+  kept: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  ms: z.number().nonnegative(),
+})
+export type ChildLinkFill = z.infer<typeof ChildLinkFillSchema>
 
 export const BackfillProgressSchema = z.object({
   /** Why this pass ran: `start`, `again`, `lock`. */
@@ -90,6 +113,26 @@ export const BackfillProgressSchema = z.object({
   repack: z.object({ dropped: z.number(), droppedBytes: z.number(), scrubbedBytes: z.number(), grouped: z.number(), alreadyGrouped: z.number(), copied: z.number(), copiedBytes: z.number(), packsWritten: z.number(), packsRemoved: z.number(), packBytesBefore: z.number(), packBytesAfter: z.number(), ms: z.number(), longestTurnMs: z.number(),
     orphans: z.object({ scanned: z.boolean(), sweep: z.boolean(), scanMs: z.number(), turnMs: z.number(), unnamed: z.number(), forgotten: z.number(), abandoned: z.number(), swept: z.number(), running: z.number(), waiting: z.number(), intentsCleared: z.number() }).optional(),
     trim: z.object({ pack: z.number().nullable(), bytes: z.number(), resumed: z.boolean(), skipped: z.string().nullable() }).optional() }).optional(),
+  /** Children's paths linked for sessions captured before captures named them, when the pass ran it. */
+  children: ChildLinkFillSchema.optional(),
+  /** The archive's migration (`ArchiveMigrationReport`), when the pass ran it. */
+  archive: z.object({
+    rows: z.number(), migrated: z.number(), viaHarness: z.number(), viaRecords: z.number(), copies: z.number(), newCopies: z.number(),
+    pending: z.number(), children: z.number(), failed: z.number(), firstFailure: z.string().optional(), legacyFolded: z.number(), legacyRemoved: z.number(),
+    ms: z.number(), yieldedMs: z.number(), longestMs: z.number(), longest: z.string().optional(),
+    decodeMs: z.number(), longestDecodeMs: z.number(), longestDropMs: z.number(),
+    reclaim: z.object({ ran: z.boolean(), why: z.string().optional(), bytesBefore: z.number(), bytesAfter: z.number(), freeBytes: z.number(), ms: z.number() }).optional(),
+    left: z.object({ rows: z.number(), copies: z.number(), pending: z.number(), migrated: z.number() }),
+  }).optional(),
+  /** Mako's attachment files (`AttachmentSweepReport`, in short, over every folder), when the pass swept them. */
+  assets: z.object({
+    ran: z.boolean(), stopped: z.string().optional(), files: z.number(), bytes: z.number(), named: z.number(), namedBytes: z.number(),
+    held: z.number(), heldBytes: z.number(), young: z.number(), reclaimable: z.number(), trashed: z.number(), trashedBytes: z.number(), restored: z.number(),
+    deleted: z.number(), deletedBytes: z.number(), trash: z.number(), trashBytes: z.number(),
+    sourcesRead: z.number(), sourcesCached: z.number(), unreadable: z.number(), ms: z.number(),
+    /** What held files this pass, each said once: a browser that can't be read, a running host of an older build. */
+    holds: z.string().optional(),
+  }).optional(),
 })
 export type BackfillProgress = z.infer<typeof BackfillProgressSchema>
 
@@ -107,6 +150,17 @@ export interface RecordBackfillOptions {
   /** The streams folder whose loose files each pass prunes. */
   streams: string
   log?: BackfillLog
+  /** The archive's migration, run once a pass has taken every session. */
+  archive?: ArchiveMigration
+  /** Mako's attachment files, swept right after the archive's migration (`AttachmentSweep`). */
+  assets?: { pass(control: AttachmentSweepControl, options: { sweep: true }): Promise<AttachmentSweepReport> }
+  /**
+   * The paths of the children of sessions captured before captures named
+   * them, kept once per session once a pass has taken every session
+   * (`SessionCatalog`'s `linkChildren`), so a link to such a child opens
+   * from its parent's records without the parent being listed first.
+   */
+  children?: { link(control: { stopped(): boolean; yieldToPerson(): Promise<void> }): Promise<ChildLinkFill> }
 }
 
 
@@ -229,6 +283,12 @@ export class RecordBackfill {
         progress.prune = { ...prune, differs: prune.differs.length }
         for (const path of prune.differs) this.log("A stream differs from what the record store holds of it; kept", { path })
       }
+      const archive = await this.migrateArchive()
+      if (archive) progress.archive = archive
+      const assets = await this.sweepAssets()
+      if (assets) progress.assets = assets
+      const children = await this.linkChildren()
+      if (children) progress.children = children
       const repack = await this.repack()
       if (repack?.ran) {
         const { ran: _ran, leftovers: _leftovers, ...counts } = repack
@@ -241,6 +301,49 @@ export class RecordBackfill {
     this.lastEndedAt = Date.now()
     this.log(complete ? "Session records backfill done" : "Session records backfill stopped", fields(progress))
     await this.save(progress)
+  }
+
+  /** The archive's copies of what the store now holds, dropped (`archive-migration.ts`); null without an archive or when it failed. */
+  private async migrateArchive(): Promise<ArchiveMigrationReport | null> {
+    const migration = this.options.archive
+    if (!migration) return null
+    try {
+      const report = await migration.pass({ stopped: () => this.stopped, yieldToPerson: () => this.yieldToPerson() })
+      if (report.rows || report.legacyFolded || report.legacyRemoved) this.log("Session archive migration", archiveFields(report))
+      return report
+    } catch (error) {
+      this.log("Session archive migration failed", { error: error instanceof Error ? error.message : String(error) })
+      return null
+    }
+  }
+
+  /** Attachment files no reader names, trashed, and those trashed long enough deleted; null without an archive, or when it failed. */
+  private async sweepAssets(): Promise<BackfillProgress["assets"] | null> {
+    const assets = this.options.assets
+    if (!assets) return null
+    try {
+      const report = await assets.pass({ stopped: () => this.stopped, yieldToPerson: () => this.yieldToPerson() }, { sweep: true })
+      const short = assetFields(report)
+      if (report.ran && (short.trashed || short.restored || short.deleted || short.stopped || short.held)) this.log("Attachment files swept", short)
+      return short
+    } catch (error) {
+      this.log("Attachment files sweep failed", { error: error instanceof Error ? error.message : String(error) })
+      return null
+    }
+  }
+
+  /** Children's paths kept for sessions captured before captures named them; null without a catalog to ask, or when it failed. */
+  private async linkChildren(): Promise<ChildLinkFill | null> {
+    const children = this.options.children
+    if (!children) return null
+    try {
+      const report = await children.link({ stopped: () => this.stopped, yieldToPerson: () => this.yieldToPerson() })
+      if (report.looked) this.log("Session children linked", { ...report })
+      return report
+    } catch (error) {
+      this.log("Session children could not be linked", { error: error instanceof Error ? error.message : String(error) })
+      return null
+    }
   }
 
   /** The store's packs, compacted and laid out by session (`record-repack.ts`), once the pass has taken every session. */
@@ -333,9 +436,35 @@ export async function backfillProgress(folder: string): Promise<BackfillProgress
   }
 }
 
+/** The archive's migration as a log line's fields. */
+function archiveFields(report: ArchiveMigrationReport) {
+  const { reclaim, left, firstFailure, longest, ...counts } = report
+  return {
+    ...counts,
+    firstFailure: firstFailure ?? null,
+    longest: longest ?? null,
+    copiesLeft: left.copies, pendingLeft: left.pending, rowsLeft: left.rows, migratedEver: left.migrated,
+    ...reclaim && (reclaim.ran
+      ? { archiveMiBBefore: mib(reclaim.bytesBefore), archiveMiBAfter: mib(reclaim.bytesAfter), reclaimMs: Math.round(reclaim.ms) }
+      : { archiveMiBFree: mib(reclaim.freeBytes), notReclaimed: reclaim.why ?? null }),
+  } satisfies BackfillFields
+}
+
+/** The attachments' sweep as the progress keeps it and a log line names it: counts, bytes, ms. */
+function assetFields(report: AttachmentSweepReport) {
+  const all = totals(report)
+  return {
+    ran: report.ran, ...report.stopped && { stopped: report.stopped }, files: all.files, bytes: all.bytes, named: all.named.files, namedBytes: all.named.bytes,
+    held: all.held.files, heldBytes: all.held.bytes, young: all.young.files, reclaimable: all.reclaimable.files, trashed: all.trashed.files, trashedBytes: all.trashed.bytes, restored: all.restored,
+    deleted: all.deleted.files, deletedBytes: all.deleted.bytes, trash: all.trash.files, trashBytes: all.trash.bytes,
+    sourcesRead: report.sources.read, sourcesCached: report.sources.cached, unreadable: report.sources.unreadable, ms: Math.round(report.ms),
+    ...report.holds.length && { holds: report.holds.map((hold) => hold.why).join("; ") },
+  } satisfies BackfillFields & NonNullable<BackfillProgress["assets"]>
+}
+
 /** A pass's progress as a log line's fields. */
 function fields(progress: BackfillProgress) {
-  const { prune, repack, endedAt, longest, firstRefusal, firstFailure, ...counts } = progress
+  const { prune, repack, archive, assets, children, endedAt, longest, firstRefusal, firstFailure, ...counts } = progress
   return {
     ...counts,
     endedAt: endedAt ?? null,
@@ -345,6 +474,9 @@ function fields(progress: BackfillProgress) {
     newMiB: mib(progress.newBytes),
     storedMiB: mib(progress.storedBytes),
     ...prune && { streamFiles: prune.files, streamsPruned: prune.pruned, streamsPrunedEnded: prune.prunedEnded, streamsRestamped: prune.restamped, streamBytesPruned: prune.bytes, streamsLive: prune.live, streamsUnnamed: prune.unnamed, streamsNotHeld: prune.notHeld, streamsDiffer: prune.differs, pruneMs: prune.ms },
+    ...archive && { archiveMigrated: archive.migrated, archiveCopies: archive.left.copies, archivePending: archive.left.pending },
+    ...assets && { assetsTrashed: assets.trashed, assetsTrashedBytes: assets.trashedBytes, assetsDeleted: assets.deleted, assetsDeletedBytes: assets.deletedBytes, assetsRestored: assets.restored, assetsStopped: assets.stopped ?? null },
+    ...children && { childrenLooked: children.looked, childrenParents: children.parents, childrenLinked: children.children, childrenKept: children.kept, childrenFailed: children.failed, childrenMs: children.ms },
     ...repack?.orphans?.scanned && { orphansForgotten: repack.orphans.forgotten, orphansAbandoned: repack.orphans.abandoned, orphansSwept: repack.orphans.swept, orphansRunning: repack.orphans.running, orphansWaiting: repack.orphans.waiting, orphansScanMs: repack.orphans.scanMs },
     ...repack?.trim && { tailTrimmedBytes: repack.trim.bytes, tailTrimSkipped: repack.trim.skipped },
     ...repack && { chunksDropped: repack.dropped, sessionsGrouped: repack.grouped, chunksCopied: repack.copied, packsRemoved: repack.packsRemoved, packBytesBefore: repack.packBytesBefore, packBytesAfter: repack.packBytesAfter, repackMs: repack.ms, repackLongestTurnMs: repack.longestTurnMs },

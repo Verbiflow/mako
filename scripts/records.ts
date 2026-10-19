@@ -1,8 +1,9 @@
 import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { relative, resolve } from "node:path"
+import { join, relative, resolve } from "node:path"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
-import { defaultCatalog } from "../packages/sessions/src/index.ts"
+import { archiveMigrationStatus, defaultCatalog } from "../packages/sessions/src/index.ts"
+import { makoViews } from "../packages/sessions/src/view-cache.ts"
 import { backfillProgress } from "../packages/sessions/src/record-backfill.ts"
 import { RecordCapture } from "../packages/sessions/src/record-capture.ts"
 import type { RecordRoot } from "../packages/sessions/src/harness-records.ts"
@@ -31,6 +32,12 @@ import { storeReader } from "./decode-compare.ts"
  *                                          each key's root before its colon) goes where --root says;
  *                                          with --fork, a copy there that went on without Mako stays
  *                                          as it is and the arriving version becomes the harness's own fork
+ *   archive [--archive <dir>] [--migrate]  the archive's migration: rows dropped, Mako's copies kept, rows
+ *                                          still to look at, and the file's size; --migrate runs a pass now
+ *   attachments [--archive <dir>] [--app-data <dir>] [--sweep | --restore-trash]
+ *                                          the attachments saved beside the archive's copies: what's named and
+ *                                          by whom, what a sweep takes, what the store also holds, the trash;
+ *                                          a dry run unless --sweep (scripts/record-attachments.ts)
  *   orphans [--list] [--limit n]           chunks no version names, read only: why each is there (a deleted session, a
  *                                          capture cut short, nothing known), whether the next repack drops it or why
  *                                          not, each capture's intent and its owner's standing, and the packs' dead space
@@ -68,6 +75,8 @@ const forking = flag("--fork")
 const limit = Number(option("--limit") ?? 50)
 const pending = Number(option("--pending") ?? 10)
 const json = flag("--json")
+const archiveFolder = resolve(option("--archive") ?? join(homedir(), ".mako", "archive"))
+const migrate = flag("--migrate")
 const [command, ...rest] = args
 
 // Before the store opens, which would migrate it: read only, so a store in a newer format reads too.
@@ -110,6 +119,12 @@ if (command === "orphans") {
     console.log(`  ${chunk.hash.toString("hex").slice(0, 16)}  ${String(chunk.pack).padStart(8, "0")}.pack:${chunk.offset}  ${chunk.stored} bytes  ${chunk.verdict}: ${chunk.reason}`)
   if (listing && report.unnamed > report.listed.length) console.log(`  … and ${report.unnamed - report.listed.length} more (--limit n)`)
   process.exit(0)
+}
+
+// Before the store opens: a dry run reads every store read-only and writes nothing.
+if (command === "attachments") {
+  const { attachmentsCommand } = await import("./record-attachments.ts")
+  process.exit(await attachmentsCommand(rest, { store: folder, archive: archiveFolder, json }))
 }
 
 const stores = new NativeStores(false)
@@ -252,12 +267,38 @@ try {
           if (last.repack) console.log(`  repack: ${last.repack.dropped} chunks dropped (${mib(last.repack.droppedBytes)}, ${mib(last.repack.scrubbedBytes)} overwritten where they lay), ${last.repack.grouped} sessions laid out together (${last.repack.alreadyGrouped} were already), ${last.repack.copied} chunks copied (${mib(last.repack.copiedBytes)}), ${last.repack.packsWritten} packs written and ${last.repack.packsRemoved} removed, packs ${mib(last.repack.packBytesBefore)} → ${mib(last.repack.packBytesAfter)}, in ${last.repack.ms} ms, holding the store's turn at most ${last.repack.longestTurnMs} ms`)
           const orphans = last.repack?.orphans
           if (orphans?.scanned) console.log(`  unnamed chunks: ${orphans.unnamed} found; dropped ${orphans.forgotten} of deleted sessions, ${orphans.abandoned} of captures cut short, ${orphans.swept} past the grace; kept ${orphans.running} of captures in progress, ${orphans.waiting} waiting (records.ts orphans says why)`)
+          if (last.archive) {
+            const archive = last.archive
+            console.log(`  archive: ${archive.migrated} rows dropped (${archive.viaHarness} their harness has, ${archive.viaRecords} the store holds), ${archive.copies} Mako's copies only, ${archive.pending} waiting for the store, ${archive.failed} kept for failing${archive.firstFailure ? ` (first: ${archive.firstFailure})` : ""}, ${archive.children} child agents; ${archive.left.rows} rows left, ${archive.left.migrated} dropped ever; ${archive.ms} ms${archive.reclaim?.ran ? `, reclaimed ${mib(archive.reclaim.bytesBefore)} → ${mib(archive.reclaim.bytesAfter)} in ${Math.round(archive.reclaim.ms)} ms` : archive.reclaim?.why ? `; ${mib(archive.reclaim.freeBytes)} free inside, not reclaimed: ${archive.reclaim.why}` : ""}`)
+          }
           if (last.prune) console.log(`  streams: ${last.prune.pruned} of ${last.prune.files} files pruned (${mib(last.prune.bytes)}; ${last.prune.prunedEnded} by their ended line, the rest by their writer gone; ${last.prune.restamped} sessions restamped), ${last.prune.live} still being written, ${last.prune.unnamed} from before writers were named, ${last.prune.notHeld} not held whole yet, ${last.prune.differs} differ from the store, ${last.prune.unbound} unbound, in ${last.prune.ms} ms`)
         }
         console.log("The rail now:")
         for (const [harness, row] of [...harnesses].sort()) console.log(`  ${harness.padEnd(10)} ${String(row.rail).padStart(5)} sessions: ${row.held} held as they stand, ${row.behind} held at an older stamp, ${row.missing} not held`)
         for (const entry of waiting.slice(0, pending)) console.log(`  ${entry.state.padEnd(7)} ${entry.harness.padEnd(10)} ${entry.nativeId}  ${entry.updatedAt ?? ""}`)
         if (waiting.length > pending) console.log(`  … and ${waiting.length - pending} more (--pending n)`)
+      }
+      break
+    }
+    case "archive": {
+      const report = migrate
+        ? await (async () => {
+          const catalog = defaultCatalog({ archivePath: archiveFolder, recordsPath: folder, viewsPath: makoViews() })
+          try {
+            await catalog.scan()
+            return await catalog.migrateArchive()
+          } finally {
+            await catalog.stop()
+          }
+        })()
+        : null
+      const status = archiveMigrationStatus(archiveFolder)
+      if (json) print({ status, report })
+      else {
+        if (migrate && !report) console.log("No pass ran: no archive, or a backfill pass holds the store's lock")
+        if (report) console.log(`This pass: ${report.rows} rows, ${report.migrated} dropped (${report.viaHarness} their harness has, ${report.viaRecords} the store holds), ${report.newCopies} newly found to be Mako's copy only, ${report.pending} waiting for the store, ${report.failed} kept for failing${report.firstFailure ? ` (first: ${report.firstFailure})` : ""}, in ${report.ms} ms`)
+        if (!status) console.log(`No archive at ${archiveFolder}`)
+        else console.log(`${archiveFolder}: ${status.migrated} rows dropped, ${status.copies} Mako's copies only (kept), ${status.pending} still to look at (of ${status.rows} rows); ${mib(status.bytes)}, ${mib(status.freeBytes)} free inside`)
       }
       break
     }
@@ -291,7 +332,7 @@ try {
       break
     }
     default:
-      console.error("Commands: sessions, captures, units, versions, cat, capture, streams, backfill, repack, restore, stats, verify (see the top of scripts/records.ts)")
+      console.error("Commands: sessions, captures, units, versions, cat, capture, streams, backfill, archive, attachments, repack, restore, stats, verify (see the top of scripts/records.ts)")
       process.exitCode = 2
   }
 } finally {

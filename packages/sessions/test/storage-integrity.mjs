@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { DatabaseSync } from "node:sqlite"
 import { SessionArchive } from "../dist/archive.js"
+import { keepCopies } from "./fixtures/archive-copies.mjs"
 import { SessionCatalog } from "../dist/catalog.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
@@ -19,20 +20,13 @@ const archive = new SessionArchive(join(home, "archive"))
 let db
 let catalog
 try {
-  const ref = { harness: "claude", nativeId: "test", path: join(home, "native"), bytes: 1 }
-  const entries = [{ type: "user", text: "run" }, { type: "tool", id: "call", name: "shell" }]
-  archive.note(ref, async () => ({ ref, entries }))
-  await archive.flush()
-  entries[1].output = "complete"
-  const next = { ...ref, bytes: 2 }
-  archive.note(next, async () => ({ ref: next, entries }))
-  await archive.flush()
+  const ref = { harness: "claude", nativeId: "test", path: join(home, "native"), bytes: 2 }
+  const entries = [{ type: "user", text: "run" }, { type: "tool", id: "call", name: "shell", output: "complete" }]
+  await keepCopies(join(home, "archive"), [{ ref, entries }])
   assert.equal((await archive.read(ref.path)).entries[1].output, "complete")
   assert.equal((await archive.read(ref.path)).ref.bytes, 2)
-  archive.note({ ...next, bytes: 3 }, async () => ({ ref: next, entries }))
   await archive.forget(ref.path)
-  await archive.flush()
-  assert.equal(await archive.read(ref.path), null, "queued writes cannot resurrect forgotten history")
+  assert.equal(await archive.read(ref.path), null, "a forgotten copy is gone")
 
   const legacyRoot = join(home, "legacy-model-archive")
   const knownRef = { ...ref, settings: { model: "known", options: { fast: false } } }
@@ -58,18 +52,6 @@ try {
   } finally {
     await recovered.stop()
   }
-  const guarded = new SessionArchive(legacyRoot)
-  const invalidRef = { ...knownRef, bytes: 2, settings: { model: "" } }
-  try {
-    guarded.note(invalidRef, async () => ({ ref: invalidRef, entries: [] }))
-    await assert.rejects(guarded.flush(), /settings/, "new invalid metadata cannot poison the archive")
-    const retained = await guarded.read(ref.path)
-    assert.deepEqual(retained.ref.settings, knownRef.settings)
-    assert.deepEqual(retained.entries, entries, "failed validation cannot replace previously committed history")
-  } finally {
-    await guarded.stop().catch(() => {})
-  }
-
   const files = [{ path: join(home, "alias-a"), bytes: 1, mtimeMs: 1 }, { path: join(home, "alias-b"), bytes: 1, mtimeMs: 2 }]
   const indexed = new SessionCatalog([{ harness: "fixture", displayName: "Fixture", roots: () => [], discover: async () => files, peek: async file => ({ harness: "fixture", nativeId: "shared", path: file.path, cwd: file.path, updatedAt: new Date(file.mtimeMs).toISOString() }), read: async () => null }])
   try {
@@ -96,14 +78,12 @@ try {
   await appendFile(path, second.slice(20))
   assert.equal((await follower.next()).entries[0].text, "second")
 
+  // The archive keeps no new copies: a catalog with an archive path and nothing kept there creates nothing.
   const captured = join(home, "startup-archive")
   catalog = new SessionCatalog([provider], { archivePath: captured })
   await catalog.scan()
-  await new Promise(resolve => setTimeout(resolve, 3400))
-  const startup = new SessionArchive(captured)
-  assert.equal((await startup.read(path)).entries.length, 2, "initial discovery archives unchanged sessions")
-  await startup.stop()
   await catalog.stop()
+  await assert.rejects(stat(join(captured, "archive.sqlite")), { code: "ENOENT" }, "discovery copies nothing into the archive")
 
   const emitted = await emitCursorSession(nativeStores, { ref: { ...ref, harness: "cursor", title: "before", cwd: home }, entries: [{ type: "user", text: "hello" }] }, { cwd: home, home })
   db = new DatabaseSync(emitted.path)
@@ -121,9 +101,8 @@ try {
   assert.equal(catalog.list()[0].title, "after", "WAL changes invalidate the catalog")
   assert.equal(userTextFrom("<recommended_plugins>list</recommended_plugins>\n\nKeep this request."), "Keep this request.")
   assert.equal(userTextFrom("<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"), undefined, "Codex's note to its model about a stop is not a message the person sent")
-  console.log("Storage integrity passed: atomic content updates, deletion ordering, startup capture, complete-record checkpoint, WAL revisions, envelope fidelity")
+  console.log("Storage integrity passed: kept copies read and forgotten, complete-record checkpoint, WAL revisions, envelope fidelity")
 } finally {
-  await archive.flush()
   await archive.stop()
   await catalog?.stop()
   db?.close()

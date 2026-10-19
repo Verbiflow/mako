@@ -778,6 +778,11 @@ export class CursorProvider implements SessionProvider {
    * rewritten, and what Cursor keeps beside it (`meta.json`). An SDK agent's
    * runs and their events sit in `index.db` under its id.
    */
+  /** Its child stores and transcripts are listed again: a restore wrote some (`SessionProvider.storeWritten`). */
+  storeWritten(): void {
+    this.childLinks.forget()
+  }
+
   /** Its Task children: their stores, or the plain transcripts Cursor kept of them. */
   async children(path: string): Promise<ChildTranscript[] | null> {
     if (this.childLinks.transcriptChild(path)) return null
@@ -831,14 +836,19 @@ export class CursorProvider implements SessionProvider {
     const files = (await filesUnder(directory)).filter((file) => !/^store\.db(?:-wal|-shm|-journal)?$/.test(basename(file)))
     // Its Task children are never rows: their stores and plain transcripts come with it.
     const parent = await this.peek({ path, bytes: 0, mtimeMs: 0 }).catch(() => null)
+    const children: string[] = []
     if (parent) {
       for (const store of await this.childLinks.childStores(parent.nativeId)) {
         const tables = [...tableColumns(store).keys()]
-        if (tables.length) databases.push({ path: store, tables: tables.map((table) => (table === "blobs" ? { table, immutable: true } : { table })) })
+        if (!tables.length) continue
+        databases.push({ path: store, tables: tables.map((table) => (table === "blobs" ? { table, immutable: true } : { table })) })
+        children.push(store)
       }
-      files.push(...(await this.childLinks.recordsOf(parent.nativeId)))
+      const kept = await this.childLinks.recordsOf(parent.nativeId)
+      files.push(...kept.files)
+      children.push(...kept.transcripts)
     }
-    return { roots: [{ name: "cursor", path: dirname(this.chatRoot) }, { name: "cursor-sdk", path: this.sdkStateRoot }], files, databases }
+    return { roots: [{ name: "cursor", path: dirname(this.chatRoot) }, { name: "cursor-sdk", path: this.sdkStateRoot }], files, databases, children }
   }
 
   /**

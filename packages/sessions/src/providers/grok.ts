@@ -603,7 +603,8 @@ export class GrokProvider implements SessionProvider {
     const directory = dirname(path)
     if (dirname(dirname(directory)) !== this.root || !(await stat(path).catch(() => null))?.isFile()) return null
     // Its subagents' sessions sit elsewhere in the tree and are never rows: they come with it.
-    return { roots: [{ name: "grok", path: dirname(this.root) }], files: [...await filesUnder(directory), ...await this.childLinks.recordsOf(path)], databases: [] }
+    const subagents = await this.childLinks.recordsOf(path)
+    return { roots: [{ name: "grok", path: dirname(this.root) }], files: [...await filesUnder(directory), ...subagents.files], databases: [], children: subagents.children }
   }
 
   /** Its subagents, from `subagents/` beside it and its own updates. */

@@ -96,6 +96,13 @@ const RouteSchema = z.object({
 
 const RuntimeLaunchSchema = z.object({
   dataRoot: z.string(), executable: z.string(), args: z.array(z.string()), cwd: z.string(), profile: z.string(),
+  /**
+   * This host's `LiveAssets` restarts a file's times when a prompt reuses it
+   * by its hash, which the attachments' sweep relies on to sweep the
+   * profile's folder while the host runs. Builds before it write no such
+   * field, and their profile's folder waits (`attachment-readers.ts`).
+   */
+  liveAssetsTouch: z.literal(true).optional(),
 })
 export type RuntimeLaunch = z.infer<typeof RuntimeLaunchSchema>
 

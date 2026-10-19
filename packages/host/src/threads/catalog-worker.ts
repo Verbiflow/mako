@@ -15,6 +15,7 @@
 import { MessagePort, parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
 import { defaultCatalog, serveCatalogOnPort } from "@mako/sessions"
+import { attachmentReaders } from "./attachment-readers.js"
 
 const catalogWorkerData = z.object({
   port: z.instanceof(MessagePort),
@@ -27,6 +28,8 @@ const catalogWorkerData = z.object({
   decodeExecutable: z.string().min(1),
   /** How this build stamps a store format it sets (`storeWriter`). */
   writer: z.string().min(1).optional(),
+  /** Where every reader's stores are (`attachmentReaders`), for the backfill's sweep of Mako's attachment files; none, none swept. */
+  profiles: z.object({ appData: z.string().min(1), app: z.string().min(1), dataRoot: z.string().min(1), sessionMemory: z.string().min(1), home: z.string().min(1) }).optional(),
 })
 
 export type CatalogWorkerData = z.infer<typeof catalogWorkerData>
@@ -46,6 +49,7 @@ async function main(): Promise<void> {
     post({ type: "failed", message: "The catalog worker was started without its port and paths" })
     return
   }
+  const profiles = data.data.profiles
   const catalog = defaultCatalog({
     cachePath: data.data.cachePath,
     archivePath: data.data.archivePath,
@@ -57,6 +61,7 @@ async function main(): Promise<void> {
     log: (message, fields) => post({ type: "log", message, fields }),
     decodeExecutable: data.data.decodeExecutable,
     ...data.data.writer && { writer: data.data.writer },
+    ...profiles && { attachmentReaders: () => attachmentReaders(profiles) },
   })
   const started = performance.now()
   try {

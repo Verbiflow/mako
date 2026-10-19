@@ -13,6 +13,7 @@ import type {
   UnreadRecord,
 } from "./format.js"
 import { ChildTranscriptsSchema, type ChildTranscripts } from "./children.js"
+import { KeptRestoreSchema, type KeptRestore } from "./kept-restore.js"
 
 /**
  * Splits a socket's chunks into NDJSON lines, scanning each chunk once.
@@ -114,6 +115,7 @@ export type DaemonRequestFrame =
   | { id: number; op: "original"; path: string; entry: string }
   | { id: number; op: "children"; path: string }
   | { id: number; op: "hold"; path: string }
+  | { id: number; op: "restore"; path: string }
   /** `reloads`: the client takes a `reload` event, where a follow would otherwise read a large session whole in the daemon. */
   | { id: number; op: "follow"; path: string; fromByte: number; reloads?: true }
   | { id: number; op: "unfollow"; path?: string }
@@ -131,6 +133,7 @@ export type DaemonResponseFrame =
         | Entry
         | EntryOriginal
         | ChildTranscripts
+        | KeptRestore
         | boolean
         | null
     }
@@ -196,6 +199,11 @@ interface HoldPending extends PendingBase {
   resolve: (held: boolean) => void
 }
 
+interface RestorePending extends PendingBase {
+  kind: "restore"
+  resolve: (restored: KeptRestore) => void
+}
+
 interface AckPending extends PendingBase {
   kind: "ack"
   resolve: () => void
@@ -210,6 +218,7 @@ export type PendingRequest =
   | OriginalPending
   | ChildrenPending
   | HoldPending
+  | RestorePending
   | AckPending
 
 export type ParsedDaemonResponse =
@@ -221,6 +230,7 @@ export type ParsedDaemonResponse =
   | { kind: "original"; pending: OriginalPending; result: EntryOriginal | null }
   | { kind: "children"; pending: ChildrenPending; result: ChildTranscripts | null }
   | { kind: "hold"; pending: HoldPending; result: boolean }
+  | { kind: "restore"; pending: RestorePending; result: KeptRestore }
   | { kind: "ack"; pending: AckPending }
   | { kind: "error"; pending: PendingRequest; error: Error }
 
@@ -283,6 +293,11 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
     case "hold": {
       const path = readString(record, "path")
       return path ? { id, op, path } : null
+    }
+    case "restore": {
+      const path = readString(record, "path")
+      if (!path) return null
+      return { id, op, path }
     }
     case "follow": {
       const path = readString(record, "path")
@@ -349,6 +364,10 @@ export function parseDaemonResponse(
     case "hold": {
       const result = readBoolean(record, "result")
       return result === undefined ? null : { kind: "hold", pending, result }
+    }
+    case "restore": {
+      const result = KeptRestoreSchema.safeParse(record.result)
+      return result.success ? { kind: "restore", pending, result: result.data } : null
     }
     case "ack":
       return record.result === null ? { kind: "ack", pending } : null

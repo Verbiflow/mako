@@ -66,6 +66,13 @@ export interface SessionRecords {
   lines?: RecordLines[]
   /** A file's key and places, by its plain path as the store names it (`codex:sessions/…`); unset, or null for a path, keys a file by where it is. */
   place?: (path: string) => RecordPlace | null
+  /**
+   * The paths the session's child agents are read at (`ChildTranscript.path`),
+   * whose files and rows are among these records. The store keeps each with
+   * the session (`RecordStore.parentAt`), so a child opens from Mako's
+   * records, at the same path, once its harness deletes the session.
+   */
+  children?: string[]
 }
 
 export type RecordValue = SQLOutputValue

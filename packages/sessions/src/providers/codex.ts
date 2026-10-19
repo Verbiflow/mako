@@ -473,7 +473,13 @@ export class CodexProvider implements SessionProvider {
       databases: databases.filter((database) => database !== null),
       lines: ids.map((value) => ({ path: this.nameLog, field: "id", value })),
       place: codexRecordPlace,
+      children: spawned.children,
     }
+  }
+
+  /** Its rollouts are listed again: a restore wrote some (`SessionProvider.storeWritten`). */
+  storeWritten(): void {
+    this.rolloutFiles.forget()
   }
 
   /** Its spawned agents, from the state database's spawn edges and its own rollout's items, and its reviews. */

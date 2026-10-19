@@ -14,6 +14,7 @@ import {ClaudeProvider} from '../dist/providers/claude.js'
 import {CodexProvider} from '../dist/providers/codex.js'
 import {CursorProvider} from '../dist/providers/cursor.js'
 import {GrokProvider} from '../dist/providers/grok.js'
+import {keepCopies} from './fixtures/archive-copies.mjs'
 import { NativeStores } from '../dist/read-only-sqlite.js'
 
 const nativeStores = new NativeStores(false)
@@ -27,12 +28,13 @@ try {
  console.log('PASS local file URL copied')
  const attachment={type:'attachment',id:'asset-1',name:'source.txt',mimeType:'text/plain',source:{kind:'file',path:source}}
  const entries=[{type:'user',text:'look',attachments:[attachment]}]
- const archive=new SessionArchive(join(root,'archive'));archive.note(ref,async()=>({ref,entries}));await archive.flush()
+ // A copy an earlier build kept, its attachment's bytes saved beside it as that build saved them.
+ await keepCopies(join(root,'archive'),[await persistThreadAttachments({ref,entries},join(root,'archive','assets'))])
+ const archive=new SessionArchive(join(root,'archive'))
  const first=await archive.read(ref.path);const savedPath=first.entries[0].attachments[0].source.path;assert.equal(await readFile(savedPath,'utf8'),'original bytes')
  await rm(source)
- const next={...ref,bytes:2};archive.note(next,async()=>({ref:next,entries:[...entries,{type:'text',text:'done'}]}));await archive.flush()
  assert.equal((await archive.read(ref.path)).entries[0].attachments[0].source.kind,'file')
- console.log('PASS retained attachment survives original deletion plus later capture')
+ console.log('PASS a kept attachment survives its original\'s deletion')
  await archive.stop()
  const reopened = new SessionArchive(join(root,'archive'))
  await reopened.load()

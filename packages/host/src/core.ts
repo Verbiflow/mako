@@ -172,6 +172,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       launch: {
         dataRoot: environment.dataRoot, executable: config.executable,
         args: environment.packaged ? [] : [environment.appRoot], cwd: process.cwd(), profile: environment.profile,
+        liveAssetsTouch: true,
       },
     },
     harnesses: threadHarnesses(providerHost),

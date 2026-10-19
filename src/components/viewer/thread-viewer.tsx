@@ -4,6 +4,8 @@ import { useConversationScope } from "@/state/conversation-scope"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { WorktreeOpening } from "@/components/viewer/worktree-opening"
+import { KeptOpening } from "@/components/viewer/kept-opening"
+import { keptSessionText } from "@/lib/kept-session"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { harnessLabel } from "@/components/rail/harness-meta"
@@ -189,10 +191,11 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
       status?.kind === "external-active")
   const lastExchangeId = exchanges.at(-1)?.id
   const worktree = useStartedWorktree(useThreadGroups((state) => rowThread(ref, state.threadOf)), ref.cwd)
+  const kept = keptSessionText(ref)
   return (
     <ConversationTimeline
       source={{ threadPath: thread.ref.path, historyFrom: { blocks: 0, base: thread.pageStart } }}
-      opening={worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : undefined}
+      opening={worktree?.start ? <WorktreeOpening worktree={worktree} start={worktree.start} /> : kept ? <KeptOpening text={kept} /> : undefined}
       identity={thread.ref.path}
       exchanges={exchanges}
       streamingId={live ? lastExchangeId : undefined}

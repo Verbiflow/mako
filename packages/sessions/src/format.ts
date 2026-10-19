@@ -102,11 +102,18 @@ export interface ThreadRef {
   /** The provider behind the model, when the harness records one. */
   modelProvider?: string
   /**
-   * True when this ref is served from Mako's own archive because the native
-   * store no longer has it. Read-only history: still readable, still
-   * movable to any harness — no longer resumable by its original CLI.
+   * True when the harness no longer has this session and Mako serves what it
+   * kept: the harness's records from the record store, or (`copyOnly`) its
+   * own copy. Still readable, still movable to any harness; a reply
+   * continues it from its transcript in a new session.
    */
   archived?: boolean
+  /**
+   * All that's left is Mako's copy of the session as an earlier build read
+   * it (the archive): the harness deleted its records before Mako kept them.
+   * It can't be resumed natively, and no newer build can read it again.
+   */
+  copyOnly?: true
   /**
    * The harness archived this session itself: Codex's archive (which moves
    * the rollout into `archived_sessions`), Cursor's Archive, an OpenCode

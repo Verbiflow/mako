@@ -424,7 +424,8 @@ export class OpenCodeProvider implements SessionProvider {
         },
       ],
     })
-    return database && { roots: [{ name: "opencode", path: dirname(target.database) }], files: [], databases: [database] }
+    const children = ids.filter((id) => id !== target.id).map((id) => sessionPath(target.database, id, target.v2))
+    return database && { roots: [{ name: "opencode", path: dirname(target.database) }], files: [], databases: [database], children }
   }
 
   /** Its subagents: the sessions under it by `parent_id`, and the calls that started them. */

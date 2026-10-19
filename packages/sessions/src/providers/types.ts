@@ -206,6 +206,15 @@ export interface SessionProvider {
   children?(path: string): Promise<ChildTranscript[] | null>
 
   /**
+   * Mako wrote records into this harness's store itself (a restore of a
+   * session its harness deleted, `SessionCatalog.restoreKept`): a listing
+   * of the store the reader keeps for a while (Codex's rollouts, Cursor's
+   * child stores) is stale, so the session and its children are found the
+   * moment the restore returns. Unset where the reader keeps none.
+   */
+  storeWritten?(): void
+
+  /**
    * Cheap metadata refresh for a session whose file grew. A provider with an
    * out-of-band title store (Codex names threads in its state database after
    * the first turn) returns the current title and cwd without re-reading the

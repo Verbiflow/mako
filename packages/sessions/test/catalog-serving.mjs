@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { MessageChannel } from 'node:worker_threads'
 import { EventEmitter } from 'node:events'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { SessionCatalog, SessionArchive, connectDaemon, connectDaemonPort, serveCatalog, serveCatalogOnPort } from '../dist/index.js'
+import { keepCopies } from './fixtures/archive-copies.mjs'
+import { SessionCatalog, connectDaemon, connectDaemonPort, serveCatalog, serveCatalogOnPort } from '../dist/index.js'
 
 const root = await mkdtemp(join(tmpdir(), 'mako-catalog-serving-'))
 const harnesses = ['claude', 'codex', 'cursor', 'grok', 'devin', 'opencode', 'future-provider']
@@ -44,11 +45,7 @@ try {
     })
     const archivePath = join(dir, 'archive')
     const retained = { ref: { harness: 'archived-provider', nativeId: 'retained', path: join(dir, 'pruned') }, entries: [{ type: 'user', text: 'Retained after pruning' }] }
-    const writer = new SessionArchive(archivePath)
-    await writer.load()
-    writer.note(retained.ref, async () => retained)
-    await writer.flush()
-    await writer.stop()
+    await keepCopies(archivePath, [retained])
     const catalog = new SessionCatalog(providers, { archivePath, cachePath: join(dir, 'cache.json') })
     const prepare = catalog.prepare()
     assert.equal(catalog.prepare(), prepare, 'preparation is shared, never a second cache hydration')

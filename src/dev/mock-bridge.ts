@@ -353,6 +353,12 @@ export function installMockBridge() {
   const scene = "location" in window ? new URLSearchParams(window.location.search).get("app") : null
   const setupScene = scene === "setup" || scene === "setup-here" || scene === "setup-fallback"
   /**
+   * `?app=kept`: sessions their harness deleted, at the top of the rail: one
+   * whose records Mako's record store kept, and one only Mako's copy keeps
+   * (`ThreadRef.copyOnly`), as the archive's migration leaves them.
+   */
+  const keptScene = scene === "kept"
+  /**
    * `?app=newer-stores`: Mako 0.163.0 changed the Thread store and the
    * session ledger, which this build reads and doesn't change, and Mako
    * 0.170.0 changed the record store past what it reads. This build is a
@@ -374,6 +380,10 @@ export function installMockBridge() {
   const ownStores: StoreFormats = { stores: newerStores.stores.map((row) => ({ store: row.store, access: "write", build: row.build, writableBy: row.build, readableBy: row.build })) }
   if (storesLater) setTimeout(() => emit({ type: "store-formats", formats: { stores: [newerStores.stores[0]!, ...ownStores.stores.slice(1)] } }), 1500)
   let mockUpdate: "current" | "ready" = "current"
+  const keptThreads = (): ThreadRef[] => keptScene ? [
+    { harness: "claude", nativeId: "cl-kept-copy", path: "/mock/claude-kept-copy.jsonl", cwd: "/Users/you/api", title: "Plan the billing ledger migration", model: "claude-opus-5", updatedAt: new Date(Date.now() - 60_000).toISOString(), archived: true, copyOnly: true, locked: false },
+    { harness: "codex", nativeId: "cx-kept-records", path: "/mock/codex-kept-records.jsonl", cwd: "/Users/you/api", title: "Audit the webhook signatures", model: "gpt-5.2-codex", updatedAt: new Date(Date.now() - 120_000).toISOString(), archived: true, locked: false },
+  ] : []
   /** `?start=behind|ahead|diverged|level|alone|detached|offline` picks how the project folder's branch stands. */
   const mockStartPoint = (): WorktreeStartPoint => {
     const kind = ("location" in window ? new URLSearchParams(window.location.search).get("start") : null) ?? "behind"
@@ -1303,7 +1313,7 @@ export function installMockBridge() {
     openUrl: async () => {},
     threads: async () => {
       const fixture = mockThreads()
-      const threads = scene === "rail" ? fixture.threads.map(railRef) : fixture.threads
+      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...fixture.threads]
       if (scene === "rail" && !railRunsSent) {
         railRunsSent = true
         setTimeout(() => {
@@ -1314,7 +1324,7 @@ export function installMockBridge() {
     },
     openThread: async (path: string) => ({
       ref:
-        mockThreads().threads.map((ref) => (scene === "rail" ? railRef(ref) : ref)).find((ref) => ref.path === path) ??
+        [...keptThreads(), ...mockThreads().threads.map((ref) => (scene === "rail" ? railRef(ref) : ref))].find((ref) => ref.path === path) ??
         (path.includes("devin")
           ? {
               harness: "devin" as const,

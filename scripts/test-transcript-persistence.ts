@@ -18,6 +18,7 @@ import { liveEntries } from "@mako/host/conversations/live-context"
 import { entriesToMessages } from "../src/lib/entry-messages.js"
 import { pairTools } from "../src/lib/tools.js"
 import { highlightCode } from "../src/lib/highlight-code.js"
+import { keepCopies } from "../packages/sessions/test/fixtures/archive-copies.mjs"
 
 const root = await mkdtemp(join(tmpdir(), "mako-transcript-persistence-"))
 const id = randomUUID()
@@ -105,9 +106,9 @@ try {
     bytes: 1,
   }
   const thread = { ref, entries: liveEntries(recovered.blocks) }
+  // A copy an earlier build kept in the archive reads back whole.
+  await keepCopies(join(root, "archive"), [thread])
   const archive = new SessionArchive(join(root, "archive"))
-  archive.note(ref, async () => thread)
-  await archive.flush()
   const archived = (await archive.read(ref.path))!
   const marker = archived.entries.find((entry) => entry.type === "event")
   assert.deepEqual(marker, {

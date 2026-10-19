@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { zstdCompressSync } from "node:zlib"
-import { SessionArchive, SessionCatalog } from "../dist/index.js"
+import { SessionCatalog } from "../dist/index.js"
+import { keepCopies } from "./fixtures/archive-copies.mjs"
 import { EntryOriginalSchema, readOriginal } from "../dist/record-original.js"
 
 // An entry's original is the bytes its record names, read whole and as the
@@ -108,12 +109,8 @@ try {
 
   // A session only Mako's older archive holds has its translation, not its records.
   const archivePath = join(root, "archive-only")
-  const writer = new SessionArchive(archivePath)
-  await writer.load()
   const pruned = { ref: { harness: "archived", nativeId: "p", path: join(root, "pruned.jsonl") }, entries: [{ type: "user", id: "u1", text: "kept translation" }] }
-  writer.note(pruned.ref, async () => pruned)
-  await writer.flush()
-  await writer.stop()
+  await keepCopies(archivePath, [pruned])
   const archived = new SessionCatalog([], { archivePath, cachePath: join(root, "cache-2.json") })
   await archived.prepare()
   const thread = await archived.open(pruned.ref.path)

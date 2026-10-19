@@ -219,7 +219,9 @@ export class DevinLocalProvider implements SessionProvider {
     const state = join(this.userDir, "globalStorage", "state.vscdb")
     const keys = stateKeysOf(state, journalOf(path))
     if (keys.length) databases.push({ path: state, tables: [{ table: "ItemTable", where: `key IN (${placeholders(keys)})`, params: keys }] })
-    return { roots: [{ name: "devin-app", path: this.userDir }], files: path.endsWith(".ndjson") ? [path] : [], databases }
+    // Its subagents' messages are in the journal: the paths they're read at come with it.
+    const children = ((await this.children(path).catch(() => null)) ?? []).flatMap((child) => (child.path ? [child.path] : []))
+    return { roots: [{ name: "devin-app", path: this.userDir }], files: path.endsWith(".ndjson") ? [path] : [], databases, children }
   }
 
   async peek(file: NativeFile): Promise<ThreadRef | null> {

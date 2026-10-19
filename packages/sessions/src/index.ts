@@ -54,8 +54,9 @@ export { DEVIN_PLAN_APPROVE, DevinExitPlanMetaSchema, DevinPlanCallSchema, Devin
 export { SessionCatalog, type CatalogEvent } from "./catalog.js"
 export { translatorBuild } from "./translator.js"
 export { onDemandCatalogPaths } from "./catalog-identity.js"
-export { SessionArchive, keepEverything, archiveStanding } from "./archive.js"
-export type { EvictionPolicy } from "./archive.js"
+export { SessionArchive, archiveMigrationStatus, archiveStanding, type ArchiveMigrationCounts, type ArchiveReclaim } from "./archive.js"
+export { ArchiveMigration, type ArchiveMigrationReport, type ArchiveMigrationSource } from "./archive-migration.js"
+export { KeptRestoreSchema, type KeptRestore } from "./kept-restore.js"
 export {
   connectDaemon,
   connectDaemonPort,
@@ -133,8 +134,8 @@ export { cursorTerminalEnd, type CursorTerminalEnd } from "./providers/cursor-te
 export { KEPT_OUTPUTS_BUDGET, KeptOutputs, keptOutputsPath, keptOutputsStanding, type KeptOutput, type OutputKey, type OutputOrigin } from "./kept-outputs.js"
 export { claudeApiErrorEvent } from "./providers/claude-events.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
+import type { AttachmentReaders } from "./attachment-sweep.js"
 import { SessionCatalog } from "./catalog.js"
-import type { EvictionPolicy } from "./archive.js"
 import type { BackfillLog } from "./record-backfill.js"
 import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
 import { DecodeAside } from "./decode-aside.js"
@@ -189,7 +190,6 @@ export function defaultCatalog(
     archivePath?: string
     recordsPath?: string
     viewsPath?: string
-    eviction?: EvictionPolicy
     readOnly?: boolean
     /** Take every session in the rail into the record store (`RecordBackfill`); for the catalog worker only. */
     backfill?: boolean
@@ -199,6 +199,8 @@ export function defaultCatalog(
     decodeExecutable?: string
     /** How this build stamps a store format it sets (`storeWriter`). */
     writer?: string
+    /** Every reader's stores on this machine, for the backfill's sweep of Mako's attachment files (`AttachmentSweep`). */
+    attachmentReaders?: () => Promise<AttachmentReaders>
   } = {}
 ): SessionCatalog {
   const { readers = SAVED_HISTORY_READERS, decodeExecutable, ...rest } = options

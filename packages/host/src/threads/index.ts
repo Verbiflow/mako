@@ -74,7 +74,7 @@ export interface Threads {
 
 export interface ThreadsDeps {
   /** Its data root, and `appData`, where a profile's Thread store is shared from. */
-  environment: Pick<HostEnvironment, "dataRoot" | "appData" | "development"> & DaemonApp
+  environment: Pick<HostEnvironment, "dataRoot" | "appData" | "appName" | "development"> & DaemonApp
   /** A fixture desk's Threads read the user's stores and write none. */
   readOnly: boolean
   /** How this host is named in the session ledger every host on this Mac reads. */
@@ -126,6 +126,7 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
     lineage,
     catalog: threadCatalog({
       dataRoot,
+      profiles: { appData, app: environment.appName },
       app: environment,
       sessionMemory: memory,
       threadStore: store,

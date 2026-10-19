@@ -8,6 +8,7 @@ import {
   mkdirSync,
   renameSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs"
 import { join, relative, isAbsolute } from "node:path"
@@ -70,7 +71,11 @@ export class LiveAssets {
       this.root,
       `${digest}-${name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100)}`
     )
-    if (!existsSync(path)) {
+    if (existsSync(path)) {
+      // Reused by its hash: its times start again, so the attachments' sweep, which takes only a file older than its grace that nothing names, leaves it while this prompt reaches the journal.
+      const now = new Date()
+      utimesSync(path, now, now)
+    } else {
       const temporary = join(this.root, `${randomUUID()}.tmp`)
       try {
         writeFileSync(temporary, bytes)

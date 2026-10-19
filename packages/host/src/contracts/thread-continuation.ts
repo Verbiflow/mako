@@ -41,6 +41,15 @@ export interface ContinuationInputs {
 }
 
 /**
+ * Whether the harness deleted this session and Mako keeps its own records
+ * (`ThreadRef.archived` without `copyOnly`): a reply restores them into the
+ * harness's store and the harness resumes it as the same session.
+ */
+export function keptByRecords(ref: Pick<ThreadRef, "archived" | "copyOnly">): boolean {
+  return Boolean(ref.archived && !ref.copyOnly)
+}
+
+/**
  * A session this host may not resume because a newer Mako changed the
  * session ledger (`refusal`, `SessionMemory.resumeRefusal`, the same that
  * refuses the hold at send). A reply goes on from its transcript in a new
@@ -100,7 +109,9 @@ export function planContinuation(
     return {
       transport: "handoff",
       provider,
-      reason: "This history lives only in Mako's archive; its CLI no longer has the session.",
+      reason: ref.copyOnly
+        ? "Only Mako's copy of this session is left; its harness deleted the session itself."
+        : "Its harness deleted this session and can't resume it here, so it goes on from its transcript.",
     }
   if (ref.resumeUnavailable)
     return { transport: "handoff", provider, reason: ref.resumeUnavailable }

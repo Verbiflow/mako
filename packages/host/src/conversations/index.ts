@@ -15,12 +15,13 @@ import { LiveHistoryReader } from "./live-history-reader.js"
 import { LiveHistoryReadSchema, type LiveHistoryRead } from "../contracts/live-history.js"
 import { createContinuationPlanner, type ContinuationPlanner } from "./continuation.js"
 import { WorkspaceSnapshots, type ConversationFiles, type Workspaces, type WorkspaceMovers } from "../workspaces/index.js"
-import { resumes, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
+import { harnessLabel, resumes, type HarnessProfiles, type Harnesses } from "../harnesses/index.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { EncodedAnswer } from "../contracts/runtime-value.js"
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { resumingUnder } from "./live-ledger.js"
+import { restoringResume } from "./kept-resume.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { HostTelemetry } from "../usage/index.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
@@ -83,7 +84,15 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const { host } = harnesses
   const dataRoot = environment.dataRoot
   const history = new LiveHistoryReader(catalog.page, catalog.entry, deps.streams === undefined ? undefined : { record: catalog.original, streams: deps.streams })
-  const assessResume = resumingUnder<Parameters<Harnesses["assessResume"]>[0]>(memory ?? undefined, (binding) => harnesses.assessResume(binding))
+  // Every resume, from the rail, a reconnect or a wake, first puts a session its harness deleted back from Mako's records.
+  const restoring = restoringResume({
+    assess: (binding) => harnesses.assessResume(binding),
+    ref: (path) => catalog.ref(path),
+    heldElsewhere: (provider, nativeId) => memory?.heldBy(provider, nativeId)?.hostLabel ?? null,
+    restore: (path) => catalog.restoreKept(path),
+    label: (harness) => harnessLabel(host, harness),
+  })
+  const assessResume = resumingUnder(memory ?? undefined, restoring)
   const live = new LiveConversations({
     turns: deps.telemetry.turns,
     memory: memory ?? undefined,

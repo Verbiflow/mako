@@ -102,6 +102,11 @@ export class CodexRollouts {
     return this.roots.some((root) => path.startsWith(`${root}/`)) && isRollout(plainRecordPath(path))
   }
 
+  /** Lists again on the next ask: Mako wrote rollouts (`SessionProvider.storeWritten`). */
+  forget(): void {
+    this.listing = null
+  }
+
   /** Every rollout, each once, in its live encoding; a listing younger than `maxAgeMs` answers again. */
   list(maxAgeMs = LISTING_MS): Promise<string[]> {
     if (this.listing && Date.now() - this.listing.at < maxAgeMs) return this.listing.files

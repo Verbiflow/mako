@@ -43,12 +43,17 @@ import {
   type SessionProvider,
   type SessionUpdate,
 } from "./providers/types.js"
-import { SessionArchive, type EvictionPolicy } from "./archive.js"
+import { SessionArchive } from "./archive.js"
+import { ThreadRefSchema } from "./thread-schema.js"
+import type { KeptRestore } from "./kept-restore.js"
+import { ArchiveMigration, type ArchiveMigrationPassOptions, type ArchiveMigrationReport, type ArchiveMigrationSource } from "./archive-migration.js"
+import { AttachmentSweep, type AttachmentReaders } from "./attachment-sweep.js"
+import { takeLock } from "./record-locks.js"
 import { boundedChildren, type ChildTranscript, type ChildTranscripts } from "./children.js"
 import { NativeStores, ReadOnlyStoreError } from "./read-only-sqlite.js"
 import { DECODE_ASIDE_BYTES, type AsideJob, type DecodeAside } from "./decode-aside.js"
 import type { FollowStart } from "./jsonl.js"
-import { RecordBackfill, type BackfillLog } from "./record-backfill.js"
+import { RecordBackfill, type BackfillLog, type ChildLinkFill } from "./record-backfill.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore } from "./record-store.js"
@@ -81,13 +86,6 @@ interface RefreshState {
   promise: Promise<void>
 }
 
-/**
- * How often a moving session's children are listed again for the archive.
- * Listing reads links only, but for a session of a hundred thousand Devin
- * nodes that is seconds; a child's own capture still settles like any
- * session's.
- */
-const CHILD_CAPTURE_MS = 60_000
 /** Sessions whose last read a follow can take over from: the viewer's, and what was read beside it since. */
 const OPENED_KEPT = 8
 /**
@@ -96,12 +94,6 @@ const OPENED_KEPT = 8
  * catalog that writes nothing.
  */
 const MEMORY_VIEW_BYTES = 192 * 1024 * 1024
-/**
- * The most characters of a session the archive translates whole, in the
- * sync daemon's 128 MB heap. A larger session's records are kept in the
- * record store, which reads it back as its harness wrote it.
- */
-const ARCHIVE_MAX_CHARS = 8 * 1024 * 1024
 
 /** Below this a record translates faster than a preview helps. */
 const PREVIEW_MIN_BYTES = 4 * 1024 * 1024
@@ -241,14 +233,6 @@ function rescansFor(provider: SessionProvider, path: string): boolean {
   return provider.rescanRoot?.(path) ?? false
 }
 
-/** A child transcript's stamp: its reader's, else the file's own. */
-async function childStamp(provider: SessionProvider, path: string): Promise<NativeFile | null> {
-  const stamp = await nativeFileOf(provider, path)
-  if (stamp) return stamp
-  const info = await stat(path).catch(() => null)
-  return info?.isFile() ? { path, bytes: info.size, mtimeMs: info.mtimeMs } : null
-}
-
 /** The stat facts the catalog compares, from the provider when it knows better than `stat`. */
 async function nativeFileOf(
   provider: SessionProvider,
@@ -272,6 +256,14 @@ function refMoved(previous: ThreadRef | null | undefined, next: ThreadRef): bool
   if (!previous) return true
   const visible = (ref: ThreadRef) => ({ ...ref, revision: undefined })
   return JSON.stringify(visible(previous)) !== JSON.stringify(visible(next))
+}
+
+const RowPathSchema = ThreadRefSchema.pick({ path: true })
+
+/** A session's row as the record store keeps it: what its harness says, without what Mako adds while serving it. */
+function railRow(ref: ThreadRef): ThreadRef {
+  const { active: _active, locked: _locked, archived: _archived, copyOnly: _copyOnly, ...row } = ref
+  return row
 }
 
 export class SessionCatalog {
@@ -328,11 +320,14 @@ export class SessionCatalog {
   private records: RecordCapture | null = null
   /** The store's streams folder, whose writes are captures of their sessions too. */
   private streams: string | null = null
-  /** When each parent's children were last noted for the archive, and the notings still running. */
-  private childCaptures = new Map<string, number>()
-  private childNotes = new Set<Promise<void>>()
   /** Takes every session in the rail into the record store, for a catalog given `backfill`. */
   private backfill: RecordBackfill | null = null
+  /** Where the backfill finds every reader of the archive's attachments, when it sweeps them. */
+  private readonly attachments: { readers: () => Promise<AttachmentReaders>; views?: string; aside?: string } | null
+  /** Sessions their harness deleted that the record store keeps the rail's row of (`RecordStore.listings`), read once until one is forgotten. */
+  private recordRows: Map<string, ThreadRef> | null = null
+  /** Harnesses whose discovery failed in the last scan: what the catalog lists of them is not all they have. */
+  private undiscovered = new Set<string>()
   private readonly readOnly: boolean
   /** Sessions as this build decoded them, at `viewsPath`. */
   private views: ViewCache | null = null
@@ -348,6 +343,12 @@ export class SessionCatalog {
   /** Where each session last read back from the record store was restored, which its entries' records name. */
   private readonly restoredFrom = new Map<string, string>()
   private recordReads: RecordReads | null = null
+  /** The home record keys are relative to, where a session its harness deleted is restored (`restoreKept`). */
+  private readonly recordsHome: string
+  /** How the harnesses' own stores are opened (`ReadBack.stores`): a restore for a harness to resume writes them; a strict host's refuse. */
+  private readonly harnessStores: NativeStores | null
+  /** Restores running, by path: a second ask shares the first. */
+  private readonly restoring = new Map<string, Promise<KeptRestore>>()
 
   /**
    * `translator` is `translatorBuild()` for a process that makes many
@@ -366,7 +367,6 @@ export class SessionCatalog {
       readBack?: ReadBack
       /** The home the providers read under, which record keys are relative to; the user's by default. */
       recordsHome?: string
-      eviction?: EvictionPolicy
       readOnly?: boolean
       /**
        * Take every session in the rail into the record store once watching
@@ -388,6 +388,13 @@ export class SessionCatalog {
        * again.
        */
       decodeAside?: DecodeAside
+      /**
+       * Every profile's folders on this machine (`profileRoots` in the
+       * host), whose stores the backfill reads before it sweeps the
+       * attachment files Mako keeps (`AttachmentSweep`);
+       * without it they aren't swept.
+       */
+      attachmentReaders?: () => Promise<AttachmentReaders>
     } = {}
   ) {
     this.providers = providers
@@ -396,8 +403,11 @@ export class SessionCatalog {
     this.strictStores = options.readBack?.stores.strict ?? true
     this.translator = options.translator
     if (options.archivePath)
-      this.archive = new SessionArchive(options.archivePath, options.eviction, { readOnly: this.readOnly })
+      this.archive = new SessionArchive(options.archivePath, { readOnly: this.readOnly })
+    this.recordsHome = options.recordsHome ?? homedir()
+    this.harnessStores = options.readBack?.stores ?? null
     this.writer = options.writer
+    this.attachments = options.attachmentReaders ? { readers: options.attachmentReaders, views: options.viewsPath, ...options.decodeAside && { aside: options.decodeAside.executable } } : null
     if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome, options.readBack, options.backfill ? options.log ?? null : undefined)
     const build = () => this.translator ??= translatorBuild()
     if (options.viewsPath) {
@@ -433,6 +443,10 @@ export class SessionCatalog {
         home,
         streams,
         stampOf: (ref) => this.stampOf(ref.path),
+        listingOf: (ref) => {
+          const listed = this.byPath.get(ref.path)?.ref
+          return listed ? JSON.stringify(railRow(listed)) : null
+        },
         rowBytesOf: async (ref) => (await this.ownerOf(ref.path)?.recordBytes?.(ref.path)) ?? null,
         onError: (ref, message) => console.error("Session record capture failed", ref.path, message),
       })
@@ -444,12 +458,59 @@ export class SessionCatalog {
           foreground: () => [...this.decoding.values()],
           streams,
           ...backfill && { log: backfill },
+          // The archive's copies go once the store holds their sessions, which only a store this catalog reads back from can tell.
+          ...this.archive && readBack && { archive: new ArchiveMigration(this.archive, this.migrationSource()) },
+          // Swept where the migration runs, under the same lock, once it has dropped what it can.
+          ...this.archive && this.attachments && { assets: new AttachmentSweep({ archive: this.archive.folder, ...this.attachments }) },
+          ...readBack && { children: { link: (control) => this.linkChildren(control) } },
         })
       return capture
     } catch (error) {
       console.warn("Session records off:", error instanceof Error ? error.message : error)
       return null
     }
+  }
+
+  /**
+   * The children's paths of sessions captured before captures named them
+   * (`RecordStore.sessionsWithoutChildLinks`), kept once per session: from
+   * its harness's reader while the harness has it, else from its records
+   * read back (`keptChildren`), whose home goes again unless it was there
+   * already. Then a link to such a child opens without its parent listed
+   * first. Yields to the person between sessions.
+   */
+  async linkChildren(control: { stopped(): boolean; yieldToPerson(): Promise<void> } = { stopped: () => this.stopped, yieldToPerson: async () => undefined }): Promise<ChildLinkFill> {
+    const started = Date.now()
+    const report: ChildLinkFill = { looked: 0, parents: 0, children: 0, kept: 0, failed: 0, ms: 0 }
+    const store = this.recordStore
+    if (!store || this.readOnly || store.access !== "write") return report
+    for (const session of store.sessionsWithoutChildLinks()) {
+      if (control.stopped()) break
+      await control.yieldToPerson()
+      report.looked += 1
+      try {
+        let paths: string[] = []
+        for (const path of session.paths) {
+          const provider = this.ownerOf(path)
+          if (!provider?.children) continue
+          const live = Boolean(await nativeFileOf(provider, path))
+          const read = !live && this.recordReads?.hasHome(session.harness, session.nativeId) === false
+          const listed = live ? await provider.children(path) : await this.keptChildren(provider, path)
+          if (read) await this.recordReads?.drop(session.harness, session.nativeId)
+          if (!listed) continue
+          if (!live) report.kept += 1
+          paths = listed.flatMap((child) => (child.path && child.path !== path ? [child.path] : []))
+          break
+        }
+        await store.keepChildPaths(session.harness, session.nativeId, paths, { linked: true })
+        if (paths.length) report.parents += 1
+        report.children += paths.length
+      } catch {
+        report.failed += 1
+      }
+    }
+    report.ms = Date.now() - started
+    return report
   }
 
   /**
@@ -464,9 +525,9 @@ export class SessionCatalog {
     return entry?.ref ? `n:${entry.bytes}:${entry.mtimeMs}:${entry.revision ?? ""}` : null
   }
 
-  /** Run the archive's eviction policy; 0 without an archive. */
-  evictArchive(now = new Date()): Promise<number> {
-    return this.archive?.evict(now) ?? Promise.resolve(0)
+  /** Harnesses whose discovery failed in the last scan, so the rail lists only part of what they have. */
+  get undiscoveredHarnesses(): ReadonlySet<string> {
+    return this.undiscovered
   }
 
   /** The backfill's pass running, or the last one this catalog ran; null without a backfill. */
@@ -561,13 +622,10 @@ export class SessionCatalog {
             cached.bytes === file.bytes &&
             cached.mtimeMs === file.mtimeMs &&
             cached.revision === file.revision
-          ) {
-            if (cached.ref) this.capture(cached.ref)
+          )
             return
-          }
           const ref = await peeked(provider, file, this.workspaces)
           if (ref === UNREADABLE || !this.commit(file, ref, cached)) return
-          if (ref) this.capture(ref)
           if (options.emitChanges) {
             if (ref) this.emit({ type: cached?.ref ? "updated" : "added", ref })
             else if (cached?.ref) this.emit({ type: "removed", path: file.path })
@@ -575,6 +633,7 @@ export class SessionCatalog {
         })
       })
     )
+    this.undiscovered = new Set([...unavailable].map((provider) => provider.harness))
     for (const path of this.byPath.keys()) {
       const owner = this.ownerOf(path)
       if (seen.has(path) || (owner && unavailable.has(owner))) continue
@@ -608,7 +667,9 @@ export class SessionCatalog {
       refs.push(this.workspaces.ref(ref) ?? ref)
     }
     for (const entry of this.byPath.values()) admit(entry.ref)
-    // Sessions whose native store forgot them. The archive did not.
+    // Sessions whose harness deleted them: what the record store keeps of
+    // them, and what only the archive's copy keeps.
+    for (const [path, ref] of this.keptRecordRows()) if (!this.byPath.has(path)) admit(ref)
     if (this.archive) {
       const live = new Set(this.byPath.keys())
       for (const ref of this.archive.orphans(live)) admit(ref)
@@ -616,19 +677,19 @@ export class SessionCatalog {
     // One session, one row — whatever the path. Symlinked roots and the
     // archive can each present the same conversation twice; identity is the
     // harness's own session id unless the provider says one id names two
-    // stores. Live beats archived, the harness's own record beats a client's
-    // copy, and newest beats older.
+    // stores. Live beats kept, the harness's records beat Mako's copy, the
+    // harness's own record beats a client's copy, and newest beats older.
     const byIdentity = new Map<string, ThreadRef>()
     for (const ref of refs) {
       const key = threadIdentity(ref)
       const held = byIdentity.get(key)
-      const rank = (candidate: ThreadRef) => [candidate.archived ? 0 : 1, candidate.clientCopy ? 0 : 1] as const
-      const [heldLive, heldOwn] = held ? rank(held) : [0, 0]
-      const [live, own] = rank(ref)
+      const rank = (candidate: ThreadRef) => [candidate.archived ? 0 : 1, candidate.copyOnly ? 0 : 1, candidate.clientCopy ? 0 : 1] as const
+      const [heldLive, heldRecords, heldOwn] = held ? rank(held) : [0, 0, 0]
+      const [live, records, own] = rank(ref)
       if (
         !held ||
         live > heldLive ||
-        (live === heldLive && (own > heldOwn || (own === heldOwn && (ref.updatedAt ?? "") > (held.updatedAt ?? ""))))
+        (live === heldLive && (records > heldRecords || (records === heldRecords && (own > heldOwn || (own === heldOwn && (ref.updatedAt ?? "") > (held.updatedAt ?? ""))))))
       ) {
         byIdentity.set(key, ref)
       }
@@ -648,18 +709,6 @@ export class SessionCatalog {
     const shown = thread.ref === served.ref ? thread : { ...thread, ref: served.ref }
     if (trackForFollow) this.track(path, served.view)
     return shown
-  }
-
-  /**
-   * The session at `path` for the archive to keep: null for one past
-   * `ARCHIVE_MAX_CHARS` while the record store captures its records.
-   */
-  private async archivable(path: string): Promise<Thread | null> {
-    const served = await this.served(path)
-    if (!served) return null
-    if (this.records && (served.view.chars ?? 0) > ARCHIVE_MAX_CHARS) return null
-    const thread = served.decoded ?? served.view.thread()
-    return thread.ref === served.ref ? thread : { ...thread, ref: served.ref }
   }
 
   /**
@@ -686,11 +735,13 @@ export class SessionCatalog {
 
   /**
    * The session last read at `path`, read back from the record store: as it
-   * last was, or as Mako had captured it by `asOf`.
+   * last was, or as Mako had captured it by `asOf`. A child agent's path is
+   * read from its parent's records (`RecordStore.parentAt`), by the reader
+   * that read it live, at the same path.
    */
   private async restored(path: string, asOf?: number): Promise<{ view: SessionView; ref: ThreadRef; decoded?: Thread } | null> {
     const reads = this.recordReads
-    const session = reads && this.recordStore?.sessionAt(path)
+    const session = reads && this.recordStore && (this.recordStore.sessionAt(path) ?? this.recordStore.parentAt(path))
     if (!reads || !session) return null
     const restored = await reads.read({ ...session, path }, asOf).catch((error) => {
       console.warn("A session could not be read back from its records", path, error instanceof Error ? error.message : error)
@@ -702,7 +753,9 @@ export class SessionCatalog {
     if (!found) return null
     // A reading as of a time is that span alone; what follows `path` is the session as it is.
     if (asOf === undefined) this.restoredFrom.set(path, restored.path)
-    const ref = this.workspaces.ref({ ...found.view.ref, path, archived: true }) ?? found.view.ref
+    const read = found.view.ref
+    const childOf = read.childOf?.path ? { childOf: { ...read.childOf, path: reads.original(read.childOf.path, restored.home) } } : {}
+    const ref = this.workspaces.ref({ ...read, ...childOf, path, archived: true }) ?? read
     return { ...found, ref }
   }
 
@@ -716,6 +769,147 @@ export class SessionCatalog {
     const ref = this.byPath.get(path)?.ref ?? (await this.open(path, false))?.ref
     if (!ref || ref.archived) return false
     return this.records.hold(ref)
+  }
+
+  /**
+   * Puts a session its harness deleted back into the harness's own store,
+   * from Mako's records, so the harness resumes it as the same session.
+   * Idempotent: a session the harness has is left as it is (`present`), and
+   * a unit already there is skipped. A copy in the harness's store that went
+   * on without Mako is never overwritten: Mako's version is written beside
+   * it as the harness's own fork (`forked`). Whether something else holds
+   * the session open is the caller's to have asked first.
+   */
+  restoreKept(path: string): Promise<KeptRestore> {
+    const key = `${path}`
+    const running = this.restoring.get(key)
+    if (running) return running
+    const work = this.restoreKeptNow(path).finally(() => this.restoring.delete(key))
+    this.restoring.set(key, work)
+    return work
+  }
+
+  private async restoreKeptNow(path: string): Promise<KeptRestore> {
+    const refused = (reason: string): KeptRestore => ({ kind: "refused", reason })
+    const store = this.recordStore
+    const provider = this.ownerOf(path)
+    if (this.readOnly || !store || !provider || !this.harnessStores) return refused("Mako keeps no records here it could restore this session from.")
+    if (this.byPath.get(path)?.ref && (await nativeFileOf(provider, path))) return { kind: "present", path }
+    const session = store.sessionAt(path)
+    if (!session || !store.captured(session.harness, session.nativeId)) return refused("Mako holds no finished copy of this session's records.")
+    const started = performance.now()
+    const destination = await provider.records(path).catch(() => null)
+    const report = await store.restore({
+      harness: session.harness, nativeId: session.nativeId, home: this.recordsHome, stores: this.harnessStores,
+      ...destination && { destination }, ...provider.fork && { fork: provider.fork },
+    })
+    // What its reader listed of the store before is stale: the session and its children are there the moment this returns.
+    if (report.written || report.fork?.written) provider.storeWritten?.()
+    if (report.fork) {
+      if (rescansFor(provider, path)) await this.scan({ emitChanges: true })
+      return report.fork.written || !report.fork.diverged.length
+        ? { kind: "forked", nativeId: report.fork.nativeId }
+        : refused(`${provider.displayName} holds a copy of this session that went on without Mako, and its fork couldn't be written.`)
+    }
+    if (report.diverged.length && !report.written) return refused(`${provider.displayName} holds part of this session that Mako never saw (${report.diverged[0]!.reason}), so nothing was restored.`)
+    // The harness lists it again: the catalog reads it as it reads any session written.
+    if (rescansFor(provider, path)) await this.scan({ emitChanges: true })
+    else await this.refresh(provider, path)
+    this.recordRows = null
+    this.orderedRefs = null
+    if (!this.byPath.get(path)?.ref) return refused(`Mako restored this session's records, but ${provider.displayName} doesn't list it at ${path}.`)
+    return {
+      kind: "restored", path,
+      files: report.actions.filter((action) => action.action !== "skip").length,
+      rows: report.rows.reduce((total, rows) => total + rows.insert + rows.replace + rows.delete, 0),
+      ms: Math.round(performance.now() - started),
+    }
+  }
+
+  /**
+   * The rail's rows the record store keeps of sessions their harness
+   * deleted (`RecordStore.listings`), by path: each read back from the
+   * store when opened. Read once, and again after the catalog forgets a
+   * path or the migration keeps a row; empty without a store to read
+   * sessions back from.
+   */
+  private keptRecordRows(): ReadonlyMap<string, ThreadRef> {
+    const store = this.recordStore
+    if (!store || !this.recordReads) return new Map()
+    if (this.recordRows) return this.recordRows
+    const rows = new Map<string, ThreadRef>()
+    try {
+      for (const listing of store.listings()) {
+        const value: unknown = JSON.parse(listing)
+        // Only a session the harnesses no longer list is parsed whole: most rows are of live sessions.
+        const listed = RowPathSchema.safeParse(value)
+        if (!listed.success || this.byPath.has(listed.data.path)) continue
+        const path = listed.data.path
+        const ref = ThreadRefSchema.safeParse(value)
+        if (ref.success) rows.set(path, { ...ref.data, locked: false, archived: true })
+      }
+    } catch (error) {
+      console.warn("The record store's rows could not be read", error instanceof Error ? error.message : error)
+    }
+    this.recordRows = rows
+    return rows
+  }
+
+  /**
+   * One pass of the archive's migration now, as each backfill pass ends
+   * with: for `records.ts` and benchmarks. It takes the backfill's lock, so
+   * it never runs beside a pass; null without an archive, a store to read
+   * sessions back from, or the lock.
+   */
+  async migrateArchive(options: Partial<ArchiveMigrationPassOptions> = {}): Promise<ArchiveMigrationReport | null> {
+    const store = this.recordStore
+    if (!this.archive || !store || this.readOnly) return null
+    const lock = await takeLock(join(store.folder, "backfill.lock"))
+    if (!lock) return null
+    try {
+      return await new ArchiveMigration(this.archive, this.migrationSource()).pass({
+        stopped: () => this.stopped,
+        yieldToPerson: async () => {
+          await Promise.allSettled(this.decoding.values())
+        },
+        ...options,
+      })
+    } finally {
+      await lock.release()
+    }
+  }
+
+  /** What the archive's migration asks of this catalog (`archive-migration.ts`). */
+  private migrationSource(): ArchiveMigrationSource {
+    return {
+      live: () => [...this.byPath.values()].flatMap((entry) => entry.ref ? [entry.ref] : []),
+      discovered: (harness) => !this.undiscovered.has(harness),
+      captured: (ref) => this.recordStore?.captured(ref.harness, ref.nativeId) ?? false,
+      decodesNative: async (path) => {
+        const provider = this.ownerOf(path)
+        if (!provider) return null
+        const stamp = await nativeFileOf(provider, path)
+        const found = stamp ? await this.viewOf(provider, path, stamp) : await this.unstamped(provider, path)
+        return found ? found.view.total : null
+      },
+      decodesRecords: async (ref) => {
+        const store = this.recordStore
+        if (!store) return null
+        const here = store.sessionAt(ref.path)
+        const own = here?.harness === ref.harness && here.nativeId === ref.nativeId ? [ref.path] : []
+        for (const path of new Set([...own, ...store.pathsOf(ref.harness, ref.nativeId)])) {
+          const restored = await this.restored(path)
+          if (restored) return { path, entries: restored.view.total }
+        }
+        return null
+      },
+      keepListing: async (ref) => {
+        const kept = (await this.recordStore?.keepListing(ref.harness, ref.nativeId, ref.path, JSON.stringify(railRow(ref)))) ?? false
+        this.recordRows = null
+        this.orderedRefs = null
+        return kept
+      },
+    }
   }
 
   /**
@@ -1160,8 +1354,11 @@ export class SessionCatalog {
   async remove(path: string): Promise<boolean> {
     if (this.readOnly) throw new ReadOnlyStoreError("The session catalog")
     const provider = this.ownerOf(path)
-    if (!provider?.remove) return false
+    if (!provider) return false
     const ref = this.byPath.get(path)?.ref
+    const kept = ref ? undefined : this.keptRecordRows().get(path)
+    if (kept) return this.removeKept(provider, kept)
+    if (!provider.remove) return false
     if (!(await provider.remove(path))) return false
     // The person deleted it: Mako's records of it go too, streams and its children's files included. A session its harness deletes keeps them.
     if (ref) await this.forgetRecords(ref)
@@ -1177,12 +1374,32 @@ export class SessionCatalog {
   }
 
   /**
-   * Drops a session the person deleted from the record store, with every
-   * home it was read back into and the views read
+   * The person's delete of a session its harness deleted, listed from Mako's
+   * records: the records go, its children's with them (they're the
+   * session's), and a child its harness still keeps goes from the harness,
+   * as with any delete. Nothing lists the session or its children again.
+   */
+  private async removeKept(provider: SessionProvider, ref: ThreadRef): Promise<boolean> {
+    const linked = (await provider.children?.(ref.path).catch(() => null)) ?? []
+    const children = [...new Set(linked.flatMap((child) => (child.path && child.path !== ref.path ? [child.path] : [])))].reverse()
+    for (const child of children) if (await nativeFileOf(provider, child)) await provider.remove?.(child)
+    if (await nativeFileOf(provider, ref.path)) await provider.remove?.(ref.path)
+    await this.forgetRecords(ref, children)
+    this.follows.get(ref.path)?.unobserve?.()
+    this.follows.get(ref.path)?.listeners.clear()
+    this.follows.delete(ref.path)
+    this.forget(ref.path)
+    this.emit({ type: "removed", path: ref.path })
+    return true
+  }
+
+  /**
+   * Drops a session the person deleted from the record store, with its
+   * children's paths, every home it was read back into and the views read
    * there; a failure is logged, and the deletion stands.
    */
-  private async forgetRecords(ref: ThreadRef): Promise<void> {
-    const paths = new Set([ref.path])
+  private async forgetRecords(ref: ThreadRef, children: readonly string[] = []): Promise<void> {
+    const paths = new Set([ref.path, ...children, ...(this.recordStore?.childPaths(ref.harness, ref.nativeId) ?? [])])
     try {
       await this.records?.forget(ref)
       await this.recordReads?.drop(ref.harness, ref.nativeId)
@@ -1194,6 +1411,7 @@ export class SessionCatalog {
       this.restoredFrom.delete(path)
       for (const at of new Set(read)) if (at) await Promise.all([this.memoryViews.remove(at), this.views?.remove(at)])
     }
+    this.recordRows = null
     this.orderedRefs = null
   }
 
@@ -1225,7 +1443,6 @@ export class SessionCatalog {
     await Promise.allSettled([
       this.backfill?.stop(),
       this.preparation,
-      ...this.childNotes,
       ...this.scans,
       this.discovering,
       this.reconciling,
@@ -1392,7 +1609,6 @@ export class SessionCatalog {
         if (ref) {
           if (refMoved(cached?.ref, ref))
             this.emit({ type: cached?.ref ? "updated" : "added", ref })
-          else this.capture(ref)
         } else if (cached?.ref) this.emit({ type: "removed", path: file.path })
       }
       if (follow && follow.listeners.size > 0) {
@@ -1556,7 +1772,6 @@ export class SessionCatalog {
     if (ref) {
       if (refMoved(cached?.ref, ref))
         this.emit({ type: cached?.ref ? "updated" : "added", ref })
-      else this.capture(ref)
     } else if (cached?.ref) this.emit({ type: "removed", path })
 
     if (!follow || follow.listeners.size === 0) return
@@ -1691,65 +1906,18 @@ export class SessionCatalog {
     for (const listener of listeners) listener.reload?.()
   }
 
-  private capture(ref: ThreadRef): void {
-    if (this.stopped) return
-    if (ref.archived || ref.locked || !this.archive) return
-    // A child agent is never a row, so it is noted when its parent's new
-    // revision is, at most once in `CHILD_CAPTURE_MS` while the parent keeps
-    // moving: a session the archive already holds as it is lists nothing.
-    if (!this.archive.note(ref, () => this.archivable(ref.path))) return
-    const now = Date.now()
-    if (now - (this.childCaptures.get(ref.path) ?? -Infinity) < CHILD_CAPTURE_MS) return
-    this.childCaptures.delete(ref.path)
-    this.childCaptures.set(ref.path, now)
-    const oldest = this.childCaptures.keys().next().value
-    if (this.childCaptures.size > 256 && oldest !== undefined) this.childCaptures.delete(oldest)
-    const noting = this.captureChildren(ref).catch(() => {})
-    this.childNotes.add(noting)
-    void noting.finally(() => this.childNotes.delete(noting))
-  }
-
-  /**
-   * Note each located child of a session the archive just captured. Its
-   * copy is keyed by the child's own path and carries its link to the
-   * parent, so a child the harness later drops stays listed and readable
-   * under it; an observed agent roster plays no part.
-   */
-  private async captureChildren(parent: ThreadRef): Promise<void> {
-    const provider = this.ownerOf(parent.path)
-    const archive = this.archive
-    if (!provider?.children || !archive) return
-    for (const child of (await provider.children(parent.path)) ?? []) {
-      const path = child.path
-      if (!path) continue
-      const stamp = await childStamp(provider, path)
-      if (!stamp) continue
-      const link: NonNullable<ThreadRef["childOf"]> = { nativeId: parent.nativeId, path: parent.path }
-      if (child.toolId) link.toolId = child.toolId
-      if (child.state.kind === "complete") link.ended = true
-      const ref: ThreadRef = { harness: parent.harness, nativeId: child.nativeId, path, bytes: stamp.bytes, updatedAt: new Date(stamp.mtimeMs).toISOString(), childOf: link }
-      if (stamp.revision) ref.revision = stamp.revision
-      if (child.title) ref.title = child.title
-      if (child.model) ref.model = child.model
-      if (child.startedAt) ref.startedAt = child.startedAt
-      if (parent.cwd) ref.cwd = parent.cwd
-      archive.note(ref, async () => {
-        const thread = await this.archivable(path)
-        return thread && { ...thread, ref: { ...thread.ref, childOf: link } }
-      })
-    }
-  }
-
   /**
    * The child agents a session started, as its harness's reader links them,
    * and those only Mako's archive still keeps. Lists links and stamps; a
    * child's transcript is read only when its `path` is opened, through
-   * `open`, `page` and `follow` like any session's.
+   * `open`, `page` and `follow` like any session's. Once its harness deletes
+   * the session, the same reader links them in its records read back
+   * (`keptChildren`), at the paths they had.
    */
   async children(path: string): Promise<ChildTranscripts | null> {
     const provider = this.ownerOf(path)
     const kept = this.archive?.childrenOf(path) ?? []
-    let ref = this.byPath.get(path)?.ref ?? this.archive?.kept(path)
+    let ref = this.byPath.get(path)?.ref ?? this.keptRecordRows().get(path) ?? this.archive?.kept(path)
     if (!ref && provider) {
       const file = await nativeFileOf(provider, path)
       const peek = file ? await peeked(provider, file, this.workspaces) : null
@@ -1760,7 +1928,7 @@ export class SessionCatalog {
     if (!provider?.children && !kept.length)
       return { parent, children: [], unsupported: `${provider?.displayName ?? ref.harness} records no child agents Mako can read.` }
     // A store a writer holds rejects (`SessionUnreadable`) rather than list no children.
-    const listed = (provider?.children ? await provider.children(path) : null) ?? []
+    const listed = (provider?.children ? (await this.keptChildren(provider, path)) ?? (await provider.children(path)) : null) ?? []
     const byId = new Map(listed.map((child) => [child.nativeId, child]))
     for (const copy of kept) {
       const native = byId.get(copy.nativeId)
@@ -1782,25 +1950,56 @@ export class SessionCatalog {
     return { parent, ...boundedChildren([...byId.values()]) }
   }
 
+  /**
+   * The children of a session its harness deleted, linked by its reader in
+   * the session's records read back, at the paths they had: each opens from
+   * the same records (`restored`). Null for a session its harness has, or
+   * one the store doesn't hold. Children a capture from before captures
+   * named them are kept now, so a link to one resolves from then on.
+   */
+  private async keptChildren(provider: SessionProvider, path: string): Promise<ChildTranscript[] | null> {
+    const reads = this.recordReads
+    const store = this.recordStore
+    const session = store?.sessionAt(path)
+    if (!reads || !store || !session || (await nativeFileOf(provider, path))) return null
+    const restored = await reads.read({ ...session, path }).catch((error) => {
+      console.warn("A session's children could not be read back from its records", path, error instanceof Error ? error.message : error)
+      return null
+    })
+    const children = restored?.provider.children ? await restored.provider.children(restored.path) : null
+    if (!restored || !children) return null
+    const listed = children.map((child) => (child.path ? { ...child, path: reads.original(child.path, restored.home) } : child))
+    const unlinked = listed.flatMap((child) => (child.path && !store.parentAt(child.path) ? [child.path] : []))
+    if (unlinked.length && store.access === "write" && !this.readOnly)
+      await store.keepChildPaths(session.harness, session.nativeId, unlinked).catch((error) => {
+        console.warn("A kept session's children could not be linked to it", path, error instanceof Error ? error.message : error)
+      })
+    return listed
+  }
+
   private forget(path: string): boolean {
     this.orderedRefs = null
+    // A session its harness deleted is listed from the record store's row of it now.
+    this.recordRows = null
     return this.byPath.delete(path)
   }
 
   private emit(event: CatalogEvent): void {
     if (this.stopped) return
-    // `list` goes on serving a record its store dropped from the archive, so
-    // the event says the same: announced as removed, the row vanished and a
-    // reload brought it back.
-    const kept = event.type === "removed" ? this.archive?.kept(event.path) : undefined
-    if (kept) event = { type: "updated", ref: this.workspaces.ref(kept) ?? kept }
-    // Archive once the writer releases its lock. Re-translating a giant live
-    // conversation on every checkpoint competes with the agent writing it.
-    if (event.type === "added" || event.type === "updated") {
-      if (this.archive) this.capture(event.ref)
-      this.records?.wrote(event.ref)
-    }
+    // `list` goes on serving a session its harness deleted, from the record
+    // store or the archive's copy, so the event says the same: announced as
+    // removed, the row vanished and a reload brought it back.
+    // A session its harness only moved (Codex archiving a rollout) is listed at its new path: the old one is simply removed.
+    const kept = event.type === "removed" ? this.keptRecordRows().get(event.path) ?? this.archive?.kept(event.path) : undefined
+    if (kept && !this.listsIdentity(threadIdentity(kept))) event = { type: "updated", ref: this.workspaces.ref(kept) ?? kept }
+    if (event.type === "added" || event.type === "updated") this.records?.wrote(event.ref)
     for (const listener of this.listeners) listener(event)
+  }
+
+  /** Whether a harness lists a session of this identity now, at any path. */
+  private listsIdentity(identity: string): boolean {
+    for (const entry of this.byPath.values()) if (entry.ref && threadIdentity(entry.ref) === identity) return true
+    return false
   }
 
   /* ------------------------------------------------------------ cache */

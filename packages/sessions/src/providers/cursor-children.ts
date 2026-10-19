@@ -129,16 +129,16 @@ export class CursorChildren {
     return boundedChildren([...children.values()].sort((left, right) => (left.startedAt ?? "~").localeCompare(right.startedAt ?? "~"))).children
   }
 
-  /** The files of a parent's children, for its records. */
-  async recordsOf(parentId: string): Promise<string[]> {
+  /** The files of a parent's children, for its records, and the plain transcripts read as children. */
+  async recordsOf(parentId: string): Promise<{ files: string[]; transcripts: string[] }> {
     const files: string[] = []
     for (const { path } of await this.storeChildren(parentId)) {
       const folder = dirname(path)
       for (const name of await readdir(folder).catch(() => new Array<string>()))
         if (!/^store\.db(?:-wal|-shm|-journal)?$/.test(name)) files.push(join(folder, name))
     }
-    files.push(...(await this.transcripts(parentId)).values())
-    return files
+    const transcripts = [...(await this.transcripts(parentId)).values()]
+    return { files: [...files, ...transcripts], transcripts }
   }
 
   /** The child stores of a parent: the `store.db` files their database must be captured from. */
@@ -176,6 +176,11 @@ export class CursorChildren {
    * its parent, listed at most once in `INDEX_MS`. A store's meta is read
    * once per mtime; listing a hundred parents' children costs one pass.
    */
+  /** Lists again on the next ask: Mako wrote into the store (`SessionProvider.storeWritten`). */
+  forget(): void {
+    this.indexed = null
+  }
+
   private index(): Promise<ChildIndex> {
     if (this.indexed && Date.now() - this.indexed.at < INDEX_MS) return this.indexed.index
     const index = this.build()
