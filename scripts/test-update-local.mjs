@@ -1,10 +1,10 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rename, rm, symlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createPackage, extractFile } from "@electron/asar"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
-import { selectLocalSigner, updateLocal } from "./update-local.mjs"
+import { selectLocalSigner, sweepLocalUpdates, updateLocal } from "./update-local.mjs"
 
 const identity = "A".repeat(40)
 const options = {
@@ -17,6 +17,12 @@ function fixture(overrides = {}) {
   let checks = 0
   const dependencies = {
     say: () => {},
+    ensureSpace: async () => {
+      calls.push({ command: "space" })
+    },
+    remove: async (path) => {
+      calls.push({ command: "remove", path })
+    },
     run: async (command, args, env) => {
       calls.push({ command, args, env })
     },
@@ -52,16 +58,18 @@ const success = fixture()
 await updateLocal(options, success.dependencies)
 assert.deepEqual(
   success.calls.map((call) => call.command),
-  ["npm", "reserve", "prepare", "wait", "wait", process.execPath, "open", "verify-startup", "release"]
+  ["space", "npm", "reserve", "prepare", "wait", "wait", process.execPath, "open", "verify-startup", "release", "remove"]
 )
-assert.deepEqual(success.calls[0].args, [
+// Installing copied the app into /Applications; the output goes last.
+assert.equal(success.calls.at(-1).path, options.output)
+assert.deepEqual(success.calls[1].args, [
   "run",
   "package:mac:local",
   "--",
   `--output=${options.output}`,
 ])
-assert.equal(success.calls[0].env.MAKO_LOCAL_SIGNING_IDENTITY, identity)
-assert.deepEqual(success.calls.at(-4).args, [
+assert.equal(success.calls[1].env.MAKO_LOCAL_SIGNING_IDENTITY, identity)
+assert.deepEqual(success.calls.find((call) => call.command === process.execPath).args, [
   join(options.project, "scripts/install-local-mac.mjs"),
   join(options.output, "mac-arm64/Mako.app"),
   "--install",
@@ -70,7 +78,7 @@ const declined = fixture({ confirm: async () => false })
 await updateLocal(options, declined.dependencies)
 assert.deepEqual(
   declined.calls.map((call) => call.command),
-  ["npm"]
+  ["space", "npm", "remove"]
 )
 const badSigner = fixture({ verify: async () => "B".repeat(40) })
 await assert.rejects(
@@ -79,7 +87,7 @@ await assert.rejects(
 )
 assert.deepEqual(
   badSigner.calls.map((call) => call.command),
-  ["npm"]
+  ["space", "npm", "remove"]
 )
 const interrupted = fixture({
   wait: async () => {
@@ -92,7 +100,7 @@ await assert.rejects(
 )
 assert.deepEqual(
   interrupted.calls.map((call) => call.command),
-  ["npm", "reserve", "prepare", "cancel", "release"]
+  ["space", "npm", "reserve", "prepare", "cancel", "release", "remove"]
 )
 const masked = fixture({
   running: async () => [],
@@ -145,7 +153,33 @@ const failed = fixture({
   },
 })
 await assert.rejects(updateLocal(options, failed.dependencies), /Build failed/)
-assert.deepEqual(failed.calls, [])
+assert.deepEqual(failed.calls.map((call) => call.command), ["space", "remove"])
+const full = fixture({
+  ensureSpace: async () => {
+    throw new Error("Not enough free disk space to build Mako")
+  },
+})
+await assert.rejects(updateLocal(options, full.dependencies), /Not enough free disk space/)
+assert.deepEqual(full.calls.map((call) => call.command), ["remove"])
+// A removal that fails is reported, and never hides the update's own outcome.
+const said = []
+const stuck = fixture({
+  say: (text) => said.push(text),
+  remove: async () => {
+    throw new Error("busy")
+  },
+})
+await updateLocal(options, stuck.dependencies)
+assert.match(said.at(-1), /Could not remove the build output .*busy/)
+const stuckFailure = fixture({
+  run: async () => {
+    throw new Error("Build failed")
+  },
+  remove: async () => {
+    throw new Error("busy")
+  },
+})
+await assert.rejects(updateLocal(options, stuckFailure.dependencies), /Build failed/)
 
 const root = await mkdtemp(join(tmpdir(), "mako-update-command-"))
 async function app(path, distribution) {
@@ -215,8 +249,39 @@ try {
     ),
     /different signing identities/
   )
+  // Earlier runs' outputs go unless a live run owns them or, unmarked, one
+  // was touched within the hour; the install lock stops the sweep outright.
+  const release = join(root, "release")
+  const output = async (name, owner, age = 0) => {
+    const folder = join(release, name)
+    await mkdir(join(folder, "mac-arm64/Mako.app"), { recursive: true })
+    if (owner !== undefined) await writeFile(join(folder, "update-local.pid"), String(owner))
+    const time = new Date(Date.now() - age)
+    await utimes(folder, time, time)
+  }
+  const hour = 60 * 60_000
+  await output(".local-update-live", 111, 5 * hour)
+  await output(".local-update-dead", 222, 5 * hour)
+  await output(".local-update-unmarked", undefined, 2 * hour)
+  await output(".local-update-fresh", undefined, 0)
+  await symlink(join(root, "swapped.app"), join(release, ".local-update-link"))
+  const lock = join(root, "Mako.app.update-lock")
+  const sweep = () => sweepLocalUpdates({ release, lock, isAlive: (pid) => pid === 111 })
+  await writeFile(lock, "{}")
+  assert.deepEqual(await sweep(), [], "an installer holding the lock stops the sweep")
+  await rm(lock)
+  assert.deepEqual((await sweep()).sort(), [join(release, ".local-update-dead"), join(release, ".local-update-unmarked")])
+  assert.deepEqual(
+    (await readdir(release)).sort(),
+    [".local-update-fresh", ".local-update-link", ".local-update-live", "another", "known", "unfinished"]
+  )
+  // The signer lookup still reads the builds the sweep leaves.
+  assert.equal(
+    await selectLocalSigner({ project: root, installed }, async () => identity),
+    identity
+  )
   console.log(
-    "One-command update: fresh metadata after archive replacement, verified signer reuse, no fallback from a bad installed signature, ambiguity refusal, ordered build/install, confirmation, wait cancellation, failures, and literal paths passed"
+    "One-command update: removed build output on install, decline and failure, disk refusal before building, stale output sweep, fresh metadata after archive replacement, verified signer reuse, no fallback from a bad installed signature, ambiguity refusal, ordered build/install, confirmation, wait cancellation, failures, and literal paths passed"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

@@ -106,8 +106,9 @@ async function check() {
       await window.loadURL(`${process.env.MAKO_ORIGINALS_CHECK_URL}?mock&app=streams`)
       await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 2, mobile: false })
       await until(`Boolean(document.querySelector(${JSON.stringify(field)}))`, "the composer")
-      // The theme is a preference the app paints again whenever preferences change.
-      await evaluate(`localStorage.setItem("mako.prefs.v1", JSON.stringify({ ...JSON.parse(localStorage.getItem("mako.prefs.v1") ?? "{}"), theme: ${JSON.stringify(theme)} })); true`)
+      // The theme is a preference the app paints again whenever preferences change; Original is a debugging aid,
+      // offered only once Settings › Diagnostics turns it on.
+      await evaluate(`localStorage.setItem("mako.prefs.v1", JSON.stringify({ ...JSON.parse(localStorage.getItem("mako.prefs.v1") ?? "{}"), theme: ${JSON.stringify(theme)}, showOriginals: true })); true`)
       await window.loadURL(`${process.env.MAKO_ORIGINALS_CHECK_URL}?mock&app=streams`)
       await until(`Boolean(document.querySelector(${JSON.stringify(field)}))`, "the composer again")
       assert.equal(await evaluate("document.documentElement.classList.contains('light')"), theme === "light", `the window is ${theme}`)

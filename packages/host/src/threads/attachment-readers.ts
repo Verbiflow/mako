@@ -26,8 +26,8 @@ import { DeskBrowserFamilySchema, deskClientsPath, NOTE_EVERY_MS, readDeskClient
  *   port moves, so every loopback origin is read). Every Chromium-family
  *   user-data root (found by its `Local State`, as the browser extension's
  *   setup finds them) and each of its profiles; Firefox's per-origin stores
- *   for loopback origins; Safari's when its container can be read (Full
- *   Disk Access).
+ *   for loopback origins; Safari's never, since listing its container
+ *   makes macOS ask the person each time.
  * - **Holds.** A browser whose storage can't be read holds every file that
  *   existed while a desk ran in it, which the desk-client record says
  *   (`desk-clients.ts`). Before that record began nobody can say, so every
@@ -137,22 +137,11 @@ async function browserStores(input: { appData: string; home: string; platform?: 
       if (existsSync(legacy)) browsers.push({ path: legacy, kind: "webkit", label: `firefox ${basename(profile)} webappsstore` })
     }
   }
-  // Safari keeps its storage in its container, which only an app with Full Disk Access reads.
-  if (platform === "darwin") {
-    const website = join(input.home, "Library", "Containers", "com.apple.Safari", "Data", "Library", "WebKit", "WebsiteData", "Default")
-    const salts = await children(website)
-    if (salts === "unreadable") unreadable.push("safari")
-    else {
-      for (const salt of salts) {
-        const origins = await children(salt)
-        if (origins === "unreadable") continue
-        for (const origin of origins) {
-          const store = join(origin, "LocalStorage", "localstorage.sqlite3")
-          if (existsSync(store)) browsers.push({ path: store, kind: "webkit", label: `safari ${basename(origin).slice(0, 12)}` })
-        }
-      }
-    }
-  }
+  // Safari keeps its storage in its container. Listing another app's container makes macOS (15 and later) ask
+  // the person whether Mako may "access data from other apps", and the sweep runs every pass, so the question
+  // came every few minutes. Safari is never read: it counts as unreadable, which holds a desk's drafts only when
+  // the launchers recorded a desk opened there (`desk-clients.json`).
+  if (platform === "darwin") unreadable.push("safari")
   return { browsers, unreadable: [...new Set(unreadable)] }
 }
 

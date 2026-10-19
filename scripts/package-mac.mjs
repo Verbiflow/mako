@@ -21,6 +21,7 @@ import { auditPackage } from "./audit-package.mjs"
 import { assertPackagedImports } from "./test-packaged-imports.mjs"
 import { assertCursorSdkPatched } from "./patch-cursor-sdk.mjs"
 import { localMacConfig, resolveLocalIdentity, verifyLocalSignature } from "./mac-local-signing.mjs"
+import { pruneReleaseBuilds } from "./lib/prune-release.mjs"
 
 const project = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const PRODUCTION_CLOUD = "https://api.runmako.co"
@@ -304,4 +305,9 @@ try {
   if (deferredRuntimeChecks) console.log("Runtime checks deferred: this package is not ready for installation until separate startup and integration acceptance passes")
 } finally {
   await rm(stage, { recursive: true, force: true })
+  // Every package used to stay in release/ for good; 72 of them filled 42 GB.
+  const { unregisterBundle } = await import("@mako/host/application/local-update-installer")
+  await pruneReleaseBuilds({ project, output, unregister: unregisterBundle }).catch((error) =>
+    console.warn(`Could not remove older packaged builds from release/: ${error instanceof Error ? error.message : error}`)
+  )
 }

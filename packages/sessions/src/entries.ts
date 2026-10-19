@@ -64,10 +64,25 @@ export function joined(held: RecordRef | undefined, record: RecordRef | undefine
 function joinedRanges(held: [number, number][], added: [number, number][]): [number, number][] {
   const last = held.at(-1)
   const copy = ([from, to]: [number, number]): [number, number] => [from, to]
+  if (last && added.length > 0 && added[0]![0] >= last[0] && ascending(added) && apart(held)) {
+    // A stream's next lines, the reducer's case on every update: only the last range can
+    // grow, so the ranges before it are shared rather than copied, each update again.
+    const ranges = held.slice(0, -1)
+    let tail = last
+    for (const range of added) {
+      if (range[0] > tail[1]) {
+        ranges.push(tail)
+        tail = copy(range)
+      } else if (range[1] > tail[1]) tail = [tail[0], range[1]]
+    }
+    ranges.push(tail)
+    return ranges
+  }
   const ranges: [number, number][] =
     !last || (added.length > 0 && added[0]![0] >= last[0] && ascending(added))
-      ? [...held.slice(0, -1), ...(last ? [copy(last)] : []), ...added.map(copy)]
+      ? [...held.slice(0, -1).map(copy), ...(last ? [copy(last)] : []), ...added.map(copy)]
       : [...held, ...added].sort((a, b) => a[0] - b[0]).map(copy)
+  // Every range here is a copy, so widening one never reaches the caller's (`held` stays as it was given).
   let kept = 0
   for (const range of ranges) {
     const previous = kept > 0 ? ranges[kept - 1]! : undefined
@@ -76,6 +91,12 @@ function joinedRanges(held: [number, number][], added: [number, number][]): [num
   }
   ranges.length = kept
   return ranges
+}
+
+/** Whether no range reaches the next, as `joinedRanges` leaves them. */
+function apart(ranges: [number, number][]): boolean {
+  for (let index = 1; index < ranges.length; index++) if (ranges[index]![0] <= ranges[index - 1]![1]) return false
+  return true
 }
 
 function ascending(ranges: [number, number][]): boolean {

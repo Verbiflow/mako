@@ -4,9 +4,11 @@ import assert from "node:assert/strict"
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   utimes,
   writeFile,
@@ -14,7 +16,7 @@ import {
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { execFileSync } from "node:child_process"
-import { copyBuildSource, syncBuildCheckout, LocalUpdates } from "@mako/host/application/local-updates"
+import { copyBuildSource, syncBuildCheckout, LocalUpdates, ensureBuildSpace, buildCopyBytes, PACKAGED_APP_BYTES, DISK_MARGIN_BYTES } from "@mako/host/application/local-updates"
 
 const gitRunner = new Git()
 
@@ -159,6 +161,33 @@ try {
     assert.ok(checkFailure.message.length < 1800, "Build diagnostics remain bounded")
   }
 
+  // The disk guard refuses below what the copy, a packaged app and the margin
+  // need, says both numbers, and runs before anything is copied.
+  const disk = (free: number) => async () => ({ bavail: free, bsize: 1 })
+  const copied = 3e9
+  const needed = copied + PACKAGED_APP_BYTES + DISK_MARGIN_BYTES
+  assert.deepEqual(await ensureBuildSpace(root, copied, disk(needed)), { needed, free: needed })
+  await assert.rejects(ensureBuildSpace(root, copied, disk(needed - 1)), (error: Error) => {
+    assert.match(error.message, /needs about 9\.0 GB free on the disk holding .* and 9\.0 GB is free\. Nothing was copied or built/)
+    return true
+  })
+  await assert.rejects(ensureBuildSpace(root, 0, disk(2e9)), /needs about 6\.0 GB free .* and 2\.0 GB is free/)
+  const sizes = await Promise.all(["package.json", "pass.cjs", "fail.cjs"].map(async (name) => (await stat(join(checkingSource, name))).size))
+  assert.equal(await buildCopyBytes(checkingSource), sizes.reduce((sum, size) => sum + size, 0), "the copy estimate counts what the sync copies, not .git")
+  const fullRoot = join(root, "full-disk-updates")
+  let finishFull = () => {}
+  const fullFinished = new Promise<void>(resolve => { finishFull = resolve })
+  const full = new LocalUpdates(gitRunner, fullRoot, "A".repeat(40), () => {
+    if (!full.building && full.snapshot().local.kind === "error") finishFull()
+  }, null, { statfs: disk(1e9) })
+  await full.select(checkingSource)
+  full.start()
+  await fullFinished
+  const refused = full.snapshot().local
+  assert.equal(refused.kind, "error")
+  if (refused.kind === "error") assert.match(refused.message, /Not enough free disk space to build Mako: it needs about .* and 1\.0 GB is free/)
+  for (const name of await readdir(fullRoot)) assert.ok(!/^(checkout|build-)/.test(name), `nothing was copied before the refusal: ${name}`)
+
   // A failed in-app install followed by a newer build installed elsewhere
   // (the CLI never writes this receipt) must not keep reporting the old failure.
   const receipts = join(root, "receipt-updates")
@@ -173,7 +202,7 @@ try {
   const same = new LocalUpdates(gitRunner, receipts, "A".repeat(40), () => {}, build(new Date(failedAt.getTime() - 1000)))
   await same.load()
   assert.equal(same.snapshot().local.kind, "error", "A failure after the running build was built still applies")
-  console.log("Local build copies preserve workspace links and security configuration, isolate writes, exclude generated data, reject escaping links, prune earlier build directories, report the real preparation error and ignore superseded install receipts")
+  console.log("Local build copies preserve workspace links and security configuration, isolate writes, exclude generated data, reject escaping links, prune earlier build directories, refuse a build the disk can't hold, report the real preparation error and ignore superseded install receipts")
 } finally {
   await rm(root, { recursive: true, force: true })
 }
