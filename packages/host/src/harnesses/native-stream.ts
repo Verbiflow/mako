@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks"
 import { constants } from "node:fs"
 import { appendFile, mkdir, open, rename } from "node:fs/promises"
 import { basename, dirname } from "node:path"
@@ -8,6 +7,7 @@ import type { ExecutionContext } from "../contracts/execution-context.js"
 import type { JsonObject } from "../contracts/json.js"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
 import { hostLog } from "../base/host-log.js"
+import { SyncScope } from "../base/sync-scope.js"
 import { nativeStreamJson } from "../base/native-diagnostic-json.js"
 
 /**
@@ -50,18 +50,18 @@ export interface NativeStream<Frame> {
   readonly path: string | null
   /**
    * A frame as `JSON.stringify` writes it, at the moment it's recorded, and
-   * where its line goes, for what it decodes into (`withFrame`).
+   * where its line goes and when it was stamped, for what it decodes into (`withFrame`).
    */
-  record(message: Frame): StreamFrame | undefined
+  record(message: Frame): RecordedLine | undefined
   /** A turn opened: the turn the messages after it belong to. */
-  prompted(prompt?: StreamedPrompt): StreamFrame | undefined
+  prompted(prompt?: StreamedPrompt): RecordedLine | undefined
   /** The harness took `text`, which Mako steered into the running turn and showed as `shown` where that differs. */
-  steered(text: string, shown?: string): StreamFrame | undefined
+  steered(text: string, shown?: string): RecordedLine | undefined
   /**
    * What the host drew from what it read across several messages or by its
    * own clock, which no decoder draws, so a replay draws it where it was.
    */
-  drawn(update: JsonObject): StreamFrame | undefined
+  drawn(update: JsonObject): RecordedLine | undefined
   /**
    * The harness reported its version in its handshake: a `{ "at", "runtime",
    * "via" }` line, once per version a launch reports. The record store reads
@@ -122,33 +122,39 @@ export interface StreamedPrompt {
  */
 export type StreamFrame = RecordRef
 
-/** The frame being decoded, open while its decode runs: work the decode starts that runs later wasn't decoded from it. */
-const decoding = new AsyncLocalStorage<{ frame: StreamFrame | undefined; at: number | undefined; open: boolean }>()
+/**
+ * A line as the decode reading it takes it (`withFrame`): its frame, and
+ * when it was stamped (its `"at"`) where the recorder stamped a message's
+ * line or a replay read one. The time travels with the line: a table keyed
+ * by every recorded frame cost the recorder a tenth of its time in
+ * collection.
+ */
+export interface RecordedLine {
+  frame?: StreamFrame
+  at?: number
+}
 
-/** When each frame's line was stamped (its `"at"`), for the decode that reads it (`frameTime`). */
-const stampedAt = new WeakMap<StreamFrame, number>()
+/** The line being decoded, while its decode runs: work the decode starts that runs later wasn't decoded from it. */
+const decoding = new SyncScope<RecordedLine>()
 
 /**
- * Runs `decode` with `frame` as the frame what it emits came from: the
- * engine names it on each update and marker (`frameOf`), and reads the time
- * its line was stamped with as the time it arrived (`frameTime`). A replay,
- * which builds no frames of the recorder, passes the line's `at`. Decoding
- * is synchronous, so the frame is current only while its decode runs.
+ * Runs `decode` with `line` as the line what it emits came from: the engine
+ * names its frame on each update and marker (`frameOf`), and reads the time
+ * it was stamped with as the time it arrived (`frameTime`). Decoding is
+ * synchronous, so the line is current only while its decode runs.
  */
-export function withFrame<T>(frame: StreamFrame | undefined, decode: () => T, at: number | undefined = frame && stampedAt.get(frame)): T {
-  if (!frame && at === undefined) return decode()
-  const held = { frame, at, open: true }
-  try {
-    return decoding.run(held, decode)
-  } finally {
-    held.open = false
-  }
+export function withFrame<T>(line: RecordedLine | undefined, decode: () => T): T {
+  return line ? decoding.run(line, decode) : decode()
 }
 
 /** The frame being decoded; none outside `withFrame`. */
 export function frameOf(): StreamFrame | undefined {
-  const held = decoding.getStore()
-  return held?.open ? held.frame : undefined
+  return decoding.get()?.frame
+}
+
+/** The line being decoded, for a decode to run under again later (a notice held until the session opens); none outside `withFrame`. */
+export function lineOf(): RecordedLine | undefined {
+  return decoding.get()
 }
 
 /**
@@ -157,8 +163,7 @@ export function frameOf(): StreamFrame | undefined {
  * replay of the stream measures. None outside `withFrame`.
  */
 export function frameTime(): number | undefined {
-  const held = decoding.getStore()
-  return held?.open ? held.at : undefined
+  return decoding.get()?.at
 }
 
 const missing = (cause: unknown) => cause instanceof Error && "code" in cause && cause.code === "ENOENT"
@@ -319,7 +324,10 @@ export function nativeStream<Frame>(
     return placed ? { file: `${STREAMS_ROOT}:${harness}/${basename(target.path)}`, ranges: [[from, to]] } : undefined
   }
 
-  const line = (body: JsonObject) => append(`${nativeStreamJson({ at: new Date().toISOString(), ...body })}\n`)
+  const line = (body: JsonObject): RecordedLine | undefined => {
+    const frame = append(`${nativeStreamJson({ at: new Date().toISOString(), ...body })}\n`)
+    return frame && { frame }
+  }
   let reported: string | undefined
 
   return {
@@ -336,8 +344,7 @@ export function nativeStream<Frame>(
       if (json === undefined) return line({ unrecordable: "undefined" })
       const at = Date.now()
       const frame = append(`{"at":"${new Date(at).toISOString()}","message":${json}}\n`)
-      if (frame) stampedAt.set(frame, at)
-      return frame
+      return frame && { frame, at }
     },
     prompted: (prompt = {}) => {
       const body: JsonObject = { prompted: true }

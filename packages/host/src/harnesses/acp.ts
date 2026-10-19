@@ -69,7 +69,7 @@ import { basename } from "node:path"
 import { applyAcpSettings } from "./acp-config.js"
 import { acpObservedSettings } from "@mako/sessions/acp-decoder"
 import { AcpDecoder, acpAnswer, type AcpNotificationRecord, type AcpRequestRecord, type AcpResponseRecord } from "./acp-decoder.js"
-import { frameOf, nativeStream, streamRuntime, withFrame, type NativeStream, type StreamFrame } from "./native-stream.js"
+import { lineOf, nativeStream, streamRuntime, withFrame, type NativeStream, type RecordedLine } from "./native-stream.js"
 import { deliverDecoded } from "../contracts/native-decoding.js"
 import { normalizeAcpOptions } from "@mako/sessions/model-catalog"
 import type { AcpBackgroundObserver, AcpBackgroundReport, AcpNotificationDecoding, AcpProviderTurnCause, AcpSidePeer, AcpTuning, ProviderAcpSource } from "./acp-source.js"
@@ -595,7 +595,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     function applyNotification(decoded: AcpNotificationDecoding, raw?: JsonObject): void {
       const { sessionId, kind, notices, state, id: noticeId } = decoded
       if ((notices?.length || decoded.usage?.length) && !live.sessionId) {
-        opening.push({ decoded, frame: frameOf() })
+        opening.push({ decoded, line: lineOf() })
         return
       }
       if (notices && sessionId !== live.sessionId) return
@@ -630,7 +630,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       for (const path of paths) engine.unknown(live, `session/update/${kind}/lost/${path}`, "unreadable", { method: "session/update", params })
     }
     const mcpStartup = source.mcpStartup?.()
-    const opening: { decoded: AcpNotificationDecoding; frame: StreamFrame | undefined }[] = []
+    const opening: { decoded: AcpNotificationDecoding; line: RecordedLine | undefined }[] = []
     const background = source.observeBackground?.()
     live.background = background
     const providerTurns = source.providerTurns?.()
@@ -766,9 +766,9 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       live.sessionId = session.sessionId
       open(session.sessionId)
       observeUsage(live.models.opened(session.reply))
-      for (const { decoded, frame } of opening.splice(0))
+      for (const { decoded, line } of opening.splice(0))
         if ((decoded.sessionId ?? session.sessionId) === session.sessionId)
-          withFrame(frame, () => applyNotification({ ...decoded, sessionId: session.sessionId, usage: decoded.usage?.filter((observation) => observation.kind !== "spent" && observation.kind !== "costSpent") }))
+          withFrame(line, () => applyNotification({ ...decoded, sessionId: session.sessionId, usage: decoded.usage?.filter((observation) => observation.kind !== "spent" && observation.kind !== "costSpent") }))
       const agents = source.agents
       live.agents = await trace.step("observation", () => agents?.kind !== "observed" ? undefined : agents.observe({
         nativeId: session.sessionId, cwd: workingDir, env, observedAgents: options.observedAgents,

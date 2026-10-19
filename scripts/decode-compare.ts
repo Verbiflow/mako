@@ -132,7 +132,7 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
     }
     replaying = openings.some((opening) => index >= opening.at && index < (opening.opened ?? Infinity))
     const at = recording.times?.[index]
-    withFrame(frame(recording.frames?.[index]), () => deliverDecoded(decoder.decode(message), sink), at === undefined || Number.isNaN(at) ? undefined : at)
+    withFrame({ frame: frame(recording.frames?.[index]), at: at === undefined || Number.isNaN(at) ? undefined : at }, () => deliverDecoded(decoder.decode(message), sink))
   })
   replaying = false
   draw(Infinity)

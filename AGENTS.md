@@ -3088,7 +3088,11 @@ on an A/B (`--rows <keys> --ab`, or `--reference <commit>`), never on one
 loaded run. `npm run update:local` runs no `test:performance`; Settings >
 Updates does, in a copy without `.git`, alongside `test:application` and
 `test:renderer-assets`, and names its source in `MAKO_BUILD_SOURCE` for the
-export.
+export. On a per-message path, a `WeakMap` entry per message cost the
+recorder a tenth of its time in collection and an `AsyncLocalStorage.run`
+per message a fifth of the host rows': carry a value on the object a caller
+already passes (`RecordedLine`), and scope one for a synchronous call with
+`SyncScope`.
 
 Journal text appends remain in the same SQLite transaction as metadata;
 publish only after commit. The journal and the requests store run WAL with
