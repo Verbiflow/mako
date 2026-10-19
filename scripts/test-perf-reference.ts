@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { buildRepository } from "./perf-reference"
 
 /**
@@ -13,7 +13,9 @@ import { buildRepository } from "./perf-reference"
 
 const root = mkdtempSync(join(tmpdir(), "mako-perf-reference-"))
 try {
-  const repository = dirname(import.meta.dirname)
+  // Folders of its own, so the test reads the same wherever it runs, a build copy without `.git` included.
+  const repository = join(root, "checkout-with-history")
+  mkdirSync(join(repository, ".git"), { recursive: true })
   const updates = join(root, "updates")
   const copy = join(updates, "checkout")
   mkdirSync(copy, { recursive: true })
