@@ -38,7 +38,8 @@ const SCHEMA = 1
 const COUNTED = new Set(["unknown", "unreadable"])
 
 export class UnreadIndex {
-  private readonly db: DatabaseSync | null
+  /** Undefined for an index in memory nothing has been noted in yet. */
+  private db: DatabaseSync | null | undefined
   private readonly statements = new Map<string, StatementSync>()
   private formatVersion = -1
   /** Another build raised the index's format since it opened: this build notes nothing more in it. */
@@ -46,7 +47,8 @@ export class UnreadIndex {
 
   /** `file` null keeps the index in memory, for a catalog that writes nothing. `writer` stamps a format this build sets (`storeWriter`). */
   constructor(readonly file: string | null, options: { writer?: string } = {}) {
-    this.db = open(file, options.writer)
+    // One in memory opens with its first unread record: a catalog made to read a clean session, as each saved open is, opens no database.
+    this.db = file ? open(file, options.writer) : undefined
   }
 
   /** Whether a newer Mako raised the index's format since it opened, read again after another build's commit. */
@@ -62,6 +64,14 @@ export class UnreadIndex {
 
   /** Replaces what is known of `ref`'s unread records with `entries`, those its view now holds. */
   note(ref: Pick<ThreadRef, "path" | "harness" | "nativeId">, translator: string, entries: Iterable<EntryOf<"unread">>): void {
+    const counted: { id: string; entry: EntryOf<"unread"> }[] = []
+    let index = 0
+    for (const entry of entries) {
+      index += 1
+      if (COUNTED.has(entry.reason)) counted.push({ id: entry.id ?? `#${index}`, entry })
+    }
+    // An index in memory that holds nothing yet has nothing to replace.
+    if (this.db === undefined && counted.length) this.db = open(null, undefined)
     const db = this.db
     if (!db) return
     db.exec("BEGIN IMMEDIATE")
@@ -73,12 +83,8 @@ export class UnreadIndex {
       this.prepared("DELETE FROM unread WHERE path = ?").run(ref.path)
       const insert = this.prepared("INSERT OR REPLACE INTO unread (path, harness, native_id, translator, id, kind, reason, record, at, noted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       const noted = Date.now()
-      let index = 0
-      for (const entry of entries) {
-        index += 1
-        if (!COUNTED.has(entry.reason)) continue
-        insert.run(ref.path, ref.harness, ref.nativeId, translator, entry.id ?? `#${index}`, entry.kind, entry.reason, entry.record ? JSON.stringify(entry.record) : null, entry.at ?? null, noted)
-      }
+      for (const { id, entry } of counted)
+        insert.run(ref.path, ref.harness, ref.nativeId, translator, id, entry.kind, entry.reason, entry.record ? JSON.stringify(entry.record) : null, entry.at ?? null, noted)
       db.exec("COMMIT")
     } catch (error) {
       if (db.isTransaction) db.exec("ROLLBACK")
