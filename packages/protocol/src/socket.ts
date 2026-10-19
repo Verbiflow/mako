@@ -124,6 +124,10 @@ export function runtimeLinkOverSocket(socket: MessageSocket): RuntimeLink {
 
 type Connection = {
   socket: Promise<MessageSocket>
+  /** When anything last came from the gateway on it, a pong included. */
+  heard: number
+  /** Ends it now: its calls are answered unknown and its subscriptions end, for their readers to follow again. */
+  drop(): void
   calls: Map<string, Array<(reply: Reply) => void>>
   correlations: Map<string, string>
   streams: Map<StreamId, Inbox<EventFrame>>
@@ -131,10 +135,25 @@ type Connection = {
   renewal: Renewal | undefined
 }
 
-export type ClientSessionOverSockets = ClientSession & { close(): void }
+export type ClientSessionOverSockets = ClientSession & {
+  close(): void
+  /**
+   * After a sleep or a network change: a connection not heard from within a heartbeat ends now, and one heard just
+   * before is pinged and ends unless the gateway answers soon, rather than when its socket finally fails, which on a
+   * network the wake didn't keep can take minutes.
+   */
+  wake(): void
+}
 
 export type ClientSessionOptions = {
   heartbeatMs?: number
+  /**
+   * Nothing heard on a connection for this long and it's presumed dead, as after a laptop sleeps: the gateway answers
+   * every ping, so a live one is never this quiet. Two heartbeats and ten seconds unless given.
+   */
+  silentMs?: number
+  /** After a wake, how long a connection heard just before the sleep has to answer a ping before it's ended. */
+  wakeProbeMs?: number
   /** Renews each connection's token in the socket before it's due, so it's never torn down to renew. */
   credential?: ConnectionCredential
   /**
@@ -156,6 +175,8 @@ export function clientSessionOverSockets(
   options: ClientSessionOptions = {}
 ): ClientSessionOverSockets {
   const connections = new Map<string, Connection>()
+  const heartbeatMs = options.heartbeatMs
+  const silentMs = options.silentMs ?? (heartbeatMs ? heartbeatMs * 2 + 10_000 : undefined)
 
   const connect = (endpoint: ClientEndpoint): Connection => {
     const key = endpointKey(endpoint)
@@ -163,6 +184,11 @@ export function clientSessionOverSockets(
     if (found) return found
     const connection: Connection = {
       socket: Promise.resolve(open(endpoint)).then(opened),
+      heard: Date.now(),
+      drop: () => {
+        void connection.socket.then((socket) => socket.close(4000, "silent"), () => undefined)
+        lost()
+      },
       calls: new Map(),
       correlations: new Map(),
       streams: new Map(),
@@ -197,6 +223,7 @@ export function clientSessionOverSockets(
         socket.addEventListener("close", lost)
         socket.addEventListener("error", lost)
         socket.addEventListener("message", (event) => {
+          connection.heard = Date.now()
           const text = TextMessageSchema.safeParse(event.data)
           if (!text.success) {
             socket.close(1003, "frames are text")
@@ -232,10 +259,12 @@ export function clientSessionOverSockets(
             if (socket.readyState === OPEN)
               socket.send(encodeClientFrame({ type: "renew", token }))
           })
-        if (options.heartbeatMs)
+        if (heartbeatMs)
           connection.heartbeat = setInterval(() => {
+            // Timers stop while the machine sleeps and the wall clock doesn't: the first beat after a wake finds it.
+            if (silentMs !== undefined && Date.now() - connection.heard > silentMs) return connection.drop()
             if (socket.readyState === OPEN) socket.send(PING)
-          }, options.heartbeatMs)
+          }, heartbeatMs)
       },
       () => lost()
     )
@@ -294,6 +323,19 @@ export function clientSessionOverSockets(
         clearInterval(connection.heartbeat)
         connection.renewal?.stop()
         void connection.socket.then((socket) => socket.close(1000, "done"))
+      }
+    },
+    wake() {
+      const asked = Date.now()
+      const quietMs = (heartbeatMs ?? 25_000) + 5_000
+      for (const connection of connections.values()) {
+        if (asked - connection.heard > quietMs) {
+          connection.drop()
+          continue
+        }
+        void connection.socket.then((socket) => socket.readyState === OPEN && socket.send(PING), () => undefined)
+        const probe = setTimeout(() => connection.heard < asked && connection.drop(), options.wakeProbeMs ?? 3_000)
+        probe.unref?.()
       }
     },
   }

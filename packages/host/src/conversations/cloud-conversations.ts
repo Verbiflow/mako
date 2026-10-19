@@ -86,6 +86,9 @@ export class CloudConversations {
   #saving: NodeJS.Timeout | undefined
   #writing: Promise<void> = Promise.resolve()
   #closed = false
+  /** Counts wakes, so a follow that was waiting out its backoff, or lost its stream to one, follows again at once. */
+  #wakes = 0
+  readonly #pauses = new Set<() => void>()
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
@@ -118,8 +121,19 @@ export class CloudConversations {
     return { handled: true, value: await this.#call(entry, channel, args) }
   }
 
+  /**
+   * After a sleep or a network change: a connection that went quiet ends now, and each Thread is followed again at
+   * once from the last event relayed, so what the machine did meanwhile arrives as soon as the network is back.
+   */
+  wake(): void {
+    this.#wakes += 1
+    this.#session?.session.wake()
+    for (const resume of this.#pauses) resume()
+  }
+
   dispose(): void {
     this.#closed = true
+    for (const resume of this.#pauses) resume()
     clearTimeout(this.#saving)
     for (const subscription of this.#following.values()) subscription?.close()
     this.#following.clear()
@@ -203,6 +217,7 @@ export class CloudConversations {
     const run = async () => {
       let wait = RETRY_MS
       let failing = false
+      let wakes = this.#wakes
       while (!this.#closed && this.#entries.get(entry.conversationId) === entry) {
         try {
           const { session } = await this.#connected()
@@ -222,11 +237,31 @@ export class CloudConversations {
           if (!failing) hostWarn("cloud-conversations", "a cloud Thread's events stopped; following again", { threadId: entry.threadId, error: error instanceof Error ? error.message : String(error) })
           failing = true
         }
-        await new Promise((resolve) => setTimeout(resolve, wait).unref())
+        if (this.#wakes === wakes) await this.#pause(wait)
+        if (this.#wakes !== wakes) {
+          // Woken: the stream that ended went with the sleep, and the network may be back; no backoff carried over.
+          wakes = this.#wakes
+          wait = RETRY_MS
+          continue
+        }
         wait = Math.min(wait * 2, RETRY_MAX_MS)
       }
     }
     void run().finally(() => this.#following.delete(entry.threadId))
+  }
+
+  /** Waits `ms`, or less when the Mac wakes or this closes. */
+  #pause(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const resume = () => {
+        clearTimeout(timer)
+        this.#pauses.delete(resume)
+        resolve()
+      }
+      const timer = setTimeout(resume, ms)
+      timer.unref()
+      this.#pauses.add(resume)
+    })
   }
 
   #relay(entry: Entry, line: string): void {

@@ -1,10 +1,24 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
+import { once } from "node:events"
 import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { createServer, connect, type AddressInfo, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
-import { Payload, RuntimeThreads, type ClientSession, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
+import { WebSocketServer } from "ws"
+import {
+  PING,
+  PONG,
+  Payload,
+  RuntimeThreads,
+  clientSessionOverSockets,
+  decodeClientFrame,
+  encodeGatewayClientFrame,
+  type ClientSession,
+  type ClientSessionOverSockets,
+  type Subscription,
+} from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { Git } from "@mako/git"
 import { CloudConversations, folderRepository } from "@mako/host/conversations/cloud-conversations"
@@ -20,8 +34,11 @@ const REPOSITORY: CloudRepository = { url: "https://github.com/octocat/Hello-Wor
 const scratch = await mkdtemp(join(tmpdir(), "mako-cloud-conversations-"))
 after(() => rm(scratch, { recursive: true, force: true }))
 
+/** How this Mac reaches the cloud: in memory, or over real sockets that can go silent as a sleeping Mac's do. */
+type Reach = { sockets?: { heartbeatMs: number; silentMs?: number; wakeProbeMs?: number } }
+
 /** A cloud machine's host behind the fake gateway: what it was asked, and its Thread's event outbox. */
-async function cloudMachine() {
+async function cloudMachine(reach: Reach = {}) {
   const gateway = createFakeGateway()
   const runtimeId = "m-0123456789abcdef.g1"
   const threads = new RuntimeThreads()
@@ -43,12 +60,16 @@ async function cloudMachine() {
   after(() => served.close())
   const deviceId = randomUUID()
   const client = await gateway.connectClient({ kind: "client", client: "desktop", deviceId })
+  const network = reach.sockets ? await sleepyNetwork(gateway, deviceId) : undefined
   const created: string[] = []
   const account: CloudAccount = {
     token: async () => "token",
     id: async () => "account",
     deviceId: async () => deviceId,
-    session: () => sessionOf(client),
+    session: () =>
+      network && reach.sockets
+        ? clientSessionOverSockets(() => new WebSocket(network.url), reach.sockets)
+        : sessionOf(client),
     createThread: async (threadId, repository) => {
       assert.deepEqual(repository, REPOSITORY)
       created.push(threadId)
@@ -63,7 +84,80 @@ async function cloudMachine() {
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, batch }
+  return { account, calls, created, batch, network }
+}
+
+/**
+ * The fake gateway's client sessions served over WebSockets, as the cloud serves them, behind a TCP proxy. `sleep`
+ * stops every open connection's bytes both ways without closing it: a Mac woken on a network the sleep didn't keep
+ * holds sockets that look open and never hear another byte. Connections opened after it pass.
+ */
+async function sleepyNetwork(gateway: ReturnType<typeof createFakeGateway>, deviceId: string) {
+  const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" })
+  await once(wss, "listening")
+  wss.on("connection", (ws) => {
+    const session = gateway.connectClient({ kind: "client", client: "desktop", deviceId })
+    const subscriptions = new Map<string, Subscription>()
+    ws.on("message", async (data) => {
+      const text = String(data)
+      // Answered by the edge, as the cloud's is.
+      if (text === PING) return ws.send(PONG)
+      const frame = decodeClientFrame(text)
+      const client = await session
+      if (frame.type === "call") ws.send(encodeGatewayClientFrame({ type: "reply", reply: await client.call(frame.operation) }))
+      else if (frame.type === "subscribe") {
+        const subscription = client.subscribe({ stream: frame.stream, after: frame.after })
+        subscriptions.set(frame.stream, subscription)
+        void (async () => {
+          for (;;) {
+            const event = await subscription.next().catch(() => undefined)
+            if (!event) return
+            if (ws.readyState === ws.OPEN) ws.send(encodeGatewayClientFrame({ type: "event", event }))
+          }
+        })()
+      } else if (frame.type === "unsubscribe") subscriptions.get(frame.stream)?.close()
+    })
+    ws.on("close", () => {
+      for (const subscription of subscriptions.values()) subscription.close()
+    })
+  })
+  // SAFETY: listening on a TCP host and port, so the address is an AddressInfo.
+  const upstreamPort = (wss.address() as AddressInfo).port
+  const pairs = new Set<{ near: Socket; far: Socket; asleep: boolean }>()
+  const proxy = createServer((near) => {
+    const pair = { near, far: connect(upstreamPort, "127.0.0.1"), asleep: false }
+    pairs.add(pair)
+    near.on("data", (chunk) => pair.asleep || pair.far.write(chunk))
+    pair.far.on("data", (chunk) => pair.asleep || near.write(chunk))
+    const end = () => {
+      pairs.delete(pair)
+      near.destroy()
+      pair.far.destroy()
+    }
+    for (const socket of [near, pair.far]) {
+      socket.on("close", end)
+      socket.on("error", end)
+    }
+  })
+  proxy.listen(0, "127.0.0.1")
+  await once(proxy, "listening")
+  after(() => {
+    for (const pair of pairs) {
+      pair.near.destroy()
+      pair.far.destroy()
+    }
+    proxy.close()
+    wss.close()
+  })
+  // SAFETY: as above.
+  const url = `ws://127.0.0.1:${(proxy.address() as AddressInfo).port}/`
+  return {
+    url,
+    sleep: () => {
+      for (const pair of pairs) pair.asleep = true
+    },
+    open: () => [...pairs].filter((pair) => !pair.asleep).length,
+  }
 }
 
 /** The fake gateway's client session as the account's session is: opened at once, used as it opens. */
@@ -72,6 +166,7 @@ function sessionOf(client: ClientSession): ClientSessionOverSockets {
     call: (operation) => client.call(operation),
     subscribe: (request): Subscription => client.subscribe(request),
     close: () => {},
+    wake: () => {},
   }
 }
 
@@ -144,6 +239,63 @@ test("a Mac that restarts lists its cloud conversations and follows each from th
   await until("the missed batch", () => second.events.length === 1)
   assert.equal(JSON.parse(second.events[0]!.payload).batch.revision, 3, "only what it hadn't relayed")
   await until("the summary caught up", () => second.router.summaries()[0]?.session.status === "ready")
+})
+
+/** Starts a cloud conversation over sockets and relays its first batch: a Mac in the middle of a cloud turn. */
+async function midTurn(reach: Reach, name: string) {
+  const machine = await cloudMachine(reach)
+  const { router, events } = conversations(machine.account, join(scratch, name, "conversations.json"))
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }])
+  const [threadId] = machine.created
+  machine.batch(threadId!, conversationId, 2, "running")
+  await until("the first batch", () => events.length === 1)
+  const revisions = () => events.map((event) => z.object({ batch: z.object({ revision: z.number() }) }).parse(JSON.parse(event.payload)).batch.revision)
+  return { machine, router, events, conversationId, threadId: threadId!, revisions }
+}
+
+const MISSED = 400
+
+test("a Mac woken on a network the sleep didn't keep follows on at once: every event the machine sent meanwhile, once and in order", async () => {
+  // A heartbeat as the app's: on its own it would find the dead socket only after a minute.
+  const { machine, router, events, conversationId, threadId, revisions } = await midTurn({ sockets: { heartbeatMs: 25_000, wakeProbeMs: 500 } }, "slept")
+  machine.network!.sleep()
+  for (let revision = 3; revision < 3 + MISSED; revision++) machine.batch(threadId, conversationId, revision, revision % 2 ? "running" : "ready")
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  assert.equal(events.length, 1, "nothing arrives on the dead socket")
+  const woke = performance.now()
+  router.wake()
+  await until("every missed event", () => events.length === 1 + MISSED, 5_000)
+  const ms = performance.now() - woke
+  assert.deepEqual(revisions(), Array.from({ length: 1 + MISSED }, (_, index) => index + 2), "each event once, in order")
+  console.log(`  woke to ${MISSED} missed events relayed: ${ms.toFixed(0)} ms`)
+  assert.ok(ms < 2_000, `caught up in ${ms.toFixed(0)} ms, the wake's probe (500 ms) included`)
+  // Following on: the next event comes on the new connection.
+  machine.batch(threadId, conversationId, 3 + MISSED, "ready")
+  await until("the next event", () => events.length === 2 + MISSED)
+  await until("the summary", () => router.summaries()[0]?.revision === 3 + MISSED)
+})
+
+test("without a wake to say so, the heartbeat finds the dead socket and the Mac follows on", async () => {
+  const { machine, events, conversationId, threadId, revisions } = await midTurn({ sockets: { heartbeatMs: 100, silentMs: 300 } }, "silent")
+  machine.network!.sleep()
+  const slept = performance.now()
+  for (let revision = 3; revision < 13; revision++) machine.batch(threadId, conversationId, revision, "running")
+  await until("the missed events", () => events.length === 11, 5_000)
+  console.log(`  dead socket found and followed on by the heartbeat alone: ${(performance.now() - slept).toFixed(0)} ms (silence allowed: 300 ms)`)
+  assert.deepEqual(revisions(), Array.from({ length: 11 }, (_, index) => index + 2))
+})
+
+test("a wake while the connection is healthy keeps it: nothing is followed twice", async () => {
+  const { machine, router, events, conversationId, threadId, revisions } = await midTurn({ sockets: { heartbeatMs: 25_000, wakeProbeMs: 300 } }, "awake")
+  const open = machine.network!.open()
+  router.wake()
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  machine.batch(threadId, conversationId, 3, "ready")
+  await until("the next event", () => events.length === 2)
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.deepEqual(revisions(), [2, 3])
+  assert.equal(machine.network!.open(), open, "no new connection")
 })
 
 test("a repository the cloud wouldn't take is refused before anything is made", async () => {

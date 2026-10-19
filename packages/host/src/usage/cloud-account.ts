@@ -390,6 +390,7 @@ export class CloudAccounts {
     if (this.#state.status !== "signed-in" || this.#closed) return
     this.#accountLink?.wake()
     this.#runtimeLink?.wake()
+    for (const session of this.#sessions) session.wake()
   }
 
   close(): void {
