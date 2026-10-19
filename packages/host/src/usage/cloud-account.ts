@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
 import { basename, join } from "node:path"
+import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
 import {
   type ClientEndpoint,
@@ -53,6 +54,11 @@ const SIGN_IN_MS = 10 * 60_000
 /** A connection token is renewed this long before it expires. */
 const RENEW_BEFORE_S = 60
 const REQUEST_MS = 15_000
+/** A call to the cloud: JSON in and out, never redirected, bounded in time. */
+type CloudRequest = { method: "GET" | "POST" | "PUT" | "DELETE"; headers: Record<string, string>; body?: string; redirect: "error"; signal: AbortSignal }
+
+/** A call to the cloud slower than this is logged, though it succeeded. */
+const SLOW_REQUEST_MS = 2_000
 /** The cloud logs and traces a call under this ID, so the cloud's side of any call this Mac reports can be found. */
 const CORRELATION_HEADER = "x-mako-correlation-id"
 /** What an account may use beyond this Mac: with it, this Mac is reachable from the account's other devices and the cloud. */
@@ -193,6 +199,12 @@ export class CloudAccounts {
   /** The Threads this Mac's runtime ran when its link last ended, claimed again when it comes back. */
   #claims: RuntimeClaim[] = []
   readonly #sessions = new Set<ClientSessionOverSockets>()
+  /**
+   * Calls to the cloud go through a pool of this Mac's own, replaced at every wake: Node's timers stop while the Mac
+   * sleeps, so a pooled connection the network dropped meanwhile still looks fresh, and a call put on it waits out
+   * TCP's retransmissions (seconds) before it's refused and retried on a new one.
+   */
+  #pool = new Agent()
   #closed = false
   #ready: Promise<void>
 
@@ -394,6 +406,9 @@ export class CloudAccounts {
   /** After sleep or a network change: reconnect now rather than at the next backoff step. */
   wake(): void {
     if (this.#state.status !== "signed-in" || this.#closed) return
+    const stale = this.#pool
+    this.#pool = new Agent()
+    void stale.destroy().catch(() => undefined)
     this.#accountLink?.wake()
     this.#runtimeLink?.wake()
     for (const session of this.#sessions) session.wake()
@@ -403,6 +418,7 @@ export class CloudAccounts {
     this.#closed = true
     if (this.#signIn) this.#endSignIn()
     this.#disconnect()
+    void this.#pool.close().catch(() => undefined)
   }
 
   // Signing in.
@@ -561,11 +577,11 @@ export class CloudAccounts {
   }
 
   /** A call as this Mac; a status in `answers` is an answer to read, not a refusal. */
-  async #call(route: CloudRoute, method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: JsonValue, retried = false, answers: number[] = []): Promise<Response> {
+  async #call(route: CloudRoute, method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: JsonValue, retried = false, answers: number[] = []): Promise<CloudResponse> {
     const token = await this.#connectionToken().catch((error) => {
       throw error instanceof Removed ? new CloudAccountError("This Mac isn't signed in to Mako.") : error
     })
-    const init: RequestInit & { headers: Record<string, string> } = {
+    const init: CloudRequest = {
       method,
       headers: { authorization: `Bearer ${token}`, accept: "application/json" },
       redirect: "error",
@@ -586,17 +602,18 @@ export class CloudAccounts {
   }
 
   /** Every call to the cloud: sent under a fresh correlation ID, and reported when it ends. */
-  async #fetch(route: CloudRoute, url: URL, init: RequestInit & { headers: Record<string, string> }): Promise<Response> {
+  async #fetch(route: CloudRoute, url: URL, init: CloudRequest): Promise<CloudResponse> {
     const correlationId = randomUUID()
     const started = performance.now()
     const report = (outcome: DiagnosticEvents["cloud.request"]["outcome"], status?: number) => {
       const ms = Math.round(performance.now() - started)
       this.#options.onRequest?.({ route, outcome, ...(status !== undefined && { status }), ms, correlationId })
-      if (outcome !== "ok") this.#options.log?.("cloud request", { route, outcome, ...(status !== undefined && { status }), ms, correlationId })
+      // A slow answer is said too: after a wake, how long the cloud took is what tells a stalled network apart.
+      if (outcome !== "ok" || ms >= SLOW_REQUEST_MS) this.#options.log?.("cloud request", { route, outcome, ...(status !== undefined && { status }), ms, correlationId })
     }
-    let response: Response
+    let response: CloudResponse
     try {
-      response = await fetch(url, { ...init, headers: { ...init.headers, [CORRELATION_HEADER]: correlationId } })
+      response = await fetchWith(url, { ...init, headers: { ...init.headers, [CORRELATION_HEADER]: correlationId }, dispatcher: this.#pool })
     } catch (error) {
       report("unreachable")
       throw error
@@ -779,7 +796,7 @@ function parseCloud(value: string | undefined, fixture: boolean): CloudTarget {
   return { url: new URL(url.origin) }
 }
 
-async function problemOf(response: Response, fallback: string): Promise<string> {
+async function problemOf(response: CloudResponse, fallback: string): Promise<string> {
   const problem = ProblemSchema.safeParse(await response.json().catch(() => undefined))
   const title = problem.success ? problem.data.title : undefined
   return title ? (problem.data?.detail ? `${title}. ${problem.data.detail}` : title) : fallback

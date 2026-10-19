@@ -10,6 +10,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
+import { connect, createServer as createTcpServer, type Socket } from "node:net"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -324,6 +325,62 @@ async function signedIn(cloud: Awaited<ReturnType<typeof fakeCloud>>, options: P
   await mac.until(connected, "connected")
   return mac
 }
+
+/**
+ * A TCP proxy in front of the fake cloud whose `sleep` stops every open connection's bytes both ways without closing
+ * it, as a Mac woken on a network the sleep didn't keep finds its pooled connections. Connections opened after pass.
+ */
+async function sleepyProxy(port: number) {
+  const pairs = new Set<{ near: Socket; far: Socket; asleep: boolean }>()
+  const proxy = createTcpServer((near) => {
+    const pair = { near, far: connect(port, "127.0.0.1"), asleep: false }
+    pairs.add(pair)
+    near.on("data", (chunk) => pair.asleep || pair.far.write(chunk))
+    pair.far.on("data", (chunk) => pair.asleep || near.write(chunk))
+    const end = () => {
+      pairs.delete(pair)
+      near.destroy()
+      pair.far.destroy()
+    }
+    for (const socket of [near, pair.far]) {
+      socket.on("close", end)
+      socket.on("error", end)
+    }
+  })
+  proxy.listen(0, "127.0.0.1")
+  await once(proxy, "listening")
+  after(() => {
+    for (const pair of pairs) {
+      pair.near.destroy()
+      pair.far.destroy()
+    }
+    proxy.close()
+  })
+  // SAFETY: listening on a TCP host and port, so the address is an AddressInfo.
+  return { url: `http://127.0.0.1:${(proxy.address() as AddressInfo).port}`, sleep: () => pairs.forEach((pair) => (pair.asleep = true)) }
+}
+
+test("after a sleep, a call to the cloud never waits on a pooled connection the network dropped", async () => {
+  const cloud = await fakeCloud()
+  const network = await sleepyProxy(Number(new URL(cloud.url).port))
+  const mac = await signedIn(cloud, { url: network.url })
+  // The pool settles: each call made while it was awake is answered and its connection idle again.
+  for (let call = 0; call < 3; call++) {
+    await mac.accounts.signIns()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  network.sleep()
+  // Node's timers stopped while the Mac slept, so the pooled connection looks fresh: a call put on it hears nothing.
+  const stalled = mac.accounts.signIns().then(() => "answered", () => "dropped")
+  assert.equal(await Promise.race([stalled, new Promise((resolve) => setTimeout(() => resolve("waiting"), 1_500))]), "waiting", "on the dropped connection, a call waits")
+  const woke = performance.now()
+  mac.accounts.wake()
+  await mac.accounts.signIns()
+  const ms = performance.now() - woke
+  console.log(`  a call to the cloud right after waking: ${ms.toFixed(0)} ms`)
+  assert.ok(ms < 1_000, `answered on a new connection in ${ms.toFixed(0)} ms`)
+  assert.equal(await stalled, "dropped", "the call stranded before the wake ends rather than hanging")
+})
 
 test("a build without a cloud, or with one it may not reach, offers no sign-in", async () => {
   for (const [url, fixture, message] of [
