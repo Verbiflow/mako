@@ -110,7 +110,7 @@ export const CURSOR_VOCABULARY = defineVocabulary({
     where: "SQLite index.db and agents/<agent>/store.db under the SDK state root (Mako's: ~/.mako/cursor-sdk); cursor-agent keeps ~/.cursor/chats/<hash>/<id>/store.db, content-addressed blobs and a meta row",
     encodings: ["plain"],
     history: {
-      branches: "meta.latestRootBlobId: the root blob whose turns are the conversation; older roots are earlier states",
+      branches: "meta.latestRootBlobId (an SDK agent's in index.db's agents.latest_checkpoint_ref_json): the root blob whose turns are the conversation; older roots are earlier states, each run's last in runs.latest_checkpoint_ref_json. A fork is a new agent indexed at one of them in a clone of its source's store; nothing in it names the source",
     },
     // Nothing a cut-off run streamed is the stream's alone: the SDK keeps a
     // stopped or killed run whole in its own record (index.db's runs row and

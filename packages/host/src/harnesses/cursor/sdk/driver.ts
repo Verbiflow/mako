@@ -36,6 +36,7 @@ import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../../contracts/native-decoding.js"
 import { nativeStream, withFrame, type NativeStream } from "../../native-stream.js"
 import { cursorLegacyCheckpoint, cursorSdkCheckpoint } from "../resume.js"
+import { cursorForkDeclined } from "./fork.js"
 import type {
   SdkEvent,
   SdkImage,
@@ -431,7 +432,17 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     questions: { kind: "unavailable", reason: "Cursor doesn't offer its model `askQuestion` in a local SDK run, in agent or Plan mode, even when the run asks for the tool by name. A question that did come would be declined by the SDK itself." },
     contextBreakdown: { kind: "unavailable", reason: "The SDK reports a run's token usage, not what fills the context." },
     modeSwitching: { kind: "single", reason: "The SDK runs one mode, agent; Plan is a setting chosen with each message." },
-    fork: { kind: "transcript", via: "The SDK has no fork of its own, so a fork opens a new agent whose first turn reads the transcript of the history up to that answer." },
+    // Verified 2026-10-16 (SDK 1.0.31, `scripts/test-cursor-fork.ts`): each
+    // run records the root it checkpointed last, the next run starts from
+    // it, and a new agent indexed at a first run's root, its store a clone of
+    // the source's, was resumed by the SDK and recalled the first turn's
+    // codeword and not the second's.
+    fork: {
+      kind: "native",
+      point: "run",
+      via: "A new SDK agent whose store is a clone of the source's blobs and whose index row starts at the root the run checkpointed last (`runs.latest_checkpoint_ref_json`), resumed with `Agent.resume`.",
+      declines: (source) => Promise.resolve(cursorForkDeclined(dependencies.stores, dependencies.stateRoot(), source)),
+    },
     // Verified 2026-09-27 (SDK 1.0.31): a shell the SDK moved to the
     // background completed its call and died as its run finished; the local
     // executor disposes every shell it started when the run ends.
@@ -567,20 +578,22 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           ),
         ]))
         const servers = await trace.step("mcp-preparation", () => mcpServers(options))
-        if (options.resume) live.stream?.opening()
-        const opened = await trace.step(options.resume ? "session-resume" : "session-open", () => live.client.request("open", {
+        const fork = options.fork
+        if (options.resume || fork) live.stream?.opening()
+        const opened = await trace.step(options.resume ? "session-resume" : fork ? "session-fork" : "session-open", () => live.client.request("open", {
           cwd,
           stateRoot,
           strictStores: dependencies.stores.strict,
           agentId,
-          create: !options.resume,
+          create: !options.resume && !fork,
           name: options.title,
           model: selection,
           mcpServers: servers,
           importFrom,
+          forkFrom: fork && { agentId: fork.nativeId, runId: fork.runId },
         }))
         if (live.closed) throw new Error("Cursor disconnected during startup")
-        if (options.resume) live.stream?.opened()
+        if (options.resume || fork) live.stream?.opened()
         await identityObservation
         if (live.closed) throw new Error("Cursor disconnected during identity verification")
         const reported = opened.model ?? selection
@@ -608,10 +621,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         const stdio = Object.entries(servers).map(([name, server]) => (server.type === "stdio" ? { name, command: server.command, env: server.env } : { name }))
         for (const name of unlaunchableMcpServers(stdio, cwd))
           engine.event(live, mcpServerFailedEvent(name, "could not be launched"))
-        hostLog("cursor-sdk", opened.imported ? "imported and resumed a cursor-agent session" : options.resume ? "resumed agent" : "created agent", {
+        hostLog("cursor-sdk", opened.imported ? "imported and resumed a cursor-agent session" : options.resume ? "resumed agent" : fork ? "forked agent" : "created agent", {
           conversation: options.conversationId,
           agent: opened.agentId,
-          from: importFrom?.path ?? "",
+          from: importFrom?.path ?? fork?.nativeId ?? "",
           model: reported.id,
         })
         return live.state

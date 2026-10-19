@@ -21,7 +21,7 @@ import {
  * delta union alone is fifty thousand lines — and a change in the SDK's shape
  * fails here, at the boundary, rather than somewhere in a transcript.
  */
-export const CURSOR_SDK_WIRE_VERSION = 3
+export const CURSOR_SDK_WIRE_VERSION = 5
 
 /** The largest line either side accepts: a tool result the SDK truncated is still under this. */
 export const CURSOR_SDK_MAX_LINE_BYTES = 16 * 1024 * 1024
@@ -191,6 +191,12 @@ export const SdkOpenParamsSchema = z.object({
    * resumes the agent it finds every time after.
    */
   importFrom: SdkImportSourceSchema.optional(),
+  /**
+   * With `create: false`: the agent and run this agent forks from. The child
+   * makes `agentId` a new agent holding the source's blobs, starting at the
+   * root the run checkpointed last (`fork.ts`), and resumes it.
+   */
+  forkFrom: z.object({ agentId: z.string(), runId: z.string() }).optional(),
   /** The host's `NativeStores` mode: a strict host's child reads Cursor's stores at the file level and imports none. */
   strictStores: z.boolean(),
 })

@@ -702,7 +702,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "fork": {
         "state": "implemented",
-        "via": "Mako writes the conversation up to the fork point into a new agent in the SDK's store and resumes it, as the SDK has no fork of its own."
+        "via": "A new SDK agent whose store is a clone of the source's blobs and whose index row starts at the root the run checkpointed last (`runs.latest_checkpoint_ref_json`), resumed with `Agent.resume`."
       },
       "steering": {
         "state": "implemented",

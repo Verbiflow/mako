@@ -44,6 +44,8 @@ import {
 } from "./import.js"
 import { readLegacyStoreSnapshot } from "../legacy-store.js"
 import { copySideStore, removeSideStore, SIDE_AGENT_TOOLS } from "./side-agents.js"
+import { cloneCursorForkStore, cursorForkMetadata, cursorForkPoint, CursorForkError } from "./fork.js"
+import { cursorSdkStorePath } from "@mako/sessions/cursor-sdk-paths"
 import { SIDE_QUESTION_BOUNDARY, withEarlierExchanges } from "../../../contracts/live-side-questions.js"
 import { lostCursorRun, recordCursorRun, settleCursorRun } from "./run-records.js"
 import { cursorCallErrored, type CursorSdkModelSelection } from "@mako/sessions/cursor-sdk-content"
@@ -310,6 +312,57 @@ async function importLegacyStore(
   return { agentId: document.agentId, imported: true, revision: snapshot.revision }
 }
 
+/**
+ * Make `params.agentId` a fork of `from` at the run: a new agent whose store
+ * clones the source's and whose index row starts at the root the run
+ * checkpointed last, read through the SDK's own store (`fork.ts`). The clone
+ * lands before the index row, so a crash between them leaves an unindexed
+ * store naming the fork, never a row pointing at missing bytes.
+ */
+async function forkAgent(stores: NativeStores, store: SqliteLocalAgentStore, params: OpenParams, from: { agentId: string; runId: string }): Promise<void> {
+  const run = await store.runs.get({ agentId: from.agentId, runId: from.runId })
+  const point = cursorForkPoint(run ? {
+    status: run.status,
+    ...run.startCheckpointRef && { start: run.startCheckpointRef.rootBlobId },
+    ...run.latestCheckpointRef && { latest: run.latestCheckpointRef.rootBlobId },
+  } : undefined)
+  if (point.kind === "declined") throw new CursorForkError(point.reason)
+  const source = await store.agents.get({ agentId: from.agentId })
+  if (!source) throw new CursorForkError("Cursor's index has no agent the fork's source names.")
+  if (await store.agents.get({ agentId: params.agentId })) throw new CursorForkError("The fork's Cursor agent already exists; nothing was overwritten.")
+  cloneCursorForkStore(stores, {
+    source: cursorSdkStorePath(params.stateRoot, from.agentId),
+    target: cursorSdkStorePath(params.stateRoot, params.agentId),
+    agentId: params.agentId,
+    rootBlobId: point.rootBlobId,
+  })
+  const now = Date.now()
+  try {
+    await store.agents.create({
+      agent: {
+        agentId: params.agentId,
+        cwd: params.cwd,
+        status: "idle",
+        name: params.name ?? source.name ?? null,
+        createdAt: now,
+        updatedAt: now,
+        latestCheckpoint: { schemaVersion: 1, rootBlobId: point.rootBlobId },
+        sdkMetadata: cursorForkMetadata(source.sdkMetadata),
+      },
+    })
+  } catch (cause) {
+    removeSideStore(params.stateRoot, params.agentId)
+    throw cause
+  }
+  log("info", `forked agent ${from.agentId} at ${from.runId} as ${params.agentId}`)
+}
+
+/** A fork that couldn't be resumed leaves neither its index row nor its store. */
+async function discardFork(store: SqliteLocalAgentStore, params: OpenParams): Promise<void> {
+  await Agent.delete(params.agentId, { cwd: params.cwd, store }).catch(() => undefined)
+  removeSideStore(params.stateRoot, params.agentId)
+}
+
 async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
   if (agent) throw new ConfigurationError("This child already has an agent open")
   const stores = new NativeStores(params.strictStores)
@@ -340,10 +393,11 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
       imported = result.imported
       importRevision = result.revision
     }
+    if (!params.create && params.forkFrom) await forkAgent(stores, store, params, params.forkFrom)
     if (!params.create) await relocateCursorAgent(store.agents, agentId, params.cwd)
   } catch (cause) {
     await store.dispose().catch(() => undefined)
-    if (cause instanceof CursorImportError) throw new ConfigurationError(cause.message)
+    if (cause instanceof CursorImportError || cause instanceof CursorForkError) throw new ConfigurationError(cause.message)
     throw cause
   }
   const base: Omit<OpenAgent, "handle"> = {
@@ -365,6 +419,7 @@ async function openAgent(params: OpenParams): Promise<SdkResult<"open">> {
       ? await Agent.create({ ...options, agentId, name: params.name })
       : await Agent.resume(agentId, options)
   } catch (cause) {
+    if (params.forkFrom) await discardFork(store, params)
     await store.dispose().catch(() => undefined)
     throw cause
   }
@@ -707,11 +762,11 @@ const sides = new Map<string, SideAgent>()
 async function forkSide(open: OpenAgent): Promise<SideCopy> {
   const record = await open.store.agents.get({ agentId: open.agentId })
   if (!record?.latestCheckpoint) throw new ConfigurationError("Send a message first, then ask a side question.")
-  const agentId = copySideStore(open.stores, open.stateRoot, open.agentId)
+  const agentId = copySideStore(open.stores, open.stateRoot, open.agentId, record.latestCheckpoint.rootBlobId)
   try {
     const now = Date.now()
     await open.store.agents.create({
-      agent: { agentId, cwd: open.cwd, status: "idle", name: "Side question", createdAt: now, updatedAt: now, latestCheckpoint: record.latestCheckpoint, sdkMetadata: record.sdkMetadata },
+      agent: { agentId, cwd: open.cwd, status: "idle", name: "Side question", createdAt: now, updatedAt: now, latestCheckpoint: record.latestCheckpoint, sdkMetadata: cursorForkMetadata(record.sdkMetadata) },
     })
     const handle = await Agent.resume(agentId, { ...handleOptions({ ...open, agentId }), tools: SIDE_AGENT_TOOLS })
     return { agentId, handle }
