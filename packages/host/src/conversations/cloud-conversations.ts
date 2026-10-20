@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
+import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -13,6 +14,7 @@ import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, splitRuntim
 import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/index.js"
 import type { CloudAccount } from "../usage/index.js"
 import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
+import { CloudPreviews } from "./cloud-previews.js"
 
 /** The newest this many are kept, and followed while they're open. */
 const KEPT = 50
@@ -104,6 +106,7 @@ const BootTabsSchema = z.object({
 }).loose()
 
 const LiveBatchHeadSchema = z.object({ channel: z.string(), type: z.string().optional(), conversation: z.string().optional() })
+const ControlActivityEventSchema = z.object({ type: z.literal("control-activity"), activity: ControlActivitySchema })
 
 export type CloudConversationsOptions = {
   /** The Mako account, once its domain is loaded. */
@@ -177,9 +180,12 @@ export class CloudConversations {
   /** By repository: how many made ahead in a row went unused. */
   readonly #unused = new Map<string, number>()
   #offering: Promise<CloudProjectsOffer> | undefined
+  /** What each conversation's agent shows on its machine, as live video through its Thread. */
+  readonly previews: CloudPreviews
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
+    this.previews = new CloudPreviews({ session: async () => (await this.#connected()).session })
   }
 
   /** Reads what this Mac remembers and follows each open conversation's Thread. */
@@ -211,6 +217,13 @@ export class CloudConversations {
       if (!options.cloud) return { handled: false }
       return { handled: true, value: await this.#start(harness, cwd, options) }
     }
+    if (channel === "mako:control-preview") {
+      // SAFETY: the dispatcher parsed this call's arguments with `mako:control-preview`'s schema before routing it.
+      const [id] = args as [string]
+      await this.start()
+      if (!this.#entries.has(id)) return { handled: false }
+      return { handled: true, value: encodeRuntimeValue(this.previews.preview(id)) }
+    }
     const id = conversationCallId(channel, args)
     if (!id) return { handled: false }
     await this.start()
@@ -237,6 +250,7 @@ export class CloudConversations {
     for (const prepared of this.#prepared.values()) clearTimeout(prepared.watching)
     for (const subscription of this.#following.values()) subscription?.close()
     this.#following.clear()
+    this.previews.close()
     this.#session?.session.close()
     this.#session = undefined
   }
@@ -568,7 +582,17 @@ export class CloudConversations {
     const parts = splitRuntimeEventLine(line)
     if (!parts) return
     const head = LiveBatchHeadSchema.safeParse(JSON.parse(parts.head))
-    if (!head.success || head.data.channel !== "event" || head.data.type !== "live-batch" || head.data.conversation !== entry.conversationId) return
+    if (!head.success || head.data.channel !== "event") return
+    if (head.data.type === "control-activity") {
+      // The machine's host emits every conversation's; only this one's is this Thread's to show.
+      const event = ControlActivityEventSchema.safeParse(JSON.parse(parts.payload))
+      if (!event.success || event.data.activity.conversationId !== entry.conversationId) return
+      const { activity } = event.data
+      this.previews.activity(entry.threadId, activity)
+      this.#options.emit({ type: "control-activity", payload: parts.payload })
+      return
+    }
+    if (head.data.type !== "live-batch" || head.data.conversation !== entry.conversationId) return
     if (entry.summary) {
       const { batch } = z.object({ batch: LiveBatchSchema }).parse(JSON.parse(parts.payload))
       const summary: LiveSummary = { ...entry.summary, session: sessionAfter(entry.summary.session, batch), revision: batch.revision }
@@ -602,7 +626,11 @@ export class CloudConversations {
 
   #save(): Promise<void> {
     const kept = [...this.#entries.values()].sort((left, right) => right.createdAt - left.createdAt).slice(0, KEPT)
-    for (const entry of this.#entries.values()) if (!kept.includes(entry)) this.#entries.delete(entry.conversationId)
+    for (const entry of this.#entries.values())
+      if (!kept.includes(entry)) {
+        this.#entries.delete(entry.conversationId)
+        this.previews.forget(entry.conversationId)
+      }
     const text = JSON.stringify({ conversations: kept })
     const file = this.#options.file
     const write = this.#writing.then(async () => {

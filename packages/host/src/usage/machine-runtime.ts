@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
 import { mkdir, rename, writeFile } from "node:fs/promises"
 import { Socket } from "node:net"
@@ -8,10 +9,12 @@ import {
   Payload,
   RuntimeRefusedError,
   RuntimeThreads,
+  problem,
   problemType,
   runtimeLinkOverSocket,
   type GatewayFrame,
   type LocalSeqStore,
+  type MediaHandler,
   type Problem,
   type ServedRuntime,
 } from "@mako/protocol"
@@ -43,8 +46,13 @@ export type MachineRuntimeOptions = {
   openWorkspace(path: string): Promise<void>
   /** What the host is working on, as its lifecycle lists it: what the machine reports, so its Thread keeps it running. */
   work(): LifecycleWork[]
+  /** The live streams its Threads' clients watch, such as a preview's video, once the host's core has loaded. */
+  media(): MediaHandler | undefined
   now?: () => number
 }
+
+/** A stream's frames come as often as its acks; they change nothing the agent hears about. */
+const MEDIA_FRAMES: ReadonlySet<GatewayFrame["type"]> = new Set(["media-watch", "media-ack", "media-unwatch"])
 
 /**
  * Host-wide readings about this machine's own harnesses and accounts. No client of a cloud Thread reads them (the
@@ -94,6 +102,16 @@ export class MachineRuntime {
   #heldLink: Link | undefined
   /** What this machine last told its Thread of its work, on which link and for which Threads, and when. */
   #activity: { served: ServedRuntime; claims: string; busy: boolean; at: number } | undefined
+  /** A watch that comes before the core has loaded ends; its viewer asks again when the agent next acts. */
+  readonly #media: MediaHandler = {
+    watch: (stream, threadId, request, sender) => {
+      const media = this.#options.media()
+      if (media) return media.watch(stream, threadId, request, sender)
+      sender.end(problem("unavailable", "The machine's host is still starting", randomUUID(), "not-applied", { status: 503 }))
+    },
+    acked: (stream, received) => this.#options.media()?.acked(stream, received),
+    unwatched: (stream) => this.#options.media()?.unwatched(stream),
+  }
 
   constructor(options: MachineRuntimeOptions) {
     this.#options = options
@@ -285,9 +303,9 @@ export class MachineRuntime {
         hostLog("machine", frame.type === "assign" ? "runs a Thread" : "fenced from a Thread", { threadId: frame.threadId, generation: frame.generation })
         // After the outbox has taken it, so the state says what it now runs.
         queueMicrotask(() => this.#publish())
-      } else if (frame.type !== "operation") this.#changed()
+      } else if (frame.type !== "operation" && !MEDIA_FRAMES.has(frame.type)) this.#changed()
     }
-    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, onFrame }).then(
+    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, onFrame }).then(
       (served) => {
         if (closed) return served.close()
         this.#served = served

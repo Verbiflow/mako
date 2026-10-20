@@ -237,6 +237,16 @@ export class BrowserVideo {
     await (await this.source)?.resized()
   }
 
+  /** A viewer that lost what it had painted starts again: the newest frame as a poster, then a key frame. */
+  refresh(viewer: BrowserVideoViewer) {
+    const state = this.viewers.get(viewer)
+    if (!state) return
+    state.awaitingKey = true
+    state.painted = false
+    this.poster()
+    this.recover()
+  }
+
   private demand(): CaptureSize | undefined {
     let width = 0, height = 0
     for (const viewer of this.viewers.keys()) {

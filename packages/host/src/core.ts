@@ -28,8 +28,9 @@ import { nodePlatform } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
-import { ControlResidency, controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
-import { openConversations, declareConversationMethods, CloudConversations, folderRepository, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
+import type { MediaHandler } from "@mako/protocol"
+import { openConversations, declareConversationMethods, declareCloudPreviewMethods, CloudConversations, folderRepository, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -69,6 +70,8 @@ export interface Core {
   installCloudSignIns(signIns: readonly CloudSignIn[], place: CloudSignInPlace): Promise<CloudSignInInstall[]>
   /** On a cloud machine: the folder its agent prepared, where every client's tabs open. */
   openMachineWorkspace(path: string): Promise<void>
+  /** On a cloud machine: the live video of its previews its Threads' clients watch. */
+  media: MediaHandler
   /** Work that holds a profile host up: turns, native runs, transfers. */
   activeWork(): boolean
   /** That work, item by item, as the lifecycle lists it: what keeps a cloud machine running. */
@@ -423,6 +426,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets, recordHelperRun: helperRuns.record })
   declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
   declareControlMethods(methods, control, environment.appRoot, config.executable)
+  declareCloudPreviewMethods(methods, () => cloudConversations?.previews)
   declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine })
   const usage = declareUsageMethods(methods, {
     dataRoot: environment.dataRoot,
@@ -499,6 +503,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       await workspaceClients.home(path)
       await workspaceAutomations.watch(path)
     },
+    media: controlVideoMedia(control.previews),
     activeWork: () => application.lifecycle.snapshot().work.length > 0,
     work: () => application.lifecycle.snapshot().work,
     lifecycleBlocked: () => application.lifecycle.blocked,

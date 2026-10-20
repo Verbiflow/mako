@@ -58,6 +58,11 @@ assert.deepEqual(decodePreviewMedia(encode({ ...preview, frame: null })), {
   ...preview,
   frame: null,
 })
+assert.deepEqual(
+  decodePreviewMedia(encode({ ...preview, frame: null, paused: true, video: true })),
+  { ...preview, frame: null, paused: true, video: true },
+  "Pause and video state reach viewers"
+)
 const embedded = Uint8Array.from(
   Buffer.concat([Buffer.alloc(7), packet, Buffer.alloc(9)])
 )

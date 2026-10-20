@@ -217,6 +217,19 @@ assert.equal(encoders.length, 4)
 assert.deepEqual(encoders.at(-1)!.size, { width: 960, height: 540 })
 assert.deepEqual([first.self.received.at(-1)?.kind, first.self.received.at(-1)?.width], ["key", 960])
 
+// A viewer that lost its picture asks again: the newest frame as a poster, then a key frame; a viewer painting already gets no poster.
+await wait(1000)
+const beforeRefresh = second.self.received.length
+video.refresh(first.handle)
+await settle()
+assert.deepEqual(kinds(first.self.received.slice(-2)), ["poster", "key"])
+assert.deepEqual(kinds(second.self.received.slice(beforeRefresh)), ["key"])
+video.refresh(first.handle)
+await settle()
+assert.equal(first.self.received.at(-1)?.kind, "poster", "a second ask within the second repaints the poster but waits for its key frame")
+await wait(1100)
+assert.equal(first.self.received.at(-1)?.kind, "key", "the key frame comes once a second has passed")
+
 // Leaving: the capture follows the remaining viewers; the last one stops capture and encoding.
 await leaveSecond()
 assert.deepEqual(demand?.(), { width: 640, height: 360 })
@@ -241,4 +254,4 @@ await other.join(watcher.handle)
 endCapture!("Recording target detached")
 assert.equal(watcher.self.ended, "Recording target detached")
 
-console.log("Browser video: wire format, shared MOV input, prompt real encoding that decodes, posters and key frames on join, slow-viewer recovery, resize, leave and failure passed")
+console.log("Browser video: wire format, shared MOV input, prompt real encoding that decodes, posters and key frames on join and on asking again, slow-viewer recovery, resize, leave and failure passed")

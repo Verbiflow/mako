@@ -80,6 +80,56 @@ export function controlVideoCodec(description: Uint8Array): string {
   return `avc1.${[...description.subarray(1, 4)].map(byte => byte.toString(16).padStart(2, "0")).join("")}`
 }
 
+export const CONTROL_VIDEO_BATCH_TYPE = "application/vnd.mako.video-batch.v1"
+const BATCH_MAGIC = 0x4d4b5631 // MKV1; network byte order.
+const BATCH_HEADER = 9
+export const CONTROL_VIDEO_BATCH_LIMIT = 16 * 1024 * 1024
+
+/** The packets a window's viewer was sent since it last read, and whether more
+ * come: once `live` is false, nothing comes until the agent acts again. */
+export interface ControlVideoBatch {
+  live: boolean
+  packets: Uint8Array[]
+}
+
+export function encodeControlVideoBatch(batch: ControlVideoBatch): Uint8Array<ArrayBuffer> {
+  const length = batch.packets.reduce((total, packet) => total + 4 + packet.byteLength, BATCH_HEADER)
+  if (length > CONTROL_VIDEO_BATCH_LIMIT) throw new Error("Live video batch exceeds its byte limit")
+  const bytes = new Uint8Array(length)
+  const view = new DataView(bytes.buffer)
+  view.setUint32(0, BATCH_MAGIC)
+  view.setUint8(4, batch.live ? 1 : 0)
+  view.setUint32(5, batch.packets.length)
+  let offset = BATCH_HEADER
+  for (const packet of batch.packets) {
+    view.setUint32(offset, packet.byteLength)
+    bytes.set(packet, offset + 4)
+    offset += 4 + packet.byteLength
+  }
+  return bytes
+}
+
+/** Each packet is a view into `bytes`, not a copy, and is decoded only by its reader. */
+export function decodeControlVideoBatch(bytes: Uint8Array): ControlVideoBatch {
+  if (bytes.byteLength < BATCH_HEADER || bytes.byteLength > CONTROL_VIDEO_BATCH_LIMIT)
+    throw new Error("Invalid live video batch size")
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const flags = view.getUint8(4)
+  if (view.getUint32(0) !== BATCH_MAGIC || flags > 1) throw new Error("Invalid live video batch framing")
+  const count = view.getUint32(5)
+  const packets: Uint8Array[] = []
+  let offset = BATCH_HEADER
+  for (let index = 0; index < count; index++) {
+    if (offset + 4 > bytes.byteLength) throw new Error("Truncated live video batch")
+    const length = view.getUint32(offset)
+    if (offset + 4 + length > bytes.byteLength) throw new Error("Truncated live video batch")
+    packets.push(bytes.subarray(offset + 4, offset + 4 + length))
+    offset += 4 + length
+  }
+  if (offset !== bytes.byteLength) throw new Error("Invalid live video batch framing")
+  return { live: flags === 1, packets }
+}
+
 function validSize(value: number) {
   return Number.isInteger(value) && value >= 2 && value <= 4096
 }

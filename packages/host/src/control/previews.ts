@@ -12,6 +12,7 @@ import type {
   ControlPreview,
 } from "@mako/control-runtime/contracts"
 import { heavy } from "../base/heavy-packages.js"
+import { PreviewVideo, type PreviewVideoSender, type VideoBox } from "./preview-video.js"
 
 interface PreviewEntry {
   preview: ControlPreview
@@ -40,6 +41,8 @@ interface PreviewEntry {
   oversized?: boolean
   /** Counts native snapshots, so a thumbnail finishing after a newer snapshot or another target is dropped. */
   snapshots: number
+  /** Its remote viewers, once one watched: live video of the tab, apart from the frames above. */
+  video?: PreviewVideo
 }
 type PreviewFrame = NonNullable<ControlPreview["frame"]>
 export interface PreviewBox {
@@ -48,6 +51,8 @@ export interface PreviewBox {
 }
 
 type Thumbnail = (image: ControlImage) => Promise<ControlImage | null>
+/** The part of the browser a preview reads: its tab's screencast. */
+export type PreviewBrowser = Pick<BrowserService, "previewStream" | "previewResized">
 
 /** A native snapshot as the viewer shows it: JPEG, at most 1440 pixels wide; none for an image too large to decode. */
 export async function previewThumbnail(image: ControlImage): Promise<ControlImage | null> {
@@ -62,18 +67,23 @@ export async function previewThumbnail(image: ControlImage): Promise<ControlImag
 /** One bounded image per task. Image bytes only cross IPC when its visible preview requests them. */
 export class ControlPreviews {
   private readonly entries = new Map<string, PreviewEntry>()
-  private readonly browser: BrowserService
+  private readonly browser: PreviewBrowser
   private readonly thumbnail: Thumbnail
   private readonly changed: (activity: ControlActivity) => void
   private readonly scaled = new WeakMap<PreviewFrame, Map<string, Promise<PreviewFrame>>>()
+  /** Each remote viewer's stream, by the conversation it watches. */
+  private readonly videoStreams = new Map<string, string>()
+  private readonly videoOptions: ConstructorParameters<typeof PreviewVideo>[1]
   constructor(
-    browser: BrowserService,
+    browser: PreviewBrowser,
     thumbnail: Thumbnail,
-    changed: (activity: ControlActivity) => void
+    changed: (activity: ControlActivity) => void,
+    videoOptions?: ConstructorParameters<typeof PreviewVideo>[1]
   ) {
     this.browser = browser
     this.thumbnail = thumbnail
     this.changed = changed
+    this.videoOptions = videoOptions
   }
 
   /**
@@ -119,6 +129,7 @@ export class ControlPreviews {
       entry.preview.window = undefined
       entry.oversized = false
       entry.snapshots++
+      entry.video?.show(undefined)
     }
     entry.preview.activity = next
     if (image && surface) void this.snapshot(activity.conversationId, entry, image)
@@ -164,6 +175,72 @@ export class ControlPreviews {
     entry.owner = owner
     entry.authorize = authorize
     this.capture(entry)
+    this.showVideo(entry)
+  }
+
+  /**
+   * A remote viewer watches a conversation's preview as live video of its tab (`preview-video.ts`), or watches again
+   * with another box. Its stream ends when no turn drives the tab, the preview ends, or the video fails.
+   */
+  watchVideo(conversationId: string, stream: string, box: VideoBox | undefined, sender: PreviewVideoSender) {
+    const watching = this.videoStreams.get(stream)
+    if (watching !== undefined && watching !== conversationId)
+      return sender.end({ kind: "failed", reason: "This stream watches another conversation" })
+    const entry = this.entries.get(conversationId)
+    if (!entry) return sender.end({ kind: "gone", reason: "Nothing is shown for this conversation" })
+    if (entry.preview.activity.kind !== "browser")
+      return sender.end({ kind: "failed", reason: "Only a browser tab's preview streams as video" })
+    const video = (entry.video ??= new PreviewVideo(() => this.paused(entry), this.videoOptions))
+    this.videoStreams.set(stream, conversationId)
+    video.watch(stream, box, {
+      send: (packet) => sender.send(packet),
+      end: (why) => {
+        if (this.videoStreams.get(stream) === conversationId) this.videoStreams.delete(stream)
+        sender.end(why)
+      },
+    })
+    this.showVideo(entry)
+  }
+
+  videoAcked(stream: string, received: number) {
+    const conversationId = this.videoStreams.get(stream)
+    if (conversationId !== undefined) this.entries.get(conversationId)?.video?.acked(stream, received)
+  }
+
+  unwatchVideo(stream: string) {
+    const conversationId = this.videoStreams.get(stream)
+    if (conversationId === undefined) return
+    this.videoStreams.delete(stream)
+    this.entries.get(conversationId)?.video?.unwatched(stream)
+  }
+
+  /** Between turns the tab is still there, but nothing may stream it. */
+  private paused(entry: PreviewEntry): boolean {
+    try {
+      entry.authorize?.()
+      return false
+    } catch {
+      return true
+    }
+  }
+
+  /** The tab the preview shows, for its remote viewers. */
+  private showVideo(entry: PreviewEntry) {
+    const video = entry.video
+    if (!video?.watched) return
+    const { target } = entry
+    const owner = entry.owner ?? entry.preview.activity.conversationId
+    if (!target || !entry.authorize) return video.show(undefined)
+    video.show({
+      key: JSON.stringify([owner, target]),
+      source: async (consumer) => {
+        const stop = await this.browser.previewStream(owner, target, () => {
+          if (entry.target !== target) throw new Error("Preview target changed")
+          entry.authorize?.()
+        }, consumer.frame, consumer.ended, consumer.size)
+        return { stop, resized: () => this.browser.previewResized(owner, target) }
+      },
+    })
   }
 
   computerTarget(
@@ -458,6 +535,7 @@ export class ControlPreviews {
       entry.watchers.clear()
       entry.clients.clear()
       this.stop(entry)
+      entry.video?.end({ kind: "gone", reason: "The preview ended" })
     }
     if (entry?.publish) clearTimeout(entry.publish)
     this.entries.delete(conversationId)

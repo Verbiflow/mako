@@ -6,7 +6,7 @@ import { decodeRuntimeValue, runtimeSuccessValue, splitRuntimeEventLine, type En
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import type { z } from "zod"
 import { hostCallReplay } from "../contracts/host-call-policy.js"
-import { requestRuntimePreview } from "./preview.js"
+import { requestRuntimePreview, requestRuntimeVideo } from "./preview.js"
 
 import { readRuntimeResponse, RuntimeResponseLimitError, type RuntimeTransfer } from "./response.js"
 
@@ -253,6 +253,13 @@ export function invokeRuntimeEncoded(socket: string, client: string, channel: st
 export function invokeRuntimePreview(socket: string, client: string, args: readonly unknown[],
   onTransfer?: (transfer: RuntimeTransfer) => void) {
   return requestRuntimePreview(socket, client, encodeRuntimeCall("mako:control-preview", args), onTransfer).catch(error => {
+    throw error instanceof Error ? (disconnection(error) ?? error) : error
+  })
+}
+
+/** A viewer's next packets of a preview's video (`mako:control-video`), as the batch's bytes. */
+export function invokeRuntimeVideo(socket: string, client: string, args: readonly unknown[]) {
+  return requestRuntimeVideo(socket, client, encodeRuntimeCall("mako:control-video", args)).catch(error => {
     throw error instanceof Error ? (disconnection(error) ?? error) : error
   })
 }

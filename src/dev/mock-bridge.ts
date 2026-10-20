@@ -1,6 +1,7 @@
 import { fixtureHarnesses } from "./harness-fixtures"
 import { mockAppshots } from "./mock-appshots"
 import { mockAuthoring } from "./mock-authoring"
+import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
@@ -1162,6 +1163,7 @@ export function installMockBridge() {
     controlPreviewSource: async () => null,
     ...mockAppshots,
     controlPreview: async () => null,
+    controlVideo: async () => encodeControlVideoBatch({ live: false, packets: [] }),
     // Element picks: a fixture's tabs, and a pick the "person" finishes 1.5 s
     // after it starts (a cancel before then ends it), so the whole loop,
     // chips included, can be seen without a browser.

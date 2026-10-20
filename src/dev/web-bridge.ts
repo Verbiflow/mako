@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { PREVIEW_MEDIA_TYPE, collectPreviewMedia } from "@mako/control-runtime/contracts"
+import { CONTROL_VIDEO_BATCH_TYPE, PREVIEW_MEDIA_TYPE, collectPreviewMedia, decodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { RuntimeInfoSchema, type RuntimeInfo, CORRELATION_HEADER, RuntimeReplySchema, encodeRuntimeCall, runtimeReplyValue } from "@mako/host/contracts/runtime"
 import { type HostEvent } from "@mako/host/contracts/host-events-boot"
@@ -65,6 +65,7 @@ export async function installWebBridge(): Promise<void> {
     if (!connected) throw new RuntimeDisconnectedError(false)
     const headers = new Headers({ "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1", [CORRELATION_HEADER]: correlationId })
     if (channel === "mako:control-preview") headers.set("accept", PREVIEW_MEDIA_TYPE)
+    if (channel === "mako:control-video") headers.set("accept", CONTROL_VIDEO_BATCH_TYPE)
     const body = encodeRuntimeCall(channel, args, attempt)
     let reply: Response
     try {
@@ -90,6 +91,11 @@ export async function installWebBridge(): Promise<void> {
       }
       return (await collectPreviewMedia(chunks())).preview
     }
+    if (channel === "mako:control-video" && reply.headers.get("content-type") === CONTROL_VIDEO_BATCH_TYPE) {
+      const bytes = new Uint8Array(await reply.arrayBuffer())
+      decodeControlVideoBatch(bytes)
+      return bytes
+    }
     // This transport shares createMakoBridge's result contract with Electron IPC.
     const result = RuntimeReplySchema.safeParse(await reply.json().catch(() => undefined))
     if (!result.success) {
@@ -98,7 +104,7 @@ export async function installWebBridge(): Promise<void> {
       throw new RuntimeDisconnectedError(true)
     }
     const value = runtimeReplyValue(result.data)
-    if (channel === "mako:control-preview") throw new Error("Preview delivery requires a matching Mako client and host.")
+    if (channel === "mako:control-preview" || channel === "mako:control-video") throw new Error("Preview delivery requires a matching Mako client and host.")
     return value
   }
   /**

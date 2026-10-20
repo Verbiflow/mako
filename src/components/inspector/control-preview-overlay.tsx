@@ -1,5 +1,6 @@
 import { NativeControlPreview } from "./native-control-preview"
 import { ControlPreviewImage } from "./control-preview-image"
+import { RemoteControlPreview } from "./remote-control-preview"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { GlobeIcon, Minimize2Icon, MonitorIcon, XIcon } from "lucide-react"
 import {
@@ -158,9 +159,10 @@ function PreviewCard({
   const frame = preview?.frame
   const activity = preview?.activity
   const nativeWindow = preview?.window
+  const video = preview?.video === true
   // A failed read is news only over a picture; alone it would flash a card in
   // every finished task the host is slow to answer for.
-  if (!frame && !nativeWindow) return null
+  if (!frame && !nativeWindow && !video) return null
   const surface = activity?.kind === "browser" ? "Browser" : "Computer"
   const paused = preview?.paused === true
   const working = !paused && activity?.status === "running"
@@ -191,6 +193,13 @@ function PreviewCard({
             id={id}
             poster={frame ?? undefined}
             className={media}
+          />
+        ) : video ? (
+          <RemoteControlPreview
+            id={id}
+            label={paused ? "Last view of the tab this task used" : "Live view of the tab this task is using"}
+            className={media}
+            onRate={setRate}
           />
         ) : (
           frame && (

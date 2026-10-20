@@ -20,6 +20,8 @@ export type GatewayHostOptions = {
   threads?: RuntimeOptions["threads"]
   /** Sees every frame after enrolment, before the runtime acts on it. */
   onFrame?: RuntimeOptions["onFrame"]
+  /** The live streams its Threads' clients watch; without it, every watch ends at once. */
+  media?: RuntimeOptions["media"]
 }
 
 /**
@@ -72,5 +74,6 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
   if (options.credential) runtime.credential = options.credential
   if (options.threads) runtime.threads = options.threads
   if (options.onFrame) runtime.onFrame = options.onFrame
+  if (options.media) runtime.media = options.media
   return serveRuntime(link, runtime)
 }

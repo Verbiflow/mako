@@ -42,6 +42,7 @@ import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
+export { declareCloudPreviewMethods } from "./cloud-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 
 /** Live turns and their journals, headless native runs, and who owns each conversation. */

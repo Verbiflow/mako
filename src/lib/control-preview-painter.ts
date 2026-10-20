@@ -50,7 +50,7 @@ export function createControlPreviewRate(report: (rate: ControlPreviewRate | nul
     else reset()
   }
   return {
-    painted({ id, sequence, capturedAt }: Frame) {
+    painted({ id, sequence, capturedAt }: Pick<Frame, "id" | "sequence" | "capturedAt">) {
       if (sequence === undefined || id === lastId) return
       lastId = id
       const last = samples.at(-1)

@@ -150,6 +150,27 @@ async function run() {
     assert.equal(pinched.scale, 2, "Pinch zoom applied")
     assert.ok(pinched.pixels[0] > unpinched.pixels[0], "Pinch zoom decodes more detail")
     assert.ok(Math.abs(pinched.pixels[0] - pinched.wanted[0]) <= 1 && Math.abs(pinched.pixels[1] - pinched.wanted[1]) <= 1, "Pinched viewer holds its magnified device pixels")
+    // A cloud machine's tab as live H.264, with each stage's look kept for review.
+    const cloud = new URL("/scripts/control-video-browser.html", url)
+    await viewer.loadURL(cloud.href)
+    const shots = new Set()
+    let cloudOutcome
+    const cloudDeadline = Date.now() + 40_000
+    while (Date.now() < cloudDeadline) {
+      cloudOutcome = await viewer.webContents.executeJavaScript(
+        "({status:document.getElementById('result')?.dataset.status,stage:document.getElementById('result')?.dataset.stage,text:document.getElementById('result')?.textContent})"
+      )
+      if (cloudOutcome.stage && !shots.has(cloudOutcome.stage)) {
+        shots.add(cloudOutcome.stage)
+        await writeFile(join(root, `cloud-${cloudOutcome.stage}.png`), (await viewer.webContents.capturePage()).toPNG())
+      }
+      if (cloudOutcome.status) break
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    console.log(cloudOutcome?.text)
+    if (cloudOutcome?.status !== "passed")
+      await writeFile(join(root, "cloud-failure.png"), (await viewer.webContents.capturePage()).toPNG())
+    assert.equal(cloudOutcome?.status, "passed", "Cloud preview video")
     assert.equal(
       await frontmost(),
       before,

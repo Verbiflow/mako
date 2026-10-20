@@ -7,6 +7,7 @@ import { CLIENT_CALL_ON_SOCKET, isClientCall } from "../contracts/client-calls.j
 import { EncodedAnswer, decodeRuntimeValue, encodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { HostCallLifetime } from "./call-lifetime.js"
 import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
+import { z } from "zod"
 
 /** Whether another host answered a call, and its answer as that host encoded it. */
 export type RoutedCall = { handled: false } | { handled: true; value: EncodedValue }
@@ -35,6 +36,7 @@ export class HostMethods implements MethodTable {
   /** Each call's value, encoded once for whichever transport carries it. */
   private readonly calls = new Map<HostChannel, (args: unknown[]) => Promise<EncodedValue>>()
   private preview: ((args: unknown[]) => Promise<ControlPreview | null>) | undefined
+  private video: ((args: unknown[]) => Promise<Uint8Array>) | undefined
   private readonly lifetime = new HostCallLifetime()
   private readonly options: HostMethodsOptions
 
@@ -73,13 +75,19 @@ export class HostMethods implements MethodTable {
       const preview = ControlPreviewSchema.nullable()
       this.preview = (args) => call(args, (value) => preview.parse(value), (value) => preview.parse(decodeRuntimeValue(value)))
     }
+    if (channel === "mako:control-video") {
+      const batch = z.instanceof(Uint8Array)
+      this.video = (args) => call(args, (value) => batch.parse(value), () => {
+        throw new Error("A preview's video is read from this host alone")
+      })
+    }
   }
 
   /** Every value is encoded here, once: the socket and the gateway carry the same text to the caller. */
   async invoke(channel: string, args: unknown[], client = "web", history = hostHistoryPaging(), correlationId?: string): Promise<EncodedValue> {
     if (isClientCall(channel)) throw new Error(CLIENT_CALL_ON_SOCKET)
     this.refuseOutsideFixture(channel)
-    if (channel === "mako:control-preview") throw new Error("Preview delivery requires a matching binary-capable client. Update the Mako client and host.")
+    if (channel === "mako:control-preview" || channel === "mako:control-video") throw new Error("Preview delivery requires a matching binary-capable client. Update the Mako client and host.")
     if (!isHostChannel(channel)) throw new Error("Unknown Mako host method")
     const call = await this.declared(channel)
     return withHostClient(client, () => call(args), history, correlationId)
@@ -91,6 +99,15 @@ export class HostMethods implements MethodTable {
     if (!this.preview) await this.options.declaring("mako:control-preview")
     const call = this.preview
     if (!call) throw new Error("Preview delivery is unavailable")
+    return withHostClient(client, () => call(args), false)
+  }
+
+  /** A preview's video for one viewer, as the bytes of a `ControlVideoBatch`. */
+  async invokeVideo(args: unknown[], client = "web"): Promise<Uint8Array> {
+    this.refuseOutsideFixture("mako:control-video")
+    if (!this.video) await this.options.declaring("mako:control-video")
+    const call = this.video
+    if (!call) throw new Error("Preview video is unavailable")
     return withHostClient(client, () => call(args), false)
   }
 

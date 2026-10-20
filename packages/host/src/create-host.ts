@@ -195,6 +195,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         installSignIns: async (signIns, secrets) => (await core.load("the machine's sign-ins")).installCloudSignIns(signIns, { home: homedir(), secrets }),
         openWorkspace: async (path) => (await core.load("the machine's workspace")).openMachineWorkspace(path),
         work: () => core.current()?.work() ?? [],
+        media: () => core.current()?.media,
       })
     }
     web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {
@@ -352,7 +353,8 @@ async function listen(config: HostConfig, methods: HostMethods, handover: Secret
     handlers.desktop,
     jobs,
     subscribed,
-    handlers.outlet
+    handlers.outlet,
+    (args, client) => methods.invokeVideo(args, client)
   )
   return {
     ...web,

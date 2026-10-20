@@ -17,7 +17,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
 import { HostJobs, type JobDemand } from "../base/host-jobs.js"
 import { DESKTOP_PATH } from "../contracts/desktop-channel.js"
-import { PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
+import { CONTROL_VIDEO_BATCH_TYPE, PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
 
 /** How the host runs one call: the encoded value of `channel(...args)`, on behalf of `client`. */
 export type HostInvoke = (channel: string, args: unknown[], client?: string, history?: boolean, correlationId?: string) => Promise<EncodedValue>
@@ -76,7 +76,9 @@ export async function startWebHost(
   /** Set on while any client is subscribed to `/events`, observers included: a window, an agent view, the CLI, another host. */
   subscribed: JobDemand = jobs.demand("a client is subscribed"),
   /** Every event for all clients, as encoded once for them: a cloud machine's runtime sends them on as its Thread's. */
-  outlet?: (channel: RuntimeEventChannel, event: RuntimeEvent) => void
+  outlet?: (channel: RuntimeEventChannel, event: RuntimeEvent) => void,
+  /** A preview's live video for one viewer (`mako:control-video`), as the bytes of a `ControlVideoBatch`. */
+  video?: (args: unknown[], client: string) => Promise<Uint8Array>
 ) {
   const info = () => (runtime instanceof Function ? runtime() : runtime)
   const streams = new Map<ServerResponse, { client: string; observer: boolean; history: boolean; eventLimit: number }>()
@@ -86,6 +88,7 @@ export async function startWebHost(
   const releases = new Map<string, ReturnType<typeof setTimeout>>()
   const pending = new Set<ServerResponse>()
   const media = new Map<ServerResponse, string>()
+  const videoReads = new Map<ServerResponse, string>()
   /** Desktops waiting to be asked for the data key; held for this host's life when it never needs one. */
   const keyWaiters = new Set<ServerResponse>()
   const secretKeyRoute = async (request: IncomingMessage, response: ServerResponse, handover: SecretKeyHandover) => {
@@ -250,6 +253,22 @@ export async function startWebHost(
             "x-content-type-options": "nosniff", vary: "Accept" })
           response.write(packet.header)
           response.end(packet.bytes)
+          return
+        }
+        if (channel === "mako:control-video" && request.headers.accept === CONTROL_VIDEO_BATCH_TYPE) {
+          if (!video) throw new Error("Preview video requires a newer Mako host. Existing agents have not been restarted.")
+          // Each read waits up to a second for packets: a window's two viewers, the panel and the chat's card, each hold one.
+          if (videoReads.size >= 32 || [...videoReads.values()].filter(owner => owner === clientId).length >= 8)
+            throw new Error("Preview video is busy; wait for the current read before starting another")
+          videoReads.set(response, clientId)
+          const release = () => videoReads.delete(response)
+          response.once("finish", release)
+          response.once("close", release)
+          const batch = await video(args, clientId)
+          if (response.destroyed || response.headersSent) return
+          response.writeHead(200, { "content-type": CONTROL_VIDEO_BATCH_TYPE, "content-length": batch.byteLength,
+            "x-content-type-options": "nosniff", vary: "Accept" })
+          response.end(batch)
           return
         }
         // A replayed mutation is answered by its id; the line is the receipt

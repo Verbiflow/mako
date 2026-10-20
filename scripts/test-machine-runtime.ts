@@ -17,7 +17,7 @@ import { duplexPair } from "node:stream"
 import { after, test } from "node:test"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { z } from "zod"
-import { PING, PONG, SUBPROTOCOL, decodeRuntimeFrame, encodeGatewayFrame, offeredCredential, threadStream, type Actor } from "@mako/protocol"
+import { PING, PONG, SUBPROTOCOL, decodeRuntimeFrame, encodeGatewayFrame, offeredCredential, threadStream, type Actor, type MediaHandler } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { MachineRuntime } from "@mako/host/usage/machine-runtime"
 import type { AgentMessage, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
@@ -99,7 +99,7 @@ async function machineGateway() {
 }
 
 /** The machine's agent: its end of the host's channel, and every message the host sent on it. */
-function machineAgent(options: { dataRoot: string; now?: () => number; work?: () => LifecycleWork[] }) {
+function machineAgent(options: { dataRoot: string; now?: () => number; work?: () => LifecycleWork[]; media?: () => MediaHandler | undefined }) {
   const [agentEnd, hostEnd] = duplexPair()
   const messages: HostMessage[] = []
   // SAFETY: the host under test writes only HostMessage lines on its channel; the assertions read what it said.
@@ -122,6 +122,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     build: "test",
     dataRoot: options.dataRoot,
     work: options.work ?? (() => []),
+    media: options.media ?? (() => undefined),
     now: options.now ?? Date.now,
     installSignIns: async (signIns, secrets) => {
       installs.push({ harnesses: signIns.map((signIn) => signIn.harness), secrets })

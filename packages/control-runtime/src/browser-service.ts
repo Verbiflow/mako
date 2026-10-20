@@ -343,6 +343,8 @@ export type BrowserFocusPolicy = "lease" | "action" | "off"
 export interface BrowserServiceOptions {
   preferencePath?: string
   defaultApplication?: () => Promise<string | undefined>
+  /** The browser preferred until someone chooses one, such as a machine's own; it needs no setup. */
+  defaultBrowser?: string
   focusPolicy?: BrowserFocusPolicy
 }
 const FOCUS_INPUT_ACTIONS: ReadonlySet<BrowserCommand["action"]> = new Set([
@@ -446,6 +448,7 @@ export class BrowserService {
   >()
   private readonly preference: BrowserPreferences
   private readonly defaultApplication?: () => Promise<string | undefined>
+  private readonly defaultBrowser?: string
   private closing = false
   /** Page refs are e1, e2, … across every tab of this service and never
    * reused, so a ref from one tab or document can never name another node. */
@@ -488,6 +491,7 @@ export class BrowserService {
     ]
     this.preference = new BrowserPreferences(options.preferencePath)
     this.defaultApplication = options.defaultApplication
+    this.defaultBrowser = options.defaultBrowser
     this.focusPolicy = options.focusPolicy ?? "action"
     this.browsers = new Map(
       (Array.isArray(definitions) ? definitions : []).map((definition) => [
@@ -651,6 +655,16 @@ export class BrowserService {
         })
         changed = true
       }
+    }
+    const fallback = this.defaultBrowser ? this.browsers.get(this.defaultBrowser)?.definition : undefined
+    if (!this.closing && !this.preference.hasSavedChoice && fallback) {
+      await this.preference.set({
+        id: fallback.id,
+        name: fallback.name,
+        product: fallback.product,
+        transport: fallback.transport,
+      })
+      changed = true
     }
     if (changed) this.changed()
     return this.status()
