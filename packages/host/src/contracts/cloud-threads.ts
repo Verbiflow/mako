@@ -1,3 +1,4 @@
+import type { SessionSettings } from "@mako/sessions/settings"
 import { z } from "zod"
 
 /** A public GitHub repository a cloud Thread's machine clones and works in, as the cloud takes it. */
@@ -16,6 +17,26 @@ export const CloudRepositorySchema = z
   .strict()
 
 export type CloudRepository = z.infer<typeof CloudRepositorySchema>
+
+/** A new cloud conversation's start, as its window shows it: its machine coming up, then its harness. */
+export type CloudStartStep = "preparing" | "starting"
+
+/**
+ * What a `mako:cloud-prepare` did while the person writes a new cloud conversation's first message: its Thread is
+ * `ready`, or still `preparing`; `later` asks again after more writing (the last few made ahead went unused); `none`
+ * when this Mac or folder can't start one in the cloud.
+ */
+export type CloudPrepareOutcome = "ready" | "preparing" | "later" | "none"
+
+/** What onboarding's offer of this Mac's recent projects did: `asked` for their bases, `already` offered, or `none` to offer. */
+export type CloudProjectsOffer = "asked" | "already" | "none"
+
+/** The harness and settings the composer would start a new cloud conversation with, to start it ahead on its machine. */
+export interface CloudPrepareLaunch {
+  harness: string
+  modeId?: string
+  tuning?: SessionSettings
+}
 
 /**
  * Where a new conversation runs: on a cloud machine of the account's, in a clone of `repository`, or without one,

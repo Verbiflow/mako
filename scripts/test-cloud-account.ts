@@ -73,6 +73,10 @@ async function fakeCloud() {
   const sockets = new Map<ServerSocket, { device: string; kind: "account" | "runtime" | "client" }>()
   const calls: string[] = []
   const correlations: (string | string[] | undefined)[] = []
+  /** What each ask to make a Thread sent. */
+  const threads: Array<{ threadId: string; prepare?: boolean }> = []
+  /** Repositories asked for project bases. */
+  const bases: unknown[] = []
   const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false, failRefreshes: 0 }
   const account = { id: "u1", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: ["cloud"] }
   /** The gateway a runtime's link reaches: the protocol's fake, which answers renewals with the same check. */
@@ -136,6 +140,18 @@ async function fakeCloud() {
     if (request.method === "GET" && url.pathname === "/v1/devices")
       return send(200, JSON.stringify({ devices: [...devices.values()].filter((device) => !device.removed).map(publicDevice), current: caller.id }))
     if (request.method === "GET" && url.pathname === `/v1/accounts/${account.id}/sign-ins`) return send(200, JSON.stringify({ signIns: [], kept: [] }))
+    if (request.method === "POST" && url.pathname === "/v1/bases") {
+      const { repositories } = z.object({ repositories: z.array(z.object({ url: z.string(), branch: z.string().optional() })) }).parse(await json(request))
+      bases.push(...repositories)
+      return send(202, JSON.stringify({ bases: repositories.map((repository) => ({ name: "b-0123456789abcdef", repository })) }))
+    }
+    if (request.method === "POST" && url.pathname === "/v1/threads") {
+      const body = await json(request)
+      threads.push(body)
+      // A Thread made ahead is ready once it has been asked for before: its machine came up meanwhile.
+      const ready = body.prepare === true && threads.filter((made) => made.threadId === body.threadId).length > 1
+      return send(201, JSON.stringify({ threadId: body.threadId, home: "cloud", machine: "m-0123456789abcdef", ready }))
+    }
     const removing = /^\/v1\/devices\/([\w-]+)$/.exec(url.pathname)?.[1]
     if (request.method === "DELETE" && removing) {
       const device = devices.get(removing)
@@ -237,6 +253,8 @@ async function fakeCloud() {
     url,
     calls,
     correlations,
+    threads,
+    bases,
     options,
     stop: () => {
       server.closeAllConnections()
@@ -583,6 +601,27 @@ test("every call to the cloud goes under its own correlation ID, and is reported
   await assert.rejects(mac.accounts.devices())
   assert.equal(reported.at(-1)?.outcome, "unreachable")
   assert.equal(reported.at(-1)?.status, undefined)
+})
+
+test("a cloud Thread made ahead is asked for as one, reported apart from a start, and its answer says when its machine is ready", async () => {
+  const cloud = await fakeCloud()
+  const reported: DiagnosticEvents["cloud.request"][] = []
+  const mac = await signedIn(cloud, { onRequest: (call) => void reported.push(call) })
+  const repository = { url: "https://github.com/octocat/Hello-World" }
+  assert.deepEqual(await mac.accounts.createThread("t-0123456789abcdef", repository, { prepare: true }), { ready: false })
+  assert.deepEqual(await mac.accounts.createThread("t-0123456789abcdef", repository, { prepare: true }), { ready: true }, "asked again, its machine is there")
+  assert.deepEqual(await mac.accounts.createThread("t-fedcba9876543210", repository), { ready: false })
+  assert.deepEqual(cloud.threads.map((made) => made.prepare === true), [true, true, false], "only a Thread made ahead says so")
+  assert.deepEqual(reported.filter((call) => call.route.startsWith("threads.")).map((call) => call.route), ["threads.prepare", "threads.prepare", "threads.create"])
+})
+
+test("project bases are asked for with the repositories only, reported as their own route", async () => {
+  const cloud = await fakeCloud()
+  const reported: DiagnosticEvents["cloud.request"][] = []
+  const mac = await signedIn(cloud, { onRequest: (call) => void reported.push(call) })
+  await mac.accounts.askBases([{ url: "https://github.com/octocat/Hello-World" }])
+  assert.deepEqual(cloud.bases, [{ url: "https://github.com/octocat/Hello-World" }])
+  assert.equal(reported.at(-1)?.route, "bases.ask")
 })
 
 test("cancelling closes the loopback listener; a code that fails to enroll says so", async () => {

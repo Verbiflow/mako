@@ -1,16 +1,16 @@
-import { randomBytes } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
-import { dirname } from "node:path"
+import { dirname, join } from "node:path"
 import { threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
 import { z } from "zod"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { CloudRepositorySchema, githubRepositoryUrl, type CloudRepository } from "../contracts/cloud-threads.js"
+import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
 import { hostCallReplay } from "../contracts/host-call-policy.js"
 import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { sessionAfter, type LiveBatch, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
-import { decodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
-import { gatewayHostCalls } from "../transport/index.js"
+import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
+import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/index.js"
 import type { CloudAccount } from "../usage/index.js"
 import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
 
@@ -25,6 +25,25 @@ const SAVE_MS = 1_000
 /** How long a call that didn't reach its Thread is repeated before the window hears of it: a wake takes seconds. */
 const CLOUD_REPEAT_MS = 60_000
 const CLOUD_REPEAT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000, 10_000] as const
+/** A Thread made ahead is taken up only this soon after this Mac last asked: the cloud ends one unused 30 minutes on. */
+const PREPARED_KEPT_MS = 25 * 60_000
+/**
+ * Asked this recently and ready then, its machine still runs: the composer asks at most every 30 s while the person
+ * writes, and the cloud keeps an idle machine at least two minutes from the last ask.
+ */
+const READY_AFTER_ASK_MS = 60_000
+/** After this many made ahead in a row went unused for one repository, the next waits for this much writing. */
+const UNUSED_BEFORE_WARY = 3
+const WARY_COMPOSING_MS = 10_000
+/**
+ * While a Thread made ahead's machine comes up (about 12 s with a clone), it's asked again this often, for at most this
+ * long, so its harness starts once the machine is ready rather than at the composer's next ask, half a minute on.
+ */
+const READY_ASK_MS = 2_000
+const READY_ASK_FOR_MS = 90_000
+/** Onboarding offers this many of the Mac's most recent projects for project bases. */
+const PROJECTS_OFFERED = 5
+const OfferedSchema = z.object({ accounts: z.array(z.string()) })
 
 const SummaryIdentitySchema = z.object({ session: z.object({ id: z.string(), status: z.string() }).loose(), revision: z.number(), createdAt: z.number() }).loose()
 /** A cloud host's own `LiveSummary`, checked for the identity and revision this router reads. */
@@ -42,10 +61,39 @@ const EntrySchema = z.object({
   created: z.boolean(),
   /** The last of the Thread's events this host relayed; it follows on from there. */
   seq: z.number().int().nonnegative(),
+  /** The window's own ID for a conversation that took one started ahead (`conversationId`), so a repeated start finds it. */
+  startedAs: z.string().optional(),
   summary: LiveSummarySchema.optional(),
 })
 
 type Entry = z.infer<typeof EntrySchema>
+
+/**
+ * A cloud Thread made ahead of a new conversation's first message, while the person writes it with Cloud chosen.
+ * Only in memory: one this Mac forgets is the cloud's to end.
+ */
+type Prepared = {
+  threadId: string
+  repository: CloudRepository
+  since: number
+  /** When this Mac last asked (`Date.now()`), and whether its machine was ready then. */
+  askedAt: number
+  ready: boolean
+  /** The last ask; the Thread is made once one has answered. */
+  asking: Promise<void>
+  made: boolean
+  /** The conversation started on its machine once it was ready, its harness running before the first message. */
+  started?: StartedAhead
+  /** The composer's latest choice of harness, and the next ask while its machine comes up. */
+  launch?: CloudPrepareLaunch
+  watching?: ReturnType<typeof setTimeout>
+}
+
+/**
+ * A conversation started ahead on a Thread made ahead: the harness and settings the composer had (`key`), its folder
+ * on the machine, and its start, which resolves to whether it went.
+ */
+type StartedAhead = { conversationId: string; key: string; cwd: string | undefined; starting: Promise<boolean> }
 
 const StoredSchema = z.object({ conversations: z.array(EntrySchema) })
 
@@ -66,6 +114,33 @@ export type CloudConversationsOptions = {
   emit(event: RuntimeEvent): void
   /** The GitHub repository a folder of this Mac's works in, for a start that names none. */
   repositoryOf(cwd: string): Promise<CloudRepository>
+}
+
+/** The folder the machine's host works in: its tab in front, which is the clone. */
+function bootFolder(boot: EncodedValue): string {
+  const tabs = BootTabsSchema.parse(decodeRuntimeValue(boot))
+  const cwd = tabs.tabs.find((tab) => tab.id === tabs.activeTabId)?.session.meta.cwd
+  if (!cwd) throw new Error("The cloud machine has no folder to work in")
+  return cwd
+}
+
+/** A harness with its settings, as two starts that would begin the same compare. */
+function launchKey(harness: string, modeId: string | undefined, tuning: LiveStartOptions["tuning"]): string {
+  const options = tuning?.options ? Object.fromEntries(Object.entries(tuning.options).sort(([a], [b]) => a.localeCompare(b))) : undefined
+  return JSON.stringify([harness, modeId ?? null, tuning?.model ?? null, options ?? null])
+}
+
+function newThreadId(): string {
+  return `t-${randomBytes(8).toString("hex")}`
+}
+
+function repositoryKey(repository: CloudRepository): string {
+  return `${repository.url}#${repository.branch ?? ""}`
+}
+
+/** A repository as a person names their project: its name on GitHub. */
+function projectName(repository: CloudRepository): string {
+  return repository.url.slice(repository.url.lastIndexOf("/") + 1)
 }
 
 /** The folder's `origin`, when it's on GitHub, and its upstream branch there. */
@@ -97,6 +172,11 @@ export class CloudConversations {
   #wakes = 0
   #wokeAt = Number.NEGATIVE_INFINITY
   readonly #pauses = new Set<() => void>()
+  /** By repository: one made ahead at a time for each. */
+  readonly #prepared = new Map<string, Prepared>()
+  /** By repository: how many made ahead in a row went unused. */
+  readonly #unused = new Map<string, number>()
+  #offering: Promise<CloudProjectsOffer> | undefined
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
@@ -115,6 +195,16 @@ export class CloudConversations {
 
   /** A call this router answers: a cloud start, or a call naming one of its conversations. */
   async route(channel: string, args: unknown[]): Promise<ConversationRoutingResult> {
+    if (channel === "mako:cloud-prepare") {
+      // SAFETY: the dispatcher parsed this call's arguments with `mako:cloud-prepare`'s schema before routing it.
+      const [folder, composingMs, launch] = args as [string, number, CloudPrepareLaunch | undefined]
+      return { handled: true, value: encodeRuntimeValue(await this.prepare(folder, composingMs, launch)) }
+    }
+    if (channel === "mako:cloud-offer-projects") {
+      // SAFETY: the dispatcher parsed this call's arguments with `mako:cloud-offer-projects`'s schema before routing it.
+      const [folders] = args as [string[]]
+      return { handled: true, value: encodeRuntimeValue(await this.offerProjects(folders)) }
+    }
     if (channel === "mako:live-start") {
       // SAFETY: the dispatcher parsed this call's arguments with `mako:live-start`'s schema before routing it.
       const [harness, cwd, options] = args as [string, string, LiveStartOptions]
@@ -144,27 +234,201 @@ export class CloudConversations {
     this.#closed = true
     for (const resume of this.#pauses) resume()
     clearTimeout(this.#saving)
+    for (const prepared of this.#prepared.values()) clearTimeout(prepared.watching)
     for (const subscription of this.#following.values()) subscription?.close()
     this.#following.clear()
     this.#session?.session.close()
     this.#session = undefined
   }
 
+  /**
+   * The person is writing a new cloud conversation's first message in `folder`, for `composingMs` so far: its Thread
+   * is made ahead, one per repository, and its machine starts and clones while they write. Asked again as they go
+   * on, which keeps the machine running. The first message takes the Thread up (`#start`); one left too long is the
+   * cloud's to end, and the next ask makes another. After a few in a row went unused, it waits for more writing.
+   * With `launch`, once the machine is ready, the conversation is started there too, its harness running before the
+   * message comes (`#startAhead`).
+   */
+  async prepare(folder: string, composingMs: number, launch?: CloudPrepareLaunch): Promise<CloudPrepareOutcome> {
+    await this.start()
+    const account = this.#options.account()
+    if (!account || !(await account.deviceId())) return "none"
+    const repository = await this.#options.repositoryOf(folder).catch(() => undefined)
+    if (!repository) return "none"
+    const key = repositoryKey(repository)
+    let prepared = this.#fresh(key)
+    if (!prepared) {
+      if ((this.#unused.get(key) ?? 0) >= UNUSED_BEFORE_WARY && composingMs < WARY_COMPOSING_MS) return "later"
+      prepared = { threadId: newThreadId(), repository, since: Date.now(), askedAt: Date.now(), ready: false, asking: Promise.resolve(), made: false }
+      this.#prepared.set(key, prepared)
+      hostLog("cloud-conversations", "making a cloud Thread ahead of its first message", { threadId: prepared.threadId, repository: repository.url })
+    }
+    const asked = prepared
+    asked.askedAt = Date.now()
+    asked.asking = account.createThread(asked.threadId, repository, { prepare: true }).then(({ ready }) => {
+      asked.made = true
+      asked.ready = ready
+    })
+    try {
+      await asked.asking
+    } catch (error) {
+      // Never made: the next ask starts afresh. Made already, it stays for its next ask or its first message.
+      if (!asked.made && this.#prepared.get(key) === asked) this.#prepared.delete(key)
+      hostWarn("cloud-conversations", "a cloud Thread wasn't made ahead", { threadId: asked.threadId, error: error instanceof Error ? error.message : String(error) })
+      return "none"
+    }
+    if (launch) asked.launch = launch
+    if (asked.ready && launch) this.#startAhead(asked, launch)
+    else if (launch) this.#watchReady(asked)
+    return asked.ready ? "ready" : "preparing"
+  }
+
+  /** Asks again every `READY_ASK_MS` while its machine comes up, and starts its harness once the machine is ready. */
+  #watchReady(prepared: Prepared): void {
+    if (prepared.watching) return
+    const key = repositoryKey(prepared.repository)
+    const until = Date.now() + READY_ASK_FOR_MS
+    const ask = async () => {
+      prepared.watching = undefined
+      const account = this.#options.account()
+      if (this.#closed || !account || this.#prepared.get(key) !== prepared || prepared.ready || Date.now() > until) return
+      try {
+        prepared.askedAt = Date.now()
+        prepared.ready = (await account.createThread(prepared.threadId, prepared.repository, { prepare: true })).ready
+      } catch (error) {
+        return hostWarn("cloud-conversations", "a cloud Thread made ahead wasn't asked again", { threadId: prepared.threadId, error: error instanceof Error ? error.message : String(error) })
+      }
+      if (prepared.ready && prepared.launch) this.#startAhead(prepared, prepared.launch)
+      else prepared.watching = setTimeout(() => void ask(), READY_ASK_MS)
+    }
+    prepared.watching = setTimeout(() => void ask(), READY_ASK_MS)
+  }
+
+  /**
+   * Starts the conversation on a Thread made ahead whose machine is ready, with the composer's harness and settings and
+   * no message, so its harness is up when the message comes. Its calls are made ahead (`OperationEnvelope.ahead`): the
+   * Thread stays made ahead. A different choice since replaces it; one that didn't start is left for the send to do.
+   * A harness's start uses no model, so this costs nothing beyond the machine already running.
+   */
+  #startAhead(prepared: Prepared, launch: CloudPrepareLaunch): void {
+    const key = launchKey(launch.harness, launch.modeId, launch.tuning)
+    if (prepared.started?.key === key) return
+    const previous = prepared.started
+    const started: StartedAhead = { conversationId: randomUUID(), key, cwd: undefined, starting: Promise.resolve(false) }
+    const ahead = { ahead: true }
+    started.starting = (async () => {
+      try {
+        if (previous) await this.#callThread(prepared.threadId, "mako:live-close", [previous.conversationId], ahead).catch(() => undefined)
+        started.cwd = bootFolder(await this.#callThread(prepared.threadId, "mako:boot", [], ahead))
+        const options: LiveStartOptions = { conversationId: started.conversationId }
+        if (launch.modeId) options.modeId = launch.modeId
+        if (launch.tuning) options.tuning = launch.tuning
+        await this.#callThread(prepared.threadId, "mako:live-start", [launch.harness, started.cwd, options], ahead)
+        hostLog("cloud-conversations", "started a harness ahead of its first message", { threadId: prepared.threadId, conversationId: started.conversationId, harness: launch.harness })
+        return true
+      } catch (error) {
+        hostWarn("cloud-conversations", "a harness wasn't started ahead; the send starts it", { threadId: prepared.threadId, harness: launch.harness, error: error instanceof Error ? error.message : String(error) })
+        if (prepared.started === started) delete prepared.started
+        return false
+      }
+    })()
+    prepared.started = started
+  }
+
+  /**
+   * Onboarding: the first time this Mac's account has the cloud, the repositories of its most recent projects (by
+   * `folders`, newest first) are offered for project bases, so each one's first cloud Thread starts from a clone made
+   * ahead. Once per account on this Mac, remembered beside its cloud conversations; nothing is shown either way.
+   */
+  offerProjects(folders: string[]): Promise<CloudProjectsOffer> {
+    this.#offering ??= this.#offerProjects(folders).finally(() => (this.#offering = undefined))
+    return this.#offering
+  }
+
+  async #offerProjects(folders: string[]): Promise<CloudProjectsOffer> {
+    const account = this.#options.account()
+    const accountId = await account?.id()
+    if (!account || !accountId) return "none"
+    const file = join(dirname(this.#options.file), "projects-offered.json")
+    const offered = OfferedSchema.safeParse(JSON.parse(await readFile(file, "utf8").catch(() => "{}"))).data?.accounts ?? []
+    if (offered.includes(accountId)) return "already"
+    const found = await Promise.all(folders.slice(0, PROJECTS_OFFERED).map((folder) => this.#options.repositoryOf(folder).catch(() => undefined)))
+    const repositories = [...new Map(found.filter((repository) => repository !== undefined).map((repository) => [repositoryKey(repository), repository])).values()]
+    if (repositories.length) await account.askBases(repositories)
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, `${JSON.stringify({ accounts: [...offered, accountId] })}\n`)
+    hostLog("cloud-conversations", "offered this Mac's recent projects for project bases", { repositories: repositories.length })
+    return repositories.length ? "asked" : "none"
+  }
+
+  /** The Thread made ahead for a repository, unless this Mac last asked for it too long ago: that one went unused. */
+  #fresh(key: string): Prepared | undefined {
+    const prepared = this.#prepared.get(key)
+    if (!prepared || Date.now() - prepared.askedAt < PREPARED_KEPT_MS) return prepared
+    this.#prepared.delete(key)
+    clearTimeout(prepared.watching)
+    const unused = (this.#unused.get(key) ?? 0) + 1
+    this.#unused.set(key, unused)
+    hostLog("cloud-conversations", "a cloud Thread made ahead went unused", { threadId: prepared.threadId, unused })
+    return undefined
+  }
+
+  /** The Thread made ahead for a repository, for a new conversation to start in once it's made; none to take, undefined. */
+  async #take(repository: CloudRepository): Promise<Prepared | undefined> {
+    const key = repositoryKey(repository)
+    const prepared = this.#fresh(key)
+    if (!prepared) return undefined
+    this.#prepared.delete(key)
+    clearTimeout(prepared.watching)
+    await prepared.asking.catch(() => undefined)
+    if (!prepared.made) return undefined
+    this.#unused.delete(key)
+    hostLog("cloud-conversations", "a new conversation takes up the cloud Thread made ahead", { threadId: prepared.threadId, aheadMs: Date.now() - prepared.since, sinceAskedMs: Date.now() - prepared.askedAt, ready: prepared.ready })
+    return prepared
+  }
+
+  /**
+   * The conversation started ahead on a Thread taken up, when the send's harness and settings are the ones it started
+   * with and its start went; one that differs is closed, and the send starts its own.
+   */
+  async #aheadFor(prepared: Prepared, harness: string, options: LiveStartOptions): Promise<StartedAhead | undefined> {
+    const started = prepared.started
+    if (!started) return undefined
+    if (started.key === launchKey(harness, options.modeId, options.tuning) && (await started.starting)) return started
+    void this.#callThread(prepared.threadId, "mako:live-close", [started.conversationId], {}).catch(() => undefined)
+    hostLog("cloud-conversations", "the send's harness or settings changed since one was started ahead; it starts its own", { threadId: prepared.threadId })
+    return undefined
+  }
+
+  /** Where a new cloud conversation's start is, for its window: in words about its project and its harness, never the machine. */
+  #step(conversationId: string, step: CloudStartStep, repository: CloudRepository): void {
+    this.#options.emit(encodeRuntimeEvent({ type: "cloud-start-step", conversationId, step, project: projectName(repository) }))
+  }
+
   async #start(harness: string, folder: string, options: LiveStartOptions): Promise<EncodedValue> {
     await this.start()
-    let entry = this.#entries.get(options.conversationId)
+    let entry = this.#entries.get(options.conversationId) ?? [...this.#entries.values()].find((known) => known.startedAs === options.conversationId)
+    let step: CloudStartStep = "preparing"
+    let ahead: StartedAhead | undefined
     if (!entry) {
       const named = options.cloud?.repository
       const repository = named ? CloudRepositorySchema.parse(named) : await this.#options.repositoryOf(folder)
+      const prepared = await this.#take(repository)
+      ahead = prepared && (await this.#aheadFor(prepared, harness, options))
+      // Ready a moment ago, it's ready now: the window goes straight to the harness starting.
+      if (ahead || (prepared?.ready && Date.now() - prepared.askedAt < READY_AFTER_ASK_MS)) step = "starting"
+      this.#step(options.conversationId, step, repository)
       entry = {
-        conversationId: options.conversationId,
-        threadId: `t-${randomBytes(8).toString("hex")}`,
+        // A conversation started ahead goes on under its own ID; the window takes it up from the start's answer.
+        conversationId: ahead?.conversationId ?? options.conversationId,
+        threadId: prepared?.threadId ?? newThreadId(),
         harness,
         repository,
         createdAt: Date.now(),
-        created: false,
+        created: prepared !== undefined,
         seq: 0,
       }
+      if (ahead) entry.startedAs = options.conversationId
       this.#entries.set(entry.conversationId, entry)
       // Remembered before the cloud is asked, so a start repeated after a crash makes the same Thread.
       await this.#save()
@@ -177,11 +441,11 @@ export class CloudConversations {
       hostLog("cloud-conversations", "made a cloud Thread", { threadId: entry.threadId, conversationId: entry.conversationId, harness, repository: entry.repository.url })
     }
     this.#follow(entry)
-    const boot = BootTabsSchema.parse(decodeRuntimeValue(await this.#call(entry, "mako:boot", [])))
-    const cwd = boot.tabs.find((tab) => tab.id === boot.activeTabId)?.session.meta.cwd
-    if (!cwd) throw new Error("The cloud machine has no folder to work in")
-    // The machine's own start: in its clone, with nothing of this Mac's folders or Thread store.
-    const start: LiveStartOptions = { ...options }
+    const cwd = ahead?.cwd ?? bootFolder(await this.#call(entry, "mako:boot", []))
+    if (step !== "starting") this.#step(options.conversationId, "starting", entry.repository)
+    // The machine's own start: in its clone, with nothing of this Mac's folders or Thread store. Repeated for a
+    // conversation started ahead, it brings the first message (`LiveConversations.firstMessage` on the machine).
+    const start: LiveStartOptions = { ...options, conversationId: entry.conversationId }
     for (const key of ["cloud", "worktree", "worktreeStart", "session", "threadPath"] as const) delete start[key]
     const value = await this.#call(entry, "mako:live-start", [harness, cwd, start])
     entry.summary = summaryOf(LiveSummarySchema.parse(decodeRuntimeValue(value)))
@@ -196,10 +460,17 @@ export class CloudConversations {
    * first answer. So a send after the machine slept arrives, without the window hearing of the wake. Past that, or
    * for a call only the person may repeat, the window hears it as a reconnect, in a cloud Thread's words.
    */
-  async #call(entry: Entry, channel: string, args: readonly unknown[]): Promise<EncodedValue> {
+  #call(entry: Entry, channel: string, args: readonly unknown[]): Promise<EncodedValue> {
+    return this.#callThread(entry.threadId, channel, args, { conversationId: entry.conversationId })
+  }
+
+  /** `#call` to a Thread by its ID, for its conversation when it has one, or made ahead of a person's message. */
+  async #callThread(threadId: string, channel: string, args: readonly unknown[], how: { conversationId?: string; ahead?: boolean }): Promise<EncodedValue> {
     const { session, deviceId } = await this.#connected()
     const actor: Actor = { kind: "client", client: "desktop", deviceId }
-    const send = gatewayHostCalls(session, { threadId: entry.threadId, actor, history: hostHistoryPaging() }).call(channel, args)
+    const calls: GatewayHostCallsOptions = { threadId, actor, history: hostHistoryPaging() }
+    if (how.ahead) calls.ahead = true
+    const send = gatewayHostCalls(session, calls).call(channel, args)
     const repeatable = hostCallReplay(channel) !== "never"
     const began = performance.now()
     for (let attempt = 1; ; attempt++) {
@@ -209,12 +480,12 @@ export class CloudConversations {
         if (!(error instanceof RuntimeDisconnectedError)) throw error
         const waitMs = CLOUD_REPEAT_BACKOFF_MS[Math.min(attempt - 1, CLOUD_REPEAT_BACKOFF_MS.length - 1)]!
         if (repeatable && attempt < 8 && performance.now() - began + waitMs < CLOUD_REPEAT_MS) {
-          hostLog("cloud-conversations", "a call didn't reach the Thread yet; repeating it", { threadId: entry.threadId, channel, attempt, inMs: waitMs })
+          hostLog("cloud-conversations", "a call didn't reach the Thread yet; repeating it", { threadId, channel, attempt, inMs: waitMs })
           await new Promise((resolve) => setTimeout(resolve, waitMs))
           continue
         }
         // As a call to another host's conversation: the window settles a lost one by its own ids, never this router.
-        throw new RuntimeDisconnectedError(error.unconfirmed, entry.conversationId, error.unconfirmed && !repeatable ? CLOUD_CALL_UNCONFIRMED_MESSAGE : CLOUD_RECONNECTING_MESSAGE)
+        throw new RuntimeDisconnectedError(error.unconfirmed, how.conversationId, error.unconfirmed && !repeatable ? CLOUD_CALL_UNCONFIRMED_MESSAGE : CLOUD_RECONNECTING_MESSAGE)
       }
     }
   }

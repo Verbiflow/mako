@@ -69,7 +69,7 @@ export function LiveAgentRow({
       : presence.status === "running"
         ? "Working"
         : presence.status === "starting"
-          ? "Connecting"
+          ? "Starting"
           : presence.status === "failed"
             ? "Failed"
             : presence.status === "background"

@@ -112,6 +112,26 @@ const inputs = {
   "mako:cloud-account": () => z.tuple([]),
   "mako:cloud-device-remove": () => z.tuple([z.string()]),
   "mako:cloud-devices": () => z.tuple([]),
+  "mako:cloud-offer-projects": () => z.tuple([z.array(z.string())]),
+  "mako:cloud-prepare": () =>
+    z.tuple([
+      z.string(),
+      z.number(),
+      z
+        .object({
+          harness: z.string(),
+          modeId: z.string().optional(),
+          tuning: z
+            .object({
+              model: z.string().optional(),
+              options: z
+                .record(z.string(), z.union([z.boolean(), z.string()]))
+                .optional(),
+            })
+            .optional(),
+        })
+        .optional(),
+    ]),
   "mako:cloud-sign-in": () => z.tuple([]),
   "mako:cloud-sign-in-cancel": () => z.tuple([]),
   "mako:cloud-sign-ins": () => z.tuple([]),
@@ -1467,6 +1487,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:cloud-account", "usage"],
   ["mako:cloud-device-remove", "usage"],
   ["mako:cloud-devices", "usage"],
+  ["mako:cloud-offer-projects", "conversations"],
+  ["mako:cloud-prepare", "conversations"],
   ["mako:cloud-sign-in", "usage"],
   ["mako:cloud-sign-in-cancel", "usage"],
   ["mako:cloud-sign-ins", "usage"],

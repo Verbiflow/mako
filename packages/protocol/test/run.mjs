@@ -331,6 +331,8 @@ describe("a Thread whose runtime is asleep", () => {
     const { input: _input, ...envelope } = call(laptop, null)
     assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, whenAsleep: "defer" }).success, true)
     assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, whenAsleep: "later" }).success, false)
+    assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, ahead: true }).success, true)
+    assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, ahead: false }).success, false)
     assert.equal(ReplyEnvelopeSchema.safeParse({ v: PROTOCOL_VERSION, id: crypto.randomUUID(), ok: true, deferred: true }).success, true)
   })
 })

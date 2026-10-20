@@ -61,6 +61,7 @@ import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudDevice } from "./cloud-account.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer } from "./cloud-threads.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
@@ -392,6 +393,15 @@ export function createMakoBridge(transport: BridgeTransport) {
     livePrewarm: (id: string) => invokeTrustedHost<"waking" | "kept-warm" | "unchanged">("mako:live-prewarm", id),
     /** The user started writing a new conversation in `cwd`: prepare what its launch reads. */
     launchPrewarm: (cwd: string) => invokeTrustedHost<void>("mako:launch-prewarm", cwd),
+    /**
+     * The user is writing a new cloud conversation's first message in `cwd`, for `composingMs` so far: its Thread is
+     * made ahead, its machine starting and cloning meanwhile, and once it's ready, `launch`'s harness started there;
+     * asked again as they go on.
+     */
+    cloudPrepare: (cwd: string, composingMs: number, launch?: CloudPrepareLaunch) =>
+      invokeTrustedHost<CloudPrepareOutcome>("mako:cloud-prepare", cwd, composingMs, launch),
+    /** The account has the cloud: this Mac's recent project folders, newest first, offered once for project bases. */
+    cloudOfferProjects: (folders: string[]) => invokeTrustedHost<CloudProjectsOffer>("mako:cloud-offer-projects", folders),
 
     /* Provider transports with their own sign-in. */
     providerConnections: (refresh?: boolean) =>

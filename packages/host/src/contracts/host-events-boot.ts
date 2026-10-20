@@ -11,6 +11,7 @@ import type { Entry } from "@mako/sessions/entries"
 import type { WorktreeStep } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
+import type { CloudStartStep } from "./cloud-threads.js"
 import type {
   ControlActivity,
   BrowserControlStatus,
@@ -77,6 +78,11 @@ export type HostEventBody =
   /** A new Thread's worktree is checked out; its provider starts next. */
   | { type: "worktree-ready"; conversationId: string }
   | { type: "worktree-step"; conversationId: string; step: WorktreeStep }
+  /**
+   * A new cloud conversation's start: `preparing` while its machine and its copy of `project` come up, `starting`
+   * once the harness is starting there. A start whose machine was ready from the composer goes straight to `starting`.
+   */
+  | { type: "cloud-start-step"; conversationId: string; step: CloudStartStep; project: string }
   /** An agent's tool changed this device's worktrees; windows read them again. */
   | { type: "worktrees-changed" }
   /** An agent's tool pushed, opened or merged a pull request; windows read GitHub and the worktrees' summaries again. */

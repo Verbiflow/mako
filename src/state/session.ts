@@ -26,6 +26,7 @@ import type { ProcessPlatform } from "@mako/host/contracts/platform"
 import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
 import { cloudAccountStore } from "@/state/cloud-account"
+import { offerCloudProjects } from "@/state/cloud-projects"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, markLiveOwnerDisconnected } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
@@ -81,7 +82,7 @@ import {
   threadsStore,
 } from "@/state/threads"
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
-import { worktreeMade, worktreeStepped } from "@/state/acp-start"
+import { cloudStepped, worktreeMade, worktreeStepped } from "@/state/acp-start"
 import { noteOutcome, openSubjectId, retireSubject, subjectId } from "@/state/notifications"
 import { toast } from "sonner"
 import { recoverThreadReader } from "@/state/thread-viewing"
@@ -240,6 +241,10 @@ function apply(event: HostEvent) {
     worktreeStepped(event.conversationId, event.step)
     return
   }
+  if (event.type === "cloud-start-step") {
+    cloudStepped(event.conversationId, event.step, event.project)
+    return
+  }
   if (event.type === "worktrees-changed") {
     void loadWorktrees()
     return
@@ -328,6 +333,7 @@ function apply(event: HostEvent) {
   }
   if (event.type === "cloud-account") {
     cloudAccountStore.set({ account: event.account })
+    offerCloudProjects(event.account)
     return
   }
   if (event.type === "cloud-sign-ins") {

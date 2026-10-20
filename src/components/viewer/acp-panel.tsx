@@ -1,8 +1,8 @@
-import { useHarnessIdentity } from "@/lib/harness-label"
+import { useHarnessIdentity, useHarnessLabels } from "@/lib/harness-label"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
 import { ApprovalStatus } from "./approval-status"
 import { carriedHistories, promptDelivery, recoverableRequests, makoPrompts, turnStopLabel, turnStops } from "@/state/prompt-delivery"
-import { agentActivity } from "@/state/agent-activity"
+import { agentActivity, startLabel } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
 import { useCopy } from "@/components/ui/use-copy"
 import { CompactionControl } from "@/components/composer/compaction-control"
@@ -288,6 +288,12 @@ function AcpActivity({
   const makingWorktree = useLasting(Boolean(making), MAKING_WORKTREE_SHOWN_AFTER_MS)
   const conversationKey = useAcp((state) => scopedAcp(state, scope)?.key)
   const slowWorktree = useLasting(Boolean(making), SLOW_WORKTREE_MS)
+  const labels = useHarnessLabels()
+  const startingAs = useAcp((state) => {
+    const current = scopedAcp(state, scope)
+    if (current?.kind === "starting") return startLabel(labels[current.harness], current.cloudStep)
+    return current?.kind === "live" ? startLabel(labels[current.session.harness]) : undefined
+  })
   const activity = useAcp((state) => {
     const live = scopedLiveAcp(state, scope)
     const approval = live?.control?.approvalResponses?.find(receipt => receipt.id === live.permission?.id)
@@ -295,7 +301,7 @@ function AcpActivity({
     // status; do not repeat it in the transcript.
     if (approval || live?.permission?.implementsPlan) return { kind: "idle" as const, label: "" }
     const switchingAccount = Boolean(live?.requests?.some((request) => request.status === "queued" && request.accountSwitch))
-    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, worktreeStep, preparing, switchingAccount, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
+    return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, starting: startingAs, makingWorktree, worktreeStep, preparing, switchingAccount, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
   }, shallowEqual)
   const waiting = running && activity.kind === "connecting"
   // The wait ended (it started, or the send went): the next one is timed afresh.

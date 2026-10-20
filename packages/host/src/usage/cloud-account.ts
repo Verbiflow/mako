@@ -44,7 +44,7 @@ import {
   type CloudSignInListing,
 } from "../contracts/cloud-sign-ins.js"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
-import type { JsonValue } from "../contracts/json.js"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
 import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
@@ -77,6 +77,8 @@ const EnrollmentSchema = z.object({
 })
 const RefreshSchema = EnrollmentSchema.omit({ credential: true })
 const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z.string() })
+/** What the cloud answers a Thread made or made again with; only whether its machine is ready is read. */
+const CreatedThreadSchema = z.object({ ready: z.boolean().optional() }).loose()
 const ProblemSchema = z.object({ title: z.string(), detail: z.string().optional() }).partial()
 /** Text that must be JSON, parsed and then checked against `schema`, in one step. */
 const jsonText = <Schema extends z.ZodType>(schema: Schema) =>
@@ -363,9 +365,25 @@ export class CloudAccounts {
     await this.#call("sign-ins.remove", "DELETE", `${this.#signInsPath()}/${harness}`)
   }
 
-  /** A cloud Thread in this account, its machine working in a clone of `repository`. Made again under the same ID, it's the same Thread. */
-  async createThread(threadId: string, repository: CloudRepository): Promise<void> {
-    await this.#call("threads.create", "POST", "/v1/threads", { threadId, home: "cloud", repository })
+  /**
+   * A cloud Thread in this account, its machine working in a clone of `repository`. Made again under the same ID, it's
+   * the same Thread. `prepare`: made ahead of its first message as the person writes it, and asked again while they
+   * do; `ready` says whether its machine runs with its runtime connected.
+   */
+  async createThread(threadId: string, repository: CloudRepository, options: { prepare?: boolean } = {}): Promise<{ ready: boolean }> {
+    const body: JsonObject = { threadId, home: "cloud", repository }
+    if (options.prepare) body.prepare = true
+    const response = await this.#call(options.prepare ? "threads.prepare" : "threads.create", "POST", "/v1/threads", body)
+    const answer = CreatedThreadSchema.safeParse(await response.json().catch(() => undefined))
+    return { ready: answer.success && answer.data.ready === true }
+  }
+
+  /**
+   * Project bases for the account's repositories, asked for ahead of their first cloud Thread: each is made in the
+   * background, and a Thread whose base isn't ready yet clones as before.
+   */
+  async askBases(repositories: CloudRepository[]): Promise<void> {
+    await this.#call("bases.ask", "POST", "/v1/bases", { repositories })
   }
 
   /** This Mac's device in the account, while it's signed in. */

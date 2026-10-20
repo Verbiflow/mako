@@ -14,6 +14,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
+import type { CloudStartStep } from "@mako/host/contracts/cloud-threads"
 import type { LiveStartOptions, LiveSnapshot, PromptAttachment } from "@/lib/types"
 import {
   acpStore,
@@ -130,6 +131,13 @@ export function updateStarting(
           projection: projectAcp({ ...conversation, ...patch }),
         }
       : conversation
+  )
+}
+
+/** Where a new cloud Thread's start is, as its host says. */
+export function cloudStepped(key: string, step: CloudStartStep, project: string): void {
+  updateAcpConversation(key, (conversation) =>
+    conversation.kind === "starting" ? { ...conversation, cloudStep: { step, project } } : conversation
   )
 }
 
