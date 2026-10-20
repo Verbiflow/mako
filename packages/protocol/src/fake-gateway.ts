@@ -21,9 +21,17 @@ import {
   type Subscription,
 } from "./gateway.js"
 import { CorrelationIdSchema } from "./ids.js"
+import {
+  type MediaDelivery,
+  type MediaStreamId,
+  MediaStreamIdSchema,
+  type MediaWatch,
+  decodeMediaMessage,
+  mediaStreamOf,
+} from "./media.js"
 import { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
-import { PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
+import { MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
 import {
   WireError,
   decodeEventFrame,
@@ -80,6 +88,8 @@ type Thread = {
 
 type Connection = {
   runtimeId: string | undefined
+  /** The link version agreed at enrolment. */
+  version: number | undefined
   correlationId: string
   closed: boolean
   inbox: Inbox<GatewayFrame>
@@ -125,6 +135,33 @@ export function createFakeGateway(
   const running = new Map<string, Running>()
   const admissions = new Map<string, number>()
   const activity = new Map<string, { busy: boolean; work: string[]; at: Date }>()
+  /** Streams being watched, each by one client, served by the runtime that ran its Thread when it was asked. */
+  const watches = new Map<MediaStreamId, { threadId: string; runtime: Connection; inbox: Inbox<MediaDelivery> }>()
+
+  const endWatch = (stream: MediaStreamId, reason?: Problem) => {
+    const watch = watches.get(stream)
+    if (!watch) return
+    watches.delete(stream)
+    watch.inbox.push(reason ? { kind: "ended", problem: reason } : { kind: "ended" })
+    watch.inbox.close()
+  }
+  const endWatchesOf = (runtime: Connection, reason: Problem, threadId?: string) => {
+    for (const [stream, watch] of watches)
+      if (watch.runtime === runtime && (threadId === undefined || watch.threadId === threadId)) endWatch(stream, reason)
+  }
+  /** A runtime's media message, as the hosted gateway routes it: by its header alone, to the stream's one viewer. */
+  const media = (connection: Connection, message: Uint8Array) => {
+    let stream: MediaStreamId
+    try {
+      stream = mediaStreamOf(message)
+    } catch (error) {
+      if (!(error instanceof WireError)) throw error
+      return refuse(connection, problem("bad-request", "Not a media message", connection.correlationId, "not-applied", { status: 400, detail: error.message }))
+    }
+    const watch = watches.get(stream)
+    if (!watch || watch.runtime !== connection) return connection.deliver({ type: "media-unwatch", stream })
+    watch.inbox.push({ kind: "data", data: decodeMediaMessage(message).data })
+  }
 
   const thread = (threadId: string): Thread => {
     let found = threads.get(threadId)
@@ -180,6 +217,7 @@ export function createFakeGateway(
       return
     runtimes.delete(connection.runtimeId)
     log({ event: "disconnected", runtimeId: connection.runtimeId })
+    endWatchesOf(connection, problem("unavailable", "The Thread's runtime left", connection.correlationId, "not-applied", { status: 503 }))
     for (const [id, waiting] of running)
       if (waiting.runtimeId === connection.runtimeId)
         waiting.settle(
@@ -239,6 +277,7 @@ export function createFakeGateway(
       )
     runtimes.get(frame.runtimeId)?.close()
     connection.runtimeId = frame.runtimeId
+    connection.version = version
     runtimes.set(frame.runtimeId, connection)
     log({
       event: "enrolled",
@@ -386,6 +425,7 @@ export function createFakeGateway(
       if (!waiting || waiting.runtimeId !== connection.runtimeId) return
       waiting.settle(frame.reply, true)
     }
+    if (frame.type === "media-end" && watches.get(frame.stream)?.runtime === connection) endWatch(frame.stream, frame.problem)
   }
 
   const forward = (
@@ -500,6 +540,7 @@ export function createFakeGateway(
       const inbox = new Inbox<GatewayFrame>()
       const connection: Connection = {
         runtimeId: undefined,
+        version: undefined,
         correlationId: crypto.randomUUID(),
         closed: false,
         inbox,
@@ -520,6 +561,14 @@ export function createFakeGateway(
       return {
         send: (frame) => send(encodeRuntimeFrame(frame)),
         sendUnchecked: send,
+        sendMedia: (message) => {
+          if (connection.closed) return
+          // Before enrolment, or at a version without media, a binary message is no frame at all.
+          if ((connection.version ?? 0) < MEDIA_VERSION)
+            return queueMicrotask(() => refuse(connection, problem("bad-request", "Frames are text", connection.correlationId, "not-applied", { status: 400 })))
+          const copy = message.slice()
+          queueMicrotask(() => media(connection, copy))
+        },
         next: (timeoutMs) => inbox.next(timeoutMs),
         frames: () => inbox,
         close: () => connection.close(),
@@ -574,6 +623,45 @@ export function createFakeGateway(
             },
           }
         },
+        watch({ threadId, stream, request }): MediaWatch {
+          MediaStreamIdSchema.parse(stream)
+          const inbox = new Inbox<MediaDelivery>()
+          const ending = (type: "unavailable" | "unsupported-version" | "conflict", title: string, status: number) =>
+            problem(type, title, crypto.randomUUID(), "not-applied", { status })
+          const ended = (reason: Problem) => {
+            inbox.push({ kind: "ended", problem: reason })
+            inbox.close()
+          }
+          const watching = () => watches.get(stream)?.inbox === inbox
+          const ask = (asked: Payload) => {
+            const watch = watches.get(stream)
+            if (watch?.inbox === inbox) watch.runtime.deliver({ type: "media-watch", threadId, stream, request: asked })
+          }
+          const target = threads.get(threadId)
+          const owner = target?.owner ? runtimes.get(target.owner) : undefined
+          if (watches.has(stream)) ended(ending("conflict", "Another viewer watches a stream of that name", 409))
+          else if (!owner) ended(ending("unavailable", "Nothing runs this Thread now", 503))
+          else if ((owner.version ?? 0) < MEDIA_VERSION) ended(ending("unsupported-version", "This Thread's runtime is too old for media", 501))
+          else {
+            watches.set(stream, { threadId, runtime: owner, inbox })
+            ask(request)
+          }
+          return {
+            next: (timeoutMs) => inbox.next(timeoutMs),
+            update: ask,
+            ack: (received) => {
+              const watch = watches.get(stream)
+              if (watch?.inbox === inbox) watch.runtime.deliver({ type: "media-ack", stream, received })
+            },
+            close: () => {
+              const watch = watches.get(stream)
+              inbox.close()
+              if (!watching() || !watch) return
+              watches.delete(stream)
+              watch.runtime.deliver({ type: "media-unwatch", stream })
+            },
+          }
+        },
       }
     },
 
@@ -587,6 +675,7 @@ export function createFakeGateway(
         threadId,
         generation: target.generation,
       })
+      if (previous) endWatchesOf(previous, problem("unavailable", "The Thread moved to another runtime", crypto.randomUUID(), "not-applied", { status: 503 }), threadId)
       runtimes
         .get(runtimeId)
         ?.deliver({ type: "assign", threadId, generation: target.generation })

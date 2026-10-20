@@ -177,6 +177,7 @@ function sessionOf(client: ClientSession): ClientSessionOverSockets {
   return {
     call: (operation) => client.call(operation),
     subscribe: (request): Subscription => client.subscribe(request),
+    watch: (request) => client.watch(request),
     close: () => {},
     wake: () => {},
   }
