@@ -1,10 +1,12 @@
 import { watch, type FSWatcher } from "node:fs"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import { hostLabel, type HostConfig } from "./host-config.js"
 import type { HostMethods, RoutedCall, startWebHost } from "./transport/index.js"
 import type { HostJobs, JobDemand } from "./base/host-jobs.js"
 import type { Foreground } from "./base/foreground.js"
 import { heavy } from "./base/heavy-packages.js"
+import { readIntoMemory } from "./base/read-into-memory.js"
 import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
 import type { Domain } from "./base/host-domains.js"
@@ -518,7 +520,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const loads = Object.entries(heavy).filter(([key]) => key !== "keyring").map(([, lazy]) => lazy.load("warm the machine").then(() => lazy.name))
       const loaded = (await Promise.allSettled(loads)).flatMap((result) => (result.status === "fulfilled" ? [result.value] : []))
       await harnesses.updates.refresh().catch(() => undefined)
-      return [...loaded, "harness versions"]
+      // What a start then reads from disk: each harness's own files, and every harness's MCP servers, which two list
+      // by running their CLIs. On a copy each was its binary's first read, 1 to 2 s (2026-10-20).
+      const runtimes = await harnesses.updates.startFiles()
+      const [read] = await Promise.all([
+        Promise.all(runtimes.map(async ({ provider, files }) => `${provider} (${Math.round((await readIntoMemory(files)).bytes / 1_048_576)} MiB)`)),
+        tools.mcp.discover(homedir()).catch(() => undefined),
+      ])
+      return [...loaded, "harness versions", ...read, "MCP servers"]
     },
     installCloudSignIns: async (signIns, place) => {
       const installed = await installCloudSignIns(providerHost.accountCapabilities, signIns, place)
