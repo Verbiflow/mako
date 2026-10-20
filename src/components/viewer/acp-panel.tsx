@@ -286,6 +286,7 @@ function AcpActivity({
     return current?.kind === "starting" ? current.worktreeStep : undefined
   })
   const makingWorktree = useLasting(Boolean(making), MAKING_WORKTREE_SHOWN_AFTER_MS)
+  const conversationKey = useAcp((state) => scopedAcp(state, scope)?.key)
   const slowWorktree = useLasting(Boolean(making), SLOW_WORKTREE_MS)
   const activity = useAcp((state) => {
     const live = scopedLiveAcp(state, scope)
@@ -296,12 +297,18 @@ function AcpActivity({
     const switchingAccount = Boolean(live?.requests?.some((request) => request.status === "queued" && request.accountSwitch))
     return agentActivity({ blocks: live?.blocks ?? EMPTY_QUEUE, waiting: Boolean(live?.permission), connecting: starting, makingWorktree, worktreeStep, preparing, switchingAccount, quietForMs, native: live?.nativeActivity, harness: live?.session.harness })
   }, shallowEqual)
+  const waiting = running && activity.kind === "connecting"
+  // The wait ended (it started, or the send went): the next one is timed afresh.
+  useEffect(() => {
+    if (!waiting && conversationKey) waitsBegan.delete(conversationKey)
+  }, [waiting, conversationKey])
   return running && activity.kind !== "responding" && activity.kind !== "idle" ? (
     <div role="status" data-agent-activity={activity.kind} className="flex min-h-8 min-w-0 items-center gap-2 py-1 text-ui text-muted-foreground">
       <ActivityMark state={activity.kind} size={20} />
       {activity.since === undefined ? (
         <>
           <span key={activity.label} className="truncate animate-in fade-in-0 duration-200 ease-[var(--ease-out)]">{activity.label}</span>
+          {activity.kind === "connecting" && !making ? <WaitClock waitKey={conversationKey} /> : null}
           {making && slowWorktree && (
             <button
               type="button"
@@ -321,6 +328,37 @@ function AcpActivity({
       )}
     </div>
   ) : null
+}
+
+/** A wait this short reads as instant and shows no clock; one longer shows how long, and past `WAIT_LONG_MS`, that it is. */
+const WAIT_CLOCK_MS = 3_000
+const WAIT_LONG_MS = 20_000
+/**
+ * When each conversation began waiting to start or send, kept across the panel's remounts (a tab switch), so a wait
+ * that goes on isn't shown as just begun. One per conversation; cleared when the wait ends.
+ */
+const waitsBegan = new Map<string, number>()
+
+/**
+ * How long a start or a send has waited, for a person: nothing for the first seconds, then a quiet count, then that
+ * it's taking longer than usual. A cloud Thread waking or starting reads like any other wait: never its machinery.
+ */
+function WaitClock({ waitKey }: { waitKey: string | undefined }) {
+  const [now, setNow] = useState(() => Date.now())
+  const began = waitKey ? (waitsBegan.get(waitKey) ?? now) : now
+  useEffect(() => {
+    if (waitKey && !waitsBegan.has(waitKey)) waitsBegan.set(waitKey, began)
+    const timer = setInterval(() => setNow(Date.now()), 1_000)
+    return () => clearInterval(timer)
+  }, [waitKey, began])
+  const waited = now - began
+  if (waited < WAIT_CLOCK_MS) return null
+  return (
+    <span className="flex min-w-0 shrink items-baseline gap-1 text-faint animate-in fade-in-0 duration-200 ease-[var(--ease-out)]">
+      {waited >= WAIT_LONG_MS ? <span className="truncate">· taking longer than usual</span> : null}
+      <span className="tabular shrink-0">· {durationText(waited)}</span>
+    </span>
+  )
 }
 
 /**

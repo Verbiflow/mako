@@ -10,8 +10,10 @@ import { WebSocketServer } from "ws"
 import {
   PING,
   PONG,
+  PROTOCOL_VERSION,
   Payload,
   RuntimeThreads,
+  problem,
   clientSessionOverSockets,
   decodeClientFrame,
   encodeGatewayClientFrame,
@@ -217,6 +219,79 @@ test("a cloud start makes the Thread once, starts on the machine in its clone, a
   assert.ok(machine.calls.some((call) => call.channel === "mako:live-prompt" && call.args[0] === conversationId))
   assert.equal((await router.route("mako:live-prompt", ["not-a-cloud-one", "r-3", "x", [], undefined])).handled, false)
   assert.equal((await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID() }])).handled, false, "a start without cloud is this Mac's")
+})
+
+test("a call the gateway lost on its way to the machine is repeated under its one id, and runs once", async () => {
+  const machine = await cloudMachine()
+  // The first send of a message is lost between the gateway and the machine: its link changed under it, as a machine
+  // that woke from a pause replaces a connection that didn't survive.
+  const session = machine.account.session
+  let lost = 0
+  machine.account.session = () => {
+    const opened = session()
+    return {
+      ...opened,
+      call: async (operation) =>
+        operation.op === "host.live-prompt" && lost++ === 0
+          ? { v: PROTOCOL_VERSION, id: operation.id, ok: false as const, problem: problem("owner-unavailable", "The runtime's link failed while the operation was sent", operation.correlationId, "unknown", { status: 503 }) }
+          : opened.call(operation),
+    }
+  }
+  const { router } = conversations(machine.account, join(scratch, "lost", "conversations.json"))
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }])
+  const prompted = await router.route("mako:live-prompt", [conversationId, "r-lost", "after a pause", [], undefined])
+  assert.ok(prompted.handled, "the window never heard of the loss")
+  assert.equal(lost, 2, "sent twice: lost once, then delivered")
+  assert.equal(machine.calls.filter((call) => call.channel === "mako:live-prompt").length, 1, "and run once")
+})
+
+test("a close is taken at once while nothing runs the Thread, and reaches the machine when it's back", async () => {
+  const gateway = createFakeGateway()
+  const runtimeId = "m-0123456789abcdef.g1"
+  const calls: string[] = []
+  const serve = async () =>
+    serveHostThroughGateway(await gateway.connectRuntime(), {
+      runtimeId,
+      build: "test",
+      threads: new RuntimeThreads(),
+      invoke: async (channel, args) => {
+        calls.push(channel)
+        if (channel === "mako:boot") return JSON.stringify({ activeTabId: "tab-1", tabs: [{ id: "tab-1", session: { meta: { cwd: CLONE } } }] })
+        if (channel === "mako:live-start") return JSON.stringify({ session: { id: z.object({ conversationId: z.string() }).loose().parse(args[2]).conversationId, harness: "claude", cwd: CLONE, status: "running" }, revision: 1, createdAt: 1, requests: [] })
+        return JSON.stringify(null)
+      },
+    })
+  let served = await serve()
+  const deviceId = randomUUID()
+  const client = await gateway.connectClient({ kind: "client", client: "desktop", deviceId })
+  const created: string[] = []
+  const account: CloudAccount = {
+    token: async () => "token",
+    id: async () => "account",
+    deviceId: async () => deviceId,
+    session: () => sessionOf(client),
+    createThread: async (threadId) => {
+      created.push(threadId)
+      await gateway.assign(threadId, runtimeId)
+    },
+    wake: () => {},
+    stop: () => {},
+  }
+  const { router } = conversations(account, join(scratch, "deferred", "conversations.json"))
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }])
+  // The machine sleeps: nothing runs the Thread.
+  served.close()
+  await until("the runtime gone", () => gateway.deferred(created[0]!).length === 0)
+  const closing = await router.route("mako:live-close", [conversationId])
+  assert.ok(closing.handled, "answered at once, without waiting on a machine")
+  assert.equal(calls.includes("mako:live-close"), false)
+  assert.equal(gateway.deferred(created[0]!).length, 1)
+  served = await serve()
+  after(() => served.close())
+  await until("the close delivered once the machine is back", () => calls.includes("mako:live-close"))
+  assert.equal(calls.filter((call) => call === "mako:live-close").length, 1)
 })
 
 test("a Mac that restarts lists its cloud conversations and follows each from the last event it relayed", async () => {

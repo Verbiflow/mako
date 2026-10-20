@@ -48,6 +48,11 @@ export const PING_MS = 25_000
 const SILENT_MS = 60_000
 /** A link answered at least once a ping, quieter than this when woken, missed its heartbeat while asleep. */
 const WOKEN_QUIET_MS = PING_MS + 5_000
+/**
+ * After the machine this runs on was paused, how long its connection has to answer a ping before it's replaced. The
+ * cloud's edge answers a ping in tens of milliseconds; a connection that survived the pause answers well within this.
+ */
+const RESUME_PROBE_MS = 1_500
 /** Up this long, a connection counts as healthy: the next drop starts the backoff over. */
 const STABLE_MS = 30_000
 const BACKOFF_MS = [500, 1_000, 2_000, 5_000, 10_000, 30_000] as const
@@ -98,13 +103,32 @@ export class CloudLink {
   }
 
   /**
-   * The machine this runs on was paused: its connection may be frozen, or gone with a network the resume didn't
-   * keep, however recently it was heard. A new one replaces it now.
+   * The machine this runs on was paused: its connection may have survived (the cloud holds a quiet one open through
+   * a short pause) or be gone with a network the resume didn't keep, however recently it was heard. It's asked with a
+   * ping: answered within `RESUME_PROBE_MS`, it's kept, and whatever the cloud is sending on it arrives. Replacing a
+   * connection that survived lost the operation the cloud had just sent on it (2026-10-19: a send after a 30 s pause
+   * failed on three harnesses of six); one that doesn't answer is replaced as before.
    */
   reconnect(): void {
     if (!this.#running) return
-    this.#attempt = 0
-    this.#reconnect(0)
+    const open = this.#open
+    if (!open?.opened || open.socket.readyState !== WebSocket.OPEN) {
+      this.#attempt = 0
+      this.#reconnect(0)
+      return
+    }
+    const asked = Date.now()
+    open.socket.send(PING)
+    this.#after(RESUME_PROBE_MS, () => {
+      if (open !== this.#open) return
+      if (open.lastHeard >= asked) {
+        this.#options.log?.(`cloud ${this.#options.name}: its connection survived the pause; kept`, { answeredMs: open.lastHeard - asked })
+        return
+      }
+      this.#options.log?.(`cloud ${this.#options.name}: its connection didn't survive the pause; replacing it`, { probeMs: RESUME_PROBE_MS })
+      this.#attempt = 0
+      this.#reconnect(0)
+    })
   }
 
   #connect(): void {

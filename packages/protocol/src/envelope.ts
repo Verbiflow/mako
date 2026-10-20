@@ -60,6 +60,12 @@ export const OperationEnvelopeSchema = z
     actor: ActorSchema,
     /** 1 on the first send; a repeat after a dropped connection counts up. */
     attempt: z.number().int().min(1).max(8),
+    /**
+     * `defer`: if the Thread's runtime is asleep, don't wake it for this. The gateway takes the operation, answers
+     * `deferred` at once, and delivers it, in order, when the runtime next wakes for anything else. Only for an
+     * operation whose answer the caller doesn't need and that is safe to repeat, such as closing a conversation.
+     */
+    whenAsleep: z.literal("defer").optional(),
   })
   .strict()
 
@@ -111,6 +117,8 @@ export const ReplyEnvelopeSchema = z.discriminatedUnion("ok", [
       ok: z.literal(true),
       /** For a Thread operation: the event that recorded its admission. */
       seq: SeqSchema.optional(),
+      /** Taken without waking an asleep runtime (`whenAsleep: "defer"`): it runs when the runtime next wakes. */
+      deferred: z.literal(true).optional(),
     })
     .strict(),
   z
