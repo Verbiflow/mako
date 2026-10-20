@@ -257,8 +257,24 @@ try {
   )
   assert.equal(saved.error, false, saved.text)
   assert.match(saved.value().path, /buttons/)
+
+  const covers = `<title>Covers</title>
+<div style="position:relative;width:200px"><button onclick="window.badged=1" style="width:160px;height:40px">Badged</button><span style="position:absolute;left:70px;top:10px;width:20px;height:20px;background:red"></span></div>
+<div style="position:relative;width:200px"><button onclick="window.covered=1" style="width:160px;height:40px">Covered</button><div class="shade dim" style="position:absolute;inset:0;background:rgba(0,0,0,.2)"></div></div>
+<div style="position:relative;width:200px"><button onclick="window.later=1" style="width:160px;height:40px">Later</button><div id=fade style="position:absolute;inset:0"></div></div>`
+  const pointed = await js(`const covers = await control.openTab({browser:"live", url:${JSON.stringify(`data:text/html,${encodeURIComponent(covers)}`)}});
+await covers.locator({role:"button",name:"Badged"}).click();
+await covers.evaluate("setTimeout(() => document.getElementById('fade').remove(), 200)");
+await covers.locator({role:"button",name:"Later"}).click();
+const covered = await covers.locator({role:"button",name:"Covered"}).click().catch((error) => [error.code, error.message]);
+[await covers.evaluate("[window.badged, window.later, window.covered ?? null]"), covered]`)
+  assert.equal(pointed.error, false, pointed.text)
+  const [clicked, refused] = pointed.value()
+  assert.deepEqual(clicked, [1, 1, null], "a badge over the centre and an overlay that fades away no longer stop a click; a cover does")
+  assert.equal(refused[0], "target-covered")
+  assert.match(refused[1], /covered at every visible point by <div\.shade\.dim>\. Nothing was clicked/, "the refusal names what covers it")
   console.log(
-    "Page verbs: waitFor, name patterns, evaluate, inspect, hover, HTML5 and pointer drag, scrollIntoView, refs across screenshots, view tokens, compact tabs and artifacts passed against real Chromium"
+    "Page verbs: waitFor, name patterns, evaluate, inspect, hover, HTML5 and pointer drag, scrollIntoView, click points past badges and fading overlays, refs across screenshots, view tokens, compact tabs and artifacts passed against real Chromium"
   )
 } finally {
   await client.close()

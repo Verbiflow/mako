@@ -90,6 +90,7 @@ export async function browserFixture() {
   let holdCookies = false
   let delayedCookies: (() => void) | undefined
   let holdAxRead = false
+  let lostSession = "Session with given id not found"
   let delayedAxRead: (() => void) | undefined
   const heldInputs: {
     type: HeldInputType
@@ -112,7 +113,7 @@ export async function browserFixture() {
         ? sessions.get(command.sessionId)
         : undefined
       if (command.sessionId && (!tab || !targets.has(tab))) {
-        fail("Session with given id not found")
+        fail(lostSession)
         return
       }
       const emit = (method: string, params: JsonObject) =>
@@ -265,15 +266,7 @@ export async function browserFixture() {
             else reply({ result: { value: { value: "b", label: "Blue" } } })
           } else if (source.includes("elementFromPoint")) {
             if (page.hidden)
-              reply({
-                exceptionDetails: {
-                  text: "Uncaught",
-                  exception: {
-                    description:
-                      "Error: Element is hidden or covered at its centre; observe again or use coordinates from a screenshot\n    at <anonymous>",
-                  },
-                },
-              })
+              reply({ result: { value: { blocked: "covered", by: '<div.backdrop> inside dialog "Settings"' } } })
             else reply({ result: { value: { x: 40, y: 20 } } })
           } else if (source.includes("getBoundingClientRect"))
             reply({
@@ -566,6 +559,11 @@ export async function browserFixture() {
     },
     sessionFor(tab: string) {
       return [...sessions.entries()].find(([, target]) => target === tab)?.[0]
+    },
+    /** Drop a tab's session without an event while the tab stays, answering later commands as `message`. */
+    forgetSession(tab: string, message: string) {
+      for (const [session, target] of sessions) if (target === tab) sessions.delete(session)
+      lostSession = message
     },
     disconnect: () => {
       for (const socket of sockets) socket.terminate()

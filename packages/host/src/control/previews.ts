@@ -104,10 +104,11 @@ export class ControlPreviews {
       entry.preview.activity.kind !== next.kind ||
       entry.preview.activity.target !== next.target
     ) {
+      // The old picture stays until the new target's first frame replaces it, so the card never blanks.
       this.stop(entry)
       entry.target = undefined
+      entry.owner = undefined
       entry.authorize = undefined
-      entry.preview.frame = null
       entry.preview.window = undefined
       entry.oversized = false
       entry.snapshots++
@@ -190,14 +191,15 @@ export class ControlPreviews {
   ): ControlPreview | null {
     const entry = this.entries.get(conversationId)
     if (!entry) return null
+    for (const [id, until] of entry.watchers)
+      if (until < Date.now()) entry.watchers.delete(id)
     try {
       entry.authorize?.()
     } catch {
-      this.remove(conversationId)
-      return null
+      // Between turns the card keeps its last picture; only the stream stops.
+      this.stop(entry)
+      return { ...entry.preview, window: undefined, paused: true }
     }
-    for (const [id, until] of entry.watchers)
-      if (until < Date.now()) entry.watchers.delete(id)
     if (watching) {
       if (entry.watchers.size < 16 || entry.watchers.has(watcher)) {
         entry.watchers.set(watcher, Date.now() + 3_000)
@@ -374,6 +376,25 @@ export class ControlPreviews {
         if (entry.generation !== generation && entry.watchers.size)
           this.capture(entry)
       })
+  }
+
+  /** The agent closed a tab: a preview showing it ends. */
+  closed(conversationId: string, target: { browser: string; tab: string }) {
+    const shown = this.entries.get(conversationId)?.target
+    if (shown?.browser === target.browser && shown.tab === target.tab) this.end(conversationId)
+  }
+
+  /** A binding's grant ended with its Local Control session: what it was showing ends too. */
+  revoked(conversationId: string, bindingId: string) {
+    const entry = this.entries.get(conversationId)
+    if (entry && (entry.owner === undefined || entry.owner === bindingId)) this.end(conversationId)
+  }
+
+  /** Remove the preview and tell viewers, so the card leaves at once instead of at its next read. */
+  private end(conversationId: string) {
+    const activity = this.entries.get(conversationId)?.preview.activity
+    this.remove(conversationId)
+    if (activity) this.changed({ ...activity, updatedAt: Date.now() })
   }
 
   remove(conversationId: string) {

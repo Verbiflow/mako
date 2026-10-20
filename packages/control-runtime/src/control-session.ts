@@ -1741,7 +1741,7 @@ export function createControlSession(
     const request = controlInput(
       ControlObserveRequestSchema.safeParse(raw),
       "observation options",
-      'Use observe({max:50,match:{role:"button",name:"Save"}}); optional keys: within, query (text search over role, name, value and visible text), interactive. Each within scope is an observed role and its name, for example within:[{role:"form",name:"Shipping"}], or the role alone when the page has one, such as within:[{role:"main"}]; a string name is exact, and name:{prefix}, {contains} or {regex,flags} match live text. Native windows also accept maxDepth:1..25 to bound traversal; browser pages do not.'
+      'Use observe({max:50,match:{role:"button",name:"Save"}}), or match:{role:"button"} for every button; optional keys: within, query (text search over role, name, value and visible text), interactive. Each within scope is an observed role and its name, for example within:[{role:"form",name:"Shipping"}], or the role alone when the page has one, such as within:[{role:"main"}]; a string name is exact, and name:{prefix}, {contains} or {regex,flags} match live text. Native windows also accept maxDepth:1..25 to bound traversal; browser pages do not.'
     )
     const scope: ComputerArguments = { within: request.within }
     if (request.match) scope.match = request.match

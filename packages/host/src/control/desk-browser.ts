@@ -2,7 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import type { WebSocket, WebSocketServer } from "ws"
 import { z } from "zod"
 import { configuredListenPort } from "../base/listen-port.js"
-import type { LocalBrowser } from "@mako/control-runtime/desktop"
+import { DESK_OUTSIDE_ORIGIN, type LocalBrowser } from "@mako/control-runtime/desktop"
 import type { JsonObject } from "../contracts/json.js"
 import { heavy } from "../base/heavy-packages.js"
 import type { HostJobs } from "../base/host-jobs.js"
@@ -199,11 +199,7 @@ export class DeskBrowser {
         if (method === "Page.navigate") {
           const url = navigateParams.parse(params).url
           if (!this.options.allowsUrl(url)) {
-            this.fail(
-              socket,
-              id,
-              "This browser hosts Mako's own interface; it does not navigate to other sites. Open a Chrome tab for external pages."
-            )
+            this.fail(socket, id, DESK_OUTSIDE_ORIGIN)
             return
           }
         }
@@ -230,11 +226,7 @@ export class DeskBrowser {
         case "Target.createTarget": {
           const url = createParams.parse(params).url
           if (url && url !== "about:blank" && !this.options.allowsUrl(url)) {
-            this.fail(
-              socket,
-              id,
-              "This browser opens Mako's own interface only. Pass about:blank (or omit url) to open a hidden desk window."
-            )
+            this.fail(socket, id, DESK_OUTSIDE_ORIGIN)
             return
           }
           if (this.pages.size >= (this.options.maxPages ?? DEFAULT_MAX_PAGES)) {

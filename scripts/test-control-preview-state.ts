@@ -170,6 +170,29 @@ try {
   await flush()
   assert.equal(reads().at(-1)!.box, undefined, "Once it exists but is unmeasured, it gets full pixels")
   reopened.release()
+  const between = {
+    conversationId: "between",
+    kind: "browser",
+    operation: "click",
+    target: "fixture:tab",
+    status: "observed",
+    updatedAt: Date.now(),
+  } satisfies ControlPreview["activity"]
+  previews.set("between", { activity: between, frame: null, paused: true })
+  receiveControlActivity(between)
+  cleanups.push(watchControlPreview("between"))
+  await flush()
+  const pausedReads = () => calls.filter((call) => call.id === "between" && call.watching).length
+  const paused = pausedReads()
+  mock.timers.tick(10_000)
+  await flush()
+  assert.equal(pausedReads(), paused, "A browser preview paused between turns makes zero polling calls")
+  previews.set("between", { activity: { ...between, updatedAt: Date.now() }, frame: null })
+  receiveControlActivity({ ...between, updatedAt: Date.now() })
+  await flush()
+  mock.timers.tick(1_000)
+  await flush()
+  assert.ok(pausedReads() >= paused + 2, "The agent acting again resumes it, and a live browser preview keeps reading")
   visibility.hidden = true
   visibility.dispatchEvent(new Event("visibilitychange"))
   await flush()

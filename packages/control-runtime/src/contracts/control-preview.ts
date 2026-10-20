@@ -47,5 +47,7 @@ export const ControlPreviewSchema = z.object({
   activity: ControlActivitySchema,
   window: AppshotTargetSchema.optional(),
   frame: ControlPreviewFrameSchema.nullable(),
+  /** No turn is driving the target: `frame` is the last one and nothing streams until the agent acts again. */
+  paused: z.boolean().optional(),
 })
 export type ControlPreview = z.infer<typeof ControlPreviewSchema>

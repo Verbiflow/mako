@@ -162,10 +162,13 @@ function PreviewCard({
   // every finished task the host is slow to answer for.
   if (!frame && !nativeWindow) return null
   const surface = activity?.kind === "browser" ? "Browser" : "Computer"
-  const working = activity?.status === "running"
-  const label = activity
-    ? `${surface} · ${activity.operation.replaceAll("_", " ")}${working ? " · working" : ""}`
-    : surface
+  const paused = preview?.paused === true
+  const working = !paused && activity?.status === "running"
+  const label = paused
+    ? `${surface} · last view, not live`
+    : activity
+      ? `${surface} · ${activity.operation.replaceAll("_", " ")}${working ? " · working" : ""}`
+      : surface
   const media = zoomed
     ? "block h-auto max-h-[100cqh] w-full object-contain"
     : "block max-h-64 w-full object-contain"
@@ -192,7 +195,7 @@ function PreviewCard({
             <ControlPreviewImage
               key={`${id}:${activity?.kind}:${activity?.target}`}
               frame={frame}
-              label="Live view of the tab this task is using"
+              label={paused ? "Last view of the tab this task used" : "Live view of the tab this task is using"}
               className={media}
               onRate={setRate}
             />
@@ -230,7 +233,8 @@ function PreviewCard({
           {working && (
             <span className="size-1.5 shrink-0 rounded-full bg-ember" />
           )}
-          {zoomed && activity && (
+          {paused && <span className="text-label">Last view</span>}
+          {zoomed && activity && !paused && (
             <span className="text-label first-letter:uppercase">
               {activity.operation.replaceAll("_", " ")}
             </span>
@@ -257,7 +261,7 @@ function PreviewCard({
             <XIcon className="size-3.5" />
           </button>
         )}
-        {rate && !error && (
+        {rate && !error && !paused && (
           <span
             data-control-preview-rate
             title={controlPreviewRateDescription(rate)}

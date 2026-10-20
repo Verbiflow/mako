@@ -66,6 +66,8 @@ const text = (value: z.infer<typeof output>) =>
     .map((x) => x.text)
     .join("\n")
 const summary: Record<string, number | boolean> = {}
+let journaled = false
+let written = ""
 try {
   const tools = await client.listTools()
   assert.deepEqual(
@@ -134,6 +136,12 @@ try {
   )
   assert.equal(named.isError, undefined, text(named))
   assert.deepEqual(JSON.parse(text(named)), [true, 1, 1])
+  const roleOnly = await js(
+    '[(await tab.observe({match:{role:"textbox"}})).nodes.length, (await tab.observe({match:{role:"TextBox"}})).nodes.length, (await tab.expect({role:"textbox"},{timeoutMs:0})).status, (await tab.expect({role:"dialog",absent:true},{timeoutMs:0})).status, (await tab.expect({role:"textbox",name:"Proof",states:["focused"]},{timeoutMs:0}).catch((error) => error.code))]'
+  )
+  assert.equal(roleOnly.isError, undefined, text(roleOnly))
+  assert.deepEqual(JSON.parse(text(roleOnly)), [1, 1, "matched", "matched", "assertion-failed"],
+    "a role alone filters a read and makes an expectation, in any spelling, and states may be listed")
   const missed = await js('await tab.locator({role:"textbox",name:"Proo"}).setValue("x")')
   assert.equal(missed.isError, true)
   assert.match(text(missed), /^Error target-not-found \(nothing dispatched\): No textbox is named "Proo"\. "Proo" is part of the name of textbox "Proof" \(e\d+\)\. .*name:\{contains:"Proo"\}/)
@@ -280,6 +288,7 @@ try {
     request({ method: "exec", source: "return (1" }),
     (error) => controlFaultData(error)?.outcome === "not-dispatched"
   )
+  journaled = true
 } finally {
   await client.close()
   await server.close()
@@ -287,7 +296,9 @@ try {
   await runtime.close()
   assert.equal(fixture.targets.size, 0, "task owner cleans up targets")
   await fixture.close()
-  const written = await readFile(journal, "utf8").finally(() => rm(artifacts, { recursive: true, force: true }))
+  written = await readFile(journal, "utf8").finally(() => rm(artifacts, { recursive: true, force: true }))
+}
+if (journaled) {
   assert.doesNotMatch(written, /journal-secret-marker/, "the journal keeps neither a cell's source nor its returned value")
   const lines = written.trim().split("\n").map((line) => z.object({
     at: z.number(), ms: z.number(), session: z.string(), requestId: z.string(), method: z.string(), outcome: z.string(), task: z.literal("repl-task"),

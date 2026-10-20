@@ -17,7 +17,7 @@ export function processAbsent(pid: number): boolean {
   }
 }
 
-function socketUnused(path: string): Promise<boolean> {
+export function socketUnused(path: string): Promise<boolean> {
   return new Promise((resolve) => {
     const socket = createConnection(path)
     const finish = (unused: boolean) => {

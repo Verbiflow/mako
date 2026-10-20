@@ -9,8 +9,10 @@ import {
 import {
   ControlSelectorSchema,
   ControlReadScopeSchema,
+  inScope,
   isExactName,
   nameMatches,
+  NameMatchSchema,
   scopeControlNodes,
   scopeLabel,
   type ControlReadScope,
@@ -152,13 +154,18 @@ export function controlSelector(value: JsonValue | ElementSelector): ElementSele
     "not-dispatched"
   )
 }
+/** Without a name, a role alone says one exists (or, with `absent`, none does); a value or states need exactly one. */
 const expectationSchema = selectorSchema
   .extend({
+    name: NameMatchSchema.optional(),
     value: z.string().optional(),
     states: z
-      .record(
-        z.string(),
-        z.union([z.string(), z.number(), z.boolean(), z.null()])
+      .preprocess(
+        (states) => Array.isArray(states) ? Object.fromEntries(states.map((state) => [state, true])) : states,
+        z.record(
+          z.string(),
+          z.union([z.string(), z.number(), z.boolean(), z.null()])
+        )
       )
       .optional(),
     absent: z.boolean().default(false),
@@ -280,7 +287,7 @@ function observationHeader(data: ControlObservationData, returned: number): stri
   }
   const within = data.scope?.within ?? []
   if (within.length || data.scope?.match)
-    head.push(`scope ${[...within.map(scopeLabel), ...(data.scope?.match ? [`match ${data.scope.match.role} ${JSON.stringify(data.scope.match.name)}`] : [])].join(" › ")}`)
+    head.push(`scope ${[...within.map(scopeLabel), ...(data.scope?.match ? [`match ${scopeLabel(data.scope.match)}`] : [])].join(" › ")}`)
   const first = (data.offset ?? 0) + 1
   const rows = `rows ${first}–${first + returned - 1} of ${data.matched ?? "more"}`
   if (data.nextOffset != null)
@@ -724,8 +731,10 @@ export class ControlHandle {
     const wanted = controlInput(
       expectationSchema.safeParse(regexNames(expectation)),
       "expectation",
-      `Use {role:"textbox",name:"Name",value:"Ada"}; optional within, states, absent.${this instanceof TabHandle ? " A page condition is {url?,title?,text?,selector?,hidden?} on its own, without role or name." : ""}`
+      `Use {role:"textbox",name:"Name",value:"Ada"}, or {role:"dialog"} for any dialog; optional within, states such as {disabled:true} or ["disabled"], absent.${this instanceof TabHandle ? " A page condition is {url?,title?,text?,selector?,hidden?} on its own, without role or name." : ""}`
     )
+    const subject = wanted.name === undefined ? { role: wanted.role } : { role: wanted.role, name: wanted.name }
+    const single = wanted.name !== undefined || wanted.value !== undefined || wanted.states !== undefined
     const timing = controlInput(
       z
         .object({
@@ -742,15 +751,13 @@ export class ControlHandle {
       const view = await this.observe({
         max: 2,
         within: wanted.within,
-        match: { role: wanted.role, name: wanted.name },
+        match: subject,
       })
-      const matches = view.nodes.filter(
-        (node) => node.role === wanted.role && nameMatches(node.name, wanted.name)
-      )
-      if (matches.length > 1)
+      const matches = view.nodes.filter((node) => inScope(node.role, node.name, subject))
+      if (matches.length > 1 && single)
         throw new ControlFault(
           "target-ambiguous",
-          `Assertion ambiguous: ${matches.length} observed ${wanted.role} ${JSON.stringify(wanted.name)}. Scope it with within:[{role,name}].`,
+          `Assertion ambiguous: ${matches.length} observed ${scopeLabel(subject)}. ${wanted.name === undefined ? "Add its name, or" : ""} scope it with within:[{role,name}].`,
           "not-dispatched"
         )
       const node = matches[0]
@@ -784,7 +791,7 @@ export class ControlHandle {
           },
           () =>
             wanted.absent
-              ? `matched: no ${wanted.role} ${JSON.stringify(wanted.name)}`
+              ? `matched: no ${scopeLabel(subject)}`
               : `matched ${node ? pageOutlineLine(node) : wanted.role}`
         )
       if (Date.now() >= deadline)

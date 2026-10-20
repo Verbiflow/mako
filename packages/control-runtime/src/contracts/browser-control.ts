@@ -52,6 +52,8 @@ export const BrowserFaultCodeSchema = z.enum([
   "disconnected",
   "target-closed",
   "target-busy",
+  "target-covered",
+  "target-hidden",
   "dialog-open",
   "stale-target",
   "invalid-request",

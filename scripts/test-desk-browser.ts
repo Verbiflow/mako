@@ -27,6 +27,7 @@ import { deskFile } from "../electron/desk-scheme.js"
 import { deskPreviewFile, resolveDeskPreviewUrl } from "@mako/host/contracts/desk-url"
 import {
   BrowserCommandSchema,
+  BrowserFault,
   BrowserTargetSchema,
 } from "../packages/control-runtime/src/contracts/browser-control.js"
 import type { JsonObject } from "@mako/host/contracts/json"
@@ -266,10 +267,25 @@ try {
   })
   await assert.rejects(
     run("agent", { action: "navigate", target, url: "https://example.test" }),
-    /Mako's own interface/
+    (error: Error) =>
+      error instanceof BrowserFault &&
+      error.detail.code === "invalid-request" &&
+      error.detail.outcome === "not-dispatched" &&
+      error.message.startsWith("mako is a Mako desk: it opens only Mako's own interface, and https://example.test is another site. Nothing was opened. No browser that opens other sites is set up")
   )
-  await assert.rejects(run("agent", { action: "open", browser: "mako", url: "https://example.test" }), /Mako's own interface/)
+  await assert.rejects(run("agent", { action: "open", browser: "mako", url: "https://example.test" }), /another site\. Nothing was opened/)
   assert.equal(desk.openPages, 1, "Refused URL creates no extra live app window")
+  const beside = new BrowserService(() => [
+    desk.definition,
+    { id: "chrome-work", name: "Chrome · Work", requiresApproval: false, endpoint: async () => { throw new Error("not running") } },
+  ])
+  await beside.execute("agent", BrowserCommandSchema.parse({ action: "connect", browser: "mako" }), new AbortController().signal)
+  await assert.rejects(
+    beside.execute("agent", BrowserCommandSchema.parse({ action: "open", browser: "mako", url: "http://localhost:20400/" }), new AbortController().signal),
+    /Nothing was opened\. Connect Chrome · Work first with await control\.connectBrowser\("chrome-work"\), then await control\.openTab\(\{browser:"chrome-work", url:"http:\/\/localhost:20400\/"\}\)\.$/,
+    "the refusal names the exact calls that open the URL in a browser that can"
+  )
+  beside.close()
 
   // A second agent gets its own window; the cap refuses a third.
   const second = BrowserTargetSchema.parse(

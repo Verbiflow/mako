@@ -44,16 +44,21 @@ export const ControlSelectorSchema = z
 export const ControlScopeSchema = z
   .object({ role: z.string().min(1), name: NameMatchSchema.optional() })
   .strict()
+/** `match` filters a read, so a role alone keeps every row of that role. */
 export const ControlReadScopeSchema = z.object({
   within: z.array(ControlScopeSchema).max(8).default([]),
-  match: ControlSelectorSchema.optional(),
+  match: ControlScopeSchema.optional(),
 })
 export type ControlSelector = z.infer<typeof ControlSelectorSchema>
 export type ControlScope = z.infer<typeof ControlScopeSchema>
 export type ControlReadScope = z.input<typeof ControlReadScopeSchema>
 
+const roleKey = (role: string) => role.replace(/^AX(?=[A-Z])/, "").toLowerCase()
+/** Roles are identifiers: `Button`, `button` and macOS's `AXButton` name one role. */
+export const roleMatches = (actual: string | null | undefined, wanted: string) =>
+  actual != null && roleKey(actual) === roleKey(wanted)
 export const inScope = (role: string | null | undefined, name: string | undefined, scope: ControlScope) =>
-  role === scope.role && (scope.name === undefined || nameMatches(name, scope.name))
+  roleMatches(role, scope.role) && (scope.name === undefined || nameMatches(name, scope.name))
 export const scopeLabel = (scope: ControlScope) =>
   scope.name === undefined ? scope.role : `${scope.role} ${JSON.stringify(scope.name)}`
 
@@ -81,9 +86,7 @@ export function scopeControlNodes(
   }
   if (scope.match) {
     const match = scope.match
-    selected = selected.filter(
-      (node) => node.role === match.role && nameMatches(node.name, match.name)
-    )
+    selected = selected.filter((node) => inScope(node.role, node.name, match))
   }
   return selected
 }

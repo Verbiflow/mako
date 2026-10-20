@@ -1055,7 +1055,8 @@ try {
   fixture.page.hidden = true
   await assert.rejects(
     run("task-c", { action: "click", target: c, at: { ref: checkboxRef } }),
-    /hidden or covered/
+    (error) => error instanceof BrowserFault && error.detail.code === "target-covered" && error.detail.outcome === "not-dispatched" &&
+      error.message.includes('covered at every visible point by <div.backdrop> inside dialog "Settings"')
   )
   assert.equal(
     fixture.calls
@@ -1716,6 +1717,27 @@ try {
   })
   assert.equal(fixture.targets.has(isolated.tab), false)
   assert.equal(fixture.calls.at(-1)?.method, "Target.disposeBrowserContext")
+
+  // Chrome can end the extension's debugger session silently while the tab
+  // stays open; the dead binding must not survive to be handed back by a claim.
+  const forgotten = BrowserTargetSchema.parse(await run("task-forgotten", { action: "open", browser: "fixture" }))
+  fixture.forgetSession(forgotten.tab, "The exact tab session is no longer owned by this client")
+  await assert.rejects(
+    run("task-forgotten", { action: "observe", target: forgotten }),
+    (error: Error) =>
+      error instanceof BrowserFault &&
+      error.detail.code === "stale-target" &&
+      error.message.includes("Nothing was retried; this handle is finished.") &&
+      error.message.includes(`control.claimTab({"browser":"fixture","tab":"${forgotten.tab}"})`)
+  )
+  assert.match(
+    service.status().find((status) => status.id === "fixture")?.lastInterruption?.message ?? "",
+    /The tab may still be open/
+  )
+  const reattached = BrowserTargetSchema.parse(await run("task-forgotten", { action: "select", browser: "fixture", tab: forgotten.tab }))
+  assert.notEqual(reattached.lease, forgotten.lease, "a claim after a lost session attaches afresh instead of returning the dead binding")
+  await run("task-forgotten", { action: "observe", target: reattached })
+  await run("task-forgotten", { action: "close", target: reattached })
 
   // With no browser discovered the message says what to install.
   const empty = new BrowserService([])

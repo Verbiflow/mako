@@ -29,6 +29,7 @@ import {
   OBSERVATION_BUDGET_BYTES,
 } from "./browser-observation.js"
 import { localBrowsers, type LocalBrowser } from "./browser-discovery.js"
+import { DESK_OUTSIDE_ORIGIN } from "./desk-browser-registration.js"
 import { InstalledBrowsers } from "./browser-installed.js"
 import { inScope, isExactName, scopeLabel } from "@mako/control/control/scope"
 import {
@@ -52,9 +53,44 @@ const targetInfo = z.object({
 })
 const targetsResult = z.object({ targetInfos: z.array(targetInfo) })
 const sessionResult = z.object({ sessionId: z.string() })
+/**
+ * Chrome's and the extension's words for a debugger session that no longer
+ * exists while its tab may live on, as when Chromium detaches an extension
+ * from a page that embeds another extension's frame.
+ */
+const SESSION_GONE = /Session with given id not found|Detached while handling command|no longer owned by this client/i
 const pointResult = z.object({
-  result: z.object({ value: z.object({ x: z.number(), y: z.number() }) }),
+  result: z.object({
+    value: z.union([
+      z.object({ x: z.number(), y: z.number() }),
+      z.object({ blocked: z.literal("covered"), by: z.string() }),
+      z.object({ blocked: z.literal("hidden"), why: z.string() }),
+    ]),
+  }),
 })
+/** How long a click waits for its element to be hit-testable: an overlay fading out, a menu opening. */
+const POINT_SETTLE_MS = 1_500
+/**
+ * Scroll the element into view and find a point on it that receives the
+ * click: its centre, else the nearest of a 5×5 grid over its visible part.
+ * Says what covers it, or why it shows nothing, instead of guessing.
+ */
+const POINT_FUNCTION = `function(){
+if(!this.isConnected)throw Error('Element detached: observe again');
+const describe=(e)=>{if(!e)return 'nothing on the page';const tag='<'+e.tagName.toLowerCase()+(e.id?'#'+e.id:'')+(typeof e.className==='string'&&e.className.trim()?'.'+e.className.trim().split(/\\s+/).slice(0,2).join('.'):'')+'>';const role=e.getAttribute('role');const label=(e.getAttribute('aria-label')||e.getAttribute('title')||e.innerText||'').replace(/\\s+/g,' ').trim().slice(0,60);const modal=e.closest('dialog,[role=dialog],[role=alertdialog],[aria-modal=true]');const within=modal&&modal!==e?' inside '+(modal.getAttribute('aria-label')?'dialog "'+modal.getAttribute('aria-label')+'"':'a dialog'):'';return tag+(role?' role='+role:'')+(label?' "'+label+'"':'')+within};
+this.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
+const r=this.getBoundingClientRect();
+if(!r.width||!r.height){for(let e=this;e;e=e.parentElement)if(getComputedStyle(e).display==='none')return {blocked:'hidden',why:e===this?'is display:none':'is inside '+describe(e)+', which is display:none'};return {blocked:'hidden',why:'has no size'}}
+const style=getComputedStyle(this);
+if(style.visibility!=='visible')return {blocked:'hidden',why:'is visibility:'+style.visibility};
+const left=Math.max(r.left,0),top=Math.max(r.top,0),right=Math.min(r.right,innerWidth),bottom=Math.min(r.bottom,innerHeight);
+if(right<=left||bottom<=top)return {blocked:'hidden',why:'stays outside the viewport after scrolling'};
+const root=this.getRootNode(),cx=(left+right)/2,cy=(top+bottom)/2,steps=[0.5,0.3,0.7,0.1,0.9],points=[];
+for(const a of steps)for(const b of steps)points.push([left+(right-left)*a,top+(bottom-top)*b]);
+points.sort((p,q)=>Math.hypot(p[0]-cx,p[1]-cy)-Math.hypot(q[0]-cx,q[1]-cy));
+let cover=null;
+for(const [x,y] of points){const hit=root.elementFromPoint(x,y);if(hit&&(hit===this||this.contains(hit)||hit.contains(this)))return {x,y};cover=cover||hit}
+return {blocked:'covered',by:describe(cover)}}`
 const boxResult = z.object({
   result: z.object({
     value: z.object({
@@ -318,6 +354,8 @@ function fault(
   code:
     | "target-closed"
     | "target-busy"
+    | "target-covered"
+    | "target-hidden"
     | "stale-target"
     | "invalid-request"
     | "disconnected"
@@ -615,6 +653,30 @@ export class BrowserService {
   }
   private changed(): void {
     for (const listener of this.listeners) listener(this.status())
+  }
+  /** A desk window carries Mako's privileged bridge, so another site never loads in one; name where it can. */
+  private outsideDesk(desk: string, url: string): never {
+    const others = this.status().filter(
+      (status) =>
+        status.id !== desk &&
+        status.kind !== "desk" &&
+        status.connection.status !== "setup-required" &&
+        status.connection.status !== "unavailable"
+    )
+    const connected = others
+      .filter((status) => status.connection.status === "connected")
+      .sort((a, b) => Number(b.preferred === true) - Number(a.preferred === true))[0]
+    const open = (id: string) =>
+      `control.openTab({browser:${JSON.stringify(id)}, url:${JSON.stringify(url)}})`
+    const next = connected
+      ? `Open it in ${connected.name} instead: await ${open(connected.id)}`
+      : others[0]
+        ? `Connect ${others[0].name} first with await control.connectBrowser(${JSON.stringify(others[0].id)}), then await ${open(others[0].id)}`
+        : "No browser that opens other sites is set up; ask the user to connect Chrome in Settings > MCP > Browser use"
+    return fault(
+      "invalid-request",
+      `${desk} is a Mako desk: it opens only Mako's own interface, and ${url} is another site. Nothing was opened. ${next}.`
+    )
   }
   private entry(id: string): BrowserEntry {
     const entry = this.browsers.get(id)
@@ -1298,6 +1360,11 @@ export class BrowserService {
       this.browserOperations.set(browser, (this.browserOperations.get(browser) ?? 0) + 1)
     }
     try { return await this.executeCommand(owner, command, signal, authorize) }
+    catch (error) {
+      if (error instanceof BrowserFault && error.message === DESK_OUTSIDE_ORIGIN && "url" in command && command.url)
+        this.outsideDesk("target" in command ? command.target.browser : browser ?? "", command.url)
+      throw error
+    }
     finally {
       if (browser) {
         const remaining = (this.browserOperations.get(browser) ?? 1) - 1
@@ -1656,23 +1723,39 @@ export class BrowserService {
         if (effect === "mutate" || effect === "release") binding.view = undefined
         return value
       } catch (error) {
-        if (
-          error instanceof BrowserFault &&
-          /Session with given id not found|No target with given id|Target closed/i.test(
-            error.message
-          )
-        ) {
+        const detached = error instanceof BrowserFault && SESSION_GONE.test(error.message)
+        const closed = error instanceof BrowserFault && (
+          /No target with given id|Target closed/i.test(error.message) ||
+          (detached && !(await binding.connection
+            .send("Target.getTargetInfo", { targetId: binding.target.tab }, AbortSignal.timeout(2_000))
+            .then(() => true, () => false)))
+        )
+        if (error instanceof BrowserFault && (closed || detached)) {
           this.recordings.stopTarget(
             binding.owner,
             binding.target,
             "Tab lease ended"
           )
           this.endBinding(binding, "Tab binding ended")
-          this.bindings.delete(this.key(binding.target))
+          if (this.bindings.get(this.key(binding.target)) === binding)
+            this.bindings.delete(this.key(binding.target))
+          if (closed)
+            throw new BrowserFault({
+              code: "target-closed",
+              message:
+                "The exact tab closed. No command was retried and no other tab was selected.",
+              outcome: error.detail.outcome,
+            })
+          const interruption = tabInterruption(binding.events, undefined)
+          const entry = this.browsers.get(binding.target.browser)
+          if (entry) {
+            entry.status = { ...entry.status, lastInterruption: { tab: binding.target.tab, message: interruption } }
+            this.changed()
+          }
+          const claim = JSON.stringify({ browser: binding.target.browser, tab: binding.target.tab })
           throw new BrowserFault({
-            code: "target-closed",
-            message:
-              "The exact tab session closed. No command was retried and no other tab was selected.",
+            code: "stale-target",
+            message: `${interruption} Nothing was retried; this handle is finished. Claim the tab again with await control.claimTab(${claim}) and observe before acting.`,
             outcome: error.detail.outcome,
           })
         }
@@ -1891,8 +1974,9 @@ export class BrowserService {
                 returnByValue: true,
               })
             ).result.value
+          // queryAXTree compares roles case-sensitively; any other spelling filters the snapshot instead.
           const exactNames = [...command.within, ...(command.match ? [command.match] : [])].every(
-            (scope) => scope.name !== undefined && isExactName(scope.name)
+            (scope) => scope.name !== undefined && isExactName(scope.name) && scope.role === scope.role.toLowerCase()
           )
           if (visibility === "hidden" || !exactNames) {
             // queryAXTree waits for a visual lifecycle update, which Chromium
@@ -3122,13 +3206,17 @@ export class BrowserService {
     ref: string,
     signal: AbortSignal
   ): Promise<{ x: number; y: number }> {
-    const result = await this.callOnNode(
-      binding,
-      ref,
-      "function(){if(!this.isConnected)throw Error('Element detached: observe again');this.scrollIntoView({block:'center',inline:'center',behavior:'instant'});const r=this.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;const hit=this.getRootNode().elementFromPoint(x,y);if(!r.width||!r.height||!(hit===this||this.contains(hit)||(hit&&hit.contains(this))))throw Error('Element is hidden or covered at its centre; observe again or use coordinates from a screenshot');return {x,y}}",
-      signal
-    )
-    return pointResult.parse(result).result.value
+    const deadline = Date.now() + POINT_SETTLE_MS
+    for (;;) {
+      const point = pointResult.parse(await this.callOnNode(binding, ref, POINT_FUNCTION, signal)).result.value
+      if ("x" in point) return point
+      if (Date.now() >= deadline && point.blocked === "covered")
+        fault("target-covered", `${ref} is covered at every visible point by ${point.by}. Nothing was clicked. Close or dismiss that first (often a dialog, menu or toast), or wait for it to go with tab.waitFor({hidden:true,selector}), then act again.`)
+      if (Date.now() >= deadline && point.blocked === "hidden")
+        fault("target-hidden", `${ref} ${point.why}, so there is nothing to click. Nothing was clicked. It may need a menu, tab or section opened first; observe again to find it shown.`)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      signal.throwIfAborted()
+    }
   }
 
   private async box(

@@ -189,7 +189,9 @@ export async function startControlService(
             : undefined,
           bound !== undefined
         )
-        if (bound && command.action !== "close")
+        if (command.action === "close" && "target" in command)
+          previews?.closed(scope.conversationId, command.target)
+        else if (bound)
           previews?.browserTarget(scope.conversationId, bound, () =>
             assertScope(token, scope), scope.bindingId
           )
@@ -261,8 +263,10 @@ export async function startControlService(
           removedLatest = true
       }
       const hasReplacement = refreshLatest(bindingId)
-      if (removedLatest && !hasReplacement)
+      if (removedLatest && !hasReplacement) {
+        previews?.revoked(conversationId, bindingId)
         await browser.releaseOwner(bindingId)
+      }
     },
     close() {
       for (const controllers of inFlight.values())

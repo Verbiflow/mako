@@ -75,6 +75,7 @@ function startWatchingControlPreview(conversationId: string): () => void {
         if (
           previous?.frame?.id !== preview?.frame?.id ||
           previous?.activity.updatedAt !== preview?.activity.updatedAt ||
+          previous?.paused !== preview?.paused ||
           previous?.window?.windowId !== preview?.window?.windowId ||
           previous?.window?.pid !== preview?.window?.pid ||
           controlPreviewStore.get().errors[conversationId]
@@ -97,9 +98,12 @@ function startWatchingControlPreview(conversationId: string): () => void {
       if (closed || document.hidden) release()
       else if (refreshRequested) { refreshRequested = false; void poll() }
       else {
+        // A paused or ended preview changes only when the agent acts, which arrives as an activity.
         const state = controlPreviewStore.get()
-        const activity = state.previews[conversationId]?.activity ?? state.activities[conversationId]
-        if (!activity || activity.kind === "browser" || activity.status === "running" || Date.now() - activity.updatedAt < 5000)
+        const preview = state.previews[conversationId]
+        const activity = preview?.activity ?? state.activities[conversationId]
+        const settled = preview === null || preview?.paused
+        if (!settled && (!activity || activity.kind === "browser" || activity.status === "running" || Date.now() - activity.updatedAt < 5000))
           timer = setTimeout(() => void poll(), 1000)
       }
     }
