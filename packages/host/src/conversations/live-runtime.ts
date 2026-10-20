@@ -137,6 +137,8 @@ export interface Dependencies {
    */
   controlInstructions?(bindingId: string, conversationId: string): string[]
   revokeTools?(bindingId: string, conversationId: string): void | Promise<void>
+  /** The provider hibernates: its grants end, and what its agent built in Local Control waits for it to wake. Without this, `revokeTools`. */
+  suspendTools?(bindingId: string, conversationId: string): void | Promise<void>
   root: string
   checkpoint?(path: string, provider?: string): Promise<string | undefined>
   /** Where the catalog lists the session with this identity now; `nativePath` is kept when it still lists it there. */
@@ -376,9 +378,9 @@ export function residentOf(snapshot: LiveSnapshot, journal: LiveJournal, state: 
 }
 
 /** Withdraw what a binding's agent could call in Mako; a failure is logged and never blocks the close. */
-export async function revokeTools(dependencies: Pick<Dependencies, "revokeTools">, bindingId: string, conversationId: string): Promise<void> {
+export async function revokeTools(dependencies: Pick<Dependencies, "revokeTools" | "suspendTools">, bindingId: string, conversationId: string, suspend = false): Promise<void> {
   try {
-    await dependencies.revokeTools?.(bindingId, conversationId)
+    await (suspend && dependencies.suspendTools ? dependencies.suspendTools(bindingId, conversationId) : dependencies.revokeTools?.(bindingId, conversationId))
   } catch (error) {
     hostWarn("residency", "control grant revocation failed", {
       conversation: conversationId,

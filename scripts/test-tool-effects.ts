@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { readdir, readFile, writeFile } from "node:fs/promises"
 import { join } from "node:path"
+import { mock } from "node:test"
 import { isDeepStrictEqual, parseArgs } from "node:util"
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
@@ -12,7 +13,7 @@ import { acpSavedNotification, SavedAcpUpdateSchema } from "../packages/sessions
 import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import { CursorSdkMessageSchema, CursorSdkProjection, cursorUnfinishedToolNote, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 import { DEVIN_ACP_HOOKS, GROK_ACP_HOOKS } from "@mako/sessions/harnesses"
-import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
+import { deliverLiveUpdates, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { OpenCodeContent } from "@mako/sessions/opencode-content"
 import { absolutePath, liveEffectsStatus, namedPaths, reportedEffects, savedToolEffects, wholePatch } from "@mako/sessions/tool-effect-reading"
 import type { ToolEffect, ToolEffects } from "@mako/sessions/tool-effects"
@@ -263,6 +264,25 @@ assert.equal(handed[0]!.status, "completed")
 assert.deepEqual(handed[0]!.effects, effects)
 assert.ok(handed[0]!.startedAt !== undefined && handed[0]!.endedAt !== undefined && handed[0]!.endedAt >= handed[0]!.startedAt)
 assert.equal(events.length, 2, "the hook changes nothing the session emits")
+
+// Each call leaves the engine with when the host first saw it and first saw it finished.
+const timedEvents: LiveDriverEvent[] = []
+const timedLive: EngineLive = { state: { ...state, id: "timed" }, emit: (event) => timedEvents.push(event) }
+const clock = mock.method(Date, "now", () => 1_000)
+engine.emitUpdate(timedLive, { kind: "tool", id: "timed", title: "Bash", status: "running" })
+clock.mock.mockImplementation(() => 4_000)
+engine.emitUpdate(timedLive, { kind: "tool-update", id: "timed", status: "completed", output: "a" })
+clock.mock.mockImplementation(() => 9_000)
+engine.emitUpdate(timedLive, { kind: "tool-update", id: "timed", status: "completed", outputAppend: "b" })
+engine.emitUpdate(timedLive, { kind: "tool", id: "timed", title: "Bash", status: "completed", output: "ab" })
+clock.mock.restore()
+const timedUpdates = timedEvents.flatMap((event) => event.type === "live-update" ? [event.update] : [])
+const timedBlock = reduceLiveUpdates([], timedUpdates)[0]
+assert.equal(timedBlock?.type, "tool")
+assert.deepEqual([timedBlock.at, timedBlock.endedAt], [1_000, 4_000],
+  "a call keeps its first start and first end, however often its harness restates it")
+const afterEnd = deliverLiveUpdates(reduceLiveUpdates([], timedUpdates.slice(0, 2)), timedUpdates.slice(2, 3))
+assert.deepEqual(afterEnd.grown.get(0), { output: "b" }, "output a finished call still streams stays an append in storage")
 
 if (failures.length) {
   console.error(`\n${failures.map((failure) => `✗ ${failure}`).join("\n\n")}\n`)

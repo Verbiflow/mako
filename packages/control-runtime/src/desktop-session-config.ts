@@ -14,6 +14,8 @@ export const DesktopSessionConfigSchema = z
       .strict()
       .optional(),
     artifacts: z.string().optional(),
+    /** The JSONL file the worker appends one line to per request. */
+    journal: z.string().optional(),
   })
   .strict()
 export type DesktopSessionConfig = z.infer<typeof DesktopSessionConfigSchema>

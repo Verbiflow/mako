@@ -192,6 +192,22 @@ to these fixes:
 
 Remaining: install U25–U28, then rerun the end-to-end API test on the installed runtime.
 
+## October 19 usage audit
+
+Source: about 3,160 MCP `js` calls across 108 conversations from the past three
+weeks of Mako's conversation databases. Stored call times there are per write
+batch, so gaps between calls could not be measured; V06 fixes that.
+
+| ID / problem found | Current disposition | Closure check |
+| --- | --- | --- |
+| V01 — The live preview card vanished after a failed call. A failed cell reports its activity as `Selected application` with no window, which retargeted the preview and dropped its frame. | **Fixed locally.** Only an activity that names a bound tab or a native window replaces the picture. Any other activity, failures included, updates the status and keeps the frame, target and stream. The card still leaves when the turn ends. | `test-control-previews.ts`: an error, an untargeted open and a failed click keep the frame and the live stream; it fails on the old code. |
+| V02 — A cell that threw before reaching its own `const x` left `x` declared but uninitialized, so every later cell failed with "Cannot access 'x' before initialization". | **Fixed locally.** Before a cell runs, the REPL declares its top-level `let`/`const` names (destructuring included), so a cell that throws early leaves them assignable. | `test-control-repl.ts`; fails on the old code. |
+| V03 — `timeoutMs` (the SDK's spelling) was refused by the `js` tool, and a deadline past 60 s failed validation. | **Fixed locally.** Both spellings are accepted, and a longer deadline runs with 60 s. | `test-control-repl.ts`. |
+| V04 — `pressKey("Shift+Tab")` was refused. | **Fixed locally.** A chord of known modifiers and one key is split into the key and its modifiers. | `test-control-repl.ts` checks the dispatched key event. |
+| V05 — The documentation reprinted 138 times mid-conversation, 126 of them right after an ordinary successful call. Hibernation (10 idle minutes, or the warm limit) stopped the binding's Local Control session, so tabs, leases and REPL bindings were lost between turns. | **Fixed locally.** Hibernation now revokes only the agent's tool grant; the session waits up to 30 minutes and the woken provider gets the same one. Closing the conversation, a failed wake or the timeout stop it. | `test-child-residency.ts`: hibernation suspends rather than revokes, and closing the hibernated conversation revokes. A real hibernate/wake with a kept tab is not yet checked. |
+| V06 — No per-call timing or audit trail. | **Fixed locally.** Tool blocks carry `at` (first seen) and `endedAt` (first finished status); requests carry `createdAt`. Every Local Control request, from MCP or the CLI, appends a line to `<data>/logs/local-control/<conversation>.jsonl` (the cloud control worker: `calls.jsonl` in its output): start time, duration, task, session, method, outcome, fault code, and for programs their size, hash, title, status and effects. Never the source or returned value. Lines are written in batches every 250 ms, off the response path; the file rotates at 8 MiB. | `test-tool-effects.ts`, `test-control-repl.ts` (every request journaled, failed cell and CLI fault codes kept, no source or value). |
+| V07 — Remaining agent friction in the same calls: the desk browser refusing external URLs (22), observe `match` name shapes (23), expectation name shapes (20), "Element is hidden or covered" (20), and losing an extension tab's ownership after a reconnect. | **Open.** | Each needs its own reproducer. |
+
 ## How to close an issue
 
 Attach the reproducer, changed code/contract and independent outcome check. State

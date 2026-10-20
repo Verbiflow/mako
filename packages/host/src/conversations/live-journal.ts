@@ -83,6 +83,8 @@ export const LiveRequestSchema = z.object({
     })
     .optional(),
   id: z.string().uuid(),
+  /** When the host admitted it (epoch milliseconds); unset in journals written before it was kept. */
+  createdAt: z.number().nonnegative().optional(),
   text: z.string().max(1_000_000),
   attachments: z.array(PromptAttachmentSchema),
   displayText: z.string().optional(),

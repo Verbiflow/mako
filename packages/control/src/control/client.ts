@@ -569,6 +569,15 @@ const pointSchema = z
   .strict()
 const clickOptionsSchema = pointerOperationSchema.omit({ kind: true, at: true })
 export type Point = z.infer<typeof pointSchema>
+const CHORD_MODIFIERS = new Set(["cmd", "meta", "ctrl", "control", "alt", "option", "shift"])
+/** "Shift+Tab", "Meta+," or "Control+Shift+K": modifiers, then the one key they hold. */
+export function keyChord(key: string): { key: string; modifiers: string[] } {
+  const chord = /^((?:[A-Za-z]+\+)+)(.+)$/.exec(key)
+  const modifiers = chord?.[1]?.slice(0, -1).split("+") ?? []
+  return chord?.[2] && modifiers.every((name) => CHORD_MODIFIERS.has(name.toLowerCase()))
+    ? { key: chord[2], modifiers }
+    : { key, modifiers: [] }
+}
 const StringSchema = z.string()
 const RefAtSchema = z.object({ ref: z.string() })
 function pointerAt(at: string | Point) {
@@ -682,7 +691,13 @@ export class ControlHandle {
     return this.perform({ kind: "activate", ref })
   }
   pressKey(key: string, options: { modifiers?: string[]; ref?: string } = {}) {
-    return this.perform({ kind: "press-key", key, ...options })
+    const chord = keyChord(key)
+    return this.perform({
+      kind: "press-key",
+      ...options,
+      key: chord.key,
+      ...(chord.modifiers.length > 0 && { modifiers: [...(options.modifiers ?? []), ...chord.modifiers] }),
+    })
   }
   scroll(delta: {
     deltaX?: number

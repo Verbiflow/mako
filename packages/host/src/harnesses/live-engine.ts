@@ -6,7 +6,7 @@ import type {
 } from "../contracts/approval-response.js"
 import type { LiveDriverEvent } from "../contracts/live-conversations.js"
 import type { LivePermissionRequest, LivePermissionResponse, LiveSessionState } from "../contracts/providers-acp.js"
-import type { LiveUpdate } from "@mako/sessions/live-content"
+import { liveToolFinished, type LiveUpdate } from "@mako/sessions/live-content"
 import type { NativeActivityObservation, NativeNotice } from "../contracts/native-activity.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import {
@@ -154,6 +154,29 @@ function stamped(update: LiveUpdate): LiveUpdate {
   const frame = update.stream ? undefined : frameOf()
   if (update.kind === "provider-turn" && update.at === undefined) return frame ? { ...update, at: Date.now(), stream: frame } : { ...update, at: Date.now() }
   return frame ? { ...update, stream: frame } : update
+}
+
+/** Calls whose start and end are stamped, per conversation; far more than run at once. */
+const MAX_TIMED_CALLS = 4096
+
+/**
+ * A tool update with when the host first saw its call and first saw it
+ * finished. Each is stamped once per call, so the output a finished call
+ * still streams stays an append in storage.
+ */
+function timed(calls: Map<string, { at: number; ended: boolean }>, update: LiveUpdate): LiveUpdate {
+  if (update.kind !== "tool" && update.kind !== "tool-update") return update
+  let call = calls.get(update.id)
+  if (!call) {
+    if (update.kind === "tool-update") return update
+    call = { at: update.at ?? clock(), ended: false }
+    calls.set(update.id, call)
+    if (calls.size > MAX_TIMED_CALLS) calls.delete(calls.keys().next().value!)
+  }
+  const ends = !call.ended && liveToolFinished(update.status)
+  if (ends) call.ended = true
+  if (update.kind === "tool") return { ...update, at: call.at, ...(ends && { endedAt: update.endedAt ?? clock() }) }
+  return ends ? { ...update, endedAt: update.endedAt ?? clock() } : update
 }
 
 /**
@@ -347,16 +370,23 @@ export function createLiveEngine<
     live.state = { ...live.state, ...next }
     live.emit({ type: "live-session", session: live.state })
   }
+  const timing = new WeakMap<Live, Map<string, { at: number; ended: boolean }>>()
+  const leaving = (live: Live, update: LiveUpdate): LiveUpdate => {
+    if (update.kind !== "tool" && update.kind !== "tool-update") return stamped(update)
+    let calls = timing.get(live)
+    if (!calls) timing.set(live, (calls = new Map()))
+    return stamped(timed(calls, update))
+  }
   const emitUpdate = (live: Live, update: LiveUpdate): void => {
     if (update.kind === "tool") retainUndeclaredTools(live.state.harness, [update])
     observeCalls(live, [update])
-    live.emit({ type: "live-update", id: live.state.id, update: stamped(update) })
+    live.emit({ type: "live-update", id: live.state.id, update: leaving(live, update) })
   }
   const emitUpdates = (live: Live, updates: LiveUpdate[]): void => {
     if (updates.length === 0) return
     retainUndeclaredTools(live.state.harness, updates)
     observeCalls(live, updates)
-    live.emit({ type: "live-updates", id: live.state.id, updates: updates.map(stamped) })
+    live.emit({ type: "live-updates", id: live.state.id, updates: updates.map((update) => leaving(live, update)) })
   }
   /** The version the launch's handshake reported, and the stream line being decoded: where an unknown record was seen. */
   const seen = (live: Live): UnknownSeen => {

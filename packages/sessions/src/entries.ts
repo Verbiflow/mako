@@ -226,6 +226,8 @@ export const EntrySchema = z.discriminatedUnion("type", [
     unfinished,
     effects,
     at,
+    /** When the call finished, beside `at` when it started; a live call has both from the host's clock. */
+    endedAt: at,
     record,
     stream,
     ...message,

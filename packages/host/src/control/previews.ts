@@ -70,9 +70,21 @@ export class ControlPreviews {
     this.changed = changed
   }
 
-  observe(activity: Omit<ControlActivity, "updatedAt">, image?: ControlImage) {
+  /**
+   * `surface` says the activity names what the preview should show: a bound
+   * tab or a native window. Anything else (a failure, a program, a script, a
+   * browser call before it knows its tab) reports its status over the picture
+   * already shown, so a failed call never blanks the card.
+   */
+  observe(
+    activity: Omit<ControlActivity, "updatedAt">,
+    image?: ControlImage,
+    surface = activity.status !== "error"
+  ) {
     let entry = this.entries.get(activity.conversationId)
-    const next = { ...activity, updatedAt: Date.now() }
+    let next = { ...activity, updatedAt: Date.now() }
+    if (entry && !surface)
+      next = { ...next, kind: entry.preview.activity.kind, target: entry.preview.activity.target }
     if (!entry) {
       if (this.entries.size >= 64) {
         const oldest = this.entries.keys().next().value
@@ -89,8 +101,8 @@ export class ControlPreviews {
       this.entries.set(activity.conversationId, entry)
     }
     if (
-      entry.preview.activity.kind !== activity.kind ||
-      entry.preview.activity.target !== activity.target
+      entry.preview.activity.kind !== next.kind ||
+      entry.preview.activity.target !== next.target
     ) {
       this.stop(entry)
       entry.target = undefined
@@ -101,7 +113,7 @@ export class ControlPreviews {
       entry.snapshots++
     }
     entry.preview.activity = next
-    if (image) void this.snapshot(activity.conversationId, entry, image)
+    if (image && surface) void this.snapshot(activity.conversationId, entry, image)
     this.publish(entry)
   }
 

@@ -1,8 +1,10 @@
-import { controlAgent } from "./control-agent.js"
+import { controlAgent, JS_REPORT_META } from "./control-agent.js"
+import { controlJournal } from "./control-journal.js"
+import type { JsonObject, JsonValue } from "./json.js"
 import { createServer } from "node:http"
 import type { Server, Socket } from "node:net"
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
@@ -30,6 +32,9 @@ import {
   type SessionOperation,
 } from "./control-session-protocol.js"
 
+/** `journal` is the JSONL file that gets one line per request; `task` names the session's task on each line. */
+type ControlAudit = { journal?: string; task?: string }
+
 /** Dispatch one ref-free `act` step on the element its locator resolves. */
 function act(
   locator: ControlLocator,
@@ -55,7 +60,7 @@ function act(
  */
 export async function serveControlSession(
   session: ControlSession,
-  options: { build?: Promise<string>; onStop?: () => void; directory?: string } = {}
+  options: { build?: Promise<string>; onStop?: () => void; directory?: string } & ControlAudit = {}
 ) {
   const build = await (options.build ?? controlSessionBuild())
   const directory = options.directory ?? await createControlDirectory("mako-control-")
@@ -73,7 +78,7 @@ export async function serveControlSession(
   }
   const transport = controlSessionTransport(session, descriptor, () => {
     void close().then(() => options.onStop?.())
-  })
+  }, options)
   let closing: Promise<void> | undefined
   async function close(): Promise<void> {
     return (closing ??= (async () => {
@@ -112,7 +117,7 @@ export async function serveControlSession(
  */
 export function serveHandedControlSession(
   session: ControlSession,
-  options: { descriptor: SessionDescriptor; listener: Server; onStop?: () => void }
+  options: { descriptor: SessionDescriptor; listener: Server; onStop?: () => void } & ControlAudit
 ) {
   let closing: Promise<void> | undefined
   const close = (): Promise<void> =>
@@ -122,7 +127,7 @@ export function serveHandedControlSession(
     })())
   const transport = controlSessionTransport(session, options.descriptor, () => {
     void close().then(() => options.onStop?.())
-  })
+  }, options)
   const accept = (connection: Socket) => {
     transport.server.emit("connection", connection)
     connection.resume()
@@ -156,8 +161,43 @@ export function refuseControlConnection(connection: Socket, fault: { code: strin
   connection.resume()
 }
 
-function controlSessionTransport(session: ControlSession, descriptor: SessionDescriptor, stop: () => void) {
+/** A js report without the cell's returned value, which can be page content. */
+const JsAuditSchema = z.object({
+  _meta: z.object({
+    [JS_REPORT_META]: z.object({
+      status: z.enum(["completed", "failed"]),
+      error: z.json().optional(),
+      effects: z.json(),
+      valueArtifact: z.json().optional(),
+    }),
+  }),
+})
+
+/** What a journal line says of a request's program: never its source, which can hold typed secrets. */
+function programAudit(operation: SessionOperation | undefined, value: JsonValue | undefined): JsonObject | undefined {
+  const source = operation?.method === "js" ? operation.code : operation?.method === "exec" ? operation.source : undefined
+  if (source === undefined) return undefined
+  const audit: JsonObject = {
+    bytes: Buffer.byteLength(source),
+    sha256: createHash("sha256").update(source).digest("hex").slice(0, 16),
+  }
+  if (operation?.method === "js" && operation.title) audit.title = operation.title
+  const report = JsAuditSchema.safeParse(value).data?._meta[JS_REPORT_META]
+  if (report) audit.report = report
+  return audit
+}
+
+function controlSessionTransport(
+  session: ControlSession,
+  descriptor: SessionDescriptor,
+  stop: () => void,
+  options: ControlAudit = {}
+) {
   const requests = new Set<AbortController>()
+  const audit = {
+    journal: options.journal ? controlJournal(options.journal) : undefined,
+    task: options.task,
+  }
   const diagnostics: Array<{
     requestId: string
     method: string
@@ -326,9 +366,13 @@ function controlSessionTransport(session: ControlSession, descriptor: SessionDes
       if (!response.writableFinished) controller.abort()
     })
     const started = performance.now()
+    const at = Date.now()
     let requestId = "invalid"
     let method = "invalid"
     let outcome = "not-dispatched"
+    let operation: SessionOperation | undefined
+    let answered: JsonValue | undefined
+    let fault: { code: string; message: string } | undefined
     void (async () => {
       if (stopped)
         throw new ControlFault(
@@ -369,6 +413,7 @@ function controlSessionTransport(session: ControlSession, descriptor: SessionDes
         "Use the matching mako-control CLI and its session file; see mako-control --help."
       )
       method = input.operation.method
+      operation = input.operation
       if (
         input.build !== descriptor.build ||
         input.session !== descriptor.session
@@ -383,6 +428,7 @@ function controlSessionTransport(session: ControlSession, descriptor: SessionDes
       const value = z
         .json()
         .parse(await invoke(input.operation, controller.signal))
+      answered = value
       outcome = "completed"
       if (method === "stop") response.once("finish", stop)
       response
@@ -394,22 +440,22 @@ function controlSessionTransport(session: ControlSession, descriptor: SessionDes
         const cause = error instanceof ControlProgramError ? error.cause : error
         const detail = controlFaultData(cause)
         outcome = detail?.outcome ?? outcome
+        fault = {
+          code:
+            detail?.code ??
+            (outcome === "not-dispatched"
+              ? "invalid-request"
+              : "session-error"),
+          message:
+            cause instanceof Error
+              ? cause.message
+              : "Local Control request failed",
+        }
         response.writeHead(200, { "content-type": "application/json" }).end(
           JSON.stringify({
             ok: false,
             requestId,
-            fault: {
-              code:
-                detail?.code ??
-                (outcome === "not-dispatched"
-                  ? "invalid-request"
-                  : "session-error"),
-              message:
-                cause instanceof Error
-                  ? cause.message
-                  : "Local Control request failed",
-              outcome,
-            },
+            fault: { ...fault, outcome },
             output: partial?.length ? partial : undefined,
             ran: error instanceof ControlProgramError && error.effects.length ? error.effects.map(effectText) : undefined,
           })
@@ -417,13 +463,16 @@ function controlSessionTransport(session: ControlSession, descriptor: SessionDes
       })
       .finally(() => {
         requests.delete(controller)
-        diagnostics.push({
-          requestId,
-          method,
-          outcome,
-          ms: Math.round((performance.now() - started) * 100) / 100,
-        })
+        const ms = Math.round((performance.now() - started) * 100) / 100
+        diagnostics.push({ requestId, method, outcome, ms })
         if (diagnostics.length > 100) diagnostics.shift()
+        if (!audit.journal) return
+        const line: JsonObject = { at, ms, session: descriptor.session, pid: process.pid, requestId, method, outcome }
+        if (audit.task) line.task = audit.task
+        if (fault) line.fault = { code: fault.code, message: fault.message.slice(0, 500) }
+        const program = programAudit(operation, answered)
+        if (program) line.program = program
+        audit.journal.record(line)
       })
   })
   async function close(): Promise<void> {
@@ -434,8 +483,12 @@ function controlSessionTransport(session: ControlSession, descriptor: SessionDes
       const stoppedServer = new Promise<void>((resolve) =>
         server.close(() => resolve())
       )
-      await session.close()
-      await stoppedServer
+      try {
+        await session.close()
+        await stoppedServer
+      } finally {
+        await audit.journal?.flush()
+      }
     })())
   }
   return { server, close }

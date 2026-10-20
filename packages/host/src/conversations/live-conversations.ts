@@ -431,6 +431,7 @@ export class LiveConversations {
     const request = LiveRequestSchema.parse({
       actor: this.threads.actor(actor),
       id: requestId,
+      createdAt: Date.now(),
       text,
       attachments,
       tuning,

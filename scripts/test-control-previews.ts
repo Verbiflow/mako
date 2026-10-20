@@ -135,6 +135,15 @@ try {
   await delay(50)
   assert.equal(previews.read("task", true, "overlay")?.frame?.sequence, counted + 6,
     "Frames within one 60 fps slot count once, so a faster source is not a shortfall")
+  const shown = previews.read("task", true, "overlay")?.frame?.id
+  previews.observe({ ...activity, kind: "computer", operation: "exec", target: "Selected application", status: "error" })
+  previews.observe({ ...activity, operation: "open", target: "fixture", status: "running" }, undefined, false)
+  previews.observe({ ...activity, operation: "click", status: "error" })
+  const over = previews.read("task", true, "overlay")
+  assert.deepEqual([over?.frame?.id, over?.activity.kind, over?.activity.target, over?.activity.status], [shown, "browser", "fixture:tab", "error"],
+    "A failed program, a failed call and a call that names no tab report over the picture instead of blanking it")
+  assert.deepEqual(previews.viewers("task", "local"), { own: 1, others: 0, capturing: true }, "and keep the live stream")
+  assert.equal(fixture.calls.filter((c) => c.method === "Page.stopScreencast").length, 0)
   previews.read("task", false, "overlay")
   assert.deepEqual(previews.viewers("task", "local"), { own: 0, others: 0, capturing: false },
     "The last viewer leaving stops the stream")

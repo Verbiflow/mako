@@ -141,6 +141,7 @@ export class LiveAccounts {
       ? LiveRequestSchema.parse({
           actor: this.access.actor(actor),
           id: randomUUID(),
+          createdAt: Date.now(),
           text: continueTurnPrompt("signed-out", "mako"),
           attachments: [],
           tuning: cut.tuning,

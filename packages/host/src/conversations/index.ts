@@ -82,6 +82,7 @@ export interface ConversationsDeps {
   /** The MCP servers the harnesses have for `cwd`, which a launch hands its agent. */
   mcpSnapshot: NonNullable<LiveDependencies["mcpSnapshot"]>
   revokeTools: NonNullable<LiveDependencies["revokeTools"]>
+  suspendTools?: LiveDependencies["suspendTools"]
   controlInstructions: NonNullable<LiveDependencies["controlInstructions"]>
   /** A waiting move may go ahead; the moves are made after the conversations. */
   settled(conversationId: string): void
@@ -138,6 +139,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       }) ?? Promise.resolve(undefined),
     controlInstructions: deps.controlInstructions,
     revokeTools: deps.revokeTools,
+    suspendTools: deps.suspendTools,
     driver: (provider) => host.liveDrivers.get(provider),
     accountRemoving: harnesses.accountRemoval.removing,
     history: catalog.page,

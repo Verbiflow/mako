@@ -78,6 +78,9 @@ export interface Core {
   stop(): Promise<void>
 }
 
+/** How long a hibernated provider's Local Control session waits for it to wake. */
+const CONTROL_SLEEP_MS = 30 * 60_000
+
 const trace = (stage: string) => {
   if (process.env.MAKO_RUNTIME_TRACE === "1") console.info("[mako-runtime]", stage)
 }
@@ -311,6 +314,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
   /** Each reason is told once per host; every failed start is still logged. */
   const controlUnavailableNotices = new Set<string>()
+  /** A hibernated binding's Local Control session, kept with its tabs and program state until it wakes or `CONTROL_SLEEP_MS` passes. */
+  const sleepingControl = new Map<string, NodeJS.Timeout>()
+  const wakeControl = (bindingId: string) => {
+    clearTimeout(sleepingControl.get(bindingId))
+    sleepingControl.delete(bindingId)
+  }
+  const stopControl = async (bindingId: string, conversationId: string) => {
+    wakeControl(bindingId)
+    await late.controlService?.revoke(conversationId, bindingId)
+    await control.sessions.stop(bindingId)
+  }
   const opened = await openConversations({
     streams,
     environment,
@@ -324,11 +338,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     tools: async (bindingId, conversationId) => {
       const minted = late.agentServers?.mint(bindingId, conversationId)
       if (!minted) return undefined
+      wakeControl(bindingId)
+      const kept = control.sessions.get(bindingId)
+      if (kept) return { ...minted, control: kept }
       const browser = late.controlService?.mint(conversationId, bindingId)
       const started = await control.sessions.startOptional(bindingId, browser, async (reason) => {
         await late.controlService?.revoke(conversationId, bindingId)
         if (reason === "failed") emit({ type: "notice", level: "error", message: "Local Control stopped unexpectedly. Its browser access has ended; start a new task before continuing control." })
-      })
+      }, join(logsRoot(environment.dataRoot), "local-control", `${conversationId}.jsonl`))
       if ("launch" in started) return { ...minted, control: started.launch }
       await late.controlService?.revoke(conversationId, bindingId)
       if (!controlUnavailableNotices.has(started.unavailable)) {
@@ -345,8 +362,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     revokeTools: async (bindingId, conversationId) => {
       late.agentServers?.revoke(bindingId, conversationId)
-      await late.controlService?.revoke(conversationId, bindingId)
-      await control.sessions.stop(bindingId)
+      await stopControl(bindingId, conversationId)
+    },
+    suspendTools: (bindingId, conversationId) => {
+      late.agentServers?.revoke(bindingId, conversationId)
+      if (!control.sessions.get(bindingId)) return stopControl(bindingId, conversationId)
+      wakeControl(bindingId)
+      const timer = setTimeout(() => void stopControl(bindingId, conversationId), CONTROL_SLEEP_MS)
+      timer.unref()
+      sleepingControl.set(bindingId, timer)
     },
     settled: (id) => {
       late.movers?.moves.settled(id)

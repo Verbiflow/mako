@@ -1,4 +1,4 @@
-import { parse, type Program } from "acorn"
+import { parse, type Pattern, type Program } from "acorn"
 import type { Runtime } from "node:inspector"
 import { Session } from "node:inspector/promises"
 import { constants, createContext, type Context } from "node:vm"
@@ -54,14 +54,34 @@ function returnsAtTopLevel(node: z.infer<typeof SyntaxNodeSchema>): boolean {
   )
 }
 
+function boundNames(pattern: Pattern): string[] {
+  switch (pattern.type) {
+    case "Identifier":
+      return [pattern.name]
+    case "ObjectPattern":
+      return pattern.properties.flatMap((property) =>
+        boundNames(property.type === "RestElement" ? property.argument : property.value)
+      )
+    case "ArrayPattern":
+      return pattern.elements.flatMap((element) => (element ? boundNames(element) : []))
+    case "AssignmentPattern":
+      return boundNames(pattern.left)
+    case "RestElement":
+      return boundNames(pattern.argument)
+    case "MemberExpression":
+      return []
+  }
+}
+
 /**
  * V8's REPL mode redeclares a name only with the same keyword, so `let x` after
  * an earlier cell's `const x` would not compile: top-level const becomes let.
  * A top-level return (the CLI's program style) makes the cell an async function
  * body whose value is the returned one; its bindings stay local to that cell.
- * Source the parser rejects is left for V8 to report.
+ * Source the parser rejects is left for V8 to report. `lexical` names the
+ * cell's top-level let and const bindings.
  */
-export function replSource(source: string): string {
+export function replCell(source: string): ReplCell {
   let program: Program
   try {
     program = parse(source, {
@@ -71,16 +91,22 @@ export function replSource(source: string): string {
       allowReturnOutsideFunction: true,
     })
   } catch {
-    return source
+    return { expression: source, lexical: [] }
   }
   if (program.body.some((node) => returnsAtTopLevel(SyntaxNodeSchema.parse(node))))
-    return `await (async () => {\n${source}\n})()`
-  let rewritten = source
-  for (const node of [...program.body].reverse())
-    if (node.type === "VariableDeclaration" && node.kind === "const")
-      rewritten = `${rewritten.slice(0, node.start)}let${rewritten.slice(node.start + "const".length)}`
-  return rewritten
+    return { expression: `await (async () => {\n${source}\n})()`, lexical: [] }
+  let expression = source
+  const lexical = new Set<string>()
+  for (const node of [...program.body].reverse()) {
+    if (node.type !== "VariableDeclaration" || node.kind === "var") continue
+    for (const declarator of node.declarations)
+      for (const name of boundNames(declarator.id)) lexical.add(name)
+    if (node.kind === "const")
+      expression = `${expression.slice(0, node.start)}let${expression.slice(node.start + "const".length)}`
+  }
+  return { expression, lexical: [...lexical] }
 }
+export type ReplCell = { expression: string; lexical: string[] }
 
 const PRESENT_VALUE = "mako.control.presentValue"
 const shownSchema = z.union([
@@ -99,7 +125,7 @@ const showValue = z.function({ input: [z.unknown()], output: shownSchema }).impl
 })
 
 /** V8 owns REPL syntax, lexical bindings and top-level await. Source changes are
- * limited to replSource. No inspector listener or network port. This is trusted
+ * limited to replCell. No inspector listener or network port. This is trusted
  * code, not an OS sandbox. */
 export class ControlRepl {
   private readonly inspector = new Session()
@@ -163,10 +189,23 @@ export class ControlRepl {
     const contextId = await this.ready
     if (!this.context) throw new Error("Control REPL context was lost")
     const objectGroup = `mako-cell-${++this.sequence}`
+    const cell = replCell(source)
     try {
+      // A cell that throws before reaching its own `let x` leaves x hoisted
+      // but uninitialized for every later cell: reading it says "not defined"
+      // and assigning throws "Cannot access 'x' before initialization".
+      // Declared first, x is undefined until the cell assigns it. A conflict
+      // with a var, function or class is left for the cell to report.
+      if (cell.lexical.length)
+        await this.inspector.post("Runtime.evaluate", {
+          expression: `let ${cell.lexical.join(", ")};`,
+          contextId,
+          replMode: true,
+          objectGroup,
+        } satisfies Runtime.EvaluateParameterType & { replMode: boolean })
       const evaluation: Runtime.EvaluateParameterType & { replMode: boolean } =
         {
-          expression: replSource(source),
+          expression: cell.expression,
           contextId,
           replMode: true,
           awaitPromise: true,
