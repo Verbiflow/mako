@@ -77,6 +77,8 @@ export interface Core {
   warm(): Promise<string[]>
   /** On a cloud machine: the folder its agent prepared, where every client's tabs open. */
   openMachineWorkspace(path: string): Promise<void>
+  /** On a project base's builder: what a start in `path` does first, done before its snapshot. */
+  prepareFolder(path: string): Promise<void>
   /** Work that holds a profile host up: turns, native runs, transfers. */
   activeWork(): boolean
   /** That work, item by item, as the lifecycle lists it: what keeps a cloud machine running. */
@@ -209,7 +211,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   late.updates = appUpdates
   const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed })
-  const tools = openTools(harnesses.tools, environment.dataRoot)
+  const tools = openTools(harnesses.tools, environment.dataRoot, () => shell.foreground.idle())
   const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.summaries() ?? [])
     .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
     .map(({ session }) => `“${session.title || "Untitled conversation"}”`)
@@ -522,11 +524,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       await harnesses.updates.refresh().catch(() => undefined)
       // What a start then reads from disk: each harness's own files, and every harness's MCP servers, which two list
       // by running their CLIs. On a copy each was its binary's first read, 1 to 2 s (2026-10-20).
-      const runtimes = await harnesses.updates.startFiles()
-      const [read] = await Promise.all([
-        Promise.all(runtimes.map(async ({ provider, files }) => `${provider} (${Math.round((await readIntoMemory(files)).bytes / 1_048_576)} MiB)`)),
-        tools.mcp.discover(homedir()).catch(() => undefined),
-      ])
+      // One harness at a time: read together, their pages interleave in memory, and on a copy, which restores memory as
+      // it's touched, the first harness to start brought in every other's too (6 s against 0.1 s, 2026-10-20).
+      const read: string[] = []
+      for (const { provider, files } of await harnesses.updates.startFiles())
+        read.push(`${provider} (${Math.round((await readIntoMemory(files)).bytes / 1_048_576)} MiB)`)
+      await tools.mcp.discover(homedir()).catch(() => undefined)
       return [...loaded, "harness versions", ...read, "MCP servers"]
     },
     installCloudSignIns: async (signIns, place) => {
@@ -536,6 +539,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       // enrols, just before its first start, and every harness's discovery at once doubled that start (2026-10-20).
       void shell.foreground.idle().then(() => harnesses.profiles.all(true)).catch(() => undefined)
       return installed
+    },
+    /**
+     * Every harness's MCP servers as a start in `path` reads them. Codex and Grok list theirs by running their CLIs,
+     * 1.5 to 3.5 s on a copy (2026-10-20); a copy of a base made after this finds the listing in its host's memory,
+     * kept while nothing either CLI reads has changed.
+     */
+    prepareFolder: async (path) => {
+      await tools.mcp.discover(path)
     },
     openMachineWorkspace: async (path) => {
       await workspaceClients.home(path)

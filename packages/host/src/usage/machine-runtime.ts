@@ -41,6 +41,8 @@ export type MachineRuntimeOptions = {
   installSignIns(signIns: readonly CloudSignIn[], secrets: string): Promise<CloudSignInInstall[]>
   /** Makes the folder the agent prepared the one every caller's tabs open in. */
   openWorkspace(path: string): Promise<void>
+  /** What a start does first in a folder, done ahead: a project base's, before its snapshot. */
+  prepareFolder(path: string): Promise<void>
   /** What the host is working on, as its lifecycle lists it: what the machine reports, so its Thread keeps it running. */
   work(): LifecycleWork[]
   now?: () => number
@@ -180,7 +182,20 @@ export class MachineRuntime {
         return this.#install(message)
       case "workspace":
         return this.#openWorkspace(message.path)
+      case "prepare":
+        return void this.#prepare(message.path)
     }
+  }
+
+  async #prepare(path: string): Promise<void> {
+    const began = performance.now()
+    const ok = await this.#options.prepareFolder(path).then(() => true, (error: Error) => {
+      hostWarn("machine", "the folder wasn't prepared; its start does it", { path, error: error.message })
+      return false
+    })
+    const ms = Math.round(performance.now() - began)
+    if (ok) hostLog("machine", "folder prepared", { path, ms })
+    this.#send({ type: "prepared", path, ms, ok })
   }
 
   #openWorkspace(path: string): void {

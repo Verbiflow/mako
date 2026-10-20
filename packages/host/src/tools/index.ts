@@ -46,8 +46,9 @@ export function authoringBackups(dataRoot: string): string {
   return join(dataRoot, "backups", "native-config")
 }
 
-export function openTools(harnesses: ToolHarnesses, dataRoot: string): Tools {
-  const mcp = mcpRegistry(harnesses)
+/** `idle` resolves when no harness start is waiting: background work on a start's path waits for it. */
+export function openTools(harnesses: ToolHarnesses, dataRoot: string, idle?: () => Promise<void>): Tools {
+  const mcp = mcpRegistry(harnesses, idle)
   const skills = skillRegistry(harnesses)
   // One writer, so a sync and an edit of the same file in this process queue behind each other.
   const files = new AuthoringFiles(authoringBackups(dataRoot))
