@@ -10,9 +10,10 @@ import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall
  */
 /**
  * 2: the host takes `sign-ins`. 3: and `workspace`. 4: and says `warm` once it has loaded what every start loads, which
- * the agent waits for before it calls the host ready. An agent sends only what the host's `hello` says it takes.
+ * the agent waits for before it calls the host ready. 5: and takes `prepare`, answering `prepared`. An agent sends only
+ * what the host's `hello` says it takes.
  */
-export const MACHINE_AGENT_PROTOCOL = 4
+export const MACHINE_AGENT_PROTOCOL = 5
 
 /** What the agent tells the host. */
 export const AgentMessageSchema = z.discriminatedUnion("type", [
@@ -46,6 +47,11 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
     .strict(),
   /** The folder the machine's Thread works in, the clone of its repository: the host's tabs and turns open there. */
   z.object({ type: z.literal("workspace"), path: z.string().regex(/^\/[^\0]*$/).max(4_096) }).strict(),
+  /**
+   * A project base's clone, before its snapshot: the host does there what a start does first (every harness's MCP
+   * servers, two listed by running their CLIs), so a copy's start finds it done. Answered with `prepared`.
+   */
+  z.object({ type: z.literal("prepare"), path: z.string().regex(/^\/[^\0]*$/).max(4_096) }).strict(),
 ])
 export type AgentMessage = z.infer<typeof AgentMessageSchema>
 
@@ -85,3 +91,5 @@ export type HostMessage =
    * a snapshot taken from here, as the machine image's is, wakes with all of it loaded.
    */
   | { type: "warm"; ms: number; loaded: string[] }
+  /** A `prepare` is done, or failed and left to the start. */
+  | { type: "prepared"; path: string; ms: number; ok: boolean }

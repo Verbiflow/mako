@@ -106,6 +106,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
   createInterface({ input: agentEnd }).on("line", (line) => messages.push(JSON.parse(line) as HostMessage))
   const calls: string[] = []
   const workspaces: string[] = []
+  const prepared: string[] = []
   const installs: Array<{ harnesses: string[]; secrets: string }> = []
   const runtime = new MachineRuntime({
     agent: hostEnd,
@@ -117,6 +118,10 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
       workspaces.push(path)
       if (path.endsWith("/missing")) throw new Error("no such folder")
       if (path.endsWith("/slow")) await new Promise((resolve) => setTimeout(resolve, 300))
+    },
+    prepareFolder: async (path) => {
+      prepared.push(path)
+      if (path.endsWith("/missing")) throw new Error("no such folder")
     },
     version: "0.0.0-test",
     build: "test",
@@ -141,6 +146,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     messages,
     calls,
     workspaces,
+    prepared,
     installs,
     state,
     tell: (message: AgentMessage) => agentEnd.write(`${JSON.stringify(message)}\n`),
@@ -300,6 +306,20 @@ test("the workspace the agent gives opens once however often it's given, and one
   agent.tellRaw(JSON.stringify({ type: "workspace", path: "relative" }))
   await new Promise((resolve) => setTimeout(resolve, 50))
   assert.equal(opens(), 3, "a folder that isn't absolute is refused")
+})
+
+test("a base's folder is prepared when the agent asks, and the host says so either way", async () => {
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-prepare-")) })
+  agent.tell({ type: "prepare", path: "/home/node/work/repo" })
+  await agent.until("prepared", () => agent.messages.some((message) => message.type === "prepared" && message.path === "/home/node/work/repo"))
+  const done = agent.messages.find((message) => message.type === "prepared" && message.path === "/home/node/work/repo")
+  assert.equal(done?.type === "prepared" && done.ok, true)
+  agent.tell({ type: "prepare", path: "/home/node/work/missing" })
+  await agent.until("the failure answered", () => agent.messages.some((message) => message.type === "prepared" && message.path === "/home/node/work/missing"))
+  const failed = agent.messages.find((message) => message.type === "prepared" && message.path === "/home/node/work/missing")
+  assert.equal(failed?.type === "prepared" && failed.ok, false, "a folder that failed is answered, so the base isn't held")
+  assert.deepEqual(agent.prepared, ["/home/node/work/repo", "/home/node/work/missing"])
+  assert.equal(agent.workspaces.length, 0, "preparing a folder opens no workspace")
 })
 
 test("a link given while the workspace opens waits for it, so the Thread's first call runs in the workspace", async () => {

@@ -9,7 +9,8 @@ import { stat } from "node:fs/promises"
  * change Mako can see. Concurrent asks for the same stamp share one run. A failed
  * run is not kept. A kept listing older than `refreshAfterMs` is still served, and
  * the CLI runs again in the background, which bounds how long a change to a file
- * nobody declared can go unseen.
+ * nobody declared can go unseen; that run waits for `idle` first, so it never
+ * competes with a harness's start.
  */
 export interface CliListingCache<T> {
   read(key: string, inputs: readonly string[], list: () => Promise<T>): Promise<T>
@@ -21,6 +22,8 @@ export interface CliListingCacheOptions {
   /** Listings kept at once; the least recently read goes first. */
   limit: number
   now?: () => number
+  /** Resolves when nothing a person waits on is running: a background run waits for it. */
+  idle?: () => Promise<void>
 }
 
 interface Entry<T> {
@@ -35,6 +38,7 @@ export function cliListingCache<T>({
   refreshAfterMs,
   limit,
   now = Date.now,
+  idle = () => Promise.resolve(),
 }: CliListingCacheOptions): CliListingCache<T> {
   const entries = new Map<string, Entry<T>>()
 
@@ -58,6 +62,12 @@ export function cliListingCache<T>({
 
   function refresh(key: string, entry: Entry<T>, list: () => Promise<T>) {
     entry.refreshing = true
+    void idle().then(() => rerun(key, entry, list))
+  }
+
+  function rerun(key: string, entry: Entry<T>, list: () => Promise<T>) {
+    // A change read while it waited listed again already.
+    if (entries.get(key) !== entry) return
     const startedAt = now()
     list().then(
       (listing) => {
