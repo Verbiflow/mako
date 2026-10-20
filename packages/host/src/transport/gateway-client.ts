@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type { Actor, ClientSession, Payload, Reply } from "@mako/protocol"
+import { deferredWhenAsleep } from "../contracts/host-call-policy.js"
 import { hostCallInput, hostOperationName, hostReplyValue, toHostOperation } from "../contracts/host-operations.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import type { EncodedValue } from "../contracts/runtime-value.js"
@@ -46,6 +47,8 @@ export function gatewayHostCalls(session: ClientSession, options: GatewayHostCal
         const started = Date.now()
         input ??= hostCallInput(args, options.history ?? false)
         const operation = toHostOperation(channel, input, { id, target, actor: options.actor, correlationId, attempt })
+        // A close needn't wake a cloud Thread's paused machine: it waits there for the machine's next wake.
+        if (deferredWhenAsleep.has(channel)) operation.whenAsleep = "defer"
         let reply: Reply
         try {
           reply = await session.call(operation)
@@ -53,7 +56,7 @@ export function gatewayHostCalls(session: ClientSession, options: GatewayHostCal
           hostWarn("gateway-client", "operation lost", { op: operation.op, correlationId, attempt, error: error instanceof Error ? error.message : "unknown" })
           throw new RuntimeDisconnectedError(true)
         }
-        const fields = { op: hostOperationName(channel), correlationId, attempt, outcome: reply.ok ? "ok" : reply.problem.type, ms: Date.now() - started }
+        const fields = { op: hostOperationName(channel), correlationId, attempt, outcome: reply.ok ? (reply.deferred ? "deferred" : "ok") : reply.problem.type, ms: Date.now() - started }
         if (!reply.ok) hostWarn("gateway-client", "operation failed", fields)
         else if (trace || attempt > 1) hostLog("gateway-client", "operation", fields)
         return hostReplyValue(reply)

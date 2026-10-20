@@ -304,6 +304,37 @@ const answer = (operation, value) => ({
   value: Payload.of(value),
 })
 
+describe("a Thread whose runtime is asleep", () => {
+  test("takes an operation marked defer without waking it, answers deferred, and delivers it in order when its runtime is back", async () => {
+    const gateway = createFakeGateway()
+    const session = await gateway.connectClient(client)
+    const thread = { kind: "thread", threadId: "th-sleep" }
+    const close = call(thread, { name: "close" }, { op: "host.live-close", whenAsleep: "defer" })
+    const first = await session.call(close)
+    assert.deepEqual({ ok: first.ok, deferred: first.deferred }, { ok: true, deferred: true })
+    assert.deepEqual((await session.call({ ...close, attempt: 2 })).deferred, true, "a repeat of its id is answered the same")
+    const plain = await session.call(call(thread, { name: "read" }))
+    assert.equal(plain.ok, false, "one not marked defer is still refused while nobody runs the Thread")
+    assert.deepEqual(gateway.deferred("th-sleep"), [close.id])
+    const seen = []
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "machine", build: "test", handle: async (operation) => (seen.push(operation.input.decode().name), answer(operation, null)) })
+    await gateway.assign("th-sleep", "machine")
+    while (!seen.length) await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(seen, ["close"])
+    assert.deepEqual(gateway.deferred("th-sleep"), [])
+    runtime.close()
+    await runtime.done
+    await gateway.close()
+  })
+
+  test("an operation's envelope may ask to be deferred, and a reply may say it was", () => {
+    const { input: _input, ...envelope } = call(laptop, null)
+    assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, whenAsleep: "defer" }).success, true)
+    assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, whenAsleep: "later" }).success, false)
+    assert.equal(ReplyEnvelopeSchema.safeParse({ v: PROTOCOL_VERSION, id: crypto.randomUUID(), ok: true, deferred: true }).success, true)
+  })
+})
+
 describe("a runtime served through serveRuntime", () => {
   test("answers operations as they finish, not in the order they came", async () => {
     const gateway = createFakeGateway()

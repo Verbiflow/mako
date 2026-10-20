@@ -25,6 +25,7 @@ import {
 import { threadsStore } from "@/state/thread-store"
 import { parseThreadReferenceAppendix } from "@/lib/thread-references"
 import { toast } from "sonner"
+import { draftText, projectDraftKey, rememberDraft } from "@/state/drafts"
 import { restorePendingPlan, takePendingPlan, withNativePlan } from "@/state/plan-choice"
 import { commandId, durableAttachments, pendingMessages, saveMessage, settleMessage, type OutboxCommand } from "@/state/message-outbox"
 
@@ -334,6 +335,10 @@ async function attemptStart(starting: StartingAcpConversation, input: LiveStartO
     settleMessage(input.initialRequest?.id ?? input.conversationId)
     failStart(starting.key)
     restorePendingPlan(starting.settingsTarget, starting.key)
+    // The person's message goes back where they wrote it, unless they've written something there since.
+    const text = input.initialRequest?.text
+    const draft = projectDraftKey(starting.cwd)
+    if (text?.trim() && !draftText(draft).trim()) rememberDraft(draft, text)
     toast.error(error instanceof Error ? error.message : String(error))
     return false
   }

@@ -243,5 +243,12 @@ export function hostCallReplay(channel: string): HostCallReplay {
   return "never"
 }
 
+/**
+ * Calls a Thread's runtime needn't be woken for: where it's asleep (a cloud Thread's paused machine), the gateway
+ * takes the call at once and delivers it when the runtime next wakes. Only a call whose answer nobody waits on and
+ * whose repeat is harmless: closing a conversation that is already quiet.
+ */
+export const deferredWhenAsleep: ReadonlySet<string> = new Set<string>(["mako:live-close"])
+
 /** How long a client waits for the host to come back before it gives a dropped call up. */
 export const HOST_CALL_REPLAY_WAIT_MS = 20_000

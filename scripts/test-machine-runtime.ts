@@ -37,6 +37,8 @@ async function machineGateway() {
   const gateway = createFakeGateway()
   const sockets = new Set<ServerSocket>()
   let upgrades = 0
+  /** Connections that answer nothing, as one dead across a pause looks before its close arrives. */
+  const silent = new Set<ServerSocket>()
   const started = Date.now()
   /** When each upgrade came, less those within 100 ms of the one before. */
   const attempts: number[] = []
@@ -55,6 +57,7 @@ async function machineGateway() {
       sockets.add(ws)
       void gateway.connectRuntime().then((link) => {
         ws.on("message", (data) => {
+          if (silent.has(ws)) return
           const text = String(data)
           if (text === PING) return ws.send(PONG)
           decodeRuntimeFrame(text)
@@ -84,6 +87,10 @@ async function machineGateway() {
     upgrades: () => upgrades,
     attempts: () => attempts,
     connected: () => sockets.size,
+    /** The connections open now answer nothing from here on; a new one is answered. */
+    silence: () => {
+      for (const socket of sockets) silent.add(socket)
+    },
     /** The connection drops as a network change would drop it, with no close frame. */
     drop: () => {
       for (const socket of sockets) socket.terminate()
@@ -239,16 +246,25 @@ test("the machine tells its Thread when it works and when it stops, a silent tur
   await agent.until("one event counted, the readings not", () => agent.state()?.events.emitted === 1)
 })
 
-test("a machine that woke connects again at once, however recently its old connection was heard", async () => {
+test("a machine that woke keeps a connection that survived its pause, and replaces one that didn't, within a second and a half", async () => {
   const cloud = await machineGateway()
   const agent = machineAgent({ dataRoot: join(scratch, "woke") })
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
   await agent.until("enrolled", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 1)
+  // It survived: the ping is answered, and the connection the gateway may be sending on stays.
   const upgrades = cloud.upgrades()
   agent.tell({ type: "wake" })
-  await agent.until("enrolled on a new connection", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 3_000)
-  assert.equal(cloud.upgrades(), upgrades + 1, "one new connection, without waiting out a backoff")
+  await new Promise((resolve) => setTimeout(resolve, 2_000))
+  assert.equal(cloud.upgrades(), upgrades, "no new connection for one that answered")
+  assert.equal(agent.state()?.enrolls, 1)
+  // It didn't: nothing answers, and a new connection replaces it once the probe runs out, without a backoff.
+  cloud.silence()
+  const woke = Date.now()
+  agent.tell({ type: "wake" })
+  await agent.until("enrolled on it", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 3_000)
+  const replacedMs = Date.now() - woke
+  assert.ok(replacedMs >= 1_400 && replacedMs < 2_800, `replaced after ${replacedMs} ms`)
 })
 
 test("the sign-ins the agent gives are installed one set at a time, the newest last, and what became of each is in the runtime's state", async () => {

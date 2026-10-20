@@ -6,7 +6,8 @@ import { z } from "zod"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, githubRepositoryUrl, type CloudRepository } from "../contracts/cloud-threads.js"
-import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
+import { hostCallReplay } from "../contracts/host-call-policy.js"
+import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { sessionAfter, type LiveBatch, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
 import { decodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import { gatewayHostCalls } from "../transport/index.js"
@@ -21,6 +22,9 @@ const RETRY_MAX_MS = 30_000
 const WOKEN_MS = 15_000
 const WOKEN_RETRY_MS = 250
 const SAVE_MS = 1_000
+/** How long a call that didn't reach its Thread is repeated before the window hears of it: a wake takes seconds. */
+const CLOUD_REPEAT_MS = 60_000
+const CLOUD_REPEAT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000, 10_000] as const
 
 const SummaryIdentitySchema = z.object({ session: z.object({ id: z.string(), status: z.string() }).loose(), revision: z.number(), createdAt: z.number() }).loose()
 /** A cloud host's own `LiveSummary`, checked for the identity and revision this router reads. */
@@ -185,17 +189,36 @@ export class CloudConversations {
     return value
   }
 
+  /**
+   * One call to the Thread's machine. A call the gateway lost on the way (its machine's link changed under it) or
+   * still holds while the machine wakes is repeated here, under its one id, for as long as `CLOUD_REPEAT_MS`, when a
+   * repeat can't do it twice (a read, or a call the host settles by its id): the gateway answers a repeat with the
+   * first answer. So a send after the machine slept arrives, without the window hearing of the wake. Past that, or
+   * for a call only the person may repeat, the window hears it as a reconnect, in a cloud Thread's words.
+   */
   async #call(entry: Entry, channel: string, args: readonly unknown[]): Promise<EncodedValue> {
     const { session, deviceId } = await this.#connected()
     const actor: Actor = { kind: "client", client: "desktop", deviceId }
-    try {
-      return await gatewayHostCalls(session, { threadId: entry.threadId, actor, history: hostHistoryPaging() }).call(channel, args)(1)
-    } catch (error) {
-      // As a call to another host's conversation: the window settles a lost one by its own ids, never this router.
-      if (error instanceof RuntimeDisconnectedError) throw new RuntimeDisconnectedError(error.unconfirmed, entry.conversationId)
-      throw error
+    const send = gatewayHostCalls(session, { threadId: entry.threadId, actor, history: hostHistoryPaging() }).call(channel, args)
+    const repeatable = hostCallReplay(channel) !== "never"
+    const began = performance.now()
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await send(attempt)
+      } catch (error) {
+        if (!(error instanceof RuntimeDisconnectedError)) throw error
+        const waitMs = CLOUD_REPEAT_BACKOFF_MS[Math.min(attempt - 1, CLOUD_REPEAT_BACKOFF_MS.length - 1)]!
+        if (repeatable && attempt < 8 && performance.now() - began + waitMs < CLOUD_REPEAT_MS) {
+          hostLog("cloud-conversations", "a call didn't reach the Thread yet; repeating it", { threadId: entry.threadId, channel, attempt, inMs: waitMs })
+          await new Promise((resolve) => setTimeout(resolve, waitMs))
+          continue
+        }
+        // As a call to another host's conversation: the window settles a lost one by its own ids, never this router.
+        throw new RuntimeDisconnectedError(error.unconfirmed, entry.conversationId, error.unconfirmed && !repeatable ? CLOUD_CALL_UNCONFIRMED_MESSAGE : CLOUD_RECONNECTING_MESSAGE)
+      }
     }
   }
+
 
   #account(): CloudAccount {
     const account = this.#options.account()

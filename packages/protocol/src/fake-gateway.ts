@@ -74,6 +74,8 @@ type Thread = {
   /** `${generation}:${localSeq}` → seq, so a resent event is acknowledged without being recorded again. */
   recorded: Map<string, number>
   readers: Set<Inbox<EventFrame>>
+  /** Operations taken while nobody ran the Thread (`whenAsleep: "defer"`), in order, for when someone does. */
+  deferred: Operation[]
 }
 
 type Connection = {
@@ -106,6 +108,8 @@ type Running = {
 /** The fake, plus what its tests read of it: each Thread's runtime's last word on whether it's working. */
 export type FakeGateway = GatewayUnderTest & {
   activity(threadId: string): { busy: boolean; work: string[]; at: Date } | undefined
+  /** The operations waiting for the Thread's runtime (`whenAsleep: "defer"`). */
+  deferred(threadId: string): string[]
 }
 
 export function createFakeGateway(
@@ -132,6 +136,7 @@ export function createFakeGateway(
         log: [],
         recorded: new Map(),
         readers: new Set(),
+        deferred: [],
       }
       threads.set(threadId, found)
     }
@@ -264,6 +269,13 @@ export function createFakeGateway(
           threadId,
           generation: owned.generation,
         })
+    for (const owned of threads.values()) if (owned.owner === frame.runtimeId) deliverDeferred(owned)
+  }
+
+  /** What waited for the Thread's runtime goes to it now, in the order it came. */
+  const deliverDeferred = (target: Thread) => {
+    const waiting = target.deferred.splice(0)
+    for (const operation of waiting) void route(operation)
   }
 
   const record = (
@@ -430,6 +442,11 @@ export function createFakeGateway(
     }
     const target = thread(operation.target.threadId)
     const owner = target.owner ? runtimes.get(target.owner) : undefined
+    const kept = target.deferred.find((waiting) => waiting.id === operation.id)
+    if (kept || (!owner?.runtimeId && operation.whenAsleep === "defer")) {
+      if (!kept) target.deferred.push(operation)
+      return { v: PROTOCOL_VERSION, id: operation.id, ok: true, deferred: true }
+    }
     if (!owner?.runtimeId) return nobody("No runtime is running this Thread")
     let seq = admissions.get(operation.id)
     if (seq === undefined) {
@@ -571,6 +588,7 @@ export function createFakeGateway(
       runtimes
         .get(runtimeId)
         ?.deliver({ type: "assign", threadId, generation: target.generation })
+      if (runtimes.get(runtimeId)) deliverDeferred(target)
       return target.generation
     },
 
@@ -579,6 +597,7 @@ export function createFakeGateway(
     },
 
     activity: (threadId) => activity.get(threadId),
+    deferred: (threadId) => thread(threadId).deferred.map((operation) => operation.id),
   }
 }
 
