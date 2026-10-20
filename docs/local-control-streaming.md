@@ -406,11 +406,11 @@ What Moonlight and Sunshine do, and where it applies to Mako:
 
 | Moonlight/Sunshine practice | Local preview (same machine) | Cloud viewer (over a network) |
 | --- | --- | --- |
-| Stream at the client's resolution, never encode pixels it discards. | Done for browser previews. Native window snapshots are still captured at full size and thumbnailed to 1,440 pixels on the host; capturing them at the viewer's size is the next saving. | Same rule; the viewer's box sets the encode size. |
+| Stream at the client's resolution, never encode pixels it discards. | Done for browser previews. Native windows need nothing: their live preview is ScreenCaptureKit's zero-copy track, about 0.05 cores at any size, and a snapshot's thumbnail takes 54 ms at the viewer's size against 62 ms at full size (V19). | Done: the viewers' box sets the screencast size, which sets the encode size (below). |
 | Hardware encode from GPU memory without a CPU copy. | Chrome's compositor already encodes the screencast; Mac recordings use VideoToolbox. | Use the GPU encoder where the job's machine has one; keep libx264 as the explicit software path. |
-| No B-frames, no lookahead, small rate-control buffer; recover from loss with intra refresh or a requested keyframe rather than retransmitting. | Recordings use libx264 `zerolatency` (about one frame held instead of 47). | Required for live H.264: B-frames and lookahead add whole frames of delay. |
+| No B-frames, no lookahead, small rate-control buffer; recover from loss with intra refresh or a requested keyframe rather than retransmitting. | Recordings use libx264 `zerolatency` (about one frame held instead of 47). | Done: `zerolatency`, no B-frames, and a key frame only when a viewer needs one, made by restarting the encoder on the newest frame. Over a reliable transport nothing is lost, so there is no intra refresh. |
 | RTP over UDP with forward error correction; the client never waits on a lost packet. | Nothing to gain: there is no loss on a local socket, and the binary IPC path already delivers the newest frame only. | WebRTC is the browser's version of this: SRTP over UDP, NACK, FEC and keyframe requests, with congestion control. It needs TURN for networks that block UDP. |
-| A frame pacer that drops late frames and keeps at most one queued. | The host already publishes the newest frame and drops the rest. | Keep the same latest-frame rule at the sender; let congestion control lower bitrate before resolution. |
+| A frame pacer that drops late frames and keeps at most one queued. | The host already publishes the newest frame and drops the rest. | Done: the encoder takes the newest frame, at most two inside it; a viewer whose socket backs up skips to a fresh key frame instead of queueing. Lowering bitrate under congestion is not built. |
 
 Cloud scaling follows from one rule: one encode per target, shared by every
 viewer and the recording, running only while someone watches. A viewer then costs
@@ -418,3 +418,93 @@ packet fan-out, not an encoder, and each job's capture and encode run on the
 job's own machine, so capacity grows with machines rather than with a central
 transcoder. None of this changes the agent API: screenshots and observations stay
 exact and never come from the video stream.
+
+## October 19: live H.264 for remote viewers, measured on a cloud machine
+
+A remote viewer of a cloud Thread's browser now has an engine: H.264 at 1–2% of
+the JPEG bandwidth, at the same frame rate, first paint and click-to-visible
+latency. It is measured on the machine cloud Threads run on. Its gateway
+transport is not built (below).
+
+**The engine.** [`BrowserVideo`](../packages/control-runtime/src/browser-video.ts)
+subscribes to the tab's shared screencast, sized to the largest remote viewer
+like every other preview, and runs one FFmpeg per target. The screencast's
+JPEGs go in as streaming MOV (the recording's
+[`MovVideoInput`](../packages/control-runtime/src/mov-video-input.ts), now with a
+JPEG sample type), so there is no decode or pixel copy in Node. FLV comes out:
+each tag carries its unit's length, its key flag and the `avcC` configuration,
+so a unit is complete the moment it arrives. Each unit reaches every viewer as a
+[`ControlVideoPacket`](../packages/control-runtime/src/contracts/control-video.ts):
+a 24-byte header, then length-prefixed NAL units, which is what WebCodecs takes.
+The renderer's [`ControlVideoPlayer`](../src/lib/control-video-player.ts) decodes
+them.
+
+- **Joining.** The viewer paints the newest frame at once, sent as it is (a
+  poster). Then the encoder restarts on that frame, so the viewer's first key
+  frame shows the current picture even while the page is still.
+- **Falling behind.** A viewer whose socket holds more than 512 KB skips units
+  until it drains. It then gets a key frame from the newest frame, at most one
+  a second, since each costs a whole picture. Other viewers never wait for it.
+- **Resizing and failure.** A new screencast size starts a new encoder.
+  Three encoder failures in a row end the stream for its viewers.
+- **Nothing held.** Each frame leaves the encoder 2–8 ms after it goes in, and
+  21 ms for the first, including FFmpeg's start-up. One trap on the way:
+  `-fflags nobuffer` makes FFmpeg discard the frame it reads while probing a
+  pipe. That looked like every frame being held until the next one arrived,
+  in every container and with every codec tried.
+
+**Measured** from a Mac through the machine provider's port proxy to a cloud
+machine of the size cloud Threads run on: 2 vCPU, no GPU, Debian
+FFmpeg 5.1, libx264 `veryfast` `zerolatency` at CRF 23 with a bitrate cap. The
+fixture is a 1920×1080 tab with 12 lines of text and blocks animating every
+frame. The viewer is a hidden Electron window running `ControlVideoPlayer`, or
+for JPEG, `createImageBitmap`. Both send the newest frame only, under the same
+512 KB limit. Click to visible is timed on the viewer's clock, from sending a
+click through the product `click` command to the clicked marker's pixel
+flipping on the viewer's canvas, 12 clicks per run. Machine CPU is taken from
+`/proc`, by process tree, over 8 s.
+
+| Viewer box, cap | Format | Shown fps | Bandwidth | Encoding (cores) | Chromium (cores) | First paint | Click to visible p50 / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 640×360, 30 | JPEG | 30.3 | 6.3 Mbit/s | — | 0.61 | 252 ms | 166 / 169 ms |
+| 640×360, 30 | H.264 | 30.1 | 0.11 Mbit/s | 0.08 | 0.60 | 166 ms | 132 / 134 ms |
+| 1280×720, 30 | JPEG | 30.1 | 17.2 Mbit/s | — | 1.10 | 199 ms | 133 / 146 ms |
+| 1280×720, 30 | H.264 | 30.1 | 0.13 Mbit/s | 0.20 | 1.02 | 219 ms | 132 / 162 ms |
+| 1280×720, 30, two viewers | H.264 | 30.3 | 0.13 Mbit/s each | 0.21 | 1.04 | 279 ms | 133 / 137 ms |
+| 1280×720, 60 | H.264 | 59.8 | 0.17 Mbit/s | 0.38 | 1.03 | 199 ms | 132 / 135 ms |
+| 1280×720, 60 | JPEG | 59.8 | 34.2 Mbit/s | — | 1.05 | 195 ms | 118 / 130 ms |
+
+H.264's first decoded frame follows its poster by 50–110 ms. Text is as legible
+as in the JPEG at 1280×720, with faint ghosting around the moving blocks.
+Across two full runs, click-to-visible varied by about 30 ms between runs of the
+same format, so the formats are equal within this method. Most of the ~130 ms
+is the network round trip and Chromium, not encoding. A second viewer adds
+fan-out (0.03 cores), not an encoder.
+
+**What it means for the machine.** At these sizes, Chromium's software
+rendering of the tab costs five to ten times what the encoder does, so the
+encoder needs no GPU. The two-core machine has room for a 720p60 viewer beside
+the agent's work. Recordings on the same machine are another matter (V18).
+
+**The transport, not built yet.** Video rides the link a runtime already has
+to its gateway and its clients:
+
+1. **The protocol.** `@mako/protocol` gets a binary media message on the
+   runtime's link and on the client's: a stream ID, then a
+   `ControlVideoPacket` as it is. The gateway forwards it to the client
+   connection watching that stream, unread, and never records it in the
+   Thread's stream, acknowledges it or replays it. Today every frame is one
+   line of JSON text, so this is a protocol version.
+2. **Backpressure.** A gateway in the middle cannot see how much waits in the
+   viewer's socket. So the viewer acknowledges what it has taken a few times
+   a second, and the machine takes a viewer's backlog as bytes sent past that
+   acknowledgement. `BrowserVideoViewer.backlog()` is that function, so the
+   engine is unchanged. This works through any number of hops.
+3. **Subscribing.** Watching a cloud preview carries the viewer's box, as
+   `mako:control-preview` does now. The host joins the target's
+   `BrowserVideo` with a viewer that sends media addressed to that client,
+   and leaves when the client stops watching or its connection closes.
+   Local previews keep the JPEG path, which measured best on one machine.
+4. **The machine image.** Chromium and FFmpeg join the machine image, which
+   has neither today. A Mac serving a remote viewer would also need
+   `--enable-muxer=flv` in the packaged FFmpeg, which has libx264 but not FLV.
