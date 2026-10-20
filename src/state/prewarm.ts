@@ -3,6 +3,10 @@ import { acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
 import { store as sessionStore } from "@/state/session"
 import { openSessionDraft, threadGroupsStore } from "@/state/thread-groups"
 import { runPlaceStore } from "@/state/run-place"
+import { currentSettingsTarget, settingsForSend } from "@/state/composer-settings"
+import { prefsStore } from "@/state/prefs"
+import { threadsStore } from "@/state/thread-store"
+import type { CloudPrepareLaunch } from "@mako/host/contracts/cloud-threads"
 
 /** One signal per conversation or folder per window: enough to wake it, or to restart its idle timer during a long draft. */
 const PREWARM_EVERY_MS = 30_000
@@ -50,17 +54,27 @@ export function noteComposing(text: string, now = Date.now()): void {
 /**
  * Writing a new Thread's first message with Cloud chosen: once it reads like a message, its cloud Thread is made
  * ahead, so its machine starts and clones while the person writes, and asking again as they go on keeps it running.
- * Choosing Cloud makes nothing; writing does. The draft itself never leaves this Mac before it's sent.
+ * Once the machine is ready, the harness the composer would start is started there too, with the settings a send
+ * would use. Choosing Cloud makes nothing; writing does. The draft itself never leaves this Mac before it's sent.
  */
 function prepareCloud(cwd: string, text: string, now: number): void {
   const began = composingSince.get(cwd) ?? now
   composingSince.set(cwd, began)
   const key = `cloud\0${cwd}`
   if (text.trim().length < CLOUD_PREPARE_FROM_CHARS || !due(key, now)) return
-  void getMako().cloudPrepare(cwd, now - began).then(
+  void composerLaunch().then((launch) => getMako().cloudPrepare(cwd, now - began, launch)).then(
     (outcome) => {
       if (outcome === "later") signalled.set(key, now - PREWARM_EVERY_MS + CLOUD_LATER_MS)
     },
     () => signalled.delete(key)
   )
+}
+
+/** The harness and settings a send from the composer would start with now (`launch` in `acp-start.ts`). */
+async function composerLaunch(): Promise<CloudPrepareLaunch> {
+  const harness = threadsStore.get().composerHarness
+  const launch: CloudPrepareLaunch = { harness, tuning: await settingsForSend(currentSettingsTarget(harness)) }
+  const modeId = prefsStore.get().providerModes[harness]
+  if (modeId) launch.modeId = modeId
+  return launch
 }

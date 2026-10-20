@@ -368,9 +368,27 @@ export class LiveConversations {
     if (options.goal !== undefined) GoalCommandSchema.parse({ kind: "set", ...options.goal })
     if (options.review !== undefined) ReviewTargetSchema.parse(options.review)
     const state = await this.launches.start(provider, cwd, options, actor, purpose)
+    if (options.initialRequest) this.firstMessage(options, actor)
     if (options.goal !== undefined) this.goals.begin(options.conversationId, options.goal, { actor: this.threads.actor(actor), tuning: options.tuning })
     if (options.review !== undefined) this.review(options.conversationId, options.review, options.tuning, actor)
     return state
+  }
+
+  /**
+   * A conversation started without a message, as a cloud Thread's harness is started while its person writes, takes
+   * its first one from the start that brings it: under that start's request ID, so a repeated start sends it once,
+   * with the start's title when it has none. The start ahead had the start's harness, folder and mode; a caller whose
+   * choice changed starts another conversation. A conversation that already holds requests keeps its own.
+   */
+  private firstMessage(options: LiveStartOptions, actor?: Actor): void {
+    const request = options.initialRequest
+    const resident = this.records.require(options.conversationId)
+    if (!request || resident.snapshot.requests.length) return
+    if (options.title && !resident.snapshot.session.title) {
+      resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, title: options.title } }
+      this.threads.register(resident.snapshot, actor)
+    }
+    this.submit(options.conversationId, request.id, request.text, request.attachments, options.tuning, undefined, options.displayPrompt, actor)
   }
 
   /** Where a start in `cwd` runs (`LiveLaunches.folder`). */
