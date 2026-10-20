@@ -333,6 +333,8 @@ export function installMockBridge() {
    * (`ThreadRef.copyOnly`), as the archive's migration leaves them.
    */
   const keptScene = scene === "kept"
+  /** `?app=slow-start`: a start the host takes 26 s to accept, as a cloud Thread's machine might, to see the wait. */
+  const slowStart = scene === "slow-start"
   /**
    * `?app=kept&outdated=1`: Codex 0.163.0 wrote the kept session's records,
    * and this Mac has 0.159.3, so the host's restore plan offers Update; the
@@ -1941,6 +1943,7 @@ export function installMockBridge() {
       cwd: string,
       options: LiveStartOptions
     ) => {
+      if (slowStart) await new Promise((resolve) => setTimeout(resolve, 26_000))
       const session: LiveSessionState = {
         id: options.conversationId,
         nativeId: `mock-${harness}-${++acpCount}`,
