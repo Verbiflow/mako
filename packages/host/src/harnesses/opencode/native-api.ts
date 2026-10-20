@@ -1,3 +1,4 @@
+import type { PrefetchLaunch } from "../start-prefetch.js"
 import { spawnProviderProcess } from "../provider-process.js"
 import { execFile } from "node:child_process"
 import { randomBytes } from "node:crypto"
@@ -57,6 +58,15 @@ export interface OpenCodeApi {
   close(): Promise<void>
 }
 
+/**
+ * The native server as a start runs it: on its own password, on the configured port or one the system picks. Its
+ * first line names its endpoint, which ends a `startPrefetch`.
+ */
+export function openCodeServe(command: string, env: NodeJS.ProcessEnv): PrefetchLaunch {
+  const port = configuredListenPort("MAKO_OPENCODE_API_PORT", env)
+  return { command, args: ["serve", "--stdio", "--port", String(port)], env: { ...env, OPENCODE_PASSWORD: randomBytes(32).toString("base64url") } }
+}
+
 /** One native server per adapter owner. OpenCode owns its execution and stores;
  * stdin is its native ownership lease. API failures never retry mutations.
  * The live adapter supplies account/configuration/MCP state before starting it.
@@ -74,11 +84,11 @@ export async function startOpenCodeApi(input: {
   fetch?: typeof globalThis.fetch
 }): Promise<OpenCodeApi> {
   input.signal?.throwIfAborted()
-  const password = randomBytes(32).toString("base64url")
-  const port = configuredListenPort("MAKO_OPENCODE_API_PORT", input.env)
+  const serve = openCodeServe(input.command, input.env)
+  const password = serve.env.OPENCODE_PASSWORD!
   const lifetime = new AbortController()
-  const spawnEnv = environmentForExecutable(input.command, { ...input.env, OPENCODE_PASSWORD: password })
-  const child = input.trace.sync("spawn", () => spawnProviderProcess(input.command, ["serve", "--stdio", "--port", String(port)], {
+  const spawnEnv = environmentForExecutable(serve.command, serve.env)
+  const child = input.trace.sync("spawn", () => spawnProviderProcess(serve.command, serve.args, {
     cwd: input.cwd,
     env: spawnEnv,
   }, { kind: "opencode:native-api", owner: input.conversationId }))

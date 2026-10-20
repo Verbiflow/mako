@@ -1,5 +1,7 @@
 import { acpDefaultMode, acpSessionModes } from "./acp-access.js"
-import type { ProviderAcpSource } from "./acp-source.js"
+import { acpClientCapabilities, type ProviderAcpSource } from "./acp-source.js"
+import { resolveExecutable } from "../base/executable.js"
+import { heavy } from "../base/heavy-packages.js"
 import type { ProviderLiveDriver } from "./live-driver.js"
 import { NO_NATIVE_EXCLUSION } from "../contracts/execution-context.js"
 import type { AcpEngine } from "./acp.js"
@@ -54,6 +56,23 @@ export function createAcpLiveDriver(
     resume: resume.kind === "native"
       ? { ...resume, locate: async (binding, cwd, env) => binding.nativeId ? resume.locate({ nativeId: binding.nativeId, cwd, env }) : undefined }
       : resume,
+    startPrefetch: {
+      kind: "process",
+      via: "The ACP agent, launched as a start launches it, through `initialize`.",
+      async launch(base, cwd) {
+        const env = { ...base }
+        const spec = await source.launch({ cwd, appPath: context.appRoot, execPath: process.execPath, env })
+        if (!spec) return undefined
+        delete env.CLAUDECODE
+        delete env.CLAUDE_CODE_ENTRYPOINT
+        spec.configureEnvironment(env)
+        const command = resolveExecutable(spec.command, env)
+        if (!command) return undefined
+        const { PROTOCOL_VERSION } = await heavy.acpSdk.load("read a start ahead")
+        const params = { protocolVersion: PROTOCOL_VERSION, clientCapabilities: acpClientCapabilities(source) }
+        return { command, args: spec.args, env, first: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize", params }) }
+      },
+    },
     turnRecovery: resume.kind === "native"
       ? {
           kind: "continues",

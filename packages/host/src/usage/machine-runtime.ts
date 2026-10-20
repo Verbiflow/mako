@@ -16,7 +16,7 @@ import {
   type ServedRuntime,
 } from "@mako/protocol"
 import { z } from "zod"
-import { hostLog, hostWarn } from "../base/host-log.js"
+import { followHostLog, hostLog, hostWarn, type HostLogLine } from "../base/host-log.js"
 import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
@@ -43,6 +43,8 @@ export type MachineRuntimeOptions = {
   openWorkspace(path: string): Promise<void>
   /** What a start does first in a folder, done ahead: a project base's, before its snapshot. */
   prepareFolder(path: string): Promise<void>
+  /** What `harness`'s start runs first, run ahead as the machine boots; undefined for a harness without it. */
+  prefetchStart(harness: string): Promise<{ answered: boolean; ms: number } | undefined>
   /** What the host is working on, as its lifecycle lists it: what the machine reports, so its Thread keeps it running. */
   work(): LifecycleWork[]
   now?: () => number
@@ -61,6 +63,18 @@ const TICK_MS = 1_000
 const REPORT_MS = 200
 /** The longest a link waits on the workspace opening: past it, the machine answers from its home instead of not at all. */
 const LINK_WAIT_MS = 30_000
+/** Scopes a start's timeline shows every line of; of any other scope, only warnings and errors. */
+const TIMELINE_SCOPES = new Set(["machine", "packages", "loop"])
+/** A field longer than this is cut on its way to the agent, whose log keeps a few hundred lines. */
+const TIMELINE_FIELD_CHARS = 300
+
+/** Whether a line belongs on a start's timeline (`npm run timeline`): each launch phase as it ends, never as it starts. */
+function onTimeline(line: HostLogLine): boolean {
+  if (line.level !== "info") return true
+  if (line.scope === "provider-startup") return line.fields?.state !== "started"
+  return TIMELINE_SCOPES.has(line.scope)
+}
+
 const LiveBatchIdentity = z.object({ batch: z.object({ id: z.string(), revision: z.number(), epoch: z.string().optional() }) })
 
 /**
@@ -86,6 +100,7 @@ export class MachineRuntime {
   #tick: NodeJS.Timeout | undefined
   #lastTick: number
   #stopped = false
+  #unfollow: (() => void) | undefined
   /** One install at a time; sign-ins that arrive during one are installed after it, the newest only. */
   #installing: Promise<void> | undefined
   #nextSignIns: SignIns | undefined
@@ -106,6 +121,7 @@ export class MachineRuntime {
   }
 
   start(): void {
+    this.#unfollow = followHostLog((line) => this.#toTimeline(line))
     const lines = createInterface({ input: this.#options.agent, crlfDelay: Infinity })
     lines.on("line", (line) => this.#fromAgent(line))
     lines.on("close", () => {
@@ -120,6 +136,7 @@ export class MachineRuntime {
 
   stop(): void {
     this.#stopped = true
+    this.#unfollow?.()
     clearInterval(this.#tick)
     clearTimeout(this.#report)
     this.#cloud?.stop()
@@ -184,7 +201,30 @@ export class MachineRuntime {
         return this.#openWorkspace(message.path)
       case "prepare":
         return void this.#prepare(message.path)
+      case "prefetch":
+        return void this.#prefetch(message.harness)
     }
+  }
+
+  async #prefetch(harness: string): Promise<void> {
+    const outcome = await this.#options.prefetchStart(harness).catch((error: Error) => {
+      hostWarn("machine", "a start wasn't run ahead", { harness, error: error.message })
+      return undefined
+    })
+    if (outcome) hostLog("machine", "a start was run ahead", { harness, ms: outcome.ms, answered: outcome.answered })
+  }
+
+  /** A line of the host's for the agent's log, when it's one a start's timeline shows and the channel can take it. */
+  #toTimeline(line: HostLogLine): void {
+    // A broken channel's own warning would come back here.
+    if (this.#stopped || !this.#options.agent.writable || !onTimeline(line)) return
+    const fields: Record<string, string | number | boolean | null> = {}
+    for (const [key, value] of Object.entries(line.fields ?? {})) {
+      if (value === undefined) continue
+      const text = String(value)
+      fields[key] = text.length > TIMELINE_FIELD_CHARS ? `${text.slice(0, TIMELINE_FIELD_CHARS)}…` : value
+    }
+    this.#send({ type: "log", at: new Date(this.#now()).toISOString(), level: line.level, scope: line.scope, message: line.message, fields })
   }
 
   async #prepare(path: string): Promise<void> {

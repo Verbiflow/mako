@@ -3,7 +3,7 @@ import { hostname } from "node:os"
 import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
-import { CloudAccounts, cloudLegacyFiles, cloudSignInName } from "./cloud-account.js"
+import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking } from "./cloud-account.js"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
@@ -32,8 +32,9 @@ export interface CloudAccount {
   /**
    * A cloud Thread in the account, its machine working in a clone of `repository`; the same Thread when made again
    * under its ID. `prepare`: made ahead of its first message, as its person writes it; `ready` once its machine is.
+   * `harness`: the one its first message is for, whose start its machine runs ahead as it boots.
    */
-  createThread(threadId: string, repository: CloudRepository, options?: { prepare?: boolean }): Promise<{ ready: boolean }>
+  createThread(threadId: string, repository: CloudRepository, options?: CloudThreadMaking): Promise<{ ready: boolean }>
   /** Project bases for these repositories, made in the background ahead of their first cloud Thread. */
   askBases(repositories: CloudRepository[]): Promise<void>
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */

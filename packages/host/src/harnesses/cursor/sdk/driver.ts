@@ -28,7 +28,7 @@ import {
   type ProviderSteerResult,
 } from "../../live-driver.js"
 import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from "./auth.js"
-import { CursorSdkClient, CursorSdkError } from "./client.js"
+import { CursorSdkClient, CursorSdkError, cursorSdkChild } from "./client.js"
 import { createCursorModelCache, type CursorModelCache } from "./models.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
 import { cursorUnfinishedToolNote, type CursorSdkModelSelection, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
@@ -460,6 +460,11 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // background completed its call and died as its run finished; the local
     // executor disposes every shell it started when the run ends.
     backgroundStop: { kind: "ends-with-turn", evidence: "The local SDK disposes the shells a run started when the run ends, and a run stays running while a subagent it started works, so neither outlives its turn, and Stop ends the run." },
+    startPrefetch: {
+      kind: "process",
+      via: "The SDK's child, spawned as a session spawns it, until it answers `hello` with the SDK loaded.",
+      launch: async (env) => cursorSdkChild({ env }),
+    },
     turnRecovery: {
       kind: "continues",
       accepted: "The run ID the SDK returns for the sent message.",
@@ -571,12 +576,12 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         if (hello.ripgrep === false)
           hostWarn("cursor-sdk", "the child has no bundled ripgrep; Grep and Glob need one on PATH", { conversation: live.state.id })
         await trace.step("authentication", () => ensureSignedIn(live, trace, account))
-        const identityObservation = observeNativeIdentity(async () => {
+        const identityObservation = trace.step("identity", () => observeNativeIdentity(async () => {
           const identity = await live.client.request("me", undefined)
           return reportedIdentity(identity.email, "cursor", CURSOR_NATIVE_IDENTITY.via)
         }, () => !live.closed && sessions.get(live.state.id) === live, identity => {
           if (live.state.executionContext) engine.patch(live, { executionContext: { ...live.state.executionContext, identity } })
-        })
+        }))
         const catalog = await trace.step("model-discovery", () => loadModels(live.client, accountEnvironment))
         live.models = catalog.models
         const selection = selectionFor(live, options.tuning, catalog.defaultModel)

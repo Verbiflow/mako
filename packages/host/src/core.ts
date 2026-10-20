@@ -24,7 +24,7 @@ import { makoViews } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, type CloudSignInPlace } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, prefetchStart, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { nodePlatform } from "./base/platform.js"
@@ -78,6 +78,8 @@ export interface Core {
   openMachineWorkspace(path: string): Promise<void>
   /** On a project base's builder: what a start in `path` does first, done before its snapshot. */
   prepareFolder(path: string): Promise<void>
+  /** On a cloud machine as it boots: what `harness`'s start runs first, run ahead (`startPrefetch`). */
+  prefetchStart(harness: string): Promise<PrefetchOutcome | undefined>
   /** Work that holds a profile host up: turns, native runs, transfers. */
   activeWork(): boolean
   /** That work, item by item, as the lifecycle lists it: what keeps a cloud machine running. */
@@ -540,6 +542,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
      * 1.5 to 3.5 s on a copy (2026-10-20); a copy of a base made after this finds the listing in its host's memory,
      * kept while nothing either CLI reads has changed.
      */
+    prefetchStart: async (harness) => {
+      const prefetch = harnesses.host.liveDrivers.get(harness)?.startPrefetch
+      if (prefetch?.kind !== "process") return undefined
+      const { env } = await harnesses.tools.account(harness)
+      const cwd = homedir()
+      const launch = await prefetch.launch({ ...env }, cwd)
+      return launch && prefetchStart(launch, cwd, `prefetch:${harness}`)
+    },
     prepareFolder: async (path) => {
       await tools.mcp.discover(path)
     },

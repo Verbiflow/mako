@@ -23,6 +23,7 @@ import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-c
 import type { ThreadCatalog } from "../threads/index.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 
+export { prefetchStart, type PrefetchOutcome } from "./start-prefetch.js"
 export { createHarnessHost, detachedHarnessContext } from "./harness-host.js"
 export type { HarnessContext, ProviderHost } from "./host.js"
 export type { AccountLaunch, HarnessAccounts } from "./accounts.js"

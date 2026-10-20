@@ -1,3 +1,4 @@
+import type { PrefetchLaunch } from "./start-prefetch.js"
 import { applyControlEnvironment } from "../control/index.js"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "../base/execution-context.js"
 import { CODEX_NATIVE_IDENTITY } from "./codex/live-driver.js"
@@ -147,6 +148,19 @@ function codexReviewTarget(target: ReviewTarget): CodexReviewTarget {
   }
 }
 
+const CODEX_APP_SERVER_ARGS = ["app-server"]
+const CODEX_INITIALIZE = {
+  clientInfo: { name: "mako", title: "Mako", version: "0.0.1" },
+  capabilities: CODEX_CLIENT_CAPABILITIES,
+}
+
+/** A start's app-server and its `initialize`, for the driver's `startPrefetch`. */
+export async function codexStartPrefetch(base: NodeJS.ProcessEnv): Promise<PrefetchLaunch | undefined> {
+  const command = await resolveCodexExecutable(base)
+  if (!command) return undefined
+  return { command, args: CODEX_APP_SERVER_ARGS, env: codexApprovalEnvironment({ ...base }), first: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize", params: CODEX_INITIALIZE }) }
+}
+
 /** Codex's sessions, each an app-server this engine started and closes. */
 export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "streams">) {
   const engine = createLiveEngine<Live>()
@@ -165,7 +179,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     applyThreadEnvironment(env, options.threadEnvironment)
     const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env))
     if (!executable) throw new Error("Codex is not installed")
-    const child = trace.sync("spawn", () => spawnProviderProcess(executable, ["app-server"], {
+    const child = trace.sync("spawn", () => spawnProviderProcess(executable, CODEX_APP_SERVER_ARGS, {
       cwd: workingDir,
       env: environmentForExecutable(executable, codexApprovalEnvironment(env)),
       shell: false,
@@ -648,20 +662,17 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     resume?: string,
     fork?: { nativeId: string; runId: string }
   ): Promise<ThreadResponse> {
-    const initialized = await trace.step("handshake", () => watch.step("initialize", rpcRequest(live, "initialize", {
-      clientInfo: { name: "mako", title: "Mako", version: "0.0.1" },
-      capabilities: CODEX_CLIENT_CAPABILITIES,
-    })))
+    const initialized = await trace.step("handshake", () => watch.step("initialize", rpcRequest(live, "initialize", CODEX_INITIALIZE)))
     sendRpc(live, { jsonrpc: "2.0", method: "initialized" })
     const runtime = reportedRuntime(codexRuntimeVersion(initialized.userAgent), "app-server initialize.userAgent")
     streamRuntime(live.stream, runtime)
     if (live.state.executionContext) updateState(live, { executionContext: { ...live.state.executionContext, runtime } })
-    const identityObservation = observeNativeIdentity(async () => {
+    const identityObservation = trace.step("identity", () => observeNativeIdentity(async () => {
       const { account } = await rpcRequest(live, "account/read", { refreshToken: false })
       return reportedIdentity(account?.type === "chatgpt" ? account.email : undefined, account?.type ?? "signed-out", CODEX_NATIVE_IDENTITY.via)
     }, () => !live.exited && live.state.status !== "closed" && sessions.get(live.id) === live, identity => {
       if (live.state.executionContext) updateState(live, { executionContext: { ...live.state.executionContext, identity } })
-    })
+    }))
     const tuning = threadTuning(
       live.tuning,
       codexMcpConfig(live.mcpSnapshot, live.makoServers)

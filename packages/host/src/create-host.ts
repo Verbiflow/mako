@@ -201,6 +201,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         installSignIns: async (signIns, secrets) => (await core.load("the machine's sign-ins")).installCloudSignIns(signIns, { home: homedir(), secrets }),
         openWorkspace: async (path) => (await core.load("the machine's workspace")).openMachineWorkspace(path),
         prepareFolder: async (path) => (await core.load("prepare a base's folder")).prepareFolder(path),
+        prefetchStart: async (harness) => (await core.load("run a start ahead")).prefetchStart(harness),
         work: () => core.current()?.work() ?? [],
       })
     }

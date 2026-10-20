@@ -20,6 +20,7 @@ import { z } from "zod"
 import { PING, PONG, SUBPROTOCOL, decodeRuntimeFrame, encodeGatewayFrame, offeredCredential, threadStream, type Actor } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { MachineRuntime } from "@mako/host/usage/machine-runtime"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import type { AgentMessage, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
 import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "@mako/host/contracts/host-operations"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
@@ -107,6 +108,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
   const calls: string[] = []
   const workspaces: string[] = []
   const prepared: string[] = []
+  const prefetched: string[] = []
   const installs: Array<{ harnesses: string[]; secrets: string }> = []
   const runtime = new MachineRuntime({
     agent: hostEnd,
@@ -122,6 +124,10 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     prepareFolder: async (path) => {
       prepared.push(path)
       if (path.endsWith("/missing")) throw new Error("no such folder")
+    },
+    prefetchStart: async (harness) => {
+      prefetched.push(harness)
+      return harness === "none" ? undefined : { answered: true, ms: 12 }
     },
     version: "0.0.0-test",
     build: "test",
@@ -147,6 +153,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     calls,
     workspaces,
     prepared,
+    prefetched,
     installs,
     state,
     tell: (message: AgentMessage) => agentEnd.write(`${JSON.stringify(message)}\n`),
@@ -320,6 +327,35 @@ test("a base's folder is prepared when the agent asks, and the host says so eith
   assert.equal(failed?.type === "prepared" && failed.ok, false, "a folder that failed is answered, so the base isn't held")
   assert.deepEqual(agent.prepared, ["/home/node/work/repo", "/home/node/work/missing"])
   assert.equal(agent.workspaces.length, 0, "preparing a folder opens no workspace")
+})
+
+test("the harness a machine boots for has its start run ahead, said in the host's own log", async () => {
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-prefetch-")) })
+  agent.tell({ type: "prefetch", harness: "codex" })
+  await agent.until("the start run ahead", () => agent.messages.some((message) => message.type === "log" && message.message === "a start was run ahead"))
+  const said = agent.messages.find((message) => message.type === "log" && message.message === "a start was run ahead")
+  assert.deepEqual(said?.type === "log" && said.fields, { harness: "codex", ms: 12, answered: true })
+  agent.tellRaw(JSON.stringify({ type: "prefetch", harness: "Not A Harness" }))
+  agent.tell({ type: "prefetch", harness: "none" })
+  await agent.until("the second asked", () => agent.prefetched.length === 2)
+  assert.deepEqual(agent.prefetched, ["codex", "none"], "a name no harness could have is refused before it's asked")
+})
+
+test("a start's lines go to the agent for its timeline: phases as they end, the machine's own, warnings; nothing else", async () => {
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-timeline-")) })
+  hostLog("provider-startup", "phase", { provider: "codex", phase: "handshake", state: "started" })
+  hostLog("provider-startup", "phase", { provider: "codex", phase: "handshake", state: "done", durationMs: 812 })
+  hostLog("threads", "catalog placed in Threads", { rows: 0 })
+  hostWarn("discovery", "a model was refused", { model: "x".repeat(400) })
+  hostLog("machine", "the clock jumped", { gapMs: 1000 })
+  const emitted = new Set(["phase", "catalog placed in Threads", "a model was refused", "the clock jumped"])
+  const ours = () => agent.messages.filter((message) => message.type === "log" && emitted.has(message.message))
+  await agent.until("three lines", () => ours().length >= 3)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const lines = ours().flatMap((message) => message.type === "log" ? [`${message.level} ${message.scope} ${message.message} ${message.fields?.state ?? ""}`.trim()] : [])
+  assert.deepEqual(lines, ["info provider-startup phase done", "warn discovery a model was refused", "info machine the clock jumped"])
+  const warned = agent.messages.find((message) => message.type === "log" && message.level === "warn")
+  assert.equal(warned?.type === "log" && String(warned.fields?.model).length, 301, "a long field is cut for the agent's log")
 })
 
 test("a link given while the workspace opens waits for it, so the Thread's first call runs in the workspace", async () => {

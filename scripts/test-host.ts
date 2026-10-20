@@ -16,6 +16,7 @@ const TESTS = [
   "scripts/test-host-lock.ts",
   "scripts/test-host-lifecycle.ts",
   "scripts/test-host-jobs.ts",
+  "scripts/test-start-prefetch.ts",
   "scripts/test-event-loop.ts",
   "scripts/test-host-methods.ts",
   "scripts/test-secrets.ts",
