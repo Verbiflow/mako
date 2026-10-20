@@ -1,4 +1,5 @@
 import { noteCarried } from "@mako/sessions/record-carried"
+import type { Foreground } from "../base/foreground.js"
 import { makoRecords } from "@mako/sessions/record-streams"
 import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
@@ -88,6 +89,8 @@ export interface ConversationsDeps {
   settled(conversationId: string): void
   /** Whether the host takes new work. */
   admission: Admission
+  /** Held while a harness starts, so routine work waits for it. */
+  foreground: Foreground
   /** Mako's streams of the live transports (`native-stream.ts`), which an entry's original reads; none on a host that keeps none. */
   streams?: string
 }
@@ -110,6 +113,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   })
   const assessResume = resumingUnder(memory ?? undefined, restoring)
   const live = new LiveConversations({
+    foreground: deps.foreground,
     turns: deps.telemetry.turns,
     memory: memory ?? undefined,
     threads: threads.store ?? undefined,

@@ -1,5 +1,6 @@
 import type { HostJob } from "../contracts/runtime.js"
 import { unwatchedWork, type HostWork } from "./event-loop.js"
+import type { Foreground } from "./foreground.js"
 import { hostWarn } from "./host-log.js"
 
 export interface JobOptions {
@@ -33,15 +34,18 @@ interface Job {
  * and a failure is logged under the job's name. A job that needs a demand is
  * paused while none of its demands is on, and starts over, first run
  * included, when one comes back on. Each run is work by the job's name, so a
- * run that holds the event loop is named.
+ * run that holds the event loop is named. A run that comes due while the
+ * foreground is held (a harness starting) waits until it's free.
  */
 export class HostJobs {
   private readonly jobs = new Map<string, Job>()
   private readonly work: HostWork
+  private readonly foreground: Foreground | undefined
   private stopped = false
 
-  constructor(work: HostWork = unwatchedWork) {
+  constructor(work: HostWork = unwatchedWork, foreground?: Foreground) {
     this.work = work
+    this.foreground = foreground
   }
 
   /** Schedules `run` every `everyMs`; the returned function cancels it, after which its name is free again. */
@@ -108,7 +112,14 @@ export class HostJobs {
     job.timer = setTimeout(() => {
       if (this.stopped) return
       this.schedule(job, job.state.everyMs)
-      if (!job.running) void this.run(job)
+      if (job.running) return
+      if (!this.foreground?.busy) return void this.run(job)
+      // Due while a person waits on the foreground: it runs once nothing holds it.
+      job.running = true
+      void this.foreground.idle().then(() => {
+        job.running = false
+        if (!this.stopped) void this.run(job)
+      })
     }, afterMs * (0.9 + Math.random() * 0.2))
     job.timer.unref()
   }
