@@ -390,3 +390,31 @@ Define the cloud-agent environment, including display, GPU availability, isolati
 network and lifecycle, before further cloud streaming implementation or adoption.
 The Selkies/pixelflux and Moonlight findings remain evidence, not a selected dependency.
 See [current delivery order](local-control-map.md#delivery-order).
+
+## October 19: encode only the pixels a viewer draws
+
+The browser preview spent 1.6 cores on one 288×162 card. Chrome encoded every
+frame at 1920×1080, and the host decoded, scaled and re-encoded each one. The
+screencast is now asked for the largest size any viewer draws, so Chrome's
+compositor scales on the GPU and the host passes frames through. A recording or
+full-detail read still takes full size. Measured with `audit-control-preview.mjs`:
+55 → 60 fps, 1.62 → 0.72 cores in total, 0.63 → 0.12 on the host, capture to
+publish 11 → 2 ms, click to visible 78 → 57 ms (median of five runs), at the same image quality
+([V15](local-control-agent-issues.md#october-19-usage-audit)).
+
+What Moonlight and Sunshine do, and where it applies to Mako:
+
+| Moonlight/Sunshine practice | Local preview (same machine) | Cloud viewer (over a network) |
+| --- | --- | --- |
+| Stream at the client's resolution, never encode pixels it discards. | Done for browser previews. Native window snapshots are still captured at full size and thumbnailed to 1,440 pixels on the host; capturing them at the viewer's size is the next saving. | Same rule; the viewer's box sets the encode size. |
+| Hardware encode from GPU memory without a CPU copy. | Chrome's compositor already encodes the screencast; Mac recordings use VideoToolbox. | Use the GPU encoder where the job's machine has one; keep libx264 as the explicit software path. |
+| No B-frames, no lookahead, small rate-control buffer; recover from loss with intra refresh or a requested keyframe rather than retransmitting. | Recordings use libx264 `zerolatency` (about one frame held instead of 47). | Required for live H.264: B-frames and lookahead add whole frames of delay. |
+| RTP over UDP with forward error correction; the client never waits on a lost packet. | Nothing to gain: there is no loss on a local socket, and the binary IPC path already delivers the newest frame only. | WebRTC is the browser's version of this: SRTP over UDP, NACK, FEC and keyframe requests, with congestion control. It needs TURN for networks that block UDP. |
+| A frame pacer that drops late frames and keeps at most one queued. | The host already publishes the newest frame and drops the rest. | Keep the same latest-frame rule at the sender; let congestion control lower bitrate before resolution. |
+
+Cloud scaling follows from one rule: one encode per target, shared by every
+viewer and the recording, running only while someone watches. A viewer then costs
+packet fan-out, not an encoder, and each job's capture and encode run on the
+job's own machine, so capacity grows with machines rather than with a central
+transcoder. None of this changes the agent API: screenshots and observations stay
+exact and never come from the video stream.

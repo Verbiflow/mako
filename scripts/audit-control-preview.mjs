@@ -152,7 +152,7 @@ if (process.versions.electron) {
 async function audit() {
   const machine = { logicalCpus: availableParallelism(), loadAverageAtStart: loadavg(),
     cpuProfiled: process.env.MAKO_PREVIEW_CPU_PROFILE === "1" }
-  const { app, BrowserWindow, ipcMain, powerSaveBlocker } = await import("electron")
+  const { app, BrowserWindow, ipcMain, nativeImage, powerSaveBlocker } = await import("electron")
   const { DeskBrowser } = await import("@mako/host/control/desk-browser")
   const { HostJobs } = await import("@mako/host/base/host-jobs")
   const { deskPageForWindow } =
@@ -196,7 +196,9 @@ async function audit() {
   viewer.webContents.setFrameRate(60)
   let source,
     captureStarts = 0,
-    captureStops = 0
+    captureStops = 0,
+    concurrentCaptures = 0,
+    captureStartedAt = 0
   const desk = new DeskBrowser({
     jobs: new HostJobs(),
     allowsUrl: (url) => url === "about:blank",
@@ -216,8 +218,12 @@ async function audit() {
       return {
         ...page,
         send(method, params) {
-          if (method === "Page.startScreencast") captureStarts++
+          if (method === "Page.startScreencast") {
+            captureStarts++
+            captureStartedAt = Date.now()
+          }
           if (method === "Page.stopScreencast") captureStops++
+          concurrentCaptures = Math.max(concurrentCaptures, captureStarts - captureStops)
           if (
             method === "Page.startScreencast" &&
             process.env.MAKO_PREVIEW_CAPTURE === "png"
@@ -366,7 +372,7 @@ async function audit() {
         const args = [installed ? process.env.MAKO_PREVIEW_CONVERSATION : id, watching, watcher, ...(sized ? [box] : [])]
         let value
         if (!shared) {
-          value = previews.read(id, watching, watcher)
+          value = previews.read(id, watching, watcher, "local", sized ? box : undefined)
           if (value && sized) value = await previews.sized(value, box)
         } else if (process.env.MAKO_PREVIEW_IDENTITY === "1")
           value = await invokeRuntime(socket, client, "mako:audit-preview", [id, watching, watcher, ...args.slice(3)], 1, { onTransfer: countTransfer })
@@ -823,9 +829,29 @@ async function audit() {
       const read = (watching) => shared
         ? invokeRuntimePreview(socket, client, [conversation, watching, "fidelity"])
         : previews.read("preview-audit", watching, "fidelity")
-      const full = (await read(true))?.frame
+      // A watcher without a box restarts the capture at full size; the frames
+      // already published stay viewer-sized until the first full frame lands.
+      let full
+      const startsBefore = captureStarts
+      await until(async () => {
+        full = (await read(true))?.frame
+        const bytes = full && (full.image.bytes ?? Buffer.from(full.image.data, "base64"))
+        return bytes ? nativeImage.createFromBuffer(Buffer.from(bytes)).getSize().width >= 1920 : false
+      }, "a read without a box restarts the capture at full size", 3_000)
       await read(false)
       assert.ok(full && !full.id.includes(":"), "A read without a box returns the full capture")
+      // Releasing the full read shrinks the screencast back after the resize
+      // debounce; judge the viewer only once it shows a frame from that stream.
+      if (!extension && !installed && captureStarts > startsBefore) {
+        await until(() => captureStarts > startsBefore + 1, "the capture returns to the viewers' size")
+        await until(
+          () => (mainStages.reads.at(-1)?.publishedAt ?? 0) > captureStartedAt,
+          "the viewer reads a frame of the restored size"
+        )
+        await viewer.webContents.executeJavaScript(
+          "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
+        )
+      }
       capture = full.image.data ?? Buffer.from(full.image.bytes).toString("base64")
     }
     const fidelity = await viewer.webContents.executeJavaScript(
@@ -852,6 +878,21 @@ async function audit() {
         assert.ok(
           Math.abs(image.sourceWidth * 1080 - image.sourceHeight * 1920) <= 1500,
           "Scaling preserves the viewport aspect ratio"
+        )
+      } else if (mainStages.reads.some((read) => read.box)) {
+        // The page renders its screencast at the viewers' size, one 8/7 step
+        // at most above it, so the host passes frames through unscaled.
+        assert.ok(
+          image.sourceWidth >= image.box[0] - 1 || image.sourceHeight >= image.box[1] - 1,
+          `A viewer-sized capture fills its viewer: ${image.sourceWidth}x${image.sourceHeight} for ${image.box.join("x")}`
+        )
+        assert.ok(
+          Math.min(image.sourceWidth / image.box[0], image.sourceHeight / image.box[1]) <= 8 / 7 + 0.01,
+          `A viewer-sized capture stays within one step of its viewer: ${image.sourceWidth}x${image.sourceHeight} for ${image.box.join("x")}`
+        )
+        assert.ok(
+          Math.abs(image.sourceWidth * 1080 - image.sourceHeight * 1920) <= 1920,
+          "A viewer-sized capture preserves the viewport aspect ratio"
         )
       } else if (extension) {
         assert.ok(
@@ -892,9 +933,11 @@ async function audit() {
       (await source.webContents.capturePage()).toPNG()
     )
     observing = false
+    // Viewer resizes restart the screencast at another size; consumers still
+    // never hold captures of their own.
     if (!extension)
       assert.equal(
-        captureStarts,
+        concurrentCaptures,
         1,
         "All viewers and recording share the same capture"
       )
@@ -904,13 +947,13 @@ async function audit() {
         `document.querySelector('[aria-label="Hide preview"]').click()`
       )
       await delay(100)
-      assert.equal(captureStops, 0, "Closing one viewer preserves its sibling")
+      assert.equal(captureStarts - captureStops, 1, "Closing one viewer preserves its sibling")
     }
     await viewer.webContents.executeJavaScript(
       `document.querySelector('[aria-label="Hide preview"]').click()`
     )
     await delay(100)
-    const stoppedBeforeRecordingFinalization = !!recording && captureStops !== 0
+    const stoppedBeforeRecordingFinalization = !!recording && captureStarts === captureStops
     if (recording) {
       await run({
         action: "recording",
@@ -933,7 +976,7 @@ async function audit() {
       )
     }
     if (!extension)
-      await until(() => captureStops === 1, "last consumer stops capture")
+      await until(() => captureStarts === captureStops, "last consumer stops capture")
     let restoredPage
     if (
       extension &&

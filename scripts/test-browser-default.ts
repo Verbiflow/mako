@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { BrowserService } from "../packages/control-runtime/src/browser-service.js"
+import { BrowserCommandSchema } from "../packages/control-runtime/src/contracts.js"
 import { macApplicationBundle } from "../electron/browser-application.js"
 import type { LocalBrowser } from "../packages/control-runtime/src/browser-discovery.js"
 
@@ -76,9 +77,22 @@ try {
     "explicit"
   )
   await chosen.close()
+  // Chrome refuses data: navigation from an extension with a bare
+  // net::ERR_ABORTED, after the tab exists; refuse it first and say why.
+  const extension = create("extension", [browser])
+  await assert.rejects(
+    extension.execute(
+      "task",
+      BrowserCommandSchema.parse({ action: "open", browser: "unknown", url: "data:text/html,<h1>hi</h1>" }),
+      new AbortController().signal
+    ),
+    (error: Error & { detail?: { code: string; outcome: string } }) =>
+      error.detail?.code === "invalid-request" && error.detail.outcome === "not-dispatched" && /does not let extensions open data: URLs/.test(error.message)
+  )
+  await extension.close()
   assert.equal(connects, 0)
   console.log(
-    "PASS: generic OS-default extension choice; saved/cleared preferences persist; ambiguous, old, direct and non-default profiles never auto-select; no browser connection"
+    "PASS: generic OS-default extension choice; saved/cleared preferences persist; ambiguous, old, direct and non-default profiles never auto-select; extension browsers refuse data: URLs before opening a tab; no browser connection"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

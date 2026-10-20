@@ -19,6 +19,12 @@ interface PreviewEntry {
   watchers: Map<string, number>
   /** The host client each watcher reads through. */
   clients: Map<string, string>
+  /** The box each watcher draws the frame into, in device pixels. */
+  boxes: Map<string, PreviewBox>
+  /** The watchers' combined box last passed to the stream, as `widthxheight`; `full` when a watcher gave none. */
+  demand?: string
+  /** Coalesces a viewer's resize drag into one screencast restart. */
+  resizeTimer?: NodeJS.Timeout
   target?: BrowserTarget
   owner?: string
   starting?: Promise<void>
@@ -94,6 +100,7 @@ export class ControlPreviews {
         preview: { activity: next, frame: null },
         watchers: new Map(),
         clients: new Map(),
+        boxes: new Map(),
         generation: 0,
         sourceFrames: 0,
         snapshots: 0,
@@ -187,12 +194,16 @@ export class ControlPreviews {
     conversationId: string,
     watching: boolean,
     watcher = "panel",
-    client = "local"
+    client = "local",
+    box?: PreviewBox
   ): ControlPreview | null {
     const entry = this.entries.get(conversationId)
     if (!entry) return null
     for (const [id, until] of entry.watchers)
-      if (until < Date.now()) entry.watchers.delete(id)
+      if (until < Date.now()) {
+        entry.watchers.delete(id)
+        entry.boxes.delete(id)
+      }
     try {
       entry.authorize?.()
     } catch {
@@ -205,12 +216,19 @@ export class ControlPreviews {
         entry.watchers.set(watcher, Date.now() + 3_000)
         for (const id of entry.clients.keys())
           if (!entry.watchers.has(id)) entry.clients.delete(id)
+        for (const id of entry.boxes.keys())
+          if (!entry.watchers.has(id)) entry.boxes.delete(id)
         entry.clients.set(watcher, client)
+        if (box && box.width > 0 && box.height > 0) entry.boxes.set(watcher, box)
+        else entry.boxes.delete(watcher)
       }
       this.capture(entry)
+      this.resize(entry)
     } else {
       entry.watchers.delete(watcher)
+      entry.boxes.delete(watcher)
       if (entry.watchers.size === 0) this.stop(entry)
+      else this.resize(entry)
     }
     if (watching && entry.oversized)
       throw new Error("Preview paused because the captured frame exceeds its size limit")
@@ -280,6 +298,40 @@ export class ControlPreviews {
     }
   }
 
+  /** The largest box any live watcher draws into; none when one of them gave no box. */
+  private demand(entry: PreviewEntry): PreviewBox | undefined {
+    let width = 0,
+      height = 0
+    for (const [id, until] of entry.watchers) {
+      if (until < Date.now()) continue
+      const box = entry.boxes.get(id)
+      if (!box) return undefined
+      width = Math.max(width, box.width)
+      height = Math.max(height, box.height)
+    }
+    return width && height ? { width: Math.ceil(width), height: Math.ceil(height) } : undefined
+  }
+
+  /** The stream learns its viewers draw another size; the tab's capture decides whether that needs other frames. */
+  private resize(entry: PreviewEntry) {
+    const demand = this.demand(entry)
+    const key = demand ? `${demand.width}x${demand.height}` : "full"
+    if (key === entry.demand) return
+    entry.demand = key
+    clearTimeout(entry.resizeTimer)
+    const { owner, target } = entry
+    if (!(entry.stopStream || entry.starting) || !target) return
+    entry.resizeTimer = setTimeout(() => {
+      void Promise.resolve(entry.starting)
+        .then(() => {
+          if (entry.stopStream && entry.target === target)
+            return this.browser.previewResized(owner ?? entry.preview.activity.conversationId, target)
+        })
+        .catch(() => {})
+    }, 150)
+    entry.resizeTimer.unref()
+  }
+
   /** Browser frames arrive with validated dimensions; native snapshots arrive here as thumbnails. */
   private frame(entry: PreviewEntry, pixels: PreviewFrame["image"], capturedAt = Date.now(), sequence?: number) {
     // Bound actual bytes; base64 expansion no longer consumes the delivery budget.
@@ -292,6 +344,7 @@ export class ControlPreviews {
     entry.generation++
     clearTimeout(entry.expiry)
     clearTimeout(entry.frameTimer)
+    clearTimeout(entry.resizeTimer)
     entry.frameTimer = undefined
     entry.latest = undefined
     const stop = entry.stopStream
@@ -361,7 +414,8 @@ export class ControlPreviews {
         },
         () => {
           if (entry.generation === generation) this.stop(entry)
-        }
+        },
+        () => this.demand(entry)
       )
       .then(async (stop) => {
         if (entry.generation !== generation || !entry.watchers.size)

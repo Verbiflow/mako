@@ -46,7 +46,7 @@ const descriptions = {
   events:
     "Read a bounded, non-destructive event history for this exact tab: at most limit events (default 32) within 60 KB. Pass the returned cursor as after to continue; more reports remaining events and gap reports evicted history. Use cdp to enable needed domains, e.g. Network.enable. Page events are enabled automatically.",
   navigate:
-    "Navigate this exact tab. By default waits for this navigation’s load event (up to timeoutMs, default 30 seconds); waitUntil:domcontentloaded returns earlier and waitUntil:commit returns once the navigation is accepted. A redirect counts as the same navigation. Expiry returns completion:timeout rather than failing; observe afterwards to verify the result. Supports http, https, about and data URLs.",
+    "Navigate this exact tab. By default waits for this navigation’s load event (up to timeoutMs, default 30 seconds); waitUntil:domcontentloaded returns earlier and waitUntil:commit returns once the navigation is accepted. A redirect counts as the same navigation. Expiry returns completion:timeout rather than failing; observe afterwards to verify the result. Supports http, https, about and data URLs; browsers connected through the Mako extension refuse data URLs.",
   close:
     "Close this exact tab or window. Its old handle becomes invalid. Does not close the browser or another task's page.",
   click:

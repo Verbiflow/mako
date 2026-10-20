@@ -184,7 +184,7 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
         .string()
         .default("about:blank")
         .describe(
-          "http, https, about or data URL to load. Default about:blank."
+          "http, https, about or data URL to load (not data in a browser connected through the extension). Default about:blank."
         ),
       background: z
         .boolean()
@@ -394,7 +394,7 @@ export const BrowserCommandSchema = z.discriminatedUnion("action", [
     .object({
       action: z.literal("navigate"),
       target: BrowserTargetSchema,
-      url: z.string().describe("http, https, about or data URL."),
+      url: z.string().describe("http, https, about or data URL; not data in a browser connected through the extension."),
       waitUntil: z
         .enum(["load", "domcontentloaded", "commit"])
         .optional()

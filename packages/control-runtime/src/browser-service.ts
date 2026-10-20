@@ -1,4 +1,4 @@
-import { BrowserCapture, type BrowserFrame } from "./browser-capture.js"
+import { BrowserCapture, type BrowserFrame, type CaptureSize } from "./browser-capture.js"
 import { BrowserFocus } from "./browser-focus.js"
 import { BrowserRecordings } from "./browser-recording.js"
 import { BrowserPreferences } from "./browser-preference.js"
@@ -367,7 +367,7 @@ function fault(
 ): never {
   throw new BrowserFault({ code, message, outcome: "not-dispatched" })
 }
-function pageUrl(url: string): string {
+function pageUrl(url: string, transport?: LocalBrowser["transport"]): string {
   const parsed = z.string().url().safeParse(url).success
     ? new URL(url)
     : fault(
@@ -378,6 +378,11 @@ function pageUrl(url: string): string {
     fault(
       "invalid-request",
       "Navigation supports http, https, about and data URLs."
+    )
+  if (parsed.protocol === "data:" && transport === "extension")
+    fault(
+      "invalid-request",
+      "This browser is connected through the Mako extension, and Chrome does not let extensions open data: URLs. Serve the page over http, or navigate to about:blank and write the page with tab.evaluate()."
     )
   return parsed.href
 }
@@ -1359,16 +1364,23 @@ export class BrowserService {
     void binding.focus.close().catch(() => {})
   }
 
-  /** UI consumers share the tab's compositor stream, independent of agent observations. */
+  /** UI consumers share the tab's compositor stream, independent of agent observations. `size` is
+   * the largest frame the preview's viewers draw; the screencast is no larger unless another consumer needs it. */
   async previewStream(
     owner: string, target: BrowserTarget, authorize: () => void,
-    frame: (value: BrowserFrame) => void, ended: (reason: string) => void
+    frame: (value: BrowserFrame) => void, ended: (reason: string) => void,
+    size?: () => CaptureSize | undefined
   ) {
     authorize()
     const binding = this.binding(owner, target)
     return binding.capture.subscribe({
-      frame: value => { authorize(); frame(value) }, ended,
+      frame: value => { authorize(); frame(value) }, ended, size,
     })
+  }
+
+  /** A preview's viewers now draw another size. */
+  async previewResized(owner: string, target: BrowserTarget): Promise<void> {
+    await this.binding(owner, target).capture.resized()
   }
 
   async execute(
@@ -1528,7 +1540,7 @@ export class BrowserService {
           "invalid-request",
           "Choose a preferred browser in Settings, or pass an explicit browser ID."
         )
-      const url = pageUrl(command.url)
+      const url = pageUrl(command.url, this.entry(browser).definition.transport)
       this.authorizeBrowser(owner, browser)
       const connection = this.connection(browser)
       if (command.context === "isolated" && command.lifetime === "persistent")
@@ -2297,7 +2309,7 @@ export class BrowserService {
         return navigatePage(
           binding.connection,
           binding.sessionId,
-          pageUrl(command.url),
+          pageUrl(command.url, this.entry(binding.target.browser).definition.transport),
           signal,
           command.waitUntil ?? "load",
           command.timeoutMs
@@ -2373,7 +2385,7 @@ export class BrowserService {
           if (!url.success) fault("invalid-request", "Page.navigate needs url.")
           return send(command.method, {
             ...command.params,
-            url: pageUrl(url.data),
+            url: pageUrl(url.data, this.entry(binding.target.browser).definition.transport),
           })
         }
         return command.method.startsWith("Target.") ||

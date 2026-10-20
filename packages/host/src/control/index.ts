@@ -280,7 +280,7 @@ export function declareControlMethods(methods: MethodTable, control: Control, ap
   methods.handle(
     "mako:control-preview",
     (conversationId: string, watching: boolean, watcher: string, box?: { width: number; height: number }) => {
-      const preview = previews.read(conversationId, watching, watcher, hostClient())
+      const preview = previews.read(conversationId, watching, watcher, hostClient(), box)
       return watching && preview ? previews.sized(preview, box) : null
     }
   )
