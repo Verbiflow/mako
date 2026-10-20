@@ -33,6 +33,7 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostJobs } from "../base/host-jobs.js"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
+export { ControlResidency } from "./residency.js"
 
 /** Browser and computer use, and the desktop app that does what only Electron can. */
 export interface Control {

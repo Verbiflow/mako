@@ -28,7 +28,7 @@ import { nodePlatform } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
-import { controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
+import { ControlResidency, controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
 import { openConversations, declareConversationMethods, CloudConversations, folderRepository, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
@@ -79,7 +79,6 @@ export interface Core {
 }
 
 /** How long a hibernated provider's Local Control session waits for it to wake. */
-const CONTROL_SLEEP_MS = 30 * 60_000
 
 const trace = (stage: string) => {
   if (process.env.MAKO_RUNTIME_TRACE === "1") console.info("[mako-runtime]", stage)
@@ -312,19 +311,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       })
   late.cloudConversations = cloudConversations
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
-  /** Each reason is told once per host; every failed start is still logged. */
-  const controlUnavailableNotices = new Set<string>()
-  /** A hibernated binding's Local Control session, kept with its tabs and program state until it wakes or `CONTROL_SLEEP_MS` passes. */
-  const sleepingControl = new Map<string, NodeJS.Timeout>()
-  const wakeControl = (bindingId: string) => {
-    clearTimeout(sleepingControl.get(bindingId))
-    sleepingControl.delete(bindingId)
-  }
-  const stopControl = async (bindingId: string, conversationId: string) => {
-    wakeControl(bindingId)
-    await late.controlService?.revoke(conversationId, bindingId)
-    await control.sessions.stop(bindingId)
-  }
+  const residency = new ControlResidency({
+    sessions: control.sessions,
+    grants: () => late.agentServers,
+    browser: () => late.controlService,
+    journal: (conversationId) => join(logsRoot(environment.dataRoot), "local-control", `${conversationId}.jsonl`),
+    notice: (message) => emit({ type: "notice", level: "error", message }),
+  })
   const opened = await openConversations({
     streams,
     environment,
@@ -335,43 +328,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     telemetry,
     emit,
     mcpSnapshot: (cwd) => tools.mcp.discover(cwd),
-    tools: async (bindingId, conversationId) => {
-      const minted = late.agentServers?.mint(bindingId, conversationId)
-      if (!minted) return undefined
-      wakeControl(bindingId)
-      const kept = control.sessions.get(bindingId)
-      if (kept) return { ...minted, control: kept }
-      const browser = late.controlService?.mint(conversationId, bindingId)
-      const started = await control.sessions.startOptional(bindingId, browser, async (reason) => {
-        await late.controlService?.revoke(conversationId, bindingId)
-        if (reason === "failed") emit({ type: "notice", level: "error", message: "Local Control stopped unexpectedly. Its browser access has ended; start a new task before continuing control." })
-      }, join(logsRoot(environment.dataRoot), "local-control", `${conversationId}.jsonl`))
-      if ("launch" in started) return { ...minted, control: started.launch }
-      await late.controlService?.revoke(conversationId, bindingId)
-      if (!controlUnavailableNotices.has(started.unavailable)) {
-        controlUnavailableNotices.add(started.unavailable)
-        emit({ type: "notice", level: "error", message: started.unavailable })
-      }
-      return minted
-    },
+    tools: (bindingId, conversationId) => residency.tools(bindingId, conversationId),
     controlInstructions: (bindingId, conversationId) => {
       const launched = workspaces.environments?.launchedWith(conversationId)
       if (launched) void workspaces.processes?.touch(launched.app).catch(() => {})
       const session = control.sessions.get(bindingId)
       return [session && controlLine(session), launched && threadEnvironmentInstructions(launched), ...(workspaces.worktrees?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
     },
-    revokeTools: async (bindingId, conversationId) => {
-      late.agentServers?.revoke(bindingId, conversationId)
-      await stopControl(bindingId, conversationId)
-    },
-    suspendTools: (bindingId, conversationId) => {
-      late.agentServers?.revoke(bindingId, conversationId)
-      if (!control.sessions.get(bindingId)) return stopControl(bindingId, conversationId)
-      wakeControl(bindingId)
-      const timer = setTimeout(() => void stopControl(bindingId, conversationId), CONTROL_SLEEP_MS)
-      timer.unref()
-      sleepingControl.set(bindingId, timer)
-    },
+    revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
+    suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),
     settled: (id) => {
       late.movers?.moves.settled(id)
       late.movers?.leaves.settled(id)
