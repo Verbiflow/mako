@@ -3,6 +3,7 @@ import { entryToolIdentity } from "@/lib/tools"
 import { toolKindActivity } from "@mako/sessions/tool-identity"
 import type { NativeActivity } from "@/lib/types"
 import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
+import type { CloudStartStep } from "@mako/host/contracts/cloud-threads"
 
 export type AgentActivityKind = "working" | "connecting" | "reasoning" | "searching" | "executing" | "editing" | "responding" | "waiting" | "failed" | "complete" | "idle"
 
@@ -33,9 +34,18 @@ const WORKTREE_STEPS = {
   carry: "Copying files from your folder",
 } satisfies Record<WorktreeStep, string>
 
-export function agentActivity({ blocks, waiting, connecting, makingWorktree = false, worktreeStep, preparing, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly Entry[]; waiting: boolean; connecting: boolean; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
+/**
+ * What a starting conversation's row says, in words about the person's project and harness: a cloud Thread's
+ * project coming up (its machine and its copy of the repository), then the harness starting, as a local one's does.
+ */
+export function startLabel(harnessName: string | undefined, cloudStep?: { step: CloudStartStep; project: string }): string {
+  if (cloudStep?.step === "preparing") return `Getting ${cloudStep.project} ready`
+  return harnessName ? `Starting ${harnessName}` : "Starting"
+}
+
+export function agentActivity({ blocks, waiting, connecting, starting, makingWorktree = false, worktreeStep, preparing, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly Entry[]; waiting: boolean; connecting: boolean; /** What a start says while `connecting`. */ starting?: string; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
   if (waiting) return { kind: "waiting", label: "Waiting for your approval" }
-  if (connecting) return { kind: "connecting", label: makingWorktree ? WORKTREE_STEPS[worktreeStep ?? "checkout"] : "Connecting" }
+  if (connecting) return { kind: "connecting", label: makingWorktree ? WORKTREE_STEPS[worktreeStep ?? "checkout"] : (starting ?? "Starting") }
   if (switchingAccount) return { kind: "waiting", label: "Waiting to switch account" }
   if (preparing) return { kind: "connecting", label: "Sending" }
   if (native) return nativeAgentActivity(native)

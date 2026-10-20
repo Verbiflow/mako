@@ -5,11 +5,11 @@ import { threadStream, type Actor, type ClientSessionOverSockets, type Subscript
 import { z } from "zod"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { CloudRepositorySchema, githubRepositoryUrl, type CloudRepository } from "../contracts/cloud-threads.js"
+import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareOutcome, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
 import { hostCallReplay } from "../contracts/host-call-policy.js"
 import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { sessionAfter, type LiveBatch, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
-import { decodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
+import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import { gatewayHostCalls } from "../transport/index.js"
 import type { CloudAccount } from "../usage/index.js"
 import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
@@ -25,6 +25,16 @@ const SAVE_MS = 1_000
 /** How long a call that didn't reach its Thread is repeated before the window hears of it: a wake takes seconds. */
 const CLOUD_REPEAT_MS = 60_000
 const CLOUD_REPEAT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000, 10_000] as const
+/** A Thread made ahead is taken up only this soon after this Mac last asked: the cloud ends one unused 30 minutes on. */
+const PREPARED_KEPT_MS = 25 * 60_000
+/**
+ * Asked this recently and ready then, its machine still runs: the composer asks at most every 30 s while the person
+ * writes, and the cloud keeps an idle machine at least two minutes from the last ask.
+ */
+const READY_AFTER_ASK_MS = 60_000
+/** After this many made ahead in a row went unused for one repository, the next waits for this much writing. */
+const UNUSED_BEFORE_WARY = 3
+const WARY_COMPOSING_MS = 10_000
 
 const SummaryIdentitySchema = z.object({ session: z.object({ id: z.string(), status: z.string() }).loose(), revision: z.number(), createdAt: z.number() }).loose()
 /** A cloud host's own `LiveSummary`, checked for the identity and revision this router reads. */
@@ -47,6 +57,22 @@ const EntrySchema = z.object({
 
 type Entry = z.infer<typeof EntrySchema>
 
+/**
+ * A cloud Thread made ahead of a new conversation's first message, while the person writes it with Cloud chosen.
+ * Only in memory: one this Mac forgets is the cloud's to end.
+ */
+type Prepared = {
+  threadId: string
+  repository: CloudRepository
+  since: number
+  /** When this Mac last asked (`Date.now()`), and whether its machine was ready then. */
+  askedAt: number
+  ready: boolean
+  /** The last ask; the Thread is made once one has answered. */
+  asking: Promise<void>
+  made: boolean
+}
+
 const StoredSchema = z.object({ conversations: z.array(EntrySchema) })
 
 /** What a start reads of the cloud host's boot: the folder of its tab in front, which is the clone. */
@@ -66,6 +92,19 @@ export type CloudConversationsOptions = {
   emit(event: RuntimeEvent): void
   /** The GitHub repository a folder of this Mac's works in, for a start that names none. */
   repositoryOf(cwd: string): Promise<CloudRepository>
+}
+
+function newThreadId(): string {
+  return `t-${randomBytes(8).toString("hex")}`
+}
+
+function repositoryKey(repository: CloudRepository): string {
+  return `${repository.url}#${repository.branch ?? ""}`
+}
+
+/** A repository as a person names their project: its name on GitHub. */
+function projectName(repository: CloudRepository): string {
+  return repository.url.slice(repository.url.lastIndexOf("/") + 1)
 }
 
 /** The folder's `origin`, when it's on GitHub, and its upstream branch there. */
@@ -97,6 +136,10 @@ export class CloudConversations {
   #wakes = 0
   #wokeAt = Number.NEGATIVE_INFINITY
   readonly #pauses = new Set<() => void>()
+  /** By repository: one made ahead at a time for each. */
+  readonly #prepared = new Map<string, Prepared>()
+  /** By repository: how many made ahead in a row went unused. */
+  readonly #unused = new Map<string, number>()
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
@@ -115,6 +158,11 @@ export class CloudConversations {
 
   /** A call this router answers: a cloud start, or a call naming one of its conversations. */
   async route(channel: string, args: unknown[]): Promise<ConversationRoutingResult> {
+    if (channel === "mako:cloud-prepare") {
+      // SAFETY: the dispatcher parsed this call's arguments with `mako:cloud-prepare`'s schema before routing it.
+      const [folder, composingMs] = args as [string, number]
+      return { handled: true, value: encodeRuntimeValue(await this.prepare(folder, composingMs)) }
+    }
     if (channel === "mako:live-start") {
       // SAFETY: the dispatcher parsed this call's arguments with `mako:live-start`'s schema before routing it.
       const [harness, cwd, options] = args as [string, string, LiveStartOptions]
@@ -150,19 +198,90 @@ export class CloudConversations {
     this.#session = undefined
   }
 
+  /**
+   * The person is writing a new cloud conversation's first message in `folder`, for `composingMs` so far: its Thread
+   * is made ahead, one per repository, and its machine starts and clones while they write. Asked again as they go
+   * on, which keeps the machine running. The first message takes the Thread up (`#start`); one left too long is the
+   * cloud's to end, and the next ask makes another. After a few in a row went unused, it waits for more writing.
+   */
+  async prepare(folder: string, composingMs: number): Promise<CloudPrepareOutcome> {
+    await this.start()
+    const account = this.#options.account()
+    if (!account || !(await account.deviceId())) return "none"
+    const repository = await this.#options.repositoryOf(folder).catch(() => undefined)
+    if (!repository) return "none"
+    const key = repositoryKey(repository)
+    let prepared = this.#fresh(key)
+    if (!prepared) {
+      if ((this.#unused.get(key) ?? 0) >= UNUSED_BEFORE_WARY && composingMs < WARY_COMPOSING_MS) return "later"
+      prepared = { threadId: newThreadId(), repository, since: Date.now(), askedAt: Date.now(), ready: false, asking: Promise.resolve(), made: false }
+      this.#prepared.set(key, prepared)
+      hostLog("cloud-conversations", "making a cloud Thread ahead of its first message", { threadId: prepared.threadId, repository: repository.url })
+    }
+    const asked = prepared
+    asked.askedAt = Date.now()
+    asked.asking = account.createThread(asked.threadId, repository, { prepare: true }).then(({ ready }) => {
+      asked.made = true
+      asked.ready = ready
+    })
+    try {
+      await asked.asking
+    } catch (error) {
+      // Never made: the next ask starts afresh. Made already, it stays for its next ask or its first message.
+      if (!asked.made && this.#prepared.get(key) === asked) this.#prepared.delete(key)
+      hostWarn("cloud-conversations", "a cloud Thread wasn't made ahead", { threadId: asked.threadId, error: error instanceof Error ? error.message : String(error) })
+      return "none"
+    }
+    return asked.ready ? "ready" : "preparing"
+  }
+
+  /** The Thread made ahead for a repository, unless this Mac last asked for it too long ago: that one went unused. */
+  #fresh(key: string): Prepared | undefined {
+    const prepared = this.#prepared.get(key)
+    if (!prepared || Date.now() - prepared.askedAt < PREPARED_KEPT_MS) return prepared
+    this.#prepared.delete(key)
+    const unused = (this.#unused.get(key) ?? 0) + 1
+    this.#unused.set(key, unused)
+    hostLog("cloud-conversations", "a cloud Thread made ahead went unused", { threadId: prepared.threadId, unused })
+    return undefined
+  }
+
+  /** The Thread made ahead for a repository, for a new conversation to start in once it's made; none to take, undefined. */
+  async #take(repository: CloudRepository): Promise<Prepared | undefined> {
+    const key = repositoryKey(repository)
+    const prepared = this.#fresh(key)
+    if (!prepared) return undefined
+    this.#prepared.delete(key)
+    await prepared.asking.catch(() => undefined)
+    if (!prepared.made) return undefined
+    this.#unused.delete(key)
+    hostLog("cloud-conversations", "a new conversation takes up the cloud Thread made ahead", { threadId: prepared.threadId, aheadMs: Date.now() - prepared.since, sinceAskedMs: Date.now() - prepared.askedAt, ready: prepared.ready })
+    return prepared
+  }
+
+  /** Where a new cloud conversation's start is, for its window: in words about its project and its harness, never the machine. */
+  #step(conversationId: string, step: CloudStartStep, repository: CloudRepository): void {
+    this.#options.emit(encodeRuntimeEvent({ type: "cloud-start-step", conversationId, step, project: projectName(repository) }))
+  }
+
   async #start(harness: string, folder: string, options: LiveStartOptions): Promise<EncodedValue> {
     await this.start()
     let entry = this.#entries.get(options.conversationId)
+    let step: CloudStartStep = "preparing"
     if (!entry) {
       const named = options.cloud?.repository
       const repository = named ? CloudRepositorySchema.parse(named) : await this.#options.repositoryOf(folder)
+      const prepared = await this.#take(repository)
+      // Ready a moment ago, it's ready now: the window goes straight to the harness starting.
+      if (prepared?.ready && Date.now() - prepared.askedAt < READY_AFTER_ASK_MS) step = "starting"
+      this.#step(options.conversationId, step, repository)
       entry = {
         conversationId: options.conversationId,
-        threadId: `t-${randomBytes(8).toString("hex")}`,
+        threadId: prepared?.threadId ?? newThreadId(),
         harness,
         repository,
         createdAt: Date.now(),
-        created: false,
+        created: prepared !== undefined,
         seq: 0,
       }
       this.#entries.set(entry.conversationId, entry)
@@ -180,6 +299,7 @@ export class CloudConversations {
     const boot = BootTabsSchema.parse(decodeRuntimeValue(await this.#call(entry, "mako:boot", [])))
     const cwd = boot.tabs.find((tab) => tab.id === boot.activeTabId)?.session.meta.cwd
     if (!cwd) throw new Error("The cloud machine has no folder to work in")
+    if (step !== "starting") this.#step(entry.conversationId, "starting", entry.repository)
     // The machine's own start: in its clone, with nothing of this Mac's folders or Thread store.
     const start: LiveStartOptions = { ...options }
     for (const key of ["cloud", "worktree", "worktreeStart", "session", "threadPath"] as const) delete start[key]

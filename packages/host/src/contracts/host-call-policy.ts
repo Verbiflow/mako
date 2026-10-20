@@ -178,6 +178,8 @@ const replays = [
   "mako:live-close",
   /** Waking a conversation that is awake or already waking does nothing more. */
   "mako:live-prewarm",
+  /** Making a cloud Thread ahead that is already made touches it again: one per folder's repository. */
+  "mako:cloud-prepare",
   /** Cancelling a sign-in that has ended cancels nothing. */
   "mako:account-login-cancel",
   /** Cancelling a Mako sign-in that has ended cancels nothing. */

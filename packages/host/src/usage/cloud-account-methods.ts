@@ -29,8 +29,11 @@ export interface CloudAccount {
   session(): ClientSessionOverSockets
   /** This Mac's device in the account, which its calls act for; undefined while signed out. */
   deviceId(): Promise<string | undefined>
-  /** A cloud Thread in the account, its machine working in a clone of `repository`; the same Thread when made again under its ID. */
-  createThread(threadId: string, repository: CloudRepository): Promise<void>
+  /**
+   * A cloud Thread in the account, its machine working in a clone of `repository`; the same Thread when made again
+   * under its ID. `prepare`: made ahead of its first message, as its person writes it; `ready` once its machine is.
+   */
+  createThread(threadId: string, repository: CloudRepository, options?: { prepare?: boolean }): Promise<{ ready: boolean }>
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   stop(): void
@@ -157,7 +160,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     session: () => cloud.session(),
     deviceId: () => cloud.deviceId(),
-    createThread: (threadId, repository) => cloud.createThread(threadId, repository),
+    createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),
     wake: () => {
       cloud.wake()
       sync?.wake()

@@ -333,7 +333,7 @@ export function installMockBridge() {
    * (`ThreadRef.copyOnly`), as the archive's migration leaves them.
    */
   const keptScene = scene === "kept"
-  /** `?app=slow-start`: a start the host takes 26 s to accept, as a cloud Thread's machine might, to see the wait. */
+  /** `?app=slow-start`: a start the host takes 26 s to accept, as a cloud Thread's might, with its steps, to see the wait. */
   const slowStart = scene === "slow-start"
   /**
    * `?app=kept&outdated=1`: Codex 0.163.0 wrote the kept session's records,
@@ -1943,7 +1943,13 @@ export function installMockBridge() {
       cwd: string,
       options: LiveStartOptions
     ) => {
-      if (slowStart) await new Promise((resolve) => setTimeout(resolve, 26_000))
+      if (slowStart) {
+        // As a cloud Thread's start reads: its project coming up, then its harness starting.
+        emit({ type: "cloud-start-step", conversationId: options.conversationId, step: "preparing", project: "mako" })
+        await new Promise((resolve) => setTimeout(resolve, 20_000))
+        emit({ type: "cloud-start-step", conversationId: options.conversationId, step: "starting", project: "mako" })
+        await new Promise((resolve) => setTimeout(resolve, 6_000))
+      }
       const session: LiveSessionState = {
         id: options.conversationId,
         nativeId: `mock-${harness}-${++acpCount}`,
@@ -2670,6 +2676,7 @@ export function installMockBridge() {
     },
     livePrewarm: async () => "unchanged" as const,
     launchPrewarm: async () => {},
+    cloudPrepare: async () => "none" as const,
     liveClose: async (id: string) => {
       const session = acpSessions.get(id)
       if (!session) return

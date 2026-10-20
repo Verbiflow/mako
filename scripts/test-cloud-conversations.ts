@@ -64,6 +64,9 @@ async function cloudMachine(reach: Reach = {}) {
   const client = await gateway.connectClient({ kind: "client", client: "desktop", deviceId })
   const network = reach.sockets ? await sleepyNetwork(gateway, deviceId) : undefined
   const created: string[] = []
+  /** Each ask to make a Thread, made ahead or not; and whether one made ahead answers that its machine is ready. */
+  const asked: Array<{ threadId: string; prepare: boolean }> = []
+  const machineState = { ready: true }
   const account: CloudAccount = {
     token: async () => "token",
     id: async () => "account",
@@ -72,10 +75,14 @@ async function cloudMachine(reach: Reach = {}) {
       network && reach.sockets
         ? clientSessionOverSockets(() => new WebSocket(network.url), reach.sockets)
         : sessionOf(client),
-    createThread: async (threadId, repository) => {
+    createThread: async (threadId, repository, options) => {
       assert.deepEqual(repository, REPOSITORY)
-      created.push(threadId)
-      await gateway.assign(threadId, runtimeId)
+      asked.push({ threadId, prepare: options?.prepare === true })
+      if (!created.includes(threadId)) {
+        created.push(threadId)
+        await gateway.assign(threadId, runtimeId)
+      }
+      return { ready: options?.prepare ? machineState.ready : false }
     },
     wake: () => {},
     stop: () => {},
@@ -86,7 +93,7 @@ async function cloudMachine(reach: Reach = {}) {
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, batch, network }
+  return { account, calls, created, asked, machineState, batch, network }
 }
 
 /**
@@ -172,11 +179,13 @@ function sessionOf(client: ClientSession): ClientSessionOverSockets {
   }
 }
 
+/** The router, the conversations' events it relays, and apart from them, what it tells windows of each start. */
 function conversations(account: CloudAccount, file: string) {
   const events: RuntimeEvent[] = []
-  const router = new CloudConversations({ account: () => account, file, emit: (event) => events.push(event), repositoryOf: async () => REPOSITORY })
+  const starts: RuntimeEvent[] = []
+  const router = new CloudConversations({ account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY })
   after(() => router.dispose())
-  return { router, events }
+  return { router, events, starts }
 }
 
 async function until(what: string, check: () => boolean, ms = 3_000) {
@@ -219,6 +228,79 @@ test("a cloud start makes the Thread once, starts on the machine in its clone, a
   assert.ok(machine.calls.some((call) => call.channel === "mako:live-prompt" && call.args[0] === conversationId))
   assert.equal((await router.route("mako:live-prompt", ["not-a-cloud-one", "r-3", "x", [], undefined])).handled, false)
   assert.equal((await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID() }])).handled, false, "a start without cloud is this Mac's")
+})
+
+/** The steps a new cloud conversation's window was told, in order. */
+function steps(starts: RuntimeEvent[], conversationId: string) {
+  return starts
+    .map((event) => z.object({ conversationId: z.string(), step: z.string(), project: z.string() }).parse(JSON.parse(event.payload)))
+    .filter((step) => step.conversationId === conversationId)
+    .map((step) => `${step.step} ${step.project}`)
+}
+
+async function prepare(router: CloudConversations, composingMs = 0) {
+  const routed = await router.route("mako:cloud-prepare", ["/Users/me/project", composingMs])
+  assert.ok(routed.handled, "the cloud router answers every prepare")
+  return decodeRuntimeValue(routed.value)
+}
+
+test("writing a new cloud conversation makes its Thread ahead, once, asked again as the person writes; the first message takes it up and starts the harness at once", async () => {
+  const machine = await cloudMachine()
+  const { router, starts } = conversations(machine.account, join(scratch, "ahead", "conversations.json"))
+  assert.equal(await prepare(router), "ready")
+  assert.equal(await prepare(router), "ready")
+  assert.equal(machine.created.length, 1, "one Thread for the draft, however often it's asked")
+  assert.deepEqual(machine.asked.map((ask) => ask.prepare), [true, true])
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: {} }])
+  assert.equal(machine.created.length, 1, "the message starts in the Thread made ahead")
+  assert.equal(machine.asked.length, 2, "and asks the cloud for nothing more before it goes to the machine")
+  assert.deepEqual(steps(starts, conversationId), ["starting Hello-World"], "ready: straight to the harness starting")
+  // Taken up, the next draft makes a Thread of its own.
+  await prepare(router)
+  assert.equal(machine.created.length, 2)
+})
+
+test("a start whose machine isn't ready says its project is being got ready, then that the harness starts; with nothing made ahead, it makes its Thread then", async () => {
+  const machine = await cloudMachine()
+  machine.machineState.ready = false
+  const { router, starts } = conversations(machine.account, join(scratch, "not-ready", "conversations.json"))
+  assert.equal(await prepare(router), "preparing")
+  const ahead = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: ahead, cloud: {} }])
+  assert.deepEqual(steps(starts, ahead), ["preparing Hello-World", "starting Hello-World"])
+  const cold = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: cold, cloud: {} }])
+  assert.deepEqual(steps(starts, cold), ["preparing Hello-World", "starting Hello-World"])
+  assert.deepEqual(machine.asked.map((ask) => ask.prepare), [true, false], "the second made its Thread as it started")
+})
+
+test("a Thread made ahead and left alone isn't taken up; after three in a row go unused, the next waits for ten seconds of writing", async (t) => {
+  const machine = await cloudMachine()
+  const { router } = conversations(machine.account, join(scratch, "unused", "conversations.json"))
+  let now = Date.parse("2026-10-20T06:00:00.000Z")
+  t.mock.method(Date, "now", () => now)
+  const threadOf = () => machine.asked.at(-1)!.threadId
+  await prepare(router)
+  const first = threadOf()
+  for (let unused = 1; unused < 3; unused++) {
+    now += 26 * 60_000
+    await prepare(router)
+  }
+  assert.equal(new Set(machine.asked.map((ask) => ask.threadId)).size, 3, "each left past the cloud's half hour is replaced")
+  assert.notEqual(threadOf(), first)
+  now += 26 * 60_000
+  assert.equal(await prepare(router, 2_000), "later", "three unused: a few seconds of writing isn't enough")
+  assert.equal(await prepare(router, 12_000), "ready")
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: {} }])
+  assert.equal(await prepare(router, 0), "ready", "one taken up, the first keystroke is enough again")
+})
+
+test("a Mac that isn't signed in makes nothing ahead", async () => {
+  const router = new CloudConversations({ account: () => undefined, file: join(scratch, "signed-out", "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY })
+  after(() => router.dispose())
+  assert.equal(await prepare(router), "none")
 })
 
 test("a call the gateway lost on its way to the machine is repeated under its one id, and runs once", async () => {
@@ -274,6 +356,7 @@ test("a close is taken at once while nothing runs the Thread, and reaches the ma
     createThread: async (threadId) => {
       created.push(threadId)
       await gateway.assign(threadId, runtimeId)
+      return { ready: false }
     },
     wake: () => {},
     stop: () => {},
