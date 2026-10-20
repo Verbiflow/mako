@@ -11,7 +11,7 @@ import { codexNativeRunner } from "./native-runner.js"
 import { createCodexProcessProbe } from "./process-probe.js"
 import { codexProfileLoader } from "./profile.js"
 import { codexSkillSource } from "./skills.js"
-import { codexStartFiles, resolveCodexExecutable } from "./executable.js"
+import { resolveCodexExecutable } from "./executable.js"
 import { npmInstall } from "../update-source.js"
 import { CODEX_VERSIONS } from "./versions.js"
 import { codexUsageHistory } from "./usage-history.js"
@@ -75,7 +75,6 @@ export const installCodex: ProviderModule = (host, context) => {
     updates: {
       provider: "codex",
       binary: (env) => resolveCodexExecutable(env),
-      startFiles: codexStartFiles,
       npmPackage: "@openai/codex",
       homebrew: { name: "codex" },
       versions: CODEX_VERSIONS,

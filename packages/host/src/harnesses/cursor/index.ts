@@ -18,7 +18,6 @@ import { CursorAccountKeys, CursorCredentialStore, cursorLegacyFiles } from "./s
 import { cursorDecoderSource } from "./sdk/decoder-source.js"
 import { createCursorSdkDriver } from "./sdk/driver.js"
 import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
-import { cursorSdkStartFiles } from "./sdk/start-files.js"
 import { cursorSdkNativeRunner } from "./sdk/native-runner.js"
 import { cursorSkillSource } from "./skills.js"
 import { cursorUsageHistory } from "./usage-history.js"
@@ -129,8 +128,6 @@ export const installCursor: ProviderModule = (host, context) => {
     updates: {
       provider: "cursor",
       binary: (env) => resolveExecutable("cursor-agent", env),
-      // A start runs the SDK, not this binary.
-      startFiles: cursorSdkStartFiles,
       versions: CURSOR_VERSIONS,
       native: {
         label: "Update Cursor Agent",

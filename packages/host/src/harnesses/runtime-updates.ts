@@ -259,16 +259,6 @@ export class RuntimeUpdates {
     this.stopReading = undefined
   }
 
-  /** Each harness's `startFiles`, from the binary its last reading found. */
-  async startFiles(): Promise<Array<{ provider: string; files: string[] }>> {
-    return Promise.all(this.options.sources().map(async (source) => {
-      const binary = this.updates[source.provider]?.binary
-      const real = binary ? await (this.options.realpath ?? realpath)(binary).catch(() => binary) : undefined
-      const files = source.startFiles ? await source.startFiles(real) : real ? [real] : []
-      return { provider: source.provider, files }
-    }))
-  }
-
   /** What is known now. Sync so a window paints before any probe answers. */
   snapshot(): HarnessUpdates {
     const sources = new Map(this.sources().map(source => [source.key, source]))

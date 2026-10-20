@@ -6,7 +6,6 @@ import type { HostMethods, RoutedCall, startWebHost } from "./transport/index.js
 import type { HostJobs, JobDemand } from "./base/host-jobs.js"
 import type { Foreground } from "./base/foreground.js"
 import { heavy } from "./base/heavy-packages.js"
-import { readIntoMemory } from "./base/read-into-memory.js"
 import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
 import type { Domain } from "./base/host-domains.js"
@@ -522,15 +521,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const loads = Object.entries(heavy).filter(([key]) => key !== "keyring").map(([, lazy]) => lazy.load("warm the machine").then(() => lazy.name))
       const loaded = (await Promise.allSettled(loads)).flatMap((result) => (result.status === "fulfilled" ? [result.value] : []))
       await harnesses.updates.refresh().catch(() => undefined)
-      // What a start then reads from disk: each harness's own files, and every harness's MCP servers, which two list
-      // by running their CLIs. On a copy each was its binary's first read, 1 to 2 s (2026-10-20).
-      // One harness at a time: read together, their pages interleave in memory, and on a copy, which restores memory as
-      // it's touched, the first harness to start brought in every other's too (6 s against 0.1 s, 2026-10-20).
-      const read: string[] = []
-      for (const { provider, files } of await harnesses.updates.startFiles())
-        read.push(`${provider} (${Math.round((await readIntoMemory(files)).bytes / 1_048_576)} MiB)`)
+      // And every harness's MCP servers, two listed by running their CLIs. Not the harnesses' binaries whole: a copy
+      // restores memory as it's touched, and one harness's handshake on a copy of an image that held every binary took
+      // 1.4 to 3.0 s, against 0.4 to 2.6 s on one that didn't (2026-10-20).
       await tools.mcp.discover(homedir()).catch(() => undefined)
-      return [...loaded, "harness versions", ...read, "MCP servers"]
+      return [...loaded, "harness versions", "MCP servers"]
     },
     installCloudSignIns: async (signIns, place) => {
       const installed = await installCloudSignIns(providerHost.accountCapabilities, signIns, place)

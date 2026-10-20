@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import type { HarnessUpdates } from "@mako/host/contracts/harness-updates"
 import { compareVersions, parseVersion, versionBehind } from "@mako/host/contracts/runtime-version"
 import { scriptInstall, type ProviderUpdateSource } from "@mako/host/harnesses/update-source"
@@ -13,8 +13,6 @@ import { npmInstall, pinnedPolicy } from "@mako/host/harnesses/update-source"
 import { runtimeFloor } from "@mako/host/harnesses/runtime-floor"
 import { launchContext, reportedRuntime } from "@mako/host/base/execution-context"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
-import { codexStartFiles } from "@mako/host/harnesses/codex/executable"
-import { readIntoMemory } from "@mako/host/base/read-into-memory"
 
 const processes = new DiscoveryProcesses()
 
@@ -802,48 +800,4 @@ try {
   await rm(versionsDir, { recursive: true, force: true })
 }
 
-// What a start executes, which a cloud machine reads into memory before its snapshot: the real file behind each
-// binary, unless the harness names its own (npm's Codex runs the native build its platform's package carries).
-const startDir = await mkdtemp(join(tmpdir(), "mako-start-files-"))
-try {
-  const pkg = join(startDir, "lib", "node_modules", "@openai", "codex")
-  const script = join(pkg, "bin", "codex.js")
-  const native = join(pkg, "node_modules", "@openai", "codex-linux-x64", "vendor", "x86_64-unknown-linux-musl", "bin", "codex")
-  await mkdir(dirname(script), { recursive: true })
-  await mkdir(dirname(native), { recursive: true })
-  await writeFile(script, "#!/usr/bin/env node\n")
-  await writeFile(native, Buffer.alloc(5 << 20, 1))
-  assert.deepEqual(await codexStartFiles(script), [script, native], "npm's Codex: its script and its platform's native build")
-  assert.deepEqual(await codexStartFiles("/opt/homebrew/bin/codex"), ["/opt/homebrew/bin/codex"], "any other install is the native build")
-  assert.deepEqual(await codexStartFiles(undefined), [], "nothing installed, nothing to read")
-  assert.deepEqual(await readIntoMemory([join(startDir, "lib"), join(startDir, "gone")]), { files: 2, bytes: (5 << 20) + 20 },
-    "a folder is read whole, through every file under it, and a path that's gone is skipped")
-
-  const world = fake()
-  const runtimes = new RuntimeUpdates({
-    processes,
-    sources: () => [
-      { ...codex, binary: () => world.binaries.codex, startFiles: (real) => [`${real}:own`] },
-      { ...claude, binary: () => world.binaries.claude },
-      { ...devin, binary: () => world.binaries.devin },
-    ],
-    path: join(startDir, "runtime-updates.json"),
-    env: () => ({ PATH: "/usr/bin" }),
-    emit: () => {},
-    version: async (binary) => world.versions[binary] ?? "",
-    latest: async () => "9.9.9",
-    run: async () => ({ code: 0, output: "" }),
-    stat: async (path) => world.stats[path] ?? { mtimeMs: 0, size: 0 },
-    realpath: async (path) => world.reals[path] ?? path,
-  })
-  await runtimes.refresh()
-  assert.deepEqual(await runtimes.startFiles(), [
-    { provider: "codex", files: [`${world.reals[world.binaries.codex ?? ""]}:own`] },
-    { provider: "claude", files: [world.reals[world.binaries.claude ?? ""]] },
-    { provider: "devin", files: [] },
-  ], "each harness's own files, else the real file behind its binary, and none when it isn't installed")
-} finally {
-  await rm(startDir, { recursive: true, force: true })
-}
-
-console.log("runtime updates: channel ladder, signature cache, registry TTL, persistence, update receipts, row words and start files hold")
+console.log("runtime updates: channel ladder, signature cache, registry TTL, persistence, update receipts and row words hold")
