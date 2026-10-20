@@ -682,6 +682,20 @@ try {
         }),
         (error) => error.detail?.outcome === "unknown"
       )
+      await assert.rejects(
+        run({ action: "observe", target: restricted }),
+        (error) =>
+          error.detail?.code === "stale-target" &&
+          error.detail.outcome === "not-dispatched" &&
+          /An extension frame was observed in this tab/.test(error.message) &&
+          error.message.includes(`control.claimTab(${JSON.stringify({ browser: value.id, tab: restricted.tab })})`),
+        "after Chrome detaches control, the handle says why and how to claim the still-open tab"
+      )
+      const reattached = BrowserTargetSchema.parse(
+        await run({ action: "select", browser: value.id, tab: restricted.tab })
+      )
+      assert.notEqual(reattached.lease, restricted.lease)
+      await run({ action: "observe", target: reattached })
       if (interruptedRecording) {
         let receipt
         for (let n = 0; n < 300; n++) {
@@ -842,7 +856,7 @@ try {
         )
       }
       console.log(
-        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, six complete saved jobs with canceled confirmations, restricted-frame detach, temporary tab/window ownership, disconnect/reconnect lifetime cleanup, cancellation without replay and stale-handle refusal passed`
+        `${value.name} round ${round + 1}: native messaging, trusted input, cross-client exclusion, six complete saved jobs with canceled confirmations, restricted-frame detach explained and recovered by one claim, temporary tab/window ownership, disconnect/reconnect lifetime cleanup, cancellation without replay and stale-handle refusal passed`
       )
     } finally {
       await service.close()

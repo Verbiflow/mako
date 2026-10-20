@@ -169,13 +169,15 @@ function PreviewCard({
     : activity
       ? `${surface} · ${activity.operation.replaceAll("_", " ")}${working ? " · working" : ""}`
       : surface
-  const media = zoomed
-    ? "block h-auto max-h-[100cqh] w-full object-contain"
-    : "block max-h-64 w-full object-contain"
+  const media = cn(
+    zoomed ? "block h-auto max-h-[100cqh] w-full object-contain" : "block max-h-64 w-full object-contain",
+    "transition-[filter,opacity] duration-300 ease-out motion-reduce:transition-none",
+    paused && "opacity-80 saturate-[.35]"
+  )
   return (
     <section
       ref={card}
-      aria-label="Live control preview"
+      aria-label={paused ? "Control preview, last view" : "Live control preview"}
       className={cn(
         "control-preview-card glass-panel pointer-events-auto relative overflow-hidden text-popover-foreground",
         zoomed ? "w-full max-w-5xl rounded-2xl" : "rounded-xl"

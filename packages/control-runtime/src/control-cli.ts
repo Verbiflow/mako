@@ -363,6 +363,13 @@ export async function runControlCli(
         )
       return { role: values.role, name: values.name }
     }
+    /** An expectation may name a role alone: that one exists, or with absent, that none does. */
+    const flagExpectation = () => {
+      if (values.name !== undefined && values.role === undefined)
+        throw new ControlFault("invalid-request", "--name needs --role, exactly as an observation lists it.", "not-dispatched")
+      if (values.role === undefined) return {}
+      return values.name === undefined ? { role: values.role } : { role: values.role, name: values.name }
+    }
     let operation: SessionOperation
     switch (command) {
       case "session":
@@ -502,7 +509,7 @@ export async function runControlCli(
         operation = SessionOperationSchema.parse({
           method: "expect",
           target: requiredTarget(),
-          expectation: { ...expectation, ...flagSelector() },
+          expectation: { ...expectation, ...flagExpectation() },
           options: { timeoutMs, everyMs },
         })
         break

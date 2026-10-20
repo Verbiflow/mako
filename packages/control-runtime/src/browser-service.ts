@@ -30,6 +30,7 @@ import {
 } from "./browser-observation.js"
 import { localBrowsers, type LocalBrowser } from "./browser-discovery.js"
 import { DESK_OUTSIDE_ORIGIN } from "./desk-browser-registration.js"
+import { EXTENSION_SESSION_GONE } from "./browser-extension-protocol.js"
 import { InstalledBrowsers } from "./browser-installed.js"
 import { inScope, isExactName, scopeLabel } from "@mako/control/control/scope"
 import {
@@ -58,7 +59,9 @@ const sessionResult = z.object({ sessionId: z.string() })
  * exists while its tab may live on, as when Chromium detaches an extension
  * from a page that embeds another extension's frame.
  */
-const SESSION_GONE = /Session with given id not found|Detached while handling command|no longer owned by this client/i
+const SESSION_GONE = ["Session with given id not found", "Detached while handling command", EXTENSION_SESSION_GONE]
+const sessionGone = (message: string) => SESSION_GONE.some((words) => message.includes(words))
+const TARGET_GONE = /No target with given id|Target closed/i
 const pointResult = z.object({
   result: z.object({
     value: z.union([
@@ -430,6 +433,8 @@ export class BrowserService {
   private readonly recordings = new BrowserRecordings()
   private readonly browsers: Map<string, BrowserEntry>
   private readonly bindings = new Map<string, Binding>()
+  /** Why a recent lease ended, so its next command hears the cause rather than a bare "released". */
+  private readonly endings = new Map<string, { code: "target-closed" | "stale-target"; message: string }>()
   private readonly ownedTargets = new Map<string, OwnedTarget>()
   private readonly listeners = new Set<
     (statuses: BrowserControlStatus[]) => void
@@ -873,6 +878,7 @@ export class BrowserService {
         this.endBinding(this.bindings.get(key), "Tab binding ended")
         this.bindings.delete(key)
         this.ownedTargets.delete(key)
+        this.ended(binding, "target-closed", "The exact tab closed. No other tab was selected.")
         continue
       }
       if (
@@ -881,17 +887,13 @@ export class BrowserService {
       ) {
         const entry = this.browsers.get(binding.target.browser)
         if (entry && !binding.intentionalDetach) {
+          const interruption = tabInterruption(binding.events, z.string().safeParse(event.params.reason).data)
           entry.status = {
             ...entry.status,
-            lastInterruption: {
-              tab: binding.target.tab,
-              message: tabInterruption(
-                binding.events,
-                z.string().safeParse(event.params.reason).data
-              ),
-            },
+            lastInterruption: { tab: binding.target.tab, message: interruption },
           }
           this.changed()
+          this.ended(binding, "stale-target", this.detachedMessage(binding, interruption))
         }
         this.recordings.stopTarget(
           binding.owner,
@@ -1051,8 +1053,16 @@ export class BrowserService {
       lease: randomUUID(),
     }
     const key = this.key(target)
-    const existing = this.bindings.get(key)
     const owned = this.ownedTargets.get(key)
+    let existing = this.bindings.get(key)
+    // A claim is how a task recovers, so it never hands back a session Chrome
+    // already dropped; one round trip proves the binding is alive.
+    if (existing && !(await this.alive(existing, signal))) {
+      this.recordings.stopTarget(existing.owner, existing.target, "Tab lease ended")
+      this.endBinding(existing, "Tab binding ended")
+      if (this.bindings.get(key) === existing) this.bindings.delete(key)
+      existing = undefined
+    }
     if (existing?.owner === owner) return existing.target
     if (!existing && this.bindings.size >= 512)
       fault(
@@ -1319,6 +1329,27 @@ export class BrowserService {
         unsubscribers.clear()
         if (!shared) await this.releaseOwner(owner).catch(() => undefined)
       },
+    }
+  }
+
+  private ended(binding: Binding, code: "target-closed" | "stale-target", message: string) {
+    this.endings.set(binding.target.lease, { code, message })
+    if (this.endings.size > 256) this.endings.delete(this.endings.keys().next().value!)
+  }
+
+  private detachedMessage(binding: Binding, interruption: string) {
+    const claim = JSON.stringify({ browser: binding.target.browser, tab: binding.target.tab })
+    return `${interruption} Nothing was retried, and this handle is finished. Claim the tab again with await control.claimTab(${claim}) and observe before acting.`
+  }
+
+  /** False only when the browser says the binding's session is gone; any other answer leaves it to the next command. */
+  private async alive(binding: Binding, signal: AbortSignal): Promise<boolean> {
+    try {
+      await binding.connection.send("Page.getFrameTree", {}, AbortSignal.any([signal, AbortSignal.timeout(2_000)]), binding.sessionId)
+      return true
+    } catch (error) {
+      signal.throwIfAborted()
+      return !(error instanceof BrowserFault && (sessionGone(error.message) || TARGET_GONE.test(error.message)))
     }
   }
 
@@ -1723,9 +1754,9 @@ export class BrowserService {
         if (effect === "mutate" || effect === "release") binding.view = undefined
         return value
       } catch (error) {
-        const detached = error instanceof BrowserFault && SESSION_GONE.test(error.message)
+        const detached = error instanceof BrowserFault && sessionGone(error.message)
         const closed = error instanceof BrowserFault && (
-          /No target with given id|Target closed/i.test(error.message) ||
+          TARGET_GONE.test(error.message) ||
           (detached && !(await binding.connection
             .send("Target.getTargetInfo", { targetId: binding.target.tab }, AbortSignal.timeout(2_000))
             .then(() => true, () => false)))
@@ -1739,25 +1770,20 @@ export class BrowserService {
           this.endBinding(binding, "Tab binding ended")
           if (this.bindings.get(this.key(binding.target)) === binding)
             this.bindings.delete(this.key(binding.target))
-          if (closed)
-            throw new BrowserFault({
-              code: "target-closed",
-              message:
-                "The exact tab closed. No command was retried and no other tab was selected.",
-              outcome: error.detail.outcome,
-            })
+          if (closed) {
+            const message = "The exact tab closed. No command was retried and no other tab was selected."
+            this.ended(binding, "target-closed", message)
+            throw new BrowserFault({ code: "target-closed", message, outcome: error.detail.outcome })
+          }
           const interruption = tabInterruption(binding.events, undefined)
           const entry = this.browsers.get(binding.target.browser)
           if (entry) {
             entry.status = { ...entry.status, lastInterruption: { tab: binding.target.tab, message: interruption } }
             this.changed()
           }
-          const claim = JSON.stringify({ browser: binding.target.browser, tab: binding.target.tab })
-          throw new BrowserFault({
-            code: "stale-target",
-            message: `${interruption} Nothing was retried; this handle is finished. Claim the tab again with await control.claimTab(${claim}) and observe before acting.`,
-            outcome: error.detail.outcome,
-          })
+          const message = this.detachedMessage(binding, interruption)
+          this.ended(binding, "stale-target", message)
+          throw new BrowserFault({ code: "stale-target", message, outcome: error.detail.outcome })
         }
         if (
           !observation &&
@@ -1803,6 +1829,8 @@ export class BrowserService {
         "This target belongs to an earlier browser connection. List and select the exact page again."
       )
     const binding = this.bindings.get(this.key(target))
+    const ending = binding ? undefined : this.endings.get(target.lease)
+    if (ending) fault(ending.code, ending.message)
     if (!binding)
       fault(
         "target-closed",

@@ -191,6 +191,7 @@
     "test:transcript": "tsx scripts/test-tool-identity.ts && tsx scripts/test-harness-vocabulary.ts && tsx scripts/test-transcript-tools.ts && tsx scripts/test-renamed-exchanges.ts && tsx scripts/test-transcript-document.ts && tsx scripts/test-content-contract.ts && tsx scripts/test-transcript-persistence.ts && tsx scripts/test-canvas-preview.ts",
     "test:workspace-snapshots": "tsx scripts/test-git-environment.ts && tsx scripts/test-workspace-snapshots.ts && tsx scripts/test-live-snapshots.ts && tsx scripts/test-snapshot-retention.ts && tsx scripts/test-snapshot-budget.ts",
     "benchmark:control": "node --import tsx scripts/benchmark-control-runtime.ts",
+    "bench:local-control": "npm run -s build:control-runtime && tsx scripts/bench-local-control.ts",
     "benchmark:snapshots": "node --max-old-space-size=256 --import tsx scripts/benchmark-snapshots.ts",
     "test:rewind-e2e": "npm run build:electron && node scripts/test-rewind-e2e.mjs",
     "generate:codex-inputs": "node scripts/generate-codex-inputs.mjs",

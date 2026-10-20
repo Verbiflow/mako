@@ -18,7 +18,18 @@ const canvas = document.createElement("canvas")
 canvas.width = 640
 canvas.height = 360
 const painter = canvas.getContext("2d")!
+// A page with colour, so a paused frame's treatment can be judged against a live one.
+painter.fillStyle = "#f4f1ea"
 painter.fillRect(0, 0, 640, 360)
+painter.fillStyle = "#1f2a44"
+painter.fillRect(0, 0, 640, 48)
+painter.fillStyle = "#e8553d"
+painter.fillRect(40, 88, 180, 44)
+painter.fillStyle = "#3a7bd5"
+painter.fillRect(40, 160, 560, 150)
+painter.fillStyle = "#fff"
+painter.font = "bold 20px sans-serif"
+painter.fillText("Checkout", 92, 117)
 let image: NonNullable<ControlPreview["frame"]>["image"] = {
   mimeType: "image/png",
   bytes: Uint8Array.from(atob(canvas.toDataURL().split(",")[1]!), char => char.charCodeAt(0)),
@@ -29,6 +40,8 @@ let frame = 0
 let sequence: number | undefined
 let step = 1
 let sourceAt = 0
+// Between turns the host answers with the last frame, paused, and no window.
+let paused = false
 bridge.nativeWindowVideo = Boolean(source)
 bridge.controlPreviewSource = async () => source
 bridge.controlPreview = async (id) => {
@@ -51,7 +64,8 @@ bridge.controlPreview = async (id) => {
       capturedAt: sequence === undefined ? Date.now() : sourceAt,
       sequence,
     },
-    window: source && id === "one" ? { pid: 1, windowId: 1 } : undefined,
+    window: source && id === "one" && !paused ? { pid: 1, windowId: 1 } : undefined,
+    paused,
   }
 }
 const container = document.getElementById("root")!
@@ -95,7 +109,15 @@ function check(condition: boolean, message: string): asserts condition {
 async function until(test: () => boolean) {
   const deadline = Date.now() + 12_000
   while (!test()) {
-    if (Date.now() > deadline) throw new Error("Preview fixture timed out")
+    if (Date.now() > deadline) {
+      const state = controlPreviewStore.get()
+      throw new Error(
+        `Preview fixture timed out waiting for ${test.toString().slice(0, 160)}; ` +
+          `cards ${panes.querySelectorAll("section").length}, hidden ${document.hidden}, ` +
+          `viewport ${innerWidth}×${innerHeight}, previews [${Object.keys(state.previews).join(",")}], ` +
+          `activities [${Object.keys(state.activities).join(",")}], reads ${frame}`
+      )
+    }
     await new Promise((resolve) => setTimeout(resolve, 25))
   }
 }
@@ -146,6 +168,21 @@ async function run() {
     Boolean(controlPreviewStore.get().previews.one),
     "Closing another task preserves this task"
   )
+  const pane = panes.querySelector('[data-pane="one"]')!
+  const lastView = () => pane.querySelector('[role="status"][aria-label$="last view, not live"]')
+  paused = true
+  receiveControlActivity({ conversationId: "one", kind: "browser", operation: "observe", status: "observed", target: "one", updatedAt: 2 })
+  await until(() => Boolean(lastView()))
+  const pausedAt = frame
+  await new Promise((resolve) => setTimeout(resolve, 2_500))
+  check(
+    frame === pausedAt && !pane.querySelector(".control-preview-rim") && Boolean(pane.querySelector('canvas[role="img"]')),
+    "Between turns the card keeps its last frame, marked Last view, and reads nothing"
+  )
+  paused = false
+  receiveControlActivity({ conversationId: "one", kind: "browser", operation: "click", status: "running", target: "one", updatedAt: 3 })
+  await until(() => !lastView() && frame > pausedAt && Boolean(pane.querySelector(".control-preview-rim")))
+  check(panes.querySelectorAll("section").length === 1, "The next action resumes the same card in place")
   if (source) {
     const video = panes.querySelector("video")!
     await until(() => video.videoWidth > 0)
@@ -156,7 +193,6 @@ async function run() {
       "Native window video advances in the production chat preview"
     )
   }
-  const pane = panes.querySelector('[data-pane="one"]')!
   const settled = async () => {
     await Promise.all(pane.querySelector("section")!.getAnimations().map((animation) => animation.finished))
     return pane.querySelector("section")!.getBoundingClientRect()

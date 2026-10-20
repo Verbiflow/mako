@@ -1727,17 +1727,28 @@ try {
     (error: Error) =>
       error instanceof BrowserFault &&
       error.detail.code === "stale-target" &&
-      error.message.includes("Nothing was retried; this handle is finished.") &&
+      error.message.includes("Nothing was retried, and this handle is finished.") &&
       error.message.includes(`control.claimTab({"browser":"fixture","tab":"${forgotten.tab}"})`)
   )
   assert.match(
     service.status().find((status) => status.id === "fixture")?.lastInterruption?.message ?? "",
     /The tab may still be open/
   )
+  await assert.rejects(
+    run("task-forgotten", { action: "observe", target: forgotten }),
+    (error: Error) => error instanceof BrowserFault && error.detail.code === "stale-target" && error.detail.outcome === "not-dispatched" && error.message.includes("control.claimTab("),
+    "the ended handle keeps saying why, not a bare released"
+  )
   const reattached = BrowserTargetSchema.parse(await run("task-forgotten", { action: "select", browser: "fixture", tab: forgotten.tab }))
   assert.notEqual(reattached.lease, forgotten.lease, "a claim after a lost session attaches afresh instead of returning the dead binding")
   await run("task-forgotten", { action: "observe", target: reattached })
-  await run("task-forgotten", { action: "close", target: reattached })
+  fixture.forgetSession(reattached.tab, "The exact tab session is no longer owned by this client")
+  const recovered = BrowserTargetSchema.parse(await run("task-forgotten", { action: "select", browser: "fixture", tab: reattached.tab }))
+  assert.notEqual(recovered.lease, reattached.lease, "a claim proves its binding alive, so recovery takes one call")
+  await run("task-forgotten", { action: "observe", target: recovered })
+  const live = BrowserTargetSchema.parse(await run("task-forgotten", { action: "select", browser: "fixture", tab: recovered.tab }))
+  assert.equal(live.lease, recovered.lease, "a live binding is handed back as it is")
+  await run("task-forgotten", { action: "close", target: recovered })
 
   // With no browser discovered the message says what to install.
   const empty = new BrowserService([])

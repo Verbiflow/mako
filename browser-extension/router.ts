@@ -5,6 +5,7 @@ import { z } from "zod"
 import {
   type ExtensionCommand,
   type ExtensionMessage,
+  EXTENSION_SESSION_GONE,
   ExtensionFieldsSchema,
 } from "@mako/control-runtime/extension"
 
@@ -97,7 +98,7 @@ export class ExtensionRouter {
   private owned(client: string, sessionId: string | undefined): AttachedTarget {
     const attached = sessionId ? this.attached.get(sessionId) : undefined
     if (!attached || attached.client !== client)
-      throw new Error("The exact tab session is no longer owned by this client")
+      throw new Error(EXTENSION_SESSION_GONE)
     return attached
   }
 

@@ -302,7 +302,7 @@ try {
   assert.equal(desk.openPages, 1)
   await assert.rejects(
     run("agent", { action: "observe", target }),
-    /closed or released/
+    /The exact tab closed/
   )
   pages.get(second.tab)?.destroy()
   await new Promise((resolve) => setTimeout(resolve, 20))
@@ -319,11 +319,11 @@ try {
   assert.equal(desk.openPages, 0, "thirty idle minutes close it")
   await assert.rejects(
     run("agent", { action: "observe", target: idle }),
-    /closed or released/
+    /The exact tab closed/
   )
   await assert.rejects(
     run("other", { action: "observe", target: second }),
-    /closed or released/
+    /The exact tab closed/
   )
   console.log(
     "Desk browser: Mako's own interface opens as hidden protocol targets with a private endpoint, page sessions, observation and capture, navigation kept inside the desk, a window cap, idle reaping, and bindings ending with their windows"

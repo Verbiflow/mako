@@ -27,6 +27,9 @@ async function run() {
   const root = process.env.MAKO_PREVIEW_TEST_ROOT
   assert.ok(root)
   app.setPath("userData", join(root, "data"))
+  // The viewer stays unfocused behind the user's windows; macOS then reports it
+  // occluded and Chromium hides its document, which unmounts the preview.
+  app.commandLine.appendSwitch("disable-backgrounding-occluded-windows")
   await app.whenReady()
   app.setActivationPolicy("prohibited")
   const execute = promisify(execFile)
@@ -63,11 +66,22 @@ async function run() {
     viewer.showInactive()
     const deadline = Date.now() + 25_000
     let outcome
+    let pausedCapture = false
     while (Date.now() < deadline) {
       outcome = await viewer.webContents.executeJavaScript(
-        "({status:document.getElementById('result')?.dataset.status,text:document.getElementById('result')?.textContent})"
+        "({status:document.getElementById('result')?.dataset.status,text:document.getElementById('result')?.textContent,paused:Boolean(document.querySelector('[aria-label=\"Control preview, last view\"]'))})"
       )
       if (outcome.status) break
+      // The paused card is evidence for review; its look is a design decision.
+      if (outcome.paused && !pausedCapture) {
+        pausedCapture = true
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        await writeFile(join(root, "paused.png"), (await viewer.webContents.capturePage()).toPNG())
+      } else if (pausedCapture === true && !outcome.paused) {
+        pausedCapture = "resumed"
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        await writeFile(join(root, "resumed.png"), (await viewer.webContents.capturePage()).toPNG())
+      }
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
     console.log(outcome?.text)
