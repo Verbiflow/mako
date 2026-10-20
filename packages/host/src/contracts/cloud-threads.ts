@@ -17,6 +17,16 @@ export const CloudRepositorySchema = z
 
 export type CloudRepository = z.infer<typeof CloudRepositorySchema>
 
+/** A new cloud conversation's start, as its window shows it: its machine coming up, then its harness. */
+export type CloudStartStep = "preparing" | "starting"
+
+/**
+ * What a `mako:cloud-prepare` did while the person writes a new cloud conversation's first message: its Thread is
+ * `ready`, or still `preparing`; `later` asks again after more writing (the last few made ahead went unused); `none`
+ * when this Mac or folder can't start one in the cloud.
+ */
+export type CloudPrepareOutcome = "ready" | "preparing" | "later" | "none"
+
 /**
  * Where a new conversation runs: on a cloud machine of the account's, in a clone of `repository`, or without one,
  * of the GitHub repository the folder's `origin` names, on its upstream branch when it has one there.

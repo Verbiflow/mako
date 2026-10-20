@@ -251,6 +251,7 @@ const inputs = {
   "mako:installation-state": () => z.tuple([]),
   "mako:integrations": () => z.tuple([]),
   "mako:launch-prewarm": () => z.tuple([z.string()]),
+  "mako:cloud-prepare": () => z.tuple([z.string(), z.number().int().nonnegative()]),
   "mako:lifecycle-command": () =>
     z.tuple([
       z.union([
@@ -1535,6 +1536,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:installation-state", "application"],
   ["mako:integrations", "tools"],
   ["mako:launch-prewarm", "tools"],
+  ["mako:cloud-prepare", "conversations"],
   ["mako:lifecycle-command", "application"],
   ["mako:lifecycle-state", "application"],
   ["mako:list-files", "workspaces"],

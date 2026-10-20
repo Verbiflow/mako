@@ -36,6 +36,7 @@ import { ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
+import type { CloudPrepareOutcome } from "../contracts/cloud-threads.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
@@ -458,6 +459,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   })
   methods.handle("mako:live-close", (id: string) => live.close(id))
   methods.handle("mako:live-prewarm", (id: string) => live.prewarm(id))
+  /** Where no person's Mac starts cloud conversations (a cloud machine, the fixture desk): nothing is made ahead. */
+  methods.handle("mako:cloud-prepare", () => "none" satisfies CloudPrepareOutcome)
   /** A new conversation on another harness, from the main composer. */
   methods.handle("mako:harness-start", async (harness: string, prompt: string, options?: SessionSettings) => {
     const cwd = await deps.workspace()

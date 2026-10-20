@@ -4,6 +4,7 @@ import type { LiveSnapshot, LiveStartOptions, ThreadRef } from "@/lib/types"
 import type { LiveProjection } from "@/state/live-projection"
 import type { Entry } from "@mako/sessions/entries"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
+import type { CloudStartStep } from "@mako/host/contracts/cloud-threads"
 import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
 import type { ReleasedTurn } from "@/state/transcript-residency"
 import type {
@@ -74,6 +75,8 @@ export interface StartingAcpConversation extends AcpConversationBase {
   worktree?: "making" | "made"
   /** What making it is doing now, once the host says. */
   worktreeStep?: WorktreeStep
+  /** A cloud Thread's start, once the host says: its project coming up, then its harness starting. */
+  cloudStep?: { step: CloudStartStep; project: string }
   /** What Mako starts this Thread for; its row shows it until the host's record of the Thread arrives. */
   purpose?: ThreadPurposeKind
 }
