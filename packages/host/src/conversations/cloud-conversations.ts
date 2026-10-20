@@ -35,6 +35,12 @@ const READY_AFTER_ASK_MS = 60_000
 /** After this many made ahead in a row went unused for one repository, the next waits for this much writing. */
 const UNUSED_BEFORE_WARY = 3
 const WARY_COMPOSING_MS = 10_000
+/**
+ * While a Thread made ahead's machine comes up (about 12 s with a clone), it's asked again this often, for at most this
+ * long, so its harness starts once the machine is ready rather than at the composer's next ask, half a minute on.
+ */
+const READY_ASK_MS = 2_000
+const READY_ASK_FOR_MS = 90_000
 
 const SummaryIdentitySchema = z.object({ session: z.object({ id: z.string(), status: z.string() }).loose(), revision: z.number(), createdAt: z.number() }).loose()
 /** A cloud host's own `LiveSummary`, checked for the identity and revision this router reads. */
@@ -75,6 +81,9 @@ type Prepared = {
   made: boolean
   /** The conversation started on its machine once it was ready, its harness running before the first message. */
   started?: StartedAhead
+  /** The composer's latest choice of harness, and the next ask while its machine comes up. */
+  launch?: CloudPrepareLaunch
+  watching?: ReturnType<typeof setTimeout>
 }
 
 /**
@@ -216,6 +225,7 @@ export class CloudConversations {
     this.#closed = true
     for (const resume of this.#pauses) resume()
     clearTimeout(this.#saving)
+    for (const prepared of this.#prepared.values()) clearTimeout(prepared.watching)
     for (const subscription of this.#following.values()) subscription?.close()
     this.#following.clear()
     this.#session?.session.close()
@@ -258,8 +268,31 @@ export class CloudConversations {
       hostWarn("cloud-conversations", "a cloud Thread wasn't made ahead", { threadId: asked.threadId, error: error instanceof Error ? error.message : String(error) })
       return "none"
     }
+    if (launch) asked.launch = launch
     if (asked.ready && launch) this.#startAhead(asked, launch)
+    else if (launch) this.#watchReady(asked)
     return asked.ready ? "ready" : "preparing"
+  }
+
+  /** Asks again every `READY_ASK_MS` while its machine comes up, and starts its harness once the machine is ready. */
+  #watchReady(prepared: Prepared): void {
+    if (prepared.watching) return
+    const key = repositoryKey(prepared.repository)
+    const until = Date.now() + READY_ASK_FOR_MS
+    const ask = async () => {
+      prepared.watching = undefined
+      const account = this.#options.account()
+      if (this.#closed || !account || this.#prepared.get(key) !== prepared || prepared.ready || Date.now() > until) return
+      try {
+        prepared.askedAt = Date.now()
+        prepared.ready = (await account.createThread(prepared.threadId, prepared.repository, { prepare: true })).ready
+      } catch (error) {
+        return hostWarn("cloud-conversations", "a cloud Thread made ahead wasn't asked again", { threadId: prepared.threadId, error: error instanceof Error ? error.message : String(error) })
+      }
+      if (prepared.ready && prepared.launch) this.#startAhead(prepared, prepared.launch)
+      else prepared.watching = setTimeout(() => void ask(), READY_ASK_MS)
+    }
+    prepared.watching = setTimeout(() => void ask(), READY_ASK_MS)
   }
 
   /**
@@ -298,6 +331,7 @@ export class CloudConversations {
     const prepared = this.#prepared.get(key)
     if (!prepared || Date.now() - prepared.askedAt < PREPARED_KEPT_MS) return prepared
     this.#prepared.delete(key)
+    clearTimeout(prepared.watching)
     const unused = (this.#unused.get(key) ?? 0) + 1
     this.#unused.set(key, unused)
     hostLog("cloud-conversations", "a cloud Thread made ahead went unused", { threadId: prepared.threadId, unused })
@@ -310,6 +344,7 @@ export class CloudConversations {
     const prepared = this.#fresh(key)
     if (!prepared) return undefined
     this.#prepared.delete(key)
+    clearTimeout(prepared.watching)
     await prepared.asking.catch(() => undefined)
     if (!prepared.made) return undefined
     this.#unused.delete(key)
