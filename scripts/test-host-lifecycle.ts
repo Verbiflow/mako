@@ -34,8 +34,11 @@ async function signalsChild(marks: string) {
 async function hostChild(dataRoot: string, records: string) {
   const predecessor = takePredecessor()
   const lock = await acquireHostLock(dataRoot, { predecessor })
-  await appendFile(records, `${JSON.stringify({ pid: process.pid, lock: lock.kind, predecessor: predecessor ?? null, inherited: process.env.MAKO_HOST_SUCCEEDS ?? null })}\n`)
-  if (lock.kind !== "held") process.exit(1)
+  const record = () => appendFile(records, `${JSON.stringify({ pid: process.pid, lock: lock.kind, predecessor: predecessor ?? null, inherited: process.env.MAKO_HOST_SUCCEEDS ?? null })}\n`)
+  if (lock.kind !== "held") {
+    await record()
+    process.exit(1)
+  }
   const lifecycle = hostLifecycle({
     cleanup: () => new Promise((done) => setTimeout(done, 200)),
     exit: nodeHostExit(),
@@ -44,6 +47,9 @@ async function hostChild(dataRoot: string, records: string) {
   })
   process.on("SIGUSR2", () => void lifecycle.stop({ kind: "request", action: "restart" }))
   setInterval(() => {}, 1000)
+  // The record is the test's cue to signal: written before the handler, a loaded machine's SIGUSR2 could land first
+  // and end the process by its default action.
+  await record()
 }
 
 async function rules() {

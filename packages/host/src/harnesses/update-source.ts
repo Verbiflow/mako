@@ -98,12 +98,6 @@ export interface ProviderUpdateSource
    * provider needs no local CLI.
    */
   install: HarnessUpdateCommand[]
-  /**
-   * The files a start of this harness executes, given the real path behind `binary` when one is installed: what a
-   * cloud machine reads into memory before its snapshot (`warm`), so a copy's start doesn't read them from disk.
-   * Default: that real path alone.
-   */
-  startFiles?(real: string | undefined): string[] | Promise<string[]>
 }
 
 /**
