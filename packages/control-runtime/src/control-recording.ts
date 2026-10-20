@@ -15,6 +15,7 @@ import {
   readdir,
   realpath,
   open,
+  rm,
   type FileHandle,
 } from "node:fs/promises"
 import { join, isAbsolute } from "node:path"
@@ -25,6 +26,7 @@ import { heavy } from "./heavy-packages.js"
 import { imageSize } from "image-size"
 import { RecordingRenderer } from "./recording-render.js"
 import {
+  RECORDING_IDLE_HOLD_MS,
   RecordingOptionsSchema,
   type RecordingOptions,
   type RecordingReceipt,
@@ -32,6 +34,11 @@ import {
 } from "@mako/control/control"
 
 const execute = promisify(execFile)
+/** Whether this FFmpeg can rewrite packet timestamps without decoding. */
+function streamTimestampFilter() {
+  return execute(mediaExecutable("ffmpeg"), ["-hide_banner", "-bsfs"], { timeout: 5000, maxBuffer: 65536 })
+    .then(({ stdout }) => /^setts$/m.test(stdout), () => false)
+}
 function recordingImageSize(bytes: Buffer) {
   try {
     return imageSize(bytes)
@@ -106,6 +113,10 @@ export class ControlRecording {
   private encodedDurationMs?: number
   private encodedFrames?: number
   private journalPointers = 0
+  /** Why a native video kept its idle time, when trimming was asked for. */
+  private idleKept: string | undefined
+  /** Still stretches cut from the video, by the wall-clock time each cut starts. */
+  private readonly idleTrims: { at: number; videoAt: number; trimmedMs: number }[] = []
   private readonly encodingTiming = {
     frames: 0,
     waitsOverFrameBudget: 0,
@@ -242,6 +253,8 @@ export class ControlRecording {
       receipt.encodedDurationMs = this.encodedDurationMs
     if (this.encodedFrames !== undefined)
       receipt.encodedFrames = this.encodedFrames
+    if (this.idleTrims.length)
+      receipt.idleTrimmedMs = this.idleTrims.reduce((total, trim) => total + trim.trimmedMs, 0)
     if (this.error) receipt.error = this.error
     return receipt
   }
@@ -298,22 +311,6 @@ export class ControlRecording {
       .int()
       .nonnegative()
       .parse(Number(stream?.nb_frames))
-    const [rateNumerator, rateDenominator] = (stream?.r_frame_rate ?? "")
-      .split("/")
-      .map(Number)
-    if (
-      !this.options.cursor &&
-      Math.max(width, height) <= this.options.maxSide &&
-      stream?.codec_name === "h264" &&
-      rateDenominator > 0 &&
-      rateNumerator / rateDenominator === this.options.fps
-    ) {
-      this.dimensions = { width, height }
-      this.video = path
-      return
-    }
-    this.sourceVideo = join(this.directory, "source.mp4")
-    await rename(path, this.sourceVideo)
     // These points are emitted at the native event-posting boundary, independent
     // of AX/screenshot capture. Pre-action element centers are never substituted.
     if (this.options.cursor) {
@@ -354,6 +351,28 @@ export class ControlRecording {
         }
       }
       this.pointers.sort((a, b) => a.at - b.at)
+    }
+    // The driver writes frames only when the window changes, so its video has
+    // a variable rate; that plays as it is. It is re-encoded only to draw
+    // pointer events onto it.
+    const playable =
+      !this.pointers.length &&
+      Math.max(width, height) <= this.options.maxSide &&
+      stream?.codec_name === "h264"
+    this.sourceVideo = join(this.directory, "source.mp4")
+    await rename(path, this.sourceVideo)
+    if (this.options.idle === "trim") {
+      const trimmed = join(this.directory, playable ? "recording.mp4" : "source-trimmed.mp4")
+      if (await this.trimNativeIdle(this.sourceVideo, trimmed)) {
+        if (!playable) this.sourceVideo = trimmed
+        else await rm(this.sourceVideo)
+      }
+    }
+    if (playable) {
+      this.dimensions = { width, height }
+      if (!this.idleTrims.length) await rename(this.sourceVideo, path)
+      this.video = path
+      return
     }
     const file = "cursor-background.png"
     const sizeScale = Math.min(
@@ -635,6 +654,9 @@ export class ControlRecording {
             encodingTiming: this.encoder ? this.encodingTiming : undefined,
             frameRate: this.receipt().frameRate,
             outputTiming: this.encoder ? "presentation-timestamps" : "native-capture",
+            // Frame and pointer times are wall-clock. Video time is wall-clock
+            // time less every cut that starts before it.
+            idle: { mode: this.options.idle, holdMs: RECORDING_IDLE_HOLD_MS, trims: this.idleTrims, kept: this.idleKept ?? null },
             videoEncoding: this.videoEncoding,
             encodedDurationMs: this.encodedDurationMs,
             pointer: this.pointers,
@@ -709,6 +731,10 @@ export class ControlRecording {
     let submittedFrames = 0
     let nextOrdinal = 0
     let lastSubmittedAt = -Infinity
+    let lastChangeAt = 0
+    let trimmed = 0
+    let sealCopies = 0
+    const trim = this.options.idle === "trim"
     let nextProgressAt = 1000
     const pending: Promise<void>[] = []
     try {
@@ -799,12 +825,26 @@ export class ControlRecording {
         const state = `${imageRevision}:${pointerIndex}:${!!press && at - press.at < 400}`
         const changed = state !== previousState
         const finalFrame = this.sourceEnded && ordinal === finalCount - 1
+        const still = at - lastChangeAt
         // A one-second heartbeat publishes playable fragments during still
         // scenes. Cursor transitions and the final sample are never coalesced.
-        if (!changed && !finalFrame && at - lastSubmittedAt < 1000) {
+        // Trimming seals the hold instead. A fragment reaches disk once a
+        // keyframe follows it and leaves the encoder once a frame follows that,
+        // so the hold ends with two copies on consecutive slots, the first
+        // always forced to a keyframe: a crash mid-pause keeps every change.
+        const sealing = trim && !changed && !finalFrame && still >= RECORDING_IDLE_HOLD_MS && sealCopies < 2
+        if (!changed && !finalFrame && !sealing && (trim || at - lastSubmittedAt < 1000)) {
           this.unchangedFrameSlots++
           continue
         }
+        const hold = RECORDING_IDLE_HOLD_MS + sealCopies * interval
+        if (trim && submittedFrames > 0 && !sealing && still > hold) {
+          this.idleTrims.push({ at: lastChangeAt + hold, videoAt: lastChangeAt + hold - trimmed, trimmedMs: still - hold })
+          trimmed += still - hold
+        }
+        const frameAt = sealing ? lastChangeAt + hold : at
+        sealCopies = changed ? 0 : sealCopies + (sealing ? 1 : 0)
+        if (changed) lastChangeAt = at
         const outputIndex = submittedFrames
         const reportProgress = at >= nextProgressAt
         if (reportProgress) nextProgressAt = at + 1000
@@ -812,7 +852,8 @@ export class ControlRecording {
         const recordedFrame = current.frame
         const write = encoder
           .write(
-            at,
+            frameAt,
+            frameAt - trimmed,
             changed
               ? {
                   bytes: current.bytes,
@@ -884,6 +925,94 @@ export class ControlRecording {
       throw error
     }
   }
+  /** Wall-clock time to video time, past every trimmed still stretch. */
+  private videoTime(at: number) {
+    let shifted = at
+    for (const trim of this.idleTrims) shifted -= Math.min(Math.max(at - trim.at, 0), trim.trimmedMs)
+    return shifted
+  }
+
+  /**
+   * Cuts still stretches from a native video without re-encoding it. The
+   * driver writes no frame while a window is still, so each stretch is a gap
+   * in presentation times; packets after it move back, and the last frame is
+   * held at most one hold. Presentation and decode times are cut at their own
+   * gaps, and every packet is checked to stay decodable before FFmpeg runs.
+   * Anything unexpected keeps the wall-clock video and says why.
+   */
+  private async trimNativeIdle(source: string, output: string): Promise<boolean> {
+    const keep = (reason: string) => {
+      this.idleKept = reason
+      return false
+    }
+    try {
+      const { stdout } = await execute(mediaExecutable("ffprobe"), [
+        "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "packet=pts_time,dts_time:format=duration",
+        "-of", "json", source,
+      ], { timeout: 20_000, maxBuffer: 16 * 1024 * 1024 })
+      const probe = z.object({
+        packets: z.array(z.object({ pts_time: z.string(), dts_time: z.string() })).max(40_000),
+        format: z.object({ duration: z.string() }),
+      }).parse(JSON.parse(stdout))
+      const packets = probe.packets.map((packet) => ({ pts: Number(packet.pts_time), dts: Number(packet.dts_time) }))
+      if (!packets.length || packets.some((packet) => !Number.isFinite(packet.pts) || !Number.isFinite(packet.dts)))
+        return keep("The native video has packets without timestamps; idle time was kept")
+      const hold = RECORDING_IDLE_HOLD_MS / 1000
+      const steps = (times: number[]) => {
+        const found: { from: number; to: number; removed: number }[] = []
+        for (let index = 1; index < times.length; index++) {
+          const gap = times[index]! - times[index - 1]!
+          if (gap > hold) found.push({ from: times[index - 1]!, to: times[index]!, removed: gap - hold })
+        }
+        return found
+      }
+      const presentation = steps(packets.map((packet) => packet.pts).sort((a, b) => a - b))
+      const decode = steps(packets.map((packet) => packet.dts))
+      const last = Math.max(...packets.map((packet) => packet.pts))
+      const tail = Math.max(0, Number(probe.format.duration) - last - hold)
+      if (!presentation.length && !tail) return false
+      if (!(await streamTimestampFilter()))
+        return keep("This FFmpeg build cannot shift packet timestamps; idle time was kept")
+      if (presentation.length > 500) return keep("The native video has too many still stretches to trim; idle time was kept")
+      const shift = (cuts: typeof presentation, time: number) =>
+        cuts.reduce((total, cut) => total + (time >= (cut.from + cut.to) / 2 ? cut.removed : 0), 0)
+      let previous = -Infinity
+      for (const packet of packets) {
+        const dts = packet.dts - shift(decode, packet.dts)
+        if (dts <= previous || dts > packet.pts - shift(presentation, packet.pts) + 1e-6)
+          return keep("Trimming would make the native video undecodable; idle time was kept")
+        previous = dts
+      }
+      const expression = (variable: string, cuts: typeof presentation) =>
+        `${variable}-(${cuts.map((cut) => `gte(${variable}*TB\\,${(cut.from + cut.to) / 2})*${cut.removed}`).join("+") || "0"})/TB`
+      const filters = [`pts=${expression("PTS", presentation)}`, `dts=${expression("DTS", decode)}`]
+      if (tail) filters.push(`duration=if(gte(PTS*TB\\,${last - 0.0005})\\,min(DURATION\\,${hold}/TB)\\,DURATION)`)
+      await execute(mediaExecutable("ffmpeg"), [
+        "-hide_banner", "-loglevel", "error", "-n", "-i", source,
+        "-map", "0:v", "-c", "copy", "-bsf:v", `setts=${filters.join(":")}`,
+        "-movflags", "+faststart", output,
+      ], { timeout: 60_000, maxBuffer: 65536 })
+      const removed = presentation.reduce((total, cut) => total + cut.removed, 0) + tail
+      const duration = Number(z.object({ format: z.object({ duration: z.string() }) }).parse(JSON.parse((await execute(mediaExecutable("ffprobe"), [
+        "-v", "error", "-show_entries", "format=duration", "-of", "json", output,
+      ], { timeout: 5000, maxBuffer: 65536 })).stdout)).format.duration)
+      if (Math.abs(duration - (Number(probe.format.duration) - removed)) > 0.1) {
+        await rm(output, { force: true })
+        return keep("The trimmed native video had an unexpected length; idle time was kept")
+      }
+      let total = 0
+      for (const cut of [...presentation, ...(tail ? [{ from: last, to: last + hold + tail, removed: tail }] : [])]) {
+        this.idleTrims.push({ at: (cut.from + hold) * 1000, videoAt: (cut.from + hold) * 1000 - total, trimmedMs: cut.removed * 1000 })
+        total += cut.removed * 1000
+      }
+      return true
+    } catch (error) {
+      await rm(output, { force: true })
+      return keep(`Idle time was kept: ${error instanceof Error ? error.message.slice(0, 200) : "trimming failed"}`)
+    }
+  }
+
   private async encodeNativeOverlay() {
     const frame = this.frames[0]
     if (!this.sourceVideo || !frame?.file)
@@ -932,7 +1061,9 @@ export class ControlRecording {
         "-i",
         "pipe:0",
         "-filter_complex",
-        `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2[base];[base][1:v]overlay=shortest=1,fps=${this.options.fps}`,
+        // A native video holds its last frame until stop, but a filter graph
+        // ends that stream where the frame starts; the overlay frames set the length.
+        `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,tpad=stop=-1:stop_mode=clone[base];[base][1:v]overlay=shortest=1,fps=${this.options.fps}`,
         ...this.videoEncoding.args,
         "-pix_fmt",
         "yuv420p",
@@ -990,10 +1121,12 @@ export class ControlRecording {
     width: number,
     height: number
   ): AsyncGenerator<Buffer> {
+    const trimmed = this.idleTrims.reduce((total, trim) => total + trim.trimmedMs, 0)
     const count = Math.max(
       1,
-      Math.ceil(((this.endedAt ?? 0) * this.options.fps) / 1000)
+      Math.ceil((((this.endedAt ?? 0) - trimmed) * this.options.fps) / 1000)
     )
+    const pointers = this.pointers.map((point) => ({ ...point, at: this.videoTime(point.at) }))
     let pointerIndex = -1,
       pressIndex = -1
     let previousState = ""
@@ -1002,20 +1135,20 @@ export class ControlRecording {
       // Use the recording clock directly: exactly one duration per output frame.
       const at = (index * 1000) / this.options.fps
       while (
-        pointerIndex + 1 < this.pointers.length &&
-        this.pointers[pointerIndex + 1]!.at <= at
+        pointerIndex + 1 < pointers.length &&
+        pointers[pointerIndex + 1]!.at <= at
       ) {
         pointerIndex++
-        if (this.pointers[pointerIndex]!.pressed) pressIndex = pointerIndex
+        if (pointers[pointerIndex]!.pressed) pressIndex = pointerIndex
       }
-      const press = this.pointers[pressIndex]
+      const press = pointers[pressIndex]
       const pressed = !!press && at - press.at < 400
       const state = `${pointerIndex}:${pressed}`
       if (rendered && state === previousState) {
         yield rendered
         continue
       }
-      const pointer = this.pointers[pointerIndex]
+      const pointer = pointers[pointerIndex]
       rendered = await this.renderer.render(
         await readFile(join(this.directory, frame.file)),
         frame,

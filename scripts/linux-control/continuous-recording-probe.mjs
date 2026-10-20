@@ -12,7 +12,7 @@ const { mediaExecutable } = await import(new URL("./control-media.js", runtime).
 const directory = await mkdtemp(join(tmpdir(), "mako-media-linux-"))
 const target = { kind: "page", browser: "fixture", tab: "one", generation: "one", lease: "one" }
 let stops = 0
-const recording = await ControlRecording.create(target, { directory, fps: 30 }, async () => { stops++ })
+const recording = await ControlRecording.create(target, { directory, fps: 30, idle: "keep" }, async () => { stops++ })
 const frame = await sharp({ create: { width: 640, height: 480, channels: 3, background: "#304060" } })
   .jpeg().toBuffer()
 await recording.frame(frame, 640, 480)

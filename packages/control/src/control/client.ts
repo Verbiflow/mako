@@ -632,7 +632,7 @@ export class ControlHandle {
           options: controlInput(
             RecordingOptionsSchema.safeParse(options),
             "recording options",
-            "Use {directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}. Read handle.capabilities() for this target’s frame-rate limit."
+            "Use {directory?,name?,cursor?,idle?:'trim'|'keep',fps?,maxSide?,maxDurationMs?}. Read handle.capabilities() for this target’s frame-rate limit."
           ),
         })
       ),

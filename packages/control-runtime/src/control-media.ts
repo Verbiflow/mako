@@ -17,7 +17,10 @@ export function recordingVideoEncoding(platform = nodePlatform()) {
     : {
         codec: "libx264" as const,
         hardwareRequired: false,
-        args: ["-c:v", "libx264", "-preset", "fast", "-crf", "18"],
+        // A recording is written live: lookahead and frame threads would hold
+        // about 47 frames, which at one frame a second keeps the file and any
+        // crash-recovered prefix most of a minute behind.
+        args: ["-c:v", "libx264", "-preset", "fast", "-tune", "zerolatency", "-crf", "18"],
       }
 }
 

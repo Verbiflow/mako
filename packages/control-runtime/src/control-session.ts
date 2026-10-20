@@ -1016,6 +1016,22 @@ export function createControlSession(
       }
     }
   }
+  // The driver ends a named session after five idle minutes and refuses
+  // calls that name it before running the tool, so one retry under a fresh
+  // session is safe. Every call that names Mako's session comes through here.
+  const callInSession = async (
+    connection: ComputerDriverClient,
+    name: string,
+    args: JsonObject,
+    options: { signal?: AbortSignal; timeout: number },
+    hasCursor: boolean
+  ) => {
+    const reply = await connection.callTool(name, { ...args, session }, options)
+    if (!endedDriverSession(toolResultSchema.parse(reply), session)) return reply
+    session = `mako-${taskId}-${randomUUID().slice(0, 8)}`
+    if (hasCursor) await quietAgentCursor(options.signal)
+    return connection.callTool(name, { ...args, session }, options)
+  }
   const AGENT_CURSOR_TOOLS = new Set([
     "set_agent_cursor_enabled",
     "set_agent_cursor_motion",
@@ -1318,23 +1334,9 @@ export function createControlSession(
     beforeDispatch?.(driverArgs)
     let reply: Awaited<ReturnType<ComputerDriverClient["callTool"]>>
     try {
-      reply = await connection.callTool(tool.name, driverArgs, {
-        signal,
-        timeout: 60_000,
-      })
-      // The driver ends a named session after five idle minutes and refuses
-      // calls that name it before running the tool, so one retry is safe.
-      if (
-        driverArgs.session === session &&
-        endedDriverSession(toolResultSchema.parse(reply), session)
-      ) {
-        session = `mako-${taskId}-${randomUUID().slice(0, 8)}`
-        if (hasCursor) await quietAgentCursor(signal)
-        reply = await connection.callTool(tool.name, { ...driverArgs, session }, {
-          signal,
-          timeout: 60_000,
-        })
-      }
+      reply = driverArgs.session === session
+        ? await callInSession(connection, tool.name, driverArgs, { signal, timeout: 60_000 }, hasCursor)
+        : await connection.callTool(tool.name, driverArgs, { signal, timeout: 60_000 })
     } catch (error) {
       if (!(error instanceof ComputerDriverExitedError) || closed) throw error
       throw NATIVE_READ_TOOLS.has(tool.name)
@@ -2918,7 +2920,7 @@ export function createControlSession(
       assertions:
         "await handle.expect({role,name?,within?,value?,states?,absent?},{timeoutMs?,everyMs?}) polls fresh structured evidence without replaying actions. A role alone waits for one to exist, e.g. {role:'dialog'} (with absent:true, for none); a value or states need exactly one match, so duplicates fail. states is {disabled:true} or ['disabled']. Exact value equality. Absent requires complete coverage. Positive evidence is scoped to observed nodes, not proof of global uniqueness. Check coverage when the UI is partial. On pages, await tab.waitFor({text?,selector?,url?,title?,hidden?,networkIdle?},{timeoutMs?}) waits for page text (a case-sensitive substring of document.body.innerText), a CSS selector, a URL or title substring or network quiet, and throws assertion-failed at the deadline; tab.expect accepts the same page condition when it names no role. Use these instead of fixed sleeps.",
       recording:
-        "await handle.record({directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}) starts explicit video capture of this tab or window. Keep the returned handle and receipt. After a program reset, await handle.recording(id) binds the existing recording from its exact receipt; it never starts another capture. recording.stop() starts finalization; recording.status() returns recording/finalizing/finished/interrupted/failed plus video, timeline paths and encoded dimensions when ready. While capture runs, timeline names timeline.jsonl, an append-only journal; once finished it names timeline.json, the complete timeline to read. The journal stays beside it as the raw log. The receipt’s frames field counts source frames (or retained samples when a source count is unavailable); browser video holds unchanged images using timestamps, so encoded frame count differs. Browser frameRate reports requestedFps, encodedFps (not distinct visual FPS), skippedFrameSlots under scheduling/encoder pressure, and unchangedFrameSlots saved by holding identical pixels. droppedFrames counts source queue evictions. Under contention, recording continues at reduced temporal sampling with original sharpness and duration; a stalled or failed encoder still reports interruption. encodedFrames/encodedDurationMs report retained playable output; a crash prefix can be shorter than capture duration. fps caps browser sampling and output (browser default/max 60; native defaults to the driver-advertised maximum, up to 60). maxSide caps output size; it does not fabricate source detail or alter devicePixelRatio. It records the agent cursor where dispatch coordinates are known, never the physical cursor. Media stays in files; capture stops when the task ends. ffmpeg is required. Native windows require the updated shared driver; unsupported window capture refuses without recording the desktop.",
+        "await handle.record({directory?,name?,cursor?,idle?,fps?,maxSide?,maxDurationMs?}) starts video capture of this tab or window; nothing records until you call it. Keep the returned handle; after a program reset, await handle.recording(id) reattaches from the receipt id and never starts another capture. recording.stop() begins finalization and recording.status() returns recording, finalizing, finished, interrupted or failed; a finished receipt names the MP4 video and timeline.json (while capture runs, timeline names timeline.jsonl, an append-only journal that stays beside it). idle:'trim' (default) plays any still stretch longer than a second for about one second, so the video shows actions rather than waiting; timeline times stay wall-clock, timeline.idle.trims lists each cut as {at,videoAt,trimmedMs} and receipt.idleTrimmedMs totals them. idle:'keep' plays in real time. cursor (default true) draws the agent's pointer where dispatch coordinates are known, never the human's. fps caps sampling (browser default and max 60; native defaults to the driver's maximum, up to 60). maxSide caps output size without inventing detail or changing devicePixelRatio. maxDurationMs defaults to 120000 (1000 to 600000). Receipt counts: frames is source frames (or retained samples); encodedFrames and encodedDurationMs describe the playable video, after idle cuts; frameRate gives requestedFps, encodedFps, skippedFrameSlots (dropped under scheduling or encoder pressure) and unchangedFrameSlots (identical pixels held, not re-encoded); droppedFrames counts source-queue evictions. Under load a recording lowers its frame rate and keeps sharpness; a stalled or failed encoder reports interruption and keeps the playable prefix. Media stays in files, never in observations; capture stops when the task ends. ffmpeg is required. Native windows need the updated shared driver; unsupported window capture refuses rather than recording the desktop.",
       page: "tab.evaluate(fn,...jsonArgs) or evaluate('expression') returns the JSON value of page JavaScript; the function is serialized into the page and cannot see program variables, and a throw reports its message and line. tab.inspect(ref,{attributes?,styles?}) reads {tag,text,attributes,box,visible,inViewport,value?,checked?,disabled?,styles?} without changing the page and prints the element, its box, then the styles and attributes asked for. tab.hover(ref|{x,y,view}), drag(from,to,{steps?,modifiers?}) (refs or points; handles pointer-event and native HTML5 drag and drop and always releases the button), scrollIntoView(ref), waitFor(condition,{timeoutMs?}). tab.navigate(url,{waitUntil?,timeoutMs?}), screenshot({ref?,region?:{x,y,width,height},fullPage?,format?:png|jpeg,quality?,maxSide?}), upload(ref,files), dialog({auto?:'ask'|'accept'|'dismiss',respond?:'accept'|'dismiss',promptText?:string}), children(), retain(name), download({directory,ref?|url?,timeoutMs?}), downloadStatus(id,{timeoutMs?}), close(), release(), cdp(method,params?). Prefer the verbs above to cdp: raw Input events skip ref and view checks. tab.raw(name,args?) is the explicit page escape hatch; run mako-control api --domain DOMAIN --method METHOD for pinned CDP schemas. tab.locator({role,name}).screenshot({maxSide:2048}) reads and captures one exact element; emitImage(await ...) writes an image artifact; CLI output includes its receipt. dialog({}) reads pending without answering; respond answers only the current dialog, while auto changes future handling. A dialog-triggering click may already have run: inspect and answer it without repeating the click. Screenshot coordinates report actual image pixels and viewport CSS geometry; do not infer coordinates from a resized chat thumbnail. A Mako desk is a live client of the real app, not a side-effect-free sandbox, and refuses URLs outside its own origin. Profile/task/background defaults. name labels the task group; retain(name) keeps a result after task cleanup. children() returns {children:[{browser,tab,title,url}],note}; pass a child to control.claimTab(child). Extension downloads accept an explicit http(s) URL, await the browser-issued ID, and copy the completed file into a unique subdirectory of directory; browserPath retains the original. In-progress results have an id for downloadStatus, never repeat the start. Ref-triggered download routing and isolated contexts require direct CDP.",
       native:
         "window.screenshot({format?,quality?,maxSide?,screenshot_out_file?}) returns actual image geometry and a view token; coordinates use the returned image pixels with {x,y,view}, including resized captures. window.appshot() returns the Appshot a person takes: {window,text,elements,truncated,data,mimeType,view,coordinates}, where text is the window's outline, one element per line indented under what holds it with its [x,y,width,height] box in the picture's pixels; it prints as that outline, emitImage(shot) shows the picture, and it is a read whose outline has no refs. window.raw(name,args?), control.native(name,args?) for driver lifecycle/capabilities. Same host validation and foreground policy. Raw calls invalidate unified refs; observe before returning to high-level input.",
@@ -3095,6 +3097,10 @@ export function createControlSession(
           "Use handle.record(options), then savedRecording.stop()/status(); recover with handle.recording(id). CLI uses record stop/status --input recording.json."
         )
         if (request.target.kind === "window") {
+          const connection = client
+          const cursor = (available: Tool[]) => available.some((candidate) => candidate.name === "set_agent_cursor_enabled")
+          const call = connection && ((name: string, args: JsonObject, timeout: number) =>
+            tools().then((available) => callInSession(connection, name, args, { timeout }, cursor(available))))
           if (request.operation !== "start") {
             const recording = nativeRecordings.get(
               request.target,
@@ -3102,15 +3108,10 @@ export function createControlSession(
             )
             return request.operation === "stop"
               ? recording.stop()
-              : nativeRecordings.status(
-                  request.target,
-                  recording.id,
-                  client,
-                  session
-                )
+              : nativeRecordings.status(request.target, recording.id, call)
           }
           const available = await tools()
-          if (!client)
+          if (!call)
             throw new Error("Native recording requires a connected driver")
           return nativeRecordings.start(
             request.target,
@@ -3119,9 +3120,8 @@ export function createControlSession(
               "recording options",
               "Use {directory?,name?,cursor?,maxDurationMs?,maxSide?,fps?}; native rates depend on the driver/backend capability."
             ),
-            client,
+            call,
             available,
-            session,
             signal
           )
         }

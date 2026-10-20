@@ -21,6 +21,8 @@ const command = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("frame"),
     at: z.number().finite().nonnegative(),
+    /** Presentation time; `at` stays the wall-clock time the cursor is drawn at. */
+    pts: z.number().finite().nonnegative(),
     id: z.number().int(),
     image: RecordingRenderSchema.omit({ at: true }).extend({
       bytes: z.instanceof(ArrayBuffer),
@@ -107,7 +109,7 @@ port.on("message", (input) => {
         if (image !== pixels) releasePixels()
         pixels = image
         const pipeStart = performance.now()
-        writing = encoder!.write(image, value.at)
+        writing = encoder!.write(image, value.pts)
         void writing.then(
           () => {
             queuedFrames--

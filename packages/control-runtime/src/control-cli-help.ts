@@ -182,7 +182,7 @@ export const controlCommands = new Map<string, CommandHelp>(
       output:
         "JSON recording receipt with id and target. Save it to stop/status later; command exit does not stop recording. Its timeline is timeline.jsonl, a journal appended during capture; the finished receipt names timeline.json instead.",
       notes:
-        "--input accepts {options:{cursor,maxDurationMs,...}}. Rates depend on the backend; unsupported requests refuse. Requested/output fps does not establish distinct source fps. The receipt’s frames field counts source frames or retained samples, not encoded constant-rate frames; the encoder may duplicate frames.",
+        "--input accepts {options:{cursor,idle,maxDurationMs,...}}. Still stretches over a second play for about one second unless idle is \"keep\"; the timeline lists every cut. Rates depend on the backend; unsupported requests refuse. Requested/output fps does not establish distinct source fps. The receipt’s frames field counts source frames or retained samples, not encoded constant-rate frames; the encoder may duplicate frames.",
       examples: [
         "mako-control record start --target-file target.json --directory ./recordings > recording.json",
       ],

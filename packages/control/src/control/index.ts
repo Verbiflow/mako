@@ -86,6 +86,7 @@ export {
 } from "./scope.js"
 
 export {
+  RECORDING_IDLE_HOLD_MS,
   RecordingHandle,
   RecordingOptionsSchema,
   RecordingReceiptSchema,

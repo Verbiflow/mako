@@ -9,13 +9,18 @@ import type { ComputerDriverClient, ComputerDriverResult } from "../packages/con
 const ended = new Set<string>()
 const calls: { name: string; session?: string }[] = []
 let failWith: string | undefined
+let started: { recording_id: string; output_dir?: string } | undefined
 const sessionTool = (name: string): Tool => ({
   name,
   inputSchema: { type: "object", properties: { session: { type: "string" } }, additionalProperties: true },
 })
 const driver: ComputerDriverClient = {
   async listTools() {
-    return ["get_window_state", "set_agent_cursor_enabled", "set_agent_cursor_motion"].map(sessionTool)
+    return [
+      ...["get_window_state", "set_agent_cursor_enabled", "set_agent_cursor_motion"].map(sessionTool),
+      { name: "start_recording", inputSchema: { type: "object", properties: { session: { type: "string" }, window_target: { type: "object" }, fps: { type: "integer", minimum: 1, maximum: 30 } } } },
+      { name: "stop_recording", inputSchema: { type: "object", properties: { session: { type: "string" }, recording_id: { type: "string" } } } },
+    ]
   },
   async callTool(name, args): Promise<ComputerDriverResult> {
     const session = z.string().optional().safeParse(args.session).data
@@ -26,6 +31,16 @@ const driver: ComputerDriverClient = {
         content: [{ type: "text", text: `session '${session}' has ended; tool call '${name}' was rejected. Call start_session with this id to revive it before issuing further actions, or use a new session id.` }],
         structuredContent: { code: "tool_invocation_failed", exit_code: 1 },
       }
+    if (name === "start_recording" || name === "stop_recording" || name === "get_recording_state") {
+      if (name !== "get_recording_state") started = z.object({ recording_id: z.string(), output_dir: z.string().optional() }).parse(args)
+      const recording = started!
+      const state = {
+        generation: 1, recording_id: recording.recording_id, target: { pid: 42, window_id: 7 },
+        video_active: name !== "stop_recording", fps: 30, output_dir: recording.output_dir ?? null,
+        last_video_path: null, last_error: name === "stop_recording" ? "fixture keeps no video" : null,
+      }
+      return { content: [{ type: "text", text: JSON.stringify(state) }], structuredContent: state }
+    }
     if (name !== "get_window_state") return { content: [], structuredContent: {} }
     if (failWith)
       return {
@@ -82,7 +97,22 @@ try {
   const failed = await read()
   assert.equal(failed.error, "AX walk failed: the window closed", "A window-state error keeps the driver's own message")
   assert.equal(reads().length, 1, "Other errors are not retried")
-  console.log("native session expiry: ended driver sessions are replaced once; window-state errors keep their message")
+
+  const current = calls.at(-1)?.session
+  assert.ok(current, JSON.stringify(calls))
+  ended.add(current)
+  calls.length = 0
+  const recorded = CallToolResultSchema.parse(await server.request({
+    method: "exec",
+    arguments: { source: "try { const r = await control.window({pid:42,window_id:7}).record({fps:30}); return {status:r.receipt?.status ?? (await r.status()).status} } catch (e) { return {error:e.message} }" },
+  }))
+  const recordText = recorded.content.find((part) => part.type === "text")
+  assert.ok(recordText?.type === "text" && recordText.text.includes('"status":"recording"'), JSON.stringify(recorded))
+  const starts = calls.filter((call) => call.name === "start_recording")
+  assert.equal(starts.length, 2, "A recording start refused for an ended session is sent once more, under a new one")
+  assert.equal(starts[0]?.session, current)
+  assert.ok(starts[1]?.session && starts[1].session !== current, JSON.stringify(calls))
+  console.log("native session expiry: ended driver sessions are replaced once, recordings included; window-state errors keep their message")
 } finally {
   await server.close()
 }

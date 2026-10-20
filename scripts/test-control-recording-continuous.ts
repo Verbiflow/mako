@@ -45,7 +45,7 @@ const frame = await sharp(pixels, { raw: { width, height, channels: 3 } })
   .toBuffer()
 const recording = await ControlRecording.create(
   target,
-  { directory: root, fps: 60, cursor: false, maxDurationMs: 600_000 },
+  { directory: root, fps: 60, cursor: false, maxDurationMs: 600_000, idle: "keep" },
   async () => {}
 )
 const start = performance.now()
@@ -152,7 +152,7 @@ let crashResult
 try {
   const crashed = await ControlRecording.create(
     target,
-    { directory: root, fps: 60, cursor: false },
+    { directory: root, fps: 60, cursor: false, idle: "keep" },
     async () => {}
   )
   await crashed.frame(frame, width, height)

@@ -5,7 +5,10 @@
 ARM64. It builds FFmpeg/ffprobe with only the codecs, filters and file protocols
 used by recordings. Network protocols and autodetected Homebrew libraries are
 disabled. Recipe 3 introduced Apple's VideoToolbox H.264 encoder; recipe 4 removes
-the unused concat demuxer after retiring staged-image browser recording. Mac
+the unused concat demuxer after retiring staged-image browser recording. Recipe 5 adds
+the `setts` bitstream filter, which cuts idle time from native video without
+re-encoding, and the `tpad` filter, which holds a native video's last frame under
+the pointer overlay. Mac
 recordings require hardware (`allow_sw=0`), realtime mode, no B-frames and quality
 85; unsupported builds refuse before capture. Native video that needs no transform
 still passes through. Linux retains its existing x264 settings pending cloud design.
