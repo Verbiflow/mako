@@ -16,6 +16,8 @@ export type GatewayHostCallsOptions = (
   history?: boolean
   /** Every call is logged; otherwise only failures and repeats. */
   trace?: boolean
+  /** Made ahead of a person's message, as their harness started on a Thread made ahead (`OperationEnvelope.ahead`). */
+  ahead?: boolean
 }
 
 export type GatewayHostCalls = {
@@ -49,6 +51,7 @@ export function gatewayHostCalls(session: ClientSession, options: GatewayHostCal
         const operation = toHostOperation(channel, input, { id, target, actor: options.actor, correlationId, attempt })
         // A close needn't wake a cloud Thread's paused machine: it waits there for the machine's next wake.
         if (deferredWhenAsleep.has(channel)) operation.whenAsleep = "defer"
+        if (options.ahead) operation.ahead = true
         let reply: Reply
         try {
           reply = await session.call(operation)

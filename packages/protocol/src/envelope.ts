@@ -66,6 +66,12 @@ export const OperationEnvelopeSchema = z
      * operation whose answer the caller doesn't need and that is safe to repeat, such as closing a conversation.
      */
     whenAsleep: z.literal("defer").optional(),
+    /**
+     * Sent ahead of a person's message while they write it, such as starting their harness on a Thread made ahead: the
+     * gateway doesn't take it as the person arriving, so the Thread stays made ahead until their message comes. Like
+     * `whenAsleep`, it's the gateway's to read, and isn't passed on to the runtime.
+     */
+    ahead: z.literal(true).optional(),
   })
   .strict()
 

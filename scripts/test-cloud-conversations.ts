@@ -24,7 +24,7 @@ import {
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { Git } from "@mako/git"
 import { CloudConversations, folderRepository } from "@mako/host/conversations/cloud-conversations"
-import type { CloudRepository } from "@mako/host/contracts/cloud-threads"
+import type { CloudPrepareLaunch, CloudRepository } from "@mako/host/contracts/cloud-threads"
 import { githubRepositoryUrl } from "@mako/host/contracts/cloud-threads"
 import { decodeRuntimeValue, encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
@@ -238,8 +238,8 @@ function steps(starts: RuntimeEvent[], conversationId: string) {
     .map((step) => `${step.step} ${step.project}`)
 }
 
-async function prepare(router: CloudConversations, composingMs = 0) {
-  const routed = await router.route("mako:cloud-prepare", ["/Users/me/project", composingMs])
+async function prepare(router: CloudConversations, composingMs = 0, launch?: CloudPrepareLaunch) {
+  const routed = await router.route("mako:cloud-prepare", ["/Users/me/project", composingMs, launch])
   assert.ok(routed.handled, "the cloud router answers every prepare")
   return decodeRuntimeValue(routed.value)
 }
@@ -295,6 +295,59 @@ test("a Thread made ahead and left alone isn't taken up; after three in a row go
   const conversationId = randomUUID()
   await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: {} }])
   assert.equal(await prepare(router, 0), "ready", "one taken up, the first keystroke is enough again")
+})
+
+/** Each operation this Mac sent its cloud Thread, by name, and whether it was made ahead of a person's message. */
+function recordOperations(machine: Awaited<ReturnType<typeof cloudMachine>>) {
+  const sent: Array<{ op: string; ahead: boolean }> = []
+  const session = machine.account.session
+  machine.account.session = () => {
+    const opened = session()
+    return { ...opened, call: (operation) => (sent.push({ op: operation.op, ahead: operation.ahead === true }), opened.call(operation)) }
+  }
+  return sent
+}
+
+test("once its machine is ready, the composer's harness is started ahead with no message; the send brings the message to it, and the window takes it up", async () => {
+  const machine = await cloudMachine()
+  const sent = recordOperations(machine)
+  const { router, starts } = conversations(machine.account, join(scratch, "harness-ahead", "conversations.json"))
+  const launch = { harness: "claude", modeId: "default", tuning: { model: "opus" } }
+  assert.equal(await prepare(router, 0, launch), "ready")
+  await until("the harness started ahead", () => machine.calls.some((call) => call.channel === "mako:live-start"))
+  const ahead = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string(), modeId: z.string(), tuning: z.unknown() }).strict()]).parse(machine.calls.find((call) => call.channel === "mako:live-start")?.args)
+  assert.equal(ahead[1], CLONE)
+  assert.deepEqual(sent.map((call) => `${call.op}${call.ahead ? " ahead" : ""}`), ["host.boot ahead", "host.live-start ahead"], "made ahead: the Thread stays so until the message")
+  await prepare(router, 30_000, launch)
+  assert.equal(machine.calls.filter((call) => call.channel === "mako:live-start").length, 1, "asked again with the same choice, it isn't started again")
+
+  const key = randomUUID()
+  const first = { id: "r-1", text: "the first message", attachments: [] }
+  const started = await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: key, cloud: {}, modeId: "default", tuning: { model: "opus" }, initialRequest: first }])
+  assert.ok(started.handled)
+  const answered = z.object({ session: z.object({ id: z.string() }) }).parse(decodeRuntimeValue(started.value))
+  assert.equal(answered.session.id, ahead[2].conversationId, "the window takes up the conversation started ahead")
+  const brought = machine.calls.filter((call) => call.channel === "mako:live-start").at(-1)
+  assert.equal(z.object({ conversationId: z.string(), initialRequest: z.unknown() }).loose().parse(brought?.args[2]).conversationId, ahead[2].conversationId)
+  assert.equal(machine.calls.filter((call) => call.channel === "mako:boot").length, 1, "the send asks nothing more of the machine first")
+  assert.deepEqual(sent.slice(2).map((call) => `${call.op}${call.ahead ? " ahead" : ""}`), ["host.live-start"], "the send's own start takes the Thread up")
+  assert.deepEqual(steps(starts, key), ["starting Hello-World"])
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: key, cloud: {}, modeId: "default", tuning: { model: "opus" }, initialRequest: first }])
+  assert.equal(machine.created.length, 1, "a repeated start finds it by the window's own ID")
+})
+
+test("a send whose harness changed since one was started ahead closes that one and starts its own, on the machine already ready", async () => {
+  const machine = await cloudMachine()
+  const { router } = conversations(machine.account, join(scratch, "harness-changed", "conversations.json"))
+  await prepare(router, 0, { harness: "claude" })
+  await until("the harness started ahead", () => machine.calls.some((call) => call.channel === "mako:live-start"))
+  const aheadId = z.object({ conversationId: z.string() }).loose().parse(machine.calls.find((call) => call.channel === "mako:live-start")?.args[2]).conversationId
+  const key = randomUUID()
+  const started = await router.route("mako:live-start", ["codex", "/Users/me/project", { conversationId: key, cloud: {}, initialRequest: { id: "r-1", text: "hi", attachments: [] } }])
+  assert.ok(started.handled)
+  assert.equal(z.object({ session: z.object({ id: z.string(), harness: z.string() }) }).parse(decodeRuntimeValue(started.value)).session.id, key)
+  await until("the one started ahead closed", () => machine.calls.some((call) => call.channel === "mako:live-close" && call.args[0] === aheadId))
+  assert.equal(machine.created.length, 1, "in the same Thread")
 })
 
 test("a Mac that isn't signed in makes nothing ahead", async () => {

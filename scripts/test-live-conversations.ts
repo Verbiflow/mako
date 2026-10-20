@@ -1040,6 +1040,31 @@ async function acceptanceAndRaces() {
   }
 }
 
+/** A harness started ahead of its first message takes it from the start that brings it, once, with its title. */
+async function startedAheadTakesFirstMessage() {
+  const f = fixture()
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    assert.deepEqual(f.owner.snapshot(f.id)?.requests, [], "started ahead: nothing to send yet")
+    const first = { id: randomUUID(), text: "the first message", attachments: [] }
+    const bring = () => f.owner.start("test-provider", "/tmp", { conversationId: f.id, title: "The first message", initialRequest: first })
+    await bring()
+    await tick()
+    assert.deepEqual(f.sent, ["the first message"], "the start that brings it sends it to the harness already running")
+    assert.equal(f.owner.snapshot(f.id)?.session.title, "The first message")
+    await bring()
+    await tick()
+    assert.deepEqual(f.sent, ["the first message"], "a repeated start sends it once")
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: randomUUID(), text: "another", attachments: [] } })
+    await tick()
+    assert.equal(f.owner.snapshot(f.id)?.requests.length, 1, "a conversation with requests keeps its own")
+  } finally {
+    f.cleanup()
+  }
+}
+
 async function closeDuringStartup() {
   const f = fixture()
   try {
@@ -1967,6 +1992,7 @@ await failureIsolationAndAssets()
 
 await queuedSettings()
 await acceptanceAndRaces()
+await startedAheadTakesFirstMessage()
 await closeDuringStartup()
 await closeBeforeNativeSpawn()
 await durabilityAndBatching()
@@ -1983,5 +2009,5 @@ await unloadsHibernatedConversations()
 await failedCloseKeepsOwnership()
 identityAndToolLifecycle()
 console.log(
-  "Live conversations: durable deduplicated acceptance, startup/terminal races, idle hibernation with one resume, recovery, batching, tool lifecycle, and 499/499 completed exchange identities passed"
+  "Live conversations: durable deduplicated acceptance, a harness started ahead taking its first message, startup/terminal races, idle hibernation with one resume, recovery, batching, tool lifecycle, and 499/499 completed exchange identities passed"
 )
