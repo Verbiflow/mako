@@ -22,9 +22,9 @@ let now = 1, calls = 0
 const cache = createCursorModelCache(() => now)
 let release!: (models: SdkModelListItem[]) => void
 const first = cache(keyA, () => { calls++; return new Promise(resolve => { release = resolve }) })
-const same = cache({ ...keyA }, async () => { calls++; return catalog("wrong") }, true)
+const same = cache({ ...keyA, MAKO_CONVERSATIONS_TOKEN: "session-only", PATH: "/session/bin" }, async () => { calls++; return catalog("wrong") }, true)
 await new Promise<void>(resolve => setImmediate(resolve))
-assert.equal(calls, 1, "display/startup overlap uses one native list")
+assert.equal(calls, 1, "display/startup overlap uses one native list, whatever else their environments hold")
 const other = await cache(keyB, async () => catalog("B"))
 assert.equal(other[0].id, "B", "another credential cannot join the pending account")
 release(catalog("A"))
