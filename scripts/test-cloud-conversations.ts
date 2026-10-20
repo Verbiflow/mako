@@ -336,6 +336,18 @@ test("once its machine is ready, the composer's harness is started ahead with no
   assert.equal(machine.created.length, 1, "a repeated start finds it by the window's own ID")
 })
 
+test("a Thread made ahead whose machine is still coming up is asked again until it's ready, and its harness starts then, not at the composer's next ask", async () => {
+  const machine = await cloudMachine()
+  machine.machineState.ready = false
+  const { router } = conversations(machine.account, join(scratch, "watch-ready", "conversations.json"))
+  assert.equal(await prepare(router, 0, { harness: "claude" }), "preparing")
+  await new Promise((resolve) => setTimeout(resolve, 2_500))
+  assert.equal(machine.calls.some((call) => call.channel === "mako:live-start"), false, "not ready: nothing started")
+  assert.ok(machine.asked.length >= 2, "asked again while it comes up")
+  machine.machineState.ready = true
+  await until("the harness started once the machine was ready", () => machine.calls.some((call) => call.channel === "mako:live-start"), 5_000)
+})
+
 test("a send whose harness changed since one was started ahead closes that one and starts its own, on the machine already ready", async () => {
   const machine = await cloudMachine()
   const { router } = conversations(machine.account, join(scratch, "harness-changed", "conversations.json"))
