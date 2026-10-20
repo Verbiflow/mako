@@ -112,6 +112,7 @@ const inputs = {
   "mako:cloud-account": () => z.tuple([]),
   "mako:cloud-device-remove": () => z.tuple([z.string()]),
   "mako:cloud-devices": () => z.tuple([]),
+  "mako:cloud-offer-projects": () => z.tuple([z.array(z.string())]),
   "mako:cloud-prepare": () =>
     z.tuple([
       z.string(),
@@ -1486,6 +1487,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:cloud-account", "usage"],
   ["mako:cloud-device-remove", "usage"],
   ["mako:cloud-devices", "usage"],
+  ["mako:cloud-offer-projects", "conversations"],
   ["mako:cloud-prepare", "conversations"],
   ["mako:cloud-sign-in", "usage"],
   ["mako:cloud-sign-in-cancel", "usage"],

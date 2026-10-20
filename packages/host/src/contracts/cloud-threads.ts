@@ -28,6 +28,9 @@ export type CloudStartStep = "preparing" | "starting"
  */
 export type CloudPrepareOutcome = "ready" | "preparing" | "later" | "none"
 
+/** What onboarding's offer of this Mac's recent projects did: `asked` for their bases, `already` offered, or `none` to offer. */
+export type CloudProjectsOffer = "asked" | "already" | "none"
+
 /** The harness and settings the composer would start a new cloud conversation with, to start it ahead on its machine. */
 export interface CloudPrepareLaunch {
   harness: string

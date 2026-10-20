@@ -26,6 +26,7 @@ import type { ProcessPlatform } from "@mako/host/contracts/platform"
 import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
 import { cloudAccountStore } from "@/state/cloud-account"
+import { offerCloudProjects } from "@/state/cloud-projects"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, markLiveOwnerDisconnected } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
@@ -332,6 +333,7 @@ function apply(event: HostEvent) {
   }
   if (event.type === "cloud-account") {
     cloudAccountStore.set({ account: event.account })
+    offerCloudProjects(event.account)
     return
   }
   if (event.type === "cloud-sign-ins") {

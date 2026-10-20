@@ -34,6 +34,8 @@ export interface CloudAccount {
    * under its ID. `prepare`: made ahead of its first message, as its person writes it; `ready` once its machine is.
    */
   createThread(threadId: string, repository: CloudRepository, options?: { prepare?: boolean }): Promise<{ ready: boolean }>
+  /** Project bases for these repositories, made in the background ahead of their first cloud Thread. */
+  askBases(repositories: CloudRepository[]): Promise<void>
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   stop(): void
@@ -161,6 +163,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     session: () => cloud.session(),
     deviceId: () => cloud.deviceId(),
     createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),
+    askBases: (repositories) => cloud.askBases(repositories),
     wake: () => {
       cloud.wake()
       sync?.wake()
