@@ -384,6 +384,12 @@ export class MachineRuntime {
     this.#send({ type: "state", state: this.#state })
   }
 
+  /** The host loaded what every start loads (`warm` in the agent's protocol), in `ms`. */
+  warmed(ms: number, loaded: string[]): void {
+    hostLog("machine", "warm: what every start loads is loaded", { ms, loaded: loaded.join(",") })
+    this.#send({ type: "warm", ms, loaded })
+  }
+
   #send(message: HostMessage): void {
     if (this.#stopped && message.type !== "state") return
     this.#options.agent.write(`${JSON.stringify(message)}\n`)

@@ -242,14 +242,14 @@ export class RuntimeUpdates {
     await this.loaded
   }
 
-  /** Schedules the first reading behind startup and the hourly public reading. */
-  start(jobs: HostJobs): void {
+  /** Schedules the first reading behind startup (or after `firstAfterMs`, when it was read already) and the hourly public reading. */
+  start(jobs: HostJobs, options: { firstAfterMs?: number } = {}): void {
     this.stopped = false
     this.stopReading?.()
     this.stopReading = jobs.every("read harness runtime versions", this.options.latestTtlMs, async () => {
       await this.refresh().catch(() => undefined)
     }, {
-      firstAfterMs: this.options.startDelayMs,
+      firstAfterMs: options.firstAfterMs ?? this.options.startDelayMs,
     })
   }
 

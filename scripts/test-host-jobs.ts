@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { setTimeout as sleep } from "node:timers/promises"
+import { Foreground } from "@mako/host/base/foreground"
 import { HostJobs } from "@mako/host/base/host-jobs"
 
 const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === "Timeout").length
@@ -133,4 +134,36 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
   }
 }
 
-console.log("Host jobs: named, unreferenced, repeating; an overlapping run is skipped, a failure is counted and the job goes on, a name is used once, nothing runs after stop or cancel, the first run can come sooner, and a job paused for want of a demand holds no timer until one is on")
+{
+  // A start holds the foreground: a job that comes due waits for it, then runs once; a hold ends by itself at its cap.
+  const foreground = new Foreground()
+  const jobs = new HostJobs(undefined, foreground)
+  let runs = 0
+  const release = foreground.hold("start claude")
+  jobs.every("routine", 40, () => { runs += 1 })
+  await sleep(150)
+  assert.equal(runs, 0, "Nothing routine runs while a start holds the foreground, however often it comes due")
+  release()
+  await sleep(2)
+  assert.equal(runs, 1, "It runs once the start is over, once")
+  await sleep(60)
+  assert.ok(runs >= 2, "and on its schedule after")
+  jobs.stop()
+
+  const capped = new Foreground()
+  capped.hold("a start that never says it ended", 20)
+  assert.equal(capped.busy, true)
+  await sleep(40)
+  assert.equal(capped.busy, false, "A hold ends by itself at its cap")
+
+  const machine = new Foreground()
+  machine.awaitFirstStart(1_000)
+  assert.deepEqual(machine.holding(), ["the machine's first start"])
+  let idle = false
+  void machine.idle().then(() => (idle = true))
+  machine.started()
+  await sleep(1)
+  assert.equal(idle, true, "A machine's routine work goes on once its first harness has started")
+}
+
+console.log("Host jobs: named, unreferenced, repeating; an overlapping run is skipped, a failure is counted and the job goes on, a name is used once, nothing runs after stop or cancel, the first run can come sooner, a job paused for want of a demand holds no timer until one is on, and a job due while a start holds the foreground waits for it")

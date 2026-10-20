@@ -8,8 +8,11 @@ import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall
  * file descriptor `MAKO_MACHINE_AGENT_FD` names, carrying a JSON message per line each way. Nothing else on the
  * machine can reach it: the host's own children don't inherit it, so a harness never sees the machine's credential.
  */
-/** 2: the host takes `sign-ins`. 3: and `workspace`. An agent sends only what the host's `hello` says it takes. */
-export const MACHINE_AGENT_PROTOCOL = 3
+/**
+ * 2: the host takes `sign-ins`. 3: and `workspace`. 4: and says `warm` once it has loaded what every start loads, which
+ * the agent waits for before it calls the host ready. An agent sends only what the host's `hello` says it takes.
+ */
+export const MACHINE_AGENT_PROTOCOL = 4
 
 /** What the agent tells the host. */
 export const AgentMessageSchema = z.discriminatedUnion("type", [
@@ -77,3 +80,8 @@ export type HostMessage =
   | { type: "state"; state: MachineRuntimeState }
   /** The host's clock jumped: the machine was paused, or this is a copy of it. The agent checks which and answers. */
   | { type: "resumed"; gapMs: number }
+  /**
+   * The host has loaded what every start loads (its heavy packages, each harness's version, which reads its binary):
+   * a snapshot taken from here, as the machine image's is, wakes with all of it loaded.
+   */
+  | { type: "warm"; ms: number; loaded: string[] }

@@ -3,6 +3,8 @@ import { join } from "node:path"
 import { hostLabel, type HostConfig } from "./host-config.js"
 import type { HostMethods, RoutedCall, startWebHost } from "./transport/index.js"
 import type { HostJobs, JobDemand } from "./base/host-jobs.js"
+import type { Foreground } from "./base/foreground.js"
+import { heavy } from "./base/heavy-packages.js"
 import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
 import type { Domain } from "./base/host-domains.js"
@@ -45,6 +47,8 @@ export interface CoreShell {
   owner: HostOwner
   methods: HostMethods
   jobs: HostJobs
+  /** Held while a harness starts: routine work waits for it. */
+  foreground: Foreground
   /** On while any client is subscribed to events; work that only tells subscribers pauses without one. */
   subscribed: JobDemand
   secrets: HostSecretStore
@@ -67,6 +71,8 @@ export interface Core {
   desktop: NonNullable<Parameters<typeof startWebHost>[7]>
   /** On a cloud machine: the sign-ins its agent was given, written where each harness reads them. */
   installCloudSignIns(signIns: readonly CloudSignIn[], place: CloudSignInPlace): Promise<CloudSignInInstall[]>
+  /** On a cloud machine: loads what every start loads, before its image's snapshot; answers what it loaded. */
+  warm(): Promise<string[]>
   /** On a cloud machine: the folder its agent prepared, where every client's tabs open. */
   openMachineWorkspace(path: string): Promise<void>
   /** Work that holds a profile host up: turns, native runs, transfers. */
@@ -320,6 +326,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     workspaces,
     telemetry,
     emit,
+    foreground: shell.foreground,
     mcpSnapshot: (cwd) => tools.mcp.discover(cwd),
     tools: async (bindingId, conversationId) => {
       const minted = late.agentServers?.mint(bindingId, conversationId)
@@ -484,7 +491,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // The last host's readings paint first; this host's own run a few seconds
   // behind startup, and hourly for the public versions.
   await harnesses.updates.load()
-  if (!fixtureDesk) harnesses.updates.start(shell.jobs)
+  // A machine reads its harnesses' versions as it warms (`warm`), before its image's snapshot: the next reading is due
+  // in an hour, not seconds into a copy's first start.
+  if (!fixtureDesk) harnesses.updates.start(shell.jobs, config.machineAgentFd !== undefined ? { firstAfterMs: 60 * 60_000 } : {})
   void ready().then((pool) => workspaceAutomations.watch(pool.active.workspace))
   void telemetry.started(shell.jobs, performance.now())
 
@@ -500,10 +509,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       void workspaceClients.release(client)
     },
     desktop: (request, response) => control.desktop.attach(request, response),
+    /**
+     * On a cloud machine, before it says it's ready: every heavy package a start loads, and each harness's version,
+     * which runs its binary. A snapshot taken after, as the machine image's is, wakes with all of it loaded: modules
+     * in the host's memory, binaries in the page cache. A copy's start loaded them cold, a second or more each.
+     */
+    warm: async () => {
+      const loads = Object.entries(heavy).filter(([key]) => key !== "keyring").map(([, lazy]) => lazy.load("warm the machine").then(() => lazy.name))
+      const loaded = (await Promise.allSettled(loads)).flatMap((result) => (result.status === "fulfilled" ? [result.value] : []))
+      await harnesses.updates.refresh().catch(() => undefined)
+      return [...loaded, "harness versions"]
+    },
     installCloudSignIns: async (signIns, place) => {
       const installed = await installCloudSignIns(providerHost.accountCapabilities, signIns, place)
-      // What each harness can run as just changed: Settings and new Threads read it again.
-      void harnesses.profiles.all(true).catch(() => undefined)
+      // What each harness can run as just changed: Settings and new Threads read it again, once no start is waiting.
+      // A start reads its own harness's profile under its new sign-in itself. On a machine, sign-ins come as it
+      // enrols, just before its first start, and every harness's discovery at once doubled that start (2026-10-20).
+      void shell.foreground.idle().then(() => harnesses.profiles.all(true)).catch(() => undefined)
       return installed
     },
     openMachineWorkspace: async (path) => {
