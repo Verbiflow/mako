@@ -39,6 +39,13 @@ after(() => rm(scratch, { recursive: true, force: true }))
 /** How this Mac reaches the cloud: in memory, or over real sockets that can go silent as a sleeping Mac's do. */
 type Reach = { sockets?: { heartbeatMs: number; silentMs?: number; wakeProbeMs?: number } }
 
+/** One Thread the cloud was asked to make. */
+interface Ask {
+  threadId: string
+  prepare: boolean
+  harness?: string
+}
+
 /** A cloud machine's host behind the fake gateway: what it was asked, and its Thread's event outbox. */
 async function cloudMachine(reach: Reach = {}) {
   const gateway = createFakeGateway()
@@ -65,7 +72,7 @@ async function cloudMachine(reach: Reach = {}) {
   const network = reach.sockets ? await sleepyNetwork(gateway, deviceId) : undefined
   const created: string[] = []
   /** Each ask to make a Thread, made ahead or not; and whether one made ahead answers that its machine is ready. */
-  const asked: Array<{ threadId: string; prepare: boolean }> = []
+  const asked: Ask[] = []
   const machineState = { ready: true }
   /** Repositories asked for project bases. */
   const bases: CloudRepository[] = []
@@ -79,7 +86,9 @@ async function cloudMachine(reach: Reach = {}) {
         : sessionOf(client),
     createThread: async (threadId, repository, options) => {
       assert.deepEqual(repository, REPOSITORY)
-      asked.push({ threadId, prepare: options?.prepare === true })
+      const ask: Ask = { threadId, prepare: options?.prepare === true }
+      if (options?.harness) ask.harness = options.harness
+      asked.push(ask)
       if (!created.includes(threadId)) {
         created.push(threadId)
         await gateway.assign(threadId, runtimeId)
@@ -213,6 +222,7 @@ test("a cloud start makes the Thread once, starts on the machine in its clone, a
   const sent = z.object({ initialRequest: z.unknown() }).loose().parse(start?.args[2])
   for (const key of ["cloud", "worktree", "threadPath"]) assert.equal(key in sent, false, `${key} stays on this Mac`)
   assert.deepEqual(sent.initialRequest, options.initialRequest)
+  assert.equal(machine.asked[0]?.harness, "claude", "the Thread is made naming its harness, whose start its machine runs ahead as it boots")
 
   await router.route("mako:live-start", ["claude", "/Users/me/project", options])
   assert.equal(machine.created.length, 1, "a repeated start makes no second Thread")
@@ -317,6 +327,7 @@ test("once its machine is ready, the composer's harness is started ahead with no
   const { router, starts } = conversations(machine.account, join(scratch, "harness-ahead", "conversations.json"))
   const launch = { harness: "claude", modeId: "default", tuning: { model: "opus" } }
   assert.equal(await prepare(router, 0, launch), "ready")
+  assert.equal(machine.asked[0]?.harness, "claude", "a Thread made ahead names the composer's harness too")
   await until("the harness started ahead", () => machine.calls.some((call) => call.channel === "mako:live-start"))
   const ahead = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string(), modeId: z.string(), tuning: z.unknown() }).strict()]).parse(machine.calls.find((call) => call.channel === "mako:live-start")?.args)
   assert.equal(ahead[1], CLONE)

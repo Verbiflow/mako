@@ -120,6 +120,11 @@ export function keepHostLog(log: HostLog): () => void {
   return lines.subscribe((line) => log.write(line.level, line.scope, line.message, line.fields))
 }
 
+/** Hears every line published from now on, as published; returns what stops hearing them. */
+export function followHostLog(listener: (line: HostLogLine) => void): () => void {
+  return lines.subscribe(listener)
+}
+
 /** Whether anything keeps the log, so a report that would be lost goes to stderr instead. */
 export function hostLogKept(): boolean {
   return lines.heard

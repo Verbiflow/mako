@@ -1,3 +1,4 @@
+import type { PrefetchLaunch } from "../../start-prefetch.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { ProviderStartupWatch, type StartupWatchOptions } from "../../provider-startup.js"
 import { mkdirSync } from "node:fs"
@@ -143,6 +144,21 @@ export function cursorSdkChildEntry(): string {
 }
 
 /**
+ * The SDK's child as a session spawns it, and the `hello` it's asked first, which it answers once it has loaded the
+ * SDK: what its client runs, and what a `startPrefetch` runs ahead.
+ */
+export function cursorSdkChild(options: Pick<CursorSdkClientOptions, "env" | "entry" | "execPath" | "heapSnapshots">): PrefetchLaunch {
+  const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
+  delete env.NODE_OPTIONS
+  return {
+    command: headlessNodeExecutable(options.execPath),
+    args: [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? cursorSdkChildEntry()],
+    env,
+    first: JSON.stringify({ id: 0, method: "hello" } satisfies SdkRequest),
+  }
+}
+
+/**
  * The host's end of the SDK child: spawns it from the host executable under
  * `ELECTRON_RUN_AS_NODE`, sends requests, matches responses by id, and hands
  * events to the owner. A malformed line is dropped and reported, never allowed
@@ -160,11 +176,10 @@ export class CursorSdkClient {
 
   constructor(options: CursorSdkClientOptions) {
     this.options = options
-    const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
-    delete env.NODE_OPTIONS
-    this.child = spawnProviderProcess(headlessNodeExecutable(options.execPath), [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? cursorSdkChildEntry()], {
+    const child = cursorSdkChild(options)
+    this.child = spawnProviderProcess(child.command, child.args, {
       cwd: options.cwd,
-      env,
+      env: child.env,
       windowsHide: true,
     }, { kind: "cursor:sdk", owner: options.owner })
     const fatals = new Set<string>()

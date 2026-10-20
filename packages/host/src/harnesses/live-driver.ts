@@ -1,3 +1,4 @@
+import type { StartPrefetch } from "./start-prefetch.js"
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
 import type { GoalCommand, GoalStatus } from "../contracts/live-goals.js"
 import type { EarlierExchange } from "../contracts/live-side-questions.js"
@@ -383,6 +384,11 @@ export interface ProviderLiveDriver extends ProviderCapability {
    */
   stopNativeAgent?(id: string, nativeId: string): Promise<void>
   turnRecovery: TurnRecovery
+  /**
+   * What its start runs first, run ahead while a cloud machine boots (`StartPrefetch`). Every installed harness
+   * declares it (`test-harness-definitions.ts`); a fixture driver may leave it out.
+   */
+  startPrefetch?: StartPrefetch
   available(appPath: string): boolean
   start(cwd: string, options: AdmittedStartOptions): Promise<LiveSessionState>
   /**
@@ -441,6 +447,9 @@ export type ProviderSteerResult =
  * at startup rather than at a call site months later.
  */
 export function validateLiveDriver(driver: ProviderLiveDriver): void {
+  const prefetch = driver.startPrefetch
+  if (prefetch && !(prefetch.kind === "process" ? prefetch.via : prefetch.reason).trim())
+    throw new Error(`${driver.provider}: explain its start prefetch`)
   LaunchEnvironmentCapabilitySchema.parse(driver.launchEnvironment)
   NativeIdentityCapabilitySchema.parse(driver.nativeIdentity)
   NativeExclusionCapabilitySchema.parse(driver.nativeExclusion)

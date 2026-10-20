@@ -11,7 +11,7 @@ import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, RuntimeDisc
 import { sessionAfter, type LiveBatch, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
 import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/index.js"
-import type { CloudAccount } from "../usage/index.js"
+import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
 import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
 
 /** The newest this many are kept, and followed while they're open. */
@@ -265,7 +265,9 @@ export class CloudConversations {
     }
     const asked = prepared
     asked.askedAt = Date.now()
-    asked.asking = account.createThread(asked.threadId, repository, { prepare: true }).then(({ ready }) => {
+    const making: CloudThreadMaking = { prepare: true }
+    if (launch) making.harness = launch.harness
+    asked.asking = account.createThread(asked.threadId, repository, making).then(({ ready }) => {
       asked.made = true
       asked.ready = ready
     })
@@ -435,7 +437,7 @@ export class CloudConversations {
     }
     const account = this.#account()
     if (!entry.created) {
-      await account.createThread(entry.threadId, entry.repository)
+      await account.createThread(entry.threadId, entry.repository, { harness })
       entry.created = true
       await this.#save()
       hostLog("cloud-conversations", "made a cloud Thread", { threadId: entry.threadId, conversationId: entry.conversationId, harness, repository: entry.repository.url })

@@ -25,7 +25,7 @@ import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../na
 import { errorMessage } from "../../base/error-message.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
-import { startOpenCodeApi } from "./native-api.js"
+import { openCodeServe, startOpenCodeApi } from "./native-api.js"
 import { openCodeProcessProbeFor } from "./process-probe.js"
 import type { OpenCodeServers } from "./servers.js"
 import { resolveOpenCodeInstallation, openCodeExecutable, locateOpenCodeSession, verifyOpenCodeSession, OpenCodeVersions } from "./installation.js"
@@ -714,6 +714,18 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       if (!live.decoder?.shells.background(nativeId)) throw new Error("That shell is no longer running")
       live.stopped.add(nativeId)
       await live.api.client.shell.remove({ id: nativeId, location: { directory: live.cwd } })
+    },
+    startPrefetch: {
+      kind: "process",
+      via: "The native server, launched as a start launches it, until it names its endpoint.",
+      async launch(base) {
+        const env = { ...base }
+        delete env.CLAUDECODE
+        delete env.CLAUDE_CODE_ENTRYPOINT
+        configureOpenCodePermissions(env, openCodeLaunchAccess(undefined, undefined))
+        const installation = await resolveOpenCodeInstallation(env, versions).catch(() => undefined)
+        return installation && openCodeServe(installation.command, env)
+      },
     },
     turnRecovery: {
       kind: "continues",
