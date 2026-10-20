@@ -67,6 +67,8 @@ async function cloudMachine(reach: Reach = {}) {
   /** Each ask to make a Thread, made ahead or not; and whether one made ahead answers that its machine is ready. */
   const asked: Array<{ threadId: string; prepare: boolean }> = []
   const machineState = { ready: true }
+  /** Repositories asked for project bases. */
+  const bases: CloudRepository[] = []
   const account: CloudAccount = {
     token: async () => "token",
     id: async () => "account",
@@ -84,6 +86,7 @@ async function cloudMachine(reach: Reach = {}) {
       }
       return { ready: options?.prepare ? machineState.ready : false }
     },
+    askBases: async (repositories) => void bases.push(...repositories),
     wake: () => {},
     stop: () => {},
   }
@@ -93,7 +96,7 @@ async function cloudMachine(reach: Reach = {}) {
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, asked, machineState, batch, network }
+  return { account, calls, created, asked, machineState, bases, batch, network }
 }
 
 /**
@@ -362,6 +365,27 @@ test("a send whose harness changed since one was started ahead closes that one a
   assert.equal(machine.created.length, 1, "in the same Thread")
 })
 
+test("onboarding offers this Mac's recent projects for project bases once per account, each repository once", async () => {
+  const machine = await cloudMachine()
+  const file = join(scratch, "onboarding", "conversations.json")
+  const router = new CloudConversations({
+    account: () => machine.account,
+    file,
+    emit: () => {},
+    repositoryOf: async (folder) => (folder.includes("not-github") ? Promise.reject(new Error("not GitHub")) : folder.endsWith("mako") ? REPOSITORY : { url: "https://github.com/octocat/Spoon-Knife" }),
+  })
+  after(() => router.dispose())
+  const offer = async (folders: string[]) => {
+    const routed = await router.route("mako:cloud-offer-projects", [folders])
+    assert.ok(routed.handled)
+    return decodeRuntimeValue(routed.value)
+  }
+  assert.equal(await offer(["/Users/me/mako", "/Users/me/worktree-of-mako", "/Users/me/not-github", "/Users/me/spoon"]), "asked")
+  assert.deepEqual(machine.bases, [REPOSITORY, { url: "https://github.com/octocat/Spoon-Knife" }], "each repository once, newest first; a folder off GitHub is left out")
+  assert.equal(await offer(["/Users/me/mako"]), "already", "once per account on this Mac")
+  assert.equal(machine.bases.length, 2)
+})
+
 test("a Mac that isn't signed in makes nothing ahead", async () => {
   const router = new CloudConversations({ account: () => undefined, file: join(scratch, "signed-out", "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY })
   after(() => router.dispose())
@@ -423,6 +447,7 @@ test("a close is taken at once while nothing runs the Thread, and reaches the ma
       await gateway.assign(threadId, runtimeId)
       return { ready: false }
     },
+    askBases: async () => {},
     wake: () => {},
     stop: () => {},
   }

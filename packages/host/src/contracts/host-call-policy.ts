@@ -180,6 +180,8 @@ const replays = [
   "mako:live-prewarm",
   /** Making a cloud Thread ahead that is already made touches it again: one per folder's repository. */
   "mako:cloud-prepare",
+  /** Offered once per account on this Mac: a repeat finds it offered. */
+  "mako:cloud-offer-projects",
   /** Cancelling a sign-in that has ended cancels nothing. */
   "mako:account-login-cancel",
   /** Cancelling a Mako sign-in that has ended cancels nothing. */

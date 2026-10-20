@@ -378,6 +378,14 @@ export class CloudAccounts {
     return { ready: answer.success && answer.data.ready === true }
   }
 
+  /**
+   * Project bases for the account's repositories, asked for ahead of their first cloud Thread: each is made in the
+   * background, and a Thread whose base isn't ready yet clones as before.
+   */
+  async askBases(repositories: CloudRepository[]): Promise<void> {
+    await this.#call("bases.ask", "POST", "/v1/bases", { repositories })
+  }
+
   /** This Mac's device in the account, while it's signed in. */
   async deviceId(): Promise<string | undefined> {
     await this.#ready

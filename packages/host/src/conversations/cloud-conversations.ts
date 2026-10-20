@@ -1,11 +1,11 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
-import { dirname } from "node:path"
+import { dirname, join } from "node:path"
 import { threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
 import { z } from "zod"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
+import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
 import { hostCallReplay } from "../contracts/host-call-policy.js"
 import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { sessionAfter, type LiveBatch, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
@@ -41,6 +41,9 @@ const WARY_COMPOSING_MS = 10_000
  */
 const READY_ASK_MS = 2_000
 const READY_ASK_FOR_MS = 90_000
+/** Onboarding offers this many of the Mac's most recent projects for project bases. */
+const PROJECTS_OFFERED = 5
+const OfferedSchema = z.object({ accounts: z.array(z.string()) })
 
 const SummaryIdentitySchema = z.object({ session: z.object({ id: z.string(), status: z.string() }).loose(), revision: z.number(), createdAt: z.number() }).loose()
 /** A cloud host's own `LiveSummary`, checked for the identity and revision this router reads. */
@@ -173,6 +176,7 @@ export class CloudConversations {
   readonly #prepared = new Map<string, Prepared>()
   /** By repository: how many made ahead in a row went unused. */
   readonly #unused = new Map<string, number>()
+  #offering: Promise<CloudProjectsOffer> | undefined
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
@@ -195,6 +199,11 @@ export class CloudConversations {
       // SAFETY: the dispatcher parsed this call's arguments with `mako:cloud-prepare`'s schema before routing it.
       const [folder, composingMs, launch] = args as [string, number, CloudPrepareLaunch | undefined]
       return { handled: true, value: encodeRuntimeValue(await this.prepare(folder, composingMs, launch)) }
+    }
+    if (channel === "mako:cloud-offer-projects") {
+      // SAFETY: the dispatcher parsed this call's arguments with `mako:cloud-offer-projects`'s schema before routing it.
+      const [folders] = args as [string[]]
+      return { handled: true, value: encodeRuntimeValue(await this.offerProjects(folders)) }
     }
     if (channel === "mako:live-start") {
       // SAFETY: the dispatcher parsed this call's arguments with `mako:live-start`'s schema before routing it.
@@ -324,6 +333,32 @@ export class CloudConversations {
       }
     })()
     prepared.started = started
+  }
+
+  /**
+   * Onboarding: the first time this Mac's account has the cloud, the repositories of its most recent projects (by
+   * `folders`, newest first) are offered for project bases, so each one's first cloud Thread starts from a clone made
+   * ahead. Once per account on this Mac, remembered beside its cloud conversations; nothing is shown either way.
+   */
+  offerProjects(folders: string[]): Promise<CloudProjectsOffer> {
+    this.#offering ??= this.#offerProjects(folders).finally(() => (this.#offering = undefined))
+    return this.#offering
+  }
+
+  async #offerProjects(folders: string[]): Promise<CloudProjectsOffer> {
+    const account = this.#options.account()
+    const accountId = await account?.id()
+    if (!account || !accountId) return "none"
+    const file = join(dirname(this.#options.file), "projects-offered.json")
+    const offered = OfferedSchema.safeParse(JSON.parse(await readFile(file, "utf8").catch(() => "{}"))).data?.accounts ?? []
+    if (offered.includes(accountId)) return "already"
+    const found = await Promise.all(folders.slice(0, PROJECTS_OFFERED).map((folder) => this.#options.repositoryOf(folder).catch(() => undefined)))
+    const repositories = [...new Map(found.filter((repository) => repository !== undefined).map((repository) => [repositoryKey(repository), repository])).values()]
+    if (repositories.length) await account.askBases(repositories)
+    await mkdir(dirname(file), { recursive: true })
+    await writeFile(file, `${JSON.stringify({ accounts: [...offered, accountId] })}\n`)
+    hostLog("cloud-conversations", "offered this Mac's recent projects for project bases", { repositories: repositories.length })
+    return repositories.length ? "asked" : "none"
   }
 
   /** The Thread made ahead for a repository, unless this Mac last asked for it too long ago: that one went unused. */

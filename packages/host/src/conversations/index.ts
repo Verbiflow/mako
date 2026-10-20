@@ -36,7 +36,7 @@ import { ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
-import type { CloudPrepareLaunch, CloudPrepareOutcome } from "../contracts/cloud-threads.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer } from "../contracts/cloud-threads.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
@@ -465,6 +465,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
    */
   const prepareNowhere: (folder: string, composingMs: number, launch?: CloudPrepareLaunch) => CloudPrepareOutcome = () => "none"
   methods.handle("mako:cloud-prepare", prepareNowhere)
+  const offerNowhere: (folders: string[]) => CloudProjectsOffer = () => "none"
+  methods.handle("mako:cloud-offer-projects", offerNowhere)
   /** A new conversation on another harness, from the main composer. */
   methods.handle("mako:harness-start", async (harness: string, prompt: string, options?: SessionSettings) => {
     const cwd = await deps.workspace()
