@@ -61,8 +61,11 @@ export function createCursorModelCache(now: () => number = Date.now) {
       signal?.throwIfAborted()
       return models
     }
+    // The credential's scope: its key and every Cursor setting beside it (an endpoint is another account). The rest
+    // of an environment differs between a session and a display read of the same account, and once kept a start and
+    // the picker listing the same models side by side, two SDK children at once on a cloud machine (2026-10-20).
     const key = createHash("sha256").update(JSON.stringify(Object.entries(env)
-      .filter(([, value]) => value !== undefined).sort(([a], [b]) => a.localeCompare(b)))).digest("hex")
+      .filter(([name, value]) => name.startsWith("CURSOR_") && value !== undefined).sort(([a], [b]) => a.localeCompare(b)))).digest("hex")
     for (const [key, entry] of entries)
       if (!entry.pending && (!entry.cached || entry.cached.expiresAt <= now())) entries.delete(key)
     let entry = entries.get(key)
