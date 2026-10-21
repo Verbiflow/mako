@@ -1,4 +1,5 @@
-import type { RecordsLink } from "@mako/sessions/record-sync"
+import { recipesOverHttp } from "@mako/protocol/recipes-http"
+import { githubRepositoryUrl } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -11,12 +12,13 @@ import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
+import { cloudUrl } from "./base/build-identity.js"
 import { NativeUnknown } from "./base/native-unknown.js"
 import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -24,7 +26,7 @@ import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
 import { makoViews } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
-import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
+import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
@@ -77,8 +79,11 @@ export interface Core {
   warm(): Promise<string[]>
   /** On a cloud machine: the folder its agent prepared, where every client's tabs open. */
   openMachineWorkspace(path: string): Promise<void>
-  /** On a cloud machine: its records kept in step with its Thread's at the gateway (`ThreadCatalog.syncRecords`). */
-  syncRecords(link: RecordsLink | null): Promise<void>
+  /**
+   * On a cloud machine: the gateway it works through, as its agent linked it. Its records are kept in step with its
+   * Thread's there (`ThreadCatalog.syncRecords`), and its project's recipe with the account's (`RecipeAccounts`).
+   */
+  machineLinked(link: MachineGatewayLink | null): Promise<void>
   /** On a project base's builder: what a start in `path` does first, done before its snapshot. */
   prepareFolder(path: string): Promise<void>
   /** On a cloud machine as it boots: what `harness`'s start runs first, run ahead (`startPrefetch`). */
@@ -136,6 +141,27 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const unknown = new NativeUnknown(logsRoot(environment.dataRoot))
   const mismatches = new StreamMismatches(logsRoot(environment.dataRoot), streams)
   const late: LateParts = {}
+  /** On a cloud machine, the gateway it's linked through; a laptop has none and reaches the account as itself. */
+  let machineLink: MachineGatewayLink | null = null
+  /**
+   * The account's authority for a project's recipe versions: a machine's Thread's repository, under its credential;
+   * on a laptop, the checkout's GitHub repository, as its signed-in device. None for a project the account can't
+   * know (no GitHub origin) or a laptop signed out: its recipe stays this computer's alone.
+   */
+  const recipes = new RecipeAccounts(async (checkout) => {
+    const linked = machineLink
+    if (linked) {
+      const base = new URL(`/v1/machines/${encodeURIComponent(linked.machine)}/recipes`, linked.gatewayUrl).toString()
+      return recipesOverHttp({ id: base, base, authorization: () => `Bearer ${linked.credential}` })
+    }
+    const cloud = late.cloud
+    const gateway = cloudUrl(environment)
+    if (!cloud || !gateway || !(await cloud.token())) return undefined
+    const repository = githubRepositoryUrl(await git.output(checkout, ["remote", "get-url", "origin"]).catch(() => ""))
+    if (!repository) return undefined
+    const base = new URL("/v1/recipes", gateway).toString()
+    return recipesOverHttp({ id: `${base}?repository=${repository}`, base, repository, authorization: async () => `Bearer ${(await cloud.token()) ?? ""}` })
+  }, { log: (message, fields) => hostLog("recipes", message, fields) })
 
   const spent = spendWatch(
     (id) => late.conversations?.live.session(id)?.harness,
@@ -228,6 +254,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const workspaces = openWorkspaces({
     git,
     dataRoot: environment.dataRoot,
+    recipes,
     // A recipe runs as its place says: a cloud machine's host is started by the machine's agent.
     where: { place: config.machineAgentFd === undefined ? "local" : "cloud", platform: onMac() ? "mac" : hostPlatform() === "linux" ? "linux" : "other" },
     readOnly: fixtureDesk,
@@ -406,6 +433,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     dataRoot: environment.dataRoot,
     workspaces,
     hasSecret: (name) => process.env[name] !== undefined,
+    recipes,
     live,
     store,
     lifecycle,
@@ -559,7 +587,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     prepareFolder: async (path) => {
       await tools.mcp.discover(path)
     },
-    syncRecords: (link) => catalog.syncRecords(link),
+    machineLinked: async (link) => {
+      machineLink = link
+      if (!link) return catalog.syncRecords(null)
+      const records = new URL(`/v1/machines/${encodeURIComponent(link.machine)}/records`, link.gatewayUrl).toString()
+      await catalog.syncRecords({ id: records, base: records, authorization: `Bearer ${link.credential}` })
+    },
     openMachineWorkspace: async (path) => {
       await workspaceClients.home(path)
       await workspaceAutomations.watch(path)

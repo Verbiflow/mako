@@ -5,7 +5,7 @@
  * connection, an oversized live batch sent as the notice to read it, a clock jump reported, an unlink silencing it,
  * and a restarted host numbering after what it reserved.
  */
-import type { RecordsLink } from "@mako/sessions/record-sync"
+import type { MachineGatewayLink } from "@mako/host/usage/machine-runtime"
 import assert from "node:assert/strict"
 import { once } from "node:events"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -114,7 +114,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
   const prefetched: string[] = []
   const signedIn: string[] = []
   const installs: Array<{ harnesses: string[]; secrets: string }> = []
-  const recordsLinks: Array<RecordsLink | null> = []
+  const links: Array<MachineGatewayLink | null> = []
   const runtime = new MachineRuntime({
     agent: hostEnd,
     invoke: async (channel, args, client, _history, correlationId) => {
@@ -145,7 +145,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     sampleCpu: options.sampleCpu ?? (async () => undefined),
     profileHost: false,
     now: options.now ?? Date.now,
-    syncRecords: async (link) => void recordsLinks.push(link),
+    linked: async (link) => void links.push(link),
     installSignIns: async (signIns, secrets) => {
       installs.push({ harnesses: signIns.map((signIn) => signIn.harness), secrets })
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -168,7 +168,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     prefetched,
     signedIn,
     installs,
-    recordsLinks,
+    links,
     state,
     tell: (message: AgentMessage) => agentEnd.write(`${JSON.stringify(message)}\n`),
     /** A line no agent of this version sends. */
@@ -203,8 +203,7 @@ test("the agent's link makes the host the machine's runtime: the Thread's operat
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
   await agent.until("enrolled", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 1)
-  const records = `${cloud.url.replace(/\/$/, "")}/v1/machines/m-0123456789abcdef/records`
-  assert.deepEqual(agent.recordsLinks, [{ id: records, base: records, authorization: `Bearer ${CREDENTIAL}` }], "its records kept in step where its Thread's are, under its credential")
+  assert.deepEqual(agent.links, [{ gatewayUrl: cloud.url, machine: "m-0123456789abcdef", credential: CREDENTIAL }], "the gateway's link given to what keeps its records and recipes in step")
   const generation = await cloud.gateway.assign("th-1", RUNTIME)
   agent.tell({ type: "inspect" })
   await agent.until("running the Thread", () => agent.state()?.threads[0]?.generation === generation)
@@ -244,7 +243,7 @@ test("the agent's link makes the host the machine's runtime: the Thread's operat
   await new Promise((resolve) => setTimeout(resolve, 1_500))
   assert.equal(cloud.upgrades(), upgrades, "no connection attempted while silent")
   assert.equal(agent.state()?.unlinked, "this machine is a copy of another")
-  assert.equal(agent.recordsLinks.at(-1), null, "and its records no longer sent")
+  assert.equal(agent.links.at(-1), null, "and taken back once silenced")
 })
 
 test("the machine tells its Thread when it works and when it stops, a silent turn included; host-wide readings stay off the Thread's stream", async () => {

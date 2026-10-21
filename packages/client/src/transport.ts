@@ -55,7 +55,7 @@ export function localHost(options: { socket?: string; client?: string } = {}): H
       return stop
     },
     close() {
-      for (const stop of [...stops]) stop()
+      for (const stop of stops) stop()
     },
   }
 }

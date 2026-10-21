@@ -15,7 +15,8 @@ import { moveHold, moveSource, ThreadWorktreeMoves } from "./thread-worktree-mov
 import { WorkspaceMoves } from "./moves.js"
 import { WorktreeLeaves } from "./worktree-leaves.js"
 import { moveablePlace, registerWorkspaceTools, within, workspaceTools } from "./tools.js"
-import { projectRecipe, type RecipeWhere } from "./thread-recipe.js"
+import { projectRecipe, type RecipeAccounts, type RecipeWhere } from "./thread-recipe.js"
+export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { beginTrace, SAMPLE_EVERY_MS, TraceRefresh } from "./app-probe.js"
@@ -92,6 +93,8 @@ export interface WorkspacesDeps {
   dataRoot: string
   /** Where recipes run here: this computer or a cloud machine, and what it is (`recipeIn`). */
   where?: RecipeWhere
+  /** The account's authority for projects it keeps the recipes of. */
+  recipes?: RecipeAccounts
   /** A fixture desk stops no one's apps. */
   readOnly: boolean
   store: ThreadStore | null
@@ -120,7 +123,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   const shared = store ? realpathSync(dirname(store.path)) : undefined
   const recipes = shared ? join(shared, "recipes") : undefined
   const environments = store && shared
-    ? new ThreadEnvironments({ git, store, dataRoot: join(shared, "thread-data"), recipesRoot: recipes, where: deps.where })
+    ? new ThreadEnvironments({ git, store, dataRoot: join(shared, "thread-data"), recipesRoot: recipes, where: deps.where, recipes: deps.recipes })
     : null
   const fileHistory = childHistory()
   const whoseApp = (app: AppKey): string | undefined => {
@@ -214,6 +217,8 @@ export interface WorkspaceMovers {
 export interface WorkspaceMoversDeps {
   /** Whether this host's environment has a value for a secret a recipe names (`secretNames`), checked before a cloud start. */
   hasSecret?(name: string): boolean
+  /** The account's authority for projects it keeps the recipes of. */
+  recipes?: RecipeAccounts
   git: Git
   dataRoot: string
   workspaces: Workspaces
@@ -287,6 +292,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     recipesRoot: workspaces.recipes,
     where: workspaces.where,
     hasSecret: deps.hasSecret,
+    recipes: deps.recipes,
     whose: workspaces.whoseApp,
     history: workspaces.fileHistory,
     owner: workspaces.appOwner,
