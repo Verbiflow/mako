@@ -72,6 +72,12 @@ export const OperationEnvelopeSchema = z
      * `whenAsleep`, it's the gateway's to read, and isn't passed on to the runtime.
      */
     ahead: z.literal(true).optional(),
+    /**
+     * The caller's word that a repeat of this operation's id reaches the same end (its `replay` is `read` or
+     * `replay`): the gateway may send it to the runtime before its admission is on disk, and answers it only once it
+     * is. Without it, the operation waits for the disk. Like `ahead`, it's the gateway's to read.
+     */
+    repeatable: z.literal(true).optional(),
   })
   .strict()
 
