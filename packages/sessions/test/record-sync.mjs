@@ -192,8 +192,8 @@ try {
   }
 
   // A long session's export is pushed in parts, each unit's versions in order.
-  const parts = splitBundle({ harness: "x", nativeId: "y", layout: { home: "/", roots: {}, paths: {} }, marks: {}, units: [{ key: "k", role: "file", path: null, places: null, versions: Array.from({ length: 4_500 }, (_, seq) => ({ seq, kind: "append", at: 0, size: 1, digest: null, tail: null, chunks: "", detail: null, writer: null, writerSource: null })) }] })
-  assert.deepEqual(parts.map((part) => part.units[0].versions.map((version) => version.seq).filter((_, at, all) => at === 0 || at === all.length - 1)), [[0, 1999], [2000, 3999], [4000, 4499]])
+  const parts = splitBundle({ harness: "x", nativeId: "y", layout: { home: "/", roots: {}, paths: {} }, marks: {}, units: [{ key: "k", role: "file", path: null, places: null, versions: Array.from({ length: 25_000 }, (_, seq) => ({ seq, kind: "append", at: 0, size: 1, digest: null, tail: null, chunks: "", detail: null, writer: null, writerSource: null })) }] })
+  assert.deepEqual(parts.map((part) => part.units[0].versions.map((version) => version.seq).filter((_, at, all) => at === 0 || at === all.length - 1)), [[0, 9999], [10000, 19999], [20000, 24999]])
 
   for (const store of [a, laptopStore]) store.close()
   console.log("PASS: a store keeps in step with a remote: only what's new each way, a lost remote caught up, a cut push sent again, two lines of one session refused both ways")
