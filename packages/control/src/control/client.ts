@@ -579,10 +579,15 @@ export type Point = z.infer<typeof pointSchema>
 const CHORD_MODIFIERS = new Set(["cmd", "meta", "ctrl", "control", "alt", "option", "shift"])
 /** "Shift+Tab", "Meta+," or "Control+Shift+K": modifiers, then the one key they hold. */
 export function keyChord(key: string): { key: string; modifiers: string[] } {
-  const chord = /^((?:[A-Za-z]+\+)+)(.+)$/.exec(key)
-  const modifiers = chord?.[1]?.slice(0, -1).split("+") ?? []
-  return chord?.[2] && modifiers.every((name) => CHORD_MODIFIERS.has(name.toLowerCase()))
-    ? { key: chord[2], modifiers }
+  const modifiers: string[] = []
+  let start = 0
+  // Each `Letters+` before a non-empty rest, scanned once: a pattern with nested repeats backtracks on long input.
+  for (let plus = key.indexOf("+"); plus > start && plus < key.length - 1 && /^[A-Za-z]+$/.test(key.slice(start, plus)); plus = key.indexOf("+", start)) {
+    modifiers.push(key.slice(start, plus))
+    start = plus + 1
+  }
+  return modifiers.length && modifiers.every((name) => CHORD_MODIFIERS.has(name.toLowerCase()))
+    ? { key: key.slice(start), modifiers }
     : { key, modifiers: [] }
 }
 const StringSchema = z.string()

@@ -40,7 +40,8 @@ await rm(context, { recursive: true, force: true })
 if (built) process.exit(1)
 // The image's user writes the evidence.
 await chmod(evidence, 0o777)
-const code = await step("docker", ["run", "--rm", "--init", ...platform, "-v", `${evidence}:/evidence`, image])
+// Without a syscall filter, as on a machine's VM: Docker's default profile refuses the browser's sandbox its namespaces.
+const code = await step("docker", ["run", "--rm", "--init", ...platform, "--security-opt", "seccomp=unconfined", "-v", `${evidence}:/evidence`, image])
 const result = await readFile(join(evidence, "result.json"), "utf8").then(JSON.parse, () => undefined)
 console.log(`\n${result ? `Linux proof ${result.status} on ${result.machine.arch}, Node ${result.machine.node}` : "The proof wrote no result"}; evidence in ${evidence}`)
 const proved = code || (result?.status === "passed" ? 0 : 1)
