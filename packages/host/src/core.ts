@@ -28,7 +28,7 @@ import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount,
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
-import { nodePlatform } from "./base/platform.js"
+import { hostPlatform, nodePlatform, onMac } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
@@ -228,6 +228,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const workspaces = openWorkspaces({
     git,
     dataRoot: environment.dataRoot,
+    // A recipe runs as its place says: a cloud machine's host is started by the machine's agent.
+    where: { place: config.machineAgentFd === undefined ? "local" : "cloud", platform: onMac() ? "mac" : hostPlatform() === "linux" ? "linux" : "other" },
     readOnly: fixtureDesk,
     store,
     jobs,
@@ -403,6 +405,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     git,
     dataRoot: environment.dataRoot,
     workspaces,
+    hasSecret: (name) => process.env[name] !== undefined,
     live,
     store,
     lifecycle,

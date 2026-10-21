@@ -61,9 +61,17 @@ const processSchema = z.object({
    * its port says.
    */
   ready: command.optional(),
+  /**
+   * What it runs on: any computer (the default), Linux, or a Mac with its screen, such as a desktop app. A process a
+   * place can't run isn't started there, and a target that needs one says so instead of starting part of itself.
+   */
+  platform: z.enum(["any", "linux", "mac"]).optional(),
 }).strict()
 
 const processName = /^[a-z][a-z0-9-]{0,31}$/
+
+/** A process as one place changes it: only the fields that differ there, patched onto the shared process. */
+const processPatchSchema = processSchema.partial().strict()
 
 const stepSchema = z.object({
   /** Such as `typecheck` or `lint`: what the step's result is reported as, and how a rerun names it. */
@@ -135,6 +143,12 @@ const prepareSchema = z.object({
    * step with outputs that doesn't say (`withLinkDefault`).
    */
   link: z.boolean().optional(),
+  /**
+   * When it runs: `base` (the default), with no secrets and no Thread values, so a cloud project base can be built
+   * from it ahead of any Thread; or `thread`, once the Thread's checkout exists, for what needs them, such as
+   * migrations and seeding.
+   */
+  phase: z.enum(["base", "thread"]).optional(),
 }).strict().refine(
   (step) => step.link === undefined || step.outputs?.length,
   { message: "link is for a step's outputs: name them in outputs, or leave link out", path: ["link"] },
@@ -153,6 +167,14 @@ const carryEntrySchema = z.union([
   }).strict(),
 ])
 export type CarryEntry = z.infer<typeof carryEntrySchema>
+
+/** What one place changes of the recipe: its own values, and fields of shared processes; never a process of its own. */
+const placeSchema = z.object({
+  /** Values for this place only, such as an `APP_URL` or a database's address; each replaces the shared value of its name. */
+  values: named(template, (name) => variableProblem(name) ?? (SHELL_OWNED.has(name) ? "the agent's own shell needs this one; set it on a process instead" : undefined)).optional(),
+  /** Fields of the recipe's processes for this place, such as `web`'s command under `xvfb-run`: a patch, never a copy. */
+  processes: z.record(z.string(), processPatchSchema).optional(),
+}).strict()
 
 export const RecipeSchema = z.object({
   $schema: z.string().optional(),
@@ -200,7 +222,25 @@ export const RecipeSchema = z.object({
    * containers' volumes or its database, when its worktree is removed.
    */
   cleanup: command.optional(),
+  /**
+   * The secrets the app reads from its environment, by name, such as `E2B_API_KEY`; never their values. On this
+   * computer the files `carry` copies meet them; in the cloud the account's secret store does, and a start that
+   * would lack one says which before it starts.
+   */
+  secretNames: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/, "a secret's name, such as E2B_API_KEY")).max(50).optional(),
+  /**
+   * What differs by place, written inside the one recipe: `local` for this computer, `cloud` for a cloud machine.
+   * Every place keeps the same processes, checks and version; a place only changes values and patches processes.
+   */
+  places: z.object({ local: placeSchema.optional(), cloud: placeSchema.optional() }).strict().optional(),
 }).strict().superRefine((recipe, context) => {
+  for (const place of ["local", "cloud"] as const)
+    for (const name of Object.keys(recipe.places?.[place]?.processes ?? {}))
+      if (!(name in recipe.processes)) context.addIssue({ code: "custom", path: ["places", place, "processes", name], message: `${name} isn't one of the recipe's processes: a place patches a process, it never adds one` })
+  recipe.prepare.forEach((step, index) => {
+    if ((step.phase ?? "base") === "base" && /\{(thread|port)/.test(step.command))
+      context.addIssue({ code: "custom", path: ["prepare", index, "command"], message: "a base step gets no Thread values, so a project base can be built from it: mark it phase \"thread\", or leave the Thread's values out" })
+  })
   const seen = new Set<string>()
   for (const [index, { path }] of [...(recipe.carry ?? []), ...(recipe.secrets ?? [])].entries()) {
     if (seen.has(path)) context.addIssue({ code: "custom", path: ["carry", index], message: `${path} is listed twice; list it once, with link or without` })
@@ -209,6 +249,47 @@ export const RecipeSchema = z.object({
 }).transform(({ secrets, ...recipe }) => (secrets?.length ? { ...recipe, carry: [...(recipe.carry ?? []), ...secrets] } : recipe))
 
 export type Recipe = z.infer<typeof RecipeSchema>
+
+/** Where a recipe runs: this computer or a cloud machine, and what that computer is. */
+export type RecipePlace = "local" | "cloud"
+export type RecipeWhere = { place: RecipePlace; platform: "mac" | "linux" | "other" }
+/** What a place can't run of a recipe: each process with what it needs, and the targets that need one of them. */
+export type RecipeAbsent = { processes: Array<{ name: string; needs: "linux" | "mac" }>; targets: string[] }
+
+/** Whether a process that runs on `platform` runs where `where` is. */
+function runsOn(platform: RecipeProcess["platform"], where: RecipeWhere): boolean {
+  return platform === undefined || platform === "any" || platform === where.platform
+}
+
+/**
+ * The recipe as it runs in one place: the place's values over the shared ones, its patches applied to the shared
+ * processes, and the processes and targets it can't run left out, each named in `absent`. The processes, checks and
+ * version are the recipe's in every place, so a check passes or fails for the same reasons on the laptop and on a
+ * machine.
+ */
+export type RecipeInPlace = { recipe: Recipe; absent: RecipeAbsent }
+export function recipeIn(recipe: Recipe, where: RecipeWhere): RecipeInPlace {
+  const place = recipe.places?.[where.place]
+  const absent: RecipeAbsent = { processes: [], targets: [] }
+  const processes: Recipe["processes"] = {}
+  for (const [name, shared] of Object.entries(recipe.processes)) {
+    const spec = { ...shared, ...place?.processes?.[name] }
+    if (runsOn(spec.platform, where)) processes[name] = spec
+    else absent.processes.push({ name, needs: spec.platform === "linux" ? "linux" : "mac" })
+  }
+  const resolved: Recipe = { ...recipe, values: { ...recipe.values, ...place?.values }, processes }
+  // As it runs, a recipe has no places: they've been applied.
+  delete resolved.places
+  if (recipe.targets) {
+    const targets: NonNullable<Recipe["targets"]> = {}
+    for (const [name, target] of Object.entries(recipe.targets)) {
+      if (target.processes.every((process) => process in processes)) targets[name] = target
+      else absent.targets.push(name)
+    }
+    resolved.targets = targets
+  }
+  return { recipe: resolved, absent }
+}
 
 /** What `recipe_save` keeps: a step with outputs that doesn't say links them, written out so the version says so. */
 export function withLinkDefault(recipe: Recipe): Recipe {
@@ -247,6 +328,9 @@ export type RecipeRead =
       draft?: { parent?: number }
       /** The published version, newer than this one the app's processes started with; it takes it at its next start. */
       newer?: number
+      /** Where it was read for, and what of it can't run there (`recipeIn`); `recipe` is as it runs there. */
+      where?: RecipeWhere
+      absent?: RecipeAbsent
     }
   | { kind: "invalid"; checkout: string; message: string; from?: string; saved?: string }
 
@@ -329,7 +413,20 @@ function issueLines(issue: z.core.$ZodIssue, under: PropertyKey[]): string[] {
  * port offset or a folder this branch lacks fails here rather than in a
  * process.
  */
-export async function readRecipe(git: Git, checkout: string, environment: ThreadEnvironment, recipesRoot?: string): Promise<RecipeRead> {
+export async function readRecipe(git: Git, checkout: string, environment: ThreadEnvironment, recipesRoot?: string, where?: RecipeWhere): Promise<RecipeRead> {
+  const read = await readRecipeAsWritten(git, checkout, environment, recipesRoot)
+  return where && read.kind === "ready" ? inPlace(read, where) : read
+}
+
+/** A read recipe as it runs in `where`: its place's values and patches, and what that place can't run. */
+export function inPlace<Read extends Extract<RecipeRead, { kind: "ready" }>>(read: Read, where: RecipeWhere): Read {
+  const resolved = recipeIn(read.recipe, where)
+  const placed: Read = { ...read, recipe: resolved.recipe, where }
+  if (resolved.absent.processes.length) placed.absent = resolved.absent
+  return placed
+}
+
+async function readRecipeAsWritten(git: Git, checkout: string, environment: ThreadEnvironment, recipesRoot?: string): Promise<RecipeRead> {
   const saved = recipesRoot ? await recipePath(git, recipesRoot, checkout) : undefined
   const at = saved ? { saved } : {}
   const draft = saved ? await appDraft(saved, environment.app) : undefined
@@ -440,8 +537,10 @@ const ProofStepSchema = z.object({
 
 const ProofSchema = z.object({
   at: z.number(),
-  /** Where it ran: `this Mac`; a cloud environment has a proof of its own. */
+  /** Where it ran, in words: `this Mac`, or `a cloud machine`. */
   on: z.string(),
+  /** Which place it proved the version in; none in a proof from before places, which ran on this computer. */
+  place: z.enum(["local", "cloud"]).optional(),
   checkout: z.string(),
   by: z.string().max(300).optional(),
   steps: z.array(ProofStepSchema).max(50),
@@ -464,8 +563,10 @@ const VersionSchema = z.object({
   /** The app that saved it, the only one that runs it while it's a draft. */
   app: AppKeySchema.optional(),
   recipe: z.unknown(),
-  /** The last proof run of it, passed or not. */
+  /** The last proof run of it, passed or not, wherever it ran. */
   proof: ProofSchema.optional(),
+  /** The last proof in each place: a version proved on this computer and on a cloud machine has both. */
+  proofs: z.object({ local: ProofSchema.optional(), cloud: ProofSchema.optional() }).strict().optional(),
   publishedAt: z.number().optional(),
 }).strict()
 export type RecipeVersion = Omit<z.infer<typeof VersionSchema>, "recipe"> & { recipe: Recipe }
@@ -629,7 +730,18 @@ async function pruneDrafts(file: string, now: number): Promise<void> {
 /** Records a proof that didn't pass, so the version says how it last went. */
 export async function recordProof(file: string, version: number, proof: RecipeProof): Promise<void> {
   const record = await readVersion(file, version)
-  if (record) await writeVersion(file, { ...record, proof })
+  if (record) await writeVersion(file, withProof(record, proof))
+}
+
+/** A version with `proof` as its last, and as its last in the place it ran. */
+function withProof(record: RecipeVersion, proof: RecipeProof): RecipeVersion {
+  return { ...record, proof, proofs: { ...placedProofs(record), [proof.place ?? "local"]: proof } }
+}
+
+/** The last proof of a version in each place, reading one from before places as this computer's. */
+export function placedProofs(record: Pick<RecipeVersion, "proof" | "proofs">): { local?: RecipeProof; cloud?: RecipeProof } {
+  if (record.proofs) return record.proofs
+  return record.proof ? { [record.proof.place ?? "local"]: record.proof } : {}
 }
 
 /** A draft made from a version that's no longer the published one: publishing it would undo what was published since. */
@@ -654,7 +766,7 @@ export async function publishDraft(file: string, app: AppKey, version: number, p
     const current = published === undefined ? undefined : await readVersion(file, published)
     throw new StaleDraftError(`Version ${published} was published after this draft was made from ${record.parent === undefined ? "nothing" : `version ${record.parent}`}.`, current)
   }
-  const done: RecipeVersion = { ...record, state: "published", proof, publishedAt: now }
+  const done: RecipeVersion = { ...withProof(record, proof), state: "published", publishedAt: now }
   await writeVersion(file, done)
   const folder = recipeVersions(file)
   await writeAtomic(join(folder, "published.json"), `${JSON.stringify({ version })}\n`)

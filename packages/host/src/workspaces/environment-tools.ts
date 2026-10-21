@@ -58,9 +58,15 @@ import {
   type CheckTier,
   type Recipe,
   type RecipeCheck,
+  type RecipeProcess,
+  type RecipeProof,
   type RecipeProofStep,
   type RecipeRead,
   type RecipeVerify,
+  type RecipeAbsent,
+  type RecipeWhere,
+  inPlace,
+  placedProofs,
 } from "./thread-recipe.js"
 
 /** Under the minute most harnesses' MCP clients give a tool call; longer waits come back as "still starting". */
@@ -123,6 +129,10 @@ interface Deps {
   traces: TraceRefresh
   /** Where Mako keeps projects' recipes, one file per repository. */
   recipesRoot?: string
+  /** Where recipes run here: this computer or a cloud machine (`recipeIn`). */
+  where?: RecipeWhere
+  /** Whether this host's environment has a value for a secret the recipe names, checked before a cloud start. */
+  hasSecret?(name: string): boolean
   /** Whose app it is, in words, such as `the Thread "Fix login"`, to name whose app was stopped to make room. */
   whose?(app: AppKey): string | undefined
   /** The Worktree Thread whose app it is, for the Room. */
@@ -354,7 +364,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
    * published while the app runs reaches it at its next start.
    */
   const readFor = async (checkout: string, environment: ThreadEnvironment): Promise<Read> => {
-    const read = await readRecipe(git, checkout, environment, deps.recipesRoot)
+    const read = await readRecipe(git, checkout, environment, deps.recipesRoot, deps.where)
     if (read.kind !== "ready" || read.draft || read.version === undefined || !read.saved) return read
     const pinned = await runningVersion(read.saved, environment.app)
     if (pinned === undefined || pinned === read.version) return read
@@ -364,7 +374,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     }
     const record = await readVersion(read.saved, pinned)
     if (!record) return read
-    return { ...read, recipe: record.recipe, version: pinned, from: join(recipeVersions(read.saved), `${pinned}.json`), newer: read.version }
+    const running = { ...read, recipe: record.recipe, version: pinned, from: join(recipeVersions(read.saved), `${pinned}.json`), newer: read.version }
+    return deps.where ? inPlace(running, deps.where) : running
   }
   const context = async (conversationId: string): Promise<Context & { read: Read }> => {
     const cwd = deps.cwd(conversationId)
@@ -390,15 +401,23 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     return { ...rest, recipe: read.recipe, read }
   }
   /** The processes to run: those named, a target's, or with neither the first target's, or every process when the recipe has no targets. */
-  const chosen = (recipe: Recipe, names?: string[], target?: string) => {
+  const chosen = (recipe: Recipe, read: { absent?: RecipeAbsent | undefined; where?: RecipeWhere | undefined }, names?: string[], target?: string) => {
+    const { absent } = read
     const all = Object.keys(recipe.processes)
+    // What this place can't run is named as such, not as something the recipe lacks.
+    const here = read.where?.place === "cloud" ? "this cloud machine" : "this computer"
+    const needs = (name: string) => absent?.processes.find((process) => process.name === name)?.needs
+    const words = (name: string) => `${name} needs ${needs(name) === "mac" ? "a Mac with its screen" : "Linux"}`
     if (target !== undefined) {
+      if (absent?.targets.includes(target)) throw new Error(`The target ${target} doesn't run on ${here}: ${absent.processes.map((process) => words(process.name)).join(", ")}.`)
       const found = recipe.targets?.[target]
       if (!found) throw new Error(`The recipe has no target named ${target}; it has ${Object.keys(recipe.targets ?? {}).join(", ") || "none"}.`)
       if (names?.length) throw new Error("Name processes or a target, not both.")
       return found.processes
     }
     if (!names?.length) return Object.values(recipe.targets ?? {})[0]?.processes ?? all
+    const elsewhere = names.filter((name) => needs(name) !== undefined)
+    if (elsewhere.length) throw new Error(`${elsewhere.map(words).join(", ")}, so ${elsewhere.length === 1 ? "it doesn't" : "they don't"} run on ${here}.`)
     const unknown = names.filter((name) => !all.includes(name))
     if (unknown.length) throw new Error(`The recipe has no process named ${unknown.join(", ")}; it has ${all.join(", ") || "none"}.`)
     return names
@@ -603,10 +622,29 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const here = written.root === checkout
     return `Since this app came up, ${writtenText(written.paths)} changed in the main checkout (${written.root}), inside what worktrees link to${here ? "" : ", through this checkout's links or another's"}. That changes every linked Thread's copy. If this app or an agent here wrote it, set "link": false for that entry in the recipe${here ? "" : ", and make this checkout's own first: app_own_packages for install outputs, worktree_bring with the entry and no link for carry"}.`
   }
+  /**
+   * A cloud start of a published version that passed no proof on a cloud machine, said before it runs: the same
+   * checks may meet what only differs here (a value, a patched process, a missing tool). Undefined otherwise.
+   */
+  const unprovedHere = async (current: Ready): Promise<string | undefined> => {
+    const { read } = current
+    if (read.where?.place !== "cloud" || read.draft || read.version === undefined || !read.saved) return undefined
+    const record = await readVersion(read.saved, read.version)
+    if (!record) return undefined
+    const proofs = placedProofs(record)
+    if (proofs.cloud?.steps.every((step) => step.passed)) return undefined
+    const local = proofs.local?.steps.every((step) => step.passed)
+    return `Version ${read.version} of the recipe ${local ? "was proved on a Mac but never on a cloud machine" : "hasn't passed a proof yet"}: it runs here as its cloud part says, and a failure here may be what only differs here, such as a value, a patched process or a tool the machine lacks.`
+  }
   /** Starts the named processes, or all; under critical memory it joins the line with `again`, unless `anyway`. */
   const startIn = async (current: Ready, names: string[] | undefined, again: () => Promise<StartOutcome>, anyway = false): Promise<StartOutcome> => {
-    const picked = chosen(current.recipe, names)
+    const picked = chosen(current.recipe, current.read, names)
     if (!picked.length) return { kind: "nothing" }
+    // On a cloud machine no carried file meets a named secret: one its environment lacks is said now, not as a crash midway.
+    if (current.read.where?.place === "cloud") {
+      const missing = (current.recipe.secretNames ?? []).filter((name) => !deps.hasSecret?.(name))
+      if (missing.length) throw new Error(`This cloud machine has no value for ${missing.join(", ")}, which the recipe names as ${missing.length === 1 ? "a secret" : "secrets"} the app reads, so nothing was started. A cloud machine gets a named secret from the account it works for; on this computer, the files carry copies meet it.`)
+    }
     const { app } = current.environment
     const before = await deps.processes.status(app)
     const idle = picked.filter((name) => !before.some((entry) => entry.kind === "process" && entry.name === name && (entry.state.kind === "running" || entry.state.kind === "starting")))
@@ -637,6 +675,8 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       notes = room.notes
     }
     line.delete(app)
+    const unproved = await unprovedHere(current)
+    if (unproved) notes = [...notes, unproved]
     if (idle.length) await deps.processes.ofProject(app, await projectRoot(git, current.checkout))
     const fresh = !before.some((entry) => entry.kind === "process" && (entry.state.kind === "running" || entry.state.kind === "starting"))
     if (fresh) await markLinks(current)
@@ -678,17 +718,17 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   /** A desk start of `target`, or of the first target's processes when there's none or the recipe no longer has it. */
   const deskStart = (current: Ready, cwd: string, target: string | undefined, anyway = false) => {
     const known = knownTarget(current.recipe, target)
-    return startIn(current, known === undefined ? undefined : chosen(current.recipe, undefined, known), deskAgain(cwd, known), anyway)
+    return startIn(current, known === undefined ? undefined : chosen(current.recipe, current.read, undefined, known), deskAgain(cwd, known), anyway)
   }
   const deskAgain = (cwd: string, target?: string) => async (): Promise<StartOutcome> => deskStart(ready(await folderContext(cwd)), cwd, target)
   const start = async (conversationId: string, names?: string[], target?: string) => {
     const current = await withRecipe(conversationId)
-    const picked = chosen(current.recipe, names, target)
+    const picked = chosen(current.recipe, current.read, names, target)
     return startText(await startIn(current, picked, again(conversationId, picked)))
   }
   /** Stops the named processes, or the whole app with its install step and any check under way; finished checks keep their results. */
   const stopIn = async ({ environment, checkout, read }: Context & { read?: Read }, names?: string[]) => {
-    if (names?.length && read?.kind === "ready") chosen(read.recipe, names)
+    if (names?.length && read?.kind === "ready") chosen(read.recipe, read, names)
     afterInstall.delete(environment.app)
     const runs = await deps.processes.status(environment.app)
     const up = (status: RunStatus) => status.state.kind === "running" || status.state.kind === "starting"
@@ -910,7 +950,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       return `The ${tier} check your last app_check left running was stopped before it finished, so it has no result. Call app_check again to run it.`
     }
     if (tier === "full") {
-      const names = chosen(current.recipe, undefined, aimed)
+      const names = chosen(current.recipe, current.read, undefined, aimed)
       if (names.length) {
         const running = startText(await startIn(current, names, again))
         const statuses = await deps.processes.status(app)
@@ -949,7 +989,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const setupProgress = async (setup: Setup): Promise<SetupProgress> => {
     const cwd = deps.cwd(setup.conversation)
     const environment = cwd ? await deps.environment(setup.conversation, cwd) : undefined
-    const read = cwd && environment ? await readRecipe(git, await checkoutOf(git, cwd), environment, deps.recipesRoot).catch(() => undefined) : undefined
+    const read = cwd && environment ? await readRecipe(git, await checkoutOf(git, cwd), environment, deps.recipesRoot, deps.where).catch(() => undefined) : undefined
     if (!environment || read?.kind !== "ready") return { recipe: "running", app: "waiting", checks: "waiting" }
     const runs = (await deps.processes.status(environment.app)).filter((entry) => (entry.startedAt ?? 0) >= setup.since)
     const failed = (entry: RunStatus) => entry.state.kind === "ended" || (entry.state.kind === "exited" && entry.state.code !== 0)
@@ -982,7 +1022,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const environment = found.environment ?? placeholder(found.app)
     let read: Read
     try {
-      read = await readRecipe(git, found.checkout, environment, deps.recipesRoot)
+      read = await readRecipe(git, found.checkout, environment, deps.recipesRoot, deps.where)
     } catch (error) {
       read = { kind: "invalid", checkout: found.checkout, message: `the recipe couldn't be read: ${error instanceof Error ? error.message : String(error)}` }
     }
@@ -1169,7 +1209,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const setupView = async (cwd: string): Promise<{ view: ProjectAppSetup; read: Read; checkout: string }> => {
     if (!deps.folder) throw new Error("This Mako can't run apps from the desk.")
     const found = await deps.folder(cwd, false)
-    const read = await readRecipe(git, found.checkout, found.environment ?? placeholder(found.app), deps.recipesRoot)
+    const read = await readRecipe(git, found.checkout, found.environment ?? placeholder(found.app), deps.recipesRoot, deps.where)
     const view: ProjectAppSetup = { project: found.project, root: found.root, recipe: await recipeState(read, found.app) }
     return { view, read, checkout: found.checkout }
   }
@@ -1217,7 +1257,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     const worktrees = await lstat(join(root, ".git")).then(() => true, () => false)
     const named = recipe.cleanup || !worktrees ? [] : perThreadValues(recipe)
     const saved = await saveDraft(git, deps.recipesRoot, checkout, recipe, environment, { by: whoIs(conversationId), reason }, (deps.now ?? Date.now)())
-    const after = await readRecipe(git, checkout, environment, deps.recipesRoot)
+    const after = await readRecipe(git, checkout, environment, deps.recipesRoot, deps.where)
     if (after.kind !== "ready") throw new Error(`Saved, but it doesn't read back as ready: ${after.kind === "invalid" ? after.message : "no recipe"}`)
     const running = await appUp(environment.app)
     const changes = read.kind === "ready" ? recipeChanges(read.recipe, after.recipe) : []
@@ -1247,9 +1287,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   }
   const stepsLine = (steps: RecipeProofStep[]) =>
     steps.map((step) => `${step.name} ${step.passed ? "passed" : "failed"}${step.ms === undefined ? "" : ` in ${elapsed(step.ms)}`}`).join(", ")
-  const proofRecord = (current: Ready, steps: RecipeProofStep[], by: string | undefined) => {
-    const proof = { at: (deps.now ?? Date.now)(), on: "this Mac", checkout: current.checkout, steps }
-    return by ? { ...proof, by } : proof
+  const proofRecord = (current: Ready, steps: RecipeProofStep[], by: string | undefined): RecipeProof => {
+    const place = current.read.where?.place ?? "local"
+    const proof: RecipeProof = { at: (deps.now ?? Date.now)(), on: place === "cloud" ? "a cloud machine" : "this Mac", place, checkout: current.checkout, steps }
+    if (by) proof.by = by
+    return proof
   }
   /** Publishes the draft Mako proved, unless the app saved another since or another version was published meanwhile. */
   const publishProved = async (current: Ready, version: number, steps: RecipeProofStep[], by: string | undefined, started: number): Promise<ProofOutcome> => {
@@ -1553,7 +1595,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         const checkout = await checkoutOf(git, cwd)
         const root = await projectRoot(git, checkout)
         // Changing a recipe that works leaves every Thread seeing its app as it is.
-        const working = (await readRecipe(git, checkout, environment, deps.recipesRoot).catch(() => undefined))?.kind === "ready"
+        const working = (await readRecipe(git, checkout, environment, deps.recipesRoot, deps.where).catch(() => undefined))?.kind === "ready"
         if (!working && setups.get(root)?.conversation !== conversationId)
           setups.set(root, { conversation: conversationId, since: (deps.now ?? Date.now)(), appStarted: false })
         if (!working) stoppedSetups.delete(root)
@@ -1610,11 +1652,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     stop,
     async restart(conversationId, names, target) {
       const current = await withRecipe(conversationId)
-      const picked = chosen(current.recipe, names, target)
+      const picked = chosen(current.recipe, current.read, names, target)
       await deps.processes.stop(current.environment.app, picked.map((name) => runKey("process", name)))
       // With nothing left running, the app is no longer held to the version it started with.
       const next = (await appUp(current.environment.app)) ? current : await withRecipe(conversationId)
-      const restarted = next === current ? picked : chosen(next.recipe, names, target)
+      const restarted = next === current ? picked : chosen(next.recipe, next.read, names, target)
       return startText(await startIn(next, restarted, again(conversationId, restarted)))
     },
     async probe(conversationId) {
@@ -2068,22 +2110,35 @@ function recipeFields(recipe: Recipe): Map<string, string> {
   const put = (path: string, value: string | boolean | readonly string[] | undefined) => {
     if (value !== undefined) found.set(path, JSON.stringify(value))
   }
+  /** A process, or a place's patch of one: the same fields either way. */
+  const putProcess = (path: string, spec: Partial<RecipeProcess>) => {
+    const { command, cwd, port, values: own, ready, platform, ...unlistedProcess } = spec
+    const noneInProcess: Record<string, never> = unlistedProcess
+    void noneInProcess
+    put(`${path}.command`, command)
+    put(`${path}.cwd`, cwd)
+    put(`${path}.port`, port)
+    put(`${path}.ready`, ready)
+    put(`${path}.platform`, platform)
+    for (const [key, value] of Object.entries(own ?? {})) put(`${path}.values.${key}`, value)
+  }
   // A field added to the recipe fails to compile here until it's listed below.
-  const { $schema, values, processes, targets, checks, prepare, carry, leave, oneAtATime, verify, cleanup, ...unlisted } = recipe
+  const { $schema, values, processes, targets, checks, prepare, carry, leave, oneAtATime, verify, cleanup, secretNames, places, ...unlisted } = recipe
   const none: Record<string, never> = unlisted
   void none
   put("$schema", $schema)
   for (const [name, value] of Object.entries(values)) put(`values.${name}`, value)
   for (const [name, spec] of Object.entries(processes)) {
-    const { command, cwd, port, values: own, ready, ...unlistedProcess } = spec
-    const noneInProcess: Record<string, never> = unlistedProcess
-    void noneInProcess
-    put(`processes.${name}.command`, command)
-    put(`processes.${name}.cwd`, cwd)
-    put(`processes.${name}.port`, port)
-    put(`processes.${name}.ready`, ready)
-    for (const [key, value] of Object.entries(own ?? {})) put(`processes.${name}.values.${key}`, value)
+    putProcess(`processes.${name}`, spec)
   }
+  for (const place of ["local", "cloud"] as const) {
+    const { values: placeValues, processes: patches, ...unlistedPlace } = places?.[place] ?? {}
+    const noneInPlace: Record<string, never> = unlistedPlace
+    void noneInPlace
+    for (const [name, value] of Object.entries(placeValues ?? {})) put(`places.${place}.values.${name}`, value)
+    for (const [name, patch] of Object.entries(patches ?? {})) putProcess(`places.${place}.processes.${name}`, patch)
+  }
+  put("secretNames", secretNames)
   const putCheck = (path: string, given: RecipeCheck | undefined) => {
     if (!Array.isArray(given)) return put(path, given)
     put(path, given.map((step) => step.name))
@@ -2108,13 +2163,14 @@ function recipeFields(recipe: Recipe): Map<string, string> {
   }
   putCheck("checks.quick", checks.quick)
   putCheck("checks.full", checks.full)
-  prepare.forEach(({ command, inputs, outputs, link, ...unlistedStep }, index) => {
+  prepare.forEach(({ command, inputs, outputs, link, phase, ...unlistedStep }, index) => {
     const noneInStep: Record<string, never> = unlistedStep
     void noneInStep
     put(`prepare[${index}].command`, command)
     put(`prepare[${index}].inputs`, inputs)
     put(`prepare[${index}].outputs`, outputs)
     put(`prepare[${index}].link`, link)
+    put(`prepare[${index}].phase`, phase)
   })
   for (const entry of carry ?? []) put(`carry[${JSON.stringify(entry.path)}]`, entry.link ? "linked" : "copied")
   put("leave", leave)
