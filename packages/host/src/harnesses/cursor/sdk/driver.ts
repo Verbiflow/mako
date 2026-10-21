@@ -77,6 +77,18 @@ interface Ahead {
   release(): void
 }
 
+/** A promise's outcome, kept for later without an unhandled rejection meanwhile. */
+type Settled<T> = { ok: true; value: T } | { ok: false; error: Error }
+function settled<T>(promise: Promise<T>): Promise<Settled<T>> {
+  return promise.then((value) => ({ ok: true as const, value }), (error: Error) => ({ ok: false as const, error }))
+}
+/** The value, or the rejection again. */
+async function outcome<T>(promise: Promise<Settled<T>>): Promise<T> {
+  const result = await promise
+  if (result.ok) return result.value
+  throw result.error
+}
+
 /** Two environments alike in every variable they set. */
 function sameEnvironment(left: NodeJS.ProcessEnv, right: NodeJS.ProcessEnv): boolean {
   const entries = (env: NodeJS.ProcessEnv) => JSON.stringify(Object.entries(env).filter(([, value]) => value !== undefined).sort(([a], [b]) => a.localeCompare(b)))
@@ -433,17 +445,18 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     return resolved.selection
   }
 
-  async function ensureSignedIn(live: Live, trace: ProviderLaunchTrace, account: boolean, apiKey: string | undefined): Promise<void> {
+  /** Resolves whether a person had to sign in, after which what was asked before is another account's. */
+  async function ensureSignedIn(live: Live, trace: ProviderLaunchTrace, account: boolean, apiKey: string | undefined): Promise<boolean> {
     // A selected account brings its own key; Cursor answers for it on open.
-    if (account) return
+    if (account) return false
     // Asked, when no answer is kept, of the session's own child, which runs under the key the answer is about.
     const on = { client: live.client, apiKey }
     const snapshot = dependencies.auth.current ?? (await dependencies.auth.status(false, on))
-    if (snapshot.state.status === "signed-in") return
+    if (snapshot.state.status === "signed-in") return false
     // A remembered "signed out" may be stale — the CLI may have logged in
     // since — so the key sources are resolved again before asking anyone.
     const fresh = await dependencies.auth.status(true, on)
-    if (fresh.state.status === "signed-in") return
+    if (fresh.state.status === "signed-in") return false
     const requestId = `${live.state.id}-authenticate-${now()}`
     const problem = fresh.state.problem?.message
     const response = await trace.step("human-sign-in", () => engine.ask(live, {
@@ -460,6 +473,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       throw new Error("Cursor sign-in was declined; the thread was not opened")
     const after = await trace.step("human-sign-in", () => dependencies.auth.signInWithBrowser())
     if (after.state.status !== "signed-in") throw new Error("Cursor sign-in did not complete")
+    return true
   }
 
   /** What `open` should copy first, when the thread being reopened is a `cursor-agent` store. */
@@ -731,14 +745,22 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         engine.patch(live, { executionContext: { ...context, runtime } })
         if (hello.ripgrep === false)
           hostWarn("cursor-sdk", "the child has no bundled ripgrep; Grep and Glob need one on PATH", { conversation: live.state.id })
-        await trace.step("authentication", () => ensureSignedIn(live, trace, account, accountEnvironment.CURSOR_API_KEY))
+        // Who it runs as and the account's models are asked beside the sign-in check, not after it: each is a call to
+        // Cursor of 0.2-1.9 s on a copy (2026-10-21). They stand only if no person had to sign in meanwhile, after
+        // which they'd be another account's and are asked again.
+        const asking = settled(live.client.request("me", undefined))
+        const listing = settled(loadModels(live.client, accountEnvironment))
+        const signedInNow = await trace.step("authentication", () => ensureSignedIn(live, trace, account, accountEnvironment.CURSOR_API_KEY))
         const identityObservation = trace.step("identity", () => observeNativeIdentity(async () => {
-          const identity = await live.client.request("me", undefined)
+          const identity = signedInNow ? await live.client.request("me", undefined) : await outcome(asking)
           return reportedIdentity(identity.email, "cursor", CURSOR_NATIVE_IDENTITY.via)
         }, () => !live.closed && sessions.get(live.state.id) === live, identity => {
           if (live.state.executionContext) engine.patch(live, { executionContext: { ...live.state.executionContext, identity } })
         }))
-        let catalog = await trace.step("model-discovery", () => loadModels(live.client, accountEnvironment))
+        let catalog = await trace.step("model-discovery", async () => {
+          const early = signedInNow ? undefined : await listing
+          return early?.ok ? early.value : loadModels(live.client, accountEnvironment)
+        })
         live.models = catalog.models
         let selection: CursorSdkModelSelection
         try {
