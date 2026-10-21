@@ -133,16 +133,19 @@ export async function startOpenCodeApi(input: {
   // The launch still reports that failure; readiness must not reject unobserved.
   void ready.catch(() => {})
   let closing: Promise<void> | undefined
-  const close = (): Promise<void> => closing ??= (async () => {
+  // `now`: stopped from outside (a start run ahead that a start stops, a start cancelled), not closed after use. A
+  // server still starting then works on beside whatever comes next until it's signalled: on a copy, a start beside a
+  // run ahead closed so took up to 1.34 s, against 1.07 s with the run ahead ended at once (2026-10-20).
+  const close = (now = false): Promise<void> => closing ??= (async () => {
     input.signal?.removeEventListener("abort", abort)
     watch.dispose()
     lifetime.abort(new Error("OpenCode native API connection closed"))
     child.stdin.end()
-    const terminate = setTimeout(() => { child.kill("SIGTERM") }, 3000)
+    const terminate = setTimeout(() => { child.kill("SIGTERM") }, now ? 0 : 3000)
     const kill = setTimeout(() => { child.kill("SIGKILL") }, 6000)
     try { await closed } finally { clearTimeout(terminate); clearTimeout(kill) }
   })()
-  const abort = () => { void close() }
+  const abort = () => { void close(true) }
   input.signal?.addEventListener("abort", abort, { once: true })
   if (input.signal?.aborted) abort()
   // A failed spawn can close stdin before the normal lease shutdown.

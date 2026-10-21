@@ -9,7 +9,8 @@ const sessionId = z.string().regex(/^ses_[a-zA-Z0-9]+$/)
 const resume = z.object({ sessionID: sessionId })
 const result = z.object({ metadata: z.object({ sessionID: sessionId, status: z.string() }) })
 interface Input {
-  nativeId: string
+  /** The session whose subagents are read; without it, none is read until `bind` names it. */
+  nativeId?: string
   env: NodeJS.ProcessEnv
   /** How the host opens OpenCode's stores; the worker opens them the same way. */
   stores: NativeStores
@@ -18,9 +19,14 @@ interface Input {
 }
 interface Admission { call: string; baseline?: string; previous?: NativeAgentObservation; previousAdmission?: Admission; ambiguous: boolean }
 
-/** OpenCode v2 metadata observation. */
+/**
+ * OpenCode v2 metadata observation. Its reader is a worker thread, which a start runs from the server's spawn so
+ * that it's loaded by the time the session exists (`bind`): loaded after, it held every start 0.18–0.38 s on a copy
+ * (2026-10-20).
+ */
 export class OpenCodeAgents {
   private readonly input: Input
+  private nativeId: string | undefined
   private readonly worker: Worker
   private readonly current = new Map<string, NativeAgentObservation>()
   private readonly nativeRuns = new Map<string, string | undefined>()
@@ -37,9 +43,10 @@ export class OpenCodeAgents {
 
   constructor(input: Input) {
     this.input = input
+    this.nativeId = input.nativeId
     for (const agent of input.observedAgents ?? []) this.current.set(agent.nativeId, agent)
     this.worker = new Worker(new URL("./agent-worker.js", import.meta.url), {
-      workerData: { paths: openCodeDatabasePaths(input.env), nativeId: input.nativeId, strictStores: input.stores.strict },
+      workerData: { paths: openCodeDatabasePaths(input.env), strictStores: input.stores.strict },
       resourceLimits: { maxOldGenerationSizeMb: 64 },
     })
     this.ready = new Promise(resolve => { this.readyResolve = resolve })
@@ -64,8 +71,15 @@ export class OpenCodeAgents {
     this.scan()
   }
 
+  /** Names the session to read, once it exists; `ready` follows its first read. */
+  bind(nativeId: string): void {
+    if (this.nativeId !== undefined) return
+    this.nativeId = nativeId
+    this.scan()
+  }
+
   observe(update: { sessionId: string; toolCallId: string; title?: string; rawInput?: unknown; rawOutput?: unknown; status?: string }): void {
-    if (this.disposed || update.sessionId !== this.input.nativeId) return
+    if (this.disposed || update.sessionId !== this.nativeId) return
     this.revision++
     if (update.title === "subagent") this.subagentTools.add(update.toolCallId)
     const args = resume.safeParse(update.rawInput)
@@ -80,7 +94,7 @@ export class OpenCodeAgents {
           ambiguous: args.success && (!this.nativeRuns.has(child) || Boolean(previous && ["working", "waiting", "unknown"].includes(previous.state.kind))),
         })
         this.publish({ ...previous, nativeId: child, nativeRunId: update.toolCallId, toolId: update.toolCallId,
-          parentNativeId: this.input.nativeId, title: previous?.title ?? "Subagent", state: { kind: "working" } })
+          parentNativeId: this.nativeId, title: previous?.title ?? "Subagent", state: { kind: "working" } })
       }
     }
     const id = this.calls.get(update.toolCallId)
@@ -116,9 +130,9 @@ export class OpenCodeAgents {
     this.timer.unref()
   }
   private scan(): void {
-    if (this.disposed || this.reading) return
+    if (this.disposed || this.reading || this.nativeId === undefined) return
     this.reading = true
     this.readingRevision = this.revision
-    this.worker.postMessage(null)
+    this.worker.postMessage({ nativeId: this.nativeId })
   }
 }
