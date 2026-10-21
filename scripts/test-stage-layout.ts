@@ -303,6 +303,16 @@ assert.deepEqual(
     ready: true,
   }
 )
+// Two cloud conversations of one repository share a path on their machines: the folder is the conversation's, so a
+// window on one isn't ready for the other, and one on this Mac's folder isn't ready for either.
+const CLONE = "/home/node/work/acme/app"
+assert.deepEqual(
+  workspaceFocusOf({ sessionCwd: CLONE, sessionElsewhere: "cloud-1", live: { id: "cloud-2", cwd: CLONE, elsewhere: true } }),
+  { cwd: CLONE, title: undefined, identity: "live:cloud-2", ready: false, elsewhere: "cloud-2" }
+)
+assert.equal(workspaceFocusOf({ sessionCwd: CLONE, sessionElsewhere: "cloud-2", live: { id: "cloud-2", cwd: CLONE, elsewhere: true } }).ready, true)
+assert.equal(workspaceFocusOf({ sessionCwd: CLONE, live: { id: "cloud-2", cwd: CLONE, elsewhere: true } }).ready, false, "a folder opened for no conversation is this Mac's")
+assert.equal(workspaceFocusOf({ sessionCwd: "/repo/arca", sessionElsewhere: "cloud-1", live: { id: "live-1", cwd: "/repo/arca" } }).ready, false, "back on this Mac's folder from a cloud one: opened again, as this Mac's")
 
 const duplicateThreadBase: ThreadRef = {
   harness: "codex",

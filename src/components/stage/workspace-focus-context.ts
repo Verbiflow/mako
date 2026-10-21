@@ -5,6 +5,8 @@ export interface WorkspaceFocus {
   title?: string
   identity: string
   ready: boolean
+  /** The cloud conversation whose folder `cwd` is, read on its machine. Two of one repository share a path, never this. */
+  elsewhere?: string
 }
 
 export const WorkspaceFocusContext = createContext<WorkspaceFocus>({
@@ -18,11 +20,14 @@ export function workspaceFocusOf({
   viewing,
   live,
   liveThreadPath,
+  sessionElsewhere,
 }: {
   sessionCwd?: string
+  /** The cloud conversation the workspace's folder was opened for, if any. */
+  sessionElsewhere?: string
   sessionTitle?: string
   viewing?: { path: string; cwd?: string; title?: string }
-  live?: { id: string; cwd: string; title?: string }
+  live?: { id: string; cwd: string; title?: string; elsewhere?: boolean }
   liveThreadPath?: string
 }): WorkspaceFocus {
   const viewingOwnsFocus = Boolean(
@@ -37,7 +42,10 @@ export function workspaceFocusOf({
     : live
       ? `live:${live.id}`
       : `workspace:${sessionCwd ?? "none"}`
-  return { cwd, title, identity, ready: !cwd || cwd === sessionCwd }
+  const elsewhere = !viewingOwnsFocus && live?.elsewhere ? live.id : undefined
+  const focus: WorkspaceFocus = { cwd, title, identity, ready: !cwd || (cwd === sessionCwd && elsewhere === sessionElsewhere) }
+  if (elsewhere) focus.elsewhere = elsewhere
+  return focus
 }
 
 export function useWorkspaceFocus() {

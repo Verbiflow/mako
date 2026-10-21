@@ -251,6 +251,11 @@ export interface LiveSummary {
    */
   epoch?: string
   threadPath?: string
+  /**
+   * Where its folder is when it isn't on this computer, in words (`a cloud machine`): a window shows its files and
+   * Git as that host reads them, naming the conversation, since a path there can be another conversation's too.
+   */
+  elsewhere?: string
   createdAt: number
   /** The Thread and Session this conversation belongs to, the same IDs a catalog row carries. */
   threadId?: string
