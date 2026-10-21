@@ -52,6 +52,10 @@ export function hostCallInput(args: readonly unknown[], history: boolean): Paylo
   return Payload.encoded(JSON.stringify(history ? { args: runtimeArgs(args), history } : { args: runtimeArgs(args) }))
 }
 
+/**
+ * A call whose repeat reaches the same end (`read` or `replay` in the host's policy) says so as `repeatable`, so the
+ * gateway may send it on before its admission is on disk; a `never` call (a commit, a push) waits for the disk.
+ */
 export function toHostOperation(channel: string, input: Payload, options: {
   id: string
   target: Target
@@ -59,7 +63,7 @@ export function toHostOperation(channel: string, input: Payload, options: {
   correlationId: string
   attempt: number
 }): Operation {
-  return {
+  const operation: Operation = {
     v: PROTOCOL_VERSION,
     id: options.id,
     op: hostOperationName(channel),
@@ -69,6 +73,8 @@ export function toHostOperation(channel: string, input: Payload, options: {
     actor: options.actor,
     attempt: options.attempt,
   }
+  if (hostCallReplay(channel) !== "never") operation.repeatable = true
+  return operation
 }
 
 export type HostCallRequest = { kind: "call"; channel: HostChannel; args: unknown[]; history: boolean }
