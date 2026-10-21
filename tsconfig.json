@@ -14,13 +14,13 @@
       "path": "./tsconfig.scripts.json"
     },
     {
+      "path": "./packages/protocol"
+    },
+    {
       "path": "./packages/sessions"
     },
     {
       "path": "./packages/git"
-    },
-    {
-      "path": "./packages/protocol"
     },
     {
       "path": "./packages/control"

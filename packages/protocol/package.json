@@ -9,6 +9,7 @@
   "exports": {
     ".": "./dist/index.js",
     "./fake-gateway": "./dist/fake-gateway.js",
+    "./records": "./dist/records.js",
     "./conformance": "./dist/conformance.js",
     "./attribution-conformance": "./dist/attribution-conformance.js"
   },
