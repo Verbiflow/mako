@@ -226,6 +226,26 @@ try {
   await fresh.startPrefetch!.signedIn!(keyC)
   assert.equal(spawned.length, count + 1)
   assert.equal(closed.filter((owner) => owner === "prefetch:cursor").length, 1, "its own child is stopped")
+  // A fresh machine keeps no sign-in answer: the start asks it of its own child, beside who it is and its models, and
+  // spawns nothing else.
+  {
+    const freshAuth = new CursorSdkAuth({
+      env: async () => ({ ...keyA }), cliKey: async () => null, openUrl: async () => { throw Error("no login") }, client,
+      credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
+    })
+    const fresh = createCursorSdkDriver({ stores: nativeStores, auth: freshAuth, stateRoot: () => root, home: root, client, modelCache: createCursorModelCache() })
+    const before = spawned.length
+    asked.length = 0
+    methods.length = 0
+    env = keyA
+    await fresh.start(root, admitted("cursor", { conversationId: "F", emit() {} }, { env }))
+    assert.deepEqual(spawned.slice(before), ["F"], "only the session's own child")
+    assert.deepEqual(asked.filter((entry) => entry.startsWith("F:")).sort(), ["F:hello", "F:me", "F:me", "F:models", "F:open"].filter((entry) => entry !== "F:hello").sort(), "the sign-in check's me, its own me, its models, then open")
+    assert.ok(methods.indexOf("open") > methods.lastIndexOf("me answered"), "open after every answer")
+    assert.equal(freshAuth.current?.state.status, "signed-in", "the answer is kept as a check's would be")
+    await fresh.close("F")
+  }
+
   // The stage's question never answers on the kept child: a start waits for it 3 s, not the 20 s a hung question took
   // on a copy, then stops that child, and its own question and session go on as without one run ahead.
   {
