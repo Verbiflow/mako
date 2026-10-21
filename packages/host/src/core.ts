@@ -18,7 +18,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -351,6 +351,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           if (!shell.closing()) web()?.conversationEvent(event)
         },
         repositoryOf: (cwd) => folderRepository(git, cwd),
+        // Every tab showing that conversation's folder reads its Git again, on the machine.
+        changed: (conversationId) => {
+          for (const tab of workspaceClients.everyTab()) tab.elsewhereChanged(conversationId)
+        },
       })
   late.cloudConversations = cloudConversations
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
@@ -473,6 +477,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       machine: () => machineOffer(machine),
       sourceRoot: config.development ? environment.appRoot : undefined,
       onWorkspaceChanged: (cwd) => workspaceAutomations.watch(cwd),
+      elsewhere: async (conversation) => cloudConversations?.folder(conversation),
     },
     emit,
     machine,
@@ -540,6 +545,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
 
   return {
     route: async (channel, args) => {
+      // A window whose folder is a conversation's on its machine reads and changes it there, and is told what only
+      // this Mac can do.
+      const tab = workspaceClients.opened(hostClient())?.active
+      const elsewhere = tab?.elsewhere
+      if (tab && elsewhere) {
+        const refusal = elsewhereRefusal(channel, elsewhere.where)
+        if (refusal) throw new Error(refusal)
+        if (answeredElsewhere(channel, args, tab.workspace)) return { handled: true, value: await elsewhere.call(channel, args) }
+      }
       const cloud = await cloudConversations?.route(channel, args)
       return cloud?.handled ? cloud : opened.route(channel, args)
     },

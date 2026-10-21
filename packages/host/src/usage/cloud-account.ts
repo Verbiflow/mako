@@ -778,6 +778,11 @@ export class CloudAccounts {
     this.#options.onChange(this.account())
   }
 
+  /** The cloud's address, when this build has one; nothing is fetched to say so. */
+  gateway(): URL | undefined {
+    return this.#cloud ? new URL(this.#cloud) : undefined
+  }
+
   #require(): URL {
     if (!this.#cloud) throw new CloudAccountError(this.#unavailable ?? "Mako accounts aren't available in this build.")
     return this.#cloud

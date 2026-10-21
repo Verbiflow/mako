@@ -20,6 +20,8 @@ import { onMac, systemName, systemVersion } from "../base/platform.js"
 export interface CloudAccount {
   /** A connection token while this Mac is signed in to Mako. */
   token(): Promise<string | undefined>
+  /** The cloud's address this Mac reaches, such as `https://api.example.com`; undefined in a build without one. */
+  gateway(): URL | undefined
   /** The signed-in Mako account's ID, or undefined while signed out. */
   id(): Promise<string | undefined>
   /**
@@ -157,6 +159,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   methods.handle("mako:cloud-sign-ins-share", (sharing: boolean) => sync?.share(sharing) ?? unsharable())
   return {
     token: () => cloud.optionalConnectionToken(),
+    gateway: () => cloud.gateway(),
     id: async () => {
       const { state } = await cloud.ready()
       return state.status === "signed-in" ? state.account.id : undefined

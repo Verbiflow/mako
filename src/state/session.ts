@@ -100,6 +100,8 @@ export interface SessionStore {
   stream: ChatMessage | null
   tree: TreeNode[]
   git?: GitStatus
+  /** The cloud conversation whose folder the workspace is, read on its machine; none for a folder on this Mac. */
+  elsewhere?: string
   models: ModelInfo[]
   capabilities: Capabilities
   platform: ProcessPlatform | "unknown"| "unknown"
@@ -716,7 +718,7 @@ export const actions = {
     const cwd = store.get().meta?.cwd
     try {
       const bridge = getMako()
-      if (cwd) await bridge.setCwd(cwd)
+      if (cwd) await bridge.setCwd(cwd, store.get().elsewhere)
       const boot = await bridge.boot()
       if (epoch !== connectionEpoch) return
       if (store.get().phase !== "ready") {
@@ -1044,20 +1046,24 @@ export const actions = {
     if (folder) await actions.newConversationIn(folder)
   },
 
-  /** Point the agent at a folder by path, without a dialog. */
-  async openWorkspace(folder: string) {
+  /**
+   * Point the agent at a folder by path, without a dialog. `elsewhere`: the cloud conversation whose folder it is,
+   * so its files and Git are read on its machine.
+   */
+  async openWorkspace(folder: string, elsewhere?: string) {
     const mine = ++workspaceGeneration
     workspaceTransitionStore.set({ kind: "loading", cwd: folder })
     store.set({ git: undefined })
     let next: TabSnapshot
     try {
-      next = await getMako().setCwd(folder)
+      next = await getMako().setCwd(folder, elsewhere)
     } catch (error) {
       if (mine === workspaceGeneration) workspaceTransitionStore.set({ kind: "failed", cwd: folder, message: error instanceof Error ? error.message : "The project could not be opened." })
       return
     }
     if (mine !== workspaceGeneration) return
     adoptSnapshot(next)
+    store.set({ elsewhere })
     workspaceTransitionStore.set({ kind: "ready" })
     viewer.close()
     void actions.refreshModels()

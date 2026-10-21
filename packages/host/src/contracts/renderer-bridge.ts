@@ -623,8 +623,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     openSession: (path: string) =>
       invokeTrustedHost<SessionState>("mako:open-session", path),
     newSession: () => invokeTrustedHost<SessionState>("mako:new-session"),
-    setCwd: (cwd: string) =>
-      invokeTrustedHost<TabSnapshot>("mako:set-cwd", cwd),
+    /** `conversation`: the live conversation whose folder this is; one on a cloud machine is read there. */
+    setCwd: (cwd: string, conversation?: string) =>
+      invokeTrustedHost<TabSnapshot>("mako:set-cwd", cwd, conversation),
     setName: (name: string) => invokeTrustedHost<void>("mako:set-name", name),
 
     prompt: (

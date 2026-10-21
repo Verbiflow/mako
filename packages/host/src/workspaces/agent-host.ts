@@ -6,6 +6,9 @@ import { type GitTab, WorkspaceGit } from "../git/index.js"
 import { searchWorkspace } from "./search.js"
 import { WorkspaceFiles } from "./files.js"
 import type { ArtifactPreviews } from "./artifact-previews.js"
+import type { ElsewhereFolder } from "./elsewhere.js"
+import { decodeRuntimeValue } from "../contracts/runtime-value.js"
+import { z } from "zod"
 import { watchTree, type TreeWatch } from "./tree-watcher.js"
 import type { WatchBackend } from "./watch-backend.js"
 import { watchOutsideGitDir, type GitDirWatch } from "./git-dir-watch.js"
@@ -39,6 +42,9 @@ export interface TabServices {
   watch: WatchBackend
 }
 
+/** Another host's `mako:git-status`, from this same contract: checked for the fields a window reads it by. */
+const ElsewhereGitStatusSchema = z.custom<GitStatus>((value) => z.object({ cwd: z.string(), ahead: z.number(), behind: z.number(), files: z.array(z.unknown()) }).loose().safeParse(value).success)
+
 export class AgentHost implements GitTab {
   readonly id: string
   private readonly git: Git
@@ -55,6 +61,8 @@ export class AgentHost implements GitTab {
   private backgroundStop: NodeJS.Timeout | null = null
   private sessionId = crypto.randomUUID()
   private sessionName: string | undefined
+  /** Set while this tab's folder is a conversation's on another host: nothing of it is read or watched here. */
+  private elsewhereFolder: ElsewhereFolder | undefined
 
   constructor(id: string, emit: (event: HostEvent) => void, services: TabServices) {
     const cwd = homedir()
@@ -72,6 +80,11 @@ export class AgentHost implements GitTab {
 
   get workspace(): string {
     return this.workspaceFiles.cwd
+  }
+
+  /** The conversation's folder on another host this tab shows, if it shows one. */
+  get elsewhere(): ElsewhereFolder | undefined {
+    return this.elsewhereFolder
   }
 
   get sessionFile(): string | undefined {
@@ -112,7 +125,7 @@ export class AgentHost implements GitTab {
   }
 
   private startWorkspaceWatcher(): void {
-    if (this.workspaceWatcher) return
+    if (this.workspaceWatcher || this.elsewhereFolder) return
     const generation = ++this.workspaceWatcherGeneration
     this.workspaceWatcher = watchTree(
       this.git,
@@ -218,7 +231,9 @@ export class AgentHost implements GitTab {
     unavailable("Opening a built-in session")
   }
 
-  async setCwd(cwd: string): Promise<void> {
+  /** `elsewhere`: the folder is a conversation's on another host, read and changed there. */
+  async setCwd(cwd: string, elsewhere?: ElsewhereFolder): Promise<void> {
+    this.elsewhereFolder = elsewhere
     await this.setWorkspace(cwd)
     this.pushState()
     void this.pushGit()
@@ -299,7 +314,14 @@ export class AgentHost implements GitTab {
   }
 
   async gitStatus(): Promise<GitStatus> {
+    const elsewhere = this.elsewhereFolder
+    if (elsewhere) return ElsewhereGitStatusSchema.parse(decodeRuntimeValue(await elsewhere.call("mako:git-status", [])))
     return this.workspaceGit.status()
+  }
+
+  /** Its folder elsewhere may have changed (its conversation's agent worked): its Git is read again, there. */
+  elsewhereChanged(conversation: string): void {
+    if (this.elsewhereFolder?.conversation === conversation) void this.pushGit()
   }
 
   async listFiles(): Promise<WorkspaceFile[]> {
