@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { runGatewayConformance } from "../dist/conformance.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
+import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
   CLOSE_CODES,
   PING,
@@ -1054,5 +1055,39 @@ describe("client frames", () => {
     assert.equal(reply.problem.type, "urn:mako:problem:unavailable")
     assert.equal(reply.problem.outcome, "unknown")
     assert.equal(reply.problem.correlationId, operation.correlationId)
+  })
+})
+
+describe("records crossing between stores", () => {
+  const hash = (byte) => byte.toString(16).padStart(2, "0").repeat(32)
+  const version = (seq, chunks, kind = "append") => ({ seq, kind, at: 1, size: 4, digest: null, tail: null, chunks: chunks.join(""), detail: null, writer: null, writerSource: null })
+  const bundle = (versions) => RecordBundleSchema.parse({ harness: "codex", nativeId: "s1", layout: { home: "/h", roots: {}, paths: {} }, marks: {}, units: [{ key: "k", role: "file", path: "codex:s1.jsonl", places: null, versions }] })
+  const holding = (versions) => () => ({ head: versions.length - 1, version: (seq) => versions[seq] && { kind: versions[seq].kind, chunks: versions[seq].chunks } })
+
+  test("a pack carries each chunk's header and body, and a pack that isn't whole is refused", () => {
+    const chunks = [{ hash: hash(1), codec: 1, size: 9, body: new Uint8Array([1, 2, 3]) }, { hash: hash(2), codec: 0, size: 2, body: new Uint8Array([4, 5]) }]
+    const pack = encodeChunkPack(chunks)
+    assert.equal(pack.length, 2 * CHUNK_HEADER_BYTES + 5)
+    assert.deepEqual(decodeChunkPack(pack).map(({ hash, codec, size, body, offset }) => ({ hash, codec, size, body: [...body], offset })), [
+      { hash: hash(1), codec: 1, size: 9, body: [1, 2, 3], offset: CHUNK_HEADER_BYTES },
+      { hash: hash(2), codec: 0, size: 2, body: [4, 5], offset: 2 * CHUNK_HEADER_BYTES + 3 },
+    ])
+    assert.throws(() => decodeChunkPack(pack.subarray(0, pack.length - 1)), /runs past its pack/)
+    assert.throws(() => decodeChunkPack(new Uint8Array(CHUNK_HEADER_BYTES)), /Not a chunk pack/)
+  })
+
+  test("one rule takes a bundle: what's held must match, what's new must follow, and each chunk is named once", () => {
+    const held = [version(0, [hash(1)]), version(1, [hash(2)])]
+    const arriving = bundle([...held, version(2, [hash(3), hash(1)])])
+    const planned = planRecordImport(arriving, holding(held))
+    assert.equal(planned.held, 2)
+    assert.deepEqual(planned.taking.map(({ version }) => version.seq), [2])
+    assert.deepEqual(recordChunks(arriving.units[0].versions), [hash(1), hash(2), hash(3)])
+    assert.deepEqual(planRecordImport(arriving, () => undefined).taking.length, 3, "a store that holds nothing takes it all")
+    const diverged = bundle([version(0, [hash(1)]), version(1, [hash(9)])])
+    assert.throws(() => planRecordImport(diverged, holding(held)), (error) => error instanceof RecordConflictError && error.conflict === "diverged" && error.seq === 1)
+    assert.throws(() => planRecordImport(bundle([version(3, [hash(4)])]), holding(held)), (error) => error instanceof RecordConflictError && error.conflict === "gap" && error.head === 1)
+    assert.throws(() => planRecordImport(bundle([version(0, [hash(1)], "replace")]), holding(held)), /went on in two places/, "a version held with another kind")
+    assert.equal(RecordBundleSchema.safeParse({ ...arriving, units: [{ ...arriving.units[0], versions: [{ ...arriving.units[0].versions[0], chunks: "abc" }] }] }).success, false, "chunks are whole hashes")
   })
 })
