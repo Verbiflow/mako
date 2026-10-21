@@ -433,14 +433,16 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     return resolved.selection
   }
 
-  async function ensureSignedIn(live: Live, trace: ProviderLaunchTrace, account: boolean): Promise<void> {
+  async function ensureSignedIn(live: Live, trace: ProviderLaunchTrace, account: boolean, apiKey: string | undefined): Promise<void> {
     // A selected account brings its own key; Cursor answers for it on open.
     if (account) return
-    const snapshot = dependencies.auth.current ?? (await dependencies.auth.status())
+    // Asked, when no answer is kept, of the session's own child, which runs under the key the answer is about.
+    const on = { client: live.client, apiKey }
+    const snapshot = dependencies.auth.current ?? (await dependencies.auth.status(false, on))
     if (snapshot.state.status === "signed-in") return
     // A remembered "signed out" may be stale — the CLI may have logged in
     // since — so the key sources are resolved again before asking anyone.
-    const fresh = await dependencies.auth.status(true)
+    const fresh = await dependencies.auth.status(true, on)
     if (fresh.state.status === "signed-in") return
     const requestId = `${live.state.id}-authenticate-${now()}`
     const problem = fresh.state.problem?.message
@@ -729,7 +731,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         engine.patch(live, { executionContext: { ...context, runtime } })
         if (hello.ripgrep === false)
           hostWarn("cursor-sdk", "the child has no bundled ripgrep; Grep and Glob need one on PATH", { conversation: live.state.id })
-        await trace.step("authentication", () => ensureSignedIn(live, trace, account))
+        await trace.step("authentication", () => ensureSignedIn(live, trace, account, accountEnvironment.CURSOR_API_KEY))
         const identityObservation = trace.step("identity", () => observeNativeIdentity(async () => {
           const identity = await live.client.request("me", undefined)
           return reportedIdentity(identity.email, "cursor", CURSOR_NATIVE_IDENTITY.via)
