@@ -253,9 +253,10 @@ export function installMockThreadApp(): void {
           savedAt: minutes(60 * 50),
           earlier: 3,
           version: 4,
+          account: new URLSearchParams(location.search).get("recipe") === "behind" ? { behind: "Mako couldn’t reach your account just now, so this may not be its newest version." } : {},
           versions: [
-            { version: 4, state: "published", current: true, savedAt: minutes(60 * 50 + 4), publishedAt: minutes(60 * 50), parent: 2, by: "the Thread \"Fix the dev server\" (claude)", reason: "Back to version 2: the separate API process left the web server without its sessions", proof: { at: minutes(60 * 50), passed: true }, readable: true },
-            { version: 3, state: "published", current: false, savedAt: minutes(60 * 75), publishedAt: minutes(60 * 74), parent: 2, by: "the Thread \"Split the API\" (codex)", reason: "Run the API on its own port", proof: { at: minutes(60 * 74), passed: true }, readable: true },
+            { version: 4, state: "published", current: true, savedAt: minutes(60 * 50 + 4), publishedAt: minutes(60 * 50), parent: 2, by: "the Thread \"Fix the dev server\" (claude)", reason: "Back to version 2: the separate API process left the web server without its sessions", proof: { at: minutes(60 * 49), passed: true }, places: { local: { at: minutes(60 * 50), passed: true }, cloud: { at: minutes(60 * 49), passed: true } }, readable: true },
+            { version: 3, state: "published", current: false, savedAt: minutes(60 * 75), publishedAt: minutes(60 * 74), parent: 2, by: "the Thread \"Split the API\" (codex)", reason: "Run the API on its own port", proof: { at: minutes(60 * 73), passed: false, failed: "verify web" }, places: { local: { at: minutes(60 * 74), passed: true }, cloud: { at: minutes(60 * 73), passed: false, failed: "verify web" } }, readable: true },
             { version: 2, state: "published", current: false, savedAt: minutes(60 * 24 * 6), publishedAt: minutes(60 * 24 * 6), parent: 1, by: "the Thread \"Faster checks\" (cursor)", reason: "Typecheck and lint at the same time", proof: { at: minutes(60 * 24 * 6), passed: true }, readable: true },
             { version: 1, state: "published", current: false, savedAt: minutes(60 * 24 * 9), publishedAt: minutes(60 * 24 * 9), reason: "Published before Mako kept versions", readable: true },
           ],

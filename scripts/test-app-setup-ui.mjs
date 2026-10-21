@@ -148,10 +148,20 @@ async function checkWindow() {
   await until(settingsOpen, "Settings opened on Apps")
   await until(`document.querySelector('[data-app-setup-action="change"]') !== null && document.body.textContent.includes('.env.local')`, "mako's app page")
   const page1 = await evaluate(`document.querySelector('[role="dialog"] main').innerText`)
-  for (const text of ["Runs", "web", "npm run web", "Thread port", "Checks", "Quick check", "Before it starts", "npm install", "New Threads also get", "Copied", "config/dev.local.json", ".env.local", "Linked to the main folder", "fixtures/recordings", "Every Thread uses the main folder’s", ".env.local holds credentials", "agents are told never to open it", "Values", "MAKO_HOME", "Version 4, saved in Mako", "3 earlier versions kept"])
+  for (const text of ["Runs", "web", "npm run web", "Thread port", "Checks", "Quick check", "Before it starts", "npm install", "New Threads also get", "Copied", "config/dev.local.json", ".env.local", "Linked to the main folder", "fixtures/recordings", "Every Thread uses the main folder’s", ".env.local holds credentials", "agents are told never to open it", "Values", "MAKO_HOME", "Version 4, kept by your account for every branch, on this Mac and on cloud machines; 3 earlier versions kept", "Proved on this Mac and on a cloud machine", "Proved on this Mac · failed on a cloud machine at verify web"])
     assert.ok(page1.includes(text), `the project's page shows ${text}:\n${page1}`)
   assert.equal(await evaluate(`document.querySelector('[role="dialog"] main [role="switch"]')`), null, "nothing to allow: credentials are carried as the recipe says")
+  assert.doesNotMatch(page1, /couldn’t reach your account/, "the account answered, so nothing says it may be behind")
   await settingsPage("apps-mako")
+  await evaluate(`(() => {
+    const versions = [...document.querySelectorAll('[role="dialog"] main section')].find(section => section.firstElementChild?.textContent.startsWith('Versions'))
+    versions.dataset.check = 'versions'
+    versions.scrollIntoView({ block: 'center' })
+    ;[...document.querySelectorAll('[role="dialog"] main p')].find(p => p.textContent.includes('kept by your account')).parentElement.dataset.check = 'kept'
+    return true
+  })()`)
+  await both("apps-mako-versions", ['[data-check="versions"]', '[data-check="kept"]'])
+  await evaluate(`(() => { document.querySelector('[role="dialog"] main').scrollTop = 0; return true })()`)
 
   // 2. Every project, with what state each is in.
   await click('[role="dialog"] main button:first-child')
@@ -195,7 +205,19 @@ async function checkWindow() {
   await escape()
   await until(`!document.querySelector('[role="dialog"] main h2')`)
 
-  // 6. The running app's own menu ends with the same row.
+  // 6. The account out of reach: the versions this Mac took are shown, saying they may not be the newest.
+  await window.loadURL(`${base}?mock&app=stopped&recipe=behind`)
+  await until(`document.querySelector('[data-app-control="stopped"]') !== null`)
+  await rightClick('[data-app-control="stopped"]')
+  await until(`document.querySelector('[role="menu"] [data-app-action="app-setup"]') !== null`)
+  await click('[role="menu"] [data-app-action="app-setup"]')
+  await until(`${settingsOpen} && document.body.textContent.includes('MAKO_HOME')`, "mako's app page, out of reach")
+  assert.match(await evaluate(`document.querySelector('[role="dialog"] main').innerText`), /3 earlier versions kept\. Mako couldn’t reach your account just now, so this may not be its newest version\./)
+  await settingsPage("apps-mako-behind")
+  await escape()
+  await until(`!document.querySelector('[role="dialog"] main h2')`)
+
+  // 7. The running app's own menu ends with the same row.
   await window.loadURL(`${base}?mock&app=running`)
   await until(`document.querySelector('[data-app-control="running"]') !== null`)
   await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 500 })
@@ -206,6 +228,6 @@ async function checkWindow() {
   await both("running-menu", ['[role="menu"]', '[data-app-control]'])
 
   clearTimeout(watchdog)
-  console.log("App setup UI checks clean: Run control right-click and menu, project right-click, Settings › Apps (list, set up with copied, linked and credentials files, committed, not set up)")
+  console.log("App setup UI checks clean: Run control right-click and menu, project right-click, Settings › Apps (list, set up with copied, linked and credentials files, versions kept by the account with each place's proof, out of reach, committed, not set up)")
   app.exit(0)
 }

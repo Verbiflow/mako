@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { runGatewayConformance } from "../dist/conformance.js"
+import { GatewayHttpError } from "../dist/gateway-http.js"
+import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
+import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
@@ -1089,5 +1092,55 @@ describe("records crossing between stores", () => {
     assert.throws(() => planRecordImport(bundle([version(3, [hash(4)])]), holding(held)), (error) => error instanceof RecordConflictError && error.conflict === "gap" && error.head === 1)
     assert.throws(() => planRecordImport(bundle([version(0, [hash(1)], "replace")]), holding(held)), /went on in two places/, "a version held with another kind")
     assert.equal(RecordBundleSchema.safeParse({ ...arriving, units: [{ ...arriving.units[0], versions: [{ ...arriving.units[0].versions[0], chunks: "abc" }] }] }).success, false, "chunks are whole hashes")
+  })
+})
+
+describe("a project's recipe authority over HTTP", () => {
+  const record = (version, extra = {}) => ({ version, state: "draft", savedAt: 1, recipe: { values: { A: "1" } }, ...extra })
+  const served = (answers) => {
+    const asked = []
+    const fetch = async (url, init) => {
+      asked.push({ url: String(url), method: init.method, authorization: init.headers.get("authorization"), body: init.body ? JSON.parse(init.body) : undefined })
+      const [status, body] = answers.shift()
+      return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+    }
+    return { asked, fetch }
+  }
+
+  test("a device's names its repository on every route; a machine's names none; answers are read by their schemas", async () => {
+    const device = served([[200, { change: 3, published: 1, versions: [record(1, { state: "published" })], more: false }], [200, record(2, { parent: 1 })], [200, { ok: false, published: record(3, { state: "published" }), reason: "Version 3 was published after this draft was made from version 1." }]])
+    const authority = recipesOverHttp({ id: "a", base: "https://gw/v1/recipes", authorization: () => "Bearer t", fetch: device.fetch, repository: "https://github.com/acme/app" })
+    assert.equal((await authority.changes(0)).published, 1)
+    const save = { id: crypto.randomUUID(), parent: 1, savedAt: 2, recipe: { values: { A: "2" } } }
+    assert.equal((await authority.save(save)).version, 2)
+    const refused = await authority.publish({ version: 2, proof: { at: 3, on: "this Mac", place: "local", checkout: "/p", steps: [] }, publishedAt: 3 })
+    assert.equal(refused.ok, false)
+    assert.equal(refused.ok === false && refused.published?.version, 3)
+    assert.deepEqual(device.asked.map((call) => [call.method, call.url]), [
+      ["GET", "https://gw/v1/recipes/changes?after=0&repository=https%3A%2F%2Fgithub.com%2Facme%2Fapp"],
+      ["POST", "https://gw/v1/recipes/save?repository=https%3A%2F%2Fgithub.com%2Facme%2Fapp"],
+      ["POST", "https://gw/v1/recipes/publish?repository=https%3A%2F%2Fgithub.com%2Facme%2Fapp"],
+    ])
+    assert.deepEqual(device.asked[1].body, save, "the save carries its own id, so a repeat makes no second version")
+    assert.ok(device.asked.every((call) => call.authorization === "Bearer t"))
+
+    const machine = served([[200, { change: 0, published: null, versions: [], more: false }]])
+    await recipesOverHttp({ id: "m", base: "https://gw/v1/machines/m1/recipes", authorization: () => "Bearer m", fetch: machine.fetch }).changes(0)
+    assert.equal(machine.asked[0].url, "https://gw/v1/machines/m1/recipes/changes?after=0")
+  })
+
+  test("a busy gateway is asked again; a refusal is thrown with its title, once", async () => {
+    const busy = served([[503, {}], [200, record(4)]])
+    const authority = recipesOverHttp({ id: "a", base: "https://gw", authorization: () => "t", fetch: busy.fetch, backoff: [1, 1] })
+    assert.equal((await authority.prove({ version: 4, proof: { at: 1, on: "a cloud machine", place: "cloud", checkout: "/w", steps: [] } })).version, 4)
+    assert.equal(busy.asked.length, 2)
+    const refusing = served([[409, { title: "Version 9 isn't a published version of this project's recipe" }]])
+    await assert.rejects(recipesOverHttp({ id: "a", base: "https://gw", authorization: () => "t", fetch: refusing.fetch, backoff: [1] }).save({ id: crypto.randomUUID(), parent: 9, savedAt: 1, recipe: {} }), (error) => error instanceof GatewayHttpError && error.status === 409 && /isn't a published version/.test(error.message))
+    assert.equal(refusing.asked.length, 1)
+  })
+
+  test("a recipe fits while its JSON is within the wire's bound", () => {
+    assert.ok(recipeFits(JSON.stringify({ values: { A: "x".repeat(RECIPE_WIRE_BYTES - 100) } })))
+    assert.ok(!recipeFits(JSON.stringify({ values: { A: "x".repeat(RECIPE_WIRE_BYTES) } })))
   })
 })

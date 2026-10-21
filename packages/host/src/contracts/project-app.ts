@@ -29,6 +29,13 @@ export interface RecipeView {
   oneAtATime: boolean
 }
 
+/** How a proof went: when, and the first step that didn't pass. */
+export interface RecipeProofSummary {
+  at: number
+  passed: boolean
+  failed?: string
+}
+
 /** One of a project's recipe versions, as its history lists it. */
 export interface RecipeVersionView {
   version: number
@@ -43,7 +50,9 @@ export interface RecipeVersionView {
   reason?: string
   publishedAt?: number
   /** How its last proof went, and the first step that didn't pass. */
-  proof?: { at: number; passed: boolean; failed?: string }
+  proof?: RecipeProofSummary
+  /** How its last proof went in each place it ran: this computer, and a cloud machine. */
+  places?: { local?: RecipeProofSummary; cloud?: RecipeProofSummary }
   /** False for a version whose recipe this Mako can't read, such as one a newer Mako saved. */
   readable: boolean
 }
@@ -68,6 +77,8 @@ export type ProjectRecipeState =
       recipe: RecipeView
       /** The newest published versions and this folder's draft, newest first, to see what an agent could go back to. */
       versions: RecipeVersionView[]
+      /** Kept by the account for every place the project runs; `behind` says why what's shown may not be its newest. */
+      account?: { behind?: string }
     }
 
 export interface ProjectAppSetup {
