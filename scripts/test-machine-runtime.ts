@@ -26,6 +26,7 @@ import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type { RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import { cpuBetween, type CpuSample } from "@mako/host/usage/process-cpu"
+import { HostProfiler } from "@mako/host/usage/host-profile"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-machine-runtime-"))
 after(() => rm(scratch, { recursive: true, force: true }))
@@ -140,6 +141,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     dataRoot: options.dataRoot,
     work: options.work ?? (() => []),
     sampleCpu: options.sampleCpu ?? (async () => undefined),
+    profileHost: false,
     now: options.now ?? Date.now,
     installSignIns: async (signIns, secrets) => {
       installs.push({ harnesses: signIns.map((signIn) => signIn.harness), secrets })
@@ -388,6 +390,19 @@ test("each harness launch says what used the machine's CPU while it ran, the bus
   const said = agent.messages.find((message) => message.type === "log" && message.message === "cpu while a harness started")
   assert.deepEqual(said?.type === "log" && said.fields, { harness: "devin", conversation: "01234567", cpu: "1.90 s busy in 1.20 s: devin 0.61 s, node:host-main.js 0.40 s, git 0.22 s, sleep 0.01 s, ended or kernel 0.66 s" })
   assert.equal(cpuBetween(samples[0] ?? { at: 0, busy: 0, byName: new Map() }, { at: 10, busy: 0, byName: new Map() }).busy, 0, "a counter that went back counts nothing")
+})
+
+test("the host's own CPU over a window is taken apart by the file that spent it", async () => {
+  const profiler = new HostProfiler()
+  assert.equal(await profiler.start(), true)
+  assert.equal(await profiler.start(), false, "one window at a time")
+  const until = performance.now() + 300
+  let spun = 0
+  while (performance.now() < until) spun += Math.sqrt(spun + 1)
+  const files = await profiler.stop()
+  assert.ok(spun > 0)
+  assert.ok(files?.some((entry) => entry.file.endsWith("test-machine-runtime.ts") && entry.seconds >= 0.15), `the busy file first: ${JSON.stringify(files)}`)
+  assert.equal(await profiler.stop(), undefined, "a window stops once")
 })
 
 test("a start's lines go to the agent for its timeline: phases as they end, the machine's own, warnings; nothing else", async () => {

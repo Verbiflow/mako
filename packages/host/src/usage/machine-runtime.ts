@@ -18,6 +18,7 @@ import {
 import { z } from "zod"
 import { followHostLog, hostLog, hostWarn, type HostLogLine } from "../base/host-log.js"
 import { cpuBetween, describeCpu, sampleCpu, type CpuSample } from "./process-cpu.js"
+import { HostProfiler } from "./host-profile.js"
 import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
@@ -52,6 +53,8 @@ export type MachineRuntimeOptions = {
   work(): LifecycleWork[]
   /** Every process's CPU time so far (`/proc`); undefined off Linux. Tests give their own. */
   sampleCpu?: () => Promise<CpuSample | undefined>
+  /** Whether to profile the host itself while a launch runs (off in tests, whose host is the test). */
+  profileHost?: boolean
   now?: () => number
 }
 
@@ -110,8 +113,9 @@ export class MachineRuntime {
   #installing: Promise<void> | undefined
   /** The harness the machine was asked to run a start ahead for, and the installs its signed-in stage last ran after. */
   #ahead: string | undefined
-  /** Each harness launch running, by its CPU sample at its start. */
-  readonly #launches = new Map<string, Promise<CpuSample | undefined>>()
+  /** Each harness launch running, by its CPU sample at its start and whether it profiles the host. */
+  readonly #launches = new Map<string, { cpu: Promise<CpuSample | undefined>; profiling: Promise<boolean> }>()
+  readonly #profiler = new HostProfiler()
   #warmedAfter: readonly CloudSignInInstall[] | undefined
   #nextSignIns: SignIns | undefined
   /** The workspace opened or opening, so the agent saying it again doesn't open it again. */
@@ -253,15 +257,22 @@ export class MachineRuntime {
     const key = `${String(fields.provider)}:${String(fields.attempt)}`
     const sample = this.#options.sampleCpu ?? sampleCpu
     if (fields.state === "started") {
-      this.#launches.set(key, sample().catch(() => undefined))
+      // The host's own share taken apart by file, for one launch at a time.
+      const profiling = this.#options.profileHost === false ? Promise.resolve(false) : this.#profiler.start().catch(() => false)
+      this.#launches.set(key, { cpu: sample().catch(() => undefined), profiling })
       return
     }
-    const before = this.#launches.get(key)
+    const launch = this.#launches.get(key)
     this.#launches.delete(key)
-    if (!before) return
-    void Promise.all([before, sample().catch(() => undefined)]).then(([start, end]) => {
+    if (!launch) return
+    void Promise.all([launch.cpu, sample().catch(() => undefined), launch.profiling.then((on) => (on ? this.#profiler.stop() : undefined))]).then(([start, end, host]) => {
       if (!start || !end) return
-      hostLog("machine", "cpu while a harness started", { harness: String(fields.provider), conversation: String(fields.conversation).slice(0, 8), cpu: describeCpu(cpuBetween(start, end)) })
+      hostLog("machine", "cpu while a harness started", {
+        harness: String(fields.provider),
+        conversation: String(fields.conversation).slice(0, 8),
+        cpu: describeCpu(cpuBetween(start, end)),
+        host: host?.length ? host.map((entry) => `${entry.file} ${entry.seconds.toFixed(2)} s`).join(", ") : undefined,
+      })
     })
   }
 
