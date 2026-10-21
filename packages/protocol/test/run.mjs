@@ -333,7 +333,27 @@ describe("a Thread whose runtime is asleep", () => {
     assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, whenAsleep: "later" }).success, false)
     assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, ahead: true }).success, true)
     assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, ahead: false }).success, false)
+    assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, repeatable: true }).success, true)
+    assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, repeatable: false }).success, false)
     assert.equal(ReplyEnvelopeSchema.safeParse({ v: PROTOCOL_VERSION, id: crypto.randomUUID(), ok: true, deferred: true }).success, true)
+  })
+})
+
+describe("an operation its caller calls repeatable", () => {
+  test("reaches the runtime without the gateway's own word, which a runtime on an older protocol would refuse", async () => {
+    const gateway = createFakeGateway()
+    const session = await gateway.connectClient(client)
+    const seen = []
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "machine", build: "test", handle: async (operation) => (seen.push(operation), answer(operation, null)) })
+    const thread = { kind: "thread", threadId: "th-repeatable" }
+    await gateway.assign("th-repeatable", "machine")
+    const reply = await session.call(call(thread, { name: "start" }, { op: "host.live-start", repeatable: true }))
+    assert.equal(reply.ok, true)
+    assert.equal(seen.length, 1)
+    assert.equal("repeatable" in seen[0], false)
+    runtime.close()
+    await runtime.done
+    await gateway.close()
   })
 })
 
