@@ -52,7 +52,7 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
     startPrefetch: {
       via: "The app-server, launched as a start launches it, through `initialize` and an ephemeral `thread/start`, with its native build read alongside.",
       files: (env) => codexStartFiles(env),
-      run: async (env, cwd, owner) => prefetchProcess(await (await import("../codex-app.js")).codexStartPrefetch(env, cwd), cwd, owner),
+      run: async (env, cwd, owner, stop) => prefetchProcess(await (await import("../codex-app.js")).codexStartPrefetch(env, cwd), cwd, owner, stop),
     },
     turnRecovery: {
       kind: "continues",

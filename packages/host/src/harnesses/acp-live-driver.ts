@@ -79,7 +79,7 @@ export function createAcpLiveDriver(
         const launch = await acpPrefetchLaunch(env, homedir())
         return launch ? [await realpath(launch.command).catch(() => launch.command)] : []
       },
-      run: async (env, cwd, owner) => prefetchProcess(await acpPrefetchLaunch(env, cwd), cwd, owner),
+      run: async (env, cwd, owner, stop) => prefetchProcess(await acpPrefetchLaunch(env, cwd), cwd, owner, stop),
     },
     turnRecovery: resume.kind === "native"
       ? {

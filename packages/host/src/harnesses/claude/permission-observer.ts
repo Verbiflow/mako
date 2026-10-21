@@ -1,13 +1,12 @@
 import { randomBytes } from "node:crypto"
 import { createServer } from "node:http"
-import { Worker } from "node:worker_threads"
 import { join } from "node:path"
 import { z } from "zod"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../../contracts/approval-response.js"
 import { approvalAnswerDigest } from "../approval-evidence.js"
 import { RetainedApprovalDecisions, readRetainedApprovalDecisions } from "../retained-approval-decisions.js"
-import { claudeTelemetryOptionsCompatible } from "./approval-telemetry-settings.js"
+import type { ClaudeSettingsReader } from "./approval-settings.js"
 import { configuredListenPort } from "../../base/listen-port.js"
 
 const Envelope = z.object({ resourceLogs: z.array(z.object({ scopeLogs: z.array(z.object({
@@ -136,31 +135,10 @@ export async function listenClaudePermissionDecisions(input: {
   }
 }
 
-async function compatibleNativeSettings(config: Options): Promise<boolean> {
-  if (!claudeTelemetryOptionsCompatible(config)) return false
-  return new Promise<boolean>(resolve => {
-    const worker = new Worker(new URL("./approval-settings-worker.js", import.meta.url), {
-      env: config.env ?? process.env,
-      workerData: { cwd: config.cwd ?? process.cwd(), settingSources: config.settingSources },
-      resourceLimits: { maxOldGenerationSizeMb: 64 },
-    })
-    let settled = false
-    const finish = (compatible: boolean) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      void worker.terminate()
-      resolve(compatible)
-    }
-    const timer = setTimeout(() => finish(false), 2000)
-    worker.once("message", value => finish(value === true))
-    worker.once("error", () => finish(false))
-    worker.once("exit", () => finish(false))
-  })
-}
-
 export async function prepareClaudePermissionObserver(input: {
   root: string
+  /** The driver's settings reader, which decides whether Claude's telemetry is Mako's to set. */
+  settings: ClaudeSettingsReader
   config: Options
   sessionId: string
   previous: readonly NativeApprovalIdentity[]
@@ -168,7 +146,7 @@ export async function prepareClaudePermissionObserver(input: {
 }): Promise<ClaudePermissionObserver | undefined> {
   const root = join(input.root, "claude")
   for (const decision of await readRetainedApprovalDecisions(root, input.previous.filter(identity => identity.sessionId === input.sessionId))) input.publish(decision)
-  if (!await compatibleNativeSettings(input.config)) {
+  if (!await input.settings.compatible(input.config)) {
     const previous = previousPermissions(input.sessionId, input.previous)
     // Changing monitoring configuration must not make an old answered callback
     // look new. This observes known identity only, never native consumption.

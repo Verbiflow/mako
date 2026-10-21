@@ -66,6 +66,7 @@ import {
   type SdkResult,
   type SdkSettledCalls,
 } from "./wire.js"
+import { adoptedEnvironment } from "./adopt.js"
 
 const PackageSchema = z.object({ name: z.string(), version: z.string() })
 
@@ -1035,6 +1036,20 @@ async function authStatus(): Promise<SdkResult<"authStatus">> {
   return { status: "logged-out" }
 }
 
+/**
+ * A child spawned ahead becomes a session's: its environment and folder are replaced with the ones the session would
+ * have spawned it with, before any agent opens, so its shell, MCP servers and tools see only the session's. It keeps
+ * its loaded SDK, its connection and the key it read at its start, which the host checked is the session's.
+ */
+function adopt(params: { cwd: string; env: Record<string, string> }): SdkResult<"adopt"> {
+  if (agent) throw new Error("This Cursor child already has an agent open")
+  const env = adoptedEnvironment(process.env, params.env)
+  process.chdir(params.cwd)
+  for (const name of Object.keys(process.env)) delete process.env[name]
+  Object.assign(process.env, env)
+  return {}
+}
+
 async function me(): Promise<SdkResult<"me">> {
   const user = await Cursor.me({ apiKey })
   const name = [user.userFirstName, user.userLastName].filter(Boolean).join(" ")
@@ -1062,6 +1077,8 @@ async function dispatch(request: SdkRequest): Promise<SdkResult<SdkRequest["meth
       return activeTurn()
     case "close":
       return close()
+    case "adopt":
+      return adopt(request.params)
     case "models":
       return { models: await Cursor.models.list({ apiKey }) }
     case "authStatus":

@@ -10,6 +10,8 @@ export type ProviderLaunchPhase =
   | "authentication" | "human-sign-in" | "model-discovery"
   | "session-open" | "session-resume" | "session-fork" | "settings"
   | "sdk-load" | "sdk-initialization" | "identity"
+  /** A process spawned ahead, taken as the session's (Cursor's SDK child). */
+  | "adoption"
 
 export type ProviderLaunchRecord = {
   provider: string

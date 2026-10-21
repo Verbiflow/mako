@@ -20,6 +20,7 @@ import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { RETRIES_EXHAUSTED_STOP } from "@mako/host/contracts/providers-acp"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { adoptedEnvironment } from "@mako/host/harnesses/cursor/sdk/adopt"
 
 const nativeStores = new NativeStores(false)
 
@@ -748,3 +749,12 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
   }
 }
 console.log("cursor sdk: compaction markers carry their summary in either order; failed turns say why")
+
+// A child spawned ahead takes a session's environment as its spawn would have set it: never the key, which it read at
+// its start and keeps from its shells, and with the ripgrep it found unless the session names one.
+{
+  const adopted = adoptedEnvironment({ CURSOR_RIPGREP_PATH: "/kept/rg", OLD: "spawn" }, { CURSOR_API_KEY: "key_fixture", PATH: "/session/bin", MAKO_THREAD_DATA_DIR: "/thread" })
+  assert.deepEqual(adopted, { PATH: "/session/bin", MAKO_THREAD_DATA_DIR: "/thread", CURSOR_RIPGREP_PATH: "/kept/rg" })
+  assert.equal(adoptedEnvironment({ CURSOR_RIPGREP_PATH: "/kept/rg" }, { CURSOR_RIPGREP_PATH: "/session/rg" }).CURSOR_RIPGREP_PATH, "/session/rg")
+  console.log("cursor sdk: an adopted child takes the session's environment, never the key")
+}

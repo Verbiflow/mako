@@ -44,7 +44,7 @@ export type MachineRuntimeOptions = {
   /** What a start does first in a folder, done ahead: a project base's, before its snapshot. */
   prepareFolder(path: string): Promise<void>
   /** What `harness`'s start runs first, run ahead as the machine boots; undefined for a harness without it. */
-  prefetchStart(harness: string): Promise<{ answered: boolean; ms: number; readMiB: number; readMs: number } | undefined>
+  prefetchStart(harness: string): Promise<{ answered: boolean; stopped: boolean; ms: number; readMiB: number; readMs: number } | undefined>
   /** What `harness`'s start asks its service first, asked once its sign-in is installed; undefined for a harness without it. */
   prefetchSignedIn(harness: string): Promise<{ ms: number } | undefined>
   /** What the host is working on, as its lifecycle lists it: what the machine reports, so its Thread keeps it running. */
@@ -218,7 +218,7 @@ export class MachineRuntime {
       hostWarn("machine", "a start wasn't run ahead", { harness, error: error.message })
       return undefined
     })
-    if (outcome) hostLog("machine", "a start was run ahead", { harness, ms: outcome.ms, answered: outcome.answered, readMiB: outcome.readMiB, readMs: outcome.readMs })
+    if (outcome) hostLog("machine", "a start was run ahead", { harness, ms: outcome.ms, answered: outcome.answered, stopped: outcome.stopped, readMiB: outcome.readMiB, readMs: outcome.readMs })
   }
 
   /**

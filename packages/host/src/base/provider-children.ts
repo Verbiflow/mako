@@ -92,8 +92,16 @@ export class ProviderChildren {
   follow(): () => void {
     return events.subscribe((event) => {
       if ("spawned" in event) this.trackPid(event.spawned)
+      else if ("owned" in event) this.reown(event.owned)
       else this.untrackPid(event.exited)
     })
+  }
+
+  /** A recorded process taken over by another owner (a child spawned ahead, adopted by a session); its birth stays. */
+  reown(info: { pid: number; owner: string }): void {
+    if (!this.records.some((entry) => entry.pid === info.pid && entry.owner !== info.owner)) return
+    this.records = this.records.map((entry) => (entry.pid === info.pid ? { ...entry, owner: info.owner } : entry))
+    this.write()
   }
 
   /** Record a spawned provider process until it exits. */
@@ -305,6 +313,7 @@ async function legacyShebangExecutable(
 
 type ProviderChildEvent =
   | { spawned: { pid: number; executable: string; kind: string; owner: string } }
+  | { owned: { pid: number; owner: string } }
   | { exited: number }
 
 /** Spawns and exits, published by whoever starts a provider process and kept by the host's registry. */
@@ -324,6 +333,11 @@ export function trackProviderChild(
 /** For a spawner that reports the exit from its own exit handler, with `untrackProviderPid`. */
 export function trackProviderPid(info: { pid: number; executable: string; kind: string; owner: string }): void {
   events.publish({ spawned: info })
+}
+
+/** For a process another owner takes over, keeping the birth its record was made with. */
+export function reownProviderPid(pid: number, owner: string): void {
+  events.publish({ owned: { pid, owner } })
 }
 
 export function untrackProviderPid(pid: number): void {
