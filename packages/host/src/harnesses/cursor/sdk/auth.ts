@@ -140,15 +140,20 @@ export class CursorSdkAuth {
     }
   }
 
-  /** The remembered answer while it is fresh; otherwise a new verification. */
-  async status(force = false): Promise<CursorSdkAuthSnapshot> {
+  /**
+   * The remembered answer while it is fresh; otherwise a new verification. `on`: a child already running under
+   * `apiKey` (none: the SDK's own file), which answers it instead of a child spawned for it when that's the key the
+   * verification resolves; a session starting asks on its own, rather than loading the SDK in a third process beside
+   * it (0.03–0.57 s of a start on a 2-vCPU copy, 2026-10-21).
+   */
+  async status(force = false, on?: { client: CursorSdkProbeClient; apiKey: string | undefined }): Promise<CursorSdkAuthSnapshot> {
     const now = this.now()
     if (!force && this.snapshot) {
       const ttl = this.snapshot.state.status === "signed-in" ? CURSOR_SDK_AUTH_TTL_MS : CURSOR_SDK_AUTH_RETRY_MS
       if (now - this.snapshot.checkedAt < ttl) return this.snapshot
     }
     if (this.inflight) return this.inflight
-    this.inflight = this.probe().finally(() => {
+    this.inflight = this.probe(on).finally(() => {
       this.inflight = null
     })
     return this.inflight
@@ -279,7 +284,8 @@ export class CursorSdkAuth {
   }
 
   /** Who a key belongs to, by Cursor's answer; throws the SDK's own error when it is refused. */
-  private async verify(env: NodeJS.ProcessEnv): Promise<{ email?: string; apiKeyName: string }> {
+  private async verify(env: NodeJS.ProcessEnv, on?: CursorSdkProbeClient): Promise<{ email?: string; apiKeyName: string }> {
+    if (on) return on.request("me", undefined)
     const client = await this.spawn(env, () => undefined)
     try {
       await client.hello()
@@ -300,7 +306,7 @@ export class CursorSdkAuth {
     return state
   }
 
-  private async probe(): Promise<CursorSdkAuthSnapshot> {
+  private async probe(on?: { client: CursorSdkProbeClient; apiKey: string | undefined }): Promise<CursorSdkAuthSnapshot> {
     const env = await this.options.env()
     let resolved: ResolvedKey
     try {
@@ -309,15 +315,17 @@ export class CursorSdkAuth {
       if (!(error instanceof CursorCredentialStoreError)) throw error
       return this.record({ status: "signed-out", problem: { source: "mako", message: error.message } })
     }
+    // A running child answers only for the key it runs under.
+    const running = on && on.apiKey === resolved.apiKey ? on.client : undefined
     try {
       if (resolved.apiKey) {
-        const identity = await this.verify({ ...env, CURSOR_API_KEY: resolved.apiKey })
+        const identity = await this.verify({ ...env, CURSOR_API_KEY: resolved.apiKey }, running)
         return this.record(this.stateOf(resolved.source, resolved.credential, identity))
       }
       // No key of Mako's, the host's or the CLI's: the SDK's own file decides.
-      const client = await this.spawn(env, () => undefined)
+      const client = running ?? await this.spawn(env, () => undefined)
       try {
-        await client.hello()
+        if (!running) await client.hello()
         const status = await client.request("authStatus", undefined)
         if (status.status === "logged-in") {
           const state: CursorSdkAuthState = { status: "signed-in", source: "sdk" }
@@ -326,7 +334,7 @@ export class CursorSdkAuth {
           return this.record(state)
         }
       } finally {
-        await client.close(2_000)
+        if (!running) await client.close(2_000)
       }
       return this.record({ status: "signed-out" })
     } catch (error) {

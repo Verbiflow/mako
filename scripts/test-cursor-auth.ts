@@ -177,6 +177,26 @@ try {
     const { auth } = make({})
     assert.deepEqual((await auth.status()).state, { status: "signed-out" })
   }
+  // A session starting asks on its own child, which runs under the key the answer is about: no child is spawned for
+  // it, and the session's is left running. A child under another key answers nothing here.
+  {
+    const { auth, fake } = make({ fake: { sdkFile: "logged-in" } })
+    const running = fakeClient(fake, { owner: "session", cwd: root, env: {}, onEvent: () => undefined })
+    let closed = false
+    const session = { ...running, close: async () => { closed = true } }
+    assert.deepEqual((await auth.status(false, { client: session, apiKey: undefined })).state, { status: "signed-in", source: "sdk", email: "file@example.com" })
+    assert.deepEqual(fake.spawned, ["<none>"], "only the session's own child")
+    assert.equal(closed, false, "which keeps running")
+  }
+  {
+    const { auth, fake } = make({ env: { CURSOR_API_KEY: KEY_GOOD } })
+    const other = fakeClient(fake, { owner: "session", cwd: root, env: { CURSOR_API_KEY: KEY_CLI }, onEvent: () => undefined })
+    assert.equal((await auth.status(false, { client: other, apiKey: KEY_CLI })).state.status, "signed-in")
+    assert.deepEqual(fake.spawned, [KEY_CLI, KEY_GOOD], "a child under another key isn't asked: one is spawned under the key resolved")
+    const same = fakeClient(fake, { owner: "session", cwd: root, env: { CURSOR_API_KEY: KEY_GOOD }, onEvent: () => undefined })
+    assert.equal((await auth.status(true, { client: same, apiKey: KEY_GOOD })).state.status, "signed-in")
+    assert.deepEqual(fake.spawned, [KEY_CLI, KEY_GOOD, KEY_GOOD], "one under the same key answers, and nothing more is spawned")
+  }
 
   // A pasted key is verified before it is saved; a refused one leaves the store untouched.
   {
