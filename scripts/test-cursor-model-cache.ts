@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { createCursorModelCache, listCursorSdkModels } from "@mako/host/harnesses/cursor/sdk/models"
+import { dirname, join } from "node:path"
+import { CURSOR_ACCOUNT_TTL_MS, CURSOR_SDK_AUTH_FILE, createCursorIdentityCache, createCursorModelCache, listCursorSdkModels } from "@mako/host/harnesses/cursor/sdk/models"
 import { createCursorSdkDriver, type CursorSdkLiveClient } from "@mako/host/harnesses/cursor/sdk/driver"
 import { CursorSdkAuth, type CursorSdkSpawnOptions } from "@mako/host/harnesses/cursor/sdk/auth"
 import { CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
@@ -34,21 +34,49 @@ assert.equal(b[0].displayName, "A", "callers cannot mutate one another's model l
 assert.equal((await cache(keyA, async () => catalog("wrong")))[0].id, "A")
 assert.equal((await cache(keyA, async () => catalog("fresh"), true))[0].id, "fresh", "display refresh stays native")
 assert.equal((await cache({ ...keyA, CURSOR_BACKEND_URL: "https://fixture.invalid" }, async () => catalog("endpoint")))[0].id, "endpoint")
-now += 10 * 60_000
+now += CURSOR_ACCOUNT_TTL_MS
 assert.equal((await cache(keyA, async () => catalog("expired")))[0].id, "expired")
 await assert.rejects(cache(keyA, async () => { throw Error("network fixture") }, true), /network fixture/)
 assert.equal((await cache(keyA, async () => catalog("wrong")))[0].id, "expired", "a failed refresh preserves the still-valid native result")
 assert.equal((await cache(keyA, async () => catalog("recovered"), true))[0].id, "recovered", "failed refresh requests are not cached")
 await assert.rejects(cache(keyA, async () => [], true), /no models/)
 assert.equal((await cache(keyA, async () => catalog("nonempty"), true))[0].id, "nonempty")
-assert.equal((await cache({}, async () => catalog("native-file-a")))[0].id, "native-file-a")
-assert.equal((await cache({}, async () => catalog("native-file-b")))[0].id, "native-file-b", "unresolved mutable SDK credentials cannot reuse a list")
+// Without a key in its environment the SDK runs as its own sign-in file says, as on a cloud machine: the file is the credential.
+const sdkHome = await mkdtemp(join(tmpdir(), "mako-cursor-sdk-home-"))
+const sdkAuth = join(sdkHome, CURSOR_SDK_AUTH_FILE)
+const fileOnly = { HOME: sdkHome }
+assert.equal((await cache(fileOnly, async () => catalog("no-file-a")))[0].id, "no-file-a")
+assert.equal((await cache(fileOnly, async () => catalog("no-file-b")))[0].id, "no-file-b", "with no key and no sign-in file, nothing says who: no list is kept")
+await mkdir(dirname(sdkAuth), { recursive: true })
+await writeFile(sdkAuth, JSON.stringify({ version: 1, apiKey: "key_fixture_file_a", backendUrl: "https://fixture.invalid", createdAtMs: 1 }))
+assert.equal((await cache(fileOnly, async () => catalog("file-a")))[0].id, "file-a")
+assert.equal((await cache({ ...fileOnly, PATH: "/elsewhere" }, async () => catalog("wrong")))[0].id, "file-a", "the SDK's own sign-in keeps its list for the hour")
+await writeFile(sdkAuth, JSON.stringify({ version: 1, apiKey: "key_fixture_file_b", backendUrl: "https://fixture.invalid", createdAtMs: 2 }))
+assert.equal((await cache(fileOnly, async () => catalog("file-b")))[0].id, "file-b", "another sign-in in the file is another account")
+await cache.forget(fileOnly)
+assert.equal((await cache(fileOnly, async () => catalog("file-b-again")))[0].id, "file-b-again", "a credential Cursor refused is forgotten")
+await rm(sdkHome, { recursive: true, force: true })
+
+let identityNow = 1
+const identities = createCursorIdentityCache(() => identityNow)
+let asked = 0
+const me = async () => { asked++; return { email: "same@example.test", apiKeyName: "same-name", createdAt: "2026-09-25" } }
+const [meA, meB] = await Promise.all([identities(keyA, me), identities(keyA, me)])
+assert.equal(asked, 1, "a start and the stage run ahead share one `me`")
+assert.equal(meA.email, meB.email)
+await identities(keyA, me)
+assert.equal(asked, 1, "who the account is stands for the hour")
+await identities(keyB, me)
+assert.equal(asked, 2, "another credential asks again")
+identityNow += CURSOR_ACCOUNT_TTL_MS
+await identities(keyA, me)
+assert.equal(asked, 3, "after the hour Cursor is asked again")
 
 let refreshResult!: (models: SdkModelListItem[]) => void
 const refreshing = cache(keyA, () => new Promise(resolve => { refreshResult = resolve }), true)
 await new Promise<void>(resolve => setImmediate(resolve))
 assert.equal((await cache(keyA, async () => catalog("wrong")))[0].id, "nonempty", "launch cannot wait for display refresh while exact-account evidence is valid")
-now += 10 * 60_000
+now += CURSOR_ACCOUNT_TTL_MS
 let staleReturned = false
 const expiredDuringRefresh = cache(keyA, async () => catalog("wrong")).then(value => { staleReturned = true; return value })
 await new Promise<void>(resolve => setImmediate(resolve))
@@ -98,26 +126,30 @@ await assert.rejects(listCursorSdkModels({ env: keyA, signal: modelOwner.signal,
 const root = await mkdtemp(join(tmpdir(), "mako-cursor-model-cache-"))
 let env = keyA
 const requests: string[] = []
+const identityRequests: string[] = []
+let offered: string[] = []
 const client = (options: CursorSdkSpawnOptions): CursorSdkLiveClient => ({
   alive: true, exited: new Promise(() => {}), kill() {}, close: async () => {},
   hello: async () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "fixture", node: process.version }),
   request: async <M extends SdkMethod>(method: M): Promise<SdkResult<M>> => {
     const answers: FixtureAnswers = {
-      me: () => ({ email: "same@example.test", apiKeyName: "same-name", createdAt: "2026-09-25" }),
-      models: () => { requests.push(options.env.CURSOR_API_KEY!); return { models: catalog(options.env.CURSOR_API_KEY!) } },
-      open: () => ({ agentId: options.owner, model: { id: options.env.CURSOR_API_KEY! } }),
+      me: () => { identityRequests.push(options.env.CURSOR_API_KEY!); return { email: "same@example.test", apiKeyName: "same-name", createdAt: "2026-09-25" } },
+      models: () => { requests.push(options.env.CURSOR_API_KEY!); return { models: [...catalog(options.env.CURSOR_API_KEY!), ...offered.flatMap(catalog)] } },
+      // Once a newer model is offered the child reports none, so the session reports the model the driver selected.
+      open: () => ({ agentId: options.owner, model: offered.length ? undefined : { id: options.env.CURSOR_API_KEY! } }),
     }
     const answer = answers[method]
     if (!answer) throw Error(`Unexpected ${method}`)
     return answer()
   },
 })
+const shared = createCursorModelCache()
+const sharedIdentities = createCursorIdentityCache()
 const auth = new CursorSdkAuth({
   env: async () => ({ ...env }), cliKey: async () => null, openUrl: async () => { throw Error("no login") }, client,
-  credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
+  credentials: new CursorCredentialStore(memorySecrets({ durable: false })), identities: sharedIdentities,
 })
-const shared = createCursorModelCache()
-const driver = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => root, home: root, client, modelCache: shared })
+const driver = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => root, home: root, client, modelCache: shared, identityCache: sharedIdentities })
 try {
   // Display discovery fills the same provider-owned cache used by the actual driver.
   await shared(keyA, async () => catalog(keyA.CURSOR_API_KEY), true)
@@ -131,8 +163,27 @@ try {
   env = keyA
   await driver.start(root, admitted("cursor", { conversationId: "A2", emit() {} }, { env }))
   assert.deepEqual(requests, [keyB.CURSOR_API_KEY])
+  assert.deepEqual(identityRequests, [keyA.CURSOR_API_KEY, keyB.CURSOR_API_KEY], "a credential's identity is asked once for the hour, the sign-in check's answer included")
+
+  // The stage a machine runs ahead once signed in asks what a start asks first, in one child, and the start finds it.
+  const keyC = { CURSOR_API_KEY: "key_fixture_c_0123456789" }
+  await driver.startPrefetch!.signedIn!(keyC)
+  assert.deepEqual([requests.at(-1), identityRequests.at(-1)], [keyC.CURSOR_API_KEY, keyC.CURSOR_API_KEY])
+  const asked = [requests.length, identityRequests.length]
+  env = keyC
+  const c = await driver.start(root, admitted("cursor", { conversationId: "C", emit() {} }, { env }))
+  assert.equal(c.settings?.model, keyC.CURSOR_API_KEY)
+  assert.equal(c.executionContext?.identity?.kind, "reported", "the identity kept is still Cursor's answer")
+  assert.deepEqual([requests.length, identityRequests.length], asked, "the start asks Cursor nothing the stage asked")
+
+  // A model Cursor began offering after the list was kept: asked again once, never refused from the kept list.
+  offered = ["fixture-new-model"]
+  const d = await driver.start(root, admitted("cursor", { conversationId: "D", emit() {}, tuning: { model: "fixture-new-model" } }, { env }))
+  assert.equal(d.settings?.model, "fixture-new-model", "the start opens the model it asked for")
+  assert.equal(requests.length, asked[0] + 1, "a missing model asks Cursor once more")
+  await assert.rejects(driver.start(root, admitted("cursor", { conversationId: "E", emit() {}, tuning: { model: "fixture-never" } }, { env })), /does not offer the model "fixture-never"/)
 } finally {
-  for (const id of ["A", "B", "A2"]) await driver.close(id)
+  for (const id of ["A", "B", "A2", "C", "D"]) await driver.close(id)
   await rm(root, { recursive: true, force: true })
 }
-console.log("Cursor native discovery: overlap, credential/endpoint isolation, expiry, refresh, failures and production startup reuse passed")
+console.log("Cursor native discovery: overlap, credential/endpoint/sign-in-file isolation, an hour's reuse, identity, refresh, failures, the signed-in stage run ahead and production startup reuse passed")

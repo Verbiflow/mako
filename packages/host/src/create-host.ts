@@ -202,6 +202,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         openWorkspace: async (path) => (await core.load("the machine's workspace")).openMachineWorkspace(path),
         prepareFolder: async (path) => (await core.load("prepare a base's folder")).prepareFolder(path),
         prefetchStart: async (harness) => (await core.load("run a start ahead")).prefetchStart(harness),
+        prefetchSignedIn: async (harness) => (await core.load("run a start's sign-in stage ahead")).prefetchSignedIn(harness),
         work: () => core.current()?.work() ?? [],
       })
     }

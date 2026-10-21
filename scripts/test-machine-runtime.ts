@@ -109,6 +109,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
   const workspaces: string[] = []
   const prepared: string[] = []
   const prefetched: string[] = []
+  const signedIn: string[] = []
   const installs: Array<{ harnesses: string[]; secrets: string }> = []
   const runtime = new MachineRuntime({
     agent: hostEnd,
@@ -127,7 +128,11 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     },
     prefetchStart: async (harness) => {
       prefetched.push(harness)
-      return harness === "none" ? undefined : { answered: true, ms: 12 }
+      return harness === "none" ? undefined : { answered: true, ms: 12, readMiB: 230, readMs: 800 }
+    },
+    prefetchSignedIn: async (harness) => {
+      signedIn.push(harness)
+      return { ms: 7 }
     },
     version: "0.0.0-test",
     build: "test",
@@ -154,6 +159,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     workspaces,
     prepared,
     prefetched,
+    signedIn,
     installs,
     state,
     tell: (message: AgentMessage) => agentEnd.write(`${JSON.stringify(message)}\n`),
@@ -334,11 +340,38 @@ test("the harness a machine boots for has its start run ahead, said in the host'
   agent.tell({ type: "prefetch", harness: "codex" })
   await agent.until("the start run ahead", () => agent.messages.some((message) => message.type === "log" && message.message === "a start was run ahead"))
   const said = agent.messages.find((message) => message.type === "log" && message.message === "a start was run ahead")
-  assert.deepEqual(said?.type === "log" && said.fields, { harness: "codex", ms: 12, answered: true })
+  assert.deepEqual(said?.type === "log" && said.fields, { harness: "codex", ms: 12, answered: true, readMiB: 230, readMs: 800 })
   agent.tellRaw(JSON.stringify({ type: "prefetch", harness: "Not A Harness" }))
   agent.tell({ type: "prefetch", harness: "none" })
   await agent.until("the second asked", () => agent.prefetched.length === 2)
   assert.deepEqual(agent.prefetched, ["codex", "none"], "a name no harness could have is refused before it's asked")
+})
+
+test("the start run ahead goes on to its signed-in stage once that harness's sign-in is installed, whichever comes first", async () => {
+  const signIn = (harness: "claude" | "codex" | "grok") => ({ harness, label: null, expiresAt: null, payload: { key: harness } })
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 60))
+  const first = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-signed-in-")) })
+  first.tell({ type: "prefetch", harness: "codex" })
+  await first.until("the start run ahead", () => first.prefetched.length === 1)
+  await settle()
+  assert.deepEqual(first.signedIn, [], "nothing signed in is asked before the sign-in is there")
+  first.tell({ type: "sign-ins", secrets: "/run/mako/secrets/host", signIns: [signIn("claude"), signIn("codex")] })
+  await first.until("the signed-in stage asked", () => first.signedIn.length === 1)
+  assert.deepEqual(first.signedIn, ["codex"])
+  await first.until("its line", () => first.messages.some((message) => message.type === "log" && message.message === "a start's sign-in stage was run ahead"))
+  first.tell({ type: "sign-ins", secrets: "/run/mako/secrets/host", signIns: [signIn("codex")] })
+  await first.until("the stage asked again for the new sign-in", () => first.signedIn.length === 2)
+
+  const second = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-signed-in-")) })
+  second.tell({ type: "sign-ins", secrets: "/run/mako/secrets/host", signIns: [signIn("grok"), signIn("claude")] })
+  await second.until("installed", () => second.state()?.signIns.length === 2)
+  second.tell({ type: "prefetch", harness: "grok" })
+  await second.until("the start run ahead", () => second.prefetched.length === 1)
+  await settle()
+  assert.deepEqual(second.signedIn, [], "a sign-in that failed to install isn't asked with")
+  second.tell({ type: "prefetch", harness: "claude" })
+  await second.until("the signed-in stage asked", () => second.signedIn.length === 1)
+  assert.deepEqual(second.signedIn, ["claude"], "a sign-in installed before the hint is asked with at the hint")
 })
 
 test("a start's lines go to the agent for its timeline: phases as they end, the machine's own, warnings; nothing else", async () => {

@@ -28,8 +28,9 @@ import {
   type ProviderSteerResult,
 } from "../../live-driver.js"
 import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from "./auth.js"
-import { CursorSdkClient, CursorSdkError, cursorSdkChild } from "./client.js"
-import { createCursorModelCache, type CursorModelCache } from "./models.js"
+import { CursorSdkClient, CursorSdkError, cursorSdkChild, cursorSdkPackages } from "./client.js"
+import { prefetchProcess } from "../../start-prefetch.js"
+import { createCursorIdentityCache, createCursorModelCache, type CursorIdentityCache, type CursorModelCache } from "./models.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
 import { cursorUnfinishedToolNote, type CursorSdkModelSelection, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder.js"
@@ -48,7 +49,7 @@ import type {
 import { cursorSdkExitReason } from "./wire.js"
 /** What a live conversation needs from its child beyond a probe. */
 export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill">
-const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me" } as const
+const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me, kept an hour per credential" } as const
 
 export interface CursorSdkDriverDependencies {
   auth: CursorSdkAuth
@@ -60,9 +61,10 @@ export interface CursorSdkDriverDependencies {
   /** Test hook: another client than the real child. */
   client?(options: CursorSdkSpawnOptions): CursorSdkLiveClient
   /** Test hook: a model list without a child. */
-  models?(client: CursorSdkLiveClient): Promise<SdkModelListItem[]>
+  models?(client: CursorSdkProbeClient): Promise<SdkModelListItem[]>
   now?(): number
   modelCache?: CursorModelCache
+  identityCache?: CursorIdentityCache
   /** Where streams go (`HarnessContext.streams`); without it none are written. */
   streams?: string
   /** Where `kill -USR2 <pid>` writes a conversation child's heap snapshot; without it the signal is not armed. */
@@ -306,6 +308,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const modelCache = dependencies.modelCache ?? createCursorModelCache(dependencies.now)
+  const identityCache = dependencies.identityCache ?? createCursorIdentityCache(dependencies.now)
 
   const now = () => dependencies.now?.() ?? Date.now()
 
@@ -315,10 +318,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     return live
   }
 
-  async function loadModels(client: CursorSdkLiveClient, env: NodeJS.ProcessEnv) {
+  async function loadModels(client: CursorSdkProbeClient, env: NodeJS.ProcessEnv, refresh = false) {
     const list = await modelCache(env, () => dependencies.models
       ? dependencies.models(client)
-      : client.request("models", undefined).then(result => result.models))
+      : client.request("models", undefined).then(result => result.models), refresh)
     const catalog = normalizeCursorSdkModels(list)
     if (catalog.models.length === 0) throw new Error("Cursor's SDK listed no models for this account")
     return catalog
@@ -461,9 +464,20 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // executor disposes every shell it started when the run ends.
     backgroundStop: { kind: "ends-with-turn", evidence: "The local SDK disposes the shells a run started when the run ends, and a run stays running while a subagent it started works, so neither outlives its turn, and Stop ends the run." },
     startPrefetch: {
-      kind: "process",
-      via: "The SDK's child, spawned as a session spawns it, until it answers `hello` with the SDK loaded.",
-      launch: async (env) => cursorSdkChild({ env }),
+      via: "The SDK's child, spawned as a session spawns it, until it answers `hello` with the SDK loaded, with the SDK's packages read alongside; once signed in, the account's models and identity (`me`), 1.1–1.6 s of every start (2026-10-20), asked by one child and kept an hour for the start.",
+      files: async () => cursorSdkPackages(),
+      run: (env, cwd, owner) => prefetchProcess(cursorSdkChild({ env }), cwd, owner),
+      signedIn: async (base) => {
+        const { env } = await dependencies.auth.childLaunch(base)
+        const spawn: CursorSdkSpawnOptions = { owner: "prefetch:cursor", cwd: homedir(), env, onEvent: () => undefined }
+        const client = dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn)
+        try {
+          await client.hello()
+          await Promise.all([loadModels(client, env), identityCache(env, () => client.request("me", undefined))])
+        } finally {
+          await client.close(2_000)
+        }
+      },
     },
     turnRecovery: {
       kind: "continues",
@@ -514,6 +528,8 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       // A selected account's refused key is that account's to sign in again,
       // not a reason to call Cursor's own login signed out.
       const rejected = (message: string) => {
+        void modelCache.forget(accountEnvironment)
+        void identityCache.forget(accountEnvironment)
         if (!account) dependencies.auth.reportRejected(message)
       }
       const live: Live = {
@@ -577,14 +593,22 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           hostWarn("cursor-sdk", "the child has no bundled ripgrep; Grep and Glob need one on PATH", { conversation: live.state.id })
         await trace.step("authentication", () => ensureSignedIn(live, trace, account))
         const identityObservation = trace.step("identity", () => observeNativeIdentity(async () => {
-          const identity = await live.client.request("me", undefined)
+          const identity = await identityCache(accountEnvironment, () => live.client.request("me", undefined))
           return reportedIdentity(identity.email, "cursor", CURSOR_NATIVE_IDENTITY.via)
         }, () => !live.closed && sessions.get(live.state.id) === live, identity => {
           if (live.state.executionContext) engine.patch(live, { executionContext: { ...live.state.executionContext, identity } })
         }))
-        const catalog = await trace.step("model-discovery", () => loadModels(live.client, accountEnvironment))
+        let catalog = await trace.step("model-discovery", () => loadModels(live.client, accountEnvironment))
         live.models = catalog.models
-        const selection = selectionFor(live, options.tuning, catalog.defaultModel)
+        let selection: CursorSdkModelSelection
+        try {
+          selection = selectionFor(live, options.tuning, catalog.defaultModel)
+        } catch {
+          // The kept list may predate the model: Cursor is asked again before it's refused.
+          catalog = await trace.step("model-discovery", () => loadModels(live.client, accountEnvironment, true))
+          live.models = catalog.models
+          selection = selectionFor(live, options.tuning, catalog.defaultModel)
+        }
         const importFrom = importSource(options, cwd)
         await trace.step("configuration", () => Promise.allSettled([
           migrateRetiredMakoMcpFile(
