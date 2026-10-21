@@ -5,7 +5,7 @@
  * `--real <n>`, this Mac's `n` largest sessions of each harness, read without writing anything of theirs, through the
  * same path into scratch stores, timed.
  *
- *   MAKO_RECORDS_BASE=<records base URL> MAKO_RECORDS_AUTH="Bearer <token>" tsx scripts/prove-record-sync.ts [--real 3]
+ *   MAKO_RECORDS_BASE=<records base URL> MAKO_RECORDS_AUTH="Bearer <token>" tsx scripts/prove-record-sync.ts [--real 3 [--harnesses cursor,devin]]
  *
  * MAKO_RECORDS_AUTH_FILE instead names a file holding the header, read each call, for a token that renews.
  *
@@ -28,6 +28,9 @@ if (!base || !(fixedAuthorization || authorizationFile)) throw new Error("Set MA
 const authorization = async () => fixedAuthorization ?? (await readFile(authorizationFile!, "utf8")).trim()
 const realIndex = process.argv.indexOf("--real")
 const real = realIndex > 0 ? Number(process.argv[realIndex + 1] ?? 3) : 0
+const harnessesIndex = process.argv.indexOf("--harnesses")
+/** The harnesses whose real sessions are measured; all six without it. */
+const only = harnessesIndex > 0 ? new Set((process.argv[harnessesIndex + 1] ?? "").split(",")) : undefined
 
 const remote = recordsOverHttp({ id: base, base, authorization })
 const root = await mkdtemp(join(tmpdir(), "mako-prove-record-sync-"))
@@ -113,6 +116,7 @@ try {
     console.log(`\nThis Mac's ${real} largest sessions of each harness, read only, through the gateway into scratch stores:`)
     const strict = new NativeStores(true)
     for (const harness of harnessFixtures(strict)) {
+      if (only && !only.has(harness.name)) continue
       const reader = harness.provider(homedir())
       let files: Awaited<ReturnType<typeof reader.discover>> = []
       try {

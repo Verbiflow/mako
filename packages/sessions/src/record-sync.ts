@@ -32,7 +32,7 @@ export class RecordSyncConflictError extends Error {
 export type SyncReport = { versions: number; held: number; chunks: number; bytes: number; requests: number; ms: number }
 
 /** The most versions, and chunk hashes, one push carries: a bundle well under a request's size. */
-const PUSH_VERSIONS = 2_000
+const PUSH_VERSIONS = 10_000
 const PUSH_HASHES = 65_536
 /** Packs going up at once. */
 const UPLOADS = 4

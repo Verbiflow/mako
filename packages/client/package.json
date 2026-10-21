@@ -1,0 +1,26 @@
+{
+  "name": "@mako/client",
+  "version": "0.1.0",
+  "license": "Elastic-2.0",
+  "description": "A headless Mako client on the public API alone: start a conversation, watch it, send to it, steer it, answer it, stop it and read its history, on a local host or a cloud Thread alike.",
+  "type": "module",
+  "bin": {
+    "mako": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsgo -b",
+    "test": "npm run -s build && node test/client.mjs"
+  },
+  "dependencies": {
+    "@mako/host": "0.1.0",
+    "@mako/protocol": "0.1.0",
+    "@mako/sessions": "0.1.0",
+    "zod": "4.4.3"
+  }
+}
