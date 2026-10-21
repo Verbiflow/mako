@@ -9,6 +9,7 @@ import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import type { PromptDeliveryEvidence } from "@mako/host/contracts/prompt-delivery"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { openCodeFreeModels } from "./opencode-free-models.ts"
 
 const nativeStores = new NativeStores(false)
 
@@ -25,13 +26,14 @@ for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"
   env[name] = join(root, name)
   await mkdir(env[name]!, { recursive: true })
 }
+const { first: model } = await openCodeFreeModels(env.OPENCODE_BIN_PATH!, env, root)
 const id = randomUUID()
 const driver = createOpenCodeDriver({ stores: nativeStores, servers, approvalRoot: async () => join(root, "approvals") })
 const reader = new OpenCodeProvider(nativeStores, env.HOME, env)
 const reports: PromptDeliveryEvidence[] = []
 try {
   const started = await driver.start(root, admitted("opencode", { conversationId: id, emit() {},
-    tuning: { model: process.env.MAKO_OPENCODE_MODEL ?? "opencode/space-bunny-free" },
+    tuning: { model },
     title: "Mako isolated prompt identity proof",
   }, { env }))
   assert.ok(started.nativePath)

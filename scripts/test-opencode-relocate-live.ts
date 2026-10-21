@@ -14,6 +14,7 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { openCodeFreeModels } from "./opencode-free-models.ts"
 
 const nativeStores = new NativeStores(false)
 
@@ -28,12 +29,12 @@ if (!existsSync(executable)) {
   process.exit(0)
 }
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-opencode-relocate-")))
-const model = process.env.MAKO_OPENCODE_MODEL ?? "opencode/space-bunny-free"
 const env: NodeJS.ProcessEnv = { ...process.env, OPENCODE_BIN_PATH: executable, OPENCODE_CONFIG_CONTENT: "{}" }
 for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "OPENCODE_CONFIG_DIR"]) {
   env[name] = join(root, name)
   await mkdir(env[name]!, { recursive: true })
 }
+const { first: model } = await openCodeFreeModels(executable, env, root)
 const main = join(root, "main")
 const worktree = join(root, "worktree")
 await mkdir(main)

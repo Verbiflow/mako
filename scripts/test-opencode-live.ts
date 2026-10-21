@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { CONTEXT_COMPACTED } from "@mako/sessions/events"
@@ -17,20 +17,23 @@ import type { ApprovalDispatch } from "@mako/host/harnesses/live-driver"
 import type { PromptDispatch } from "@mako/host/harnesses/prompt-dispatch"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { openCodeFreeModels } from "./opencode-free-models.ts"
 
 const nativeStores = new NativeStores(false)
 
 // Real OpenCode v2 through Mako's native driver. Every store is disposable
 // (isolated HOME and XDG roots); the free hosted model needs no credentials.
 const servers = new OpenCodeServers()
-const root = await mkdtemp(join(tmpdir(), "mako-opencode-live-"))
+// Its real path: OpenCode works in a folder's real path (macOS's temporary folder is under /private), so a tool's
+// location names it so whether the model gives a relative path or a whole one.
+const root = await realpath(await mkdtemp(join(tmpdir(), "mako-opencode-live-")))
 const executable = process.env.OPENCODE_BIN_PATH ?? join(homedir(), ".opencode/bin/opencode2")
-const model = process.env.MAKO_OPENCODE_MODEL ?? "opencode/space-bunny-free"
 const env: NodeJS.ProcessEnv = { ...process.env, OPENCODE_BIN_PATH: executable, OPENCODE_CONFIG_CONTENT: "{}" }
 for (const name of ["HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "OPENCODE_CONFIG_DIR"]) {
   env[name] = join(root, name)
   await mkdir(env[name]!, { recursive: true })
 }
+const { first: model, second: secondModel } = await openCodeFreeModels(executable, env, root)
 const work = join(root, "work")
 await mkdir(work)
 await writeFile(join(work, "notes.txt"), "The launch code is 7-alpha-3.\n")
@@ -258,7 +261,7 @@ try {
     && update.details?.some(detail => detail.type === "location" && detail.path === join(work, "notes.txt"))), "the read row carries its resolved location")
   report.cases.push("full access: read runs without asking; the row carries its resolved location")
 
-  const switchTo = process.env.MAKO_OPENCODE_SECOND_MODEL ?? "opencode/mimo-v2.6-flash-free"
+  const switchTo = secondModel
   const switchFrom = full.events.length
   const switched = promptDispatch()
   await driver.prompt(full.id, "Reply with exactly the word switched.", [], { model: switchTo }, switched)
@@ -338,7 +341,7 @@ try {
   const edits = conversation()
   chats.push(edits.id)
   await start(edits, { modeId: accessModeId("edits") })
-  const wrote = await turn(edits, "Use the write tool to create the file hello.txt in the current directory containing exactly: hi from edits. Then use the bash tool to run: cat hello.txt", async request => {
+  const wrote = await turn(edits, "Use the write tool to create the file hello.txt in the current directory containing exactly the text 'hi from edits' (no period). Then use the bash tool to run: cat hello.txt", async request => {
     assert.equal(request.kind, "execute", `the edits tier asks only for commands, got ${request.title}`)
     await driver.permission(edits.id, request.id, { kind: "choice", optionId: "reject" }, approvalDispatch())
   })
