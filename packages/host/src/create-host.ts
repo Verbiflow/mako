@@ -205,6 +205,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         prefetchStart: async (harness) => (await core.load("run a start ahead")).prefetchStart(harness),
         prefetchSignedIn: async (harness) => (await core.load("run a start's sign-in stage ahead")).prefetchSignedIn(harness),
         work: () => core.current()?.work() ?? [],
+        syncRecords: async (link) => (await core.load("the machine's records")).syncRecords(link),
       })
     }
     web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {

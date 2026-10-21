@@ -10,6 +10,7 @@
     ".": "./dist/index.js",
     "./fake-gateway": "./dist/fake-gateway.js",
     "./records": "./dist/records.js",
+    "./records-http": "./dist/records-http.js",
     "./conformance": "./dist/conformance.js",
     "./attribution-conformance": "./dist/attribution-conformance.js"
   },

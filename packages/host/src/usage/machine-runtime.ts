@@ -27,6 +27,7 @@ import { type HostInvoke, serveHostThroughGateway } from "../transport/index.js"
 import { CloudLink, type CloudLinkEnding, type CloudLinkState } from "./cloud-link.js"
 import { ACTIVITY_HEARTBEAT_MS } from "@mako/protocol"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
+import type { RecordsLink } from "@mako/sessions/record-sync"
 
 type Link = Extract<AgentMessage, { type: "link" }>
 type SignIns = Extract<AgentMessage, { type: "sign-ins" }>
@@ -51,6 +52,8 @@ export type MachineRuntimeOptions = {
   prefetchSignedIn(harness: string): Promise<{ ms: number } | undefined>
   /** What the host is working on, as its lifecycle lists it: what the machine reports, so its Thread keeps it running. */
   work(): LifecycleWork[]
+  /** Keeps the machine's records in step with its Thread's at the gateway, under the link's credential; null stops. */
+  syncRecords?(link: RecordsLink | null): Promise<void>
   /** Every process's CPU time so far (`/proc`); undefined off Linux. Tests give their own. */
   sampleCpu?: () => Promise<CpuSample | undefined>
   /** Whether to profile the host's own JavaScript while a launch runs (`MAKO_LAUNCH_PROFILE=1`); off unless asked. */
@@ -394,6 +397,9 @@ export class MachineRuntime {
     this.#cloud = cloud
     this.#setLink("connecting")
     cloud.start()
+    // Its records go where its Thread's are kept, with the same credential: each session as it's captured (1.6).
+    const records = new URL(`/v1/machines/${encodeURIComponent(link.machine)}/records`, link.gatewayUrl).toString()
+    void this.#options.syncRecords?.({ id: records, base: records, authorization: `Bearer ${link.credential}` }).catch((error: Error) => hostWarn("machine", "records aren't kept in step", { error: error.message }))
   }
 
   #attach(link: Link, threads: RuntimeThreads, socket: WebSocket, end: (ending: CloudLinkEnding) => void) {
@@ -445,6 +451,7 @@ export class MachineRuntime {
     this.#threads = undefined
     this.#state.unlinked = reason
     this.#setLink("silent")
+    void this.#options.syncRecords?.(null).catch(() => undefined)
   }
 
   /**

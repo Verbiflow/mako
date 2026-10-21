@@ -1,3 +1,4 @@
+import { RecordsLinkSchema, type RecordsLink } from "./record-sync.js"
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
 import {
@@ -122,6 +123,8 @@ export type DaemonRequestFrame =
   | { id: number; op: "follow"; path: string; fromByte: number; reloads?: true }
   | { id: number; op: "unfollow"; path?: string }
   | { id: number; op: "retire" }
+  /** Where the store's records are kept in step (`SessionCatalog.syncRecords`); null stops. */
+  | { id: number; op: "records"; link: RecordsLink | null }
 
 export type DaemonResponseFrame =
   | {
@@ -313,6 +316,11 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       return { id, op, path: readString(record, "path") }
     case "retire":
       return { id, op }
+    case "records": {
+      if (record.link === null) return { id, op, link: null }
+      const link = RecordsLinkSchema.safeParse(record.link)
+      return link.success ? { id, op, link: link.data } : null
+    }
     default:
       return null
   }

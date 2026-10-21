@@ -25,6 +25,7 @@
  * client; if something answers the ping, it exits quietly.
  */
 
+import type { RecordsLink } from "./record-sync.js"
 import type { InstalledReading } from "./record-writers.js"
 import {
   createConnection,
@@ -414,6 +415,10 @@ function catalogService(
             reply({ id: frame.id, ok: true, result: null })
             return
           }
+          case "records":
+            catalog.syncRecords(frame.link)
+            reply({ id: frame.id, ok: true, result: null })
+            return
           case "retire": {
             // A newer client wants this vintage gone. Answer, then leave —
             // the socket frees, and the successor takes over the watchers.
@@ -581,6 +586,8 @@ export interface DaemonClient {
   unfollow(path?: string): Promise<void>
   /** Ask the daemon to exit — used to replace an older vintage. */
   retire(): Promise<void>
+  /** Keeps a remote store in step with the catalog's (`SessionCatalog.syncRecords`); null stops. */
+  syncRecords(link: RecordsLink | null): Promise<void>
   onEvent(listener: (event: DaemonEvent) => void): () => void
   /** Fires once if the daemon goes away; the client is dead afterwards. */
   onClose(listener: () => void): void
@@ -865,6 +872,7 @@ async function connectDaemonLink(
         requestAck((id) => ({ id, op: "follow", path, fromByte, reloads: true })),
       unfollow: (path) => requestAck((id) => ({ id, op: "unfollow", path })),
       retire: () => requestAck((id) => ({ id, op: "retire" })),
+      syncRecords: (link) => requestAck((id) => ({ id, op: "records", link })),
       onEvent: (listener) => {
         eventListeners.add(listener)
         return () => eventListeners.delete(listener)

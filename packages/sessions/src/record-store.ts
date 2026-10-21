@@ -5,7 +5,7 @@ import { dirname, join } from "node:path"
 import type { DatabaseSync, StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { checkStoredChunk, Chunker, chunkHash, HASH_BYTES, Packs, type StoredChunk } from "./record-chunks.js"
-import { planRecordImport, recordChunks as versionChunks, type HeldUnit, type RecordBundle, type RecordHoldings, type RecordVersion } from "@mako/protocol/records"
+import { planRecordImport, recordChunks as versionChunks, type HeldUnit, type RecordBundle, type RecordHoldings, type RecordUnit, type RecordVersion } from "@mako/protocol/records"
 import { plainRecordPath, recordChunks, recordFilePath, statRecord } from "./record-files.js"
 import type { ForkFile, ForkIds, ForkRow, RecordDatabase, RecordFork, RecordLines, RecordRoot, RecordRow, RecordTable, RecordValue, SessionRecords } from "./harness-records.js"
 import { forkIds, forkLines } from "./record-fork.js"
@@ -69,6 +69,15 @@ export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
 const SCHEMA_VERSION = 2
 /** Additive changes this build made to the format, each a name in `meta.additions`; a build that doesn't know one ignores what it added. */
 const ADDITIONS = ["writers", "children", "intents", "remotes"]
+/** One batch of `RecordStore.exportFor`: at most `limit` versions, from the unit after `cursor`. */
+export type ExportPage = { limit?: number; cursor?: number }
+/** A unit as an export reads it, with what a remote is known to hold of it. */
+const ExportUnitSchema = z.object({ id: z.number(), key: z.string(), role: z.enum(["file", "row", "schema", "lines"]), head: z.number(), seen_path: z.string().nullable(), places: z.string().nullable(), held: z.number().nullable() })
+const ExportVersionSchema = z.object({
+  seq: z.number(), kind: z.enum(["append", "replace", "delete"]), at: z.number(), size: z.number(),
+  digest: z.instanceof(Uint8Array).nullable(), tail: z.instanceof(Uint8Array).nullable(), chunks: z.instanceof(Uint8Array),
+  detail: z.string().nullable(), writer: z.string().nullable(), writer_source: z.enum(["record", "observed"]).nullable(),
+})
 /** The most of a deferred file's first line a restore writes (`RestoreInput.files`). */
 const HEAD_BYTES = 1024 * 1024
 /** How many files a restore writes at once. */
@@ -1480,35 +1489,71 @@ export class RecordStore {
     return this.exportPast(harness, nativeId, null, (unit) => have[unit.key] ?? -1)
   }
 
-  /** `exportSession` past what `remote`, a store this one pushes to, is known to hold (`remoteHolds`). */
-  exportFor(remote: string, harness: string, nativeId: string): RecordBundle | null {
-    return this.exportPast(harness, nativeId, remote, (unit) => unit.held ?? -1)
+  /**
+   * `exportSession` past what `remote`, a store this one pushes to, is known to hold (`remoteHolds`), a batch at a
+   * time: at most `limit` versions, from the unit after `cursor` on. A long session's hundreds of thousands of rows
+   * are read once across its batches and never held whole; `cursor` says where the next batch begins, null after the
+   * last. A unit cut short is taken up again past what the remote then holds.
+   */
+  exportFor(remote: string, harness: string, nativeId: string, page: ExportPage = {}): { bundle: RecordBundle; cursor: number | null } | null {
+    const found = SessionRowSchema.optional().parse(this.prepared("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
+    if (!found?.layout) return null
+    const limit = page.limit ?? Number.POSITIVE_INFINITY
+    const units = this.prepared(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places, r.head AS held FROM session_units su JOIN units u ON u.id = su.unit
+      LEFT JOIN remote_units r ON r.remote = ? AND r.unit = u.id WHERE su.session = ? AND u.id > ? AND u.head > coalesce(r.head, -1) ORDER BY u.id`)
+    const bundled: RecordUnit[] = []
+    let taken = 0
+    let cursor: number | null = null
+    let full = false
+    for (const raw of units.iterate(remote, found.id, page.cursor ?? 0)) {
+      const unit = ExportUnitSchema.parse(raw)
+      if (taken >= limit) {
+        full = true
+        break
+      }
+      const versions = this.versionsPast(unit.id, unit.held ?? -1, limit - taken)
+      bundled.push({ key: unit.key, role: unit.role, path: unit.seen_path, places: unit.places, versions })
+      taken += versions.length
+      // A unit taken whole moves the cursor past it; one cut short is the next batch's first.
+      if (versions.at(-1)?.seq === unit.head) cursor = unit.id
+      else {
+        full = true
+        break
+      }
+    }
+    return { bundle: { ...this.sessionHead(found.id, harness, nativeId, found.layout), units: bundled }, cursor: full ? (cursor ?? page.cursor ?? 0) : null }
   }
 
   private exportPast(harness: string, nativeId: string, remote: string | null, after: (unit: { key: string; held: number | null }) => number): RecordBundle | null {
     const found = SessionRowSchema.optional().parse(this.prepared("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
     if (!found?.layout) return null
-    const units = z.object({ id: z.number(), key: z.string(), role: UnitRoleSchema, head: z.number(), seen_path: z.string().nullable(), places: z.string().nullable(), held: z.number().nullable() }).array()
+    const units = ExportUnitSchema.array()
       .parse(this.prepared(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places, r.head AS held FROM session_units su JOIN units u ON u.id = su.unit
         LEFT JOIN remote_units r ON r.remote = ? AND r.unit = u.id WHERE su.session = ? ORDER BY u.id`).all(remote, found.id))
-    const row = z.object({
-      seq: z.number(), kind: VersionKindSchema, at: z.number(), size: z.number(),
-      digest: z.instanceof(Uint8Array).nullable(), tail: z.instanceof(Uint8Array).nullable(), chunks: z.instanceof(Uint8Array),
-      detail: z.string().nullable(), writer: z.string().nullable(), writer_source: z.enum(["record", "observed"]).nullable(),
-    })
-    const hex = (bytes: Uint8Array | null) => (bytes ? Buffer.from(bytes).toString("hex") : null)
     const bundled = units.flatMap((unit) => {
       const past = after(unit)
       if (unit.head <= past) return []
-      const versions = row.array().parse(this.prepared("SELECT seq, kind, at, size, digest, tail, chunks, detail, writer, writer_source FROM versions WHERE unit = ? AND seq > ? ORDER BY seq").all(unit.id, past))
-      return [{ key: unit.key, role: unit.role, path: unit.seen_path, places: unit.places, versions: versions.map((version): RecordVersion => ({
-        seq: version.seq, kind: version.kind, at: version.at, size: version.size, digest: hex(version.digest), tail: hex(version.tail),
-        chunks: Buffer.from(version.chunks).toString("hex"), detail: version.detail, writer: version.writer, writerSource: version.writer_source,
-      })) }]
+      return [{ key: unit.key, role: unit.role, path: unit.seen_path, places: unit.places, versions: this.versionsPast(unit.id, past, Number.POSITIVE_INFINITY) }]
     })
+    return { ...this.sessionHead(found.id, harness, nativeId, found.layout), units: bundled }
+  }
+
+  /** A unit's versions past `after`, in order, at most `most`. */
+  private versionsPast(unit: number, after: number, most: number): RecordVersion[] {
+    const hex = (bytes: Uint8Array | null) => (bytes ? Buffer.from(bytes).toString("hex") : null)
+    const rows = ExportVersionSchema.array().parse(this.prepared("SELECT seq, kind, at, size, digest, tail, chunks, detail, writer, writer_source FROM versions WHERE unit = ? AND seq > ? ORDER BY seq LIMIT ?")
+      .all(unit, after, Number.isFinite(most) ? most : -1))
+    return rows.map((version) => ({
+      seq: version.seq, kind: version.kind, at: version.at, size: version.size, digest: hex(version.digest), tail: hex(version.tail),
+      chunks: Buffer.from(version.chunks).toString("hex"), detail: version.detail, writer: version.writer, writerSource: version.writer_source,
+    }))
+  }
+
+  /** What a bundle of the session carries besides its units: its layout, and its marks but the stamp naming one machine's files. */
+  private sessionHead(session: number, harness: string, nativeId: string, layout: string): Omit<RecordBundle, "units"> {
     const marks = z.object({ name: z.string(), fingerprint: z.string() }).array()
-      .parse(this.prepared("SELECT name, fingerprint FROM marks WHERE session = ? AND name != ?").all(found.id, HELD_STAMP))
-    return { harness, nativeId, layout: SessionLayoutSchema.parse(JSON.parse(found.layout)), marks: Object.fromEntries(marks.map((mark) => [mark.name, mark.fingerprint])), units: bundled }
+      .parse(this.prepared("SELECT name, fingerprint FROM marks WHERE session = ? AND name != ?").all(session, HELD_STAMP))
+    return { harness, nativeId, layout: SessionLayoutSchema.parse(JSON.parse(layout)), marks: Object.fromEntries(marks.map((mark) => [mark.name, mark.fingerprint])) }
   }
 
   /**
