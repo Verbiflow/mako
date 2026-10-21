@@ -194,6 +194,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       const { MachineRuntime, machineAgentChannel } = await (await import("./usage/index.js")).loadMachineRuntime()
       machine = new MachineRuntime({
         agent: machineAgentChannel(config.machineAgentFd),
+        profileHost: config.launchProfile === true,
         invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
         version: environment.version,
         build: runtimeBuild(environment),
