@@ -3,10 +3,11 @@ import { lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile 
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { z } from "zod"
 import { STEPS_FOLDER_VARIABLE, type CheckStep } from "./check-steps.js"
-import type { RecipeVersionView } from "../contracts/project-app.js"
+import type { RecipeProofSummary, RecipeVersionView } from "../contracts/project-app.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironment } from "../contracts/thread-environments.js"
 import { PROJECT_CHECKOUT_FILE } from "../contracts/thread-worktrees.js"
 import type { Git } from "@mako/git"
+import { RECIPE_REASON_MAX, RecipeProofSchema, RecipeProofStepSchema, RecipeVersionRecordSchema, type RecipeAuthority, type RecipeSave, type RecipeVersionRecord } from "@mako/protocol/recipes"
 
 /**
  * A recipe committed with the project, for a team that shares one through
@@ -61,9 +62,17 @@ const processSchema = z.object({
    * its port says.
    */
   ready: command.optional(),
+  /**
+   * What it runs on: any computer (the default), Linux, or a Mac with its screen, such as a desktop app. A process a
+   * place can't run isn't started there, and a target that needs one says so instead of starting part of itself.
+   */
+  platform: z.enum(["any", "linux", "mac"]).optional(),
 }).strict()
 
 const processName = /^[a-z][a-z0-9-]{0,31}$/
+
+/** A process as one place changes it: only the fields that differ there, patched onto the shared process. */
+const processPatchSchema = processSchema.partial().strict()
 
 const stepSchema = z.object({
   /** Such as `typecheck` or `lint`: what the step's result is reported as, and how a rerun names it. */
@@ -135,6 +144,12 @@ const prepareSchema = z.object({
    * step with outputs that doesn't say (`withLinkDefault`).
    */
   link: z.boolean().optional(),
+  /**
+   * When it runs: `base` (the default), with no secrets and no Thread values, so a cloud project base can be built
+   * from it ahead of any Thread; or `thread`, once the Thread's checkout exists, for what needs them, such as
+   * migrations and seeding.
+   */
+  phase: z.enum(["base", "thread"]).optional(),
 }).strict().refine(
   (step) => step.link === undefined || step.outputs?.length,
   { message: "link is for a step's outputs: name them in outputs, or leave link out", path: ["link"] },
@@ -153,6 +168,14 @@ const carryEntrySchema = z.union([
   }).strict(),
 ])
 export type CarryEntry = z.infer<typeof carryEntrySchema>
+
+/** What one place changes of the recipe: its own values, and fields of shared processes; never a process of its own. */
+const placeSchema = z.object({
+  /** Values for this place only, such as an `APP_URL` or a database's address; each replaces the shared value of its name. */
+  values: named(template, (name) => variableProblem(name) ?? (SHELL_OWNED.has(name) ? "the agent's own shell needs this one; set it on a process instead" : undefined)).optional(),
+  /** Fields of the recipe's processes for this place, such as `web`'s command under `xvfb-run`: a patch, never a copy. */
+  processes: z.record(z.string(), processPatchSchema).optional(),
+}).strict()
 
 export const RecipeSchema = z.object({
   $schema: z.string().optional(),
@@ -200,7 +223,25 @@ export const RecipeSchema = z.object({
    * containers' volumes or its database, when its worktree is removed.
    */
   cleanup: command.optional(),
+  /**
+   * The secrets the app reads from its environment, by name, such as `E2B_API_KEY`; never their values. On this
+   * computer the files `carry` copies meet them; in the cloud the account's secret store does, and a start that
+   * would lack one says which before it starts.
+   */
+  secretNames: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/, "a secret's name, such as E2B_API_KEY")).max(50).optional(),
+  /**
+   * What differs by place, written inside the one recipe: `local` for this computer, `cloud` for a cloud machine.
+   * Every place keeps the same processes, checks and version; a place only changes values and patches processes.
+   */
+  places: z.object({ local: placeSchema.optional(), cloud: placeSchema.optional() }).strict().optional(),
 }).strict().superRefine((recipe, context) => {
+  for (const place of ["local", "cloud"] as const)
+    for (const name of Object.keys(recipe.places?.[place]?.processes ?? {}))
+      if (!(name in recipe.processes)) context.addIssue({ code: "custom", path: ["places", place, "processes", name], message: `${name} isn't one of the recipe's processes: a place patches a process, it never adds one` })
+  recipe.prepare.forEach((step, index) => {
+    if ((step.phase ?? "base") === "base" && /\{(thread|port)/.test(step.command))
+      context.addIssue({ code: "custom", path: ["prepare", index, "command"], message: "a base step gets no Thread values, so a project base can be built from it: mark it phase \"thread\", or leave the Thread's values out" })
+  })
   const seen = new Set<string>()
   for (const [index, { path }] of [...(recipe.carry ?? []), ...(recipe.secrets ?? [])].entries()) {
     if (seen.has(path)) context.addIssue({ code: "custom", path: ["carry", index], message: `${path} is listed twice; list it once, with link or without` })
@@ -209,6 +250,47 @@ export const RecipeSchema = z.object({
 }).transform(({ secrets, ...recipe }) => (secrets?.length ? { ...recipe, carry: [...(recipe.carry ?? []), ...secrets] } : recipe))
 
 export type Recipe = z.infer<typeof RecipeSchema>
+
+/** Where a recipe runs: this computer or a cloud machine, and what that computer is. */
+export type RecipePlace = "local" | "cloud"
+export type RecipeWhere = { place: RecipePlace; platform: "mac" | "linux" | "other" }
+/** What a place can't run of a recipe: each process with what it needs, and the targets that need one of them. */
+export type RecipeAbsent = { processes: Array<{ name: string; needs: "linux" | "mac" }>; targets: string[] }
+
+/** Whether a process that runs on `platform` runs where `where` is. */
+function runsOn(platform: RecipeProcess["platform"], where: RecipeWhere): boolean {
+  return platform === undefined || platform === "any" || platform === where.platform
+}
+
+/**
+ * The recipe as it runs in one place: the place's values over the shared ones, its patches applied to the shared
+ * processes, and the processes and targets it can't run left out, each named in `absent`. The processes, checks and
+ * version are the recipe's in every place, so a check passes or fails for the same reasons on the laptop and on a
+ * machine.
+ */
+export type RecipeInPlace = { recipe: Recipe; absent: RecipeAbsent }
+export function recipeIn(recipe: Recipe, where: RecipeWhere): RecipeInPlace {
+  const place = recipe.places?.[where.place]
+  const absent: RecipeAbsent = { processes: [], targets: [] }
+  const processes: Recipe["processes"] = {}
+  for (const [name, shared] of Object.entries(recipe.processes)) {
+    const spec = { ...shared, ...place?.processes?.[name] }
+    if (runsOn(spec.platform, where)) processes[name] = spec
+    else absent.processes.push({ name, needs: spec.platform === "linux" ? "linux" : "mac" })
+  }
+  const resolved: Recipe = { ...recipe, values: { ...recipe.values, ...place?.values }, processes }
+  // As it runs, a recipe has no places: they've been applied.
+  delete resolved.places
+  if (recipe.targets) {
+    const targets: NonNullable<Recipe["targets"]> = {}
+    for (const [name, target] of Object.entries(recipe.targets)) {
+      if (target.processes.every((process) => process in processes)) targets[name] = target
+      else absent.targets.push(name)
+    }
+    resolved.targets = targets
+  }
+  return { recipe: resolved, absent }
+}
 
 /** What `recipe_save` keeps: a step with outputs that doesn't say links them, written out so the version says so. */
 export function withLinkDefault(recipe: Recipe): Recipe {
@@ -247,6 +329,9 @@ export type RecipeRead =
       draft?: { parent?: number }
       /** The published version, newer than this one the app's processes started with; it takes it at its next start. */
       newer?: number
+      /** Where it was read for, and what of it can't run there (`recipeIn`); `recipe` is as it runs there. */
+      where?: RecipeWhere
+      absent?: RecipeAbsent
     }
   | { kind: "invalid"; checkout: string; message: string; from?: string; saved?: string }
 
@@ -329,7 +414,22 @@ function issueLines(issue: z.core.$ZodIssue, under: PropertyKey[]): string[] {
  * port offset or a folder this branch lacks fails here rather than in a
  * process.
  */
-export async function readRecipe(git: Git, checkout: string, environment: ThreadEnvironment, recipesRoot?: string): Promise<RecipeRead> {
+export async function readRecipe(git: Git, checkout: string, environment: ThreadEnvironment, recipesRoot?: string, where?: RecipeWhere, accounts?: RecipeAccounts): Promise<RecipeRead> {
+  // A project the account keeps is read from its mirror, brought up to date first if it's been a few seconds.
+  if (accounts && recipesRoot) await accounts.forRead(await recipePath(git, recipesRoot, checkout), checkout)
+  const read = await readRecipeAsWritten(git, checkout, environment, recipesRoot)
+  return where && read.kind === "ready" ? inPlace(read, where) : read
+}
+
+/** A read recipe as it runs in `where`: its place's values and patches, and what that place can't run. */
+export function inPlace<Read extends Extract<RecipeRead, { kind: "ready" }>>(read: Read, where: RecipeWhere): Read {
+  const resolved = recipeIn(read.recipe, where)
+  const placed: Read = { ...read, recipe: resolved.recipe, where }
+  if (resolved.absent.processes.length) placed.absent = resolved.absent
+  return placed
+}
+
+async function readRecipeAsWritten(git: Git, checkout: string, environment: ThreadEnvironment, recipesRoot?: string): Promise<RecipeRead> {
   const saved = recipesRoot ? await recipePath(git, recipesRoot, checkout) : undefined
   const at = saved ? { saved } : {}
   const draft = saved ? await appDraft(saved, environment.app) : undefined
@@ -427,47 +527,14 @@ export async function recipeProblem(recipe: Recipe, checkout: string, environmen
   return undefined
 }
 
-const ProofStepSchema = z.object({
-  /** Such as `install`, `start`, `verify` or `verify web`. */
-  name: z.string().max(100),
-  passed: z.boolean(),
-  ms: z.number().nonnegative().optional(),
-  /** For a step Mako ran. */
-  command: z.string().max(4_000).optional(),
-  /** For a check the agent made: what it did and saw. */
-  how: z.string().max(4_000).optional(),
-}).strict()
-
-const ProofSchema = z.object({
-  at: z.number(),
-  /** Where it ran: `this Mac`; a cloud environment has a proof of its own. */
-  on: z.string(),
-  checkout: z.string(),
-  by: z.string().max(300).optional(),
-  steps: z.array(ProofStepSchema).max(50),
-}).strict()
-export type RecipeProof = z.infer<typeof ProofSchema>
-export type RecipeProofStep = z.infer<typeof ProofStepSchema>
+// A version and its proofs are the protocol's, so a store and the account's authority read them alike.
+export type RecipeProof = z.infer<typeof RecipeProofSchema>
+export type RecipeProofStep = z.infer<typeof RecipeProofStepSchema>
 
 /** The longest reason a version keeps; a longer one makes the version unreadable. */
-export const REASON_MAX = 500
+export const REASON_MAX = RECIPE_REASON_MAX
 
-const VersionSchema = z.object({
-  version: z.number().int().positive(),
-  /** The published version it was made from; none for a project's first. */
-  parent: z.number().int().positive().optional(),
-  state: z.enum(["draft", "published"]),
-  savedAt: z.number(),
-  /** Who saved it, such as `the Thread "Fix login" (codex)`. */
-  by: z.string().max(300).optional(),
-  reason: z.string().max(REASON_MAX).optional(),
-  /** The app that saved it, the only one that runs it while it's a draft. */
-  app: AppKeySchema.optional(),
-  recipe: z.unknown(),
-  /** The last proof run of it, passed or not. */
-  proof: ProofSchema.optional(),
-  publishedAt: z.number().optional(),
-}).strict()
+const VersionSchema = RecipeVersionRecordSchema
 export type RecipeVersion = Omit<z.infer<typeof VersionSchema>, "recipe"> & { recipe: Recipe }
 
 const PointerSchema = z.object({ version: z.number().int().positive() }).strict()
@@ -575,6 +642,7 @@ export async function saveDraft(
   environment: ThreadEnvironment,
   saved: { by?: string; reason?: string },
   now = Date.now(),
+  authority?: RecipeAuthority,
 ): Promise<SavedDraft> {
   const problem = await recipeProblem(recipe, checkout, environment)
   if (problem) throw new Error(`Not saved: ${problem}`)
@@ -583,7 +651,8 @@ export async function saveDraft(
   const file = await recipePath(git, recipesRoot, checkout)
   const folder = recipeVersions(file)
   await mkdir(folder, { recursive: true, mode: 0o700 })
-  const published = await publishedVersion(file, now)
+  // A project the account keeps is numbered there only: its mirror says what's published, never this store's guess.
+  const published = authority ? await pointer(join(folder, "published.json")) : await publishedVersion(file, now)
   const draftFile = appFile(folder, "drafts", environment.app)
   const current = published === undefined ? undefined : await readVersion(file, published)
   if (current && recipeText(current.recipe) === text) {
@@ -595,6 +664,18 @@ export async function saveDraft(
     const saved: SavedDraft = { file, version: draft }
     if (published !== undefined) saved.published = published
     return saved
+  }
+  if (authority) {
+    const request: RecipeSave = { id: randomUUID(), savedAt: now, app: environment.app, recipe }
+    if (published !== undefined) request.parent = published
+    if (saved.by) request.by = saved.by
+    if (saved.reason) request.reason = saved.reason
+    const record = mirrored(await authority.save(request))
+    await writeVersion(file, record)
+    await writeAtomic(draftFile, `${JSON.stringify({ version: record.version })}\n`)
+    const result: SavedDraft = { file, version: record }
+    if (published !== undefined) result.published = published
+    return result
   }
   const record: RecipeVersion = { version: 0, state: "draft", savedAt: now, app: environment.app, recipe }
   if (published !== undefined) record.parent = published
@@ -627,9 +708,21 @@ async function pruneDrafts(file: string, now: number): Promise<void> {
 }
 
 /** Records a proof that didn't pass, so the version says how it last went. */
-export async function recordProof(file: string, version: number, proof: RecipeProof): Promise<void> {
+export async function recordProof(file: string, version: number, proof: RecipeProof, authority?: RecipeAuthority): Promise<void> {
+  if (authority) return writeVersion(file, mirrored(await authority.prove({ version, proof })))
   const record = await readVersion(file, version)
-  if (record) await writeVersion(file, { ...record, proof })
+  if (record) await writeVersion(file, withProof(record, proof))
+}
+
+/** A version with `proof` as its last, and as its last in the place it ran. */
+function withProof(record: RecipeVersion, proof: RecipeProof): RecipeVersion {
+  return { ...record, proof, proofs: { ...placedProofs(record), [proof.place ?? "local"]: proof } }
+}
+
+/** The last proof of a version in each place, reading one from before places as this computer's. */
+export function placedProofs(record: Pick<RecipeVersion, "proof" | "proofs">): { local?: RecipeProof; cloud?: RecipeProof } {
+  if (record.proofs) return record.proofs
+  return record.proof ? { [record.proof.place ?? "local"]: record.proof } : {}
 }
 
 /** A draft made from a version that's no longer the published one: publishing it would undo what was published since. */
@@ -646,7 +739,21 @@ export class StaleDraftError extends Error {
  * it from its next start. Refused when another version was published since
  * the draft was made from one.
  */
-export async function publishDraft(file: string, app: AppKey, version: number, proof: RecipeProof, now = Date.now()): Promise<RecipeVersion> {
+export async function publishDraft(file: string, app: AppKey, version: number, proof: RecipeProof, now = Date.now(), authority?: RecipeAuthority): Promise<RecipeVersion> {
+  const folder = recipeVersions(file)
+  if (authority) {
+    // The account compares and sets what's published in one turn: of two places publishing at once, one wins.
+    const answer = await authority.publish({ version, proof, publishedAt: now })
+    if (!answer.ok) {
+      const current = answer.published ? mirrored(answer.published) : undefined
+      if (current) await mirrorPublished(file, current)
+      throw new StaleDraftError(answer.reason, current)
+    }
+    const done = mirrored(answer.record)
+    await mirrorPublished(file, done)
+    if ((await pointer(appFile(folder, "drafts", app))) === version) await rm(appFile(folder, "drafts", app), { force: true })
+    return done
+  }
   const record = await readVersion(file, version)
   if (!record || record.state !== "draft") throw new Error(`Version ${version} isn't a draft any more.`)
   const published = await publishedVersion(file, now)
@@ -654,9 +761,8 @@ export async function publishDraft(file: string, app: AppKey, version: number, p
     const current = published === undefined ? undefined : await readVersion(file, published)
     throw new StaleDraftError(`Version ${published} was published after this draft was made from ${record.parent === undefined ? "nothing" : `version ${record.parent}`}.`, current)
   }
-  const done: RecipeVersion = { ...record, state: "published", proof, publishedAt: now }
+  const done: RecipeVersion = { ...withProof(record, proof), state: "published", publishedAt: now }
   await writeVersion(file, done)
-  const folder = recipeVersions(file)
   await writeAtomic(join(folder, "published.json"), `${JSON.stringify({ version })}\n`)
   await writeAtomic(file, recipeText(record.recipe))
   if ((await pointer(appFile(folder, "drafts", app))) === version) await rm(appFile(folder, "drafts", app), { force: true })
@@ -688,6 +794,11 @@ export interface VersionHistory {
   kept: number[]
 }
 
+function proofSummary(proof: RecipeProof): RecipeProofSummary {
+  const failed = proof.steps.find((step) => !step.passed)
+  return failed ? { at: proof.at, passed: false, failed: failed.name } : { at: proof.at, passed: true }
+}
+
 async function versionEntry(file: string, version: number, published: number | undefined): Promise<RecipeVersionView | undefined> {
   const read = await readJson(join(recipeVersions(file), `${version}.json`)).catch((): JsonRead => ({ kind: "absent" }))
   if (read.kind !== "json") return undefined
@@ -699,9 +810,12 @@ async function versionEntry(file: string, version: number, published: number | u
   if (by) entry.by = by
   if (reason) entry.reason = reason
   if (publishedAt !== undefined) entry.publishedAt = publishedAt
-  if (proof) {
-    const failed = proof.steps.find((step) => !step.passed)
-    entry.proof = failed ? { at: proof.at, passed: false, failed: failed.name } : { at: proof.at, passed: true }
+  if (proof) entry.proof = proofSummary(proof)
+  const placed = placedProofs(parsed.data)
+  if (placed.local || placed.cloud) {
+    entry.places = {}
+    if (placed.local) entry.places.local = proofSummary(placed.local)
+    if (placed.cloud) entry.places.cloud = proofSummary(placed.cloud)
   }
   return entry
 }
@@ -731,6 +845,176 @@ export async function versionHistory(file: string, app: AppKey | undefined, limi
     else if (entry?.state === "draft" && version === draft) entries.push(entry)
   }
   return { entries, kept }
+}
+
+// The account's authority
+
+/** A version as the authority sent it, its recipe read as this build reads one; a recipe it can't read stays as sent. */
+function mirrored(record: RecipeVersionRecord): RecipeVersion {
+  const recipe = RecipeSchema.safeParse(record.recipe)
+  // SAFETY: a recipe this build can't read is kept as the authority sent it; `readVersion` reads it as unreadable.
+  return { ...record, recipe: (recipe.success ? recipe.data : record.recipe) as Recipe }
+}
+
+/** A version the authority says is published: its record, the pointer to it and the project's recipe file. */
+async function mirrorPublished(file: string, record: RecipeVersion): Promise<void> {
+  await writeVersion(file, record)
+  await writeAtomic(join(recipeVersions(file), "published.json"), `${JSON.stringify({ version: record.version })}\n`)
+  if (RecipeSchema.safeParse(record.recipe).success) await writeAtomic(file, recipeText(record.recipe))
+}
+
+const SyncedSchema = z.object({ authority: z.string(), change: z.number().int().nonnegative() }).strict()
+
+/** How a store took its project's versions from the authority: what changed, and what of its own it gave or set aside. */
+export type RecipeSync = { change: number; taken: number; adopted?: number; setAside?: string }
+
+/** The store's mirror of `authority`, if it has ever taken one: the project is the account's from then on. */
+export async function syncedWith(file: string): Promise<z.infer<typeof SyncedSchema> | undefined> {
+  const read = await readJson(join(recipeVersions(file), "synced.json")).catch((): JsonRead => ({ kind: "absent" }))
+  const parsed = read.kind === "json" ? SyncedSchema.safeParse(read.value) : undefined
+  return parsed?.success ? parsed.data : undefined
+}
+
+/**
+ * Takes what changed at the project's authority since this store last asked, into its own files: each version,
+ * the published one's pointer and its recipe. The first time, the account takes this store's history when it keeps
+ * none; when it keeps another, versions of this store's that aren't the account's are set aside in a folder beside
+ * them, never stitched in, and the account's are the project's. The cursor is written last, so a sync cut short
+ * takes the same changes again.
+ */
+export async function syncRecipe(file: string, authority: RecipeAuthority, now = Date.now()): Promise<RecipeSync> {
+  const folder = recipeVersions(file)
+  await mkdir(folder, { recursive: true, mode: 0o700 })
+  const synced = await syncedWith(file)
+  const result: RecipeSync = { change: 0, taken: 0 }
+  let after = synced?.authority === authority.id ? synced.change : 0
+  if (synced?.authority !== authority.id) {
+    // This store's history as it stands, a recipe saved before versions included.
+    const published = await publishedVersion(file, now)
+    const own = (await Promise.all((await versionNumbers(file)).map((version) => readVersion(file, version)))).flatMap((record) => (record ? [record] : []))
+    const first = await authority.changes(0)
+    const adopted = own.length > 0 && first.change === 0 && (await authority.adopt({ versions: own, published: published ?? null })).adopted
+    if (adopted) result.adopted = own.length
+    else if (own.length) {
+      const theirs = await allVersions(authority)
+      const differs = own.some((record) => {
+        const kept = theirs.get(record.version)
+        return !kept || kept.state !== record.state || JSON.stringify(kept.recipe) !== JSON.stringify(record.recipe)
+      })
+      if (differs) {
+        result.setAside = `${folder}.set-aside-${now}`
+        await rename(folder, result.setAside)
+        await mkdir(folder, { recursive: true, mode: 0o700 })
+      }
+    }
+  }
+  for (;;) {
+    const changes = await authority.changes(after)
+    for (const record of changes.versions) await writeVersion(file, mirrored(record))
+    result.taken += changes.versions.length
+    after = changes.change
+    if (!changes.more) {
+      if (changes.published !== null) {
+        const record = await readVersion(file, changes.published)
+        if (record) await mirrorPublished(file, record)
+      }
+      break
+    }
+  }
+  await writeAtomic(join(folder, "synced.json"), `${JSON.stringify({ authority: authority.id, change: after })}\n`)
+  result.change = after
+  return result
+}
+
+async function allVersions(authority: RecipeAuthority): Promise<Map<number, RecipeVersionRecord>> {
+  const all = new Map<number, RecipeVersionRecord>()
+  for (let after = 0; ; ) {
+    const changes = await authority.changes(after)
+    for (const record of changes.versions) all.set(record.version, record)
+    after = changes.change
+    if (!changes.more) return all
+  }
+}
+
+/** A project the account keeps whose authority can't be reached now: a version saved or published here would be numbered apart from the others. */
+export class RecipeUnreachableError extends Error {}
+
+/** Whether a refusal says the account doesn't keep recipes for this caller (signed out, or no cloud), not that it can't be reached. */
+export type RecipeAuthorityOf = (checkout: string) => Promise<RecipeAuthority | undefined>
+
+/**
+ * The projects the account keeps the recipes of, as one host works with them: the authority for a checkout's
+ * project, and each store kept in step with it. A read asks for what changed at most every `freshMs`, one ask at a
+ * time per store, and never fails: a store that can't reach its authority reads what it took last. A write needs the
+ * authority once the store has taken it, and says so when it can't be reached; a project the account doesn't keep
+ * (no repository it knows, signed out, no cloud) is this store's alone, as before.
+ */
+export class RecipeAccounts {
+  readonly #of: RecipeAuthorityOf
+  readonly #freshMs: number
+  readonly #stores = new Map<string, { at: number; authority?: RecipeAuthority; flight?: Promise<RecipeAuthority | undefined>; failed?: string }>()
+  readonly #log: (message: string, fields: Record<string, string | number>) => void
+
+  constructor(of: RecipeAuthorityOf, options: { freshMs?: number; log?: (message: string, fields: Record<string, string | number>) => void } = {}) {
+    this.#of = of
+    this.#freshMs = options.freshMs ?? 3_000
+    this.#log = options.log ?? (() => undefined)
+  }
+
+  /** The authority `file`'s store mirrors, kept fresh for a read; undefined for a project the account doesn't keep. */
+  async forRead(file: string, checkout: string): Promise<RecipeAuthority | undefined> {
+    return (await this.#fresh(file, checkout, false).catch(() => undefined)) ?? undefined
+  }
+
+  /** The authority a write goes through, the store fresh first; undefined for a project the account doesn't keep. */
+  async forWrite(file: string, checkout: string): Promise<RecipeAuthority | undefined> {
+    return this.#fresh(file, checkout, true)
+  }
+
+  /** What went wrong the last time `file`'s store asked its authority, for a status that says why it may be behind. */
+  failure(file: string): string | undefined {
+    return this.#stores.get(file)?.failed
+  }
+
+  async #fresh(file: string, checkout: string, force: boolean): Promise<RecipeAuthority | undefined> {
+    const state = this.#stores.get(file) ?? { at: 0 }
+    this.#stores.set(file, state)
+    if (state.flight) return state.flight
+    // Within a few seconds of the last look, a read takes what it found then, the authority or that there's none.
+    if (!force && Date.now() - state.at < this.#freshMs && !state.failed) return state.authority
+    const authority = await this.#of(checkout)
+    state.authority = authority
+    if (!authority) {
+      state.at = Date.now()
+      return undefined
+    }
+    const flight = (async () => {
+      const started = performance.now()
+      try {
+        const synced = await syncRecipe(file, authority)
+        state.at = Date.now()
+        state.failed = undefined
+        if (synced.taken || synced.adopted || synced.setAside) this.#log("recipe versions taken", { file, taken: synced.taken, adopted: synced.adopted ?? 0, setAside: synced.setAside ?? "", ms: Math.round(performance.now() - started) })
+        return authority
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        // The account keeps no recipes for this caller: a project it was never taken by stays this store's own.
+        if (z.object({ status: z.union([z.literal(401), z.literal(403)]) }).safeParse(error).success && !(await syncedWith(file))) {
+          state.authority = undefined
+          state.at = Date.now()
+          return undefined
+        }
+        state.failed = message
+        this.#log("recipe versions not taken", { file, error: message })
+        if (force || (await syncedWith(file))) throw new RecipeUnreachableError(`Mako couldn't reach your account, which keeps this project's recipe versions, so nothing was kept (${message}). The recipe it has is still what runs; try again in a moment.`)
+        return undefined
+      } finally {
+        state.flight = undefined
+      }
+    })()
+    state.flight = flight
+    return flight
+  }
 }
 
 /** `{port}`, `{port+N}`, `{host}`, `{url}`, `{data}` and `{thread}`; other braces are left as written. */

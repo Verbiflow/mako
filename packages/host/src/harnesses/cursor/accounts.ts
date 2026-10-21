@@ -23,6 +23,7 @@ import type { SelectableAccountCapability } from "../account-capability.js"
 import { placeSecret, removeSecret, type CloudSignInCapability, type CloudSignInPayload } from "../cloud-sign-in.js"
 import { CURSOR_ACCOUNT_ENV, type CursorSdkAuth } from "./sdk/auth.js"
 import type { CursorAccountKeys, StoredCursorCredential } from "./sdk/credentials.js"
+import { CURSOR_SDK_AUTH_FILE } from "./sdk/models.js"
 import { CURSOR_API_KEY_URL } from "./connection.js"
 
 const API = "https://api2.cursor.sh"
@@ -251,8 +252,6 @@ function expired(credential: StoredCursorCredential, now = Date.now()): boolean 
  * in on its page, kept in its own encrypted record. Selecting one hands its
  * key to new sessions; the own login stays as it is.
  */
-/** The SDK's own file, which it reads when no key is in its environment, as on a cloud machine. */
-const SDK_AUTH = join(".cursor", "sdk", "auth.json")
 const CursorSignInSchema = z.object({ apiKey: z.string().min(1), expiresAt: z.string().optional(), email: z.string().optional() })
 
 /** The Cursor SDK's own `auth.json`. */
@@ -290,7 +289,7 @@ function cursorCloudSignIn(auth: CursorSdkAuth, keys: CursorAccountKeys): CloudS
         }
       }
       if (!apiKey) {
-        const file = await readFile(join(launched.HOME ?? homedir(), SDK_AUTH), "utf8").catch(() => null)
+        const file = await readFile(join(launched.HOME ?? homedir(), CURSOR_SDK_AUTH_FILE), "utf8").catch(() => null)
         const stored = file === null ? null : jsonFields(file)
         apiKey = stringValue(stored?.get("apiKey"))
         const lapses = numberValue(stored?.get("apiKeyExpiresAtMs"))
@@ -302,7 +301,7 @@ function cursorCloudSignIn(auth: CursorSdkAuth, keys: CursorAccountKeys): CloudS
       if (email) payload.email = email
       return { label: email, expiresAt, payload }
     },
-    remove: (place) => removeSecret(place, SDK_AUTH),
+    remove: (place) => removeSecret(place, CURSOR_SDK_AUTH_FILE),
     async install(payload, place) {
       const signIn = CursorSignInSchema.safeParse(payload)
       if (!signIn.success) throw new Error("Cursor's sign-in has no key")
@@ -311,7 +310,7 @@ function cursorCloudSignIn(auth: CursorSdkAuth, keys: CursorAccountKeys): CloudS
       const lapses = expiresAt === undefined ? NaN : Date.parse(expiresAt)
       if (Number.isFinite(lapses)) file.apiKeyExpiresAtMs = lapses
       if (email !== undefined) file.email = email
-      await placeSecret(place, SDK_AUTH, JSON.stringify(file))
+      await placeSecret(place, CURSOR_SDK_AUTH_FILE, JSON.stringify(file))
     },
   }
 }
@@ -402,7 +401,7 @@ export function createCursorAccountCapability(
       const launch = await auth.childLaunch(env)
       const key = launch.env.CURSOR_API_KEY
       if (key) return credentialFingerprint([key])
-      const path = join(launch.env.HOME ?? homedir(), ".cursor", "sdk", "auth.json")
+      const path = join(launch.env.HOME ?? homedir(), CURSOR_SDK_AUTH_FILE)
       const raw = await readFile(path, "utf8").catch(error => {
         if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
         throw error

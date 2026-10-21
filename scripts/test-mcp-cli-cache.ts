@@ -16,9 +16,10 @@ const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 const root = await mkdtemp(join(tmpdir(), "mako-mcp-cli-cache-"))
 try {
   await rules()
+  await waitsForIdle()
   await throughDiscovery()
   console.log(
-    "MCP CLI listings: reused until an input or the CLI changes, shared while in flight, failures not kept, refreshed in the background when old"
+    "MCP CLI listings: reused until an input or the CLI changes, shared while in flight, failures not kept, refreshed in the background when old, once no start waits"
   )
 } finally {
   await rm(root, { recursive: true, force: true })
@@ -68,6 +69,36 @@ async function rules() {
   const before = runs
   await cache.read("a", [config, created], list)
   assert.equal(runs, before + 1, "The least recently read listing goes first past the limit")
+}
+
+/** A start holds the host's foreground; a listing read again only for its age waits for it, and a change doesn't. */
+async function waitsForIdle() {
+  let clock = 0
+  let release = () => {}
+  let idle: Promise<void> = new Promise((resolve) => (release = resolve))
+  const cache = cliListingCache<string>({ refreshAfterMs: 1_000, limit: 4, now: () => clock, idle: () => idle })
+  const config = join(root, "idle.toml")
+  await writeFile(config, "one")
+  let runs = 0
+  const list = async () => `listing ${++runs}`
+  assert.equal(await cache.read("a", [config], list), "listing 1", "The first listing doesn't wait: a start needs it")
+  clock = 5_000
+  assert.equal(await cache.read("a", [config], list), "listing 1", "An old listing is served while a start holds the host")
+  await new Promise((done) => setTimeout(done, 20))
+  assert.equal(runs, 1, "Its background run waits for the start")
+  release()
+  await new Promise((done) => setTimeout(done, 20))
+  assert.equal(runs, 2, "and runs once it's over")
+  assert.equal(await cache.read("a", [config], list), "listing 2")
+
+  idle = new Promise((resolve) => (release = resolve))
+  clock = 10_000
+  await cache.read("a", [config], list)
+  await writeFile(config, "two")
+  assert.equal(await cache.read("a", [config], list), "listing 3", "A changed input runs at once, start or not")
+  release()
+  await new Promise((done) => setTimeout(done, 20))
+  assert.equal(runs, 3, "and the old listing's waiting run is dropped")
 }
 
 async function throughDiscovery() {

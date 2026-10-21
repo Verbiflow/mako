@@ -8,8 +8,12 @@ import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall
  * file descriptor `MAKO_MACHINE_AGENT_FD` names, carrying a JSON message per line each way. Nothing else on the
  * machine can reach it: the host's own children don't inherit it, so a harness never sees the machine's credential.
  */
-/** 2: the host takes `sign-ins`. 3: and `workspace`. An agent sends only what the host's `hello` says it takes. */
-export const MACHINE_AGENT_PROTOCOL = 3
+/**
+ * 2: the host takes `sign-ins`. 3: and `workspace`. 4: and says `warm` once it has loaded what every start loads, which
+ * the agent waits for before it calls the host ready. 5: and takes `prepare`, answering `prepared`. 6: and takes
+ * `prefetch`, and sends its start's lines as `log`. An agent sends only what the host's `hello` says it takes.
+ */
+export const MACHINE_AGENT_PROTOCOL = 6
 
 /** What the agent tells the host. */
 export const AgentMessageSchema = z.discriminatedUnion("type", [
@@ -43,6 +47,16 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
     .strict(),
   /** The folder the machine's Thread works in, the clone of its repository: the host's tabs and turns open there. */
   z.object({ type: z.literal("workspace"), path: z.string().regex(/^\/[^\0]*$/).max(4_096) }).strict(),
+  /**
+   * A project base's clone, before its snapshot: the host does there what a start does first (every harness's MCP
+   * servers, two listed by running their CLIs), so a copy's start finds it done. Answered with `prepared`.
+   */
+  z.object({ type: z.literal("prepare"), path: z.string().regex(/^\/[^\0]*$/).max(4_096) }).strict(),
+  /**
+   * The harness the machine's Thread was made for, as the machine boots: the host runs what its start runs first, so
+   * the start finds it in memory (`startPrefetch`). A hint: another harness's start runs as it would have.
+   */
+  z.object({ type: z.literal("prefetch"), harness: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/) }).strict(),
 ])
 export type AgentMessage = z.infer<typeof AgentMessageSchema>
 
@@ -77,3 +91,15 @@ export type HostMessage =
   | { type: "state"; state: MachineRuntimeState }
   /** The host's clock jumped: the machine was paused, or this is a copy of it. The agent checks which and answers. */
   | { type: "resumed"; gapMs: number }
+  /**
+   * The host has loaded what every start loads (its heavy packages, each harness's version, which reads its binary):
+   * a snapshot taken from here, as the machine image's is, wakes with all of it loaded.
+   */
+  | { type: "warm"; ms: number; loaded: string[] }
+  /** A `prepare` is done, or failed and left to the start. */
+  | { type: "prepared"; path: string; ms: number; ok: boolean }
+  /**
+   * One of the host's lines a machine's timeline shows beside the agent's (`npm run timeline`): each launch's phases,
+   * what the machine runtime does, a held event loop, and every warning and error. The agent keeps them with its own.
+   */
+  | { type: "log"; at: string; level: "info" | "warn" | "error"; scope: string; message: string; fields?: Record<string, string | number | boolean | null> }

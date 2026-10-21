@@ -134,6 +134,12 @@ export type CloudRuntime = {
   serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[] }): Promise<ServedRuntime>
 }
 
+/** How a cloud Thread is made: ahead of its first message (`prepare`), and the harness that message is for. */
+export interface CloudThreadMaking {
+  prepare?: boolean
+  harness?: string
+}
+
 export type CloudAccountOptions = {
   /** `MAKO_CLOUD_URL`: https, or http on this Mac's loopback. */
   url: string | undefined
@@ -368,11 +374,13 @@ export class CloudAccounts {
   /**
    * A cloud Thread in this account, its machine working in a clone of `repository`. Made again under the same ID, it's
    * the same Thread. `prepare`: made ahead of its first message as the person writes it, and asked again while they
-   * do; `ready` says whether its machine runs with its runtime connected.
+   * do; `ready` says whether its machine runs with its runtime connected. `harness`: the one its first message is for,
+   * whose start its machine runs ahead as it boots.
    */
-  async createThread(threadId: string, repository: CloudRepository, options: { prepare?: boolean } = {}): Promise<{ ready: boolean }> {
+  async createThread(threadId: string, repository: CloudRepository, options: CloudThreadMaking = {}): Promise<{ ready: boolean }> {
     const body: JsonObject = { threadId, home: "cloud", repository }
     if (options.prepare) body.prepare = true
+    if (options.harness) body.harness = options.harness
     const response = await this.#call(options.prepare ? "threads.prepare" : "threads.create", "POST", "/v1/threads", body)
     const answer = CreatedThreadSchema.safeParse(await response.json().catch(() => undefined))
     return { ready: answer.success && answer.data.ready === true }
@@ -768,6 +776,11 @@ export class CloudAccounts {
   #set(state: CloudAccountState): void {
     this.#state = state
     this.#options.onChange(this.account())
+  }
+
+  /** The cloud's address, when this build has one; nothing is fetched to say so. */
+  gateway(): URL | undefined {
+    return this.#cloud ? new URL(this.#cloud) : undefined
   }
 
   #require(): URL {

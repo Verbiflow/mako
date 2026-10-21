@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeReviewCommand } from "./review.js"
 import { randomBytes, randomUUID } from "node:crypto"
@@ -26,6 +27,8 @@ import { errorMessage } from "../../base/error-message.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { startOpenCodeApi } from "./native-api.js"
+import { discoverOpenCodeCatalog } from "./profile.js"
+import { openCodeBinaryTarget } from "./updates.js"
 import { openCodeProcessProbeFor } from "./process-probe.js"
 import type { OpenCodeServers } from "./servers.js"
 import { resolveOpenCodeInstallation, openCodeExecutable, locateOpenCodeSession, verifyOpenCodeSession, OpenCodeVersions } from "./installation.js"
@@ -127,6 +130,18 @@ interface Live {
 
 type Engine = LiveEngineApi<Live>
 type ConnectedLive = Live & { root: string; catalog: OpenCodeCatalog; model: OpenCodeModelRef; interactions: OpenCodeInteractions }
+
+/** Long enough for a cold server on a slow copy to read its catalog; a start that comes meanwhile isn't held by it. */
+const PREFETCH_CATALOG_MS = 20_000
+
+/** A start's environment before its conversation's own: Mako's agent variables out, the launch tier's preset in. */
+function prefetchEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base }
+  delete env.CLAUDECODE
+  delete env.CLAUDE_CODE_ENTRYPOINT
+  configureOpenCodePermissions(env, openCodeLaunchAccess(undefined, undefined))
+  return env
+}
 
 export interface OpenCodeDriverDependencies {
   approvalRoot(): Promise<string>
@@ -715,6 +730,22 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       live.stopped.add(nativeId)
       await live.api.client.shell.remove({ id: nativeId, location: { directory: live.cwd } })
     },
+    startPrefetch: {
+      via: "The native server through what a start waits on: its folder's plugins active and its catalog read, with its binary read alongside. On a copy, a server after it was up with its plugins active in 0.85–1.0 s, against 1.25–1.3 s after its binary read alone and 2.0–2.3 s cold; the run ahead itself takes 2.2–2.8 s, so a start that comes sooner stops it (2026-10-20).",
+      files: async (env) => {
+        const installation = await resolveOpenCodeInstallation(prefetchEnvironment(env), versions).catch(() => undefined)
+        if (!installation) return []
+        // `opencode2` may be the 47-byte shim that runs its sibling `opencode`: read the binary it runs.
+        const binary = openCodeBinaryTarget(installation.command)
+        return [await realpath(binary).catch(() => binary)]
+      },
+      run: async (base, cwd, _owner, stop) => {
+        const env = prefetchEnvironment(base)
+        const installation = await resolveOpenCodeInstallation(env, versions).catch(() => undefined)
+        if (!installation) return false
+        return discoverOpenCodeCatalog(installation.command, env, cwd, dependencies.servers, AbortSignal.any([stop, AbortSignal.timeout(PREFETCH_CATALOG_MS)])).then(() => true, () => false)
+      },
+    },
     turnRecovery: {
       kind: "continues",
       accepted: "The server's acceptance of the prompt into the session's inbox, or its echo on the event stream.",
@@ -779,8 +810,10 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const installation = await trace.step("runtime-discovery", () => resolveOpenCodeInstallation(env, versions))
       const nativePath = options.resume ? await trace.step("session-resume", () => verifyOpenCodeSession(stores, options.resume!, options.threadPath, env)) : undefined
       const cwd = requestedCwd && existsSync(requestedCwd) ? requestedCwd : homedir()
-      const servers = await trace.step("mcp-preparation", () => mcpServers(options))
-      const approvalRoot = await dependencies.approvalRoot()
+      // Mako's MCP servers are prepared while the server starts, which takes them only once its plugins are active.
+      const preparing = trace.step("mcp-preparation", () => mcpServers(options))
+      const rooting = dependencies.approvalRoot()
+      void Promise.allSettled([preparing, rooting])
       const api = await startOpenCodeApi({ command: installation.command, cwd, env, conversationId: options.conversationId, trace, servers: dependencies.servers, signal, fetch: dependencies.fetch })
       const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, options.accountLaunch.account, installation.command)
       context.runtime = reportedRuntime(api.info.version, "launched native API info.version")
@@ -795,6 +828,9 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         },
       }
       sessions.set(live.state.id, live)
+      // Its reader loads while the server starts; it reads once the session exists (`bind`).
+      const agents = live.agents = new OpenCodeAgents({ env, stores, observedAgents: options.observedAgents,
+        publish: observation => { if (!live.closed) engine.emitAgent(live, observation) } })
       void api.exited.then(({ code, signal }) => {
         if (live.closed) return
         const running = live.state.status === "running"
@@ -811,14 +847,22 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const location = { directory: cwd }
         const activated = new Promise<void>(resolve => { live.pluginsActivated = resolve })
         await trace.step("sdk-initialization", () => api.watch.step("plugin activation", awaitOpenCodePlugins(api.client, cwd, activated, api.signal)))
-        const catalog = await trace.step("model-discovery", () => api.watch.step("catalog", loadCatalog(live)))
-        const loadedAt = live.catalogGeneration
+        const servers = await preparing
         const refused: Array<{ name: string; error: string }> = []
-        await trace.step("mcp-preparation", () => Promise.all(servers.map(server =>
-          api.client.mcp.add({ server: server.name, location, config: server.config }).catch(error => {
-            hostWarn("opencode", "an MCP server could not be added", { conversation: live.state.id, server: server.name, error: errorText({ error }) })
-            refused.push({ name: server.name, error: errorText({ error }) })
-          }))))
+        // Added while the catalog is read: an MCP server's commands come with the catalog change it causes, which
+        // the generation the catalog was read at tells apart.
+        let loadedAt = live.catalogGeneration
+        const [catalog] = await Promise.all([
+          trace.step("model-discovery", () => api.watch.step("catalog", loadCatalog(live).then((read) => {
+            loadedAt = live.catalogGeneration
+            return read
+          }))),
+          trace.step("mcp-preparation", () => Promise.all(servers.map(server =>
+            api.client.mcp.add({ server: server.name, location, config: server.config }).catch(error => {
+              hostWarn("opencode", "an MCP server could not be added", { conversation: live.state.id, server: server.name, error: errorText({ error }) })
+              refused.push({ name: server.name, error: errorText({ error }) })
+            })))),
+        ])
         const modes = openCodeSessionModes(catalog.agents)
         const requested = options.modeId && modes.some(mode => mode.id === options.modeId) ? options.modeId : OPENCODE_DEFAULT_MODE
         const agent = openCodeAgentForMode(requested, launchAccess)
@@ -854,7 +898,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         live.nativeStream = nativeStream("opencode", options.conversationId, () => ({ root: decoder.root, cwd, launchAccess, contextSize: contextSize() ?? null }), dependencies.streams, () => live.state.nativeId)
         streamRuntime(live.nativeStream, context.runtime)
         live.interactions = new OpenCodeInteractions({
-          client: api.client, root: approvalRoot, conversationId: live.state.id,
+          client: api.client, root: await rooting, conversationId: live.state.id,
           emit: event => { if (!live.closed) live.emit(event) },
           describe: (sessionID, toolID) => ({
             title: toolID ? decoder.content.title(sessionID, toolID) : undefined,
@@ -862,9 +906,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
           }),
         })
         await trace.step("observation", () => live.interactions!.restore(options.observedApprovals ?? []))
-        const agents = new OpenCodeAgents({ nativeId: session.id, env, stores, observedAgents: options.observedAgents,
-          publish: observation => { if (!live.closed) engine.emitAgent(live, observation) } })
-        live.agents = agents
+        agents.bind(session.id)
         await trace.step("observation", () => agents.ready)
         if (options.resume) await trace.step("observation", () => live.interactions!.reconcile(session!.id))
         if (live.closed) throw new Error("OpenCode disconnected during startup")

@@ -19,7 +19,9 @@ import {
   type ServedRuntime,
 } from "@mako/protocol"
 import { z } from "zod"
-import { hostLog, hostWarn } from "../base/host-log.js"
+import { followHostLog, hostLog, hostWarn, type HostLogLine } from "../base/host-log.js"
+import { cpuBetween, describeCpu, describeThreads, sampleCpu, type CpuSample } from "./process-cpu.js"
+import { HostProfiler } from "./host-profile.js"
 import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
@@ -28,6 +30,8 @@ import { type HostInvoke, serveHostThroughGateway } from "../transport/index.js"
 import { CloudLink, type CloudLinkEnding, type CloudLinkState } from "./cloud-link.js"
 import { ACTIVITY_HEARTBEAT_MS } from "@mako/protocol"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
+/** The gateway a machine works through: where, as which machine, with which credential. */
+export type MachineGatewayLink = { gatewayUrl: string; machine: string; credential: string }
 
 type Link = Extract<AgentMessage, { type: "link" }>
 type SignIns = Extract<AgentMessage, { type: "sign-ins" }>
@@ -44,10 +48,22 @@ export type MachineRuntimeOptions = {
   installSignIns(signIns: readonly CloudSignIn[], secrets: string): Promise<CloudSignInInstall[]>
   /** Makes the folder the agent prepared the one every caller's tabs open in. */
   openWorkspace(path: string): Promise<void>
+  /** What a start does first in a folder, done ahead: a project base's, before its snapshot. */
+  prepareFolder(path: string): Promise<void>
+  /** What `harness`'s start runs first, run ahead as the machine boots; undefined for a harness without it. */
+  prefetchStart(harness: string): Promise<{ answered: boolean; stopped: boolean; ms: number; readMiB: number; readMs: number } | undefined>
+  /** What `harness`'s start asks its service first, asked once its sign-in is installed; undefined for a harness without it. */
+  prefetchSignedIn(harness: string): Promise<{ ms: number } | undefined>
   /** What the host is working on, as its lifecycle lists it: what the machine reports, so its Thread keeps it running. */
   work(): LifecycleWork[]
   /** The live streams its Threads' clients watch, such as a preview's video, once the host's core has loaded. */
   media(): MediaHandler | undefined
+  /** The gateway the machine works through, as its agent linked it: what keeps its records and recipes in step. Null once silenced. */
+  linked?(link: MachineGatewayLink | null): Promise<void>
+  /** Every process's CPU time so far (`/proc`); undefined off Linux. Tests give their own. */
+  sampleCpu?: () => Promise<CpuSample | undefined>
+  /** Whether to profile the host's own JavaScript while a launch runs (`MAKO_LAUNCH_PROFILE=1`); off unless asked. */
+  profileHost?: boolean
   now?: () => number
 }
 
@@ -67,6 +83,18 @@ const TICK_MS = 1_000
 const REPORT_MS = 200
 /** The longest a link waits on the workspace opening: past it, the machine answers from its home instead of not at all. */
 const LINK_WAIT_MS = 30_000
+/** Scopes a start's timeline shows every line of; of any other scope, only warnings and errors. */
+const TIMELINE_SCOPES = new Set(["machine", "packages", "loop"])
+/** A field longer than this is cut on its way to the agent, whose log keeps a few hundred lines. */
+const TIMELINE_FIELD_CHARS = 300
+
+/** Whether a line belongs on a start's timeline (`npm run timeline`): each launch phase as it ends, never as it starts. */
+function onTimeline(line: HostLogLine): boolean {
+  if (line.level !== "info") return true
+  if (line.scope === "provider-startup") return line.fields?.state !== "started"
+  return TIMELINE_SCOPES.has(line.scope)
+}
+
 const LiveBatchIdentity = z.object({ batch: z.object({ id: z.string(), revision: z.number(), epoch: z.string().optional() }) })
 
 /**
@@ -92,8 +120,15 @@ export class MachineRuntime {
   #tick: NodeJS.Timeout | undefined
   #lastTick: number
   #stopped = false
+  #unfollow: (() => void) | undefined
   /** One install at a time; sign-ins that arrive during one are installed after it, the newest only. */
   #installing: Promise<void> | undefined
+  /** The harness the machine was asked to run a start ahead for, and the installs its signed-in stage last ran after. */
+  #ahead: string | undefined
+  /** Each harness launch running, by its CPU sample at its start and whether it profiles the host. */
+  readonly #launches = new Map<string, { cpu: Promise<CpuSample | undefined>; profiling: Promise<boolean> }>()
+  readonly #profiler = new HostProfiler()
+  #warmedAfter: readonly CloudSignInInstall[] | undefined
   #nextSignIns: SignIns | undefined
   /** The workspace opened or opening, so the agent saying it again doesn't open it again. */
   #workspace: string | undefined
@@ -122,6 +157,10 @@ export class MachineRuntime {
   }
 
   start(): void {
+    this.#unfollow = followHostLog((line) => {
+      this.#launchCpu(line)
+      this.#toTimeline(line)
+    })
     const lines = createInterface({ input: this.#options.agent, crlfDelay: Infinity })
     lines.on("line", (line) => this.#fromAgent(line))
     lines.on("close", () => {
@@ -136,6 +175,7 @@ export class MachineRuntime {
 
   stop(): void {
     this.#stopped = true
+    this.#unfollow?.()
     clearInterval(this.#tick)
     clearTimeout(this.#report)
     this.#cloud?.stop()
@@ -198,7 +238,89 @@ export class MachineRuntime {
         return this.#install(message)
       case "workspace":
         return this.#openWorkspace(message.path)
+      case "prepare":
+        return void this.#prepare(message.path)
+      case "prefetch":
+        return void this.#prefetch(message.harness)
     }
+  }
+
+  async #prefetch(harness: string): Promise<void> {
+    this.#ahead = harness
+    this.#warmSignedIn()
+    const outcome = await this.#options.prefetchStart(harness).catch((error: Error) => {
+      hostWarn("machine", "a start wasn't run ahead", { harness, error: error.message })
+      return undefined
+    })
+    if (outcome) hostLog("machine", "a start was run ahead", { harness, ms: outcome.ms, answered: outcome.answered, stopped: outcome.stopped, readMiB: outcome.readMiB, readMs: outcome.readMs })
+  }
+
+  /**
+   * The signed-in stage of the start run ahead, once both are known: the harness it was asked for and its sign-in
+   * installed, whichever comes first. Again after a later install, which may be another account.
+   */
+  #warmSignedIn(): void {
+    const harness = this.#ahead
+    const installs = this.#state.signIns
+    if (!harness || installs === this.#warmedAfter || !installs.some((install) => install.harness === harness && install.status === "installed")) return
+    this.#warmedAfter = installs
+    void this.#options.prefetchSignedIn(harness).then((outcome) => {
+      if (outcome) hostLog("machine", "a start's sign-in stage was run ahead", { harness, ms: outcome.ms })
+    }, (error: Error) => hostWarn("machine", "a start's sign-in stage wasn't run ahead", { harness, error: error.message }))
+  }
+
+  /**
+   * What used the machine's CPU while each harness launch ran, said once it ends: a start that's slow on a copy and
+   * quick on an idle one is slow for what ran beside it, which no phase of its own names.
+   */
+  #launchCpu(line: HostLogLine): void {
+    const fields = line.fields
+    if (line.scope !== "provider-startup" || fields?.phase !== "launch") return
+    const key = `${String(fields.provider)}:${String(fields.attempt)}`
+    const sample = this.#options.sampleCpu ?? sampleCpu
+    if (fields.state === "started") {
+      // The host's own share taken apart by file, for one launch at a time.
+      const profiling = this.#options.profileHost ? this.#profiler.start().catch(() => false) : Promise.resolve(false)
+      this.#launches.set(key, { cpu: sample().catch(() => undefined), profiling })
+      return
+    }
+    const launch = this.#launches.get(key)
+    this.#launches.delete(key)
+    if (!launch) return
+    void Promise.all([launch.cpu, sample().catch(() => undefined), launch.profiling.then((on) => (on ? this.#profiler.stop() : undefined))]).then(([start, end, host]) => {
+      if (!start || !end) return
+      hostLog("machine", "cpu while a harness started", {
+        harness: String(fields.provider),
+        conversation: String(fields.conversation).slice(0, 8),
+        cpu: describeCpu(cpuBetween(start, end)),
+        threads: describeThreads(cpuBetween(start, end)) || undefined,
+        host: host?.length ? host.map((entry) => `${entry.file} ${entry.seconds.toFixed(2)} s`).join(", ") : undefined,
+      })
+    })
+  }
+
+  /** A line of the host's for the agent's log, when it's one a start's timeline shows and the channel can take it. */
+  #toTimeline(line: HostLogLine): void {
+    // A broken channel's own warning would come back here.
+    if (this.#stopped || !this.#options.agent.writable || !onTimeline(line)) return
+    const fields: Record<string, string | number | boolean | null> = {}
+    for (const [key, value] of Object.entries(line.fields ?? {})) {
+      if (value === undefined) continue
+      const text = String(value)
+      fields[key] = text.length > TIMELINE_FIELD_CHARS ? `${text.slice(0, TIMELINE_FIELD_CHARS)}…` : value
+    }
+    this.#send({ type: "log", at: new Date(this.#now()).toISOString(), level: line.level, scope: line.scope, message: line.message, fields })
+  }
+
+  async #prepare(path: string): Promise<void> {
+    const began = performance.now()
+    const ok = await this.#options.prepareFolder(path).then(() => true, (error: Error) => {
+      hostWarn("machine", "the folder wasn't prepared; its start does it", { path, error: error.message })
+      return false
+    })
+    const ms = Math.round(performance.now() - began)
+    if (ok) hostLog("machine", "folder prepared", { path, ms })
+    this.#send({ type: "prepared", path, ms, ok })
   }
 
   #openWorkspace(path: string): void {
@@ -248,6 +370,7 @@ export class MachineRuntime {
         const failed = installed.filter((install) => install.status === "failed")
         hostLog("machine", "sign-ins installed", { installed: installed.length - failed.length, failed: failed.map((install) => install.harness).join(",") || "none" })
         this.#publish()
+        this.#warmSignedIn()
       }
     }
     this.#installing = next().finally(() => (this.#installing = undefined))
@@ -293,6 +416,8 @@ export class MachineRuntime {
     this.#cloud = cloud
     this.#setLink("connecting")
     cloud.start()
+    // Its records and its project's recipe are kept where its Thread's are, under the same credential.
+    void this.#options.linked?.({ gatewayUrl: link.gatewayUrl, machine: link.machine, credential: link.credential }).catch((error: Error) => hostWarn("machine", "the gateway's link wasn't taken", { error: error.message }))
   }
 
   #attach(link: Link, threads: RuntimeThreads, socket: WebSocket, end: (ending: CloudLinkEnding) => void) {
@@ -344,6 +469,7 @@ export class MachineRuntime {
     this.#threads = undefined
     this.#state.unlinked = reason
     this.#setLink("silent")
+    void this.#options.linked?.(null).catch(() => undefined)
   }
 
   /**
@@ -400,6 +526,12 @@ export class MachineRuntime {
     this.#report = undefined
     this.#state.threads = this.#threads?.stats() ?? []
     this.#send({ type: "state", state: this.#state })
+  }
+
+  /** The host loaded what every start loads (`warm` in the agent's protocol), in `ms`. */
+  warmed(ms: number, loaded: string[]): void {
+    hostLog("machine", "warm: what every start loads is loaded", { ms, loaded: loaded.join(",") })
+    this.#send({ type: "warm", ms, loaded })
   }
 
   #send(message: HostMessage): void {

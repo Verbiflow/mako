@@ -448,9 +448,12 @@ export interface McpRegistry {
   route(provider: McpProvider, cwd: string): Promise<McpDiscoveryRoute>
 }
 
-/** A harness's CLI listing is kept until a file it reads changes, or for five minutes. */
-export function mcpRegistry(harnesses: ToolHarnesses): McpRegistry {
-  const cliListings = cliListingCache<string>({ refreshAfterMs: 5 * 60_000, limit: 64 })
+/**
+ * A harness's CLI listing is kept until a file it reads changes, or for five minutes; `idle` resolves when no start is
+ * waiting, which a listing read again only for its age waits for.
+ */
+export function mcpRegistry(harnesses: ToolHarnesses, idle?: () => Promise<void>): McpRegistry {
+  const cliListings = cliListingCache<string>({ refreshAfterMs: 5 * 60_000, limit: 64, idle })
 
   async function route(provider: McpProvider, cwd: string): Promise<McpDiscoveryRoute> {
     const source = harnesses.mcpSources.get(provider)

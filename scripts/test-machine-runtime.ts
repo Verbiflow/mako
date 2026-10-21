@@ -5,6 +5,7 @@
  * connection, an oversized live batch sent as the notice to read it, a clock jump reported, an unlink silencing it,
  * and a restarted host numbering after what it reserved.
  */
+import type { MachineGatewayLink } from "@mako/host/usage/machine-runtime"
 import assert from "node:assert/strict"
 import { once } from "node:events"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -20,10 +21,13 @@ import { z } from "zod"
 import { PING, PONG, SUBPROTOCOL, decodeRuntimeFrame, encodeGatewayFrame, offeredCredential, threadStream, type Actor, type MediaHandler } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { MachineRuntime } from "@mako/host/usage/machine-runtime"
+import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import type { AgentMessage, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
 import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "@mako/host/contracts/host-operations"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type { RuntimeEvent } from "@mako/host/contracts/runtime-value"
+import { cpuBetween, type CpuSample } from "@mako/host/usage/process-cpu"
+import { HostProfiler } from "@mako/host/usage/host-profile"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-machine-runtime-"))
 after(() => rm(scratch, { recursive: true, force: true }))
@@ -99,14 +103,18 @@ async function machineGateway() {
 }
 
 /** The machine's agent: its end of the host's channel, and every message the host sent on it. */
-function machineAgent(options: { dataRoot: string; now?: () => number; work?: () => LifecycleWork[]; media?: () => MediaHandler | undefined }) {
+function machineAgent(options: { dataRoot: string; now?: () => number; work?: () => LifecycleWork[]; media?: () => MediaHandler | undefined; sampleCpu?: () => Promise<CpuSample | undefined> }) {
   const [agentEnd, hostEnd] = duplexPair()
   const messages: HostMessage[] = []
   // SAFETY: the host under test writes only HostMessage lines on its channel; the assertions read what it said.
   createInterface({ input: agentEnd }).on("line", (line) => messages.push(JSON.parse(line) as HostMessage))
   const calls: string[] = []
   const workspaces: string[] = []
+  const prepared: string[] = []
+  const prefetched: string[] = []
+  const signedIn: string[] = []
   const installs: Array<{ harnesses: string[]; secrets: string }> = []
+  const links: Array<MachineGatewayLink | null> = []
   const runtime = new MachineRuntime({
     agent: hostEnd,
     invoke: async (channel, args, client, _history, correlationId) => {
@@ -118,12 +126,27 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
       if (path.endsWith("/missing")) throw new Error("no such folder")
       if (path.endsWith("/slow")) await new Promise((resolve) => setTimeout(resolve, 300))
     },
+    prepareFolder: async (path) => {
+      prepared.push(path)
+      if (path.endsWith("/missing")) throw new Error("no such folder")
+    },
+    prefetchStart: async (harness) => {
+      prefetched.push(harness)
+      return harness === "none" ? undefined : { answered: true, stopped: false, ms: 12, readMiB: 230, readMs: 800 }
+    },
+    prefetchSignedIn: async (harness) => {
+      signedIn.push(harness)
+      return { ms: 7 }
+    },
     version: "0.0.0-test",
     build: "test",
     dataRoot: options.dataRoot,
     work: options.work ?? (() => []),
     media: options.media ?? (() => undefined),
+    sampleCpu: options.sampleCpu ?? (async () => undefined),
+    profileHost: false,
     now: options.now ?? Date.now,
+    linked: async (link) => void links.push(link),
     installSignIns: async (signIns, secrets) => {
       installs.push({ harnesses: signIns.map((signIn) => signIn.harness), secrets })
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -142,7 +165,11 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     messages,
     calls,
     workspaces,
+    prepared,
+    prefetched,
+    signedIn,
     installs,
+    links,
     state,
     tell: (message: AgentMessage) => agentEnd.write(`${JSON.stringify(message)}\n`),
     /** A line no agent of this version sends. */
@@ -177,6 +204,7 @@ test("the agent's link makes the host the machine's runtime: the Thread's operat
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
   await agent.until("enrolled", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 1)
+  assert.deepEqual(agent.links, [{ gatewayUrl: cloud.url, machine: "m-0123456789abcdef", credential: CREDENTIAL }], "the gateway's link given to what keeps its records and recipes in step")
   const generation = await cloud.gateway.assign("th-1", RUNTIME)
   agent.tell({ type: "inspect" })
   await agent.until("running the Thread", () => agent.state()?.threads[0]?.generation === generation)
@@ -216,6 +244,7 @@ test("the agent's link makes the host the machine's runtime: the Thread's operat
   await new Promise((resolve) => setTimeout(resolve, 1_500))
   assert.equal(cloud.upgrades(), upgrades, "no connection attempted while silent")
   assert.equal(agent.state()?.unlinked, "this machine is a copy of another")
+  assert.equal(agent.links.at(-1), null, "and taken back once silenced")
 })
 
 test("the machine tells its Thread when it works and when it stops, a silent turn included; host-wide readings stay off the Thread's stream", async () => {
@@ -301,6 +330,103 @@ test("the workspace the agent gives opens once however often it's given, and one
   agent.tellRaw(JSON.stringify({ type: "workspace", path: "relative" }))
   await new Promise((resolve) => setTimeout(resolve, 50))
   assert.equal(opens(), 3, "a folder that isn't absolute is refused")
+})
+
+test("a base's folder is prepared when the agent asks, and the host says so either way", async () => {
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-prepare-")) })
+  agent.tell({ type: "prepare", path: "/home/node/work/repo" })
+  await agent.until("prepared", () => agent.messages.some((message) => message.type === "prepared" && message.path === "/home/node/work/repo"))
+  const done = agent.messages.find((message) => message.type === "prepared" && message.path === "/home/node/work/repo")
+  assert.equal(done?.type === "prepared" && done.ok, true)
+  agent.tell({ type: "prepare", path: "/home/node/work/missing" })
+  await agent.until("the failure answered", () => agent.messages.some((message) => message.type === "prepared" && message.path === "/home/node/work/missing"))
+  const failed = agent.messages.find((message) => message.type === "prepared" && message.path === "/home/node/work/missing")
+  assert.equal(failed?.type === "prepared" && failed.ok, false, "a folder that failed is answered, so the base isn't held")
+  assert.deepEqual(agent.prepared, ["/home/node/work/repo", "/home/node/work/missing"])
+  assert.equal(agent.workspaces.length, 0, "preparing a folder opens no workspace")
+})
+
+test("the harness a machine boots for has its start run ahead, said in the host's own log", async () => {
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-prefetch-")) })
+  agent.tell({ type: "prefetch", harness: "codex" })
+  await agent.until("the start run ahead", () => agent.messages.some((message) => message.type === "log" && message.message === "a start was run ahead"))
+  const said = agent.messages.find((message) => message.type === "log" && message.message === "a start was run ahead")
+  assert.deepEqual(said?.type === "log" && said.fields, { harness: "codex", ms: 12, answered: true, stopped: false, readMiB: 230, readMs: 800 })
+  agent.tellRaw(JSON.stringify({ type: "prefetch", harness: "Not A Harness" }))
+  agent.tell({ type: "prefetch", harness: "none" })
+  await agent.until("the second asked", () => agent.prefetched.length === 2)
+  assert.deepEqual(agent.prefetched, ["codex", "none"], "a name no harness could have is refused before it's asked")
+})
+
+test("the start run ahead goes on to its signed-in stage once that harness's sign-in is installed, whichever comes first", async () => {
+  const signIn = (harness: "claude" | "codex" | "grok") => ({ harness, label: null, expiresAt: null, payload: { key: harness } })
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 60))
+  const first = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-signed-in-")) })
+  first.tell({ type: "prefetch", harness: "codex" })
+  await first.until("the start run ahead", () => first.prefetched.length === 1)
+  await settle()
+  assert.deepEqual(first.signedIn, [], "nothing signed in is asked before the sign-in is there")
+  first.tell({ type: "sign-ins", secrets: "/run/mako/secrets/host", signIns: [signIn("claude"), signIn("codex")] })
+  await first.until("the signed-in stage asked", () => first.signedIn.length === 1)
+  assert.deepEqual(first.signedIn, ["codex"])
+  await first.until("its line", () => first.messages.some((message) => message.type === "log" && message.message === "a start's sign-in stage was run ahead"))
+  first.tell({ type: "sign-ins", secrets: "/run/mako/secrets/host", signIns: [signIn("codex")] })
+  await first.until("the stage asked again for the new sign-in", () => first.signedIn.length === 2)
+
+  const second = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-signed-in-")) })
+  second.tell({ type: "sign-ins", secrets: "/run/mako/secrets/host", signIns: [signIn("grok"), signIn("claude")] })
+  await second.until("installed", () => second.state()?.signIns.length === 2)
+  second.tell({ type: "prefetch", harness: "grok" })
+  await second.until("the start run ahead", () => second.prefetched.length === 1)
+  await settle()
+  assert.deepEqual(second.signedIn, [], "a sign-in that failed to install isn't asked with")
+  second.tell({ type: "prefetch", harness: "claude" })
+  await second.until("the signed-in stage asked", () => second.signedIn.length === 1)
+  assert.deepEqual(second.signedIn, ["claude"], "a sign-in installed before the hint is asked with at the hint")
+})
+
+test("each harness launch says what used the machine's CPU while it ran, the busiest first", async () => {
+  const samples: CpuSample[] = [
+    { at: 0, busy: 1_000, byName: new Map([["devin", 50], ["node:host-main.js", 400], ["git", 10]]), threads: new Map([["MainThread", 300], ["V8Worker", 100]]) },
+    { at: 1_200, busy: 1_190, byName: new Map([["devin", 111], ["node:host-main.js", 440], ["git", 32], ["sleep", 1]]), threads: new Map([["MainThread", 330], ["V8Worker", 110]]) },
+  ]
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-cpu-")), sampleCpu: async () => samples.shift() })
+  hostLog("provider-startup", "phase", { provider: "devin", conversation: "0123456789abcdef", attempt: "a1", phase: "launch", state: "started" })
+  hostLog("provider-startup", "phase", { provider: "devin", conversation: "0123456789abcdef", attempt: "a1", phase: "launch", state: "done", durationMs: 1200 })
+  await agent.until("the launch's CPU", () => agent.messages.some((message) => message.type === "log" && message.message === "cpu while a harness started"))
+  const said = agent.messages.find((message) => message.type === "log" && message.message === "cpu while a harness started")
+  assert.deepEqual(said?.type === "log" && said.fields, { harness: "devin", conversation: "01234567", cpu: "1.90 s busy in 1.20 s: devin 0.61 s, node:host-main.js 0.40 s, git 0.22 s, sleep 0.01 s, ended or kernel 0.66 s", threads: "MainThread 0.30 s, V8Worker 0.10 s" })
+  assert.equal(cpuBetween(samples[0] ?? { at: 0, busy: 0, byName: new Map(), threads: new Map() }, { at: 10, busy: 0, byName: new Map(), threads: new Map() }).busy, 0, "a counter that went back counts nothing")
+})
+
+test("the host's own CPU over a window is taken apart by the file that spent it", async () => {
+  const profiler = new HostProfiler()
+  assert.equal(await profiler.start(), true)
+  assert.equal(await profiler.start(), false, "one window at a time")
+  const until = performance.now() + 300
+  let spun = 0
+  while (performance.now() < until) spun += Math.sqrt(spun + 1)
+  const files = await profiler.stop()
+  assert.ok(spun > 0)
+  assert.ok(files?.some((entry) => entry.file.endsWith("test-machine-runtime.ts") && entry.seconds >= 0.15), `the busy file first: ${JSON.stringify(files)}`)
+  assert.equal(await profiler.stop(), undefined, "a window stops once")
+})
+
+test("a start's lines go to the agent for its timeline: phases as they end, the machine's own, warnings; nothing else", async () => {
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-timeline-")) })
+  hostLog("provider-startup", "phase", { provider: "codex", phase: "handshake", state: "started" })
+  hostLog("provider-startup", "phase", { provider: "codex", phase: "handshake", state: "done", durationMs: 812 })
+  hostLog("threads", "catalog placed in Threads", { rows: 0 })
+  hostWarn("discovery", "a model was refused", { model: "x".repeat(400) })
+  hostLog("machine", "the clock jumped", { gapMs: 1000 })
+  const emitted = new Set(["phase", "catalog placed in Threads", "a model was refused", "the clock jumped"])
+  const ours = () => agent.messages.filter((message) => message.type === "log" && emitted.has(message.message))
+  await agent.until("three lines", () => ours().length >= 3)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const lines = ours().flatMap((message) => message.type === "log" ? [`${message.level} ${message.scope} ${message.message} ${message.fields?.state ?? ""}`.trim()] : [])
+  assert.deepEqual(lines, ["info provider-startup phase done", "warn discovery a model was refused", "info machine the clock jumped"])
+  const warned = agent.messages.find((message) => message.type === "log" && message.level === "warn")
+  assert.equal(warned?.type === "log" && String(warned.fields?.model).length, 301, "a long field is cut for the agent's log")
 })
 
 test("a link given while the workspace opens waits for it, so the Thread's first call runs in the workspace", async () => {

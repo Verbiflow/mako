@@ -18,6 +18,8 @@ export type GatewayHostCallsOptions = (
   trace?: boolean
   /** Made ahead of a person's message, as their harness started on a Thread made ahead (`OperationEnvelope.ahead`). */
   ahead?: boolean
+  /** A window's own look, polled: it never wakes a sleeping machine, nor counts as a person (`OperationEnvelope.passive`). */
+  passive?: boolean
 }
 
 export type GatewayHostCalls = {
@@ -52,6 +54,7 @@ export function gatewayHostCalls(session: ClientSession, options: GatewayHostCal
         // A close needn't wake a cloud Thread's paused machine: it waits there for the machine's next wake.
         if (deferredWhenAsleep.has(channel)) operation.whenAsleep = "defer"
         if (options.ahead) operation.ahead = true
+        if (options.passive) operation.passive = true
         let reply: Reply
         try {
           reply = await session.call(operation)

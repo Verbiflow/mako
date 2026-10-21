@@ -39,6 +39,13 @@ after(() => rm(scratch, { recursive: true, force: true }))
 /** How this Mac reaches the cloud: in memory, or over real sockets that can go silent as a sleeping Mac's do. */
 type Reach = { sockets?: { heartbeatMs: number; silentMs?: number; wakeProbeMs?: number } }
 
+/** One Thread the cloud was asked to make. */
+interface Ask {
+  threadId: string
+  prepare: boolean
+  harness?: string
+}
+
 /** A cloud machine's host behind the fake gateway: what it was asked, and its Thread's event outbox. */
 async function cloudMachine(reach: Reach = {}) {
   const gateway = createFakeGateway()
@@ -52,6 +59,7 @@ async function cloudMachine(reach: Reach = {}) {
     invoke: async (channel, args) => {
       calls.push({ channel, args })
       if (channel === "mako:boot") return JSON.stringify({ activeTabId: "tab-1", tabs: [{ id: "tab-1", session: { meta: { cwd: CLONE } } }] })
+      if (channel === "mako:thread-app") return JSON.stringify({ kind: "ready", project: "Hello-World", phase: "running", address: { host: "t.thread.localhost", port: 20000 }, processes: [], checks: [] })
       if (channel === "mako:live-start") {
         const [harness, cwd, options] = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string() }).loose()]).parse(args)
         return JSON.stringify({ session: { id: options.conversationId, harness, cwd, status: "running" }, revision: 1, createdAt: 1, requests: [] })
@@ -65,12 +73,13 @@ async function cloudMachine(reach: Reach = {}) {
   const network = reach.sockets ? await sleepyNetwork(gateway, deviceId) : undefined
   const created: string[] = []
   /** Each ask to make a Thread, made ahead or not; and whether one made ahead answers that its machine is ready. */
-  const asked: Array<{ threadId: string; prepare: boolean }> = []
+  const asked: Ask[] = []
   const machineState = { ready: true }
   /** Repositories asked for project bases. */
   const bases: CloudRepository[] = []
   const account: CloudAccount = {
     token: async () => "token",
+    gateway: () => new URL("http://gateway.invalid"),
     id: async () => "account",
     deviceId: async () => deviceId,
     session: () =>
@@ -79,7 +88,9 @@ async function cloudMachine(reach: Reach = {}) {
         : sessionOf(client),
     createThread: async (threadId, repository, options) => {
       assert.deepEqual(repository, REPOSITORY)
-      asked.push({ threadId, prepare: options?.prepare === true })
+      const ask: Ask = { threadId, prepare: options?.prepare === true }
+      if (options?.harness) ask.harness = options.harness
+      asked.push(ask)
       if (!created.includes(threadId)) {
         created.push(threadId)
         await gateway.assign(threadId, runtimeId)
@@ -96,7 +107,7 @@ async function cloudMachine(reach: Reach = {}) {
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, asked, machineState, bases, batch, network }
+  return { account, calls, created, asked, machineState, bases, batch, network, served }
 }
 
 /**
@@ -187,9 +198,11 @@ function sessionOf(client: ClientSession): ClientSessionOverSockets {
 function conversations(account: CloudAccount, file: string) {
   const events: RuntimeEvent[] = []
   const starts: RuntimeEvent[] = []
-  const router = new CloudConversations({ account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY })
+  /** Each conversation a window on its folder was told changed, in order. */
+  const changed: string[] = []
+  const router = new CloudConversations({ account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id) })
   after(() => router.dispose())
-  return { router, events, starts }
+  return { router, events, starts, changed }
 }
 
 async function until(what: string, check: () => boolean, ms = 3_000) {
@@ -214,6 +227,7 @@ test("a cloud start makes the Thread once, starts on the machine in its clone, a
   const sent = z.object({ initialRequest: z.unknown() }).loose().parse(start?.args[2])
   for (const key of ["cloud", "worktree", "threadPath"]) assert.equal(key in sent, false, `${key} stays on this Mac`)
   assert.deepEqual(sent.initialRequest, options.initialRequest)
+  assert.equal(machine.asked[0]?.harness, "claude", "the Thread is made naming its harness, whose start its machine runs ahead as it boots")
 
   await router.route("mako:live-start", ["claude", "/Users/me/project", options])
   assert.equal(machine.created.length, 1, "a repeated start makes no second Thread")
@@ -318,6 +332,7 @@ test("once its machine is ready, the composer's harness is started ahead with no
   const { router, starts } = conversations(machine.account, join(scratch, "harness-ahead", "conversations.json"))
   const launch = { harness: "claude", modeId: "default", tuning: { model: "opus" } }
   assert.equal(await prepare(router, 0, launch), "ready")
+  assert.equal(machine.asked[0]?.harness, "claude", "a Thread made ahead names the composer's harness too")
   await until("the harness started ahead", () => machine.calls.some((call) => call.channel === "mako:live-start"))
   const ahead = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string(), modeId: z.string(), tuning: z.unknown() }).strict()]).parse(machine.calls.find((call) => call.channel === "mako:live-start")?.args)
   assert.equal(ahead[1], CLONE)
@@ -440,6 +455,7 @@ test("a close is taken at once while nothing runs the Thread, and reaches the ma
   const created: string[] = []
   const account: CloudAccount = {
     token: async () => "token",
+    gateway: () => new URL("http://gateway.invalid"),
     id: async () => "account",
     deviceId: async () => deviceId,
     session: () => sessionOf(client),
@@ -580,4 +596,69 @@ test("a Git remote names its GitHub repository as the cloud takes it", () => {
   assert.equal(githubRepositoryUrl("ssh://git@github.com/octocat/Hello-World"), "https://github.com/octocat/Hello-World")
   assert.equal(githubRepositoryUrl("https://user@github.com/octocat/Hello-World/"), "https://github.com/octocat/Hello-World")
   assert.equal(githubRepositoryUrl("git@gitlab.com:a/b.git"), undefined)
+})
+
+test("a cloud conversation's folder is read on its machine, by its conversation: two Threads of one repository each read their own, and a burst of work tells a window once", async () => {
+  const machine = await cloudMachine()
+  const targets: string[] = []
+  const session = machine.account.session
+  machine.account.session = () => {
+    const opened = session()
+    return { ...opened, call: (operation) => (targets.push(`${operation.op} ${JSON.stringify(operation.target)}`), opened.call(operation)) }
+  }
+  const { router, changed } = conversations(machine.account, join(scratch, "folders", "conversations.json"))
+  const [first, second] = [randomUUID(), randomUUID()]
+  for (const conversationId of [first, second]) {
+    const started = await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }])
+    assert.ok(started.handled)
+    assert.equal(z.object({ elsewhere: z.string() }).loose().parse(decodeRuntimeValue(started.value)).elsewhere, "a cloud machine", "the window hears from the start that its folder is on the machine")
+  }
+  const [firstThread, secondThread] = machine.created
+  assert.ok(firstThread && secondThread && firstThread !== secondThread)
+  assert.deepEqual(router.summaries().map((summary) => [summary.session.cwd, summary.elsewhere]), [[CLONE, "a cloud machine"], [CLONE, "a cloud machine"]], "one path on both machines")
+
+  assert.equal(await router.folder("not-a-cloud-one"), undefined)
+  for (const [conversationId, threadId] of [[first, firstThread], [second, secondThread]] as const) {
+    const folder = await router.folder(conversationId)
+    assert.equal(folder?.where, "a cloud machine")
+    targets.length = 0
+    const status = await folder!.call("mako:git-status", [])
+    assert.deepEqual(decodeRuntimeValue(status), { channel: "mako:git-status" }, "the machine's host answered")
+    assert.equal(targets.length, 1)
+    assert.match(targets[0]!, new RegExp(`^host\\.git-status .*${threadId}`), "the call went to this conversation's Thread")
+  }
+  assert.ok(machine.calls.some((call) => call.channel === "mako:git-status"))
+
+  // A burst of the agent's work on the first: the window reads its folder again once, a moment after.
+  for (let revision = 2; revision <= 6; revision++) machine.batch(firstThread, first, revision, "running")
+  await until("the first's change told", () => changed.length === 1, 3_000)
+  await new Promise((resolve) => setTimeout(resolve, 1_200))
+  assert.deepEqual(changed, [first], "five batches, one change, and none for the other conversation")
+})
+
+test("a cloud app's view is asked passively, its address is this Mac's preview of the port, and while its machine sleeps the last one is shown", async () => {
+  const machine = await cloudMachine()
+  const passive: boolean[] = []
+  const session = machine.account.session
+  machine.account.session = () => {
+    const opened = session()
+    return { ...opened, call: (operation) => (operation.op === "host.thread-app" && passive.push(operation.passive === true), opened.call(operation)) }
+  }
+  const { router } = conversations(machine.account, join(scratch, "app-view", "conversations.json"))
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }])
+  const folder = await router.folder(conversationId)
+  const ViewSchema = z.object({ kind: z.string(), phase: z.string(), address: z.object({ host: z.string(), port: z.number() }) }).loose()
+  const view = ViewSchema.parse(decodeRuntimeValue(await folder!.call("mako:thread-app", [CLONE])))
+  assert.equal(view.phase, "running")
+  assert.equal(view.address.host, `${machine.created[0]}.cloud.localhost`, "the app at this Mac's preview of its port")
+  assert.notEqual(view.address.port, 20000)
+  assert.deepEqual(passive, [true], "a window's look, never a person's call")
+  // The machine goes to sleep: no runtime answers; the window is shown the last view, and nothing waits or wakes.
+  await machine.served.close()
+  const started = performance.now()
+  const asleep = ViewSchema.parse(decodeRuntimeValue(await folder!.call("mako:thread-app", [CLONE])))
+  assert.deepEqual(asleep, view)
+  assert.ok(performance.now() - started < 1_000, "answered at once, never waited out")
+  assert.deepEqual(passive, [true, true])
 })

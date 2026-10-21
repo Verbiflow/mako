@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
-import { JsonSchema, OperationNameSchema, decodeReply, encodeReply, type Actor, type ClientSession, type Json, type ServedRuntime } from "@mako/protocol"
+import { JsonSchema, OperationEnvelopeSchema, OperationNameSchema, decodeReply, encodeReply, type Actor, type ClientSession, type Json, type ServedRuntime } from "@mako/protocol"
 import { createFakeGateway, type GatewayLogLine } from "@mako/protocol/fake-gateway"
 import { hostCallSchema, hostChannels } from "@mako/host/contracts/host-call-inputs"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
@@ -44,11 +44,17 @@ const answered = socketCalls(hostChannels)
     const name = hostOperationName(channel)
     assert.ok(OperationNameSchema.safeParse(name).success, `${name} is a valid operation name`)
     assert.deepEqual(hostOperations.get(name), { channel, replay: hostCallReplay(channel) })
+    const operation = toHostOperation(channel, hostCallInput([], false), { id: randomUUID(), target: { kind: "runtime", runtimeId: "laptop" }, actor: actor("policy"), correlationId: "c-1", attempt: 1 })
+    assert.equal(operation.repeatable, hostCallReplay(channel) === "never" ? undefined : true, `${channel} is repeatable exactly when its repeat reaches the same end`)
+    const { input: _input, ...envelope } = operation
+    assert.ok(OperationEnvelopeSchema.safeParse(envelope).success, `${channel}'s envelope is one the protocol takes`)
   }
+  const never = channels.filter((channel) => hostCallReplay(channel) === "never")
+  assert.ok(never.includes("mako:git-commit") && never.includes("mako:git-push"), "a commit and a push wait for the disk")
   const stray = toHostOperation("mako:not-a-call", hostCallInput([], false), { id: randomUUID(), target: { kind: "runtime", runtimeId: "laptop" }, actor: actor("stray"), correlationId: "c-1", attempt: 1 })
   const refused = fromHostOperation(stray)
   assert.equal(refused.kind === "refused" && refused.problem.type, "urn:mako:problem:not-found")
-  console.log(`Host operations: all ${channels.length} host calls are operations, named host.<call>, with the host's replay class`)
+  console.log(`Host operations: all ${channels.length} host calls are operations, named host.<call>, with the host's replay class; ${channels.length - never.length} say they're repeatable, ${never.length} wait for the disk`)
 }
 
 // 2. A host's answer survives the trip through a protocol reply, across the wire, exactly: a value byte for byte.

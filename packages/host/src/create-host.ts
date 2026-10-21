@@ -1,4 +1,5 @@
 import { rmSync } from "node:fs"
+import { Foreground } from "./base/foreground.js"
 import { lstat, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname } from "node:path"
@@ -8,7 +9,7 @@ import { HostJobs, type JobDemand } from "./base/host-jobs.js"
 import { HostDomains, hostDomainOptions, type Domain } from "./base/host-domains.js"
 import { EventLoopWatch } from "./base/event-loop.js"
 import type { HostLifecycle } from "./base/host-lifecycle.js"
-import { hostLog } from "./base/host-log.js"
+import { hostLog, hostWarn } from "./base/host-log.js"
 import { RUNTIME_PROTOCOL, type RuntimeInfo } from "./contracts/runtime.js"
 import { hostChannelDomain, hostChannels, type HostChannel } from "./contracts/host-call-inputs.js"
 import { isClientCall, socketCalls } from "./contracts/client-calls.js"
@@ -75,6 +76,8 @@ const CORE_IMPORTS = [
 
 /** How long a call waits for the domain that declares it before it fails. */
 const DOMAIN_WAIT_MS = 30_000
+/** Long enough for a machine's link, its Thread's first call and its harness's start; past it, routine work goes on. */
+const MACHINE_FIRST_START_CAP_MS = 120_000
 
 /**
  * One host: its socket, its method table and its domains. The socket listens
@@ -86,7 +89,10 @@ const DOMAIN_WAIT_MS = 30_000
 export function createHost(config: HostConfig, owner: HostOwner): Host {
   const { environment, fixtureDesk } = config
   const loop = new EventLoopWatch()
-  const jobs = new HostJobs(loop)
+  const foreground = new Foreground()
+  const jobs = new HostJobs(loop, foreground)
+  // A cloud machine is made for its Thread's first start, which its routine work waits for.
+  if (config.machineAgentFd !== undefined) foreground.awaitFirstStart(MACHINE_FIRST_START_CAP_MS)
   const subscribed = jobs.demand("a client is subscribed")
   const domains = new HostDomains(hostDomainOptions(), loop)
   const secrets = hostSecretStore(environment)
@@ -130,7 +136,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       stillStarting()
       const { openCore } = await import("./core.js")
       const opened = await openCore({
-        config, owner, methods, jobs, subscribed, secrets, terminals,
+        config, owner, methods, jobs, foreground, subscribed, secrets, terminals,
         web: () => web,
         closing: () => closing,
         closeSocket,
@@ -188,14 +194,19 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       const { MachineRuntime, machineAgentChannel } = await (await import("./usage/index.js")).loadMachineRuntime()
       machine = new MachineRuntime({
         agent: machineAgentChannel(config.machineAgentFd),
+        profileHost: config.launchProfile === true,
         invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
         version: environment.version,
         build: runtimeBuild(environment),
         dataRoot: environment.dataRoot,
         installSignIns: async (signIns, secrets) => (await core.load("the machine's sign-ins")).installCloudSignIns(signIns, { home: homedir(), secrets }),
         openWorkspace: async (path) => (await core.load("the machine's workspace")).openMachineWorkspace(path),
+        prepareFolder: async (path) => (await core.load("prepare a base's folder")).prepareFolder(path),
+        prefetchStart: async (harness) => (await core.load("run a start ahead")).prefetchStart(harness),
+        prefetchSignedIn: async (harness) => (await core.load("run a start's sign-in stage ahead")).prefetchSignedIn(harness),
         work: () => core.current()?.work() ?? [],
         media: () => core.current()?.media,
+        linked: async (link) => (await core.load("the machine's link")).machineLinked(link),
       })
     }
     web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {
@@ -217,12 +228,28 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     })
     trace("host listening")
     machine?.start()
+    if (machine) void warmMachine(machine)
     if (environment.profile) watchProfileHostIdle()
     void domains.afterListen().catch((error: Error) => {
       if (closing) return
       console.error(`Mako's host couldn't start: ${error.message}`)
       void owner.lifecycle.stop({ kind: "failed", error: error.stack ?? error.message })
     })
+  }
+
+  /**
+   * A cloud machine loads what every start loads, then tells its agent, which only then calls the host ready: so the
+   * machine image's snapshot, taken once it's ready, and every machine made from it wake warm.
+   */
+  async function warmMachine(runtime: MachineRuntime): Promise<void> {
+    const began = performance.now()
+    try {
+      const loaded = await (await core.load("warm the machine")).warm()
+      runtime.warmed(Math.round(performance.now() - began), loaded)
+    } catch (error) {
+      hostWarn("machine", "the machine didn't warm; it starts cold", { error: error instanceof Error ? error.message : String(error) })
+      runtime.warmed(Math.round(performance.now() - began), [])
+    }
   }
 
   async function stop(): Promise<void> {

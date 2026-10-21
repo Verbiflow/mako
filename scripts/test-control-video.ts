@@ -15,7 +15,7 @@ import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import type { ServedRuntime } from "@mako/protocol"
 import { ControlPreviews, type PreviewBrowser } from "@mako/host/control/previews"
 import { controlVideoMedia } from "@mako/host/control/video-media"
-import { CloudPreviews } from "@mako/host/conversations/cloud-previews"
+import { CloudControlPreviews } from "@mako/host/conversations/cloud-control-previews"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -91,7 +91,7 @@ const serve = async () => {
 }
 let served: ServedRuntime = await serve()
 const session = await gateway.connectClient({ kind: "client", client: "desktop", deviceId: "d-1" })
-const cloud = new CloudPreviews({ session: async () => session })
+const cloud = new CloudControlPreviews({ session: async () => session })
 const activity = (operation = "click"): ControlActivity => ({ conversationId: "c1", kind: "browser", operation, target: "tab-1", status: "running", updatedAt: Date.now() })
 
 /** Reads a viewer until `done` holds of everything it was sent, showing a frame between reads. */

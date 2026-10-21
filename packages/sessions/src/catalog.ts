@@ -63,6 +63,8 @@ import { EVIDENCE_RULES, type WriterEvidence } from "./record-writers.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore } from "./record-store.js"
+import { RecordPushes, type PushStatus, type RecordsLink } from "./record-sync.js"
+import { recordsOverHttp } from "@mako/protocol/records-http"
 import { readOriginal, type EntryOriginal } from "./record-original.js"
 import { streamOwner, streamsRoot } from "./record-streams.js"
 import { FolderWatches, type RootWatch } from "./root-watch.js"
@@ -348,6 +350,9 @@ export class SessionCatalog {
   readonly unread: UnreadIndex
   /** The record store capture writes, and sessions read back from it. */
   private recordStore: RecordStore | null = null
+  /** The store captures write, for keeping a remote in step (`syncRecords`). */
+  private recordWriter: RecordStore | null = null
+  private recordPushes: RecordPushes | null = null
   /** Where each session last read back from the record store was restored, which its entries' records name. */
   private readonly restoredFrom = new Map<string, string>()
   private recordReads: RecordReads | null = null
@@ -457,6 +462,7 @@ export class SessionCatalog {
         return null
       }
       const streams = streamsRoot(folder)
+      this.recordWriter = store
       const capture = new RecordCapture(store, async (ref) => (await this.ownerOf(ref.path)?.records(ref.path)) ?? null, {
         home,
         streams,
@@ -469,6 +475,7 @@ export class SessionCatalog {
         rowBytesOf: async (ref) => (await this.ownerOf(ref.path)?.recordBytes?.(ref.path)) ?? null,
         observedInstall: (harness) => (this.runtimeReadings ? observedInstall(this.runtimeReadings, harness) : null),
         onError: (ref, message) => console.error("Session record capture failed", ref.path, message),
+        onCaptured: (ref) => this.recordPushes?.captured(ref.harness, ref.nativeId),
       })
       this.streams = streams
       if (backfill !== undefined)
@@ -1546,7 +1553,28 @@ export class SessionCatalog {
     this.orderedRefs = null
   }
 
+  /**
+   * Keeps a remote store in step with this one, as a cloud machine keeps its Thread's records at the gateway: each
+   * capture is pushed as it lands, and what was captured before is pushed now. Another link replaces it; null stops.
+   */
+  syncRecords(link: RecordsLink | null): void {
+    this.recordPushes?.stop()
+    this.recordPushes = null
+    const store = this.recordWriter
+    if (!link || !store || this.stopped) return
+    const log = (level: "info" | "warn", message: string, fields: Record<string, string | number>) => (level === "warn" ? console.warn : console.info)(`Session records: ${message}`, JSON.stringify(fields))
+    const pushes = new RecordPushes(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization }), log)
+    this.recordPushes = pushes
+    void pushes.catchUp(store.sessions()).catch((error: Error) => log("warn", "catching up stopped", { error: error.message }))
+  }
+
+  /** How keeping the remote in step has gone; null without a link. */
+  recordsStatus(): PushStatus | null {
+    return this.recordPushes?.status() ?? null
+  }
+
   async stop(): Promise<void> {
+    this.recordPushes?.stop()
     this.stopped = true
     this.watching = false
     this.aside?.stop()

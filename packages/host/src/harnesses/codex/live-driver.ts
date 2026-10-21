@@ -1,7 +1,8 @@
+import { prefetchProcess } from "../start-prefetch.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import { codexQuestionAnswer } from "./questions.js"
 import { CodexQuestionReader } from "./question-reader.js"
-import { codexExecutableCandidates } from "./executable.js"
+import { codexExecutableCandidates, codexStartFiles } from "./executable.js"
 import { codexAccessModes, CODEX_DEFAULT_MODE } from "./access.js"
 import { CODEX_PLAN_OPTION } from "@mako/sessions/model-catalog"
 import type { ProviderLiveDriver } from "../live-driver.js"
@@ -48,6 +49,11 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
     contextBreakdown: { kind: "unavailable", reason: "The app-server reports token totals and the context window, not what fills it." },
     modeSwitching: { kind: "native", via: "Each mode is an approval policy and sandbox, sent with each turn." },
     backgroundStop: { kind: "ends-on-stop", how: "Stop terminates exact native terminal IDs before interruption and checks again after settlement, including child threads. Stopped turn IDs retain a bounded guard for commands reported after interruption; failed native termination disconnects instead of claiming cleanup. Checked on Codex 0.159.3: foreground child exit and same-session follow-up. Closing ends terminals and subagents before the app-server exits." },
+    startPrefetch: {
+      via: "The app-server, launched as a start launches it, through `initialize` and an ephemeral `thread/start`, with its native build read alongside.",
+      files: (env) => codexStartFiles(env),
+      run: async (env, cwd, owner, stop) => prefetchProcess(await (await import("../codex-app.js")).codexStartPrefetch(env, cwd), cwd, owner, stop),
+    },
     turnRecovery: {
       kind: "continues",
       accepted: "The turn/start response, which names the turn Codex began, before any of the turn runs.",

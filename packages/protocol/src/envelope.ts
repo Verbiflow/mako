@@ -72,6 +72,19 @@ export const OperationEnvelopeSchema = z
      * `whenAsleep`, it's the gateway's to read, and isn't passed on to the runtime.
      */
     ahead: z.literal(true).optional(),
+    /**
+     * The caller's word that a repeat of this operation's id reaches the same end (its `replay` is `read` or
+     * `replay`): the gateway may send it to the runtime before its admission is on disk, and answers it only once it
+     * is. Without it, the operation waits for the disk. Like `ahead`, it's the gateway's to read.
+     */
+    repeatable: z.literal(true).optional(),
+    /**
+     * A window's own look, polled, not a person acting (an app's status a window keeps showing): if the Thread's
+     * runtime is asleep, the gateway answers at once that it is, keeps nothing and wakes nothing; and the call never
+     * counts as a person using the Thread, so a window left open doesn't keep its machine running. Only for a read.
+     * Like `ahead`, it's the gateway's to read.
+     */
+    passive: z.literal(true).optional(),
   })
   .strict()
 

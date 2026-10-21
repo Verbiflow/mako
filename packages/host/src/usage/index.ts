@@ -8,7 +8,8 @@ import { classifyProviderFailure, type ProviderFailureKind } from "../contracts/
 
 export { declareTelemetryMethods } from "./telemetry-methods.js"
 export { declareCloudAccountMethods, type CloudAccount } from "./cloud-account-methods.js"
-export type { MachineRuntime } from "./machine-runtime.js"
+export type { CloudThreadMaking } from "./cloud-account.js"
+export type { MachineRuntime, MachineGatewayLink } from "./machine-runtime.js"
 /** A cloud machine's runtime, loaded only by a host its machine's agent started. */
 export const loadMachineRuntime = () => import("./machine-runtime.js")
 export type { HostTelemetry } from "./host-telemetry.js"

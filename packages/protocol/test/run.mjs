@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { runGatewayConformance, runMediaConformance } from "../dist/conformance.js"
+import { GatewayHttpError } from "../dist/gateway-http.js"
+import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
+import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
+import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
   CLOSE_CODES,
   PING,
@@ -340,7 +344,46 @@ describe("a Thread whose runtime is asleep", () => {
     assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, whenAsleep: "later" }).success, false)
     assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, ahead: true }).success, true)
     assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, ahead: false }).success, false)
+    assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, repeatable: true }).success, true)
+    assert.equal(OperationEnvelopeSchema.safeParse({ ...envelope, repeatable: false }).success, false)
     assert.equal(ReplyEnvelopeSchema.safeParse({ v: PROTOCOL_VERSION, id: crypto.randomUUID(), ok: true, deferred: true }).success, true)
+  })
+})
+
+describe("an operation its caller calls repeatable", () => {
+  test("reaches the runtime without the gateway's own word, which a runtime on an older protocol would refuse", async () => {
+    const gateway = createFakeGateway()
+    const session = await gateway.connectClient(client)
+    const seen = []
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "machine", build: "test", handle: async (operation) => (seen.push(operation), answer(operation, null)) })
+    const thread = { kind: "thread", threadId: "th-repeatable" }
+    await gateway.assign("th-repeatable", "machine")
+    const reply = await session.call(call(thread, { name: "start" }, { op: "host.live-start", repeatable: true }))
+    assert.equal(reply.ok, true)
+    assert.equal(seen.length, 1)
+    assert.equal("repeatable" in seen[0], false)
+    runtime.close()
+    await runtime.done
+    await gateway.close()
+  })
+})
+
+describe("a window's passive look", () => {
+  test("reaches a runtime that runs without the gateway's own word, and is answered at once, unapplied, while none does", async () => {
+    const gateway = createFakeGateway()
+    const session = await gateway.connectClient(client)
+    const seen = []
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "machine", build: "test", handle: async (operation) => (seen.push(operation), answer(operation, null)) })
+    const thread = { kind: "thread", threadId: "th-passive" }
+    await gateway.assign("th-passive", "machine")
+    assert.equal((await session.call(call(thread, { name: "status" }, { op: "host.thread-app", passive: true }))).ok, true)
+    assert.equal("passive" in seen[0], false)
+    runtime.close()
+    await runtime.done
+    const asleep = await session.call(call(thread, { name: "status" }, { op: "host.thread-app", passive: true }))
+    assert.equal(asleep.ok, false)
+    assert.equal(asleep.problem.outcome, "not-applied")
+    await gateway.close()
   })
 })
 
@@ -1234,5 +1277,89 @@ describe("client frames", () => {
     assert.equal(reply.problem.type, "urn:mako:problem:unavailable")
     assert.equal(reply.problem.outcome, "unknown")
     assert.equal(reply.problem.correlationId, operation.correlationId)
+  })
+})
+
+describe("records crossing between stores", () => {
+  const hash = (byte) => byte.toString(16).padStart(2, "0").repeat(32)
+  const version = (seq, chunks, kind = "append") => ({ seq, kind, at: 1, size: 4, digest: null, tail: null, chunks: chunks.join(""), detail: null, writer: null, writerSource: null })
+  const bundle = (versions) => RecordBundleSchema.parse({ harness: "codex", nativeId: "s1", layout: { home: "/h", roots: {}, paths: {} }, marks: {}, units: [{ key: "k", role: "file", path: "codex:s1.jsonl", places: null, versions }] })
+  const holding = (versions) => () => ({ head: versions.length - 1, version: (seq) => versions[seq] && { kind: versions[seq].kind, chunks: versions[seq].chunks } })
+
+  test("a pack carries each chunk's header and body, and a pack that isn't whole is refused", () => {
+    const chunks = [{ hash: hash(1), codec: 1, size: 9, body: new Uint8Array([1, 2, 3]) }, { hash: hash(2), codec: 0, size: 2, body: new Uint8Array([4, 5]) }]
+    const pack = encodeChunkPack(chunks)
+    assert.equal(pack.length, 2 * CHUNK_HEADER_BYTES + 5)
+    assert.deepEqual(decodeChunkPack(pack).map(({ hash, codec, size, body, offset }) => ({ hash, codec, size, body: [...body], offset })), [
+      { hash: hash(1), codec: 1, size: 9, body: [1, 2, 3], offset: CHUNK_HEADER_BYTES },
+      { hash: hash(2), codec: 0, size: 2, body: [4, 5], offset: 2 * CHUNK_HEADER_BYTES + 3 },
+    ])
+    assert.throws(() => decodeChunkPack(pack.subarray(0, pack.length - 1)), /runs past its pack/)
+    assert.throws(() => decodeChunkPack(new Uint8Array(CHUNK_HEADER_BYTES)), /Not a chunk pack/)
+  })
+
+  test("one rule takes a bundle: what's held must match, what's new must follow, and each chunk is named once", () => {
+    const held = [version(0, [hash(1)]), version(1, [hash(2)])]
+    const arriving = bundle([...held, version(2, [hash(3), hash(1)])])
+    const planned = planRecordImport(arriving, holding(held))
+    assert.equal(planned.held, 2)
+    assert.deepEqual(planned.taking.map(({ version }) => version.seq), [2])
+    assert.deepEqual(recordChunks(arriving.units[0].versions), [hash(1), hash(2), hash(3)])
+    assert.deepEqual(planRecordImport(arriving, () => undefined).taking.length, 3, "a store that holds nothing takes it all")
+    const diverged = bundle([version(0, [hash(1)]), version(1, [hash(9)])])
+    assert.throws(() => planRecordImport(diverged, holding(held)), (error) => error instanceof RecordConflictError && error.conflict === "diverged" && error.seq === 1)
+    assert.throws(() => planRecordImport(bundle([version(3, [hash(4)])]), holding(held)), (error) => error instanceof RecordConflictError && error.conflict === "gap" && error.head === 1)
+    assert.throws(() => planRecordImport(bundle([version(0, [hash(1)], "replace")]), holding(held)), /went on in two places/, "a version held with another kind")
+    assert.equal(RecordBundleSchema.safeParse({ ...arriving, units: [{ ...arriving.units[0], versions: [{ ...arriving.units[0].versions[0], chunks: "abc" }] }] }).success, false, "chunks are whole hashes")
+  })
+})
+
+describe("a project's recipe authority over HTTP", () => {
+  const record = (version, extra = {}) => ({ version, state: "draft", savedAt: 1, recipe: { values: { A: "1" } }, ...extra })
+  const served = (answers) => {
+    const asked = []
+    const fetch = async (url, init) => {
+      asked.push({ url: String(url), method: init.method, authorization: init.headers.get("authorization"), body: init.body ? JSON.parse(init.body) : undefined })
+      const [status, body] = answers.shift()
+      return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
+    }
+    return { asked, fetch }
+  }
+
+  test("a device's names its repository on every route; a machine's names none; answers are read by their schemas", async () => {
+    const device = served([[200, { change: 3, published: 1, versions: [record(1, { state: "published" })], more: false }], [200, record(2, { parent: 1 })], [200, { ok: false, published: record(3, { state: "published" }), reason: "Version 3 was published after this draft was made from version 1." }]])
+    const authority = recipesOverHttp({ id: "a", base: "https://gw/v1/recipes", authorization: () => "Bearer t", fetch: device.fetch, repository: "https://github.com/acme/app" })
+    assert.equal((await authority.changes(0)).published, 1)
+    const save = { id: crypto.randomUUID(), parent: 1, savedAt: 2, recipe: { values: { A: "2" } } }
+    assert.equal((await authority.save(save)).version, 2)
+    const refused = await authority.publish({ version: 2, proof: { at: 3, on: "this Mac", place: "local", checkout: "/p", steps: [] }, publishedAt: 3 })
+    assert.equal(refused.ok, false)
+    assert.equal(refused.ok === false && refused.published?.version, 3)
+    assert.deepEqual(device.asked.map((call) => [call.method, call.url]), [
+      ["GET", "https://gw/v1/recipes/changes?after=0&repository=https%3A%2F%2Fgithub.com%2Facme%2Fapp"],
+      ["POST", "https://gw/v1/recipes/save?repository=https%3A%2F%2Fgithub.com%2Facme%2Fapp"],
+      ["POST", "https://gw/v1/recipes/publish?repository=https%3A%2F%2Fgithub.com%2Facme%2Fapp"],
+    ])
+    assert.deepEqual(device.asked[1].body, save, "the save carries its own id, so a repeat makes no second version")
+    assert.ok(device.asked.every((call) => call.authorization === "Bearer t"))
+
+    const machine = served([[200, { change: 0, published: null, versions: [], more: false }]])
+    await recipesOverHttp({ id: "m", base: "https://gw/v1/machines/m1/recipes", authorization: () => "Bearer m", fetch: machine.fetch }).changes(0)
+    assert.equal(machine.asked[0].url, "https://gw/v1/machines/m1/recipes/changes?after=0")
+  })
+
+  test("a busy gateway is asked again; a refusal is thrown with its title, once", async () => {
+    const busy = served([[503, {}], [200, record(4)]])
+    const authority = recipesOverHttp({ id: "a", base: "https://gw", authorization: () => "t", fetch: busy.fetch, backoff: [1, 1] })
+    assert.equal((await authority.prove({ version: 4, proof: { at: 1, on: "a cloud machine", place: "cloud", checkout: "/w", steps: [] } })).version, 4)
+    assert.equal(busy.asked.length, 2)
+    const refusing = served([[409, { title: "Version 9 isn't a published version of this project's recipe" }]])
+    await assert.rejects(recipesOverHttp({ id: "a", base: "https://gw", authorization: () => "t", fetch: refusing.fetch, backoff: [1] }).save({ id: crypto.randomUUID(), parent: 9, savedAt: 1, recipe: {} }), (error) => error instanceof GatewayHttpError && error.status === 409 && /isn't a published version/.test(error.message))
+    assert.equal(refusing.asked.length, 1)
+  })
+
+  test("a recipe fits while its JSON is within the wire's bound", () => {
+    assert.ok(recipeFits(JSON.stringify({ values: { A: "x".repeat(RECIPE_WIRE_BYTES - 100) } })))
+    assert.ok(!recipeFits(JSON.stringify({ values: { A: "x".repeat(RECIPE_WIRE_BYTES) } })))
   })
 })

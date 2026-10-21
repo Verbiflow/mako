@@ -6,6 +6,7 @@ import type { BootPayload, TabSnapshot } from "../contracts/host-events-boot.js"
 import type { ThinkingLevel } from "../contracts/conversation-session.js"
 import type { MethodTable } from "../base/methods.js"
 import type { MachineOffer } from "../contracts/machine-offer.js"
+import type { ElsewhereFolder } from "./elsewhere.js"
 
 export interface SessionMethodsDeps {
   archives?(): ThreadArchiveSnapshot
@@ -18,6 +19,8 @@ export interface SessionMethodsDeps {
   machine(): Promise<MachineOffer>
   sourceRoot?: string
   onWorkspaceChanged?(cwd: string): void | Promise<void>
+  /** A conversation's folder on another host, when the conversation is one whose folder isn't on this Mac. */
+  elsewhere?(conversation: string): Promise<ElsewhereFolder | undefined>
 }
 
 export function declareSessionMethods(methods: MethodTable, context: SessionMethodsDeps): void {
@@ -84,10 +87,12 @@ export function declareSessionMethods(methods: MethodTable, context: SessionMeth
       return host.state()
     })
   )
-  methods.handle("mako:set-cwd", (cwd: string) =>
+  // `conversation`: the conversation whose folder this is, so one on another host is read there.
+  methods.handle("mako:set-cwd", (cwd: string, conversation?: string) =>
     withHost(async (host): Promise<TabSnapshot> => {
-      await host.setCwd(cwd)
-      await context.onWorkspaceChanged?.(cwd)
+      const elsewhere = conversation ? await context.elsewhere?.(conversation) : undefined
+      await host.setCwd(cwd, elsewhere)
+      if (!elsewhere) await context.onWorkspaceChanged?.(cwd)
       return {
         id: host.id,
         session: host.state(),

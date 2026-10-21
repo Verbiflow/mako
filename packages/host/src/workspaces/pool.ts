@@ -33,6 +33,11 @@ export class HostPool {
 
   /* -------------------------------------------------- access */
 
+  /** Every tab, in front or not. */
+  get tabs(): readonly AgentHost[] {
+    return this.hosts
+  }
+
   get active(): AgentHost {
     const host = this.hosts[this.activeIndex]
     if (!host) throw new Error("No agent tab is open")

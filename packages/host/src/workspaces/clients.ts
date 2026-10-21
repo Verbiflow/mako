@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises"
-import type { TabServices } from "./agent-host.js"
+import type { AgentHost, TabServices } from "./agent-host.js"
 import { HostPool } from "./pool.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 
@@ -43,6 +43,16 @@ export class WorkspaceClients {
       const pool = await this.ready(id)
       if (pool.active.workspace !== path) await pool.open({ cwd: path })
     }))
+  }
+
+  /** A client's tabs, if it opened any; asking opens none. */
+  opened(id: string): HostPool | undefined {
+    return this.starting.has(id) ? undefined : this.pools.get(id)
+  }
+
+  /** Every client's every tab. */
+  everyTab(): AgentHost[] {
+    return [...this.pools.values()].flatMap((pool) => [...pool.tabs])
   }
 
   async release(id: string): Promise<void> {

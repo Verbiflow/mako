@@ -117,6 +117,32 @@ export interface ChunkPlace {
 }
 
 export type ChunkCodec = 0 | 1
+
+/** A chunk as a store keeps it: its codec, its size once decoded, and its stored bytes. */
+export interface StoredChunk {
+  codec: ChunkCodec
+  size: number
+  body: Buffer
+}
+
+/**
+ * Whether `stored` is the chunk `hash` names, decoded and hashed: what crosses between stores is never taken on its
+ * sender's word. Throws naming the hash when it isn't.
+ */
+export function checkStoredChunk(hash: Buffer, stored: StoredChunk): void {
+  if (stored.codec !== 0 && stored.codec !== 1) throw new Error(`The chunk ${hash.toString("hex")} came in an unknown codec`)
+  const bytes = stored.codec === 1 ? decoded(stored.body) : stored.body
+  if (bytes === null || bytes.length !== stored.size || !chunkHash(bytes).equals(hash))
+    throw new Error(`The chunk ${hash.toString("hex")} that came isn't the chunk its hash names`)
+}
+/** A body that doesn't decode is as wrong as one whose bytes don't match. */
+function decoded(body: Buffer): Buffer | null {
+  try {
+    return zstdDecompressSync(body)
+  } catch {
+    return null
+  }
+}
 const RAW: ChunkCodec = 0
 const ZSTD: ChunkCodec = 1
 
@@ -183,7 +209,36 @@ export class Packs {
   async write(hash: Buffer, bytes: Buffer): Promise<ChunkPlace> {
     const compressed = zstdCompressSync(bytes, { params: { [constants.ZSTD_c_compressionLevel]: 3 } })
     const codec = compressed.length < bytes.length * 0.95 ? ZSTD : RAW
-    const body = codec === ZSTD ? compressed : bytes
+    return this.writeBody(hash, codec, bytes.length, codec === ZSTD ? compressed : bytes)
+  }
+
+  /**
+   * Stores a chunk as another store stored it (`readStored`), once `chunkOf` checked it is the chunk its hash names:
+   * a chunk that crosses between stores is compressed once, where it was first written.
+   */
+  async writeStored(hash: Buffer, stored: StoredChunk): Promise<ChunkPlace> {
+    return this.writeBody(hash, stored.codec, stored.size, stored.body)
+  }
+
+  /** A chunk's bytes as stored, compressed or not, for another store's `writeStored`. */
+  async readStored(place: ChunkPlace): Promise<StoredChunk> {
+    const body = Buffer.allocUnsafe(place.stored)
+    const { writing, staged } = this
+    if (writing?.pack === place.pack && staged && place.offset >= writing.written)
+      staged.copy(body, 0, place.offset - writing.written, place.offset - writing.written + place.stored)
+    else {
+      const handle = await this.reader(place.pack)
+      let read = 0
+      while (read < body.length) {
+        const { bytesRead } = await handle.read(body, read, body.length - read, place.offset + read)
+        if (bytesRead === 0) throw new Error(`${packName(place.pack)} ends before the chunk at ${place.offset}`)
+        read += bytesRead
+      }
+    }
+    return { codec: place.codec, size: place.size, body }
+  }
+
+  private async writeBody(hash: Buffer, codec: ChunkCodec, size: number, body: Buffer): Promise<ChunkPlace> {
     const entry = ENTRY_HEADER_BYTES + body.length
     const target = await this.target(entry)
     if (target.size - target.written + entry > FLUSH_BYTES) await this.flush()
@@ -192,12 +247,12 @@ export class Packs {
     staged.writeUInt32LE(ENTRY_MAGIC, at)
     hash.copy(staged, at + 4)
     staged.writeUInt8(codec, at + 4 + HASH_BYTES)
-    staged.writeUInt32LE(bytes.length, at + 5 + HASH_BYTES)
+    staged.writeUInt32LE(size, at + 5 + HASH_BYTES)
     staged.writeUInt32LE(body.length, at + 9 + HASH_BYTES)
     body.copy(staged, at + ENTRY_HEADER_BYTES)
     const offset = target.size + ENTRY_HEADER_BYTES
     target.size += entry
-    return { pack: target.pack, offset, stored: body.length, size: bytes.length, codec }
+    return { pack: target.pack, offset, stored: body.length, size, codec }
   }
 
   async read(place: ChunkPlace): Promise<Buffer> {

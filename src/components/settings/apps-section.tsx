@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react"
-import type { ProjectAppSetup, RecipeVersionView, RecipeView } from "@mako/host/contracts/project-app"
+import type { ProjectAppSetup, RecipeProofSummary, RecipeVersionView, RecipeView } from "@mako/host/contracts/project-app"
 import { environmentRepairPrompt } from "@mako/host/contracts/thread-environments"
 import { Action, Blank, Chip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
@@ -388,9 +388,21 @@ function VersionRow({ entry }: { entry: RecipeVersionView }) {
 
 function VersionProof({ entry }: { entry: RecipeVersionView }) {
   if (!entry.readable) return <span className="text-caution">This Mako can’t read its recipe</span>
+  if (entry.places?.cloud) return <PlacesProof local={entry.places.local} cloud={entry.places.cloud} />
   if (!entry.proof) return <>{entry.state === "draft" ? "Not proved yet" : "Never proved"}</>
   if (!entry.proof.passed) return <span className="text-caution">Its last proof failed at {entry.proof.failed}</span>
   return <>{entry.state === "draft" ? "Passed its proof, not published" : "Proved"}</>
+}
+
+/** A version proved on a cloud machine: each place's last proof, the place it passed in first, a failure in the caution colour. */
+function PlacesProof({ local, cloud }: { local: RecipeProofSummary | undefined; cloud: RecipeProofSummary }) {
+  const failed = (summary: RecipeProofSummary, where: string, lead: boolean) => <span className="text-caution">{lead ? "Failed" : "failed"} on {where} at {summary.failed}</span>
+  if (cloud.passed) {
+    if (local?.passed) return <>Proved on this Mac and on a cloud machine</>
+    return <>Proved on a cloud machine · {local ? failed(local, "this Mac", false) : "not yet on this Mac"}</>
+  }
+  if (local?.passed) return <>Proved on this Mac · {failed(cloud, "a cloud machine", false)}</>
+  return <>{local ? <>{failed(local, "this Mac", true)} · </> : null}{failed(cloud, "a cloud machine", !local)}</>
 }
 
 /** What a new Thread's checkout gets from the main folder besides Git's files: copies of its own, and links to the main folder's. */
@@ -432,6 +444,8 @@ function RecipeSource({ state }: { state: ReadyRecipe }) {
   const where =
     state.draft
       ? `Version ${state.version ?? ""}, a draft saved${state.savedAt ? ` ${ago(state.savedAt)}` : ""} that only this folder's app runs until an agent proves and publishes it.`
+      : state.account
+      ? `${state.version ? `Version ${state.version}, kept` : "Kept"} by your account for every branch, on this Mac and on cloud machines${state.earlier ? `; ${plural(state.earlier, "earlier version")} kept` : ""}.`
       : state.source === "mako"
       ? `${state.version ? `Version ${state.version}, saved` : "Saved"} in Mako${state.savedAt ? ` ${ago(state.savedAt)}` : ""}, for every branch${state.earlier ? `; ${plural(state.earlier, "earlier version")} kept` : ""}.`
       : "Committed with the project as .mako/recipe.json, so it changes with the branch."
@@ -440,6 +454,7 @@ function RecipeSource({ state }: { state: ReadyRecipe }) {
       <p className="min-w-0 flex-1 text-label leading-relaxed text-faint">
         {where}
         {state.ignored ? " A committed .mako/recipe.json is ignored while this one exists." : ""}
+        {state.account?.behind ? " Mako couldn’t reach your account just now, so this may not be its newest version." : ""}
       </p>
       <IfCanReveal>
         <Action size="xs" className="text-muted-foreground" onClick={() => void desktop.revealPath(state.file)}>

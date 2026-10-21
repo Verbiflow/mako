@@ -1,12 +1,14 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { ProviderStartupWatch, type StartupWatchOptions } from "../../provider-startup.js"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, readFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
 import { hostLog, hostWarn } from "../../../base/host-log.js"
 import { spawnProviderProcess } from "../../provider-process.js"
 import { headlessNodeExecutable } from "../../../base/headless-node.js"
+import { reownProviderPid } from "../../../base/provider-children.js"
 import {
   CURSOR_SDK_MAX_LINE_BYTES,
   CURSOR_SDK_WIRE_VERSION,
@@ -142,6 +144,39 @@ export function cursorSdkChildEntry(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "child.js")
 }
 
+/** The SDK's child as its client spawns it. */
+function cursorSdkChild(options: Pick<CursorSdkClientOptions, "env" | "entry" | "execPath" | "heapSnapshots">) {
+  const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
+  delete env.NODE_OPTIONS
+  return {
+    command: headlessNodeExecutable(options.execPath),
+    args: [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? cursorSdkChildEntry()],
+    env,
+  }
+}
+
+const PackageName = z.object({ name: z.string() }).loose()
+/** Whether `directory` is the `@cursor/sdk` package itself, not a folder inside it that has a manifest of its own. */
+function isCursorSdk(directory: string): boolean {
+  try {
+    return PackageName.parse(JSON.parse(readFileSync(join(directory, "package.json"), "utf8"))).name === "@cursor/sdk"
+  } catch {
+    return false
+  }
+}
+
+/** The SDK's packages the child loads: `@cursor/sdk` and its platform's build, in the scope folder they share. */
+export function cursorSdkPackages(): string[] {
+  try {
+    // The export map hides package.json from `resolve`: walk up from the entry it exposes.
+    let directory = dirname(createRequire(import.meta.url).resolve("@cursor/sdk"))
+    for (let depth = 0; depth < 6 && !isCursorSdk(directory); depth += 1) directory = dirname(directory)
+    return isCursorSdk(directory) ? [dirname(directory)] : []
+  } catch {
+    return []
+  }
+}
+
 /**
  * The host's end of the SDK child: spawns it from the host executable under
  * `ELECTRON_RUN_AS_NODE`, sends requests, matches responses by id, and hands
@@ -154,17 +189,16 @@ export class CursorSdkClient {
   private readonly child: ChildProcessWithoutNullStreams
   private readonly pending = new Map<number, Pending>()
   private readonly lines = new LineAssembler(CURSOR_SDK_MAX_LINE_BYTES)
-  private readonly options: CursorSdkClientOptions
+  private options: CursorSdkClientOptions
   private nextId = 1
   private closed = false
 
   constructor(options: CursorSdkClientOptions) {
     this.options = options
-    const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
-    delete env.NODE_OPTIONS
-    this.child = spawnProviderProcess(headlessNodeExecutable(options.execPath), [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? cursorSdkChildEntry()], {
+    const child = cursorSdkChild(options)
+    this.child = spawnProviderProcess(child.command, child.args, {
       cwd: options.cwd,
-      env,
+      env: child.env,
       windowsHide: true,
     }, { kind: "cursor:sdk", owner: options.owner })
     const fatals = new Set<string>()
@@ -198,6 +232,17 @@ export class CursorSdkClient {
 
   get pid(): number | undefined {
     return this.child.pid
+  }
+
+  /**
+   * Makes a child spawned ahead `owner`'s, as if spawned with `cwd` and `env`: the child takes them before any agent
+   * opens, and its events go to `onEvent` from then on. Only for a child whose credential is `env`'s.
+   */
+  async adopt(input: Pick<CursorSdkClientOptions, "owner" | "cwd" | "env" | "onEvent">): Promise<void> {
+    const env = Object.fromEntries(Object.entries(cursorSdkChild({ ...this.options, env: input.env }).env).filter((entry): entry is [string, string] => entry[1] !== undefined))
+    await this.request("adopt", { cwd: input.cwd, env })
+    this.options = { ...this.options, ...input }
+    if (this.child.pid) reownProviderPid(this.child.pid, input.owner)
   }
 
   /** Confirms the child speaks this wire version before anything else is sent. */

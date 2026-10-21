@@ -55,8 +55,8 @@ ENV NPM_CONFIG_PREFIX=/home/node/.local PATH=/home/node/.local/bin:$PATH
 # harness's own updater stays off where its vendor has a switch (Claude
 # Code's DISABLE_AUTOUPDATER, OpenCode's OPENCODE_DISABLE_AUTOUPDATE,
 # Grok's GROK_DISABLE_AUTOUPDATER, which Mako's Grok launches set anyway).
-# Codex's app-server and Cursor's SDK don't update themselves; Devin's CLI
-# names no switch. A person's own Mac keeps its vendors' updates.
+# Codex's app-server and Cursor's SDK don't update themselves; Devin's switch
+# is in its config, set below. A person's own Mac keeps its vendors' updates.
 ENV DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1 GROK_DISABLE_AUTOUPDATER=1
 WORKDIR /home/node
 ENTRYPOINT ["mako-host"]
@@ -69,6 +69,11 @@ ENTRYPOINT ["mako-host"]
 FROM host AS harnesses
 COPY proof/host-process.mjs proof/install-harnesses.mjs /opt/mako/install/
 RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/install/install-harnesses.mjs /home/node/harnesses.json
+# Devin's CLI reads its updater's switch from its config, not its environment:
+# without `auto_update: false`, a machine's first `devin acp` replaced the
+# tested 3000.10.23 with the newest build within 40 s (2026-10-20). What its
+# setup wrote there stays.
+RUN node -e 'const fs = require("node:fs"); const file = "/home/node/.config/devin/config.json"; const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {}; fs.mkdirSync("/home/node/.config/devin", { recursive: true }); fs.writeFileSync(file, JSON.stringify({ ...config, auto_update: false }, null, 2) + "\n")'
 
 # The proof of item 1.1: those harnesses started by the host, and measured.
 FROM harnesses AS proof

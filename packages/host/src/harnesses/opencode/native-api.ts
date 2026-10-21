@@ -1,3 +1,4 @@
+import type { PrefetchLaunch } from "../start-prefetch.js"
 import { spawnProviderProcess } from "../provider-process.js"
 import { execFile } from "node:child_process"
 import { randomBytes } from "node:crypto"
@@ -57,6 +58,15 @@ export interface OpenCodeApi {
   close(): Promise<void>
 }
 
+/**
+ * The native server as a start runs it: on its own password, on the configured port or one the system picks. Its
+ * first line names its endpoint, which ends a `startPrefetch`.
+ */
+export function openCodeServe(command: string, env: NodeJS.ProcessEnv): PrefetchLaunch {
+  const port = configuredListenPort("MAKO_OPENCODE_API_PORT", env)
+  return { command, args: ["serve", "--stdio", "--port", String(port)], env: { ...env, OPENCODE_PASSWORD: randomBytes(32).toString("base64url") } }
+}
+
 /** One native server per adapter owner. OpenCode owns its execution and stores;
  * stdin is its native ownership lease. API failures never retry mutations.
  * The live adapter supplies account/configuration/MCP state before starting it.
@@ -74,11 +84,11 @@ export async function startOpenCodeApi(input: {
   fetch?: typeof globalThis.fetch
 }): Promise<OpenCodeApi> {
   input.signal?.throwIfAborted()
-  const password = randomBytes(32).toString("base64url")
-  const port = configuredListenPort("MAKO_OPENCODE_API_PORT", input.env)
+  const serve = openCodeServe(input.command, input.env)
+  const password = serve.env.OPENCODE_PASSWORD!
   const lifetime = new AbortController()
-  const spawnEnv = environmentForExecutable(input.command, { ...input.env, OPENCODE_PASSWORD: password })
-  const child = input.trace.sync("spawn", () => spawnProviderProcess(input.command, ["serve", "--stdio", "--port", String(port)], {
+  const spawnEnv = environmentForExecutable(serve.command, serve.env)
+  const child = input.trace.sync("spawn", () => spawnProviderProcess(serve.command, serve.args, {
     cwd: input.cwd,
     env: spawnEnv,
   }, { kind: "opencode:native-api", owner: input.conversationId }))
@@ -123,16 +133,19 @@ export async function startOpenCodeApi(input: {
   // The launch still reports that failure; readiness must not reject unobserved.
   void ready.catch(() => {})
   let closing: Promise<void> | undefined
-  const close = (): Promise<void> => closing ??= (async () => {
+  // `now`: stopped from outside (a start run ahead that a start stops, a start cancelled), not closed after use. A
+  // server still starting then works on beside whatever comes next until it's signalled: on a copy, a start beside a
+  // run ahead closed so took up to 1.34 s, against 1.07 s with the run ahead ended at once (2026-10-20).
+  const close = (now = false): Promise<void> => closing ??= (async () => {
     input.signal?.removeEventListener("abort", abort)
     watch.dispose()
     lifetime.abort(new Error("OpenCode native API connection closed"))
     child.stdin.end()
-    const terminate = setTimeout(() => { child.kill("SIGTERM") }, 3000)
+    const terminate = setTimeout(() => { child.kill("SIGTERM") }, now ? 0 : 3000)
     const kill = setTimeout(() => { child.kill("SIGKILL") }, 6000)
     try { await closed } finally { clearTimeout(terminate); clearTimeout(kill) }
   })()
-  const abort = () => { void close() }
+  const abort = () => { void close(true) }
   input.signal?.addEventListener("abort", abort, { once: true })
   if (input.signal?.aborted) abort()
   // A failed spawn can close stdin before the normal lease shutdown.

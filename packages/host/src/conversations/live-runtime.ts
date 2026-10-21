@@ -1,4 +1,5 @@
 import type { Admission } from "../base/admission.js"
+import type { Foreground } from "../base/foreground.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { dirname } from "node:path"
 import { hostWarn } from "../base/host-log.js"
@@ -121,6 +122,8 @@ export interface Resident {
 }
 
 export interface Dependencies {
+  /** Held while a harness starts, so the host's routine work waits for it (`base/foreground.ts`). */
+  foreground?: Pick<Foreground, "hold" | "started">
   mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots
   appPath: string

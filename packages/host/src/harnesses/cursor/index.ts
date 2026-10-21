@@ -43,6 +43,7 @@ export const installCursor: ProviderModule = (host, context) => {
   const credentials = new CursorCredentialStore(context.secrets.secrets)
   const keys = new CursorAccountKeys(context.secrets.secrets)
   const auth = new CursorSdkAuth({ env, openUrl: (url) => context.openUrl(url), credentials })
+  // Each account's models, kept an hour per credential and shared by display and starts.
   const modelCache = createCursorModelCache()
   installHarness(host, {
     provider: "cursor",

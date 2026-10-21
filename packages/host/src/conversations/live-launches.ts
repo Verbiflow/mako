@@ -226,6 +226,8 @@ export class LiveLaunches {
     const { dependencies } = this.access
     const id = options.conversationId
     const generation = resident.generation
+    // A start is what a person waits on: the host's routine work waits for it (`base/foreground.ts`).
+    const releaseForeground = dependencies.foreground?.hold(`start ${provider} ${id.slice(0, 8)}`)
     const openingOperation = Promise.resolve()
       .then(async () => {
         const conversationTools = await dependencies.tools?.(id, id)
@@ -313,6 +315,8 @@ export class LiveLaunches {
       })
     resident.openingOperation = openingOperation
     void openingOperation.finally(() => {
+      releaseForeground?.()
+      dependencies.foreground?.started()
       if (resident.openingOperation === openingOperation)
         resident.openingOperation = undefined
     })

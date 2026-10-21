@@ -2023,9 +2023,11 @@ the native session even when the turn fails. Grok needs an advertised tier that
 pre-approves lazy MCP calls (currently `MAKO_E2E_MODE=access:full`); Codex needs
 a model the installed CLI and account both accept.
 The installed OpenCode v2 ACP server rejects concurrent prompts. A free
-`opencode/` model (`test-opencode-live.ts` uses `opencode/space-bunny-free`; Zen
-withdrew `muse-spark-1.3-contributor-free` in October 2026) passes normal replies
-and queueing; verify it with `--continuation`, not by advertising unsupported
+`opencode/` model passes normal replies and queueing: Zen withdraws them without
+notice (`muse-spark-1.3-contributor-free`, then `space-bunny-free` and
+`mimo-v2.6-flash-free` in October 2026), so the live tests take them from
+OpenCode's own catalog in their isolated home (`scripts/opencode-free-models.ts`,
+Zen's default first; `MAKO_OPENCODE_MODEL` chooses); verify it with `--continuation`, not by advertising unsupported
 steering. OpenCode starts on its last models.dev catalog and refreshes it after
 startup, so a default Mako read from the first can be a model it no longer
 routes: the driver treats `models-dev.refreshed` and `integration.updated` as

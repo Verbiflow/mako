@@ -452,7 +452,7 @@ export function createFakeGateway(
       },
     })
     // What the gateway reads of an envelope stays with it, as the hosted gateway's does.
-    const { whenAsleep: _asleep, ahead: _ahead, ...delivered } = operation
+    const { whenAsleep: _asleep, ahead: _ahead, repeatable: _repeatable, passive: _passive, ...delivered } = operation
     owner.deliver(
       generation === undefined
         ? { type: "operation", operation: delivered }
