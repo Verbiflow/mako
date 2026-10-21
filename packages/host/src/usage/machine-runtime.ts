@@ -53,7 +53,7 @@ export type MachineRuntimeOptions = {
   work(): LifecycleWork[]
   /** Every process's CPU time so far (`/proc`); undefined off Linux. Tests give their own. */
   sampleCpu?: () => Promise<CpuSample | undefined>
-  /** Whether to profile the host itself while a launch runs (off in tests, whose host is the test). */
+  /** Whether to profile the host's own JavaScript while a launch runs (`MAKO_LAUNCH_PROFILE=1`); off unless asked. */
   profileHost?: boolean
   now?: () => number
 }
@@ -258,7 +258,7 @@ export class MachineRuntime {
     const sample = this.#options.sampleCpu ?? sampleCpu
     if (fields.state === "started") {
       // The host's own share taken apart by file, for one launch at a time.
-      const profiling = this.#options.profileHost === false ? Promise.resolve(false) : this.#profiler.start().catch(() => false)
+      const profiling = this.#options.profileHost ? this.#profiler.start().catch(() => false) : Promise.resolve(false)
       this.#launches.set(key, { cpu: sample().catch(() => undefined), profiling })
       return
     }
