@@ -184,6 +184,36 @@ function bytesHex(bytes: Uint8Array): string {
   return hex
 }
 
+/**
+ * One push carrying its chunks: the bundle's JSON, then a pack. The receiver keeps the chunks it lacks and takes the
+ * bundle in the same request, so a turn's records cost one round trip. Layout: the JSON's length (little-endian u32),
+ * the JSON, the pack.
+ */
+export function encodeRecordPush(bundle: RecordBundle, chunks: readonly PackedChunk[]): Uint8Array<ArrayBuffer> {
+  const json = new TextEncoder().encode(JSON.stringify(bundle))
+  const pack = encodeChunkPack(chunks)
+  const bytes = new Uint8Array(4 + json.length + pack.length)
+  new DataView(bytes.buffer).setUint32(0, json.length, true)
+  bytes.set(json, 4)
+  bytes.set(pack, 4 + json.length)
+  return bytes
+}
+
+export type RecordPushWith = { bundle: RecordBundle; pack: Uint8Array }
+
+/** The bundle, checked, and the pack of a push carrying its chunks; throws on one that isn't. */
+export function decodeRecordPush(bytes: Uint8Array): RecordPushWith {
+  if (bytes.length < 4) throw new Error("Not a push: too short")
+  const length = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true)
+  if (4 + length > bytes.length) throw new Error("Not a push: its bundle runs past it")
+  const bundle = RecordBundleSchema.safeParse(JSON.parse(new TextDecoder().decode(bytes.subarray(4, 4 + length))))
+  if (!bundle.success) throw new Error(`Not a push: ${z.prettifyError(bundle.error)}`)
+  return { bundle: bundle.data, pack: bytes.subarray(4 + length) }
+}
+
+/** The most a push carrying its chunks takes: a bigger one asks which chunks are missing first. */
+export const RECORD_PUSH_WITH_BYTES = 4 * 1024 * 1024
+
 /** A session a store holds records of, as it lists them: how many versions, and the newest number it gave one. */
 export const RecordSessionSchema = z.object({ harness: z.string(), nativeId: z.string(), units: z.number().int(), versions: z.number().int(), through: z.number().int() })
 export type RecordSession = z.infer<typeof RecordSessionSchema>
@@ -191,3 +221,37 @@ export type RecordSession = z.infer<typeof RecordSessionSchema>
 /** The most hashes one ask names, and the most bytes one pack carries, either way. */
 export const RECORD_ASK_HASHES = 4096
 export const RECORD_PACK_BYTES = 16 * 1024 * 1024
+
+/** A push's answer: what the remote took, or why it refused, said as data. */
+export const RecordPushAnswerSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), versions: z.number().int(), held: z.number().int(), through: z.number().int() }),
+  z.object({ ok: z.literal(false), conflict: z.enum(["diverged", "gap"]), key: z.string(), seq: z.number().int(), head: z.number().int(), message: z.string() }),
+])
+export type RecordPushAnswer = z.infer<typeof RecordPushAnswerSchema>
+export const RecordPulledSchema = z.object({ bundle: RecordBundleSchema, through: z.number().int().nonnegative(), more: z.boolean() })
+export type RecordPulled = z.infer<typeof RecordPulledSchema>
+export const RecordHoldingsPageSchema = z.object({ holdings: RecordHoldingsSchema, next: z.string().nullable() })
+
+/**
+ * A remote record store, as a gateway serves one Thread's: the chunks it lacks, packs of them up and down, and the
+ * sessions pushed and pulled by `planRecordImport`'s rule. Every call is safe to repeat: chunks are kept once, a
+ * version held is passed over, and reads change nothing.
+ */
+export interface RecordRemote {
+  /** Names the remote in a store's cursors: one per Thread. */
+  readonly id: string
+  missing(hashes: string[]): Promise<string[]>
+  /** One pack up; the remote checks each chunk against its hash. */
+  putChunks(pack: PackedChunk[]): Promise<{ taken: number }>
+  /** Those of `hashes` the remote holds, as many as fit one pack, in the order asked; ask again for the rest. */
+  readChunks(hashes: string[]): Promise<PackedChunk[]>
+  push(bundle: RecordBundle): Promise<RecordPushAnswer>
+  /**
+   * A push with its chunks in the same request: the remote keeps those it lacks and takes the bundle. `missing` names
+   * chunks the bundle needs that neither the remote nor the pack holds; send them, then `push`.
+   */
+  pushWith(bundle: RecordBundle, chunks: PackedChunk[]): Promise<RecordPushAnswer | { missing: string[] }>
+  holdings(harness: string, nativeId: string, after: string): Promise<{ holdings: RecordHoldings; next: string | null }>
+  pull(harness: string, nativeId: string, after: number): Promise<RecordPulled | null>
+  sessions(): Promise<RecordSession[]>
+}

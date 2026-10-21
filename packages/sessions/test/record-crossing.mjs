@@ -95,29 +95,45 @@ try {
     const remote = "https://gateway.test/threads/t-1"
     const f = new RecordStore(join(root, "f"), stores)
     const g = new RecordStore(join(root, "g"), stores)
-    const everything = a.exportFor(remote, "synthetic", "s1")
+    const everything = a.exportFor(remote, "synthetic", "s1").bundle
     assert.deepEqual(everything.units, a.exportSession("synthetic", "s1").units, "a remote nothing is known of gets everything")
     await f.importSession(everything, async function* (hashes) { for (const hash of hashes) yield { hash, chunk: await a.readChunk(hash) } })
     await a.remoteHolds(remote, "synthetic", "s1", everything)
-    assert.deepEqual(a.exportFor(remote, "synthetic", "s1").units, [], "once it took a bundle, nothing of it is sent again")
+    assert.deepEqual(a.exportFor(remote, "synthetic", "s1").bundle.units, [], "once it took a bundle, nothing of it is sent again")
     await appendFile(transcript, `${JSON.stringify({ n: 4, text: "more" })}\n`)
     await a.capture({ harness: "synthetic", nativeId: "s1", home: machine, records })
-    const more = a.exportFor(remote, "synthetic", "s1")
+    const more = a.exportFor(remote, "synthetic", "s1").bundle
     assert.equal(more.units.length, 1, "only the unit that moved")
     assert.equal(more.units[0].versions.length, 1, "only its new version")
     // A remote that lost what it was known to hold refuses the push for a gap; its own holdings replace what's known.
     await a.remoteHolds(remote, "synthetic", "s1", { holdings: { ...a.holdings("synthetic", "s1"), [more.units[0].key]: 0 } })
-    assert.deepEqual(a.exportFor(remote, "synthetic", "s1").units.map((unit) => unit.versions.map((version) => version.seq)), [[1, 2, 3]], "after its holdings, from just past them")
+    assert.deepEqual(a.exportFor(remote, "synthetic", "s1").bundle.units.map((unit) => unit.versions.map((version) => version.seq)), [[1, 2, 3]], "after its holdings, from just past them")
 
     // Pulled through the remote's own number, kept with the versions in one commit.
     assert.equal(g.pulledThrough(remote, "synthetic", "s1"), 0)
     await g.importSession(everything, async function* (hashes) { for (const hash of hashes) yield { hash, chunk: await a.readChunk(hash) } }, { remote, through: 7 })
     assert.equal(g.pulledThrough(remote, "synthetic", "s1"), 7)
-    assert.deepEqual(g.exportFor(remote, "synthetic", "s1").units, [], "what was pulled from a remote is never pushed back to it")
+    assert.deepEqual(g.exportFor(remote, "synthetic", "s1").bundle.units, [], "what was pulled from a remote is never pushed back to it")
     // A pull that's refused keeps the cursor where it was.
     const h = new RecordStore(join(root, "h"), stores)
     await assert.rejects(h.importSession(skipped, async function* () {}, { remote, through: 9 }), /skip from version/)
     assert.equal(h.pulledThrough(remote, "synthetic", "s1"), 0)
+    // A push's export a batch at a time, by a cursor over the units, a unit cut short taken up past what was sent.
+    const fresh = "https://gateway.test/threads/t-2"
+    const whole = a.exportFor(fresh, "synthetic", "s1").bundle
+    const seen = []
+    let cursor
+    for (let batches = 0; batches < 50; batches++) {
+      const page = a.exportFor(fresh, "synthetic", "s1", { limit: 2, ...(cursor === undefined ? {} : { cursor }) })
+      assert.ok(page.bundle.units.flatMap((unit) => unit.versions).length <= 2, "no more than the limit")
+      if (!page.bundle.units.length) break
+      for (const unit of page.bundle.units) seen.push(...unit.versions.map((version) => `${unit.key}@${version.seq}`))
+      await a.remoteHolds(fresh, "synthetic", "s1", page.bundle)
+      if (page.cursor === null) break
+      cursor = page.cursor
+    }
+    assert.deepEqual(seen, whole.units.flatMap((unit) => unit.versions.map((version) => `${unit.key}@${version.seq}`)), "every version once, in order")
+    assert.deepEqual(a.exportFor(fresh, "synthetic", "s1").bundle.units, [])
     for (const store of [f, g, h]) store.close()
   }
   for (const store of [a, b, c, d, e]) store.close()

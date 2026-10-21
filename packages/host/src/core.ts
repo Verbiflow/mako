@@ -1,3 +1,4 @@
+import type { RecordsLink } from "@mako/sessions/record-sync"
 import { watch, type FSWatcher } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -76,6 +77,8 @@ export interface Core {
   warm(): Promise<string[]>
   /** On a cloud machine: the folder its agent prepared, where every client's tabs open. */
   openMachineWorkspace(path: string): Promise<void>
+  /** On a cloud machine: its records kept in step with its Thread's at the gateway (`ThreadCatalog.syncRecords`). */
+  syncRecords(link: RecordsLink | null): Promise<void>
   /** On a project base's builder: what a start in `path` does first, done before its snapshot. */
   prepareFolder(path: string): Promise<void>
   /** On a cloud machine as it boots: what `harness`'s start runs first, run ahead (`startPrefetch`). */
@@ -553,6 +556,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     prepareFolder: async (path) => {
       await tools.mcp.discover(path)
     },
+    syncRecords: (link) => catalog.syncRecords(link),
     openMachineWorkspace: async (path) => {
       await workspaceClients.home(path)
       await workspaceAutomations.watch(path)

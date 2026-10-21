@@ -170,6 +170,12 @@ const reloaded = new Promise((resolve) => {
 reloadFollow?.()
 assert.deepEqual(await reloaded, { event: "reload", path: thread.ref.path })
 assert.deepEqual(parseDaemonRequest(JSON.stringify({ id: 3, op: "follow", path: "/a", fromByte: 4 })), { id: 3, op: "follow", path: "/a", fromByte: 4 }, "an older client's follow asks for no reload")
+{
+  const link = { id: "https://gateway.test/v1/machines/m-1/records", base: "https://gateway.test/v1/machines/m-1/records", authorization: "Bearer mmc_x" }
+  assert.deepEqual(parseDaemonRequest(JSON.stringify({ id: 4, op: "records", link })), { id: 4, op: "records", link }, "a records link reaches the catalog")
+  assert.deepEqual(parseDaemonRequest(JSON.stringify({ id: 5, op: "records", link: null })), { id: 5, op: "records", link: null }, "and its end")
+  assert.equal(parseDaemonRequest(JSON.stringify({ id: 6, op: "records", link: { id: "x", base: "not a url", authorization: "y" } })), null, "a link that isn't one is refused")
+}
 const oversized = createConnection(socketPath)
 await new Promise((resolve, reject) => {
   oversized.once("connect", resolve)

@@ -16,6 +16,7 @@ import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE, type KeptRest
 import { makoRecords } from "@mako/sessions/record-streams"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import type { InstalledReading, SessionWriters } from "@mako/sessions/record-writers"
+import type { RecordsLink } from "@mako/sessions/record-sync"
 import { isReplyEntry } from "@mako/sessions/entries"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { existsSync } from "node:fs"
@@ -277,6 +278,11 @@ export interface ThreadCatalog {
    * older than the newest version that wrote them (`restoreGate`).
    */
   restoreKept(path: string, installed?: InstalledReading | null): Promise<KeptRestore>
+  /**
+   * On a cloud machine: the record store kept in step with its Thread's records at the gateway, each capture pushed
+   * as it lands (`SessionCatalog.syncRecords`); null stops. Kept across a restart of the catalog's reader.
+   */
+  syncRecords(link: RecordsLink | null): Promise<void>
   /** Every harness version that wrote the session at `path`, as the record store keeps them, read without writing; null when it holds none. */
   recordWriters(path: string): SessionWriters | null
   /** A page for the viewer; a tool row fetches its whole output (`block`) when it opens. */
@@ -459,9 +465,11 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let recoveringDaemon: Promise<void> | null = null
   let catalogStartup: Promise<void> | null = null
   let catalogLifetime: AbortController | null = null
+  /** Where records are kept in step, given again to whichever reader serves next. */
+  let recordsLink: RecordsLink | null = null
 
   async function awaitCatalogReady(): Promise<{
-    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept">
+    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept" | "syncRecords">
     signal: AbortSignal
   }> {
     const signal = catalogLifetime?.signal
@@ -765,6 +773,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     daemon = client
     daemonKind = kind
     refreshFollowForReader(client)
+    if (recordsLink) void client.syncRecords(recordsLink).catch((error: Error) => hostWarn("threads", "records link not given to the catalog", { error: error.message }))
     const started = performance.now()
     let hydrated = false
     const stopEvents = client.onEvent((event) => {
@@ -1051,6 +1060,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       signal.throwIfAborted()
       catalog = source
       refreshFollowForReader(source)
+      if (recordsLink) source.syncRecords(recordsLink)
       source.onEvent((event) => {
         if (signal.aborted || catalog !== source) return
         if (event.type === "removed") {
@@ -1235,6 +1245,13 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
     return source.original(path, id)
+  }
+
+  async function syncRecords(link: RecordsLink | null): Promise<void> {
+    recordsLink = link
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    await source.syncRecords(link)
   }
 
   async function restoreKept(path: string, installed?: InstalledReading | null): Promise<KeptRestore> {
@@ -1523,6 +1540,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     page: pageThread,
     hold: holdThread,
     restoreKept,
+    syncRecords,
     recordWriters,
     viewPage: viewThreadPage,
     viewPreview: viewThreadPreview,
