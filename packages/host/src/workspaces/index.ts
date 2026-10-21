@@ -15,7 +15,7 @@ import { moveHold, moveSource, ThreadWorktreeMoves } from "./thread-worktree-mov
 import { WorkspaceMoves } from "./moves.js"
 import { WorktreeLeaves } from "./worktree-leaves.js"
 import { moveablePlace, registerWorkspaceTools, within, workspaceTools } from "./tools.js"
-import { projectRecipe } from "./thread-recipe.js"
+import { projectRecipe, type RecipeWhere } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
 import { PlanBuilds } from "./plan-builds.js"
 import { beginTrace, SAMPLE_EVERY_MS, TraceRefresh } from "./app-probe.js"
@@ -76,6 +76,8 @@ export interface Workspaces {
   worktrees: ThreadWorktreeService | null
   /** The recipe Mako keeps for each project, one file per repository, outside every checkout. */
   recipes: string | undefined
+  /** Where recipes run here: this computer or a cloud machine. */
+  where: RecipeWhere | undefined
   /** Whose app a key is, in words: a Worktree Thread's, or a folder's that Threads share. */
   whoseApp(app: AppKey): string | undefined
   /** The Worktree Thread an app belongs to, for the Room. */
@@ -88,6 +90,8 @@ export interface Workspaces {
 export interface WorkspacesDeps {
   git: Git
   dataRoot: string
+  /** Where recipes run here: this computer or a cloud machine, and what it is (`recipeIn`). */
+  where?: RecipeWhere
   /** A fixture desk stops no one's apps. */
   readOnly: boolean
   store: ThreadStore | null
@@ -116,7 +120,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   const shared = store ? realpathSync(dirname(store.path)) : undefined
   const recipes = shared ? join(shared, "recipes") : undefined
   const environments = store && shared
-    ? new ThreadEnvironments({ git, store, dataRoot: join(shared, "thread-data"), recipesRoot: recipes })
+    ? new ThreadEnvironments({ git, store, dataRoot: join(shared, "thread-data"), recipesRoot: recipes, where: deps.where })
     : null
   const fileHistory = childHistory()
   const whoseApp = (app: AppKey): string | undefined => {
@@ -189,6 +193,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     processes,
     worktrees,
     recipes,
+    where: deps.where,
     whoseApp,
     appOwner,
     fileHistory,
@@ -207,6 +212,8 @@ export interface WorkspaceMovers {
 }
 
 export interface WorkspaceMoversDeps {
+  /** Whether this host's environment has a value for a secret a recipe names (`secretNames`), checked before a cloud start. */
+  hasSecret?(name: string): boolean
   git: Git
   dataRoot: string
   workspaces: Workspaces
@@ -278,6 +285,8 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     processes,
     traces: new TraceRefresh(),
     recipesRoot: workspaces.recipes,
+    where: workspaces.where,
+    hasSecret: deps.hasSecret,
     whose: workspaces.whoseApp,
     history: workspaces.fileHistory,
     owner: workspaces.appOwner,

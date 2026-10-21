@@ -19,7 +19,7 @@ import {
 import type { ThreadStore } from "../threads/index.js"
 import { checkoutOf, processPort, projectRoot, readRecipe, recipeValues } from "./thread-recipe.js"
 import { linkedCarry, linkedEntries, missingEntries, missingText } from "./worktree-carry.js"
-import type { Recipe } from "./thread-recipe.js"
+import type { Recipe, RecipeWhere } from "./thread-recipe.js"
 
 const VARIABLES = ["MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_THREAD_VALUES"] as const
 /** Lists the recipe's names Mako set, so a Mako started inside a Thread can clear them. */
@@ -98,6 +98,8 @@ export interface ThreadEnvironmentDependencies {
   dataRoot: string
   /** Where Mako keeps projects' recipes, one file per repository. */
   recipesRoot?: string
+  /** Where recipes run here: this computer or a cloud machine (`recipeIn`). */
+  where?: RecipeWhere
   /** Whether anything accepts connections on a local port. */
   listening?: (port: number) => Promise<boolean>
   now?: () => number
@@ -154,7 +156,7 @@ export class ThreadEnvironments {
     if (!checkout) return environment
     let read: Awaited<ReturnType<typeof readRecipe>>
     try {
-      read = await readRecipe(this.git, checkout, environment, this.dependencies.recipesRoot)
+      read = await readRecipe(this.git, checkout, environment, this.dependencies.recipesRoot, this.dependencies.where)
     } catch (error) {
       return { ...environment, recipe: { kind: "invalid", message: `the recipe couldn't be read: ${error instanceof Error ? error.message : String(error)}` } }
     }
