@@ -17,7 +17,7 @@ import {
 } from "@mako/protocol"
 import { z } from "zod"
 import { followHostLog, hostLog, hostWarn, type HostLogLine } from "../base/host-log.js"
-import { cpuBetween, describeCpu, sampleCpu, type CpuSample } from "./process-cpu.js"
+import { cpuBetween, describeCpu, describeThreads, sampleCpu, type CpuSample } from "./process-cpu.js"
 import { HostProfiler } from "./host-profile.js"
 import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
@@ -271,6 +271,7 @@ export class MachineRuntime {
         harness: String(fields.provider),
         conversation: String(fields.conversation).slice(0, 8),
         cpu: describeCpu(cpuBetween(start, end)),
+        threads: describeThreads(cpuBetween(start, end)) || undefined,
         host: host?.length ? host.map((entry) => `${entry.file} ${entry.seconds.toFixed(2)} s`).join(", ") : undefined,
       })
     })

@@ -380,16 +380,16 @@ test("the start run ahead goes on to its signed-in stage once that harness's sig
 
 test("each harness launch says what used the machine's CPU while it ran, the busiest first", async () => {
   const samples: CpuSample[] = [
-    { at: 0, busy: 1_000, byName: new Map([["devin", 50], ["node:host-main.js", 400], ["git", 10]]) },
-    { at: 1_200, busy: 1_190, byName: new Map([["devin", 111], ["node:host-main.js", 440], ["git", 32], ["sleep", 1]]) },
+    { at: 0, busy: 1_000, byName: new Map([["devin", 50], ["node:host-main.js", 400], ["git", 10]]), threads: new Map([["MainThread", 300], ["V8Worker", 100]]) },
+    { at: 1_200, busy: 1_190, byName: new Map([["devin", 111], ["node:host-main.js", 440], ["git", 32], ["sleep", 1]]), threads: new Map([["MainThread", 330], ["V8Worker", 110]]) },
   ]
   const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-cpu-")), sampleCpu: async () => samples.shift() })
   hostLog("provider-startup", "phase", { provider: "devin", conversation: "0123456789abcdef", attempt: "a1", phase: "launch", state: "started" })
   hostLog("provider-startup", "phase", { provider: "devin", conversation: "0123456789abcdef", attempt: "a1", phase: "launch", state: "done", durationMs: 1200 })
   await agent.until("the launch's CPU", () => agent.messages.some((message) => message.type === "log" && message.message === "cpu while a harness started"))
   const said = agent.messages.find((message) => message.type === "log" && message.message === "cpu while a harness started")
-  assert.deepEqual(said?.type === "log" && said.fields, { harness: "devin", conversation: "01234567", cpu: "1.90 s busy in 1.20 s: devin 0.61 s, node:host-main.js 0.40 s, git 0.22 s, sleep 0.01 s, ended or kernel 0.66 s" })
-  assert.equal(cpuBetween(samples[0] ?? { at: 0, busy: 0, byName: new Map() }, { at: 10, busy: 0, byName: new Map() }).busy, 0, "a counter that went back counts nothing")
+  assert.deepEqual(said?.type === "log" && said.fields, { harness: "devin", conversation: "01234567", cpu: "1.90 s busy in 1.20 s: devin 0.61 s, node:host-main.js 0.40 s, git 0.22 s, sleep 0.01 s, ended or kernel 0.66 s", threads: "MainThread 0.30 s, V8Worker 0.10 s" })
+  assert.equal(cpuBetween(samples[0] ?? { at: 0, busy: 0, byName: new Map(), threads: new Map() }, { at: 10, busy: 0, byName: new Map(), threads: new Map() }).busy, 0, "a counter that went back counts nothing")
 })
 
 test("the host's own CPU over a window is taken apart by the file that spent it", async () => {
