@@ -17,7 +17,7 @@ import { CursorSdkAuth } from "./sdk/auth.js"
 import { CursorAccountKeys, CursorCredentialStore, cursorLegacyFiles } from "./sdk/credentials.js"
 import { cursorDecoderSource } from "./sdk/decoder-source.js"
 import { createCursorSdkDriver } from "./sdk/driver.js"
-import { createCursorIdentityCache, createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
+import { createCursorModelCache, listCursorSdkModels } from "./sdk/models.js"
 import { cursorSdkNativeRunner } from "./sdk/native-runner.js"
 import { cursorSkillSource } from "./skills.js"
 import { cursorUsageHistory } from "./usage-history.js"
@@ -42,10 +42,9 @@ export const installCursor: ProviderModule = (host, context) => {
   context.secrets.adoptLegacy(cursorLegacyFiles(stateRoot()))
   const credentials = new CursorCredentialStore(context.secrets.secrets)
   const keys = new CursorAccountKeys(context.secrets.secrets)
-  // What Cursor answers each account, kept an hour per credential and shared by display, sign-in checks and starts.
+  const auth = new CursorSdkAuth({ env, openUrl: (url) => context.openUrl(url), credentials })
+  // Each account's models, kept an hour per credential and shared by display and starts.
   const modelCache = createCursorModelCache()
-  const identityCache = createCursorIdentityCache()
-  const auth = new CursorSdkAuth({ env, openUrl: (url) => context.openUrl(url), credentials, identities: identityCache })
   installHarness(host, {
     provider: "cursor",
     presentation: cursorPresentation,
@@ -94,7 +93,6 @@ export const installCursor: ProviderModule = (host, context) => {
       stateRoot,
       stores: context.stores,
       modelCache,
-      identityCache,
       streams: context.streams,
       heapSnapshots: join(logsRoot(context.dataRoot), "cursor-heaps"),
     }),

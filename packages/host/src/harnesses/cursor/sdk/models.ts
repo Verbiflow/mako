@@ -4,7 +4,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { CursorSdkClient } from "./client.js"
 import type { CursorSdkProbeClient, CursorSdkSpawnOptions } from "./auth.js"
-import type { SdkModelListItem, SdkResult } from "./wire.js"
+import type { SdkModelListItem } from "./wire.js"
 
 export interface CursorSdkModelsOptions {
   env: NodeJS.ProcessEnv
@@ -46,7 +46,7 @@ export async function listCursorSdkModels(options: CursorSdkModelsOptions): Prom
   }
 }
 
-/** How long an account's model list and identity stand for a start. A display refresh always asks Cursor again. */
+/** How long an account's model list stands for a start. A display refresh always asks Cursor again. */
 export const CURSOR_ACCOUNT_TTL_MS = 60 * 60_000
 /** The SDK's own sign-in, which it reads when no key is in its environment, as on a cloud machine. */
 export const CURSOR_SDK_AUTH_FILE = join(".cursor", "sdk", "auth.json")
@@ -152,9 +152,3 @@ export function createCursorModelCache(now: () => number = Date.now): CursorAcco
   }, now)
 }
 export type CursorModelCache = ReturnType<typeof createCursorModelCache>
-
-/** Who each account is, by Cursor's `me`: what a session reports it runs as. */
-export function createCursorIdentityCache(now: () => number = Date.now): CursorAccountCache<SdkResult<"me">> {
-  return cursorAccountCache(() => undefined, now)
-}
-export type CursorIdentityCache = ReturnType<typeof createCursorIdentityCache>

@@ -21,7 +21,7 @@ export interface StartPrefetch {
   run(env: NodeJS.ProcessEnv, cwd: string, owner: string): Promise<boolean>
   /**
    * What the start asks its harness's service first, asked as soon as the machine's sign-in for it is installed,
-   * and kept where the start finds it (Cursor's model list and identity, kept an hour per credential). Without it,
+   * and kept where the start finds it (Cursor's model list, kept an hour per credential). Without it,
    * the start asks nothing a read ahead could.
    */
   signedIn?(env: NodeJS.ProcessEnv): Promise<void>

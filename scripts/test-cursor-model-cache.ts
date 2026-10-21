@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { CURSOR_ACCOUNT_TTL_MS, CURSOR_SDK_AUTH_FILE, createCursorIdentityCache, createCursorModelCache, listCursorSdkModels } from "@mako/host/harnesses/cursor/sdk/models"
+import { CURSOR_ACCOUNT_TTL_MS, CURSOR_SDK_AUTH_FILE, createCursorModelCache, listCursorSdkModels } from "@mako/host/harnesses/cursor/sdk/models"
 import { createCursorSdkDriver, type CursorSdkLiveClient } from "@mako/host/harnesses/cursor/sdk/driver"
 import { CursorSdkAuth, type CursorSdkSpawnOptions } from "@mako/host/harnesses/cursor/sdk/auth"
 import { CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
@@ -57,20 +57,6 @@ await cache.forget(fileOnly)
 assert.equal((await cache(fileOnly, async () => catalog("file-b-again")))[0].id, "file-b-again", "a credential Cursor refused is forgotten")
 await rm(sdkHome, { recursive: true, force: true })
 
-let identityNow = 1
-const identities = createCursorIdentityCache(() => identityNow)
-let asked = 0
-const me = async () => { asked++; return { email: "same@example.test", apiKeyName: "same-name", createdAt: "2026-09-25" } }
-const [meA, meB] = await Promise.all([identities(keyA, me), identities(keyA, me)])
-assert.equal(asked, 1, "a start and the stage run ahead share one `me`")
-assert.equal(meA.email, meB.email)
-await identities(keyA, me)
-assert.equal(asked, 1, "who the account is stands for the hour")
-await identities(keyB, me)
-assert.equal(asked, 2, "another credential asks again")
-identityNow += CURSOR_ACCOUNT_TTL_MS
-await identities(keyA, me)
-assert.equal(asked, 3, "after the hour Cursor is asked again")
 
 let refreshResult!: (models: SdkModelListItem[]) => void
 const refreshing = cache(keyA, () => new Promise(resolve => { refreshResult = resolve }), true)
@@ -129,11 +115,15 @@ const requests: string[] = []
 const identityRequests: string[] = []
 let offered: string[] = []
 const spawned: string[] = []
+const methods: string[] = []
 const closed: string[] = []
 const client = (options: CursorSdkSpawnOptions): CursorSdkLiveClient => (spawned.push(options.owner), {
   alive: true, exited: new Promise(() => {}), kill() {}, close: async () => { closed.push(options.owner) },
   hello: async () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "fixture", node: process.version }),
   request: async <M extends SdkMethod>(method: M): Promise<SdkResult<M>> => {
+    methods.push(method)
+    // Slower than every other step, as a child's first call to Cursor is.
+    if (method === "me") { await new Promise((resolve) => setTimeout(resolve, 30)); methods.push("me answered") }
     const answers: FixtureAnswers = {
       me: () => { identityRequests.push(options.env.CURSOR_API_KEY!); return { email: "same@example.test", apiKeyName: "same-name", createdAt: "2026-09-25" } },
       models: () => { requests.push(options.env.CURSOR_API_KEY!); return { models: [...catalog(options.env.CURSOR_API_KEY!), ...offered.flatMap(catalog)] } },
@@ -146,12 +136,11 @@ const client = (options: CursorSdkSpawnOptions): CursorSdkLiveClient => (spawned
   },
 })
 const shared = createCursorModelCache()
-const sharedIdentities = createCursorIdentityCache()
 const auth = new CursorSdkAuth({
   env: async () => ({ ...env }), cliKey: async () => null, openUrl: async () => { throw Error("no login") }, client,
-  credentials: new CursorCredentialStore(memorySecrets({ durable: false })), identities: sharedIdentities,
+  credentials: new CursorCredentialStore(memorySecrets({ durable: false })),
 })
-const driver = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => root, home: root, client, modelCache: shared, identityCache: sharedIdentities })
+const driver = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => root, home: root, client, modelCache: shared })
 try {
   // Display discovery fills the same provider-owned cache used by the actual driver.
   await shared(keyA, async () => catalog(keyA.CURSOR_API_KEY), true)
@@ -165,10 +154,11 @@ try {
   env = keyA
   await driver.start(root, admitted("cursor", { conversationId: "A2", emit() {} }, { env }))
   assert.deepEqual(requests, [keyB.CURSOR_API_KEY])
-  assert.deepEqual(identityRequests, [keyA.CURSOR_API_KEY, keyB.CURSOR_API_KEY], "a credential's identity is asked once for the hour, the sign-in check's answer included")
+  // Each session asks who it runs as on its own child: the first call there, which its `open` would pay otherwise.
+  assert.equal(identityRequests.filter((key) => key === keyA.CURSOR_API_KEY).length, 3, "the sign-in check and both of A's sessions")
 
-  // The start run ahead keeps its child, its SDK loaded, and the stage after sign-in asks on it what a start asks
-  // first; the start then finds the answers. No third child loads the SDK beside the run-ahead's and the session's.
+  // The start run ahead keeps its child, its SDK loaded, and the stage after sign-in asks the account's models on it;
+  // the start then finds them. No third child loads the SDK beside the run-ahead's and the session's.
   const keyC = { CURSOR_API_KEY: "key_fixture_c_0123456789" }
   const prefetch = driver.startPrefetch!
   assert.equal(await prefetch.run(keyC, root, "prefetch:cursor"), true)
@@ -177,13 +167,15 @@ try {
   await prefetch.signedIn!(keyC)
   assert.equal(spawned.length, children, "the stage asks on the kept child")
   assert.equal(closed.filter((owner) => owner === "prefetch:cursor").length, 1, "and stops it once it has asked")
-  assert.deepEqual([requests.at(-1), identityRequests.at(-1)], [keyC.CURSOR_API_KEY, keyC.CURSOR_API_KEY])
-  const asked = [requests.length, identityRequests.length]
+  assert.equal(requests.at(-1), keyC.CURSOR_API_KEY)
+  const asked = [requests.length, identityRequests.length + 1]
   env = keyC
+  methods.length = 0
   const c = await driver.start(root, admitted("cursor", { conversationId: "C", emit() {} }, { env }))
+  assert.ok(methods.indexOf("me answered") >= 0 && methods.indexOf("me answered") < methods.indexOf("open"), `open waits for the child's first call, me: ${methods.join(", ")}`)
   assert.equal(c.settings?.model, keyC.CURSOR_API_KEY)
   assert.equal(c.executionContext?.identity?.kind, "reported", "the identity kept is still Cursor's answer")
-  assert.deepEqual([requests.length, identityRequests.length], asked, "the start asks Cursor nothing the stage asked")
+  assert.deepEqual([requests.length, identityRequests.length], asked, "the start asks its models of nobody, and who it is of its own child")
 
   // A model Cursor began offering after the list was kept: asked again once, never refused from the kept list.
   offered = ["fixture-new-model"]
@@ -200,7 +192,7 @@ try {
   await new Promise<void>((resolve) => setImmediate(resolve))
   assert.ok(closed.includes("prefetch:release"), "release stops the kept child")
   // With neither a kept child nor a session, the stage spawns its own.
-  const fresh = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => root, home: root, client, modelCache: createCursorModelCache(), identityCache: createCursorIdentityCache() })
+  const fresh = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => root, home: root, client, modelCache: createCursorModelCache() })
   const count = spawned.length
   await fresh.startPrefetch!.signedIn!(keyC)
   assert.equal(spawned.length, count + 1)
@@ -209,4 +201,4 @@ try {
   for (const id of ["A", "B", "A2", "C", "D"]) await driver.close(id)
   await rm(root, { recursive: true, force: true })
 }
-console.log("Cursor native discovery: overlap, credential/endpoint/sign-in-file isolation, an hour's reuse, identity, refresh, failures, the signed-in stage run ahead and production startup reuse passed")
+console.log("Cursor native discovery: overlap, credential/endpoint/sign-in-file isolation, an hour's reuse, refresh, failures, the signed-in stage run ahead and production startup reuse passed")

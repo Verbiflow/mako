@@ -117,11 +117,15 @@ try {
   const delayedId = randomUUID()
   let ready = false
   const starting = delayed.start(root, admitted("cursor", { conversationId: delayedId, emit() {} }, { env: { CURSOR_API_KEY: "key_fixture_0123456789abcdef" } })).then(state => { ready = true; return state })
-  await opened.promise
-  await tick()
+  let openedFirst = false
+  void opened.promise.then(() => { openedFirst = !ready })
+  for (let step = 0; step < 20; step++) await tick()
+  // `open` waits for identity, the child's first call to Cursor, so no input is admitted before it settles.
   assert.equal(ready, false, "native open cannot admit input before effective identity settles")
+  assert.equal(openedFirst, false, "the agent isn't opened before its identity settles")
   identity.resolve({ email: "effective@example.test", apiKeyName: "fixture", createdAt: "2026-10-03" })
   const identified = await starting
+  assert.equal(openedFirst, true, "it's opened once identity settles, before it's ready")
   assert.equal(identified.executionContext?.identity.kind, "reported")
   assert.equal(identified.executionContext?.sourceImport?.source, "/native/previous-import.db", "a previously indexed import retains native provenance even when no new copy occurred")
   assert.equal(identified.executionContext?.sourceImport?.revision, "verified-snapshot-head", "the parent retains the child snapshot revision")
