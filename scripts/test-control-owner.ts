@@ -47,12 +47,17 @@ try {
   assert.ok(controlLine(launch).includes(launch.command))
   assert.deepEqual(await sessions.processes(), { bindings: { binding: undefined }, spare: undefined }, "a launch starts no worker")
   assert.equal(JSON.parse(await readFile(launch.sessionFile, "utf8")).pid, process.pid, "the session file names its owner, which listens until a worker takes over")
+  // Warmed, as a machine's start run ahead warms it: building its servers serves nothing, and the first agent's
+  // requests after it are answered as every later one.
+  await grants.warm()
   const grant = grants.mint("binding", "conversation")
   assert.ok(grant.computerUrl)
+  const connecting = performance.now()
   await agent.connect(new StreamableHTTPClientTransport(new URL(grant.computerUrl), {
     requestInit: { headers: { Authorization: `Bearer ${grant.token}` } },
   }))
   assert.deepEqual((await agent.listTools()).tools.map(t => t.name), ["js", "js_reset"])
+  assert.ok(performance.now() - connecting < 150, `the first agent's initialize and tools/list after warming took ${Math.round(performance.now() - connecting)} ms`)
   const result = await agent.callTool({ name: "js", arguments: { code: 'await control.browsers()' } })
   assert.equal(result.isError, undefined, JSON.stringify(result))
   assert.match(JSON.stringify(result), /Mako browser and computer use/)

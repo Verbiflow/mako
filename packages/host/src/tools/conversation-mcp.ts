@@ -192,6 +192,22 @@ export async function startConversationMcp(
           scopes.delete(token)
         }
     },
+    /**
+     * Loads what the first request would, so a machine's first session doesn't wait on it: on a copy that request took
+     * 190-200 ms (the MCP SDK and the control runtime loaded and built), each after it 2-5 ms (2026-10-21). Builds the
+     * servers a request builds, answering nothing, and closes them.
+     */
+    async warm(): Promise<void> {
+      const [{ McpServer, createControlMcpServer }] = await Promise.all([heavy.mcpServer.load("Mako's MCP servers, warmed"), heavy.mcpTypes.load("Mako's MCP servers, warmed")])
+      const unused = (): never => { throw new Error("A warmed server answers nothing") }
+      const servers = [createControlMcpServer(async () => unused())]
+      if (serveMako) {
+        const mako = new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
+        for (const register of makoTools) register(mako, unused)
+        servers.push(mako)
+      }
+      await Promise.all(servers.map((each) => each.close()))
+    },
     close() {
       for (const scope of scopes.values())
         for (const pending of scope.controlRequests.values()) pending.abort()
