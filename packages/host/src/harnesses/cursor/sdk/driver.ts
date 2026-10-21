@@ -29,7 +29,7 @@ import {
 } from "../../live-driver.js"
 import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from "./auth.js"
 import { CursorSdkClient, CursorSdkError, cursorSdkPackages } from "./client.js"
-import { createCursorIdentityCache, createCursorModelCache, cursorSettings, type CursorIdentityCache, type CursorModelCache } from "./models.js"
+import { createCursorModelCache, cursorSettings, type CursorModelCache } from "./models.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
 import { cursorUnfinishedToolNote, type CursorSdkModelSelection, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder.js"
@@ -48,7 +48,7 @@ import type {
 import { cursorSdkExitReason } from "./wire.js"
 /** What a live conversation needs from its child beyond a probe. */
 export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill">
-const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me, kept an hour per credential" } as const
+const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me" } as const
 
 /** How long the run-ahead's child waits for the stage after sign-in, which comes within seconds of a machine's boot. */
 const AHEAD_HOLD_MS = 60_000
@@ -73,7 +73,6 @@ export interface CursorSdkDriverDependencies {
   models?(client: CursorSdkProbeClient): Promise<SdkModelListItem[]>
   now?(): number
   modelCache?: CursorModelCache
-  identityCache?: CursorIdentityCache
   /** Where streams go (`HarnessContext.streams`); without it none are written. */
   streams?: string
   /** Where `kill -USR2 <pid>` writes a conversation child's heap snapshot; without it the signal is not armed. */
@@ -317,7 +316,6 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const modelCache = dependencies.modelCache ?? createCursorModelCache(dependencies.now)
-  const identityCache = dependencies.identityCache ?? createCursorIdentityCache(dependencies.now)
   /**
    * The child the start run ahead spawned, kept with its SDK loaded for the stage after sign-in: a third child loading
    * the SDK beside the run-ahead's and the session's held a quick start up by 1 s on a 2-vCPU machine (2026-10-20).
@@ -329,9 +327,9 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     return dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn)
   }
 
-  /** Asks what a start asks first on `client` and keeps the answers for `env`'s credential. */
+  /** Asks the account's models on `client`, kept for `env`'s credential, where the start finds them. */
   async function askAhead(client: CursorSdkProbeClient, env: NodeJS.ProcessEnv): Promise<void> {
-    await Promise.all([loadModels(client, env), identityCache(env, () => client.request("me", undefined))])
+    await loadModels(client, env)
   }
 
   const now = () => dependencies.now?.() ?? Date.now()
@@ -488,7 +486,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // executor disposes every shell it started when the run ends.
     backgroundStop: { kind: "ends-with-turn", evidence: "The local SDK disposes the shells a run started when the run ends, and a run stays running while a subagent it started works, so neither outlives its turn, and Stop ends the run." },
     startPrefetch: {
-      via: "The SDK's child, spawned as a session spawns it, until it answers `hello` with the SDK loaded, with the SDK's packages read alongside, and kept; once signed in, the account's models and identity (`me`), 1.1–1.6 s of every start (2026-10-20), asked on that child and kept an hour for the start.",
+      via: "The SDK's child, spawned as a session spawns it, until it answers `hello` with the SDK loaded, with the SDK's packages read alongside, and kept; once signed in, the account's models (1.3–1.5 s of a start, 2026-10-20), asked on that child and kept an hour for the start.",
       files: async () => cursorSdkPackages(),
       run: async (env, cwd, owner) => {
         ahead?.release()
@@ -584,7 +582,6 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       // not a reason to call Cursor's own login signed out.
       const rejected = (message: string) => {
         void modelCache.forget(accountEnvironment)
-        void identityCache.forget(accountEnvironment)
         if (!account) dependencies.auth.reportRejected(message)
       }
       const live: Live = {
@@ -648,7 +645,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           hostWarn("cursor-sdk", "the child has no bundled ripgrep; Grep and Glob need one on PATH", { conversation: live.state.id })
         await trace.step("authentication", () => ensureSignedIn(live, trace, account))
         const identityObservation = trace.step("identity", () => observeNativeIdentity(async () => {
-          const identity = await identityCache(accountEnvironment, () => live.client.request("me", undefined))
+          const identity = await live.client.request("me", undefined)
           return reportedIdentity(identity.email, "cursor", CURSOR_NATIVE_IDENTITY.via)
         }, () => !live.closed && sessions.get(live.state.id) === live, identity => {
           if (live.state.executionContext) engine.patch(live, { executionContext: { ...live.state.executionContext, identity } })
@@ -674,6 +671,11 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           ),
         ]))
         const servers = await trace.step("mcp-preparation", () => mcpServers(options))
+        // A child's first call to Cursor pays its setup (`me` took 0.75–1.4 s first, 0.11 s after), which `open` paid
+        // when nothing came before it (1.1 s cold, 0.36–0.40 s after a call; 2026-10-20). `me`, asked at once beside the
+        // steps above, is that first call: `open` waits for it rather than paying it again.
+        await identityObservation
+        if (live.closed) throw new Error("Cursor disconnected during identity verification")
         const fork = options.fork
         if (options.resume || fork) live.stream?.opening()
         const opened = await trace.step(options.resume ? "session-resume" : fork ? "session-fork" : "session-open", () => live.client.request("open", {
@@ -690,8 +692,6 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         }))
         if (live.closed) throw new Error("Cursor disconnected during startup")
         if (options.resume || fork) live.stream?.opened()
-        await identityObservation
-        if (live.closed) throw new Error("Cursor disconnected during identity verification")
         const reported = opened.model ?? selection
         engine.patch(live, {
           status: "ready",
