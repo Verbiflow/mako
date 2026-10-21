@@ -42,6 +42,24 @@ export const ELSEWHERE_CALLS: ReadonlySet<string> = new Set([
   "mako:git-push",
 ])
 
+/** A folder's app, run where the folder is: each names the folder as its first argument. */
+export const ELSEWHERE_APP_CALLS: ReadonlySet<string> = new Set([
+  "mako:thread-app",
+  "mako:thread-app-start",
+  "mako:thread-app-stop",
+  "mako:thread-app-restart",
+  "mako:thread-app-check",
+  "mako:thread-app-output",
+  "mako:thread-app-probe",
+  "mako:thread-app-make-room",
+  "mako:thread-app-take-turn",
+])
+
+/** Whether a window whose folder is `folder`, elsewhere, has this call answered there. */
+export function answeredElsewhere(channel: string, args: readonly unknown[], folder: string): boolean {
+  return ELSEWHERE_CALLS.has(channel) || (ELSEWHERE_APP_CALLS.has(channel) && args[0] === folder)
+}
+
 /** What only this Mac can do, and why it can't for a folder elsewhere. */
 export function elsewhereRefusal(channel: string, where: string): string | undefined {
   switch (channel) {

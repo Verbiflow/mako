@@ -361,6 +361,25 @@ describe("an operation its caller calls repeatable", () => {
   })
 })
 
+describe("a window's passive look", () => {
+  test("reaches a runtime that runs without the gateway's own word, and is answered at once, unapplied, while none does", async () => {
+    const gateway = createFakeGateway()
+    const session = await gateway.connectClient(client)
+    const seen = []
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "machine", build: "test", handle: async (operation) => (seen.push(operation), answer(operation, null)) })
+    const thread = { kind: "thread", threadId: "th-passive" }
+    await gateway.assign("th-passive", "machine")
+    assert.equal((await session.call(call(thread, { name: "status" }, { op: "host.thread-app", passive: true }))).ok, true)
+    assert.equal("passive" in seen[0], false)
+    runtime.close()
+    await runtime.done
+    const asleep = await session.call(call(thread, { name: "status" }, { op: "host.thread-app", passive: true }))
+    assert.equal(asleep.ok, false)
+    assert.equal(asleep.problem.outcome, "not-applied")
+    await gateway.close()
+  })
+})
+
 describe("a runtime served through serveRuntime", () => {
   test("answers operations as they finish, not in the order they came", async () => {
     const gateway = createFakeGateway()

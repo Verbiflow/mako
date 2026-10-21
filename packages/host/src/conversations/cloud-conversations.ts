@@ -11,6 +11,7 @@ import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, RuntimeDisc
 import { sessionAfter, type LiveBatch, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
 import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/index.js"
+import { CloudPreviews } from "./cloud-previews.js"
 import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
 import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
 
@@ -125,6 +126,9 @@ export type ElsewhereFolderRoute = {
   call(channel: string, args: readonly unknown[]): Promise<EncodedValue>
 }
 
+/** An app's view with an address, as `mako:thread-app` answers for a running one. */
+const ReadyAddressSchema = z.object({ kind: z.literal("ready"), address: z.object({ host: z.string(), port: z.number().int() }) }).loose()
+
 /** Where a cloud conversation's folder is, in words. */
 export const CLOUD_FOLDER_WHERE = "a cloud machine"
 /** A window following a cloud conversation's folder reads its Git again at most this often while its agent works. */
@@ -193,9 +197,14 @@ export class CloudConversations {
   #offering: Promise<CloudProjectsOffer> | undefined
   /** By conversation: a change to tell of, waiting out `CHANGED_MS` from the last told. */
   readonly #changes = new Map<string, NodeJS.Timeout>()
+  /** Each cloud Thread's ports, served on this Mac. */
+  readonly #previews: CloudPreviews
+  /** By conversation: the last view of its app a window was given, shown while its machine sleeps. */
+  readonly #views = new Map<string, unknown>()
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
+    this.#previews = new CloudPreviews({ gateway: () => options.account()?.gateway(), token: async () => options.account()?.token() })
   }
 
   /** Reads what this Mac remembers and follows each open conversation's Thread. */
@@ -254,6 +263,7 @@ export class CloudConversations {
     for (const subscription of this.#following.values()) subscription?.close()
     for (const timer of this.#changes.values()) clearTimeout(timer)
     this.#changes.clear()
+    void this.#previews.close()
     this.#following.clear()
     this.#session?.session.close()
     this.#session = undefined
@@ -483,7 +493,28 @@ export class CloudConversations {
     await this.start()
     const entry = this.#entries.get(conversationId)
     if (!entry) return undefined
-    return { conversation: conversationId, where: CLOUD_FOLDER_WHERE, call: (channel, args) => this.#call(entry, channel, args) }
+    return { conversation: conversationId, where: CLOUD_FOLDER_WHERE, call: (channel, args) => (channel === "mako:thread-app" ? this.#appView(entry, args) : this.#call(entry, channel, args)) }
+  }
+
+  /**
+   * A window's look at the app in a cloud conversation's folder, which it keeps asking for: asked passively, so a window
+   * left open neither wakes a sleeping machine nor keeps it running; while it sleeps, the last view seen (its app
+   * paused with it, still in memory). The app's address is this Mac's preview of its port, which a click wakes.
+   */
+  async #appView(entry: Entry, args: readonly unknown[]): Promise<EncodedValue> {
+    let view: unknown
+    try {
+      view = decodeRuntimeValue(await this.#callThread(entry.threadId, "mako:thread-app", args, { conversationId: entry.conversationId, passive: true }))
+      this.#views.set(entry.conversationId, view)
+    } catch (error) {
+      const kept = this.#views.get(entry.conversationId)
+      // Asleep is a call the gateway didn't apply; any other failure is the machine's, said as it is.
+      if (!(error instanceof RuntimeDisconnectedError && !error.unconfirmed) || kept === undefined) throw error
+      view = kept
+    }
+    const ready = ReadyAddressSchema.safeParse(view)
+    if (!ready.success) return encodeRuntimeValue(view)
+    return encodeRuntimeValue({ ...ready.data, address: await this.#previews.address(entry.threadId, ready.data.address.port) })
   }
 
   /**
@@ -498,13 +529,15 @@ export class CloudConversations {
   }
 
   /** `#call` to a Thread by its ID, for its conversation when it has one, or made ahead of a person's message. */
-  async #callThread(threadId: string, channel: string, args: readonly unknown[], how: { conversationId?: string; ahead?: boolean }): Promise<EncodedValue> {
+  async #callThread(threadId: string, channel: string, args: readonly unknown[], how: { conversationId?: string; ahead?: boolean; passive?: boolean }): Promise<EncodedValue> {
     const { session, deviceId } = await this.#connected()
     const actor: Actor = { kind: "client", client: "desktop", deviceId }
     const calls: GatewayHostCallsOptions = { threadId, actor, history: hostHistoryPaging() }
     if (how.ahead) calls.ahead = true
+    if (how.passive) calls.passive = true
     const send = gatewayHostCalls(session, calls).call(channel, args)
-    const repeatable = hostCallReplay(channel) !== "never"
+    // A passive look is answered at once, asleep or not; it's never waited out.
+    const repeatable = !how.passive && hostCallReplay(channel) !== "never"
     const began = performance.now()
     for (let attempt = 1; ; attempt++) {
       try {

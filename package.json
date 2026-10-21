@@ -109,7 +109,7 @@
     "test:cloud-account": "tsx scripts/test-cloud-account.ts",
     "test:machine-runtime": "tsx scripts/test-machine-runtime.ts",
     "test:client": "npm run -s build --workspace @mako/client && node packages/client/test/client.mjs && tsx scripts/test-mako-client.ts",
-    "test:cloud-conversations": "tsx scripts/test-cloud-conversations.ts",
+    "test:cloud-conversations": "tsx scripts/test-cloud-conversations.ts && tsx scripts/test-cloud-previews.ts",
     "test:telemetry": "tsx scripts/test-telemetry.ts",
     "test:host": "tsx scripts/test-host.ts",
     "test:host-linux": "npm run build:control-runtime && node scripts/test-host-linux.mjs",

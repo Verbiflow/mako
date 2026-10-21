@@ -18,7 +18,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, ELSEWHERE_CALLS, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -547,11 +547,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     route: async (channel, args) => {
       // A window whose folder is a conversation's on its machine reads and changes it there, and is told what only
       // this Mac can do.
-      const elsewhere = workspaceClients.opened(hostClient())?.active.elsewhere
-      if (elsewhere) {
+      const tab = workspaceClients.opened(hostClient())?.active
+      const elsewhere = tab?.elsewhere
+      if (tab && elsewhere) {
         const refusal = elsewhereRefusal(channel, elsewhere.where)
         if (refusal) throw new Error(refusal)
-        if (ELSEWHERE_CALLS.has(channel)) return { handled: true, value: await elsewhere.call(channel, args) }
+        if (answeredElsewhere(channel, args, tab.workspace)) return { handled: true, value: await elsewhere.call(channel, args) }
       }
       const cloud = await cloudConversations?.route(channel, args)
       return cloud?.handled ? cloud : opened.route(channel, args)

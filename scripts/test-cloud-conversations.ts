@@ -59,6 +59,7 @@ async function cloudMachine(reach: Reach = {}) {
     invoke: async (channel, args) => {
       calls.push({ channel, args })
       if (channel === "mako:boot") return JSON.stringify({ activeTabId: "tab-1", tabs: [{ id: "tab-1", session: { meta: { cwd: CLONE } } }] })
+      if (channel === "mako:thread-app") return JSON.stringify({ kind: "ready", project: "Hello-World", phase: "running", address: { host: "t.thread.localhost", port: 20000 }, processes: [], checks: [] })
       if (channel === "mako:live-start") {
         const [harness, cwd, options] = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string() }).loose()]).parse(args)
         return JSON.stringify({ session: { id: options.conversationId, harness, cwd, status: "running" }, revision: 1, createdAt: 1, requests: [] })
@@ -78,6 +79,7 @@ async function cloudMachine(reach: Reach = {}) {
   const bases: CloudRepository[] = []
   const account: CloudAccount = {
     token: async () => "token",
+    gateway: () => new URL("http://gateway.invalid"),
     id: async () => "account",
     deviceId: async () => deviceId,
     session: () =>
@@ -105,7 +107,7 @@ async function cloudMachine(reach: Reach = {}) {
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, asked, machineState, bases, batch, network }
+  return { account, calls, created, asked, machineState, bases, batch, network, served }
 }
 
 /**
@@ -452,6 +454,7 @@ test("a close is taken at once while nothing runs the Thread, and reaches the ma
   const created: string[] = []
   const account: CloudAccount = {
     token: async () => "token",
+    gateway: () => new URL("http://gateway.invalid"),
     id: async () => "account",
     deviceId: async () => deviceId,
     session: () => sessionOf(client),
@@ -630,4 +633,31 @@ test("a cloud conversation's folder is read on its machine, by its conversation:
   await until("the first's change told", () => changed.length === 1, 3_000)
   await new Promise((resolve) => setTimeout(resolve, 1_200))
   assert.deepEqual(changed, [first], "five batches, one change, and none for the other conversation")
+})
+
+test("a cloud app's view is asked passively, its address is this Mac's preview of the port, and while its machine sleeps the last one is shown", async () => {
+  const machine = await cloudMachine()
+  const passive: boolean[] = []
+  const session = machine.account.session
+  machine.account.session = () => {
+    const opened = session()
+    return { ...opened, call: (operation) => (operation.op === "host.thread-app" && passive.push(operation.passive === true), opened.call(operation)) }
+  }
+  const { router } = conversations(machine.account, join(scratch, "app-view", "conversations.json"))
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }])
+  const folder = await router.folder(conversationId)
+  const ViewSchema = z.object({ kind: z.string(), phase: z.string(), address: z.object({ host: z.string(), port: z.number() }) }).loose()
+  const view = ViewSchema.parse(decodeRuntimeValue(await folder!.call("mako:thread-app", [CLONE])))
+  assert.equal(view.phase, "running")
+  assert.equal(view.address.host, `${machine.created[0]}.cloud.localhost`, "the app at this Mac's preview of its port")
+  assert.notEqual(view.address.port, 20000)
+  assert.deepEqual(passive, [true], "a window's look, never a person's call")
+  // The machine goes to sleep: no runtime answers; the window is shown the last view, and nothing waits or wakes.
+  await machine.served.close()
+  const started = performance.now()
+  const asleep = ViewSchema.parse(decodeRuntimeValue(await folder!.call("mako:thread-app", [CLONE])))
+  assert.deepEqual(asleep, view)
+  assert.ok(performance.now() - started < 1_000, "answered at once, never waited out")
+  assert.deepEqual(passive, [true, true])
 })

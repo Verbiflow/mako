@@ -48,7 +48,7 @@ export { ArtifactPreviews, type ProviderArtifactPreview } from "./artifact-previ
 export { Automations } from "./automations.js"
 export { checkoutConversations } from "./checkout-conversations.js"
 export { WorkspaceClients } from "./clients.js"
-export { ELSEWHERE_CALLS, elsewhereRefusal, type ElsewhereFolder } from "./elsewhere.js"
+export { answeredElsewhere, elsewhereRefusal, type ElsewhereFolder } from "./elsewhere.js"
 export type { Relocation, WorkspaceConversations } from "./conversations.js"
 export { resolveFilePreview } from "./file-previews.js"
 export { fileResponse, localFile } from "./file-response.js"
