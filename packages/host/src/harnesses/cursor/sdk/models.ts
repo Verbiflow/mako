@@ -59,10 +59,15 @@ export const CURSOR_SDK_AUTH_FILE = join(".cursor", "sdk", "auth.json")
  * the SDK may sign in some other way, so no answer is kept.
  */
 export async function cursorCredentialScope(env: NodeJS.ProcessEnv): Promise<string | undefined> {
-  const settings = Object.entries(env).filter(([name, value]) => name.startsWith("CURSOR_") && value !== undefined).sort(([a], [b]) => a.localeCompare(b))
+  const settings = cursorSettings(env)
   const file = env.CURSOR_API_KEY ? null : await readFile(join(env.HOME ?? homedir(), CURSOR_SDK_AUTH_FILE), "utf8").catch(() => undefined)
   if (file === undefined) return undefined
   return createHash("sha256").update(JSON.stringify([settings, file])).digest("hex")
+}
+
+/** An environment's Cursor settings, by name: what, beside the SDK's own sign-in file, says which account a child is. */
+export function cursorSettings(env: NodeJS.ProcessEnv): Array<[string, string]> {
+  return Object.entries(env).flatMap(([name, value]): Array<[string, string]> => (name.startsWith("CURSOR_") && value !== undefined ? [[name, value]] : [])).sort(([a], [b]) => a.localeCompare(b))
 }
 
 interface AccountEntry<T> {

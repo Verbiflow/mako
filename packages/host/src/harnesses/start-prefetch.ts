@@ -25,6 +25,11 @@ export interface StartPrefetch {
    * the start asks nothing a read ahead could.
    */
   signedIn?(env: NodeJS.ProcessEnv): Promise<void>
+  /**
+   * Stops what `run` keeps for `signedIn` (Cursor's child, its SDK loaded), for when no sign-in will come. Without
+   * it, `signedIn` or a time limit stops it.
+   */
+  release?(): void
 }
 
 /** A harness's own process as its start spawns it. */
@@ -65,7 +70,7 @@ const READERS = 8
 /** Each file is split into slices of this much, shared out among the readers. */
 const SLICE_BYTES = 8 << 20
 
-/** Both halves of `prefetch`, together. Never throws. */
+/** Both halves of `prefetch`, together. Never throws. `run` may keep its process for `signedIn` (`release`). */
 export async function runPrefetch(prefetch: StartPrefetch, env: NodeJS.ProcessEnv, cwd: string, owner: string): Promise<PrefetchOutcome> {
   const began = performance.now()
   const [read, answered] = await Promise.all([
