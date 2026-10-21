@@ -28,7 +28,10 @@ try {
     }
     assert.ok(prefetch, `${provider} declares startPrefetch`)
     const outcome = await runPrefetch(prefetch, env, home, `prove:${provider}`)
+    prefetch.release?.()
     const again = await runPrefetch(prefetch, env, home, `prove:${provider}`)
+    // No sign-in comes in a scratch home: what `run` kept for one is stopped.
+    prefetch.release?.()
     const files = await prefetch.files(env)
     assert.ok(files.length > 0, `${provider} names the files its start reads`)
     const ok = outcome.answered && again.answered

@@ -1,4 +1,3 @@
-import { answersId, type PrefetchLaunch } from "../../start-prefetch.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { ProviderStartupWatch, type StartupWatchOptions } from "../../provider-startup.js"
 import { mkdirSync, readFileSync } from "node:fs"
@@ -144,18 +143,14 @@ export function cursorSdkChildEntry(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "child.js")
 }
 
-/**
- * The SDK's child as a session spawns it, and the `hello` it's asked first, which it answers once it has loaded the
- * SDK: what its client runs, and what a `startPrefetch` runs ahead.
- */
-export function cursorSdkChild(options: Pick<CursorSdkClientOptions, "env" | "entry" | "execPath" | "heapSnapshots">): PrefetchLaunch {
+/** The SDK's child as its client spawns it. */
+function cursorSdkChild(options: Pick<CursorSdkClientOptions, "env" | "entry" | "execPath" | "heapSnapshots">) {
   const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
   delete env.NODE_OPTIONS
   return {
     command: headlessNodeExecutable(options.execPath),
     args: [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? cursorSdkChildEntry()],
     env,
-    exchange: [{ send: JSON.stringify({ id: 0, method: "hello" } satisfies SdkRequest), answer: answersId(0) }],
   }
 }
 

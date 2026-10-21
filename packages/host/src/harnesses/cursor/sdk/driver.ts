@@ -28,9 +28,8 @@ import {
   type ProviderSteerResult,
 } from "../../live-driver.js"
 import type { CursorSdkAuth, CursorSdkProbeClient, CursorSdkSpawnOptions } from "./auth.js"
-import { CursorSdkClient, CursorSdkError, cursorSdkChild, cursorSdkPackages } from "./client.js"
-import { prefetchProcess } from "../../start-prefetch.js"
-import { createCursorIdentityCache, createCursorModelCache, type CursorIdentityCache, type CursorModelCache } from "./models.js"
+import { CursorSdkClient, CursorSdkError, cursorSdkPackages } from "./client.js"
+import { createCursorIdentityCache, createCursorModelCache, cursorSettings, type CursorIdentityCache, type CursorModelCache } from "./models.js"
 import { CURSOR_SDK_DEFAULT_MODE, CURSOR_SDK_MODES, isCursorSdkModeId } from "./modes.js"
 import { cursorUnfinishedToolNote, type CursorSdkModelSelection, type CursorTurnOutcome } from "@mako/sessions/cursor-sdk-content"
 import { cursorConfigOptions, CursorDecoder, type CursorEffect } from "./decoder.js"
@@ -50,6 +49,16 @@ import { cursorSdkExitReason } from "./wire.js"
 /** What a live conversation needs from its child beyond a probe. */
 export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill">
 const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me, kept an hour per credential" } as const
+
+/** How long the run-ahead's child waits for the stage after sign-in, which comes within seconds of a machine's boot. */
+const AHEAD_HOLD_MS = 60_000
+
+interface Ahead {
+  env: NodeJS.ProcessEnv
+  /** Its SDK loaded, or undefined when it didn't answer `hello`. */
+  ready: Promise<CursorSdkProbeClient | undefined>
+  release(): void
+}
 
 export interface CursorSdkDriverDependencies {
   auth: CursorSdkAuth
@@ -309,6 +318,21 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   const sessions = engine.sessions
   const modelCache = dependencies.modelCache ?? createCursorModelCache(dependencies.now)
   const identityCache = dependencies.identityCache ?? createCursorIdentityCache(dependencies.now)
+  /**
+   * The child the start run ahead spawned, kept with its SDK loaded for the stage after sign-in: a third child loading
+   * the SDK beside the run-ahead's and the session's held a quick start up by 1 s on a 2-vCPU machine (2026-10-20).
+   */
+  let ahead: Ahead | undefined
+
+  function spawnProbe(env: NodeJS.ProcessEnv, cwd: string, owner: string): CursorSdkProbeClient {
+    const spawn: CursorSdkSpawnOptions = { owner, cwd, env, onEvent: () => undefined }
+    return dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn)
+  }
+
+  /** Asks what a start asks first on `client` and keeps the answers for `env`'s credential. */
+  async function askAhead(client: CursorSdkProbeClient, env: NodeJS.ProcessEnv): Promise<void> {
+    await Promise.all([loadModels(client, env), identityCache(env, () => client.request("me", undefined))])
+  }
 
   const now = () => dependencies.now?.() ?? Date.now()
 
@@ -464,20 +488,51 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // executor disposes every shell it started when the run ends.
     backgroundStop: { kind: "ends-with-turn", evidence: "The local SDK disposes the shells a run started when the run ends, and a run stays running while a subagent it started works, so neither outlives its turn, and Stop ends the run." },
     startPrefetch: {
-      via: "The SDK's child, spawned as a session spawns it, until it answers `hello` with the SDK loaded, with the SDK's packages read alongside; once signed in, the account's models and identity (`me`), 1.1–1.6 s of every start (2026-10-20), asked by one child and kept an hour for the start.",
+      via: "The SDK's child, spawned as a session spawns it, until it answers `hello` with the SDK loaded, with the SDK's packages read alongside, and kept; once signed in, the account's models and identity (`me`), 1.1–1.6 s of every start (2026-10-20), asked on that child and kept an hour for the start.",
       files: async () => cursorSdkPackages(),
-      run: (env, cwd, owner) => prefetchProcess(cursorSdkChild({ env }), cwd, owner),
+      run: async (env, cwd, owner) => {
+        ahead?.release()
+        const client = spawnProbe(env, cwd, owner)
+        const held: Ahead = {
+          env,
+          ready: client.hello().then(() => client, () => undefined),
+          release: () => {
+            clearTimeout(timer)
+            if (ahead === held) ahead = undefined
+            void client.close(2_000).catch(() => undefined)
+          },
+        }
+        const timer = setTimeout(held.release, AHEAD_HOLD_MS)
+        timer.unref()
+        ahead = held
+        const ready = await held.ready
+        if (!ready) held.release()
+        return ready !== undefined
+      },
       signedIn: async (base) => {
         const { env } = await dependencies.auth.childLaunch(base)
-        const spawn: CursorSdkSpawnOptions = { owner: "prefetch:cursor", cwd: homedir(), env, onEvent: () => undefined }
-        const client = dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn)
+        const held = ahead
+        // The held child runs as the sign-in it was spawned with: a key resolved since is another account's.
+        if (held && JSON.stringify(cursorSettings(held.env)) !== JSON.stringify(cursorSettings(env))) held.release()
+        else if (held) {
+          try {
+            const client = await held.ready
+            if (client) return await askAhead(client, env)
+          } finally {
+            held.release()
+          }
+        }
+        // A session already asked what this would; its answers are kept.
+        if (sessions.size > 0) return
+        const client = spawnProbe(env, homedir(), "prefetch:cursor")
         try {
           await client.hello()
-          await Promise.all([loadModels(client, env), identityCache(env, () => client.request("me", undefined))])
+          await askAhead(client, env)
         } finally {
           await client.close(2_000)
         }
       },
+      release: () => ahead?.release(),
     },
     turnRecovery: {
       kind: "continues",
