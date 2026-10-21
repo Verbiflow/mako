@@ -17,6 +17,7 @@ import {
 } from "@mako/protocol"
 import { z } from "zod"
 import { followHostLog, hostLog, hostWarn, type HostLogLine } from "../base/host-log.js"
+import { cpuBetween, describeCpu, sampleCpu, type CpuSample } from "./process-cpu.js"
 import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
@@ -49,6 +50,8 @@ export type MachineRuntimeOptions = {
   prefetchSignedIn(harness: string): Promise<{ ms: number } | undefined>
   /** What the host is working on, as its lifecycle lists it: what the machine reports, so its Thread keeps it running. */
   work(): LifecycleWork[]
+  /** Every process's CPU time so far (`/proc`); undefined off Linux. Tests give their own. */
+  sampleCpu?: () => Promise<CpuSample | undefined>
   now?: () => number
 }
 
@@ -107,6 +110,8 @@ export class MachineRuntime {
   #installing: Promise<void> | undefined
   /** The harness the machine was asked to run a start ahead for, and the installs its signed-in stage last ran after. */
   #ahead: string | undefined
+  /** Each harness launch running, by its CPU sample at its start. */
+  readonly #launches = new Map<string, Promise<CpuSample | undefined>>()
   #warmedAfter: readonly CloudSignInInstall[] | undefined
   #nextSignIns: SignIns | undefined
   /** The workspace opened or opening, so the agent saying it again doesn't open it again. */
@@ -126,7 +131,10 @@ export class MachineRuntime {
   }
 
   start(): void {
-    this.#unfollow = followHostLog((line) => this.#toTimeline(line))
+    this.#unfollow = followHostLog((line) => {
+      this.#launchCpu(line)
+      this.#toTimeline(line)
+    })
     const lines = createInterface({ input: this.#options.agent, crlfDelay: Infinity })
     lines.on("line", (line) => this.#fromAgent(line))
     lines.on("close", () => {
@@ -233,6 +241,28 @@ export class MachineRuntime {
     void this.#options.prefetchSignedIn(harness).then((outcome) => {
       if (outcome) hostLog("machine", "a start's sign-in stage was run ahead", { harness, ms: outcome.ms })
     }, (error: Error) => hostWarn("machine", "a start's sign-in stage wasn't run ahead", { harness, error: error.message }))
+  }
+
+  /**
+   * What used the machine's CPU while each harness launch ran, said once it ends: a start that's slow on a copy and
+   * quick on an idle one is slow for what ran beside it, which no phase of its own names.
+   */
+  #launchCpu(line: HostLogLine): void {
+    const fields = line.fields
+    if (line.scope !== "provider-startup" || fields?.phase !== "launch") return
+    const key = `${String(fields.provider)}:${String(fields.attempt)}`
+    const sample = this.#options.sampleCpu ?? sampleCpu
+    if (fields.state === "started") {
+      this.#launches.set(key, sample().catch(() => undefined))
+      return
+    }
+    const before = this.#launches.get(key)
+    this.#launches.delete(key)
+    if (!before) return
+    void Promise.all([before, sample().catch(() => undefined)]).then(([start, end]) => {
+      if (!start || !end) return
+      hostLog("machine", "cpu while a harness started", { harness: String(fields.provider), conversation: String(fields.conversation).slice(0, 8), cpu: describeCpu(cpuBetween(start, end)) })
+    })
   }
 
   /** A line of the host's for the agent's log, when it's one a start's timeline shows and the channel can take it. */
