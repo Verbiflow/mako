@@ -17,6 +17,7 @@ import type { NativeResumeEvidence } from "../../native-continuation.js"
 import { inspectNativeSession as inspectNativeSource } from "../../native-continuation.js"
 import { cursorProcessProbe } from "../process-probe.js"
 import { hostLog, hostWarn } from "../../../base/host-log.js"
+import { errorMessage } from "../../../base/error-message.js"
 import type { ProviderLaunchTrace } from "../../provider-launch.js"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LivePermissionResponse, type LiveSessionState, type PromptAttachment } from "../../../contracts/providers-acp.js"
 import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
@@ -43,21 +44,35 @@ import type {
   SdkImportSource,
   SdkMcpServer,
   SdkModelListItem,
+  SdkResult,
   SdkRunResult,
 } from "./wire.js"
 import { cursorSdkExitReason } from "./wire.js"
 /** What a live conversation needs from its child beyond a probe. */
-export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill">
+export type CursorSdkLiveClient = CursorSdkProbeClient & Pick<CursorSdkClient, "exited" | "alive" | "kill"> & Partial<Pick<CursorSdkClient, "adopt">>
 const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me" } as const
 
-/** How long the run-ahead's child waits for the stage after sign-in, which comes within seconds of a machine's boot. */
-const AHEAD_HOLD_MS = 60_000
+/**
+ * How long the run-ahead's child waits for the start that takes it: a cloud machine boots on the first keystroke of
+ * its Thread's first message, which may take minutes to write.
+ */
+const AHEAD_HOLD_MS = 10 * 60_000
 
 interface Ahead {
+  /** The environment it was spawned with: only a start whose account environment is this one takes it. */
   env: NodeJS.ProcessEnv
-  /** Its SDK loaded, or undefined when it didn't answer `hello`. */
-  ready: Promise<CursorSdkProbeClient | undefined>
+  /** Its SDK loaded and its answer to `hello`, or undefined when it didn't answer. */
+  ready: Promise<{ client: CursorSdkLiveClient; hello: SdkResult<"hello"> } | undefined>
+  /** Makes it a start's: nothing here stops it from then on. */
+  claim(): void
+  /** Stops it, unless a start claimed it. */
   release(): void
+}
+
+/** Two environments alike in every variable they set. */
+function sameEnvironment(left: NodeJS.ProcessEnv, right: NodeJS.ProcessEnv): boolean {
+  const entries = (env: NodeJS.ProcessEnv) => JSON.stringify(Object.entries(env).filter(([, value]) => value !== undefined).sort(([a], [b]) => a.localeCompare(b)))
+  return entries(left) === entries(right)
 }
 
 export interface CursorSdkDriverDependencies {
@@ -317,14 +332,53 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   const sessions = engine.sessions
   const modelCache = dependencies.modelCache ?? createCursorModelCache(dependencies.now)
   /**
-   * The child the start run ahead spawned, kept with its SDK loaded for the stage after sign-in: a third child loading
-   * the SDK beside the run-ahead's and the session's held a quick start up by 1 s on a 2-vCPU machine (2026-10-20).
+   * The child the start run ahead spawned, as a session's is spawned, kept with its SDK loaded: the stage after sign-in
+   * asks on it (a third child loading the SDK beside the run-ahead's and the session's held a quick start up by 1 s on
+   * a 2-vCPU machine, 2026-10-20), and the start takes it as its own (`take`), its SDK loaded and its connection made.
    */
   let ahead: Ahead | undefined
 
-  function spawnProbe(env: NodeJS.ProcessEnv, cwd: string, owner: string): CursorSdkProbeClient {
-    const spawn: CursorSdkSpawnOptions = { owner, cwd, env, onEvent: () => undefined }
-    return dependencies.client ? dependencies.client(spawn) : new CursorSdkClient(spawn)
+  /** A child as every session's is spawned, the run-ahead's included. */
+  function spawnChild(env: NodeJS.ProcessEnv, cwd: string, owner: string, onEvent: CursorSdkSpawnOptions["onEvent"] = () => undefined): CursorSdkLiveClient {
+    const spawn: CursorSdkSpawnOptions = { owner, cwd, env, onEvent }
+    return dependencies.client ? dependencies.client(spawn) : new CursorSdkClient({ ...spawn, heapSnapshots: dependencies.heapSnapshots })
+  }
+
+  /**
+   * The run-ahead's child made the session's: once loaded, it takes the session's environment and folder before any
+   * agent opens. Undefined when it didn't load or can't be taken; a session then spawns its own, as without it.
+   */
+  async function adopt(held: Ahead, spawn: CursorSdkSpawnOptions): Promise<{ client: CursorSdkLiveClient; hello: SdkResult<"hello"> } | undefined> {
+    const ready = await held.ready
+    if (!ready) return undefined
+    if (!ready.client.alive || !ready.client.adopt) {
+      ready.client.kill()
+      return undefined
+    }
+    try {
+      await ready.client.adopt({ owner: spawn.owner, cwd: spawn.cwd, env: spawn.env, onEvent: spawn.onEvent })
+      return ready
+    } catch (error) {
+      hostWarn("cursor-sdk", "the child run ahead couldn't be taken; spawning the session's own", { conversation: spawn.owner, error: errorMessage({ error }) })
+      ready.client.kill()
+      return undefined
+    }
+  }
+
+  /**
+   * The run-ahead's child, for a start whose account environment is the one it was spawned with: the same credential,
+   * settings and everything else, so it differs from a child spawned for the session only by what `adopt` gives it.
+   * Any other start stops it.
+   */
+  function take(accountEnvironment: NodeJS.ProcessEnv): Ahead | undefined {
+    const held = ahead
+    if (!held) return undefined
+    if (!sameEnvironment(held.env, accountEnvironment)) {
+      held.release()
+      return undefined
+    }
+    held.claim()
+    return held
   }
 
   /** Asks the account's models on `client`, kept for `env`'s credential, where the start finds them. */
@@ -488,16 +542,23 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     startPrefetch: {
       via: "The SDK's child, spawned as a session spawns it, until it answers `hello` with the SDK loaded, with the SDK's packages read alongside, and kept; once signed in, the account's models (1.3–1.5 s of a start, 2026-10-20), asked on that child and kept an hour for the start.",
       files: async () => cursorSdkPackages(),
+      // A start that comes while it loads takes it as it is (`take`), so its stop is not this run's to act on.
       run: async (env, cwd, owner) => {
         ahead?.release()
-        const client = spawnProbe(env, cwd, owner)
+        const client = spawnChild(env, cwd, owner)
+        let claimed = false
         const held: Ahead = {
           env,
-          ready: client.hello().then(() => client, () => undefined),
+          ready: client.hello().then((hello) => ({ client, hello }), () => undefined),
+          claim: () => {
+            claimed = true
+            clearTimeout(timer)
+            if (ahead === held) ahead = undefined
+          },
           release: () => {
             clearTimeout(timer)
             if (ahead === held) ahead = undefined
-            void client.close(2_000).catch(() => undefined)
+            if (!claimed) void client.close(2_000).catch(() => undefined)
           },
         }
         const timer = setTimeout(held.release, AHEAD_HOLD_MS)
@@ -513,16 +574,12 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         // The held child runs as the sign-in it was spawned with: a key resolved since is another account's.
         if (held && JSON.stringify(cursorSettings(held.env)) !== JSON.stringify(cursorSettings(env))) held.release()
         else if (held) {
-          try {
-            const client = await held.ready
-            if (client) return await askAhead(client, env)
-          } finally {
-            held.release()
-          }
+          const ready = await held.ready
+          if (ready) return askAhead(ready.client, env)
         }
         // A session already asked what this would; its answers are kept.
         if (sessions.size > 0) return
-        const client = spawnProbe(env, homedir(), "prefetch:cursor")
+        const client = spawnChild(env, homedir(), "prefetch:cursor")
         try {
           await client.hello()
           await askAhead(client, env)
@@ -574,7 +631,9 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           if (live) receive(engine, live, event)
         },
       }
-      const client = trace.sync("spawn", () => dependencies.client ? dependencies.client(spawn) : new CursorSdkClient({ ...spawn, heapSnapshots: dependencies.heapSnapshots }))
+      const held = take(accountEnvironment)
+      const adopted = held && await trace.step("adoption", () => adopt(held, spawn))
+      const client = adopted?.client ?? trace.sync("spawn", () => spawnChild(spawn.env, spawn.cwd, spawn.owner, spawn.onEvent))
       const context = launchContext("cursor-sdk-child", CURSOR_NATIVE_IDENTITY, options.accountLaunch.account)
       context.credential = launch.credential
       const account = launch.credential.kind === "configured" && launch.credential.source === "account"
@@ -637,7 +696,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       // After the handler above, which draws the exit into the stream: the child is gone, so the launch's stream is finished.
       void live.client.exited.then(() => live.stream?.ended(), () => live.stream?.ended())
       try {
-        const hello = await trace.step("handshake", () => live.client.hello())
+        const hello = adopted ? adopted.hello : await trace.step("handshake", () => live.client.hello())
         const runtime = reportedRuntime(hello.sdkVersion, "SDK child hello.sdkVersion")
         streamRuntime(live.stream, runtime)
         engine.patch(live, { executionContext: { ...context, runtime } })

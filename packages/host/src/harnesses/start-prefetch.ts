@@ -17,8 +17,13 @@ export interface StartPrefetch {
   via: string
   /** The files the start reads from disk: its binary, or the packages its SDK loads. A folder is read whole. */
   files(env: NodeJS.ProcessEnv): Promise<string[]>
-  /** The start's first steps, run to their first answers and stopped; resolves whether they answered. Never throws. */
-  run(env: NodeJS.ProcessEnv, cwd: string, owner: string): Promise<boolean>
+  /**
+   * The start's first steps, run to their first answers and stopped; resolves whether they answered. Never throws.
+   * `stop` is aborted when a start of the harness begins: what's still running gives way to it, which on a 2-vCPU
+   * copy would otherwise run beside the start's own process (OpenCode's took a quick start from 2.0 s to 2.8 s,
+   * 2026-10-20), unless the start takes it over (Cursor's child).
+   */
+  run(env: NodeJS.ProcessEnv, cwd: string, owner: string, stop: AbortSignal): Promise<boolean>
   /**
    * What the start asks its harness's service first, asked as soon as the machine's sign-in for it is installed,
    * and kept where the start finds it (Cursor's model list, kept an hour per credential). Without it,
@@ -53,6 +58,8 @@ export const answersId = (id: number) => z.object({ id: z.literal(id) }).loose()
 
 export interface PrefetchOutcome {
   answered: boolean
+  /** A start of the harness began before `run` settled, and it gave way. */
+  stopped: boolean
   ms: number
   /** The files read alongside: how much, and how long it took. */
   readMiB: number
@@ -70,14 +77,18 @@ const READERS = 8
 /** Each file is split into slices of this much, shared out among the readers. */
 const SLICE_BYTES = 8 << 20
 
-/** Both halves of `prefetch`, together. Never throws. `run` may keep its process for `signedIn` (`release`). */
-export async function runPrefetch(prefetch: StartPrefetch, env: NodeJS.ProcessEnv, cwd: string, owner: string): Promise<PrefetchOutcome> {
+/**
+ * Both halves of `prefetch`, together. Never throws. `run` may keep its process for `signedIn` (`release`). The files
+ * are read whole even once `stop` is aborted: the start reads them too.
+ */
+export async function runPrefetch(prefetch: StartPrefetch, env: NodeJS.ProcessEnv, cwd: string, owner: string, stop: AbortSignal = new AbortController().signal): Promise<PrefetchOutcome> {
   const began = performance.now()
+  let stopped = false
   const [read, answered] = await Promise.all([
     prefetch.files({ ...env }).then(readAlongside, () => ({ bytes: 0, ms: 0 })),
-    prefetch.run({ ...env }, cwd, owner).catch(() => false),
+    prefetch.run({ ...env }, cwd, owner, stop).catch(() => false).finally(() => { stopped = stop.aborted }),
   ])
-  return { answered, ms: Math.round(performance.now() - began), readMiB: Math.round(read.bytes / 1_048_576), readMs: read.ms }
+  return { answered, stopped, ms: Math.round(performance.now() - began), readMiB: Math.round(read.bytes / 1_048_576), readMs: read.ms }
 }
 
 /** Reads `paths` whole, a file or a folder and everything in it, by `READERS` readers at once, keeping nothing. */
@@ -120,10 +131,11 @@ export async function readAlongside(paths: readonly string[]): Promise<{ bytes: 
 
 /**
  * Runs `launch` through its exchange, each step written once the one before is answered, until the last is
- * answered, it exits or `timeoutMs` passes; then stops it and its process group. Resolves whether it answered all.
+ * answered, it exits, `stop` is aborted or `timeoutMs` passes; then stops it and its process group. Resolves whether
+ * it answered all.
  */
-export function prefetchProcess(launch: PrefetchLaunch | undefined, cwd: string, owner: string, timeoutMs = PREFETCH_MS): Promise<boolean> {
-  if (!launch) return Promise.resolve(false)
+export function prefetchProcess(launch: PrefetchLaunch | undefined, cwd: string, owner: string, stop?: AbortSignal, timeoutMs = PREFETCH_MS): Promise<boolean> {
+  if (!launch || stop?.aborted) return Promise.resolve(false)
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawnProviderProcess>
     try {
@@ -138,6 +150,7 @@ export function prefetchProcess(launch: PrefetchLaunch | undefined, cwd: string,
       if (settled) return
       settled = true
       clearTimeout(timer)
+      stop?.removeEventListener("abort", stopped)
       resolve(answered)
       if (child.exitCode !== null || child.signalCode !== null) return
       child.kill("SIGTERM")
@@ -151,6 +164,8 @@ export function prefetchProcess(launch: PrefetchLaunch | undefined, cwd: string,
     }
     const timer = setTimeout(() => settle(false), timeoutMs)
     timer.unref()
+    const stopped = () => settle(false)
+    stop?.addEventListener("abort", stopped, { once: true })
     let pending = ""
     child.stdout.on("data", (chunk: Buffer) => {
       if (settled) return

@@ -3,6 +3,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { answersId, prefetchProcess, readAlongside, runPrefetch, type StartPrefetch } from "@mako/host/harnesses/start-prefetch"
+import { LiveDrivers } from "@mako/host/harnesses/live-drivers"
+import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 // A start run ahead: its files read whole by several readers, and its process taken through its exchange, each step
 // written once the one before is answered, then stopped. Nothing throws and nothing is left running.
@@ -49,7 +52,7 @@ setInterval(() => {}, 1000)`)
   assert.equal(await prefetchProcess({ ...exits, exchange }, root, "test"), false, "an exit before the answer is no answer")
   const silent = await fixture("silent", "setInterval(() => {}, 1000)")
   const began = performance.now()
-  assert.equal(await prefetchProcess({ ...silent, exchange }, root, "test", 200), false, "silence until its time is no answer")
+  assert.equal(await prefetchProcess({ ...silent, exchange }, root, "test", undefined, 200), false, "silence until its time is no answer")
   assert.ok(performance.now() - began < 2_000)
   assert.equal(await prefetchProcess({ command: join(root, "missing"), args: [], env: process.env }, root, "test"), false, "a missing executable is no answer, not a throw")
   assert.equal(await prefetchProcess({ ...server, exchange }, join(root, "gone"), "test"), false, "nor is a missing folder")
@@ -67,8 +70,46 @@ setInterval(() => {}, 1000)`)
   assert.equal(outcome.answered, true)
   assert.equal(outcome.readMiB, 0)
   const failing: StartPrefetch = { via: "test", files: async () => { throw new Error("no files") }, run: async () => { throw new Error("no start") } }
-  assert.deepEqual({ ...(await runPrefetch(failing, process.env, root, "test")), ms: 0 }, { answered: false, ms: 0, readMiB: 0, readMs: 0 }, "a half that throws is a half that didn't answer")
+  assert.deepEqual({ ...(await runPrefetch(failing, process.env, root, "test")), ms: 0 }, { answered: false, stopped: false, ms: 0, readMiB: 0, readMs: 0 }, "a half that throws is a half that didn't answer")
+
+  // A start of the harness stops what of its run ahead still runs: the process is stopped, the files still read.
+  const stop = new AbortController()
+  const stopping = prefetchProcess({ ...silent, exchange }, root, "test", stop.signal)
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  stop.abort()
+  assert.equal(await stopping, false, "a stopped run is no answer")
+  assert.equal(await prefetchProcess({ ...server, exchange }, root, "test", stop.signal), false, "and one stopped before it began spawns nothing")
+  const before = (await readFile(pids, "utf8")).trim().split("\n").length
+
+  const drivers = new LiveDrivers({
+    resolve: async () => { throw new Error("no fixture account") },
+    assertCurrent: async () => undefined, principal: async () => undefined,
+    mismatch: () => new Error("mismatch"), observeUsage: () => undefined,
+  })
+  const prototype = createHarnessHost(detachedHarnessContext(new NativeStores(false))).liveDrivers.list()[0]!
+  let runStop: AbortSignal | undefined
+  drivers.register({
+    ...prototype,
+    provider: "prefetch-fixture",
+    startPrefetch: {
+      via: "test",
+      files: async () => [join(folder, "lib", "big")],
+      run: (_env, _cwd, _owner, signal) => new Promise<boolean>((resolve) => {
+        runStop = signal
+        signal.addEventListener("abort", () => resolve(false), { once: true })
+      }),
+    },
+  })
+  const ahead = drivers.runAhead("prefetch-fixture", process.env, root)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await drivers.get("prefetch-fixture")!.start(root, { conversationId: "fixture", emit: () => {} }).catch(() => undefined)
+  const stopped = await ahead
+  assert.equal(runStop?.aborted, true, "the harness's start stops its run ahead")
+  assert.equal(stopped?.stopped, true, "and its outcome says so")
+  assert.equal(stopped?.readMiB, 20, "its files are read whole all the same")
+  assert.equal(await drivers.runAhead("not-a-harness", process.env, root), undefined)
+  assert.equal(before, (await readFile(pids, "utf8")).trim().split("\n").length)
 } finally {
   await rm(root, { recursive: true, force: true })
 }
-console.log("Start prefetch: files read whole by several readers; an exchange step by step, answered by id; no answer on exit, time, or a missing executable or folder; nothing left running")
+console.log("Start prefetch: files read whole by several readers; an exchange step by step, answered by id; no answer on exit, time, or a missing executable or folder; a start stops its harness's run ahead, its files still read; nothing left running")

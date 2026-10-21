@@ -239,6 +239,12 @@ export const SdkSideParamsSchema = z.object({
 export const SdkRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.number(), method: z.literal("hello") }),
   z.object({ id: z.number(), method: z.literal("open"), params: SdkOpenParamsSchema }),
+  /**
+   * Before `open`, a child spawned ahead takes the session's environment and folder as its own, as if it had been
+   * spawned with them: what it holds of its spawn's is its loaded SDK, its connection and its credential, which the
+   * host takes only when the session's credential is the same.
+   */
+  z.object({ id: z.number(), method: z.literal("adopt"), params: z.object({ cwd: z.string(), env: z.record(z.string(), z.string()) }) }),
   z.object({ id: z.number(), method: z.literal("send"), params: SdkSendParamsSchema }),
   z.object({ id: z.number(), method: z.literal("steer"), params: z.object({ text: z.string() }) }),
   z.object({ id: z.number(), method: z.literal("cancel") }),
@@ -286,6 +292,7 @@ export const SdkResultSchemas = {
     truncated: z.boolean().optional(),
   }),
   close: z.object({}),
+  adopt: z.object({}),
   models: z.object({ models: z.array(SdkModelListItemSchema) }),
   authStatus: SdkAuthStatusSchema,
   /**

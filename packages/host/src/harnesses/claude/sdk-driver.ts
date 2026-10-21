@@ -157,7 +157,7 @@ export interface ClaudeSdkDependencies {
   }): Promise<ClaudeQuery>
   interruptTimeoutMs?: number
   receiptTimeoutMs?: number
-  prepareApprovals?: (input: Omit<Parameters<typeof prepareClaudePermissionObserver>[0], "root">) => Promise<ClaudePermissionObserver | undefined>
+  prepareApprovals?: (input: Omit<Parameters<typeof prepareClaudePermissionObserver>[0], "root" | "settings">) => Promise<ClaudePermissionObserver | undefined>
   inspectCredentials?: (env: NodeJS.ProcessEnv) => Promise<ClaudeCredentialState>
   /** The config folder an account's sessions are kept under. */
   configDir?: (account: string) => string

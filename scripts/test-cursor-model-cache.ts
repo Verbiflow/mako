@@ -10,6 +10,7 @@ import { memorySecrets } from "@mako/host/base/secrets"
 import { CURSOR_SDK_WIRE_VERSION, type SdkMethod, type SdkResult, type SdkModelListItem } from "@mako/host/harnesses/cursor/sdk/wire"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { AppKeySchema } from "@mako/host/contracts/thread-environments"
 
 const nativeStores = new NativeStores(false)
 
@@ -117,24 +118,37 @@ let offered: string[] = []
 const spawned: string[] = []
 const methods: string[] = []
 const closed: string[] = []
-const client = (options: CursorSdkSpawnOptions): CursorSdkLiveClient => (spawned.push(options.owner), {
-  alive: true, exited: new Promise(() => {}), kill() {}, close: async () => { closed.push(options.owner) },
+/** Each child by the owner it was spawned for, what it was asked, and each adoption with what it was given. */
+const asked: string[] = []
+const adoptions: Array<{ from: string; owner: string; cwd: string; thread: string | undefined }> = []
+const client = (options: CursorSdkSpawnOptions): CursorSdkLiveClient => {
+  spawned.push(options.owner)
+  const spawnedFor = options.owner
+  let owner = options.owner
+  return {
+  alive: true, exited: new Promise(() => {}), kill() {}, close: async () => { closed.push(owner) },
   hello: async () => ({ wire: CURSOR_SDK_WIRE_VERSION, sdkVersion: "fixture", node: process.version }),
+  adopt: async (input) => {
+    adoptions.push({ from: owner, owner: input.owner, cwd: input.cwd, thread: input.env.MAKO_THREAD_DATA_DIR })
+    owner = input.owner
+  },
   request: async <M extends SdkMethod>(method: M): Promise<SdkResult<M>> => {
     methods.push(method)
+    asked.push(`${spawnedFor}:${method}`)
     // Slower than every other step, as a child's first call to Cursor is.
     if (method === "me") { await new Promise((resolve) => setTimeout(resolve, 30)); methods.push("me answered") }
     const answers: FixtureAnswers = {
       me: () => { identityRequests.push(options.env.CURSOR_API_KEY!); return { email: "same@example.test", apiKeyName: "same-name", createdAt: "2026-09-25" } },
       models: () => { requests.push(options.env.CURSOR_API_KEY!); return { models: [...catalog(options.env.CURSOR_API_KEY!), ...offered.flatMap(catalog)] } },
       // Once a newer model is offered the child reports none, so the session reports the model the driver selected.
-      open: () => ({ agentId: options.owner, model: offered.length ? undefined : { id: options.env.CURSOR_API_KEY! } }),
+      open: () => ({ agentId: owner, model: offered.length ? undefined : { id: options.env.CURSOR_API_KEY! } }),
     }
     const answer = answers[method]
     if (!answer) throw Error(`Unexpected ${method}`)
     return answer()
   },
-})
+  }
+}
 const shared = createCursorModelCache()
 const auth = new CursorSdkAuth({
   env: async () => ({ ...env }), cliKey: async () => null, openUrl: async () => { throw Error("no login") }, client,
@@ -157,37 +171,52 @@ try {
   // Each session asks who it runs as on its own child: the first call there, which its `open` would pay otherwise.
   assert.equal(identityRequests.filter((key) => key === keyA.CURSOR_API_KEY).length, 3, "the sign-in check and both of A's sessions")
 
-  // The start run ahead keeps its child, its SDK loaded, and the stage after sign-in asks the account's models on it;
-  // the start then finds them. No third child loads the SDK beside the run-ahead's and the session's.
+  // The start run ahead keeps its child, its SDK loaded; the stage after sign-in asks the account's models on it, and
+  // the start takes it as its own: no third child loads the SDK, and the session's spawns nothing.
   const keyC = { CURSOR_API_KEY: "key_fixture_c_0123456789" }
   const prefetch = driver.startPrefetch!
-  assert.equal(await prefetch.run(keyC, root, "prefetch:cursor"), true)
-  assert.equal(closed.includes("prefetch:cursor"), false, "the run-ahead's child is kept for the stage after sign-in")
+  const stop = new AbortController()
+  assert.equal(await prefetch.run(keyC, root, "prefetch:cursor", stop.signal), true)
   const children = spawned.length
   await prefetch.signedIn!(keyC)
   assert.equal(spawned.length, children, "the stage asks on the kept child")
-  assert.equal(closed.filter((owner) => owner === "prefetch:cursor").length, 1, "and stops it once it has asked")
-  assert.equal(requests.at(-1), keyC.CURSOR_API_KEY)
-  const asked = [requests.length, identityRequests.length + 1]
+  assert.deepEqual(asked.filter((entry) => entry.startsWith("prefetch:cursor:")), ["prefetch:cursor:models"])
+  assert.equal(closed.includes("prefetch:cursor"), false, "and keeps it for the start")
+  stop.abort()
   env = keyC
   methods.length = 0
-  const c = await driver.start(root, admitted("cursor", { conversationId: "C", emit() {} }, { env }))
+  const thread = { app: AppKeySchema.parse("folder-0123456789abcdef"), host: "fixture.thread.localhost", port: 20000, ports: 10, dataDir: join(root, "thread-data") }
+  const c = await driver.start(root, admitted("cursor", { conversationId: "C", emit() {}, threadEnvironment: thread }, { env }))
+  assert.equal(spawned.length, children, "the start spawns no child: it takes the one run ahead")
+  assert.deepEqual(adoptions.at(-1), { from: "prefetch:cursor", owner: "C", cwd: root, thread: thread.dataDir }, "with the session's owner, folder and environment")
+  assert.deepEqual(asked.filter((entry) => entry.startsWith("prefetch:cursor:")), ["prefetch:cursor:models", "prefetch:cursor:me", "prefetch:cursor:open"], "the session asks who it is and opens on it, its models kept")
   assert.ok(methods.indexOf("me answered") >= 0 && methods.indexOf("me answered") < methods.indexOf("open"), `open waits for the child's first call, me: ${methods.join(", ")}`)
   assert.equal(c.settings?.model, keyC.CURSOR_API_KEY)
-  assert.equal(c.executionContext?.identity?.kind, "reported", "the identity kept is still Cursor's answer")
-  assert.deepEqual([requests.length, identityRequests.length], asked, "the start asks its models of nobody, and who it is of its own child")
+  assert.equal(c.executionContext?.identity?.kind, "reported", "who it runs as is still Cursor's answer")
+  assert.equal(c.executionContext?.runtime?.kind, "reported", "the runtime is the kept child's own hello")
+  await driver.close("C")
+  assert.ok(closed.includes("C"), "the session closes the child it took")
+  const counted = requests.length
+
+  // Another account's start doesn't take it: the kept child stops and the start spawns its own.
+  assert.equal(await prefetch.run(keyB, root, "prefetch:other", new AbortController().signal), true)
+  env = keyC
+  await driver.start(root, admitted("cursor", { conversationId: "C2", emit() {} }, { env }))
+  assert.ok(closed.includes("prefetch:other"), "a child spawned for another credential is stopped")
+  assert.ok(spawned.includes("C2"), "and the start spawns its own")
+  await driver.close("C2")
 
   // A model Cursor began offering after the list was kept: asked again once, never refused from the kept list.
   offered = ["fixture-new-model"]
   const d = await driver.start(root, admitted("cursor", { conversationId: "D", emit() {}, tuning: { model: "fixture-new-model" } }, { env }))
   assert.equal(d.settings?.model, "fixture-new-model", "the start opens the model it asked for")
-  assert.equal(requests.length, asked[0] + 1, "a missing model asks Cursor once more")
+  assert.equal(requests.length, counted + 1, "a missing model asks Cursor once more")
   await assert.rejects(driver.start(root, admitted("cursor", { conversationId: "E", emit() {}, tuning: { model: "fixture-never" } }, { env })), /does not offer the model "fixture-never"/)
   // A stage with no kept child after a session already asked spawns nothing; `release` stops a child no sign-in follows.
   const before = spawned.length
   await prefetch.signedIn!({ CURSOR_API_KEY: "key_fixture_d_0123456789" })
   assert.equal(spawned.length, before, "a session has asked already: no child is spawned for the stage")
-  assert.equal(await prefetch.run(keyC, root, "prefetch:release"), true)
+  assert.equal(await prefetch.run(keyC, root, "prefetch:release", new AbortController().signal), true)
   prefetch.release!()
   await new Promise<void>((resolve) => setImmediate(resolve))
   assert.ok(closed.includes("prefetch:release"), "release stops the kept child")
@@ -196,9 +225,9 @@ try {
   const count = spawned.length
   await fresh.startPrefetch!.signedIn!(keyC)
   assert.equal(spawned.length, count + 1)
-  assert.ok(closed.includes("prefetch:cursor") && closed.filter((owner) => owner === "prefetch:cursor").length === 2, "its own child is stopped")
+  assert.equal(closed.filter((owner) => owner === "prefetch:cursor").length, 1, "its own child is stopped")
 } finally {
-  for (const id of ["A", "B", "A2", "C", "D"]) await driver.close(id)
+  for (const id of ["A", "B", "A2", "D"]) await driver.close(id)
   await rm(root, { recursive: true, force: true })
 }
 console.log("Cursor native discovery: overlap, credential/endpoint/sign-in-file isolation, an hour's reuse, refresh, failures, the signed-in stage run ahead and production startup reuse passed")

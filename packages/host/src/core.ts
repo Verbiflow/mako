@@ -24,7 +24,7 @@ import { makoViews } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, runPrefetch, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { nodePlatform } from "./base/platform.js"
@@ -539,24 +539,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       void shell.foreground.idle().then(() => harnesses.profiles.all(true)).catch(() => undefined)
       return installed
     },
+    prefetchStart: async (harness) => harnesses.host.liveDrivers.runAhead(harness, (await harnesses.tools.account(harness)).env, homedir()),
+    prefetchSignedIn: async (harness) => harnesses.host.liveDrivers.signedInAhead(harness, (await harnesses.tools.account(harness)).env),
     /**
      * Every harness's MCP servers as a start in `path` reads them. Codex and Grok list theirs by running their CLIs,
      * 1.5 to 3.5 s on a copy (2026-10-20); a copy of a base made after this finds the listing in its host's memory,
      * kept while nothing either CLI reads has changed.
      */
-    prefetchStart: async (harness) => {
-      const prefetch = harnesses.host.liveDrivers.get(harness)?.startPrefetch
-      if (!prefetch) return undefined
-      const { env } = await harnesses.tools.account(harness)
-      return runPrefetch(prefetch, env, homedir(), `prefetch:${harness}`)
-    },
-    prefetchSignedIn: async (harness) => {
-      const signedIn = harnesses.host.liveDrivers.get(harness)?.startPrefetch?.signedIn
-      if (!signedIn) return undefined
-      const began = performance.now()
-      await signedIn((await harnesses.tools.account(harness)).env)
-      return { ms: Math.round(performance.now() - began) }
-    },
     prepareFolder: async (path) => {
       await tools.mcp.discover(path)
     },

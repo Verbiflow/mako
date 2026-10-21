@@ -128,7 +128,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     },
     prefetchStart: async (harness) => {
       prefetched.push(harness)
-      return harness === "none" ? undefined : { answered: true, ms: 12, readMiB: 230, readMs: 800 }
+      return harness === "none" ? undefined : { answered: true, stopped: false, ms: 12, readMiB: 230, readMs: 800 }
     },
     prefetchSignedIn: async (harness) => {
       signedIn.push(harness)
@@ -340,7 +340,7 @@ test("the harness a machine boots for has its start run ahead, said in the host'
   agent.tell({ type: "prefetch", harness: "codex" })
   await agent.until("the start run ahead", () => agent.messages.some((message) => message.type === "log" && message.message === "a start was run ahead"))
   const said = agent.messages.find((message) => message.type === "log" && message.message === "a start was run ahead")
-  assert.deepEqual(said?.type === "log" && said.fields, { harness: "codex", ms: 12, answered: true, readMiB: 230, readMs: 800 })
+  assert.deepEqual(said?.type === "log" && said.fields, { harness: "codex", ms: 12, answered: true, stopped: false, readMiB: 230, readMs: 800 })
   agent.tellRaw(JSON.stringify({ type: "prefetch", harness: "Not A Harness" }))
   agent.tell({ type: "prefetch", harness: "none" })
   await agent.until("the second asked", () => agent.prefetched.length === 2)

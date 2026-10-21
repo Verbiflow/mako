@@ -28,7 +28,7 @@ const PROGRAMS = new Map([
   ["harnesses/opencode/resume-worker.ts", "OpenCode's resume worker (harnesses/opencode/resume.ts)"],
   ["harnesses/opencode/agent-worker.ts", "OpenCode's agent reader (harnesses/opencode/agents.ts)"],
   ["harnesses/codex/question-worker.ts", "Codex's question reader (harnesses/codex/question-reader.ts)"],
-  ["harnesses/claude/approval-settings-worker.ts", "Claude's settings worker (harnesses/claude/permission-observer.ts)"],
+  ["harnesses/claude/approval-settings-worker.ts", "Claude's settings worker (harnesses/claude/approval-settings.ts)"],
   ["harnesses/cursor/sdk/child.ts", "the Cursor SDK's child process (harnesses/cursor/sdk/client.ts)"],
 ])
 

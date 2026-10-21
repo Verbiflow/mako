@@ -8,6 +8,7 @@ import { LineAssembler } from "@mako/sessions"
 import { hostLog, hostWarn } from "../../../base/host-log.js"
 import { spawnProviderProcess } from "../../provider-process.js"
 import { headlessNodeExecutable } from "../../../base/headless-node.js"
+import { reownProviderPid } from "../../../base/provider-children.js"
 import {
   CURSOR_SDK_MAX_LINE_BYTES,
   CURSOR_SDK_WIRE_VERSION,
@@ -188,7 +189,7 @@ export class CursorSdkClient {
   private readonly child: ChildProcessWithoutNullStreams
   private readonly pending = new Map<number, Pending>()
   private readonly lines = new LineAssembler(CURSOR_SDK_MAX_LINE_BYTES)
-  private readonly options: CursorSdkClientOptions
+  private options: CursorSdkClientOptions
   private nextId = 1
   private closed = false
 
@@ -231,6 +232,17 @@ export class CursorSdkClient {
 
   get pid(): number | undefined {
     return this.child.pid
+  }
+
+  /**
+   * Makes a child spawned ahead `owner`'s, as if spawned with `cwd` and `env`: the child takes them before any agent
+   * opens, and its events go to `onEvent` from then on. Only for a child whose credential is `env`'s.
+   */
+  async adopt(input: Pick<CursorSdkClientOptions, "owner" | "cwd" | "env" | "onEvent">): Promise<void> {
+    const env = Object.fromEntries(Object.entries(cursorSdkChild({ ...this.options, env: input.env }).env).filter((entry): entry is [string, string] => entry[1] !== undefined))
+    await this.request("adopt", { cwd: input.cwd, env })
+    this.options = { ...this.options, ...input }
+    if (this.child.pid) reownProviderPid(this.child.pid, input.owner)
   }
 
   /** Confirms the child speaks this wire version before anything else is sent. */

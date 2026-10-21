@@ -731,7 +731,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       await live.api.client.shell.remove({ id: nativeId, location: { directory: live.cwd } })
     },
     startPrefetch: {
-      via: "The native server through what a start waits on: its folder's plugins active and its catalog read, which leaves its caches on disk for the next server (3.7 s cold, 1.1 s after, 2026-10-20), with its binary read alongside.",
+      via: "The native server through what a start waits on: its folder's plugins active and its catalog read, with its binary read alongside. On a copy, a server after it was up with its plugins active in 0.85–1.0 s, against 1.25–1.3 s after its binary read alone and 2.0–2.3 s cold; the run ahead itself takes 2.2–2.8 s, so a start that comes sooner stops it (2026-10-20).",
       files: async (env) => {
         const installation = await resolveOpenCodeInstallation(prefetchEnvironment(env), versions).catch(() => undefined)
         if (!installation) return []
@@ -739,11 +739,11 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
         const binary = openCodeBinaryTarget(installation.command)
         return [await realpath(binary).catch(() => binary)]
       },
-      run: async (base, cwd) => {
+      run: async (base, cwd, _owner, stop) => {
         const env = prefetchEnvironment(base)
         const installation = await resolveOpenCodeInstallation(env, versions).catch(() => undefined)
         if (!installation) return false
-        return discoverOpenCodeCatalog(installation.command, env, cwd, dependencies.servers, AbortSignal.timeout(PREFETCH_CATALOG_MS)).then(() => true, () => false)
+        return discoverOpenCodeCatalog(installation.command, env, cwd, dependencies.servers, AbortSignal.any([stop, AbortSignal.timeout(PREFETCH_CATALOG_MS)])).then(() => true, () => false)
       },
     },
     turnRecovery: {
