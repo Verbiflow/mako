@@ -57,12 +57,20 @@ const CURSOR_NATIVE_IDENTITY = { kind: "reported", via: "SDK child me" } as cons
  * its Thread's first message, which may take minutes to write.
  */
 const AHEAD_HOLD_MS = 10 * 60_000
+/**
+ * How long a start waits for the stage after sign-in still asking on the child it takes, before it stops that child
+ * and spawns its own: the stage's question normally answers within 1.5 s of being asked. On a copy one never answered,
+ * and the start that joined it waited 20 s (2026-10-20).
+ */
+const AHEAD_ASKING_MS = 3_000
 
 interface Ahead {
   /** The environment it was spawned with: only a start whose account environment is this one takes it. */
   env: NodeJS.ProcessEnv
   /** Its SDK loaded and its answer to `hello`, or undefined when it didn't answer. */
   ready: Promise<{ client: CursorSdkLiveClient; hello: SdkResult<"hello"> } | undefined>
+  /** The stage after sign-in asking on it, settled either way; a start takes it only once that has settled. */
+  asking?: Promise<void>
   /** Makes it a start's: nothing here stops it from then on. */
   claim(): void
   /** Stops it, unless a start claimed it. */
@@ -351,6 +359,19 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   async function adopt(held: Ahead, spawn: CursorSdkSpawnOptions): Promise<{ client: CursorSdkLiveClient; hello: SdkResult<"hello"> } | undefined> {
     const ready = await held.ready
     if (!ready) return undefined
+    // Taken only while it's asking nothing: its environment is replaced under no question in flight.
+    if (held.asking) {
+      let timer: NodeJS.Timeout | undefined
+      const asked = await Promise.race([held.asking.then(() => true), new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), AHEAD_ASKING_MS) })])
+      clearTimeout(timer)
+      if (!asked) {
+        hostWarn("cursor-sdk", "the child run ahead was still asking Cursor for the account's models; stopping it and spawning the session's own", { conversation: spawn.owner, waitedMs: AHEAD_ASKING_MS })
+        ready.client.kill()
+        // Its question fails with it, and leaves the model cache before the start asks its own.
+        await held.asking
+        return undefined
+      }
+    }
     if (!ready.client.alive || !ready.client.adopt) {
       ready.client.kill()
       return undefined
@@ -575,7 +596,13 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         if (held && JSON.stringify(cursorSettings(held.env)) !== JSON.stringify(cursorSettings(env))) held.release()
         else if (held) {
           const ready = await held.ready
-          if (ready) return askAhead(ready.client, env)
+          // A start that took it meanwhile asks for itself: nothing is asked on a session's child but by its session.
+          if (ahead !== held) return
+          if (ready) {
+            const asking = askAhead(ready.client, env)
+            held.asking = asking.then(() => undefined, () => undefined)
+            return asking
+          }
         }
         // A session already asked what this would; its answers are kept.
         if (sessions.size > 0) return
