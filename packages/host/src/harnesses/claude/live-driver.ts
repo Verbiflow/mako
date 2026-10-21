@@ -42,9 +42,13 @@ export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" 
         const runtime = claudeRuntime(env)
         const exchange = [{ send: CLAUDE_INITIALIZE, answer: ControlResponse }]
         // Beside it, the settings reader every start checks before it spawns loads the SDK, kept for the start.
+        // And what the start loads into the host before it spawns: the Agent SDK and its options (0.1 s before the
+        // spawn, the event loop held 0.28 s, on a copy).
         const [answered] = await Promise.all([
           prefetchProcess(runtime ? { command: claudeExecutablePath(runtime.executable), args: CLAUDE_SDK_ARGS, env, exchange } : undefined, cwd, owner, stop),
           settings.warm(),
+          heavy.claudeAgentSdk.load("read a start ahead").catch(() => undefined),
+          import("./sdk-options.js").catch(() => undefined),
         ])
         return answered
       },

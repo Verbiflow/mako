@@ -539,7 +539,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       void shell.foreground.idle().then(() => harnesses.profiles.all(true)).catch(() => undefined)
       return installed
     },
-    prefetchStart: async (harness) => harnesses.host.liveDrivers.runAhead(harness, (await harnesses.tools.account(harness)).env, homedir()),
+    prefetchStart: async (harness) => {
+      // Beside the harness's own: what every start loads into the host first, Mako's MCP servers.
+      void late.agentServers?.warm().catch((error: Error) => hostWarn("machine", "Mako's MCP servers weren't warmed", { error: error.message }))
+      return harnesses.host.liveDrivers.runAhead(harness, (await harnesses.tools.account(harness)).env, homedir())
+    },
     prefetchSignedIn: async (harness) => harnesses.host.liveDrivers.signedInAhead(harness, (await harnesses.tools.account(harness)).env),
     /**
      * Every harness's MCP servers as a start in `path` reads them. Codex and Grok list theirs by running their CLIs,
