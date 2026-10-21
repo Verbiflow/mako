@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeReviewCommand } from "./review.js"
 import { randomBytes, randomUUID } from "node:crypto"
@@ -25,7 +26,9 @@ import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../na
 import { errorMessage } from "../../base/error-message.js"
 import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
-import { openCodeServe, startOpenCodeApi } from "./native-api.js"
+import { startOpenCodeApi } from "./native-api.js"
+import { discoverOpenCodeCatalog } from "./profile.js"
+import { openCodeBinaryTarget } from "./updates.js"
 import { openCodeProcessProbeFor } from "./process-probe.js"
 import type { OpenCodeServers } from "./servers.js"
 import { resolveOpenCodeInstallation, openCodeExecutable, locateOpenCodeSession, verifyOpenCodeSession, OpenCodeVersions } from "./installation.js"
@@ -127,6 +130,18 @@ interface Live {
 
 type Engine = LiveEngineApi<Live>
 type ConnectedLive = Live & { root: string; catalog: OpenCodeCatalog; model: OpenCodeModelRef; interactions: OpenCodeInteractions }
+
+/** Long enough for a cold server on a slow copy to read its catalog; a start that comes meanwhile isn't held by it. */
+const PREFETCH_CATALOG_MS = 20_000
+
+/** A start's environment before its conversation's own: Mako's agent variables out, the launch tier's preset in. */
+function prefetchEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base }
+  delete env.CLAUDECODE
+  delete env.CLAUDE_CODE_ENTRYPOINT
+  configureOpenCodePermissions(env, openCodeLaunchAccess(undefined, undefined))
+  return env
+}
 
 export interface OpenCodeDriverDependencies {
   approvalRoot(): Promise<string>
@@ -716,15 +731,19 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       await live.api.client.shell.remove({ id: nativeId, location: { directory: live.cwd } })
     },
     startPrefetch: {
-      kind: "process",
-      via: "The native server, launched as a start launches it, until it names its endpoint.",
-      async launch(base) {
-        const env = { ...base }
-        delete env.CLAUDECODE
-        delete env.CLAUDE_CODE_ENTRYPOINT
-        configureOpenCodePermissions(env, openCodeLaunchAccess(undefined, undefined))
+      via: "The native server through what a start waits on: its folder's plugins active and its catalog read, which leaves its caches on disk for the next server (3.7 s cold, 1.1 s after, 2026-10-20), with its binary read alongside.",
+      files: async (env) => {
+        const installation = await resolveOpenCodeInstallation(prefetchEnvironment(env), versions).catch(() => undefined)
+        if (!installation) return []
+        // `opencode2` may be the 47-byte shim that runs its sibling `opencode`: read the binary it runs.
+        const binary = openCodeBinaryTarget(installation.command)
+        return [await realpath(binary).catch(() => binary)]
+      },
+      run: async (base, cwd) => {
+        const env = prefetchEnvironment(base)
         const installation = await resolveOpenCodeInstallation(env, versions).catch(() => undefined)
-        return installation && openCodeServe(installation.command, env)
+        if (!installation) return false
+        return discoverOpenCodeCatalog(installation.command, env, cwd, dependencies.servers, AbortSignal.timeout(PREFETCH_CATALOG_MS)).then(() => true, () => false)
       },
     },
     turnRecovery: {

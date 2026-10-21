@@ -1,5 +1,5 @@
-// Proves every installed harness's `startPrefetch` against its real CLI: the process its start spawns, spawned the
-// same way, reaches its first answer and is stopped, leaving nothing running. In a scratch home, so no harness reads or
+// Proves every installed harness's `startPrefetch` against its real CLI: the files its start reads are found and read,
+// and the start's first steps, run as the start runs them, are answered and stopped, leaving nothing running. In a scratch home, so no harness reads or
 // writes the person's own configuration, and without a sign-in, as a cloud machine runs it while it boots.
 //
 //   npm run build:electron && node scripts/prove-start-prefetch.mjs [harness …]
@@ -9,7 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
-import { prefetchStart } from "@mako/host/harnesses/start-prefetch"
+import { runPrefetch } from "@mako/host/harnesses/start-prefetch"
 
 const asked = process.argv.slice(2)
 const home = await mkdtemp(join(tmpdir(), "mako-start-prefetch-"))
@@ -26,17 +26,14 @@ try {
       console.log(`${provider.padEnd(9)} not installed here`)
       continue
     }
-    if (prefetch?.kind !== "process") {
-      console.log(`${provider.padEnd(9)} none: ${prefetch?.reason ?? "undeclared"}`)
-      continue
-    }
-    const launch = await prefetch.launch({ ...env }, home)
-    assert.ok(launch, `${provider} resolves what its start runs`)
-    const outcome = await prefetchStart(launch, home, `prove:${provider}`)
-    const again = await prefetchStart(launch, home, `prove:${provider}`)
+    assert.ok(prefetch, `${provider} declares startPrefetch`)
+    const outcome = await runPrefetch(prefetch, env, home, `prove:${provider}`)
+    const again = await runPrefetch(prefetch, env, home, `prove:${provider}`)
+    const files = await prefetch.files(env)
+    assert.ok(files.length > 0, `${provider} names the files its start reads`)
     const ok = outcome.answered && again.answered
     if (!ok) failed += 1
-    console.log(`${provider.padEnd(9)} ${ok ? "answered" : "DIDN'T ANSWER"}  first ${outcome.ms} ms, again ${again.ms} ms  ${launch.command.split("/").at(-1)} ${launch.args.join(" ").slice(0, 60)}`)
+    console.log(`${provider.padEnd(9)} ${ok ? "answered" : "DIDN'T ANSWER"}  first ${outcome.ms} ms (read ${outcome.readMiB} MiB in ${outcome.readMs} ms), again ${again.ms} ms  ${files.map((file) => file.split("/").slice(-2).join("/")).join(", ").slice(0, 70)}`)
   }
   // Each process is stopped once it answers; after the stop's grace, nothing may still be at work in the scratch home.
   await new Promise((resolve) => setTimeout(resolve, 2_500))

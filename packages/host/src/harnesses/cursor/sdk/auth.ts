@@ -11,6 +11,7 @@ import {
 } from "./credentials.js"
 import type { SdkEvent } from "./wire.js"
 import type { ExecutionCredential } from "../../../contracts/execution-context.js"
+import type { CursorIdentityCache } from "./models.js"
 
 /** What a sign-in or probe needs from a child: a handshake, requests, and a close. */
 export type CursorSdkProbeClient = Pick<CursorSdkClient, "hello" | "request" | "close">
@@ -75,6 +76,8 @@ export interface CursorSdkAuthOptions {
   /** Test hook: a client factory other than spawning the real child. */
   client?(options: CursorSdkSpawnOptions): CursorSdkProbeClient
   now?(): number
+  /** Where each answer of `me` is kept for the sessions of that credential, which report who they run as. */
+  identities?: CursorIdentityCache
 }
 
 /** A resolved key and where it came from; `sdk` resolves to no key because the SDK reads its own. */
@@ -280,13 +283,17 @@ export class CursorSdkAuth {
 
   /** Who a key belongs to, by Cursor's answer; throws the SDK's own error when it is refused. */
   private async verify(env: NodeJS.ProcessEnv): Promise<{ email?: string; apiKeyName: string }> {
-    const client = await this.spawn(env, () => undefined)
-    try {
-      await client.hello()
-      return await client.request("me", undefined)
-    } finally {
-      await client.close(2_000)
+    const ask = async () => {
+      const client = await this.spawn(env, () => undefined)
+      try {
+        await client.hello()
+        return await client.request("me", undefined)
+      } finally {
+        await client.close(2_000)
+      }
     }
+    // Always asked of Cursor (a refresh), and kept: a session started next reports who it runs as without asking again.
+    return this.options.identities ? this.options.identities(env, ask, true) : ask()
   }
 
   private stateOf(source: CursorKeySource, credential?: StoredCursorCredential, identity?: { email?: string; apiKeyName?: string }): CursorSdkAuthState {

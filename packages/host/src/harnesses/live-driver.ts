@@ -448,7 +448,7 @@ export type ProviderSteerResult =
  */
 export function validateLiveDriver(driver: ProviderLiveDriver): void {
   const prefetch = driver.startPrefetch
-  if (prefetch && !(prefetch.kind === "process" ? prefetch.via : prefetch.reason).trim())
+  if (prefetch && !prefetch.via.trim())
     throw new Error(`${driver.provider}: explain its start prefetch`)
   LaunchEnvironmentCapabilitySchema.parse(driver.launchEnvironment)
   NativeIdentityCapabilitySchema.parse(driver.nativeIdentity)

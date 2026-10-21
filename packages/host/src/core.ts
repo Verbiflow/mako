@@ -24,7 +24,7 @@ import { makoViews } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, prefetchStart, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, runPrefetch, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { nodePlatform } from "./base/platform.js"
@@ -80,6 +80,8 @@ export interface Core {
   prepareFolder(path: string): Promise<void>
   /** On a cloud machine as it boots: what `harness`'s start runs first, run ahead (`startPrefetch`). */
   prefetchStart(harness: string): Promise<PrefetchOutcome | undefined>
+  /** Then, once its sign-in is installed: what its start asks its service first (`startPrefetch.signedIn`). */
+  prefetchSignedIn(harness: string): Promise<{ ms: number } | undefined>
   /** Work that holds a profile host up: turns, native runs, transfers. */
   activeWork(): boolean
   /** That work, item by item, as the lifecycle lists it: what keeps a cloud machine running. */
@@ -544,11 +546,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
      */
     prefetchStart: async (harness) => {
       const prefetch = harnesses.host.liveDrivers.get(harness)?.startPrefetch
-      if (prefetch?.kind !== "process") return undefined
+      if (!prefetch) return undefined
       const { env } = await harnesses.tools.account(harness)
-      const cwd = homedir()
-      const launch = await prefetch.launch({ ...env }, cwd)
-      return launch && prefetchStart(launch, cwd, `prefetch:${harness}`)
+      return runPrefetch(prefetch, env, homedir(), `prefetch:${harness}`)
+    },
+    prefetchSignedIn: async (harness) => {
+      const signedIn = harnesses.host.liveDrivers.get(harness)?.startPrefetch?.signedIn
+      if (!signedIn) return undefined
+      const began = performance.now()
+      await signedIn((await harnesses.tools.account(harness)).env)
+      return { ms: Math.round(performance.now() - began) }
     },
     prepareFolder: async (path) => {
       await tools.mcp.discover(path)

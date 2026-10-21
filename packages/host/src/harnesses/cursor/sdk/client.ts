@@ -1,7 +1,8 @@
-import type { PrefetchLaunch } from "../../start-prefetch.js"
+import { answersId, type PrefetchLaunch } from "../../start-prefetch.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { ProviderStartupWatch, type StartupWatchOptions } from "../../provider-startup.js"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, readFileSync } from "node:fs"
+import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { LineAssembler } from "@mako/sessions"
@@ -154,7 +155,29 @@ export function cursorSdkChild(options: Pick<CursorSdkClientOptions, "env" | "en
     command: headlessNodeExecutable(options.execPath),
     args: [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? cursorSdkChildEntry()],
     env,
-    first: JSON.stringify({ id: 0, method: "hello" } satisfies SdkRequest),
+    exchange: [{ send: JSON.stringify({ id: 0, method: "hello" } satisfies SdkRequest), answer: answersId(0) }],
+  }
+}
+
+const PackageName = z.object({ name: z.string() }).loose()
+/** Whether `directory` is the `@cursor/sdk` package itself, not a folder inside it that has a manifest of its own. */
+function isCursorSdk(directory: string): boolean {
+  try {
+    return PackageName.parse(JSON.parse(readFileSync(join(directory, "package.json"), "utf8"))).name === "@cursor/sdk"
+  } catch {
+    return false
+  }
+}
+
+/** The SDK's packages the child loads: `@cursor/sdk` and its platform's build, in the scope folder they share. */
+export function cursorSdkPackages(): string[] {
+  try {
+    // The export map hides package.json from `resolve`: walk up from the entry it exposes.
+    let directory = dirname(createRequire(import.meta.url).resolve("@cursor/sdk"))
+    for (let depth = 0; depth < 6 && !isCursorSdk(directory); depth += 1) directory = dirname(directory)
+    return isCursorSdk(directory) ? [dirname(directory)] : []
+  } catch {
+    return []
   }
 }
 

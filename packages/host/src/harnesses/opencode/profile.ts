@@ -68,7 +68,7 @@ export function openCodeProfileLoader(servers: OpenCodeServers, versions = new O
  * (OpenCode refreshes models after startup) is read again rather than
  * answered from the older list.
  */
-async function discoverOpenCodeCatalog(command: string, env: NodeJS.ProcessEnv, directory: string, servers: OpenCodeServers, signal?: AbortSignal): Promise<OpenCodeCatalog> {
+export async function discoverOpenCodeCatalog(command: string, env: NodeJS.ProcessEnv, directory: string, servers: OpenCodeServers, signal?: AbortSignal): Promise<OpenCodeCatalog> {
   const trace = new ProviderLaunchTrace({ provider: "opencode", conversation: "model-discovery" }, { report() {} })
   const api = await startOpenCodeApi({ command, cwd: directory, env, conversationId: "model-discovery", trace, servers, signal })
   const stream = new AbortController()

@@ -1,4 +1,4 @@
-import type { PrefetchLaunch } from "./start-prefetch.js"
+import { answersId, type PrefetchLaunch } from "./start-prefetch.js"
 import { applyControlEnvironment } from "../control/index.js"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "../base/execution-context.js"
 import { CODEX_NATIVE_IDENTITY } from "./codex/live-driver.js"
@@ -154,11 +154,25 @@ const CODEX_INITIALIZE = {
   capabilities: CODEX_CLIENT_CAPABILITIES,
 }
 
-/** A start's app-server and its `initialize`, for the driver's `startPrefetch`. */
-export async function codexStartPrefetch(base: NodeJS.ProcessEnv): Promise<PrefetchLaunch | undefined> {
+/**
+ * A start's app-server, through `initialize` and a `thread/start` in `cwd`, for the driver's `startPrefetch`. The
+ * thread is ephemeral and never takes a turn, so Codex keeps nothing of it: a process's first `thread/start` costs it
+ * 0.4 s cold and the next process's 0.12 s (2026-10-20).
+ */
+export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string): Promise<PrefetchLaunch | undefined> {
   const command = await resolveCodexExecutable(base)
   if (!command) return undefined
-  return { command, args: CODEX_APP_SERVER_ARGS, env: codexApprovalEnvironment({ ...base }), first: JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize", params: CODEX_INITIALIZE }) }
+  const initialize = { jsonrpc: "2.0", id: 0, method: "initialize", params: CODEX_INITIALIZE }
+  const open = { jsonrpc: "2.0", id: 1, method: "thread/start", params: { cwd, ephemeral: true } }
+  return {
+    command,
+    args: CODEX_APP_SERVER_ARGS,
+    env: codexApprovalEnvironment({ ...base }),
+    exchange: [
+      { send: JSON.stringify(initialize), answer: answersId(0) },
+      { send: `${JSON.stringify({ jsonrpc: "2.0", method: "initialized" })}\n${JSON.stringify(open)}`, answer: answersId(1) },
+    ],
+  }
 }
 
 /** Codex's sessions, each an app-server this engine started and closes. */

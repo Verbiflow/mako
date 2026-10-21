@@ -44,7 +44,9 @@ export type MachineRuntimeOptions = {
   /** What a start does first in a folder, done ahead: a project base's, before its snapshot. */
   prepareFolder(path: string): Promise<void>
   /** What `harness`'s start runs first, run ahead as the machine boots; undefined for a harness without it. */
-  prefetchStart(harness: string): Promise<{ answered: boolean; ms: number } | undefined>
+  prefetchStart(harness: string): Promise<{ answered: boolean; ms: number; readMiB: number; readMs: number } | undefined>
+  /** What `harness`'s start asks its service first, asked once its sign-in is installed; undefined for a harness without it. */
+  prefetchSignedIn(harness: string): Promise<{ ms: number } | undefined>
   /** What the host is working on, as its lifecycle lists it: what the machine reports, so its Thread keeps it running. */
   work(): LifecycleWork[]
   now?: () => number
@@ -103,6 +105,9 @@ export class MachineRuntime {
   #unfollow: (() => void) | undefined
   /** One install at a time; sign-ins that arrive during one are installed after it, the newest only. */
   #installing: Promise<void> | undefined
+  /** The harness the machine was asked to run a start ahead for, and the installs its signed-in stage last ran after. */
+  #ahead: string | undefined
+  #warmedAfter: readonly CloudSignInInstall[] | undefined
   #nextSignIns: SignIns | undefined
   /** The workspace opened or opening, so the agent saying it again doesn't open it again. */
   #workspace: string | undefined
@@ -207,11 +212,27 @@ export class MachineRuntime {
   }
 
   async #prefetch(harness: string): Promise<void> {
+    this.#ahead = harness
+    this.#warmSignedIn()
     const outcome = await this.#options.prefetchStart(harness).catch((error: Error) => {
       hostWarn("machine", "a start wasn't run ahead", { harness, error: error.message })
       return undefined
     })
-    if (outcome) hostLog("machine", "a start was run ahead", { harness, ms: outcome.ms, answered: outcome.answered })
+    if (outcome) hostLog("machine", "a start was run ahead", { harness, ms: outcome.ms, answered: outcome.answered, readMiB: outcome.readMiB, readMs: outcome.readMs })
+  }
+
+  /**
+   * The signed-in stage of the start run ahead, once both are known: the harness it was asked for and its sign-in
+   * installed, whichever comes first. Again after a later install, which may be another account.
+   */
+  #warmSignedIn(): void {
+    const harness = this.#ahead
+    const installs = this.#state.signIns
+    if (!harness || installs === this.#warmedAfter || !installs.some((install) => install.harness === harness && install.status === "installed")) return
+    this.#warmedAfter = installs
+    void this.#options.prefetchSignedIn(harness).then((outcome) => {
+      if (outcome) hostLog("machine", "a start's sign-in stage was run ahead", { harness, ms: outcome.ms })
+    }, (error: Error) => hostWarn("machine", "a start's sign-in stage wasn't run ahead", { harness, error: error.message }))
   }
 
   /** A line of the host's for the agent's log, when it's one a start's timeline shows and the channel can take it. */
@@ -285,6 +306,7 @@ export class MachineRuntime {
         const failed = installed.filter((install) => install.status === "failed")
         hostLog("machine", "sign-ins installed", { installed: installed.length - failed.length, failed: failed.map((install) => install.harness).join(",") || "none" })
         this.#publish()
+        this.#warmSignedIn()
       }
     }
     this.#installing = next().finally(() => (this.#installing = undefined))

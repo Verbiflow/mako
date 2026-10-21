@@ -90,7 +90,7 @@ for (const { provider, absent } of harnesses) {
   // A cloud machine runs the start of its Thread's harness ahead as it boots: every harness says how, or why it can't.
   const prefetch = providerHost.liveDrivers.get(provider)?.startPrefetch
   assert.ok(prefetch, `${provider} declares what its start runs first (startPrefetch)`)
-  assert.ok((prefetch.kind === "process" ? prefetch.via : prefetch.reason).trim(), `${provider} explains its startPrefetch`)
+  assert.ok(prefetch.via.trim(), `${provider} explains its startPrefetch`)
   const runner = providerHost.nativeRunners.get(provider)
   if (runner) {
     assert.ok(runner.transport.trim(), `${provider} declares its actual headless transport`)
