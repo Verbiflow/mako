@@ -78,6 +78,13 @@ export const OperationEnvelopeSchema = z
      * is. Without it, the operation waits for the disk. Like `ahead`, it's the gateway's to read.
      */
     repeatable: z.literal(true).optional(),
+    /**
+     * A window's own look, polled, not a person acting (an app's status a window keeps showing): if the Thread's
+     * runtime is asleep, the gateway answers at once that it is, keeps nothing and wakes nothing; and the call never
+     * counts as a person using the Thread, so a window left open doesn't keep its machine running. Only for a read.
+     * Like `ahead`, it's the gateway's to read.
+     */
+    passive: z.literal(true).optional(),
   })
   .strict()
 
