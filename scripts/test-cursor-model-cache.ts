@@ -226,6 +226,40 @@ try {
   await fresh.startPrefetch!.signedIn!(keyC)
   assert.equal(spawned.length, count + 1)
   assert.equal(closed.filter((owner) => owner === "prefetch:cursor").length, 1, "its own child is stopped")
+  // The stage's question never answers on the kept child: a start waits for it 3 s, not the 20 s a hung question took
+  // on a copy, then stops that child, and its own question and session go on as without one run ahead.
+  {
+    const keyH = { CURSOR_API_KEY: "key_fixture_h_0123456789" }
+    const killed: string[] = []
+    let asked = false
+    const hanging = (options: CursorSdkSpawnOptions): CursorSdkLiveClient => {
+      const base = client(options)
+      if (options.owner !== "prefetch:hang") return base
+      let fail: (error: Error) => void = () => undefined
+      return {
+        ...base,
+        kill: () => { killed.push(options.owner); fail(new Error("The Cursor SDK process closed before answering")) },
+        request: async <M extends SdkMethod>(method: M, params: Parameters<typeof base.request<M>>[1]): Promise<SdkResult<M>> => {
+          if (method !== "models") return base.request(method, params)
+          asked = true
+          return new Promise<SdkResult<M>>((_, reject) => { fail = reject })
+        },
+      }
+    }
+    const hung = createCursorSdkDriver({ stores: nativeStores, auth, stateRoot: () => root, home: root, client: hanging, modelCache: createCursorModelCache() })
+    assert.equal(await hung.startPrefetch!.run(keyH, root, "prefetch:hang", new AbortController().signal), true)
+    void hung.startPrefetch!.signedIn!(keyH).catch(() => undefined)
+    while (!asked) await new Promise<void>((resolve) => setTimeout(resolve, 5))
+    env = keyH
+    const began = performance.now()
+    const started = await hung.start(root, admitted("cursor", { conversationId: "H", emit() {} }, { env }))
+    const waited = performance.now() - began
+    assert.deepEqual(killed, ["prefetch:hang"], "the child still asking is stopped")
+    assert.ok(waited >= 2_900 && waited < 6_000, `the start waited for it ${Math.round(waited)} ms, not 20 s`)
+    assert.ok(spawned.includes("H"), "and the start spawned its own")
+    assert.equal(started.settings?.model, keyH.CURSOR_API_KEY, "whose models it asked itself")
+    await hung.close("H")
+  }
 } finally {
   for (const id of ["A", "B", "A2", "D"]) await driver.close(id)
   await rm(root, { recursive: true, force: true })
