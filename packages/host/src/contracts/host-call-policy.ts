@@ -17,6 +17,11 @@
 export type HostCallReplay = "read" | "replay" | "never"
 
 const reads = [
+  /**
+   * A client's tabs, conversations and models as they are, opening its first tab if it has none: asked twice, the same
+   * answer. A cloud start asks it first, so marked so, its Thread sends it on without waiting for the disk.
+   */
+  "mako:boot",
   /** Changes nothing Mako keeps: terminals reconnect and the sign-in refreshes, and wakes within ten seconds are one (`watchWake`). */
   "mako:machine-woke",
   /** Warms the MCP listing a launch in that folder reads; nothing else sees it. */
