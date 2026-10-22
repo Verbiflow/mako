@@ -83,7 +83,7 @@ import {
 } from "@/state/threads"
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
 import { cloudStepped, worktreeMade, worktreeStepped } from "@/state/acp-start"
-import { threadMoveStepped } from "@/state/cloud-moves"
+import { threadMoveStepped, threadReturnStepped } from "@/state/cloud-moves"
 import { noteOutcome, openSubjectId, retireSubject, subjectId } from "@/state/notifications"
 import { toast } from "sonner"
 import { recoverThreadReader } from "@/state/thread-viewing"
@@ -246,6 +246,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "cloud-start-step") {
     cloudStepped(event.conversationId, event.step, event.project)
+    return
+  }
+  if (event.type === "thread-return-step") {
+    threadReturnStepped(event.conversationId, event.move, event.step)
     return
   }
   if (event.type === "thread-move-step") {

@@ -177,7 +177,8 @@ export class LiveHibernation {
         !goalWorking(resident.snapshot.goal) &&
         !resident.sideAnswer &&
         !resident.snapshot.permissions.length &&
-        (recoverAccount || resident.snapshot.requests.some(
+        // A session needs a record to open again from: one a turn here wrote, or the one it resumed.
+        (recoverAccount || binding.resumed || resident.snapshot.requests.some(
           (request) =>
             request.status === "completed" ||
             request.status === "interrupted"
@@ -476,6 +477,7 @@ export class LiveHibernation {
       }
       if (!this.access.moves.executes(resident)) throw new Error("Execution ownership changed while preparing native recovery.")
       const session = await nativeStart(resident, driver, binding.id, () => driver.start(resident.snapshot.session.cwd, {
+        unattended: dependencies.unattended,
         conversationId: binding.id,
         resume: binding.nativeId,
         observedAgents: resident.snapshot.nativeAgents?.agents.filter((agent) => agent.bindingId === binding.id && agent.provider === binding.provider),

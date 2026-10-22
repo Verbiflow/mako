@@ -68,6 +68,80 @@ try {
   assert.deepEqual({ ...back.prepare("SELECT * FROM threads").get() }, { id: "s1", title: "First", rollout: join(laptop, "sessions", "s1.jsonl") }, "the row, its path moved into the laptop's home")
   back.close()
 
+  // Into a home whose harness made its own database first, as a cloud machine's does as it starts: the tables it
+  // holds are the same objects in other text (one a migration altered, as SQLite rewrites `ALTER TABLE`), and stay
+  // as they are; the session's rows land in them.
+  {
+    const migrated = join(root, "migrated")
+    await mkdir(migrated, { recursive: true })
+    const source = new DatabaseSync(join(migrated, "store.db"))
+    source.exec("CREATE TABLE project (id TEXT PRIMARY KEY)")
+    source.exec("ALTER TABLE project ADD COLUMN name TEXT")
+    source.exec("CREATE INDEX \"project name\" ON project(name)")
+    source.exec("CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT)")
+    source.prepare("INSERT INTO project VALUES (?, ?)").run("p1", "mako")
+    source.prepare("INSERT INTO session VALUES (?, ?)").run("s2", "p1")
+    source.close()
+    const own = { roots: [{ name: "synthetic", path: migrated }], files: [], databases: [{ path: join(migrated, "store.db"), tables: [{ table: "session", where: "id = ?", params: ["s2"] }, { table: "project", where: "id = ?", params: ["p1"] }] }] }
+    const m = new RecordStore(join(root, "m"), stores)
+    await m.capture({ harness: "synthetic", nativeId: "s2", home: migrated, records: own })
+    const started = join(root, "started")
+    await mkdir(started, { recursive: true })
+    const made = new DatabaseSync(join(started, "store.db"))
+    made.exec("CREATE TABLE project(id TEXT PRIMARY KEY, name TEXT)")
+    made.exec("CREATE INDEX [project name] ON project (name)")
+    made.exec("CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT)")
+    const schema = () => made.prepare("SELECT name, sql FROM sqlite_master ORDER BY name").all().map((row) => ({ ...row }))
+    const before = schema()
+    const taken = await m.restore({ harness: "synthetic", nativeId: "s2", home: started })
+    assert.ok(taken.written, JSON.stringify(taken))
+    assert.deepEqual(schema(), before, "its own schema stands")
+    assert.deepEqual({ ...made.prepare("SELECT * FROM project").get() }, { id: "p1", name: "mako" })
+    assert.deepEqual({ ...made.prepare("SELECT * FROM session").get() }, { id: "s2", project_id: "p1" })
+    made.close()
+    m.close()
+  }
+
+  // There and back: a laptop's session goes to a machine, which writes its row naming its own home, and comes back
+  // through a store that keeps the laptop's layout (as the cloud keeps a session's first). The row lands on the laptop
+  // naming the laptop's file: a path is known by its root's place under whichever home wrote it.
+  {
+    const laptopHome = join(root, "round", "Users", "ada")
+    const machineHome = join(root, "round", "home", "node")
+    const rowsAt = (home) => ({ db: join(home, ".synthetic", "state.sqlite"), file: join(home, ".synthetic", "sessions", "s3.jsonl") })
+    for (const home of [laptopHome, machineHome]) await mkdir(join(home, ".synthetic", "sessions"), { recursive: true })
+    const at = rowsAt(laptopHome)
+    await writeFile(at.file, `${JSON.stringify({ n: 1 })}\n`)
+    const made = new DatabaseSync(at.db)
+    made.exec("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, rollout TEXT)")
+    made.prepare("INSERT INTO threads VALUES (?, ?, ?)").run("s3", "On the laptop", at.file)
+    made.close()
+    const recordsAt = (home) => ({ roots: [{ name: "synthetic", path: join(home, ".synthetic") }], files: [rowsAt(home).file], databases: [{ path: rowsAt(home).db, tables: [{ table: "threads", where: "id = ?", params: ["s3"], paths: ["rollout"] }] }] })
+    const laptop = new RecordStore(join(root, "round-laptop"), stores)
+    const cloud = new RecordStore(join(root, "round-cloud"), stores)
+    const machine = new RecordStore(join(root, "round-machine"), stores)
+    await laptop.capture({ harness: "synthetic", nativeId: "s3", home: laptopHome, records: recordsAt(laptopHome) })
+    await cross(laptop, cloud, "synthetic", "s3")
+    await cross(cloud, machine, "synthetic", "s3")
+    assert.ok((await machine.restore({ harness: "synthetic", nativeId: "s3", home: machineHome })).written)
+    const there = new DatabaseSync(rowsAt(machineHome).db)
+    assert.equal(there.prepare("SELECT rollout FROM threads").get().rollout, rowsAt(machineHome).file, "on the machine, the machine's file")
+    // The machine goes on: its turn appended, its row retitled, captured under its own home.
+    there.prepare("UPDATE threads SET title = ? WHERE id = ?").run("Went on in the cloud", "s3")
+    there.close()
+    await appendFile(rowsAt(machineHome).file, `${JSON.stringify({ n: 2 })}\n`)
+    await machine.capture({ harness: "synthetic", nativeId: "s3", home: machineHome, records: recordsAt(machineHome) })
+    await cross(machine, cloud, "synthetic", "s3")
+    await cross(cloud, laptop, "synthetic", "s3")
+    const back = await laptop.restore({ harness: "synthetic", nativeId: "s3", home: laptopHome })
+    assert.ok(back.written && !back.diverged.length, JSON.stringify(back))
+    const home = new DatabaseSync(at.db)
+    assert.deepEqual({ ...home.prepare("SELECT * FROM threads").get() }, { id: "s3", title: "Went on in the cloud", rollout: at.file }, "back on the laptop, naming the laptop's file")
+    home.close()
+    assert.equal(await readFile(at.file, "utf8"), `${JSON.stringify({ n: 1 })}\n${JSON.stringify({ n: 2 })}\n`, "with the machine's turn")
+    for (const store of [laptop, cloud, machine]) store.close()
+  }
+
   // A chunk that isn't what its hash names is refused, and nothing of the import is kept.
   const d = new RecordStore(join(root, "d"), stores)
   await assert.rejects(cross(a, d, "synthetic", "s1", (hash, chunk) => ({ ...chunk, body: Buffer.from(chunk.body).fill(7, 0, 1) })), /isn't the chunk its hash names|unknown codec/)

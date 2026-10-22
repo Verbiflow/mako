@@ -10,12 +10,14 @@
  * A fixture session is one whose working directory is a disposable directory
  * that a Mako test or probe creates under the OS temporary directory: one
  * named `mako-…` (every test's `mkdtemp` prefix starts so) or one of the
- * older prefixes below. Nothing else qualifies. macOS keeps those
+ * older prefixes below, or a run of the cloud moves proof under
+ * `~/.mako/moves-e2e/run-…`, which a cloud machine needs under the person's
+ * home rather than the temporary directory. Nothing else qualifies. macOS keeps those
  * directories around, so their presence says nothing; a fixture updated in
  * the last thirty minutes is treated as a run in progress and left alone.
  */
 import { mkdtemp, realpath, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { defaultCatalog } from "@mako/sessions"
 import type { ThreadRef } from "@mako/sessions"
@@ -24,8 +26,12 @@ import { makoRecords } from "@mako/sessions/record-streams"
 const FIXTURE_DIRECTORY =
   /\/(?:mako|acp-perm|acp-steer|acp-steer-tools|acp-probe|codex-home|codex-steer)-[^/]+(?:\/|$)/
 
+/** The cloud moves proof's runs (`machines -- moves-e2e`): under the home, where a cloud machine can make the same folder. */
+const MOVES_RUNS = join(homedir(), ".mako", "moves-e2e")
+
 function fixtureRoot(ref: ThreadRef): boolean {
   const cwd = ref.cwd ?? ""
+  if (cwd.startsWith(`${MOVES_RUNS}/run-`)) return true
   const temporary = [
     tmpdir(),
     "/tmp",

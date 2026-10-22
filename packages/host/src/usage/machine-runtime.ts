@@ -48,6 +48,8 @@ export type MachineRuntimeOptions = {
   installSignIns(signIns: readonly CloudSignIn[], secrets: string): Promise<CloudSignInInstall[]>
   /** Makes the folder the agent prepared the one every caller's tabs open in. */
   openWorkspace(path: string): Promise<void>
+  /** The agent couldn't make the Thread's folder: why, said by whatever needs the folder later. */
+  workspaceFailed?(problem: string): void
   /** What a start does first in a folder, done ahead: a project base's, before its snapshot. */
   prepareFolder(path: string): Promise<void>
   /** What `harness`'s start runs first, run ahead as the machine boots; undefined for a harness without it. */
@@ -238,6 +240,11 @@ export class MachineRuntime {
         return this.#install(message)
       case "workspace":
         return this.#openWorkspace(message.path)
+      case "workspace-failed": {
+        const problem = `the agent's ${message.step} failed${message.path ? ` for ${message.path}` : ""}: ${message.reason}`
+        hostWarn("machine", "the Thread's folder wasn't made", { step: message.step, reason: message.reason })
+        return this.#options.workspaceFailed?.(problem)
+      }
       case "prepare":
         return void this.#prepare(message.path)
       case "prefetch":

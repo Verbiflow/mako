@@ -92,6 +92,63 @@ try {
   console.log("PASS: locally recorded history refresh, no duplicate turns, saved requests, streaming tail, durable coverage")
 } finally { rmSync(mixedRoot, { recursive: true, force: true }) }
 
+// A session resumed where it never ran before (a Thread arriving on a cloud machine): no history yet, and the
+// notices its harness gives as it opens (Codex's sandbox warning on Linux) the only live blocks. Its history is
+// read all the same, the notices after it; a turn that isn't covered yet still holds the read back; and the turn
+// that follows lines up after the history it continued, the notice with it.
+for (const harness of registeredHarnessIds()) {
+  const resumedRoot = mkdtempSync(join(tmpdir(), "mako-history-resumed-"))
+  const moved: ThreadPage["entries"] = [{ type: "user", id: "m1", text: "Before the move" }, { type: "text", id: "m2", text: "Answered on the laptop" }]
+  let record = moved
+  const notice = { type: "event" as const, id: "notice", label: "Warning", detail: "No sandbox helper on PATH", tone: "warning" as const, setup: true }
+  const journal = (conversation: string, blocks: ThreadPage["entries"], coveredBlocks: number, base: ThreadPage | null = null) => {
+    const written = new LiveJournal(resumedRoot, conversation)
+    written.commit({
+      session: { id: conversation, harness, cwd: resumedRoot, connection: "disconnected", status: "ready", modes: [], currentMode: null, configOptions: [] },
+      revision: 0, createdAt: 1, base, permissions: [], requests: [], blocks,
+      control: { activeBindingId: conversation, bindings: [{ id: conversation, provider: harness, nativeId: "resumed", path: "resumed-store", includesBase: true, coveredBlocks }], transfers: [], actions: [], merges: [] },
+    })
+    written.close()
+  }
+  const opened = randomUUID()
+  const prompted = randomUUID()
+  journal(opened, [notice], 0)
+  journal(prompted, [notice, { type: "user", requestId: "r1", text: "Not in the record yet" }], 0)
+  const owner = new LiveConversations({
+    root: resumedRoot, appPath: resumedRoot, driver: () => undefined, emit: () => {},
+    history: async () => ({ ref: { harness, nativeId: "resumed", path: "resumed-store", bytes: record.length }, entries: record, start: 0, total: record.length, hasEarlier: false, checkpoint: record.length }),
+  })
+  try {
+    const read = (await owner.refreshedSnapshot(opened))!
+    assert.deepEqual(read.base?.entries, moved, `${harness}: the history is read with only the opening notice live`)
+    assert.deepEqual(read.blocks, [notice], `${harness}: the notice stays, drawn after it`)
+    assert.equal(read.baseCoveredBlocks ?? 0, 0)
+    assert.equal((await owner.refreshedSnapshot(prompted))!.base, null, `${harness}: a turn the record doesn't cover yet holds the read back`)
+    owner.stop()
+    // The next turn ends and is covered: its record now holds it after the history it continued.
+    record = [...moved, { type: "user", id: "m3", text: "On the machine" }, { type: "text", id: "m4", text: "Answered in the cloud" }]
+    const turned = randomUUID()
+    journal(turned, [notice, { type: "user", requestId: "r2", text: "On the machine" }, { type: "text", id: "t1", text: "Answered in the cloud" }], 3, read.base)
+    const later = new LiveConversations({
+      root: resumedRoot, appPath: resumedRoot, driver: () => undefined, emit: () => {},
+      history: async () => ({ ref: { harness, nativeId: "resumed", path: "resumed-store", bytes: record.length }, entries: record, start: 0, total: record.length, hasEarlier: false, checkpoint: record.length }),
+    })
+    try {
+      const after = (await later.refreshedSnapshot(turned))!
+      assert.equal(after.baseLiveStart, moved.length, `${harness}: the live part begins after the moved history`)
+      assert.equal(after.baseCoveredBlocks, 3)
+      const users = projectLive(after).messages.filter((message) => message.role === "user")
+      assert.equal(users.length, 2, `${harness}: each prompt once`)
+    } finally {
+      later.stop()
+    }
+    console.log(`PASS: ${harness} resumed with only opening notices live reads its history, holds back for an uncovered turn, and lines the next turn up after it`)
+  } finally {
+    owner.stop()
+    rmSync(resumedRoot, { recursive: true, force: true })
+  }
+}
+
 // A fork Mako seeded into a harness's store: the store keeps tool calls as text,
 // so a refresh keeps Mako's own record of the seed and adds what the harness wrote after it.
 const { historyDigest, messageDigest } = await import("@mako/host/conversations/native-history")

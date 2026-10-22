@@ -1,10 +1,10 @@
 import { useState } from "react"
-import { CloudIcon, CloudUploadIcon, LaptopIcon, LoaderCircleIcon } from "lucide-react"
+import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon, LoaderCircleIcon } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useCloudAccount } from "@/state/cloud-account"
-import { moveToCloud, useCloudMoves } from "@/state/cloud-moves"
+import { bringBack, moveToCloud, useCloudMoves } from "@/state/cloud-moves"
 import { runPlaceStore, useRunPlace } from "@/state/run-place"
 import { shallowEqual } from "@/state/store"
 import { useSession } from "@/state/session"
@@ -47,7 +47,7 @@ export function RunPlaceChoice() {
 /**
  * Where an open Thread runs, and the way to move it: a Thread on this Mac in its own worktree moves to the cloud,
  * all of its sessions, between turns; one in the project folder, or mid-turn, is told what to do first. A Thread
- * in the cloud says so.
+ * in the cloud comes back the same way.
  */
 function ThreadRunPlace({ thread }: { thread: string }) {
   const live = useAcp((state) => {
@@ -56,16 +56,42 @@ function ThreadRunPlace({ thread }: { thread: string }) {
   }, shallowEqual)
   const worktree = useWorktrees((state) => state.worktrees.find((entry) => entry.thread === thread)?.path)
   const moving = useCloudMoves((state) => (live ? Boolean(state.moving[live.key]) : false))
+  const returning = useCloudMoves((state) => (live ? Boolean(state.returning[live.key]) : false))
   const [open, setOpen] = useState(false)
   if (!live) return null
   if (live.elsewhere)
     return (
-      <span data-run-place="cloud" title="Runs on a cloud machine, at the same folder" className={cn(triggerClass, "text-foreground")}>
-        <CloudIcon className="size-3 shrink-0" />
-        <span data-collapse="1" className="truncate">
-          Cloud
-        </span>
-      </span>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button type="button" data-run-place="cloud" disabled={returning} aria-label={returning ? "Coming back to this Mac" : "Runs on a cloud machine. Bring it back to this Mac"} title={returning ? "Coming back to this Mac" : "Runs on a cloud machine, at the same folder"} className={cn(triggerClass, "text-foreground")}>
+            {returning ? <LoaderCircleIcon className="size-3 shrink-0 animate-spin" /> : <CloudIcon className="size-3 shrink-0" />}
+            <span data-collapse="1" className="truncate">
+              {returning ? "Coming back…" : "Cloud"}
+            </span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent side="top" align="start" sideOffset={8} className="w-80 p-1">
+          <p className="px-2 py-1.5 text-label text-faint">Where this thread runs</p>
+          <button
+            type="button"
+            data-thread-return-offer
+            disabled={live.running}
+            onClick={() => {
+              setOpen(false)
+              void bringBack(live.key)
+            }}
+            className="pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60"
+          >
+            <CloudDownloadIcon className="mt-0.5 size-3 shrink-0" />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="text-ui">Bring back to this Mac</span>
+              <span className="text-label text-faint">
+                {live.running ? "Threads come back between turns: wait for this turn to end, or stop it." : "What it did in the cloud comes into its worktree here, and every session picks up on this Mac. The cloud machine ends."}
+              </span>
+            </span>
+          </button>
+        </PopoverContent>
+      </Popover>
     )
   const inWorktree = worktree !== undefined && (live.cwd === worktree || live.cwd.startsWith(`${worktree}/`))
   const blocked = !live.started

@@ -509,6 +509,55 @@ const LinesKeySchema = z.record(z.string(), z.string())
 const SchemaStatementSchema = z.object({ sql: z.string() })
 const UserVersionSchema = z.object({ user_version: z.union([z.number(), z.bigint()]) })
 const TableNameSchema = z.object({ name: z.string() })
+const SchemaObjectSchema = z.object({ name: z.string(), sql: z.string().nullable() })
+
+/**
+ * The object a schema statement creates, as `sqlite_master` names it. SQLite keeps each statement normalized
+ * (`CREATE <kind> <name>`, no `IF NOT EXISTS`, no schema qualifier), so the name is the token after the kind,
+ * in any of SQLite's quotings. Undefined for a statement of another shape.
+ */
+export function schemaObjectName(statement: string): string | undefined {
+  const kind = /^CREATE (?:UNIQUE INDEX|VIRTUAL TABLE|TABLE|INDEX|VIEW|TRIGGER) /.exec(statement)
+  if (!kind) return undefined
+  const rest = statement.slice(kind[0].length)
+  const close = { '"': '"', "`": "`", "'": "'", "[": "]" }[rest[0] ?? ""]
+  if (!close) return /^[^\s(]+/.exec(rest)?.[0]
+  let name = ""
+  for (let at = 1; at < rest.length; at++) {
+    if (rest[at] !== close) name += rest[at]
+    // A doubled quote is the quote itself; brackets have no escape.
+    else if (close !== "]" && rest[at + 1] === close) name += rest[at++]
+    else return name
+  }
+  return undefined
+}
+
+/**
+ * A captured schema written into the database a restore opened: each object the database lacks, by name, and
+ * the user version when it has none. One it already holds stays as it is, whatever its text: a store its harness
+ * migrated keeps statements `ALTER TABLE` rewrote, and a virtual table makes its shadow tables itself.
+ */
+function applySchema(db: DatabaseSync, snapshot: SchemaSnapshot): void {
+  const objects = () => SchemaObjectSchema.array().parse(db.prepare("SELECT name, sql FROM sqlite_master").all())
+  const names = new Set<string>()
+  const texts = new Set<string>()
+  const list = () => {
+    for (const object of objects()) {
+      names.add(object.name.toLowerCase())
+      if (object.sql !== null) texts.add(object.sql)
+    }
+  }
+  list()
+  for (const statement of snapshot.statements) {
+    const name = schemaObjectName(statement)
+    if (name === undefined ? texts.has(statement) : names.has(name.toLowerCase())) continue
+    db.exec(statement)
+    // A virtual table's shadow tables come with it.
+    list()
+  }
+  const current = Number(UserVersionSchema.parse(db.prepare("PRAGMA user_version").get()).user_version)
+  if (current === 0 && snapshot.userVersion !== 0) db.exec(`PRAGMA user_version = ${Math.trunc(snapshot.userVersion)}`)
+}
 const KeySchema = z.object({ key: z.string() })
 const HeldStampSchema = z.object({ harness: z.string(), nativeId: z.string(), stamp: z.string() })
 const SeqSchema = z.object({ seq: z.number() })
@@ -2765,13 +2814,7 @@ export class RecordStore {
     db.exec("PRAGMA foreign_keys = OFF")
     db.exec("BEGIN IMMEDIATE")
     try {
-      if (plan.schema) {
-        const { statements, userVersion } = SchemaSnapshotSchema.parse(JSON.parse((await this.versionBytes(plan.schema.id, plan.schema.head)).toString("utf8")))
-        const has = db.prepare("SELECT 1 FROM sqlite_master WHERE sql = ?")
-        for (const statement of statements) if (!has.get(statement)) db.exec(statement)
-        const current = Number(UserVersionSchema.parse(db.prepare("PRAGMA user_version").get()).user_version)
-        if (current === 0 && userVersion !== 0) db.exec(`PRAGMA user_version = ${Math.trunc(userVersion)}`)
-      }
+      if (plan.schema) applySchema(db, SchemaSnapshotSchema.parse(JSON.parse((await this.versionBytes(plan.schema.id, plan.schema.head)).toString("utf8"))))
       const aliases = new Map<string, string | null>()
       const statements = new Map<string, StatementSync>()
       for (const row of this.inRowidOrder(db, plan.rows, aliases)) {
@@ -3062,14 +3105,7 @@ export class RecordStore {
     db.exec("PRAGMA foreign_keys = OFF")
     db.exec("BEGIN IMMEDIATE")
     try {
-      if (plan.schema) {
-        const { statements, userVersion } = SchemaSnapshotSchema.parse(JSON.parse((await this.versionBytes(plan.schema.id, plan.schema.head)).toString("utf8")))
-        const has = db.prepare("SELECT 1 FROM sqlite_master WHERE sql = ?")
-        // A virtual table creates its shadow tables itself, and a home that already holds the store keeps its schema.
-        for (const statement of statements) if (!has.get(statement)) db.exec(statement)
-        const current = Number(UserVersionSchema.parse(db.prepare("PRAGMA user_version").get()).user_version)
-        if (current === 0 && userVersion !== 0) db.exec(`PRAGMA user_version = ${Math.trunc(userVersion)}`)
-      }
+      if (plan.schema) applySchema(db, SchemaSnapshotSchema.parse(JSON.parse((await this.versionBytes(plan.schema.id, plan.schema.head)).toString("utf8"))))
       // One statement per table and set of columns, however many rows use it.
       const statements = new Map<string, StatementSync>()
       const statement = (sql: string) => {

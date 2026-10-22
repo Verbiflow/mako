@@ -39,7 +39,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudMoves, folderRepository, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudMoves, CloudReturns, folderRepository, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -83,6 +83,8 @@ export interface Core {
   warm(): Promise<string[]>
   /** On a cloud machine: the folder its agent prepared, where every client's tabs open. */
   openMachineWorkspace(path: string): Promise<void>
+  /** On a cloud machine: why its agent couldn't make the Thread's folder, for whatever needs it to say. */
+  machineWorkspaceFailed(problem: string): void
   /** On a cloud machine: the live video of its previews its Threads' clients watch. */
   media: MediaHandler
   /**
@@ -151,6 +153,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const late: LateParts = {}
   /** On a cloud machine, the gateway it's linked through; a laptop has none and reaches the account as itself. */
   let machineLink: MachineGatewayLink | null = null
+  /** Why this machine's agent couldn't make the Thread's folder, when it said. */
+  let machineWorkspaceProblem: string | undefined
+  /** On a cloud machine: settles once its agent made the Thread's folder or said why it couldn't. */
+  let settleMachineWorkspace: (settled: { path: string } | { problem: string }) => void = () => undefined
+  const machineWorkspace = new Promise<{ path: string } | { problem: string }>((resolve) => (settleMachineWorkspace = resolve))
+  /** On a cloud machine: the account's sign-ins as last installed here; undefined until the agent gave a set. */
+  let machineSignIns: readonly CloudSignInInstall[] | undefined
   /**
    * The account's authority for a project's recipe versions: a machine's Thread's repository, under its credential;
    * on a laptop, the checkout's GitHub repository, as its signed-in device. None for a project the account can't
@@ -375,6 +384,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   const opened = await openConversations({
     streams,
+    // A cloud machine's harnesses run on the account's sign-ins: nobody is there to sign one in.
+    unattended: config.machineAgentFd !== undefined,
     environment,
     git,
     threads,
@@ -418,6 +429,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
   })
   void cloudMoves?.settle().catch((error: Error) => hostWarn("moves", "moves a stopped host left couldn't be settled", { error: error.message }))
+  // And brings them back (`mako:thread-return`): a machine sends them (`mako:move-depart`).
+  const cloudReturns = cloudConversations && new CloudReturns({
+    folder: join(environment.dataRoot, "cloud", "returns"),
+    moves: join(environment.dataRoot, "cloud", "moves"),
+    git,
+    account: () => late.cloud,
+    threads: () => threads.store ?? undefined,
+    claim: (input) => live.moves.claim(input),
+    receiveRecords: (link, sessions) => {
+      const installed: Record<string, ReturnType<typeof installedReading>> = {}
+      for (const { harness } of sessions) installed[harness] = installedReading(harnesses.updates.restoreRuntime(harness))
+      return catalog.receiveRecords(link, sessions, installed)
+    },
+    cloud: cloudConversations,
+    step: (conversationId, move, step) => emit({ type: "thread-return-step", conversationId, move, step }),
+  })
+  void cloudReturns?.settle().catch((error: Error) => hostWarn("returns", "returns a stopped host left couldn't be settled", { error: error.message }))
   const workspaceAutomations = new Automations({
     git,
     watch: watchBackend,
@@ -524,8 +552,40 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         git,
         records: () => machineRecords(machineLink),
         workspace: () => workspaceClients.homePath(),
+        workspaceProblem: () => machineWorkspaceProblem,
+        workspaceSettled: () => machineWorkspace,
         receive: (link, sessions, installed) => catalog.receiveRecords(link, sessions, installed),
         installed: (harness) => installedReading(harnesses.updates.restoreRuntime(harness)),
+        open: async (session) => {
+          // Settled as every start's are: the harness's catalog fills what the device's settings leave out.
+          const tuning = await harnesses.profiles.resolveLaunch(session.harness, session.folder, session.tuning)
+          await live.start(session.harness, session.folder, {
+            conversationId: session.conversationId, resume: session.nativeId,
+            ...session.modeId !== undefined && { modeId: session.modeId },
+            ...tuning !== undefined && { tuning },
+          })
+          await live.opened(session.conversationId)
+        },
+        warm: async (harness, folder) => {
+          await harnesses.profiles.resolveLaunch(harness, folder, undefined)
+        },
+        signedIn: (harness) => machineSignIns?.some((install) => install.harness === harness && install.status === "installed"),
+        label: (harness) => opened.harnessLabel(harness),
+        scratch: join(environment.dataRoot, "moves"),
+      },
+      departure: {
+        git,
+        records: () => machineRecords(machineLink),
+        workspace: () => workspaceClients.homePath(),
+        workspaceProblem: () => machineWorkspaceProblem,
+        blockers: (conversations) => live.moves.conversationBlockers(conversations),
+        threads: () => threads.store ?? undefined,
+        moves: live.moves,
+        native: (conversationId) => {
+          const session = live.snapshot(conversationId)?.session
+          return session?.harness && session.nativeId && session.nativePath ? { harness: session.harness, nativeId: session.nativeId, path: session.nativePath } : undefined
+        },
+        send: (link, paths) => catalog.sendRecords(link, paths),
         scratch: join(environment.dataRoot, "moves"),
       },
     }),
@@ -578,6 +638,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         if (refusal) throw new Error(refusal)
         if (answeredElsewhere(channel, args, tab.workspace)) return { handled: true, value: await elsewhere.call(channel, args) }
       }
+      if (channel === "mako:thread-return" && cloudReturns) {
+        // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-return`'s schema before routing it.
+        const [conversationId, move] = args as [string, string]
+        return { handled: true, value: encodeRuntimeValue(await cloudReturns.bringBack(conversationId, move)) }
+      }
       if (channel === "mako:thread-move" && cloudMoves) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-move`'s schema before routing it.
         const [conversationId, move] = args as [string, string]
@@ -610,6 +675,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     installCloudSignIns: async (signIns, place) => {
       const installed = await installCloudSignIns(providerHost.accountCapabilities, signIns, place)
+      machineSignIns = installed
       // What each harness can run as just changed: Settings and new Threads read it again, once no start is waiting.
       // A start reads its own harness's profile under its new sign-in itself. On a machine, sign-ins come as it
       // enrols, just before its first start, and every harness's discovery at once doubled that start (2026-10-20).
@@ -634,9 +700,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       machineLink = link
       await catalog.syncRecords(machineRecords(link) ?? null)
     },
+    machineWorkspaceFailed: (problem) => {
+      machineWorkspaceProblem = problem
+      settleMachineWorkspace({ problem })
+    },
     openMachineWorkspace: async (path) => {
       await workspaceClients.home(path)
       await workspaceAutomations.watch(path)
+      settleMachineWorkspace({ path })
     },
     media: controlVideoMedia(control.previews),
     activeWork: () => application.lifecycle.snapshot().work.length > 0,

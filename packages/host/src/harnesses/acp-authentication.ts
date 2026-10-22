@@ -1,5 +1,6 @@
 import type { AuthMethod } from "@agentclientprotocol/sdk"
 import { heavy } from "../base/heavy-packages.js"
+import { UNATTENDED_SIGN_IN } from "./live-driver.js"
 
 interface AuthenticationFlow<Value> {
   open(): Promise<Value>
@@ -7,6 +8,8 @@ interface AuthenticationFlow<Value> {
   select(methods: AuthMethod[]): Promise<string | null>
   methods: AuthMethod[]
   signal: AbortSignal
+  /** Nobody is here to choose a sign-in (`ProviderStartOptions.unattended`): a session that needs one fails at once. */
+  unattended?: boolean
 }
 
 export async function openAuthenticatedSession<Value>(
@@ -25,6 +28,7 @@ export async function openAuthenticatedSession<Value>(
     )
       throw error
     flow.signal.throwIfAborted()
+    if (flow.unattended) throw new Error(UNATTENDED_SIGN_IN, { cause: error })
     const methods = flow.methods.filter((method) => !("type" in method))
     if (!methods.length)
       throw new Error(

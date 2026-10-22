@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
 import { MoveCheckpointSchema, type MoveAnswer, type MoveCheckpoint } from "@mako/protocol/moves"
-import { RecordHoldingsSchema, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
+import { RecordHoldingsSchema, withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -22,13 +22,17 @@ import { MoveNotQuietError } from "./live-moves.js"
  * at this Mac's own path, each Session's native records written into its harness's store there, and each Session
  * resumed as the same native session. The Thread has one owner throughout:
  *
- * 1. Everything that can go ahead does, while the Thread still runs here: the cloud Thread is made (its machine
- *    boots and clones meanwhile), the checkout's checkpoint and every Session's records are sent.
+ * 1. Everything that can go ahead does, while the Thread still runs here: the cloud Thread is made, the checkout's
+ *    checkpoint and every Session's records are sent, and its machine boots and clones the folder: the release waits
+ *    for it, so a cloud that can't start the machine never leaves the Thread in transit.
  * 2. This Mac releases the Thread (`LiveMoves.release`): only once nothing in it is working, refusing rather than
  *    waiting. From then nothing runs it anywhere.
  * 3. What changed since is sent, a few files and lines at most, and the machine applies it all (`mako:move-arrive`).
+ *    Each Session is opened there as it arrives, its harness ready before the machine answers, so one that can't
+ *    start there (not signed in, say) refuses the move here, never after the cloud took it.
  * 4. The cloud claims the move: the gateway keeps one answer per move, a claim or a refusal, whichever came first.
- *    Claimed, this Mac confirms and the Sessions start on the machine; refused, this Mac takes the Thread back.
+ *    Claimed, this Mac confirms and takes the Sessions' summaries from the machine; refused, this Mac takes the
+ *    Thread back, and the cloud ends the machine.
  *
  * A failure before the release changes nothing here. One after it, before the claim, asks the cloud to refuse; if
  * the cloud claimed first, the move goes on. An answer lost on the way is asked for again by the move's id, and
@@ -37,7 +41,7 @@ import { MoveNotQuietError } from "./live-moves.js"
  */
 
 /** A UUID fixed by a name: version 8 (named by its maker), variant 10, from the name's SHA-256. */
-function namedUuid(name: string): string {
+export function namedUuid(name: string): string {
   const hex = createHash("sha256").update(name).digest("hex")
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
 }
@@ -69,7 +73,8 @@ type PlanSession = z.infer<typeof PlanSessionSchema>
 
 const PhaseSchema = z.enum(["preparing", "released", "claimed", "started", "kept-here"])
 
-const PlanSchema = z.object({
+/** A move's plan as it's kept on disk: the way back reads a moved Thread's from it. */
+export const MovePlanSchema = z.object({
   move: MoveIdSchema,
   thread: ThreadIdSchema,
   /** The conversation the move was asked from, whose window hears its steps. */
@@ -85,6 +90,7 @@ const PlanSchema = z.object({
   began: z.number(),
   timings: z.record(z.string(), z.number()).default({}),
 })
+const PlanSchema = MovePlanSchema
 type Plan = z.infer<typeof PlanSchema>
 
 /** What a move needs of the host. */
@@ -100,8 +106,8 @@ export type CloudMovesOptions = {
     person(): Actor
   } | undefined
   moves: {
-    /** What keeps the Thread from leaving now, as a release would say it; empty when it could go. */
-    blockers(thread: ThreadId): string[]
+    /** What keeps the Thread from leaving, once a turn's own bookkeeping has passed (`LiveMoves.settledBlockers`); empty when it could go. */
+    settledBlockers(thread: ThreadId): Promise<string[]>
     begin(input: { move: MoveId; thread: ThreadId; target: ExecutionOwner; actor: Actor }): void
     cancel(input: { operationId: string; move: MoveId; actor: Actor }): void
     release(input: { operationId: string; move: MoveId; actor: Actor }): Promise<Handoff>
@@ -181,7 +187,7 @@ export class CloudMoves {
     const placed = threads.journalPlacement(conversationId)
     if (!placed) throw new Error("This conversation isn't in a Thread yet.")
     // Asked before anything is made: a busy Thread starts no machine. The release asks again, with no wait before it commits.
-    const busy = this.#options.moves.blockers(placed.thread)
+    const busy = await this.#options.moves.settledBlockers(placed.thread)
     if (busy.length) throw new Error(`Moves happen between turns: ${busy.join("; ")}.`)
     const checkout = this.#options.checkout(conversationId)
     if (!checkout) throw new Error("A Thread moves to the cloud from its own worktree. Move it into one first; the main checkout stays here.")
@@ -258,12 +264,26 @@ export class CloudMoves {
     return { kind: "moved", cloudThread: plan.cloudThread }
   }
 
-  /** Everything that can go before the release: the cloud Thread made, the checkout and each Session's records sent. */
+  /**
+   * Everything that can go before the release: the cloud Thread made, the checkout and each Session's records sent,
+   * and its machine up with the folder cloned (`mako:move-ready`). A machine that can't start (the cloud is full) or
+   * can't clone keeps the Thread here, never released, rather than in transit until it can.
+   */
   async #ahead(plan: Plan): Promise<void> {
     const account = this.#account()
     await account.createThread(plan.cloudThread, plan.repository, { folder: plan.folder, harness: plan.sessions[0]?.harness ?? "" })
     plan.timings.made = Date.now() - plan.began
-    await Promise.all([this.#sendCheckpoint(plan), this.#sendRecords(plan)])
+    // Each failure says which step it stopped, which a bare one ("file closed") doesn't.
+    const step = <Value>(what: string, work: Promise<Value>) => work.catch((error: Error) => {
+      throw new Error(`${what}: ${errorMessage({ error })}`, { cause: error })
+    })
+    await Promise.all([
+      step("Its worktree couldn't be sent ahead", this.#sendCheckpoint(plan)),
+      step("Its sessions' records couldn't be sent ahead", this.#sendRecords(plan)),
+      step("Its cloud machine didn't get ready", this.#options.cloud.callThread(plan.cloudThread, "mako:move-ready", [{ folder: plan.folder, harnesses: [...new Set(plan.sessions.map((session) => session.harness))] }]).then(() => {
+        plan.timings.ready = Date.now() - plan.began
+      })),
+    ])
     plan.timings.ahead = Date.now() - plan.began
     await this.#write(plan)
   }
@@ -299,8 +319,12 @@ export class CloudMoves {
 
   /** Each Session's records to the cloud Thread, noting what went so the machine can tell it took all of it. */
   async #sendRecords(plan: Plan): Promise<void> {
-    const link = await this.#account().threadRecords(plan.cloudThread)
-    const sent = await this.#options.sendRecords(link, plan.sessions.map((session) => session.path))
+    // Under a fresh link if the last one's token lapsed on the way: what went stays gone, and the rest follows.
+    const sent = await withFreshLink(() => this.#account().threadRecords(plan.cloudThread), (link) => this.#options.sendRecords(link, plan.sessions.map((session) => session.path)))
+    hostLog("moves", "a move's records were sent", {
+      move: plan.move, phase: plan.phase,
+      sessions: sent.map((each) => `${each.harness}: ${each.versions} versions, ${each.chunks} chunks, ${each.bytes} bytes in ${each.requests} requests, ${each.ms} ms`).join("; "),
+    })
     for (const session of plan.sessions) {
       const went = sent.find((each) => each.harness === session.harness && each.nativeId === session.nativeId)
       if (went) session.holdings = went.holdings
@@ -311,7 +335,11 @@ export class CloudMoves {
   async #arrive(plan: Plan): Promise<void> {
     const checkpoint: MoveCheckpoint | undefined = plan.checkpoint
     if (!checkpoint) throw new Error("The move has no checkpoint to carry.")
-    const sessions = plan.sessions.map(({ harness, nativeId, holdings }) => (holdings ? { harness, nativeId, holdings } : { harness, nativeId }))
+    // Each opened there before the claim: a harness that can't start on the machine refuses the move while it's this Mac's.
+    const sessions = plan.sessions.map(({ harness, nativeId, holdings, conversationId, modeId, tuning }) => ({
+      harness, nativeId, ...holdings && { holdings },
+      open: { conversationId, ...modeId !== undefined && { modeId }, ...tuning !== undefined && { tuning } },
+    }))
     await this.#options.cloud.callThread(plan.cloudThread, "mako:move-arrive", [{ move: plan.move, folder: plan.folder, checkpoint, sessions }])
     plan.timings.arrived = Date.now() - plan.began
   }
@@ -348,7 +376,7 @@ export class CloudMoves {
     this.#options.moves.confirm({ operationId: stepOperation(plan.move, "confirm"), receipt, actor: threads.person() })
   }
 
-  /** Each Session, its conversation now the cloud's, resumed on the machine as the same native session. */
+  /** Each Session, its conversation now the cloud's: opened on the machine as it arrived, so its start there answers how it stands. */
   async #start(plan: Plan): Promise<void> {
     for (const session of plan.sessions) {
       await this.#options.cloud.adopt({ conversationId: session.conversationId, threadId: plan.cloudThread, harness: session.harness, repository: plan.repository })

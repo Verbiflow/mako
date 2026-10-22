@@ -131,6 +131,7 @@ export class LiveLaunches {
             coveredBlocks: 0,
             includesBase: Boolean(options.resume) || !base,
             nativeId: options.resume,
+            ...options.resume !== undefined && { resumed: true as const },
             path: options.threadPath,
             tuning,
             modeId,
@@ -246,6 +247,7 @@ export class LiveLaunches {
             : undefined,
           conversationTools,
           threadEnvironment,
+          unattended: dependencies.unattended,
         }))
       })
       .then(async (session) => {

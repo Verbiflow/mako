@@ -318,6 +318,35 @@ function sumReports(first: SyncReport, second: SyncReport, started: number): Syn
 export const RecordsLinkSchema = z.object({ id: z.string().min(1).max(2_048), base: z.url(), authorization: z.string().min(1).max(4_096) })
 export type RecordsLink = z.infer<typeof RecordsLinkSchema>
 
+/**
+ * How a send or receive over a link says the remote refused its credential, which lapses: a link carries a
+ * short-lived token, and records can take longer to go than it lives. Only the message crosses a catalog's process,
+ * so it's what callers read (`linkRefused`).
+ */
+export const RECORDS_LINK_REFUSED = "The cloud refused the records link's credential"
+
+export class RecordsLinkRefusedError extends Error {
+  constructor(detail: string) {
+    super(`${RECORDS_LINK_REFUSED}: ${detail}`)
+    this.name = "RecordsLinkRefusedError"
+  }
+}
+
+export function linkRefused(error: Error): boolean {
+  return error.message.startsWith(RECORDS_LINK_REFUSED)
+}
+
+/** Sends or receives under a fresh link each time the last one's credential lapsed: records go on from where they stopped. */
+export async function withFreshLink<Value>(link: () => Promise<RecordsLink> | RecordsLink, work: (link: RecordsLink) => Promise<Value>, attempts = 4): Promise<Value> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await work(await link())
+    } catch (error) {
+      if (!(error instanceof Error) || !linkRefused(error) || attempt >= attempts) throw error
+    }
+  }
+}
+
 /** How pushing has gone: for the machine's state and its log. */
 export type PushStatus = {
   link: string | null

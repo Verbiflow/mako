@@ -375,6 +375,18 @@ export class LiveConversations {
   }
 
   /**
+   * Once the conversation's start has settled: resolves when its harness is ready, rejects with why it couldn't
+   * start. A conversation that started earlier answers how it stands.
+   */
+  async opened(id: string): Promise<LiveSessionState> {
+    const resident = this.records.require(id)
+    await resident.openingOperation?.catch(() => undefined)
+    const session = resident.snapshot.session
+    if (session.status === "failed") throw new Error(session.error ?? "Its harness didn't start.")
+    return session
+  }
+
+  /**
    * A conversation started without a message, as a cloud Thread's harness is started while its person writes, takes
    * its first one from the start that brings it: under that start's request ID, so a repeated start sends it once,
    * with the start's title when it has none. The start ahead had the start's harness, folder and mode; a caller whose

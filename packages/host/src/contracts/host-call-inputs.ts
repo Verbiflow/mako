@@ -773,9 +773,43 @@ const inputs = {
             harness: z.string(),
             nativeId: z.string(),
             holdings: z.record(z.string(), z.number()).optional(),
+            open: z
+              .object({
+                conversationId: z.string(),
+                modeId: z.string().optional(),
+                tuning: z
+                  .object({
+                    model: z.string().optional(),
+                    options: z
+                      .record(z.string(), z.union([z.boolean(), z.string()]))
+                      .optional(),
+                  })
+                  .optional(),
+              })
+              .optional(),
           })
         ),
       }),
+    ]),
+  "mako:move-depart": () =>
+    z.tuple([
+      z.object({
+        move: z.string(),
+        folder: z.string(),
+        conversations: z.array(z.string()),
+        device: z.string(),
+      }),
+    ]),
+  "mako:move-ready": () =>
+    z.tuple([
+      z.object({
+        folder: z.string(),
+        harnesses: z.array(z.string()).optional(),
+      }),
+    ]),
+  "mako:move-stay": () =>
+    z.tuple([
+      z.object({ move: z.string(), device: z.string(), reason: z.string() }),
     ]),
   "mako:native-authoring-apply": () =>
     z.tuple([
@@ -1326,6 +1360,7 @@ const inputs = {
       z.string().optional(),
     ]),
   "mako:thread-restore-plan": () => z.tuple([z.string()]),
+  "mako:thread-return": () => z.tuple([z.string(), z.string()]),
   "mako:thread-run": () => z.tuple([z.string()]),
   "mako:thread-stop": () =>
     z.tuple([
@@ -1643,6 +1678,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:mcp-sync-preview", "tools"],
   ["mako:merge-pull", "git"],
   ["mako:move-arrive", "conversations"],
+  ["mako:move-depart", "conversations"],
+  ["mako:move-ready", "conversations"],
+  ["mako:move-stay", "conversations"],
   ["mako:native-authoring-apply", "tools"],
   ["mako:native-authoring-catalog", "tools"],
   ["mako:native-authoring-preview", "tools"],
@@ -1752,6 +1790,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-remember-mode", "threads"],
   ["mako:thread-rename", "threads"],
   ["mako:thread-restore-plan", "conversations"],
+  ["mako:thread-return", "conversations"],
   ["mako:thread-run", "conversations"],
   ["mako:thread-stop", "threads"],
   ["mako:thread-titles", "threads"],

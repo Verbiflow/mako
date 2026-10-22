@@ -11,7 +11,9 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
  * fixture desk signed in with the cloud: a Thread in its own worktree offers
  * Move to the cloud from its Local chip; the strip above the composer walks
  * through sending ahead, handing over and resuming; once moved the chip says
- * Cloud. A busy Thread stays here and says why. Screenshots of each, dark and
+ * Cloud, and offers Bring back to this Mac, whose strip walks through packing
+ * and bringing it here until the chip says Local again. A busy Thread stays
+ * here and says why. Screenshots of each, dark and
  * light, stay in the printed directory.
  */
 
@@ -157,6 +159,21 @@ async function checkWindow() {
   await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved")
   await both("moved", ['[data-run-place]', '[data-composer]'])
 
+  // 3b. The way back: the Cloud chip offers it, two steps above the composer, and Local once it's here.
+  await click('[data-run-place="cloud"]')
+  await until(`document.querySelector('[data-thread-return-offer]') !== null`, "the return offer")
+  assert.equal(await evaluate(`document.querySelector('[data-thread-return-offer]').disabled`), false, "a quiet cloud Thread can come back")
+  assert.match(await evaluate(`document.querySelector('[data-thread-return-offer]').innerText`), /Bring back to this Mac[\s\S]*cloud machine ends/)
+  await both("return-offer", ['[data-thread-return-offer]', '[data-run-place]'])
+  await click('[data-thread-return-offer]')
+  await until(`document.querySelector('[data-thread-return="packing"]') !== null`, "packing in the cloud")
+  assert.match(await evaluate(`document.querySelector('[data-run-place]').getAttribute('aria-label')`), /Coming back/)
+  await both("return-packing", ['[data-thread-return]', '[data-run-place]'])
+  await until(`document.querySelector('[data-thread-return="bringing"]') !== null`, "bringing it here")
+  await both("return-bringing", ['[data-thread-return]'])
+  await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-return]')`, "back")
+  await both("back", ['[data-run-place]', '[data-composer]'])
+
   // 4. A busy Thread stays here: nothing moves, and the toast says why.
   await startThread("&move=busy")
   await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
@@ -164,7 +181,7 @@ async function checkWindow() {
   await until(`document.querySelector('[data-thread-move-offer]') !== null`, "the move offer")
   await click('[data-thread-move-offer]')
   await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-move]')`, "kept here")
-  console.log("Thread move UI: offered from a worktree Thread's Local chip, three steps above the composer, Cloud once moved, and a busy Thread kept here")
+  console.log("Thread move UI: offered from a worktree Thread's Local chip, three steps above the composer, Cloud once moved; brought back from its Cloud chip in two steps, Local once back; and a busy Thread kept here")
   clearTimeout(watchdog)
   app.exit(0)
 }

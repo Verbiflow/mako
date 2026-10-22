@@ -1,5 +1,5 @@
 import { toast } from "sonner"
-import type { ThreadMoveOutcome, ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
+import type { ThreadMoveOutcome, ThreadMoveStep, ThreadReturnOutcome, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { updateAcpConversation } from "@/state/acp-state"
 import { hydrateLive } from "@/state/live-recovery"
@@ -13,9 +13,11 @@ import { createHook, createStore } from "@/state/store"
  */
 interface CloudMovesState {
   moving: Record<string, { move: string; step: ThreadMoveStep }>
+  /** A Thread coming back from the cloud, by the conversation it was asked from (`thread-return-step`). */
+  returning: Record<string, { move: string; step: ThreadReturnStep }>
 }
 
-export const cloudMovesStore = createStore<CloudMovesState>({ moving: {} })
+export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, returning: {} })
 export const useCloudMoves = createHook(cloudMovesStore)
 
 /** Where a moved conversation's folder is, as the cloud router names a cloud Thread's (`CLOUD_FOLDER_WHERE`). */
@@ -39,7 +41,7 @@ export async function moveToCloud(conversationId: string): Promise<ThreadMoveOut
 /** A step of a move, from the host. The last word (moved, kept here) is said once, then the strip goes. */
 export function threadMoveStepped(conversationId: string, move: string, step: ThreadMoveStep): void {
   if (step.kind === "moved" || step.kind === "kept-here") {
-    cloudMovesStore.set((state) => ({ moving: Object.fromEntries(Object.entries(state.moving).filter(([id]) => id !== conversationId)) }))
+    cloudMovesStore.set((state) => ({ ...state, moving: Object.fromEntries(Object.entries(state.moving).filter(([id]) => id !== conversationId)) }))
     if (step.kind === "moved") {
       toast.success("Moved to the cloud", { id: `move:${move}`, description: "It goes on in a cloud machine, at the same folder. Its changes show here as it works." })
       for (const id of step.conversations) {
@@ -49,5 +51,35 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
     } else toast.message("It stayed on this Mac", { id: `move:${move}`, description: step.reason })
     return
   }
-  cloudMovesStore.set((state) => ({ moving: { ...state.moving, [conversationId]: { move, step } } }))
+  cloudMovesStore.set((state) => ({ ...state, moving: { ...state.moving, [conversationId]: { move, step } } }))
+}
+
+/** Asks the host to bring the Thread of `conversationId` back from the cloud; its steps arrive as events. */
+export async function bringBack(conversationId: string): Promise<ThreadReturnOutcome | undefined> {
+  if (!hasBridge() || cloudMovesStore.get().returning[conversationId]) return undefined
+  const move = crypto.randomUUID()
+  threadReturnStepped(conversationId, move, { kind: "packing" })
+  try {
+    return await getMako().threadReturn(conversationId, move)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    threadReturnStepped(conversationId, move, { kind: "stayed", reason })
+    return { kind: "stayed", reason }
+  }
+}
+
+/** A step of a return, from the host. Back or stayed is said once, then the strip goes; unsettled stays shown. */
+export function threadReturnStepped(conversationId: string, move: string, step: ThreadReturnStep): void {
+  if (step.kind === "back" || step.kind === "stayed") {
+    cloudMovesStore.set((state) => ({ ...state, returning: Object.fromEntries(Object.entries(state.returning).filter(([id]) => id !== conversationId)) }))
+    if (step.kind === "back") {
+      toast.success("Back on this Mac", { id: `return:${move}`, description: "It goes on here, with what it did in the cloud in its worktree. The cloud machine is gone." })
+      for (const id of step.conversations) {
+        updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: undefined } : conversation))
+        void hydrateLive(id, true)
+      }
+    } else toast.message("It stayed in the cloud", { id: `return:${move}`, description: step.reason })
+    return
+  }
+  cloudMovesStore.set((state) => ({ ...state, returning: { ...state.returning, [conversationId]: { move, step } } }))
 }

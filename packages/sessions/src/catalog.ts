@@ -63,8 +63,10 @@ import { EVIDENCE_RULES, type WriterEvidence } from "./record-writers.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore } from "./record-store.js"
-import { RecordPushes, RecordSync, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords } from "./record-sync.js"
+import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords } from "./record-sync.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
+import { GatewayHttpError } from "@mako/protocol/gateway-http"
+import type { RecordRemote } from "@mako/protocol/records"
 import { readOriginal, type EntryOriginal } from "./record-original.js"
 import { streamOwner, streamsRoot } from "./record-streams.js"
 import { FolderWatches, type RootWatch } from "./root-watch.js"
@@ -1592,7 +1594,7 @@ export class SessionCatalog {
   async sendRecords(link: RecordsLink, paths: readonly string[]): Promise<SentRecords[]> {
     const store = this.recordWriter
     if (!store || this.readOnly) throw new Error("Mako keeps no records here to send.")
-    const sync = new RecordSync(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization }))
+    const sync = new RecordSync(store, refusingLink(recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization })))
     const sent: SentRecords[] = []
     for (const path of paths) {
       const ref = this.byPath.get(path)?.ref ?? (await this.open(path, false))?.ref
@@ -1618,7 +1620,7 @@ export class SessionCatalog {
   async receiveRecords(link: RecordsLink, sessions: readonly ReceivingSession[], installed: Readonly<Record<string, InstalledReading | null>> = {}): Promise<ReceivedRecords[]> {
     const store = this.recordWriter
     if (!store || this.readOnly || !this.harnessStores) throw new Error("Mako keeps no records here to receive into.")
-    const sync = new RecordSync(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization }))
+    const sync = new RecordSync(store, refusingLink(recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization })))
     const received: ReceivedRecords[] = []
     for (const { harness, nativeId, holdings: sent } of sessions) {
       const provider = this.providers.find((each) => each.harness === harness)
@@ -2300,5 +2302,23 @@ function openUnreadIndex(file: string | null, writer: string | undefined): Unrea
   } catch (error) {
     console.warn("Unread records kept in memory:", error instanceof Error ? error.message : error)
     return new UnreadIndex(null)
+  }
+}
+
+/** A remote whose refusals of the link's credential say so (`RecordsLinkRefusedError`), for the caller to send again. */
+function refusingLink(remote: RecordRemote): RecordRemote {
+  const said = <Value>(work: Promise<Value>): Promise<Value> => work.catch((error: Error) => {
+    throw error instanceof GatewayHttpError && error.status === 401 ? new RecordsLinkRefusedError(error.message) : error
+  })
+  return {
+    id: remote.id,
+    missing: (hashes) => said(remote.missing(hashes)),
+    putChunks: (pack) => said(remote.putChunks(pack)),
+    readChunks: (hashes) => said(remote.readChunks(hashes)),
+    push: (bundle) => said(remote.push(bundle)),
+    pushWith: (bundle, chunks) => said(remote.pushWith(bundle, chunks)),
+    holdings: (harness, nativeId, after) => said(remote.holdings(harness, nativeId, after)),
+    pull: (harness, nativeId, after) => said(remote.pull(harness, nativeId, after)),
+    sessions: () => said(remote.sessions()),
   }
 }

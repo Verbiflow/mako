@@ -338,6 +338,7 @@ export class LiveTransfers {
           source.session.cwd
         )
         const open = (resume?: { nativeId?: string; path?: string }) => this.host.nativeStart(resident, driver, bindingId, () => driver.start(source.session.cwd, {
+          unattended: this.host.dependencies.unattended,
           emit: this.host.driverEvents(resident, bindingId),
           mcpSnapshot: this.host.dependencies.mcpSnapshot
             ? () => this.host.dependencies.mcpSnapshot!(source.session.cwd)

@@ -106,14 +106,27 @@ export async function captureMoveCheckpoint(git: Git, checkout: string, folder: 
  * Applies a checkpoint to `checkout`, a clean clone of the same repository: HEAD, the branch, the index and the files
  * become the checkpoint's, then are read back. A bundle whose base the clone lacks (the remote lost a commit the
  * checkout had) is refused before anything changes; one that reads back otherwise throws `mismatch`.
+ *
+ * `replace`: the checkout isn't a clean clone but a person's own, a Thread's worktree coming back from the cloud,
+ * whose state the caller kept first (a checkpoint of its own). Its base is fetched from its remote when the bundle
+ * needs a commit it lacks, what's checked out is replaced whatever it held, and files Git doesn't track and doesn't
+ * ignore are cleared, as the checkpoint's own are what stands; ignored files (installs, builds) stay.
  */
-export async function applyMoveCheckpoint(git: Git, checkout: string, file: string, checkpoint: MoveCheckpoint): Promise<void> {
+export async function applyMoveCheckpoint(git: Git, checkout: string, file: string, checkpoint: MoveCheckpoint, options: { replace?: boolean } = {}): Promise<void> {
   if ((await fileSha256(file)) !== checkpoint.sha256) throw new MoveCheckpointError("mismatch", "The checkpoint's bytes aren't the ones it names.")
-  const verified = await git.run({ cwd: checkout, args: ["bundle", "verify", "--quiet", file], codes: [0, 1], timeoutMs: TIMEOUT_MS })
+  const verify = () => git.run({ cwd: checkout, args: ["bundle", "verify", "--quiet", file], codes: [0, 1], timeoutMs: TIMEOUT_MS })
+  let verified = await verify()
+  if (verified.code !== 0 && options.replace) {
+    // The cloud's clone may stand on newer commits of the remote than this checkout has seen.
+    await run(git, { cwd: checkout, args: ["fetch", "--quiet", "--no-tags", "origin"] })
+    verified = await verify()
+  }
   if (verified.code !== 0) throw new MoveCheckpointError("missing-base", `This clone lacks a commit the checkpoint builds on: ${verified.stderr.trim().split("\n").at(-1) ?? "Git refused the bundle"}`)
   await run(git, { cwd: checkout, args: ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", file, `refs/mako/*:${ARRIVED}/*`] })
   try {
-    await run(git, { cwd: checkout, args: checkpoint.branch ? ["checkout", "--quiet", "-B", checkpoint.branch, checkpoint.head] : ["checkout", "--quiet", "--detach", checkpoint.head] })
+    const force = options.replace ? ["--force"] : []
+    await run(git, { cwd: checkout, args: checkpoint.branch ? ["checkout", "--quiet", ...force, "-B", checkpoint.branch, checkpoint.head] : ["checkout", "--quiet", ...force, "--detach", checkpoint.head] })
+    if (options.replace) await run(git, { cwd: checkout, args: ["clean", "--quiet", "-d", "--force"] })
     // The files, then the index: what's staged stays staged, what isn't stays a change, untracked files stay untracked.
     await run(git, { cwd: checkout, args: ["read-tree", "-u", "--reset", checkpoint.work] })
     await run(git, { cwd: checkout, args: ["read-tree", checkpoint.index] })

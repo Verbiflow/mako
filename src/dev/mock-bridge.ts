@@ -5,7 +5,7 @@ import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
-import type { ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
+import type { ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
@@ -2699,6 +2699,17 @@ export function installMockBridge() {
       }
       step({ kind: "moved", conversations: [conversationId] })
       return { kind: "moved" as const, cloudThread: "t-0123456789abcdef" }
+    },
+    /** A fixture's way back: its steps a moment apart, as a real one takes them. */
+    threadReturn: async (conversationId: string, move: string) => {
+      const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+      const step = (next: ThreadReturnStep) => emit({ type: "thread-return-step", conversationId, move, step: next })
+      for (const next of [{ kind: "packing" }, { kind: "bringing" }] as const) {
+        step(next)
+        await pause(900)
+      }
+      step({ kind: "back", conversations: [conversationId] })
+      return { kind: "back" as const }
     },
     liveClose: async (id: string) => {
       const session = acpSessions.get(id)

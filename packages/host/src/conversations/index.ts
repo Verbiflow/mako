@@ -37,14 +37,16 @@ import { ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
-import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, ThreadMoveOutcome } from "../contracts/cloud-threads.js"
-import { arriveMove, MoveArrivalInputSchema, type MoveArrivalDeps, type MoveArrivalInput } from "./move-arrival.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, ThreadMoveOutcome, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
+import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, readyForMove, type MoveArrivalDeps, type MoveArrivalInput, type MoveReadyInput } from "./move-arrival.js"
+import { departMove, MoveDepartureInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveStayInput } from "./move-departure.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { CloudMoves } from "./cloud-moves.js"
+export { CloudReturns } from "./cloud-returns.js"
 export { installedReading } from "./kept-resume.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
@@ -98,6 +100,8 @@ export interface ConversationsDeps {
   foreground: Foreground
   /** Mako's streams of the live transports (`native-stream.ts`), which an entry's original reads; none on a host that keeps none. */
   streams?: string
+  /** A cloud machine's host: nobody is at it to sign a harness in. */
+  unattended?: boolean
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -118,6 +122,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   })
   const assessResume = resumingUnder(memory ?? undefined, restoring)
   const live = new LiveConversations({
+    unattended: deps.unattended,
     foreground: deps.foreground,
     turns: deps.telemetry.turns,
     memory: memory ?? undefined,
@@ -271,6 +276,8 @@ export interface ConversationMethodsDeps {
   emit(event: HostEvent): void
   /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`). */
   arrival?: MoveArrivalDeps
+  /** On a cloud machine: what a Thread going back to its device needs (`mako:move-depart`). */
+  departure?: MoveDepartureDeps
 }
 
 /** Starting, continuing, steering and moving conversations, live or headless. */
@@ -348,7 +355,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
       emit({ type: "worktree-ready", conversationId: options.conversationId })
     }
     const startCwd = worktree?.cwd ?? chat ?? landed
-    const tuning = await profiles.resolveLaunch(harness, startCwd, options.tuning ?? remembered?.settings)
+    // A conversation already open (a move's, opened as it arrived) answers as it stands: its start reads nothing again.
+    const tuning = live.snapshot(options.conversationId) ? options.tuning : await profiles.resolveLaunch(harness, startCwd, options.tuning ?? remembered?.settings)
     trace("profile")
     try {
       await live.start(
@@ -482,11 +490,32 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   /** Where no person's Mac moves Threads to the cloud (a cloud machine, the fixture desk); on a Mac, `CloudMoves` answers first. */
   const moveNowhere: (conversationId: string, move: string) => ThreadMoveOutcome = () => ({ kind: "kept-here", reason: "This Mako doesn't move Threads to the cloud." })
   methods.handle("mako:thread-move", moveNowhere)
+  /** Where no person's Mac brings Threads back (a cloud machine, the fixture desk); on a Mac, `CloudReturns` answers first. */
+  const returnNowhere: (conversationId: string, move: string) => ThreadReturnOutcome = () => ({ kind: "stayed", reason: "This Mako doesn't bring Threads back from the cloud." })
+  methods.handle("mako:thread-return", returnNowhere)
+  /** Before a device releases a Thread: on a cloud machine, once its folder is cloned. */
+  methods.handle("mako:move-ready", (input: MoveReadyInput) => {
+    const arrival = deps.arrival
+    if (!arrival) throw new Error("Only a cloud machine's host takes a Thread's move.")
+    return readyForMove(arrival, MoveReadyInputSchema.parse(input))
+  })
   /** A Thread arriving from a device: on a cloud machine, its checkout applied and its sessions' records written here. */
   methods.handle("mako:move-arrive", (input: MoveArrivalInput) => {
     const arrival = deps.arrival
     if (!arrival) throw new Error("Only a cloud machine's host takes a Thread's move.")
     return arriveMove(arrival, MoveArrivalInputSchema.parse(input))
+  })
+  /** A Thread going back to its device: on a cloud machine, paused, its checkout and its sessions' records sent up. */
+  methods.handle("mako:move-depart", (input: MoveDepartureInput) => {
+    const departure = deps.departure
+    if (!departure) throw new Error("Only a cloud machine's host sends a Thread back.")
+    return departMove(departure, MoveDepartureInputSchema.parse(input))
+  })
+  /** A Thread staying on its cloud machine after its departure: the device cancelled the return or gave it back. */
+  methods.handle("mako:move-stay", (input: MoveStayInput) => {
+    const departure = deps.departure
+    if (!departure) throw new Error("Only a cloud machine's host takes a Thread back.")
+    return stayMove(departure, MoveStayInputSchema.parse(input))
   })
   /** A new conversation on another harness, from the main composer. */
   methods.handle("mako:harness-start", async (harness: string, prompt: string, options?: SessionSettings) => {

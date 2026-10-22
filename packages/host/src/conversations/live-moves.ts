@@ -31,6 +31,15 @@ export interface MoveAccess {
 }
 
 /** Release refused: something in the Thread is still working, and the move waits for it. */
+/** How long a move waits for what passes in a moment (`settledBlockers`), and how often it looks. */
+const PASSING_WAIT_MS = 5_000
+const PASSING_STEP_MS = 100
+
+/** A resident busy only with what passes in a moment: its turn's checkpoint, its provider starting or closing. */
+function passingWork(resident: Resident): boolean {
+  return Boolean(resident.opening || resident.waking || resident.closing || resident.checkpointing || resident.rewinding)
+}
+
 export class MoveNotQuietError extends Error {
   readonly reasons: string[]
   constructor(reasons: string[]) {
@@ -198,6 +207,62 @@ export class LiveMoves {
       if (error instanceof MoveNotQuietError) return error.reasons
       throw error
     }
+  }
+
+  /**
+   * What keeps the Thread from leaving, once what passes in a moment has
+   * passed: a turn's own checkpoint as it ends, a provider starting or
+   * closing, waited for up to `waitMs`. A turn, an approval, a question or
+   * background work is said at once, never waited for. Empty when it could go.
+   * A move asks this, so one asked as a turn ends goes once the turn's
+   * bookkeeping is done rather than being refused for it.
+   */
+  async settledBlockers(thread: ThreadId, waitMs = PASSING_WAIT_MS): Promise<string[]> {
+    const deadline = Date.now() + waitMs
+    for (;;) {
+      const reasons = this.blockers(thread)
+      if (!reasons.length) return []
+      const residents = this.store().threadSessions(thread).flatMap((session) => session.journals).flatMap((id) => {
+        const resident = this.access.resident(id)
+        return resident ? [resident] : []
+      })
+      const passing = reasons.length === residents.filter((resident) => this.busy(resident)).length &&
+        residents.every((resident) => !this.busy(resident) || passingWork(resident))
+      if (!passing || Date.now() >= deadline) return reasons
+      await new Promise((resolve) => setTimeout(resolve, PASSING_STEP_MS))
+    }
+  }
+
+  /**
+   * What keeps these conversations from leaving now, as `blockers` says it
+   * for a Thread: a cloud machine asks it of the conversations a device takes
+   * back, which its own store places in Threads of their own.
+   */
+  conversationBlockers(journals: readonly string[]): string[] {
+    try {
+      this.residentsQuiet([{ journals, natives: [] }])
+      return []
+    } catch (error) {
+      if (error instanceof MoveNotQuietError) return error.reasons
+      throw error
+    }
+  }
+
+  /**
+   * Pauses these conversations' providers, as a release does, once none of
+   * them works: their journals and bindings stay, and nothing of them runs
+   * until something wakes them. Refuses, naming what still works, rather than
+   * wait.
+   */
+  async pauseConversations(journals: readonly string[]): Promise<void> {
+    const sessions = [{ journals, natives: [] }]
+    const residents = this.residentsQuiet(sessions)
+    await Promise.all(residents.map(async (resident) => {
+      await resident.hibernating
+      if (resident.driver) await this.access.hibernate(resident, "move")
+    }))
+    const connected = this.residentsQuiet(sessions).filter((resident) => resident.driver)
+    if (connected.length) throw new MoveNotQuietError(connected.map((resident) => `${label(resident)} is still connected to its provider`))
   }
 
   /**

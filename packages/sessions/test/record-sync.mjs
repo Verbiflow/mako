@@ -7,7 +7,7 @@ import { zstdDecompressSync } from "node:zlib"
 import { RecordConflictError, planRecordImport } from "@mako/protocol/records"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 import { RecordStore } from "../dist/record-store.js"
-import { RecordPushes, RecordSync, RecordSyncConflictError, splitBundle } from "../dist/record-sync.js"
+import { RECORDS_LINK_REFUSED, RecordPushes, RecordSync, RecordSyncConflictError, RecordsLinkRefusedError, linkRefused, splitBundle, withFreshLink } from "../dist/record-sync.js"
 
 /**
  * A record store kept in step with a remote one, as a machine's and a laptop's are with the gateway's: pushes send
@@ -160,6 +160,33 @@ try {
   await assert.rejects(cut.push("synthetic", "s1"), /connection dropped/)
   assert.equal(flaky.versions.length, 0)
   assert.ok((await cut.push("synthetic", "s1")).versions > 0, "sent whole the next time")
+
+  // A push whose link's credential lapsed (a short-lived token, a long push) goes on under a fresh link: nothing is sent
+  // twice, and nothing else is retried.
+  {
+    const lapsing = new MemoryRemote("gateway/t-lapse", { pageVersions: 1 })
+    let refusals = 1
+    const links = []
+    const remoteFor = (link) => ({
+      ...Object.fromEntries(["missing", "putChunks", "readChunks", "push", "holdings", "pull", "sessions"].map((name) => [name, (...args) => lapsing[name](...args)])),
+      id: lapsing.id,
+      pushWith: async (...args) => {
+        if (link.authorization === "Bearer first" && refusals-- > 0) throw new RecordsLinkRefusedError("The connection token has expired")
+        return lapsing.pushWith(...args)
+      },
+    })
+    const sent = await withFreshLink(() => {
+      const link = { id: lapsing.id, base: "https://gateway.test/v1/threads/t-lapse/records", authorization: links.length ? "Bearer fresh" : "Bearer first" }
+      links.push(link.authorization)
+      return link
+    }, (link) => new RecordSync(a, remoteFor(link)).push("synthetic", "s1"))
+    assert.deepEqual(links, ["Bearer first", "Bearer fresh"], "one fresh link, after the refusal")
+    assert.ok(sent.versions > 0)
+    assert.deepEqual(lapsing.versions.map((entry) => `${entry.key}@${entry.version.seq}`), [...new Set(lapsing.versions.map((entry) => `${entry.key}@${entry.version.seq}`))], "nothing sent twice")
+    assert.equal(lapsing.versions.length, a.exportSession("synthetic", "s1").units.flatMap((unit) => unit.versions).length, "every version, once")
+    await assert.rejects(withFreshLink(() => ({ id: "x", base: "https://gateway.test", authorization: "Bearer x" }), async () => { throw new Error("the connection dropped") }), /connection dropped/, "only a refused credential is tried again")
+    assert.ok(linkRefused(new Error(`${RECORDS_LINK_REFUSED}: across a catalog's process`)), "read by its message, as it crosses a process")
+  }
 
   // Records that went on in two places: the laptop's own line is refused going up, and the machine's coming down.
   await appendFile(join(laptop, "sessions", "s1.jsonl"), line(200, 2))

@@ -456,12 +456,15 @@ export class LiveSources {
     const provider = binding?.provider ?? base?.ref.harness
     const path = recorded && nativeId && provider ? this.located({ harness: provider, nativeId, path: recorded }) : recorded
     const covered = binding?.coveredBlocks ?? 0
+    // Past what the record covers, only the notices a session gives as it opens (Codex's sandbox warning on every
+    // Linux start) can stand while it's read: no turn wrote them, so the record hasn't moved past them.
+    const uncovered = resident.snapshot.blocks.slice(covered)
+    const onlyOpening = uncovered.every((block) => block.type === "event" && block.setup === true)
     // A fork that hasn't opened a session of its own has only the copy it began from: its parent's record goes on past the fork.
     if (!path || !nativeId || resident.opening || resident.transferring || (isFork(resident.snapshot) && !binding) ||
         resident.snapshot.session.status === "running" ||
         resident.snapshot.requests.some((request) => request.status === "dispatching") ||
-        (resident.snapshot.blocks.length > 0 &&
-          (!binding?.includesBase || covered !== resident.snapshot.blocks.length)))
+        (resident.snapshot.blocks.length > 0 && (!binding?.includesBase || !onlyOpening)))
       return this.access.snapshot(id)
     const pending = this.refreshes.get(id)
     if (pending) return pending

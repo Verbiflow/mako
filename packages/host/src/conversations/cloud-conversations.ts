@@ -514,6 +514,21 @@ export class CloudConversations {
     hostLog("cloud-conversations", "a conversation of this Mac's moved to a cloud Thread", { conversationId: entry.conversationId, threadId: entry.threadId, harness: entry.harness })
   }
 
+  /**
+   * A conversation that came back to this Mac from its cloud Thread: answered here again from now, its own journal
+   * standing, and its Thread no longer followed once none of its conversations is. Forgotten before anything starts
+   * here, so a host that stops between never sends its calls to a machine that gave it up.
+   */
+  async release(conversationId: string): Promise<void> {
+    await this.start()
+    const entry = this.#entries.get(conversationId)
+    if (!entry) return
+    this.#entries.delete(conversationId)
+    await this.#save()
+    if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
+    hostLog("cloud-conversations", "a conversation came back from its cloud Thread", { conversationId, threadId: entry.threadId })
+  }
+
   /** An adopted conversation's start on its machine, as the machine answered it: what windows list from now on. */
   started(conversationId: string, value: EncodedValue): LiveSummary {
     const entry = this.#entries.get(conversationId)

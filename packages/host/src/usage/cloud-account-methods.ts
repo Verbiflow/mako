@@ -4,7 +4,7 @@ import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking } from "./cloud-account.js"
-import type { MoveAnswer, MoveCheckpoint, MoveClaimRequest } from "@mako/protocol/moves"
+import type { MoveAnswer, MoveCheckpoint, MoveClaimRequest, ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
@@ -51,6 +51,15 @@ export interface CloudAccount {
   moveAnswer(threadId: string, move: string): Promise<MoveAnswer | undefined>
   /** Where a cloud Thread's session records are kept, as this Mac's device reaches them. */
   threadRecords(threadId: string): Promise<RecordsLink>
+  /** A checkpoint kept beside a cloud Thread's records, read whole into `file`. */
+  readCheckpoint(threadId: string, sha256: string, file: string): Promise<void>
+  /** A cloud Thread's return to this Mac, step by step (`CloudAccounts.beginReturn` and the rest). */
+  beginReturn(threadId: string, move: string): Promise<ReturnState>
+  releaseReturn(threadId: string, move: string, departure: ReturnDeparture): Promise<ReturnState>
+  cancelReturn(threadId: string, move: string, reason: string): Promise<ReturnState>
+  giveBackReturn(threadId: string, move: string, reason: string): Promise<ReturnState>
+  finishReturn(threadId: string, move: string): Promise<ReturnState>
+  returnState(threadId: string, move: string): Promise<ReturnState | undefined>
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   stop(): void
@@ -129,7 +138,12 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     url: cloudUrl(environment),
     secrets: secrets.secrets,
     secretName: cloudSignInName(dataRoot),
-    openExternal: (url) => presentMachine(machine).openUrl(url),
+    // A host with no screen (a server, or one started for a check) has no browser to open: the sign-in page waits in
+    // the account's state, which says where it is, for whoever opens it.
+    openExternal: async (url) => {
+      if (machine.kind === "absent") return hostLog("cloud", "no browser here; the sign-in page waits in the account's state", { reason: machine.reason })
+      await presentMachine(machine).openUrl(url)
+    },
     device: () => (described ??= describeThisMac(environment.version)),
     fixture,
     onChange: (account) => {
@@ -193,6 +207,13 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),
     moveAnswer: (threadId, move) => cloud.moveAnswer(threadId, move),
     threadRecords: (threadId) => cloud.threadRecords(threadId),
+    readCheckpoint: (threadId, sha256, file) => cloud.readCheckpoint(threadId, sha256, file),
+    beginReturn: (threadId, move) => cloud.beginReturn(threadId, move),
+    releaseReturn: (threadId, move, departure) => cloud.releaseReturn(threadId, move, departure),
+    cancelReturn: (threadId, move, reason) => cloud.cancelReturn(threadId, move, reason),
+    giveBackReturn: (threadId, move, reason) => cloud.giveBackReturn(threadId, move, reason),
+    finishReturn: (threadId, move) => cloud.finishReturn(threadId, move),
+    returnState: (threadId, move) => cloud.returnState(threadId, move),
     wake: () => {
       cloud.wake()
       sync?.wake()

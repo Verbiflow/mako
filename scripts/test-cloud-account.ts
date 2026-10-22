@@ -34,6 +34,8 @@ import {
   serveRuntime,
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { MOVE_REASON_MAX, MoveClaimRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
+import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
 import { declareCloudAccountMethods } from "@mako/host/usage/cloud-account-methods"
 import { HostMethods } from "@mako/host/transport/methods"
@@ -78,6 +80,8 @@ async function fakeCloud() {
   const threads: Array<{ threadId: string; prepare?: boolean }> = []
   /** Repositories asked for project bases. */
   const bases: unknown[] = []
+  /** What each move's claim and refusal carried, as the cloud took them. */
+  const moves: Array<{ move: string; step: string; body: unknown }> = []
   /** The browsers signed in to the account, as the cloud lists them. */
   const browsers: Array<Omit<CloudBrowserSession, "method"> & { method: string | null }> = []
   const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false, failRefreshes: 0, rotate: false, failRemovals: 0 }
@@ -194,6 +198,22 @@ async function fakeCloud() {
       const ready = body.prepare === true && threads.filter((made) => made.threadId === body.threadId).length > 1
       return send(201, JSON.stringify({ threadId: body.threadId, home: "cloud", machine: "m-0123456789abcdef", ready }))
     }
+    // A move's answers, its bodies held to the protocol's own schemas, as the gateway holds them.
+    const moving = /^\/v1\/threads\/([\w-]+)\/moves\/([\w-]+)\/(claim|refuse)$/.exec(url.pathname)
+    if (request.method === "POST" && moving) {
+      const [, , move = "", step] = moving
+      const body = await json(request)
+      if (step === "claim") {
+        const checked = MoveClaimRequestSchema.safeParse(body)
+        if (!checked.success) return send(400, JSON.stringify({ title: "The request body isn't valid", detail: z.prettifyError(checked.error) }))
+        moves.push({ move, step, body: checked.data })
+        return send(200, JSON.stringify({ kind: "claimed", move, at: 1, sessions: [] }))
+      }
+      const checked = MoveRefuseRequestSchema.safeParse(body)
+      if (!checked.success) return send(400, JSON.stringify({ title: "The request body isn't valid", detail: z.prettifyError(checked.error) }))
+      moves.push({ move, step: step ?? "", body: checked.data })
+      return send(200, JSON.stringify({ kind: "refused", move, at: 1, reason: checked.data.reason }))
+    }
     const removing = /^\/v1\/devices\/([\w-]+)$/.exec(url.pathname)?.[1]
     if (request.method === "DELETE" && removing) {
       if (options.failRemovals > 0) {
@@ -303,6 +323,7 @@ async function fakeCloud() {
   })
   return {
     url,
+    moves,
     browsers,
     calls,
     correlations,
@@ -748,6 +769,30 @@ test("the browsers signed in to the account are listed, and signed out one at a 
   assert.equal(await mac.accounts.endBrowserSessions(), 2)
   assert.deepEqual(await mac.accounts.browserSessions(), [])
   assert.equal(mac.accounts.account().state.status, "signed-in", "this Mac stays signed in")
+})
+
+test("a move's claim goes as JSON carries its handoff, and its refusal within what the cloud keeps, so neither is lost", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/moves" })
+  const move = randomUUID()
+  // A handoff as the Thread store writes it: an untitled Thread's title is undefined, and so is a first Session's parent.
+  const handoff: Handoff = HandoffSchema.parse({
+    move, releasedAt: 1,
+    source: { kind: "device", device: randomUUID() }, target: { kind: "cloud", runtime: randomUUID() },
+    thread: { id: randomUUID(), owner: randomUUID(), title: undefined },
+    sessions: [{ id: randomUUID(), origin: "started", parent: undefined, position: 0, generation: 2, journals: [randomUUID()] }],
+  })
+  assert.ok("title" in handoff.thread && handoff.thread.title === undefined, "the store's handoff carries the field, undefined")
+  const claimed = await mac.accounts.claimMove("t-0123456789abcdef", move, { thread: randomUUID(), sessions: [{ id: randomUUID(), generation: 2 }], handoff })
+  assert.equal(claimed.kind, "claimed")
+  const claim = MoveClaimRequestSchema.parse(cloud.moves[0]?.body)
+  assert.deepEqual(claim.handoff, JSON.parse(JSON.stringify(handoff)), "sent as JSON, undefined fields left out")
+  // A failure's whole text can run to pages; the cloud keeps a sentence, so it's cut rather than refused.
+  const refused = await mac.accounts.refuseMove("t-0123456789abcdef", randomUUID(), `The arrival failed: ${"x".repeat(5_000)}`)
+  assert.equal(refused.kind, "refused")
+  const { reason } = MoveRefuseRequestSchema.parse(cloud.moves[1]?.body)
+  assert.equal(reason.length, MOVE_REASON_MAX)
+  assert.ok(reason.startsWith("The arrival failed: ") && reason.endsWith("…"))
 })
 
 test("without a keychain the sign-in lasts until Mako quits and nothing is written", async () => {

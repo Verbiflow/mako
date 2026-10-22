@@ -61,7 +61,7 @@ import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
-import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, ThreadMoveOutcome } from "./cloud-threads.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, ThreadMoveOutcome, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
@@ -405,6 +405,8 @@ export function createMakoBridge(transport: BridgeTransport) {
      * answers how that move went. Its steps arrive as `thread-move-step` events.
      */
     threadMove: (conversationId: string, move: string) => invokeTrustedHost<ThreadMoveOutcome>("mako:thread-move", conversationId, move),
+    /** Brings the Thread of a conversation back from the cloud under `move`; its steps arrive as `thread-return-step` events. */
+    threadReturn: (conversationId: string, move: string) => invokeTrustedHost<ThreadReturnOutcome>("mako:thread-return", conversationId, move),
     /** The account has the cloud: this Mac's recent project folders, newest first, offered once for project bases. */
     cloudOfferProjects: (folders: string[]) => invokeTrustedHost<CloudProjectsOffer>("mako:cloud-offer-projects", folders),
 

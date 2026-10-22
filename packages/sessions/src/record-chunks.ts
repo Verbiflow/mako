@@ -198,8 +198,12 @@ export class Packs {
   /** `size` counts the entries waiting in `staged`; `written` is where they go. */
   private writing: { pack: number; handle: FileHandle; size: number; written: number } | null = null
   private staged: Buffer | null = null
-  /** Each pack's reading handle, as the promise of its open: two reads of one pack at once share one open. */
-  private readers = new Map<number, Promise<FileHandle>>()
+  /**
+   * Each pack's reading handle, as the promise of its open: two reads of one pack at once share one open. Apart from
+   * the handle it's written by, which its writer closes when the pack fills or another process starts a newer one, as a
+   * read in flight on it would meet ("file closed"). A reader closes once no read is using it.
+   */
+  private readers = new Map<number, Reader>()
 
   constructor(readonly folder: string) {
     mkdirSync(folder, { recursive: true })
@@ -227,13 +231,7 @@ export class Packs {
     if (writing?.pack === place.pack && staged && place.offset >= writing.written)
       staged.copy(body, 0, place.offset - writing.written, place.offset - writing.written + place.stored)
     else {
-      const handle = await this.reader(place.pack)
-      let read = 0
-      while (read < body.length) {
-        const { bytesRead } = await handle.read(body, read, body.length - read, place.offset + read)
-        if (bytesRead === 0) throw new Error(`${packName(place.pack)} ends before the chunk at ${place.offset}`)
-        read += bytesRead
-      }
+      await this.readAt(place, body)
     }
     return { codec: place.codec, size: place.size, body }
   }
@@ -263,13 +261,7 @@ export class Packs {
       staged.copy(body, 0, place.offset - writing.written, place.offset - writing.written + place.stored)
       return this.decoded(place, body)
     }
-    const handle = await this.reader(place.pack)
-    let read = 0
-    while (read < body.length) {
-      const { bytesRead } = await handle.read(body, read, body.length - read, place.offset + read)
-      if (bytesRead === 0) throw new Error(`${packName(place.pack)} ends before the chunk at ${place.offset}`)
-      read += bytesRead
-    }
+    await this.readAt(place, body)
     return this.decoded(place, body)
   }
 
@@ -303,9 +295,9 @@ export class Packs {
 
   /** Lets go of a pack a repack removed; its number is never used again, since the newest pack is never removed. */
   async drop(pack: number): Promise<void> {
-    const handle = this.readers.get(pack)
+    const reader = this.readers.get(pack)
     this.readers.delete(pack)
-    await (await handle?.catch(() => null))?.close()
+    if (reader) await retire(reader)
   }
 
   /** Makes what's written durable before the index that names it commits. */
@@ -318,8 +310,9 @@ export class Packs {
   async close(): Promise<void> {
     await this.writing?.handle.close()
     this.writing = null
-    for (const handle of this.readers.values()) await (await handle.catch(() => null))?.close()
+    const readers = [...this.readers.values()]
     this.readers.clear()
+    for (const reader of readers) await retire(reader)
   }
 
   /** Every entry of every pack, for rebuilding the index or checking the packs. */
@@ -386,17 +379,44 @@ export class Packs {
     }
   }
 
-  private async reader(pack: number): Promise<FileHandle> {
-    if (this.writing?.pack === pack) return this.writing.handle
-    let handle = this.readers.get(pack)
-    if (!handle) {
-      handle = open(join(this.folder, packName(pack)), "r")
-      this.readers.set(pack, handle)
-      // A pack that can't be opened isn't cached: the next read tries again.
-      handle.catch(() => {
-        if (this.readers.get(pack) === handle) this.readers.delete(pack)
-      })
+  /** A chunk's stored bytes from its pack, through that pack's reader, held open until the read ends. */
+  private async readAt(place: ChunkPlace, body: Buffer): Promise<void> {
+    const reader = this.reader(place.pack)
+    reader.users += 1
+    try {
+      const handle = await reader.handle
+      let read = 0
+      while (read < body.length) {
+        const { bytesRead } = await handle.read(body, read, body.length - read, place.offset + read)
+        if (bytesRead === 0) throw new Error(`${packName(place.pack)} ends before the chunk at ${place.offset}`)
+        read += bytesRead
+      }
+    } finally {
+      reader.users -= 1
+      if (reader.users === 0) reader.idle?.()
     }
-    return handle
   }
+
+  private reader(pack: number): Reader {
+    let reader = this.readers.get(pack)
+    if (!reader) {
+      const opened: Reader = { handle: open(join(this.folder, packName(pack)), "r"), users: 0 }
+      this.readers.set(pack, opened)
+      // A pack that can't be opened isn't kept: the next read tries again.
+      opened.handle.catch(() => {
+        if (this.readers.get(pack) === opened) this.readers.delete(pack)
+      })
+      reader = opened
+    }
+    return reader
+  }
+}
+
+/** A pack's read handle, and how many reads use it now. */
+type Reader = { handle: Promise<FileHandle>; users: number; idle?: () => void }
+
+/** Closes a reader no longer kept, once the reads using it have ended. */
+async function retire(reader: Reader): Promise<void> {
+  if (reader.users > 0) await new Promise<void>((resolve) => (reader.idle = resolve))
+  await (await reader.handle.catch(() => null))?.close()
 }
