@@ -3,6 +3,7 @@ import {
   CopyIcon,
   ExternalLinkIcon,
   CheckIcon,
+  GlobeIcon,
   LaptopIcon,
   LoaderCircleIcon,
   LockIcon,
@@ -20,7 +21,7 @@ import { useThreads } from "@/state/thread-store"
 import { useDeskIdentity } from "@/components/identity/desk-identity"
 import { formatDay, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
-import type { CloudAccountState, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow } from "@/lib/types"
+import type { CloudAccountState, CloudBrowserSession, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow } from "@/lib/types"
 
 type SignedIn = Extract<CloudAccountState, { status: "signed-in" }>
 
@@ -225,6 +226,7 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
       {invited ? <CloudSignIns /> : null}
 
       <Devices current={state.device} connection={state.connection} />
+      <Browsers connection={state.connection} />
     </>
   )
 }
@@ -523,6 +525,157 @@ function DeviceRow({
       )}
     </ListCardRow>
   )
+}
+
+/**
+ * The browsers signed in to the account on the cloud's pages. A browser signed in there can connect a new device to
+ * the account with a click, so each is listed with what makes a stranger's stand out: which browser, where it signed
+ * in and how, and where it was last used. Signing one out takes effect at once, and at the sign-in provider too.
+ */
+function Browsers({ connection }: { connection: SignedIn["connection"] }) {
+  const browsers = useCloudAccount((store) => store.browsers)
+  const failure = useCloudAccount((store) => store.failure)
+  const busy = useCloudAccount((store) => store.busy)
+  const [confirming, setConfirming] = useState<string>()
+  useEffect(() => {
+    if (connection !== "connected") return
+    void cloudAccount.loadBrowsers()
+    const refresh = () => void cloudAccount.loadBrowsers()
+    const timer = setInterval(refresh, 60_000)
+    window.addEventListener("focus", refresh)
+    return () => {
+      clearInterval(timer)
+      window.removeEventListener("focus", refresh)
+    }
+  }, [connection])
+  if (!browsers) {
+    return failure?.action === "browsers" ? (
+      <div className="flex flex-col gap-2">
+        <Eyebrow>Browsers</Eyebrow>
+        <p className="px-1 text-label text-faint">The browsers signed in to your account couldn't be read: {failure.message}</p>
+      </div>
+    ) : null
+  }
+  const endingAll = busy === "end-browsers"
+  return (
+    <div className="flex flex-col gap-2" data-testid="account-browsers">
+      <div className="flex items-center justify-between gap-3">
+        <Eyebrow>Browsers</Eyebrow>
+        {browsers.length > 1 ? (
+          confirming === "all" ? (
+            <div className="flex animate-enter items-center gap-1">
+              <Action size="xs" disabled={endingAll} onClick={() => setConfirming(undefined)}>
+                Cancel
+              </Action>
+              <Action size="xs" tone="danger" disabled={endingAll} onClick={() => void cloudAccount.endBrowsers().then((ok) => ok && setConfirming(undefined))}>
+                {endingAll ? <LoaderCircleIcon className="animate-spin" /> : null}
+                Sign out {browsers.length} browsers
+              </Action>
+            </div>
+          ) : (
+            <Action size="xs" disabled={Boolean(busy)} onClick={() => setConfirming("all")}>
+              Sign out all
+            </Action>
+          )
+        ) : null}
+      </div>
+      <ListCard>
+        {browsers.length ? (
+          browsers.map((session) => (
+            <BrowserRow
+              key={session.id}
+              session={session}
+              confirming={confirming === session.id ? "this" : confirming === "all" ? "all" : undefined}
+              onConfirm={(next) => setConfirming(next ? session.id : undefined)}
+            />
+          ))
+        ) : (
+          <ListCardRow>
+            <p className="text-ui text-muted-foreground">No browser is signed in to your account.</p>
+          </ListCardRow>
+        )}
+      </ListCard>
+      {failure?.action.startsWith("end-browser") ? (
+        <Note tone="negative">{failure.message}</Note>
+      ) : (
+        <p className="px-1 text-label leading-relaxed text-faint">
+          A browser signed in to your account can connect new devices to it. Signing one out takes effect at once; your devices stay signed in.
+        </p>
+      )}
+    </div>
+  )
+}
+
+/** `confirming`: this browser's sign-out is being confirmed in its row, or every browser's above the list. */
+function BrowserRow({ session, confirming, onConfirm }: { session: CloudBrowserSession; confirming: "this" | "all" | undefined; onConfirm: (confirming: boolean) => void }) {
+  const busy = useCloudAccount((store) => store.busy)
+  const ending = busy === `end-browser:${session.id}`
+  const name = session.browser ? `${session.browser}${session.os ? ` on ${session.os}` : ""}` : session.os ? `A browser on ${session.os}` : "A browser"
+  const signedIn = signedInLine(session)
+  return (
+    <ListCardRow className="flex items-center gap-3">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-raised text-muted-foreground [&_svg]:size-4">
+        <GlobeIcon />
+      </div>
+      <div className="min-w-0 flex-1">
+        <span data-browser-name className="block truncate text-ui font-medium">{name}</span>
+        {confirming ? (
+          <p className="mt-0.5 truncate text-label text-caution">It will be signed out at once, and asked to sign in again.</p>
+        ) : (
+          <>
+            <p className="mt-0.5 truncate text-label text-faint">{usedLine(session)}</p>
+            <p className="truncate text-label text-faint" title={signedIn}>
+              {signedIn}
+            </p>
+          </>
+        )}
+      </div>
+      {confirming === "all" ? null : confirming ? (
+        <div className="flex animate-enter items-center gap-1">
+          <Action size="xs" disabled={ending} onClick={() => onConfirm(false)}>
+            Cancel
+          </Action>
+          <Action size="xs" tone="danger" disabled={ending} onClick={() => void cloudAccount.endBrowser(session.id).then((ok) => ok && onConfirm(false))}>
+            {ending ? <LoaderCircleIcon className="animate-spin" /> : null}
+            Sign out
+          </Action>
+        </div>
+      ) : (
+        <Action size="xs" disabled={Boolean(busy)} onClick={() => onConfirm(true)}>
+          Sign out
+        </Action>
+      )}
+    </ListCardRow>
+  )
+}
+
+/** A place as the cloud read it, in words: "Tokyo, Japan"; empty when it couldn't say. */
+function placeWords(from: CloudBrowserSession["signedInFrom"]): string {
+  if (!from) return ""
+  let country = from.country
+  try {
+    if (country) country = new Intl.DisplayNames(undefined, { type: "region" }).of(country) ?? country
+  } catch {
+    // A code the runtime doesn't know is shown as it came.
+  }
+  return [from.city, country].filter(Boolean).join(", ")
+}
+
+/** "Used now from San Francisco, United States", or "Last used 3 hr ago from Osaka, Japan". */
+function usedLine(session: CloudBrowserSession): string {
+  const minutes = (Date.now() - new Date(session.lastSeenAt).getTime()) / 60_000
+  const relative = formatRelative(session.lastSeenAt) || formatDay(session.lastSeenAt)
+  const when = minutes < 10 ? "Used now" : /^\d/.test(relative) ? `Last used ${relative} ago` : `Last used ${relative}`
+  const place = placeWords(session.lastSeenFrom)
+  return place ? `${when} from ${place}` : when
+}
+
+/** "Signed in Oct 12 from San Francisco, United States, with GitHub". */
+function signedInLine(session: CloudBrowserSession): string {
+  const at = new Date(session.signedInAt)
+  const when = at.toLocaleDateString(undefined, { month: "short", day: "numeric", year: at.getFullYear() === new Date().getFullYear() ? undefined : "numeric" })
+  const place = placeWords(session.signedInFrom)
+  return `Signed in ${when}${place ? ` from ${place}` : ""}${session.method ? `, ${SIGNED_IN_WITH[session.method]}` : ""}`
 }
 
 /** Offline shows only after the link has been down a while, and it reconnects by itself: the bead says it's trying. */

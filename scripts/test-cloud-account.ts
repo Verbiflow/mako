@@ -44,7 +44,7 @@ import { ProviderRegistry } from "@mako/host/harnesses/registry"
 import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
 import type { Machine } from "@mako/host/base/machine"
 import type { CloudSignInsState } from "@mako/host/contracts/cloud-sign-ins"
-import type { CloudAccount, CloudAccountState, CloudDevice } from "@mako/host/contracts/cloud-account"
+import type { CloudAccount, CloudAccountState, CloudBrowserSession, CloudDevice } from "@mako/host/contracts/cloud-account"
 import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
 import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
@@ -78,6 +78,8 @@ async function fakeCloud() {
   const threads: Array<{ threadId: string; prepare?: boolean }> = []
   /** Repositories asked for project bases. */
   const bases: unknown[] = []
+  /** The browsers signed in to the account, as the cloud lists them. */
+  const browsers: Array<Omit<CloudBrowserSession, "method"> & { method: string | null }> = []
   const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false, failRefreshes: 0, rotate: false, failRemovals: 0 }
   /** The account's stream: its events, numbered, and the connections following it. */
   const accountEvents: Array<{ seq: number; at: string; text: string }> = []
@@ -167,6 +169,18 @@ async function fakeCloud() {
     if (!caller) return send(401, JSON.stringify({ title: "The connection token isn't valid here" }))
     if (request.method === "GET" && url.pathname === "/v1/devices")
       return send(200, JSON.stringify({ devices: [...devices.values()].filter((device) => !device.removed).map(publicDevice), current: caller.id }))
+    if (request.method === "GET" && url.pathname === "/v1/browser-sessions") return send(200, JSON.stringify({ sessions: browsers }))
+    if (request.method === "DELETE" && url.pathname === "/v1/browser-sessions") {
+      const ended = browsers.length
+      browsers.length = 0
+      return send(200, JSON.stringify({ ended }))
+    }
+    if (request.method === "DELETE" && url.pathname.startsWith("/v1/browser-sessions/")) {
+      const at = browsers.findIndex((browser) => browser.id === url.pathname.split("/").at(-1))
+      if (at < 0) return send(404, JSON.stringify({ title: "No such browser session" }))
+      browsers.splice(at, 1)
+      return send(204, "")
+    }
     if (request.method === "GET" && url.pathname === `/v1/accounts/${account.id}/sign-ins`) return send(200, JSON.stringify({ signIns: [], kept: [] }))
     if (request.method === "POST" && url.pathname === "/v1/bases") {
       const { repositories } = z.object({ repositories: z.array(z.object({ url: z.string(), branch: z.string().optional() })) }).parse(await json(request))
@@ -289,6 +303,7 @@ async function fakeCloud() {
   })
   return {
     url,
+    browsers,
     calls,
     correlations,
     threads,
@@ -713,6 +728,26 @@ test("signing out removes this device from the account", async () => {
   assert.ok([...cloud.devices.values()].every((device) => device.removed))
   await assert.rejects(stat(recordPath(secretName)))
   assert.deepEqual((await mac.accounts.signOut()).state, { status: "signed-out" }, "signing out twice is signing out once")
+})
+
+test("the browsers signed in to the account are listed, and signed out one at a time, again, or all", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/browsers" })
+  const place = { city: "Tokyo", region: "Tokyo", country: "JP" }
+  const at = new Date().toISOString()
+  cloud.browsers.push(
+    { id: "b1", method: "github", browser: "Chrome", os: "macOS", signedInAt: at, signedInFrom: null, lastSeenAt: at, lastSeenFrom: null, expiresAt: at },
+    { id: "b2", method: "a method of tomorrow", browser: "Firefox", os: "Windows", signedInAt: at, signedInFrom: place, lastSeenAt: at, lastSeenFrom: place, expiresAt: at },
+    { id: "b3", method: "google", browser: null, os: null, signedInAt: at, signedInFrom: null, lastSeenAt: at, lastSeenFrom: null, expiresAt: at },
+  )
+  const listed = await mac.accounts.browserSessions()
+  assert.deepEqual(listed.map((browser) => [browser.id, browser.method]), [["b1", "github"], ["b2", null], ["b3", "google"]], "a method this build doesn't know reads as none")
+  await mac.accounts.endBrowserSession("b2")
+  await mac.accounts.endBrowserSession("b2")
+  assert.deepEqual(cloud.browsers.map((browser) => browser.id), ["b1", "b3"], "one already signed out is done")
+  assert.equal(await mac.accounts.endBrowserSessions(), 2)
+  assert.deepEqual(await mac.accounts.browserSessions(), [])
+  assert.equal(mac.accounts.account().state.status, "signed-in", "this Mac stays signed in")
 })
 
 test("without a keychain the sign-in lasts until Mako quits and nothing is written", async () => {

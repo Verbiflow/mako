@@ -10,8 +10,9 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
  * Settings › Account's devices against the production components and the
  * fixture desk: each device says when, from where and how it joined the
  * account, with its own kind's icon; a Mac signed out because its sign-in was
- * used from somewhere else says so. Screenshots of each, dark and light, stay
- * in the printed directory.
+ * used from somewhere else says so. The browsers signed in to the account are
+ * named and placed, and signed out one at a time or all, each asked first.
+ * Screenshots of each, dark and light, stay in the printed directory.
  */
 
 if (process.versions.electron) {
@@ -123,12 +124,34 @@ async function checkWindow() {
   await evaluate(`(() => { const rows = [...document.querySelectorAll('[data-device-joined]')]; rows.at(-1).scrollIntoView({ block: 'center' }); rows.forEach((row) => row.closest('[class*="flex items-center gap-3"]')?.setAttribute('data-device-row', '')); return true })()`)
   await both("devices", ['[data-device-row]'])
 
-  // 2. Signed out because the sign-in was used from somewhere else: said, with Sign in.
+  // 2. The browsers signed in to the account: named, where each signed in and was last used, signed out when asked twice.
+  await until(`document.querySelectorAll('[data-browser-name]').length === 3`, "the browsers")
+  const browsers = () => evaluate(`[...document.querySelectorAll('[data-browser-name]')].map((name) => name.closest('.flex.items-center.gap-3').innerText.replace(/\\n+/g, '\\n'))`)
+  const rows = await browsers()
+  assert.match(rows[0], /^Chrome on macOS\nUsed now from San Francisco, United States\nSigned in .+ from San Francisco, United States, with GitHub/, rows[0])
+  assert.match(rows[2], /^Firefox on Windows\nLast used 3 ?h(?:r|ours?)? ago from Osaka, Japan\nSigned in .+ from Tokyo, Japan, with GitHub/, rows[2])
+  await evaluate(`document.querySelector('[data-testid="account-browsers"]').scrollIntoView({ block: 'center' }), true`)
+  await both("browsers", ['[data-testid="account-browsers"]'])
+  const click = (scope, label) => evaluate(`(() => { const button = [...document.querySelectorAll('${scope} button')].find((each) => each.innerText.trim() === ${JSON.stringify(label)}); button.click(); return true })()`)
+  await evaluate(`(() => { const row = [...document.querySelectorAll('[data-testid="account-browsers"] .flex.items-center.gap-3')].find((each) => each.innerText.startsWith('Firefox')); row.setAttribute('data-firefox', ''); return true })()`)
+  await click("[data-firefox]", "Sign out")
+  await until(`document.querySelector('[data-firefox]').innerText.includes('It will be signed out at once')`, "the confirmation")
+  await both("browser-confirm", ['[data-testid="account-browsers"]'])
+  await click("[data-firefox]", "Sign out")
+  await until(`!document.querySelector('[data-firefox]') && document.querySelectorAll('[data-browser-name]').length === 2`, "one signed out")
+  await click('[data-testid="account-browsers"]', "Sign out all")
+  await until(`document.querySelectorAll('[data-testid="account-browsers"] .text-caution').length === 2`, "every row says it goes")
+  await both("browsers-confirm-all", ['[data-testid="account-browsers"]'])
+  await click('[data-testid="account-browsers"]', "Sign out 2 browsers")
+  await until(`document.querySelector('[data-testid="account-browsers"]').innerText.includes('No browser is signed in to your account.')`, "none left")
+  await both("browsers-none", ['[data-testid="account-browsers"]'])
+
+  // 3. Signed out because the sign-in was used from somewhere else: said, with Sign in.
   await openAccount("&cloud=reused")
   await until(`document.body.innerText.includes('used from somewhere else')`, "the reused notice")
   assert.match(await evaluate(`document.querySelector('[role="dialog"] main').innerText`), /This Mac was signed out[\s\S]*used from somewhere else[\s\S]*Sign in/)
   await both("signed-out-reused", ['[role="dialog"] main'])
-  // 3. A device joins while this Mac is open: said at once, with Remove.
+  // 4. A device joins while this Mac is open: said at once, with Remove.
   await window.loadURL(`${base}?mock&cloud=signed-in&invited&joined`)
   await until(`Boolean(document.querySelector('[data-sonner-toast]')) && document.body.innerText.includes('build-box joined your account')`, "the joined alert")
   const alert = await evaluate(`document.querySelector('[data-sonner-toast]').innerText`)
@@ -136,7 +159,7 @@ async function checkWindow() {
   assert.match(alert, /Remove/)
   showToasts = true
   await both("device-joined", ['[data-sonner-toast]'])
-  console.log("Account devices UI: each device's joining said, a reused sign-in's sign-out said, a device that joins said at once")
+  console.log("Account devices UI: each device's joining said, the browsers named, placed and signed out one or all, a reused sign-in's sign-out said, a device that joins said at once")
   clearTimeout(watchdog)
   app.exit(0)
 }

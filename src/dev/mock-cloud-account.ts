@@ -1,4 +1,4 @@
-import type { CloudAccount, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow, CloudSignInsState, HostEvent } from "@/lib/types"
+import type { CloudAccount, CloudBrowserSession, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow, CloudSignInsState, HostEvent } from "@/lib/types"
 
 type CloudSignInHarness = CloudSignInRow["harness"]
 
@@ -14,7 +14,8 @@ export const MOCK_GITHUB_USER_ID = "583231"
  * user; `signin=google` with Google and no GitHub user, and `signin=legacy`
  * before the cloud said either. `invited` gives the account the cloud, and
  * `sharing` has this Mac already sharing its harnesses' sign-ins with it, and `joined` has a terminal join the account a moment after the desk opens, and `kept` has the cloud keeping
- * Codex fresh, retrying Grok and needing Claude signed in again.
+ * Codex fresh, retrying Grok and needing Claude signed in again. Three browsers are signed in to the account's pages,
+ * one of them last used from another country; `browsers=none` has none.
  */
 export function mockCloudAccount(emit: (event: HostEvent) => void) {
   const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
@@ -40,6 +41,25 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     { ...thisMac, id: "d2", name: "Studio", platform: "macOS 15.5", appVersion: "0.3.9", lastSeenAt: minutesAgo(60 * 5) },
     { ...thisMac, id: "d3", kind: "cli", name: "build-box", platform: "Linux", appVersion: null, enrolledBy: "device-code", enrolledFrom: { city: "Frankfurt", region: "Hesse", country: "DE" }, createdAt: minutesAgo(60 * 24 * 40), lastSeenAt: minutesAgo(60 * 24 * 12) },
   ]
+  const browser = (session: Partial<CloudBrowserSession> & Pick<CloudBrowserSession, "id">): CloudBrowserSession => ({
+    method: "github",
+    browser: "Chrome",
+    os: "macOS",
+    signedInAt: minutesAgo(60 * 24 * 9),
+    signedInFrom: thisMac.enrolledFrom ?? null,
+    lastSeenAt: minutesAgo(2),
+    lastSeenFrom: thisMac.enrolledFrom ?? null,
+    expiresAt: new Date(Date.now() + 5 * 24 * 3_600_000).toISOString(),
+    ...session,
+  })
+  let browsers: CloudBrowserSession[] =
+    params.get("browsers") === "none"
+      ? []
+      : [
+          browser({ id: "b1" }),
+          browser({ id: "b2", browser: "Safari", os: "iOS", method: "google", signedInAt: minutesAgo(60 * 24 * 4), lastSeenAt: minutesAgo(60 * 26) }),
+          browser({ id: "b3", browser: "Firefox", os: "Windows", signedInAt: minutesAgo(60 * 50), signedInFrom: { city: "Tokyo", region: "Tokyo", country: "JP" }, lastSeenAt: minutesAgo(60 * 3), lastSeenFrom: { city: "Osaka", region: "Osaka", country: "JP" } }),
+        ]
   const start = params.get("cloud")
   let account: CloudAccount = {
     cloud: "127.0.0.1:8787",
@@ -131,6 +151,17 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
       if (id === thisMac.id) return signedOut()
       others = others.filter((device) => device.id !== id)
       return account
+    },
+    cloudBrowserSessions: async () => browsers,
+    cloudBrowserSessionEnd: async (id: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      browsers = browsers.filter((session) => session.id !== id)
+    },
+    cloudBrowserSessionsEnd: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      const ended = browsers.length
+      browsers = []
+      return ended
     },
     cloudSignOut: async () => signedOut(),
   }

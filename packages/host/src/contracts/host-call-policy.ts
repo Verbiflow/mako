@@ -110,6 +110,7 @@ const reads = [
   "mako:cloud-account",
   /** May refresh the connection token, which another caller would have refreshed the same way. */
   "mako:cloud-devices",
+  "mako:cloud-browser-sessions",
   /** Reads every harness's sign-in and sends what changed; a repeat finds nothing changed. */
   "mako:cloud-sign-ins",
   /** Waits on a sign-in the host finishes by itself, whoever is waiting. */

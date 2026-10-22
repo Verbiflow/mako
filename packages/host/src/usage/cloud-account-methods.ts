@@ -168,6 +168,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   methods.handle("mako:cloud-sign-in-cancel", () => cloud.cancelSignIn())
   methods.handle("mako:cloud-devices", () => cloud.devices())
   methods.handle("mako:cloud-device-remove", (id: string) => cloud.removeDevice(id))
+  methods.handle("mako:cloud-browser-sessions", () => cloud.browserSessions())
+  methods.handle("mako:cloud-browser-session-end", (id: string) => cloud.endBrowserSession(id))
+  methods.handle("mako:cloud-browser-sessions-end", () => cloud.endBrowserSessions())
   methods.handle("mako:cloud-sign-out", () => cloud.signOut())
 
   sync?.start()
