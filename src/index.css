@@ -1093,7 +1093,8 @@ diffs-container {
  * held high and left once connected, circling while it connects, and
  * circling slower over a breathing halo while it's offline and retrying.
  * The halo (`::before`) is under the bead (`::after`). Transform and
- * opacity only, and still under reduced motion.
+ * opacity only; reduced motion stills it (the global rule), and the chip's
+ * tone and words still say the state.
  */
 .link-bead {
   position: relative;
