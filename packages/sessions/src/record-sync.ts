@@ -1,5 +1,6 @@
 import { CHUNK_HEADER_BYTES, RECORD_ASK_HASHES, RECORD_PACK_BYTES, RECORD_PUSH_WITH_BYTES, RecordConflictError, recordChunks, type PackedChunk, type RecordBundle, type RecordHoldings, type RecordPushAnswer, type RecordRemote, type RecordUnit } from "@mako/protocol/records"
 import { z } from "zod"
+import { KeptRestoreSchema } from "./kept-restore.js"
 import type { StoredChunk } from "./record-chunks.js"
 import type { ExportPage, RecordStore } from "./record-store.js"
 
@@ -29,7 +30,16 @@ export class RecordSyncConflictError extends Error {
   }
 }
 
-export type SyncReport = { versions: number; held: number; chunks: number; bytes: number; requests: number; ms: number }
+export const SyncReportSchema = z.object({ versions: z.number(), held: z.number(), chunks: z.number(), bytes: z.number(), requests: z.number(), ms: z.number() })
+export type SyncReport = z.infer<typeof SyncReportSchema>
+
+/** One session sent to a remote store (`SessionCatalog.sendRecords`). */
+export const SentRecordsSchema = SyncReportSchema.extend({ harness: z.string(), nativeId: z.string() })
+export type SentRecords = z.infer<typeof SentRecordsSchema>
+
+/** One session taken from a remote store and written into its harness's store here (`SessionCatalog.receiveRecords`). */
+export const ReceivedRecordsSchema = z.object({ harness: z.string(), nativeId: z.string(), pulled: SyncReportSchema, restored: KeptRestoreSchema })
+export type ReceivedRecords = z.infer<typeof ReceivedRecordsSchema>
 
 /** The most versions, and chunk hashes, one push carries: a bundle well under a request's size. */
 const PUSH_VERSIONS = 10_000
