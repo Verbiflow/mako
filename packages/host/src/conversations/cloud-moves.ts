@@ -371,6 +371,8 @@ export class CloudMoves {
     } else {
       const threads = this.#options.threads()
       if (threads?.moveStatus(plan.move)?.phase === "leaving") this.#options.moves.cancel({ operationId: stepOperation(plan.move, "cancel"), move: plan.move, actor: threads.person() })
+      // The cloud Thread made ahead was this move's alone: refused, the cloud ends its machine now, not at its lease's end.
+      if (plan.timings.made !== undefined) await this.#refuse(plan, reason)
     }
     plan.phase = "kept-here"
     plan.reason = reason

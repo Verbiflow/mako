@@ -196,10 +196,12 @@ try {
   {
     const s = setup("busy-late")
     s.busy.late.push("Codex is running a turn")
-    const outcome = await s.moves.move(s.conversation, move())
+    const id = move()
+    const outcome = await s.moves.move(s.conversation, id)
     assert.deepEqual(outcome, { kind: "kept-here", reason: "Moves happen between turns: Codex is running a turn." })
     assert.deepEqual(state(s), { state: "here", owner: s.threads.self, generation: 1 }, "the move was cancelled; the Session is as it was")
-    assert.equal(s.gateway.answers.size, 0)
+    assert.equal(s.gateway.made.length, 1, "its cloud Thread was made ahead")
+    assert.equal(s.gateway.answers.get(id)?.kind, "refused", "and refused, so the cloud ends its machine")
     assert.ok(!s.gateway.calls.some((call) => call.channel === "mako:move-arrive"))
   }
 
