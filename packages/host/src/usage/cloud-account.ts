@@ -50,6 +50,7 @@ import {
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
+import { errorMessage } from "../base/error-message.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
 import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
 
@@ -83,6 +84,10 @@ const REMOVED: CloudSignedOutNotice = {
   kind: "removed",
   message: "This Mac was removed from your Mako account. Sign in to connect it again.",
 }
+const REUSED: CloudSignedOutNotice = {
+  kind: "reused",
+  message: "This Mac's sign-in was used from somewhere else, so Mako signed it out to keep your account safe. Sign in again, then check Devices for any you don't know.",
+}
 
 const ConnectionSchema = z.object({ token: z.string().min(1), expiresAt: z.number() })
 const EnrollmentSchema = z.object({
@@ -91,7 +96,8 @@ const EnrollmentSchema = z.object({
   connection: ConnectionSchema,
   account: CloudPersonSchema,
 })
-const RefreshSchema = EnrollmentSchema.omit({ credential: true })
+/** `credential`: a successor to this Mac's credential, once it's due to rotate; the old one works until it's used. */
+const RefreshSchema = EnrollmentSchema.omit({ credential: true }).extend({ credential: z.string().regex(/^mako_dc_[\w-]{43}$/).optional() })
 const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z.string() })
 /** What the cloud answers a Thread made or made again with; only whether its machine is ready is read. */
 const CreatedThreadSchema = z.object({ ready: z.boolean().optional() }).loose()
@@ -578,11 +584,11 @@ export class CloudAccounts {
     this.#set(notice ? { status: "signed-out", notice } : { status: "signed-out" })
   }
 
-  /** The credential stopped working: removed from this account, here or on another device. */
-  async #removed(): Promise<void> {
+  /** The credential stopped working: removed from this account, here or on another device, or seen used elsewhere. */
+  async #removed(notice: CloudSignedOutNotice = REMOVED): Promise<void> {
     if (!this.#stored) return
-    this.#options.log?.("cloud device removed", { device: this.#stored.device.id })
-    await this.#forget(REMOVED)
+    this.#options.log?.("cloud device removed", { device: this.#stored.device.id, kind: notice.kind })
+    await this.#forget(notice)
   }
 
   // Connection tokens.
@@ -641,14 +647,29 @@ export class CloudAccounts {
       signal: AbortSignal.timeout(REQUEST_MS),
     })
     if (response.status === 401) {
-      await this.#removed()
+      const reused = /used somewhere else/.test(await problemOf(response, ""))
+      await this.#removed(reused ? REUSED : REMOVED)
       throw new Removed()
     }
     if (!response.ok) throw new CloudAccountError(await problemOf(response, "The Mako cloud didn't answer."))
     const refreshed = RefreshSchema.parse(await response.json())
     if (this.#stored !== stored) throw new Removed()
     this.#token = hold(refreshed.connection)
-    this.#stored = { ...stored, account: refreshed.account, device: refreshed.device }
+    let next: Stored = { ...stored, account: refreshed.account, device: refreshed.device }
+    if (refreshed.credential) {
+      // The successor is kept before it's used, so a restart never brings back a credential the cloud retired. One
+      // that can't be kept is left: the old credential works until the successor's first use, and the next refresh
+      // offers another. Without a keychain both live in memory alone, and the successor is used at once.
+      const rotated = { ...next, credential: refreshed.credential }
+      try {
+        await this.#save(rotated)
+        next = rotated
+      } catch (error) {
+        this.#options.log?.("cloud credential successor not kept; the current one stays", { error: errorMessage({ error }) })
+      }
+    }
+    if (this.#stored !== stored) throw new Removed()
+    this.#stored = next
     if (this.#state.status === "signed-in" && (!sameJson(this.#state.account, refreshed.account) || !sameJson(this.#state.device, refreshed.device)))
       this.#set({ ...this.#state, account: refreshed.account, device: refreshed.device })
     // An upgrade, or its end, reaches this Mac with its next token: the runtime's link follows it.

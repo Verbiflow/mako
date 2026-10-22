@@ -16,6 +16,8 @@ export const CloudDeviceSchema = z.object({
   enrolledBy: z.enum(["browser", "device-code"]),
   createdAt: z.string(),
   lastSeenAt: z.string(),
+  /** Where it joined the account from, as the cloud read its address: never the address. Absent from older clouds. */
+  enrolledFrom: z.object({ city: z.string().nullable(), region: z.string().nullable(), country: z.string().nullable() }).nullish(),
 })
 export type CloudDevice = z.infer<typeof CloudDeviceSchema>
 
@@ -37,7 +39,8 @@ export type CloudPerson = z.infer<typeof CloudPersonSchema>
 
 /** Why this Mac is signed out, when something other than the person did it. */
 export const CloudSignedOutNoticeSchema = z.object({
-  kind: z.enum(["removed", "timed-out", "failed"]),
+  /** `reused`: the cloud saw this Mac's sign-in used from somewhere else, and signed it out to keep the account safe. */
+  kind: z.enum(["removed", "reused", "timed-out", "failed"]),
   message: z.string(),
 })
 export type CloudSignedOutNotice = z.infer<typeof CloudSignedOutNoticeSchema>

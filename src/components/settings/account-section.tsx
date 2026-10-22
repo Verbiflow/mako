@@ -61,7 +61,7 @@ function SignedOutView({ state, cloud }: { state: Exclude<CloudAccountState, Sig
           ? "Signing in isn't available"
           : waiting
             ? "Waiting for your browser"
-            : notice?.kind === "removed"
+            : notice?.kind === "removed" || notice?.kind === "reused"
               ? "This Mac was signed out"
               : "Sign in to Mako"}
       </h3>
@@ -70,12 +70,12 @@ function SignedOutView({ state, cloud }: { state: Exclude<CloudAccountState, Sig
           ? state.message
           : waiting
             ? "Choose your account on the page that opened. Mako carries on by itself once you have."
-            : notice?.kind === "removed"
+            : notice?.kind === "removed" || notice?.kind === "reused"
               ? notice.message
               : "Connect this Mac to your Mako account, or create one. Signing in happens in your browser with GitHub or Google, so Mako never sees your password."}
       </p>
 
-      {notice && notice.kind !== "removed" ? (
+      {notice && notice.kind !== "removed" && notice.kind !== "reused" ? (
         <Note tone="negative" className="mt-5 max-w-[25rem]">
           {notice.message}
         </Note>
@@ -438,6 +438,25 @@ function Devices({ current, connection }: { current: CloudDevice; connection: Si
 
 const DEVICE_ICONS = { desktop: LaptopIcon, cli: TerminalIcon, runtime: ServerIcon } as const
 
+/**
+ * How a device came to be signed in as you, in one line: when, from where (as the cloud read its address, never the
+ * address), and how. "Joined Oct 21 from San Jose, United States, through the browser". Where is left out for a
+ * device that joined before the cloud kept it.
+ */
+function joined(device: CloudDevice): string {
+  const when = new Date(device.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: new Date(device.createdAt).getFullYear() === new Date().getFullYear() ? undefined : "numeric" })
+  const from = device.enrolledFrom
+  let country = from?.country ?? null
+  try {
+    if (country) country = new Intl.DisplayNames(undefined, { type: "region" }).of(country) ?? country
+  } catch {
+    // A code the runtime doesn't know is shown as it came.
+  }
+  const place = from ? [from.city, country].filter(Boolean).join(", ") : ""
+  const how = device.enrolledBy === "browser" ? "through the browser" : "with a code you approved"
+  return `Joined ${when}${place ? ` from ${place}` : ""}, ${how}`
+}
+
 function DeviceRow({
   device,
   current,
@@ -465,11 +484,16 @@ function DeviceRow({
         {confirming ? (
           <p className="mt-0.5 truncate text-label text-caution">It will be signed out within seconds.</p>
         ) : (
-          <p className="mt-0.5 truncate text-label text-faint">
-            {[device.platform, device.appVersion ? `Mako ${device.appVersion}` : null, current ? null : seen(device.lastSeenAt)]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
+          <>
+            <p className="mt-0.5 truncate text-label text-faint">
+              {[device.platform, device.appVersion ? `Mako ${device.appVersion}` : null, current ? null : seen(device.lastSeenAt)]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+            <p data-device-joined className="truncate text-label text-faint" title={joined(device)}>
+              {joined(device)}
+            </p>
+          </>
         )}
       </div>
       {current ? null : confirming ? (
