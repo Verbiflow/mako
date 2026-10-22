@@ -133,6 +133,11 @@ try {
   const pulled = await down.pull("synthetic", "s1")
   assert.equal(pulled.versions, first.versions + second.versions)
   assert.ok(remote.calls.pull >= 2 && remote.calls.read >= 2, JSON.stringify(remote.calls))
+  // Taken from the remote, never this store's own capture: a receiver asks what it holds against what was sent, as a
+  // move's machine does (`SessionCatalog.receiveRecords`), never whether it captured the session. Asking that once
+  // refused every move on its first live run.
+  assert.equal(laptopStore.captured("synthetic", "s1"), false, "an imported session isn't a capture here")
+  assert.deepEqual(laptopStore.holdings("synthetic", "s1"), a.holdings("synthetic", "s1"), "it holds every unit at the sender's head")
   const laptop = join(root, "laptop")
   assert.equal((await laptopStore.restore({ harness: "synthetic", nativeId: "s1", home: laptop })).written, true)
   assert.equal(await readFile(join(laptop, "sessions", "s1.jsonl"), "utf8"), await readFile(transcript, "utf8"), "byte for byte")

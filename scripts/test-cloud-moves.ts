@@ -51,7 +51,7 @@ class Gateway {
   }
 }
 
-type Setup = { moves: CloudMoves; fresh(): CloudMoves; gateway: Gateway; threads: ThreadStore; steps: ThreadMoveStep[]; conversation: string; session: string; checkout: string; busy: { reasons: string[] }; folder: string; started: string[] }
+type Setup = { moves: CloudMoves; fresh(): CloudMoves; gateway: Gateway; threads: ThreadStore; steps: ThreadMoveStep[]; conversation: string; session: string; checkout: string; busy: { reasons: string[]; late: string[] }; folder: string; started: string[] }
 
 function setup(name: string, options: { worktree?: boolean } = {}): Setup {
   const folder = join(root, name)
@@ -72,7 +72,9 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
   const gateway = new Gateway()
   const steps: ThreadMoveStep[] = []
   const reasons: string[] = []
-  const busy = { reasons }
+  /** `late`: busy only by the time of the release, after the move asked first and made its cloud Thread. */
+  const late: string[] = []
+  const busy = { reasons, late }
   const started: string[] = []
   const repository = { url: "https://github.com/octocat/Hello-World" }
   const account: ReturnType<CloudMovesOptions["account"]> = {
@@ -113,10 +115,12 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
     account: () => account,
     threads: () => threads,
     moves: {
+      blockers: () => [...busy.reasons],
       begin: (input) => threads.beginMove(input),
       cancel: (input) => threads.cancelMove(input),
       release: async (input) => {
-        if (busy.reasons.length) throw new MoveNotQuietError(busy.reasons)
+        const late = [...busy.reasons, ...busy.late]
+        if (late.length) throw new MoveNotQuietError(late)
         return threads.release(input)
       },
       confirm: (input) => threads.confirm(input),
@@ -127,7 +131,8 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
     repositoryOf: async () => repository,
     sendRecords: async (_link, paths) => {
       gateway.sentRecords.push(paths)
-      return paths.map(() => ({ harness: "codex", nativeId: "n-1", versions: 1, held: 0, chunks: 1, bytes: 10, requests: 1, ms: 1 }))
+      // Each send holds a newer head, as a Session that went on between the send ahead and the one after the release.
+      return paths.map(() => ({ harness: "codex", nativeId: "n-1", versions: 1, held: 0, chunks: 1, bytes: 10, requests: 1, ms: 1, holdings: { "codex:sessions/n-1.jsonl": gateway.sentRecords.length } }))
     },
     cloud: {
       adopt: async (conversation) => void started.push(`adopt ${conversation.conversationId} ${conversation.threadId}`),
@@ -163,7 +168,7 @@ try {
     const arrive = s.gateway.calls.find((call) => call.channel === "mako:move-arrive")
     const sent = plan(s, id)
     assert.equal(sent.phase, "started")
-    assert.deepEqual(arrive?.args, [{ move: id, folder: s.checkout, checkpoint: plan(s, id).checkpoint, sessions: [{ harness: "codex", nativeId: "n-1" }] }])
+    assert.deepEqual(arrive?.args, [{ move: id, folder: s.checkout, checkpoint: plan(s, id).checkpoint, sessions: [{ harness: "codex", nativeId: "n-1", holdings: { "codex:sessions/n-1.jsonl": 2 } }] }], "the machine is told what the last send held, to hold at least that")
     const start = s.gateway.calls.find((call) => call.channel === "mako:live-start")
     assert.deepEqual(start?.args, ["codex", s.checkout, { conversationId: s.conversation, resume: "n-1", modeId: "access:full", tuning: { model: "gpt-5.5" } }], "resumed natively, with the settings it ran with")
     assert.ok(s.gateway.calls.findIndex((call) => call.channel === "mako:move-arrive") < s.gateway.calls.findIndex((call) => call.channel === "mako:live-start"), "nothing starts before the arrival")
@@ -176,10 +181,21 @@ try {
     assert.equal(s.gateway.calls.filter((call) => call.channel === "mako:live-start").length, 1)
   }
 
-  // Busy: nothing released, nothing claimed, the Thread runs here as before.
+  // Busy: refused before anything is made in the cloud, so no machine starts for a move that can't go.
   {
     const s = setup("busy")
     s.busy.reasons.push("Codex is running a turn")
+    const outcome = await s.moves.move(s.conversation, move())
+    assert.deepEqual(outcome, { kind: "kept-here", reason: "Moves happen between turns: Codex is running a turn." })
+    assert.deepEqual(state(s), { state: "here", owner: s.threads.self, generation: 1 }, "nothing begun; the Session is as it was")
+    assert.deepEqual([s.gateway.made.length, s.gateway.sentRecords.length, s.gateway.checkpoints.size], [0, 0, 0], "no cloud Thread made, nothing sent")
+    assert.equal(s.gateway.answers.size, 0)
+  }
+
+  // Busy only by the release (a turn started after the move asked): the release refuses, nothing released, the Thread runs here.
+  {
+    const s = setup("busy-late")
+    s.busy.late.push("Codex is running a turn")
     const outcome = await s.moves.move(s.conversation, move())
     assert.deepEqual(outcome, { kind: "kept-here", reason: "Moves happen between turns: Codex is running a turn." })
     assert.deepEqual(state(s), { state: "here", owner: s.threads.self, generation: 1 }, "the move was cancelled; the Session is as it was")

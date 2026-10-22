@@ -1,4 +1,4 @@
-import { ReceivedRecordsSchema, RecordsLinkSchema, SentRecordsSchema, type ReceivedRecords, type RecordsLink, type SentRecords } from "./record-sync.js"
+import { ReceivedRecordsSchema, ReceivingSessionSchema, RecordsLinkSchema, SentRecordsSchema, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords } from "./record-sync.js"
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
 import {
@@ -128,7 +128,7 @@ export type DaemonRequestFrame =
   /** Sends sessions' records to a remote store now (`SessionCatalog.sendRecords`). */
   | { id: number; op: "send-records"; link: RecordsLink; paths: string[] }
   /** Takes sessions' records from a remote store into their harnesses' stores here (`SessionCatalog.receiveRecords`). */
-  | { id: number; op: "receive-records"; link: RecordsLink; sessions: Array<{ harness: string; nativeId: string }>; installed: Record<string, InstalledReading | null> }
+  | { id: number; op: "receive-records"; link: RecordsLink; sessions: ReceivingSession[]; installed: Record<string, InstalledReading | null> }
 
 export type DaemonResponseFrame =
   | {
@@ -348,7 +348,7 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
     case "receive-records": {
       const parsed = z.object({
         link: RecordsLinkSchema,
-        sessions: z.array(z.object({ harness: z.string().min(1), nativeId: z.string().min(1) })),
+        sessions: z.array(ReceivingSessionSchema),
         installed: z.record(z.string(), InstalledReadingSchema.nullable()),
       }).safeParse(record)
       return parsed.success ? { id, op, ...parsed.data } : null

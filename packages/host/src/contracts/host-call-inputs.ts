@@ -769,7 +769,11 @@ const inputs = {
           branch: z.string().optional(),
         }),
         sessions: z.array(
-          z.object({ harness: z.string(), nativeId: z.string() })
+          z.object({
+            harness: z.string(),
+            nativeId: z.string(),
+            holdings: z.record(z.string(), z.number()).optional(),
+          })
         ),
       }),
     ]),
