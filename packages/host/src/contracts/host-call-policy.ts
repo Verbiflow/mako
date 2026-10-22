@@ -190,8 +190,16 @@ const replays = [
   "mako:cloud-offer-projects",
   /** A move is settled by its id: a repeat joins the move running, or answers how it went. */
   "mako:thread-move",
+  /** A return is settled by its id: a repeat joins the return running, or answers how it went. */
+  "mako:thread-return",
+  /** Whether a machine has its folder for a move only reads. */
+  "mako:move-ready",
   /** A move's arrival on a machine is marked by its id: a repeat answers what it did without doing it again. */
   "mako:move-arrive",
+  /** A Thread's departure for its device: a repeat finds it released, sends the same checkpoint by its hash, and only what's new of the records. */
+  "mako:move-depart",
+  /** A Thread staying on its machine after a departure: a repeat finds it there and changes nothing. */
+  "mako:move-stay",
   /** Cancelling a sign-in that has ended cancels nothing. */
   "mako:account-login-cancel",
   /** Cancelling a Mako sign-in that has ended cancels nothing. */

@@ -249,6 +249,46 @@ async function resumesAfterQuitInFirstTurn() {
   }
 }
 
+/**
+ * A conversation that resumed a native session with records (a Thread arriving from another device) can close its
+ * provider before its first turn here, since the same session opens again from them; one that started fresh can't
+ * until a turn wrote its record.
+ */
+async function resumedHibernatesBeforeATurn() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-resumed-hibernate-"))
+  let closes = 0
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => ({
+      id: options.conversationId, nativeId: options.resume ?? `fresh-${options.conversationId}`, nativePath: join(root, "native-session"),
+      harness: "test-provider", cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [],
+    }),
+    prompt: async () => {},
+    permission: async () => {},
+    cancel: async () => {},
+    close: async () => void closes++,
+    setMode: async () => {},
+  }
+  const owner = new LiveConversations({ appPath: root, root: join(root, "journals"), driver: () => driver, history: async () => null, emit: () => {}, providerIdleMs: 15, providerWarmLimit: 2, resumeVerdict: async () => ({ kind: "resumable", record: "same" }) })
+  try {
+    const fresh = randomUUID()
+    const resumed = randomUUID()
+    await owner.start("test-provider", root, { conversationId: fresh })
+    await owner.start("test-provider", root, { conversationId: resumed, resume: "native-arrived" })
+    await waitFor(() => owner.snapshot(resumed)?.session.connection === "hibernated", "the resumed provider did not hibernate")
+    assert.equal(owner.snapshot(resumed)?.control?.bindings[0]?.resumed, true, "its binding says it opened a session with records")
+    assert.equal(owner.snapshot(fresh)?.session.connection, "connected", "a fresh one waits for a turn's record")
+    assert.equal(closes, 1)
+    console.log("PASS: a resumed session can close before its first turn here; a fresh one waits for a turn")
+  } finally {
+    owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close-during-preparation" | "changed-store" = false) {
   const root = mkdtempSync(join(tmpdir(), "mako-live-hibernate-"))
   const memoryPath = join(root, "session-memory.sqlite")
@@ -1996,6 +2036,7 @@ await startedAheadTakesFirstMessage()
 await closeDuringStartup()
 await closeBeforeNativeSpawn()
 await durabilityAndBatching()
+await resumedHibernatesBeforeATurn()
 await hibernatesAndWakesExactlyOnce()
 await hibernatesAndWakesExactlyOnce(true)
 await hibernatesAndWakesExactlyOnce("close-during-preparation")

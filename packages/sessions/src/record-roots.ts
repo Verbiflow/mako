@@ -68,12 +68,21 @@ export function rootFolders(roots: readonly RecordRoot[]): Map<string, string> {
  * them, else at the same place under the destination's home when the source
  * kept the root under its own home. A root kept elsewhere, which the
  * destination doesn't name, has nowhere to go and the restore says so.
+ *
+ * A path a session's records name may have been written in another home than
+ * the one its layout says: a session that went to a cloud machine and back has
+ * rows the machine wrote, naming its home (`/home/node/.codex/…`), under the
+ * device's layout, which the cloud keeps from the session's first arrival. A
+ * root under its home is known in any home by its place there (`.codex`), so a
+ * path naming it in another home goes to the destination's root too.
  */
 export class RootPlaces {
   readonly folders = new Map<string, string>()
   /** Roots that have no place in the destination, with why. */
   readonly missing: { root: string; reason: string }[] = []
   private readonly moves: { from: string; to: string }[] = []
+  /** Each root kept under its home, by its place there (`.codex`), and where it goes: found in any home. */
+  private readonly homed: { below: string; to: string }[] = []
 
   constructor(source: { home: string; roots: ReadonlyMap<string, string> }, destination: { home: string; roots?: readonly RecordRoot[] }) {
     const named = rootFolders(destination.roots ?? [])
@@ -87,8 +96,10 @@ export class RootPlaces {
       }
       this.folders.set(name, to)
       if (to !== from) this.moves.push({ from, to })
+      if (underHome && below !== "") this.homed.push({ below, to })
     }
     this.moves.sort((left, right) => right.from.length - left.from.length)
+    this.homed.sort((left, right) => right.below.length - left.below.length)
   }
 
   place(qualified: string): string {
@@ -101,10 +112,20 @@ export class RootPlaces {
       if (value === from) return to
       if (value.startsWith(`${from}/`)) return `${to}${value.slice(from.length)}`
     }
+    // Written in another home: the root's place under it, after an absolute home.
+    if (!isAbsolute(value)) return value
+    for (const { below, to } of this.homed) {
+      const at = value.indexOf(`${sep}${below}`)
+      if (at <= 0) continue
+      const after = value.slice(at + 1 + below.length)
+      if (after !== "" && !after.startsWith(sep)) continue
+      return `${to}${after}`
+    }
     return value
   }
 
+  /** Whether a value naming a path may read otherwise in the destination: always, while any root has a place under its home. */
   get moving(): boolean {
-    return this.moves.length > 0
+    return this.moves.length > 0 || this.homed.length > 0
   }
 }

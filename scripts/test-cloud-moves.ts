@@ -35,8 +35,11 @@ class Gateway {
   readonly sentRecords: string[][] = []
   readonly answers = new Map<string, MoveAnswer>()
   readonly calls: Array<{ channel: string; args: readonly unknown[] }> = []
-  /** Set to make the machine's arrival fail, or the next refusals unreachable. */
+  /** The Thread's state here each time the machine was asked whether it's ready. */
+  readonly readyWhile: string[] = []
+  /** Set to make the machine's arrival fail, or its readiness (a cloud too full to start it), or the next refusals unreachable. */
   arrival: Error | undefined
+  ready: Error | undefined
   unreachable = 0
   answered(move: string, answer: MoveAnswer): MoveAnswer {
     const first = this.answers.get(move) ?? answer
@@ -106,6 +109,14 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
       return gateway.answers.get(move)
     },
     threadRecords: async (threadId) => ({ id: threadId, base: `https://gateway.test/v1/threads/${threadId}/records`, authorization: "Bearer token" }),
+    // The way back's, which this test never takes (`test-cloud-returns.ts` does).
+    readCheckpoint: () => Promise.reject(new Error("no return in this test")),
+    beginReturn: () => Promise.reject(new Error("no return in this test")),
+    releaseReturn: () => Promise.reject(new Error("no return in this test")),
+    cancelReturn: () => Promise.reject(new Error("no return in this test")),
+    giveBackReturn: () => Promise.reject(new Error("no return in this test")),
+    finishReturn: () => Promise.reject(new Error("no return in this test")),
+    returnState: () => Promise.reject(new Error("no return in this test")),
     wake: () => undefined,
     stop: () => undefined,
   }
@@ -115,7 +126,7 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
     account: () => account,
     threads: () => threads,
     moves: {
-      blockers: () => [...busy.reasons],
+      settledBlockers: async () => [...busy.reasons],
       begin: (input) => threads.beginMove(input),
       cancel: (input) => threads.cancelMove(input),
       release: async (input) => {
@@ -140,6 +151,11 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
       callThread: async (_threadId, channel, args): Promise<EncodedValue> => {
         gateway.calls.push({ channel, args })
         if (channel === "mako:move-arrive" && gateway.arrival) throw gateway.arrival
+        if (channel === "mako:move-ready") {
+          if (gateway.ready) throw gateway.ready
+          // Asked while the Thread still runs here: nothing has been released yet.
+          gateway.readyWhile.push(threads.execution(threads.journalPlacement(conversation)!.session)?.state ?? "none")
+        }
         return encodeRuntimeValue({ ok: true })
       },
     },
@@ -168,10 +184,12 @@ try {
     const arrive = s.gateway.calls.find((call) => call.channel === "mako:move-arrive")
     const sent = plan(s, id)
     assert.equal(sent.phase, "started")
-    assert.deepEqual(arrive?.args, [{ move: id, folder: s.checkout, checkpoint: plan(s, id).checkpoint, sessions: [{ harness: "codex", nativeId: "n-1", holdings: { "codex:sessions/n-1.jsonl": 2 } }] }], "the machine is told what the last send held, to hold at least that")
+    assert.deepEqual(arrive?.args, [{ move: id, folder: s.checkout, checkpoint: plan(s, id).checkpoint, sessions: [{ harness: "codex", nativeId: "n-1", holdings: { "codex:sessions/n-1.jsonl": 2 }, open: { conversationId: s.conversation, modeId: "access:full", tuning: { model: "gpt-5.5" } } }] }], "the machine is told what the last send held, to hold at least that, and to open the session as it ran here before the claim")
     const start = s.gateway.calls.find((call) => call.channel === "mako:live-start")
     assert.deepEqual(start?.args, ["codex", s.checkout, { conversationId: s.conversation, resume: "n-1", modeId: "access:full", tuning: { model: "gpt-5.5" } }], "resumed natively, with the settings it ran with")
     assert.ok(s.gateway.calls.findIndex((call) => call.channel === "mako:move-arrive") < s.gateway.calls.findIndex((call) => call.channel === "mako:live-start"), "nothing starts before the arrival")
+    assert.deepEqual(s.gateway.calls.find((call) => call.channel === "mako:move-ready")?.args, [{ folder: s.checkout, harnesses: ["codex"] }])
+    assert.deepEqual(s.gateway.readyWhile, ["here"], "its machine was ready before the release")
     assert.deepEqual(s.started, [`adopt ${s.conversation} ${outcome.kind === "moved" ? outcome.cloudThread : ""}`, `started ${s.conversation}`])
     const execution = state(s)
     assert.equal(execution?.state, "elsewhere")
@@ -202,6 +220,31 @@ try {
     assert.deepEqual(state(s), { state: "here", owner: s.threads.self, generation: 1 }, "the move was cancelled; the Session is as it was")
     assert.equal(s.gateway.made.length, 1, "its cloud Thread was made ahead")
     assert.equal(s.gateway.answers.get(id)?.kind, "refused", "and refused, so the cloud ends its machine")
+    assert.ok(!s.gateway.calls.some((call) => call.channel === "mako:move-arrive"))
+  }
+
+  // A harness that can't start on the machine: the arrival fails before the claim, so the cloud refuses and this Mac
+  // takes the Thread back, rather than a cloud Thread that can't run.
+  {
+    const s = setup("no-start")
+    s.gateway.arrival = new Error("Cursor couldn't start in the cloud: API key is required.")
+    const id = move()
+    const outcome = await s.moves.move(s.conversation, id)
+    assert.deepEqual(outcome, { kind: "kept-here", reason: "Cursor couldn't start in the cloud: API key is required." })
+    assert.equal(s.gateway.answers.get(id)?.kind, "refused", "nothing was claimed")
+    assert.equal(state(s)?.state, "here")
+    assert.deepEqual(s.started, [], "never adopted as the cloud's")
+  }
+
+  // A cloud that can't start the machine (full): the Thread is never released, and the cloud Thread made for it ends.
+  {
+    const s = setup("full")
+    s.gateway.ready = new Error("Mako's cloud is full right now")
+    const id = move()
+    const outcome = await s.moves.move(s.conversation, id)
+    assert.deepEqual(outcome, { kind: "kept-here", reason: "Its cloud machine didn't get ready: Mako's cloud is full right now" }, "the reason names the step")
+    assert.deepEqual(state(s), { state: "here", owner: s.threads.self, generation: 1 }, "never released: it ran here throughout")
+    assert.equal(s.gateway.answers.get(id)?.kind, "refused", "so the cloud ends the machine it was making")
     assert.ok(!s.gateway.calls.some((call) => call.channel === "mako:move-arrive"))
   }
 

@@ -115,6 +115,44 @@ try {
   await writeFile(join(machine, "a.txt"), "changed on the machine\n")
   await assert.rejects(verifyMoveCheckpoint(git, machine, checkpoint), { name: "MoveCheckpointError", kind: "mismatch", message: /the files/ })
 
+  // The way back: the machine goes on (a commit, a staged file, an untracked file made and one removed) on top of a
+  // remote that moved meanwhile, and its checkout replaces the Mac's own, which is kept first and can be put back.
+  {
+    const other = join(root, "other")
+    sh(root, "clone", "--quiet", remote, other)
+    await writeFile(join(other, "upstream.txt"), "pushed by someone else\n")
+    sh(other, "add", "upstream.txt")
+    sh(other, "commit", "--quiet", "-m", "upstream")
+    sh(other, "push", "--quiet", "origin", "main")
+    sh(machine, "fetch", "--quiet", "origin")
+    // Its branch takes the remote's new commit, which the Mac has never fetched.
+    sh(machine, "stash", "--quiet", "--include-untracked")
+    sh(machine, "merge", "--quiet", "--no-edit", "origin/main")
+    sh(machine, "stash", "pop", "--quiet", "--index")
+    await writeFile(join(machine, "cloud.txt"), "committed in the cloud\n")
+    sh(machine, "add", "cloud.txt")
+    sh(machine, "commit", "--quiet", "-m", "cloud commit")
+    await writeFile(join(machine, "staged-in-cloud.txt"), "staged\n")
+    sh(machine, "add", "staged-in-cloud.txt")
+    await rm(join(machine, "new-dir"), { recursive: true })
+    await writeFile(join(machine, "cloud-untracked.txt"), "left untracked\n")
+    const cloudReading = await reading(machine)
+    const backOut = await mkdtemp(join(root, "out-"))
+    const back = await captureMoveCheckpoint(git, machine, backOut)
+
+    const keptOut = await mkdtemp(join(root, "out-"))
+    const kept = await captureMoveCheckpoint(git, mac, keptOut)
+    // A plain apply refuses the Mac's checkout: its base is newer than anything the Mac has fetched.
+    await assert.rejects(applyMoveCheckpoint(git, mac, back.file, back.checkpoint), { kind: "missing-base" })
+    await applyMoveCheckpoint(git, mac, back.file, back.checkpoint, { replace: true })
+    assert.deepEqual(await reading(mac), cloudReading, "the Mac's worktree reads as the machine's: the commit, what's staged, the untracked file made and the one removed")
+    assert.equal(await readFile(join(mac, "ignored.env"), "utf8"), "SECRET=never-carried\n", "ignored files on the Mac stay")
+    assert.equal(sh(mac, "for-each-ref", "refs/mako"), "", "no Mako refs left behind")
+    // And put back as it was, from the copy kept first.
+    await applyMoveCheckpoint(git, mac, kept.file, kept.checkpoint, { replace: true })
+    assert.deepEqual(await reading(mac), macReading, "the Mac's own checkout, exactly as kept")
+  }
+
   // A detached HEAD arrives detached.
   const detached = join(root, "detached")
   sh(root, "clone", "--quiet", remote, detached)
@@ -165,7 +203,7 @@ try {
   const empty = join(root, "empty")
   sh(root, "init", "--quiet", empty)
   await assert.rejects(captureMoveCheckpoint(git, empty, await mkdtemp(join(root, "out-"))), { name: "MoveCheckpointError", kind: "no-commits" })
-  console.log(`PASS: a checkout carried to a partial clone reads back the same (HEAD, branch, index, ${Object.keys(arrived.files).length} files with modes and links; ignored files stay behind) in a ${checkpoint.bytes}-byte bundle; capture writes nothing into the repository and repeats byte for byte; detached HEAD, a lost base, wrong bytes, conflicts, the limit and no commits each say so`)
+  console.log(`PASS: a checkout carried to a partial clone reads back the same (HEAD, branch, index, ${Object.keys(arrived.files).length} files with modes and links; ignored files stay behind) in a ${checkpoint.bytes}-byte bundle; capture writes nothing into the repository and repeats byte for byte; detached HEAD, a lost base, wrong bytes, conflicts, the limit and no commits each say so; the way back replaces a person's worktree over a remote that moved, and the copy kept first puts it back exactly`)
 } finally {
   git.close()
   await rm(root, { recursive: true, force: true })

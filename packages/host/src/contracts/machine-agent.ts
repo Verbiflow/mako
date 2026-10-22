@@ -38,6 +38,11 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   /** Report the runtime's state now, for the agent's own state page. */
   z.object({ type: z.literal("inspect") }).strict(),
   /**
+   * The Thread's folder couldn't be made: the step that failed (asking for it, cloning, fetching) and why, so a call that
+   * needs the folder says why it isn't there. An older host ignores it.
+   */
+  z.object({ type: z.literal("workspace-failed"), path: z.string().min(1).max(1024).optional(), step: z.string().min(1).max(40), reason: z.string().min(1).max(2_000) }).strict(),
+  /**
    * The sign-ins the machine's harnesses run under, all of them each time: the host writes each where its harness
    * reads it, keeping secret files in `secrets`, a folder in memory the agent made for the host alone.
    */

@@ -122,6 +122,8 @@ export interface Resident {
 }
 
 export interface Dependencies {
+  /** Nobody is at this host to sign a harness in: every start is unattended (`ProviderStartOptions.unattended`). */
+  unattended?: boolean
   /** Held while a harness starts, so the host's routine work waits for it (`base/foreground.ts`). */
   foreground?: Pick<Foreground, "hold" | "started">
   mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>

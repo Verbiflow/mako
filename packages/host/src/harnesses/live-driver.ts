@@ -281,6 +281,9 @@ export function conversationServers(tools: ConversationTools): Array<{ name: str
   return servers
 }
 
+/** Why an unattended start (`ProviderStartOptions.unattended`) that needed a person to sign in failed. */
+export const UNATTENDED_SIGN_IN = "It isn't signed in here, and nobody is here to sign it in."
+
 /** What a conversation owner starts a session with. Host-only: never in the renderer wire contract or journals. */
 export interface ProviderStartOptions extends LiveStartOptions {
   /** Known native occurrences from this binding, including answered ones. Keep
@@ -297,6 +300,11 @@ export interface ProviderStartOptions extends LiveStartOptions {
   conversationTools?: ConversationTools
   /** Set on the agent process with `applyThreadEnvironment`, beside the control environment. */
   threadEnvironment?: ThreadEnvironment
+  /**
+   * Nobody is at this host to sign a harness in (a cloud machine, whose sign-ins come from the account): a start that
+   * would ask a person to sign in fails at once, saying the harness isn't signed in, instead of waiting for an answer.
+   */
+  unattended?: boolean
 }
 
 /** What a driver's own start receives: the owner's options and the account admission launched it on. */

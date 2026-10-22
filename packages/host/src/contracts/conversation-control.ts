@@ -55,6 +55,11 @@ export const ProviderBindingSchema = z.object({
   }).optional(),
   /** The native session's own totals when the conversation last moved off it, for a resume that restores them. */
   nativeUsage: NativeTotalsSchema.optional(),
+  /**
+   * It opened a native session that already had its records (a resume, as a Thread arriving from another device
+   * does): its provider can close and the same session open again before it runs a turn here.
+   */
+  resumed: z.literal(true).optional(),
 })
 export type ProviderBinding = z.infer<typeof ProviderBindingSchema>
 

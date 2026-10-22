@@ -256,8 +256,12 @@ export interface MachineProbe {
   find?: FindCommand
 }
 
-/** The machine this host runs on, by what it has: a Mac, a Linux desktop session, or no screen at all. */
+/**
+ * The machine this host runs on, by what it has: a Mac, a Linux desktop session, or no screen at all. `MAKO_SCREENLESS=1`
+ * starts a host that opens and shows nothing wherever it runs, as an end-to-end check's host does beside a person's own.
+ */
 export function probeMachine({ platform, env, run, find }: MachineProbe): MachineCapability {
+  if (env.MAKO_SCREENLESS === "1") return absentMachine("This host was started without a screen (MAKO_SCREENLESS=1), so it opens and shows nothing.")
   if (platform === "darwin") return macMachine(run)
   if (platform === "linux") {
     return hasGraphicalSession(env)

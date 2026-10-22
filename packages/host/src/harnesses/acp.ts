@@ -730,6 +730,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       const session = await openAuthenticatedSession({
         methods: initialized.authMethods ?? [],
         signal: live.startup.signal,
+        unattended: options.unattended,
         select: async (methods) => {
           const requestId = `${id}-authenticate-${Date.now()}`
           const request: LivePermissionRequest = {

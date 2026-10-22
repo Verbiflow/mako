@@ -73,3 +73,17 @@ export type ThreadMoveStep =
 
 /** What `mako:thread-move` came to: the Thread runs on a cloud Thread now, or it stayed here, and why. */
 export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
+
+/** A Thread coming back from the cloud, step by step, as the window it was asked from shows it. */
+export type ThreadReturnStep =
+  /** Its machine stops taking work and packs the checkout and the records. */
+  | { kind: "packing" }
+  /** The checkout and each Session's records are arriving here. */
+  | { kind: "bringing" }
+  /** Every conversation of the Thread runs here again, under its own id. */
+  | { kind: "back"; conversations: string[] }
+  | { kind: "stayed"; reason: string }
+  | { kind: "unsettled"; reason: string }
+
+/** What `mako:thread-return` came to: the Thread runs here again, or it stayed in the cloud, and why. */
+export type ThreadReturnOutcome = { kind: "back" } | { kind: "stayed"; reason: string } | { kind: "unsettled"; reason: string }

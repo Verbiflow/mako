@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { RequestError, type AuthMethod } from "@agentclientprotocol/sdk"
 import { openAuthenticatedSession } from "@mako/host/harnesses/acp-authentication"
+import { UNATTENDED_SIGN_IN } from "@mako/host/harnesses/live-driver"
 
 const methods: AuthMethod[] = [
   { id: "provider-browser", name: "Log in with browser" },
@@ -24,6 +25,12 @@ const flow = {
     calls.push(`authenticate:${id}`)
   },
 }
+// Nobody at the host (a cloud machine): a provider that needs a sign-in fails at once, asking no one.
+opens = 0
+await assert.rejects(openAuthenticatedSession({ ...flow, unattended: true }), { message: UNATTENDED_SIGN_IN })
+assert.deepEqual(calls, ["open"], "no sign-in was offered")
+calls.length = 0
+opens = 0
 assert.equal(await openAuthenticatedSession(flow), "session")
 assert.deepEqual(calls, [
   "open",

@@ -24,6 +24,7 @@ import { createLiveEngine, type LiveEngineApi } from "../../live-engine.js"
 import { acpMcpServers, unlaunchableMcpServers, migrateRetiredMakoMcpFile } from "../../../tools/index.js"
 import {
   conversationServers,
+  UNATTENDED_SIGN_IN,
   type ProviderLiveDriver,
   type ProviderStartOptions,
   type ProviderSteerResult,
@@ -446,7 +447,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   }
 
   /** Resolves whether a person had to sign in, after which what was asked before is another account's. */
-  async function ensureSignedIn(live: Live, trace: ProviderLaunchTrace, account: boolean, apiKey: string | undefined): Promise<boolean> {
+  async function ensureSignedIn(live: Live, trace: ProviderLaunchTrace, account: boolean, apiKey: string | undefined, unattended: boolean | undefined): Promise<boolean> {
     // A selected account brings its own key; Cursor answers for it on open.
     if (account) return false
     // Asked, when no answer is kept, of the session's own child, which runs under the key the answer is about.
@@ -457,6 +458,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // since — so the key sources are resolved again before asking anyone.
     const fresh = await dependencies.auth.status(true, on)
     if (fresh.state.status === "signed-in") return false
+    if (unattended) throw new Error(UNATTENDED_SIGN_IN)
     const requestId = `${live.state.id}-authenticate-${now()}`
     const problem = fresh.state.problem?.message
     const response = await trace.step("human-sign-in", () => engine.ask(live, {
@@ -750,7 +752,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
         // which they'd be another account's and are asked again.
         const asking = settled(live.client.request("me", undefined))
         const listing = settled(loadModels(live.client, accountEnvironment))
-        const signedInNow = await trace.step("authentication", () => ensureSignedIn(live, trace, account, accountEnvironment.CURSOR_API_KEY))
+        const signedInNow = await trace.step("authentication", () => ensureSignedIn(live, trace, account, accountEnvironment.CURSOR_API_KEY, options.unattended))
         const identityObservation = trace.step("identity", () => observeNativeIdentity(async () => {
           const identity = signedInNow ? await live.client.request("me", undefined) : await outcome(asking)
           return reportedIdentity(identity.email, "cursor", CURSOR_NATIVE_IDENTITY.via)

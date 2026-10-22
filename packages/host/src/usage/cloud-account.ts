@@ -1,11 +1,12 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
-import { createReadStream } from "node:fs"
-import type { Readable } from "node:stream"
+import { createReadStream, createWriteStream } from "node:fs"
+import { Readable } from "node:stream"
+import { pipeline } from "node:stream/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
-import { MoveAnswerSchema, MoveClaimRequestSchema, type MoveAnswer, type MoveCheckpoint, type MoveClaimRequest } from "@mako/protocol/moves"
+import { MOVE_REASON_MAX, MoveAnswerSchema, MoveClaimRequestSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveClaimRequest, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
@@ -446,14 +447,67 @@ export class CloudAccounts {
 
   /** The cloud's claim of a move this Mac released, each Session one generation on, or its refusal if that came first. */
   async claimMove(threadId: string, move: string, request: MoveClaimRequest): Promise<MoveAnswer> {
-    const response = await this.#call("moves.claim", "POST", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}/claim`, MoveClaimRequestSchema.parse(request))
+    // The handoff goes as JSON carries it: a field left undefined isn't sent, as it was refused here unsent before.
+    const body = MoveClaimRequestSchema.parse({ ...request, handoff: JSON.parse(JSON.stringify(request.handoff)) })
+    const response = await this.#call("moves.claim", "POST", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}/claim`, body)
     return MoveAnswerSchema.parse(await response.json())
   }
 
   /** The cloud's promise never to take a move, or its claim if that came first. */
   async refuseMove(threadId: string, move: string, reason: string): Promise<MoveAnswer> {
-    const response = await this.#call("moves.refuse", "POST", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}/refuse`, { reason })
+    // Within what the cloud takes, or a refusal that can never be heard leaves the move unsettled for good.
+    const response = await this.#call("moves.refuse", "POST", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}/refuse`, { reason: clipReason(reason) })
     return MoveAnswerSchema.parse(await response.json())
+  }
+
+  /** A checkpoint kept beside a cloud Thread's records, read whole into `file`; its bytes are checked where it's applied. */
+  async readCheckpoint(threadId: string, sha256: string, file: string): Promise<void> {
+    const response = await this.#call("moves.checkpoint-read", "GET", `/v1/threads/${encodeURIComponent(threadId)}/records/checkpoints/${sha256}`)
+    if (!response.body) throw new CloudAccountError("The cloud sent no checkpoint.")
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(file))
+  }
+
+  /** A cloud Thread's return to this Mac begun: from now it takes no work but its machine's departure. */
+  async beginReturn(threadId: string, move: string): Promise<ReturnState> {
+    return this.#returnStep("returns.begin", threadId, move, "", {})
+  }
+
+  /** The cloud Thread recorded released, with what its machine packed: nothing runs it in the cloud from now. */
+  async releaseReturn(threadId: string, move: string, departure: ReturnDeparture): Promise<ReturnState> {
+    return this.#returnStep("returns.release", threadId, move, "/release", ReturnReleaseRequestSchema.parse({ departure }))
+  }
+
+  /** A return given up before its release: the Thread goes on in the cloud as it was. */
+  async cancelReturn(threadId: string, move: string, reason: string): Promise<ReturnState> {
+    return this.#returnStep("returns.cancel", threadId, move, "/cancel", { reason: clipReason(reason) })
+  }
+
+  /** A released Thread this Mac couldn't take, given back: its machine runs it again. */
+  async giveBackReturn(threadId: string, move: string, reason: string): Promise<ReturnState> {
+    return this.#returnStep("returns.give-back", threadId, move, "/give-back", { reason: clipReason(reason) })
+  }
+
+  /** The return done: this Mac took the Thread, and the cloud ends its machine. */
+  async finishReturn(threadId: string, move: string): Promise<ReturnState> {
+    return this.#returnStep("returns.done", threadId, move, "/done", {})
+  }
+
+  /** What the cloud recorded for a return, if anything; undefined while it hasn't. */
+  async returnState(threadId: string, move: string): Promise<ReturnState | undefined> {
+    const response = await this.#call("returns.state", "GET", `/v1/threads/${encodeURIComponent(threadId)}/returns/${move}`, undefined, false, [404])
+    return response.status === 404 ? undefined : ReturnStateSchema.parse(await response.json())
+  }
+
+  /** One step of a return; a step the record has gone past is answered with the record, which the caller reads. */
+  async #returnStep(route: CloudRoute, threadId: string, move: string, step: string, body: JsonValue): Promise<ReturnState> {
+    const response = await this.#call(route, "POST", `/v1/threads/${encodeURIComponent(threadId)}/returns/${move}${step}`, body, false, [409])
+    const answer: unknown = await response.json()
+    if (response.status === 409) {
+      const record = z.object({ record: ReturnStateSchema }).safeParse(answer)
+      if (!record.success) throw new CloudAccountError(problemWords(ProblemSchema.safeParse(answer).data, "The cloud refused that step of the return."))
+      return record.data.record
+    }
+    return ReturnStateSchema.parse(answer)
   }
 
   /** What the cloud answered a move, if it answered; undefined while it hasn't. */
@@ -1048,9 +1102,13 @@ function parseCloud(value: string | undefined, fixture: boolean): CloudTarget {
 }
 
 async function problemOf(response: CloudResponse, fallback: string): Promise<string> {
-  const problem = ProblemSchema.safeParse(await response.json().catch(() => undefined))
-  const title = problem.success ? problem.data.title : undefined
-  return title ? (problem.data?.detail ? `${title}. ${problem.data.detail}` : title) : fallback
+  return problemWords(ProblemSchema.safeParse(await response.json().catch(() => undefined)).data, fallback)
+}
+
+/** A problem document's words; `fallback` when the body wasn't one. */
+function problemWords(problem: z.infer<typeof ProblemSchema> | undefined, fallback: string): string {
+  const title = problem?.title
+  return title ? (problem.detail ? `${title}. ${problem.detail}` : title) : fallback
 }
 
 function base64url(bytes: Uint8Array): string {
@@ -1064,4 +1122,10 @@ function messageOf(error: Error | undefined, fallback: string): string {
 
 function sameJson(a: CloudPerson | CloudDevice, b: CloudPerson | CloudDevice): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
+}
+
+/** A reason the cloud keeps beside a move: within `MOVE_REASON_MAX`, cut with an ellipsis rather than refused. */
+export function clipReason(reason: string): string {
+  const said = reason.trim() || "No reason was given."
+  return said.length <= MOVE_REASON_MAX ? said : `${said.slice(0, MOVE_REASON_MAX - 1)}…`
 }

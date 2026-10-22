@@ -46,7 +46,10 @@ export const MoveClaimRequestSchema = z.object({
 }).strict()
 export type MoveClaimRequest = z.infer<typeof MoveClaimRequestSchema>
 
-export const MoveRefuseRequestSchema = z.object({ reason: z.string().min(1).max(2_000) }).strict()
+/** The longest reason a refusal, a cancel or a give-back carries: a sentence, not a stack. */
+export const MOVE_REASON_MAX = 2_000
+
+export const MoveRefuseRequestSchema = z.object({ reason: z.string().min(1).max(MOVE_REASON_MAX) }).strict()
 
 /** What the gateway recorded for a move: the claim, each Session one generation on, or the refusal. */
 export const MoveAnswerSchema = z.discriminatedUnion("kind", [
@@ -59,3 +62,41 @@ export const MoveAnswerSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("refused"), move: z.uuid(), at: z.number(), reason: z.string() }).strict(),
 ])
 export type MoveAnswer = z.infer<typeof MoveAnswerSchema>
+
+/**
+ * A cloud Thread going back to the device it came from: a move the other way, by the same rules. The device asks the
+ * gateway to begin the return; from then the Thread takes no work but its machine's departure (`RETURN_DEPARTURE_OP`).
+ * The machine packs up only once nothing in it works: its checkout as a checkpoint and each Session's records, beside
+ * the Thread's records. The device then asks the gateway to record the Thread released, with what the machine packed:
+ * from then nothing runs it in the cloud. The device takes it (`returned`; the machine goes) or, unable to, gives it
+ * back (`given-back`; the machine runs it again). Before the release the device can cancel (`cancelled`).
+ *
+ * The gateway keeps one record per return, which only goes forward: `returning`, then `cancelled` or `released`, then
+ * `given-back` or `returned`. A step asked again is answered with the record as it stands; a step the record has gone
+ * past is refused with it. One return runs at a time per Thread.
+ */
+
+/** The operation a Thread takes while it's returning: its machine's departure, and nothing else. */
+export const RETURN_DEPARTURE_OP = "host.move-depart"
+
+/** Each unit of a session's records by its key, at the version its sender holds: what the taker must hold at least. */
+export const ReturnHoldingsSchema = z.record(z.string().min(1).max(4_096), z.number().int().min(-1))
+
+/** What a machine packed for the way back: its checkout and, per Session, what it sent of its records. */
+export const ReturnDepartureSchema = z.object({
+  checkpoint: MoveCheckpointSchema,
+  sessions: z.array(z.object({ harness: z.string().min(1).max(64), nativeId: z.string().min(1).max(256), holdings: ReturnHoldingsSchema }).strict()).min(1).max(256),
+}).strict()
+export type ReturnDeparture = z.infer<typeof ReturnDepartureSchema>
+
+export const ReturnStateSchema = z.discriminatedUnion("phase", [
+  z.object({ phase: z.literal("returning"), move: z.uuid(), at: z.number() }).strict(),
+  z.object({ phase: z.literal("cancelled"), move: z.uuid(), at: z.number(), reason: z.string() }).strict(),
+  z.object({ phase: z.literal("released"), move: z.uuid(), at: z.number(), departure: ReturnDepartureSchema }).strict(),
+  z.object({ phase: z.literal("given-back"), move: z.uuid(), at: z.number(), reason: z.string(), departure: ReturnDepartureSchema }).strict(),
+  z.object({ phase: z.literal("returned"), move: z.uuid(), at: z.number(), departure: ReturnDepartureSchema }).strict(),
+])
+export type ReturnState = z.infer<typeof ReturnStateSchema>
+
+export const ReturnReleaseRequestSchema = z.object({ departure: ReturnDepartureSchema }).strict()
+export const ReturnReasonRequestSchema = z.object({ reason: z.string().min(1).max(MOVE_REASON_MAX) }).strict()

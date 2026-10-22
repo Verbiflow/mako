@@ -32,14 +32,21 @@ import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { CloudAccount } from "@mako/host/usage/cloud-account-methods"
 import { z } from "zod"
 
-/** A move's calls, which these conversations never make (`test-cloud-moves.ts` covers them). */
+/** A move's calls and its way back's, which these conversations never make (`test-cloud-moves.ts` covers them). */
 const unused = () => Promise.reject(new Error("no move in this test"))
-const movesUnused: Pick<CloudAccount, "sendCheckpoint" | "claimMove" | "refuseMove" | "moveAnswer" | "threadRecords"> = {
+const movesUnused: Pick<CloudAccount, "sendCheckpoint" | "claimMove" | "refuseMove" | "moveAnswer" | "threadRecords" | "readCheckpoint" | "beginReturn" | "releaseReturn" | "cancelReturn" | "giveBackReturn" | "finishReturn" | "returnState"> = {
   sendCheckpoint: unused,
   claimMove: unused,
   refuseMove: unused,
   moveAnswer: unused,
   threadRecords: unused,
+  readCheckpoint: unused,
+  beginReturn: unused,
+  releaseReturn: unused,
+  cancelReturn: unused,
+  giveBackReturn: unused,
+  finishReturn: unused,
+  returnState: unused,
 }
 
 const CLONE = "/home/node/work/octocat/Hello-World"
