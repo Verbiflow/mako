@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
 import { MoveCheckpointSchema, type MoveAnswer, type MoveCheckpoint } from "@mako/protocol/moves"
-import type { RecordsLink, SentRecords } from "@mako/sessions/record-sync"
+import { RecordHoldingsSchema, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -62,6 +62,8 @@ const PlanSessionSchema = z.object({
   path: z.string(),
   modeId: z.string().optional(),
   tuning: SessionSettingsSchema.optional(),
+  /** What the last send pushed of its records, each unit at its head: what the machine must hold before it writes them. */
+  holdings: RecordHoldingsSchema.optional(),
 })
 type PlanSession = z.infer<typeof PlanSessionSchema>
 
@@ -98,6 +100,8 @@ export type CloudMovesOptions = {
     person(): Actor
   } | undefined
   moves: {
+    /** What keeps the Thread from leaving now, as a release would say it; empty when it could go. */
+    blockers(thread: ThreadId): string[]
     begin(input: { move: MoveId; thread: ThreadId; target: ExecutionOwner; actor: Actor }): void
     cancel(input: { operationId: string; move: MoveId; actor: Actor }): void
     release(input: { operationId: string; move: MoveId; actor: Actor }): Promise<Handoff>
@@ -176,6 +180,9 @@ export class CloudMoves {
     if (!threads) throw new Error("Moves need the Thread store, which didn't open.")
     const placed = threads.journalPlacement(conversationId)
     if (!placed) throw new Error("This conversation isn't in a Thread yet.")
+    // Asked before anything is made: a busy Thread starts no machine. The release asks again, with no wait before it commits.
+    const busy = this.#options.moves.blockers(placed.thread)
+    if (busy.length) throw new Error(`Moves happen between turns: ${busy.join("; ")}.`)
     const checkout = this.#options.checkout(conversationId)
     if (!checkout) throw new Error("A Thread moves to the cloud from its own worktree. Move it into one first; the main checkout stays here.")
     if (checkout.worktrees.length !== 1) throw new Error("A Thread working in several repositories can't move to the cloud yet.")
@@ -290,16 +297,22 @@ export class CloudMoves {
     }
   }
 
+  /** Each Session's records to the cloud Thread, noting what went so the machine can tell it took all of it. */
   async #sendRecords(plan: Plan): Promise<void> {
     const link = await this.#account().threadRecords(plan.cloudThread)
-    await this.#options.sendRecords(link, plan.sessions.map((session) => session.path))
+    const sent = await this.#options.sendRecords(link, plan.sessions.map((session) => session.path))
+    for (const session of plan.sessions) {
+      const went = sent.find((each) => each.harness === session.harness && each.nativeId === session.nativeId)
+      if (went) session.holdings = went.holdings
+    }
   }
 
   /** The machine applies the checkout and writes each Session into its harness's store; nothing starts. */
   async #arrive(plan: Plan): Promise<void> {
     const checkpoint: MoveCheckpoint | undefined = plan.checkpoint
     if (!checkpoint) throw new Error("The move has no checkpoint to carry.")
-    await this.#options.cloud.callThread(plan.cloudThread, "mako:move-arrive", [{ move: plan.move, folder: plan.folder, checkpoint, sessions: plan.sessions.map(({ harness, nativeId }) => ({ harness, nativeId })) }])
+    const sessions = plan.sessions.map(({ harness, nativeId, holdings }) => (holdings ? { harness, nativeId, holdings } : { harness, nativeId }))
+    await this.#options.cloud.callThread(plan.cloudThread, "mako:move-arrive", [{ move: plan.move, folder: plan.folder, checkpoint, sessions }])
     plan.timings.arrived = Date.now() - plan.began
   }
 
@@ -358,6 +371,8 @@ export class CloudMoves {
     } else {
       const threads = this.#options.threads()
       if (threads?.moveStatus(plan.move)?.phase === "leaving") this.#options.moves.cancel({ operationId: stepOperation(plan.move, "cancel"), move: plan.move, actor: threads.person() })
+      // The cloud Thread made ahead was this move's alone: refused, the cloud ends its machine now, not at its lease's end.
+      if (plan.timings.made !== undefined) await this.#refuse(plan, reason)
     }
     plan.phase = "kept-here"
     plan.reason = reason

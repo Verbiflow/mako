@@ -63,7 +63,7 @@ import { EVIDENCE_RULES, type WriterEvidence } from "./record-writers.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore } from "./record-store.js"
-import { RecordPushes, RecordSync, type PushStatus, type ReceivedRecords, type RecordsLink, type SentRecords } from "./record-sync.js"
+import { RecordPushes, RecordSync, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords } from "./record-sync.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { readOriginal, type EntryOriginal } from "./record-original.js"
 import { streamOwner, streamsRoot } from "./record-streams.js"
@@ -1598,7 +1598,8 @@ export class SessionCatalog {
       const ref = this.byPath.get(path)?.ref ?? (await this.open(path, false))?.ref
       if (!ref) throw new Error(`No session is listed at ${path}.`)
       if (!(await this.hold(path))) throw new Error(`Mako couldn't take ${ref.harness}'s session ${ref.nativeId} into its records whole, so it can't be sent.`)
-      sent.push({ harness: ref.harness, nativeId: ref.nativeId, ...(await sync.push(ref.harness, ref.nativeId)) })
+      const report = await sync.push(ref.harness, ref.nativeId)
+      sent.push({ harness: ref.harness, nativeId: ref.nativeId, ...report, holdings: store.holdings(ref.harness, ref.nativeId) })
     }
     return sent
   }
@@ -1608,17 +1609,28 @@ export class SessionCatalog {
    * does before the harness resumes it: the same session, in this home, at the paths the harness keeps it. `installed`
    * is each harness's version here, gating a restore as `restoreKept` does. A session the harness here already has is
    * left as it is (`present`).
+   *
+   * `holdings` is what the sender pushed, each unit at its head (`SentRecords.holdings`): nothing is written into the
+   * harness's store until this store holds at least that, so a session that went up only in part never resumes as if
+   * it were whole. Without it, the session must at least be here. Imported records are never this store's own
+   * captures, so being here, not `captured`, is the question.
    */
-  async receiveRecords(link: RecordsLink, sessions: ReadonlyArray<{ harness: string; nativeId: string }>, installed: Readonly<Record<string, InstalledReading | null>> = {}): Promise<ReceivedRecords[]> {
+  async receiveRecords(link: RecordsLink, sessions: readonly ReceivingSession[], installed: Readonly<Record<string, InstalledReading | null>> = {}): Promise<ReceivedRecords[]> {
     const store = this.recordWriter
     if (!store || this.readOnly || !this.harnessStores) throw new Error("Mako keeps no records here to receive into.")
     const sync = new RecordSync(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization }))
     const received: ReceivedRecords[] = []
-    for (const { harness, nativeId } of sessions) {
+    for (const { harness, nativeId, holdings: sent } of sessions) {
       const provider = this.providers.find((each) => each.harness === harness)
       if (!provider) throw new Error(`No harness here reads ${harness}'s sessions.`)
       const pulled = await sync.pull(harness, nativeId)
-      if (!store.captured(harness, nativeId)) throw new Error(`The remote holds no finished copy of ${harness}'s session ${nativeId}.`)
+      const held = store.holdings(harness, nativeId)
+      if (!Object.keys(held).length) throw new Error(`The cloud holds none of ${harness}'s session ${nativeId}.`)
+      const short = Object.entries(sent ?? {}).filter(([key, head]) => (held[key] ?? -1) < head)
+      if (short.length) {
+        const [key, head] = short[0]!
+        throw new Error(`The cloud holds ${harness}'s session ${nativeId} only in part: ${key} at version ${held[key] ?? "none"} of ${head}${short.length > 1 ? `, and ${short.length - 1} more` : ""}.`)
+      }
       const started = performance.now()
       const report = await store.restore({ harness, nativeId, home: this.recordsHome, stores: this.harnessStores, ...provider.fork && { fork: provider.fork }, ...installed[harness] !== undefined && { installed: installed[harness] } })
       if (report.written || report.fork?.written) provider.storeWritten?.()

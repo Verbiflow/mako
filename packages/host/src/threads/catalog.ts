@@ -16,7 +16,7 @@ import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE, type KeptRest
 import { makoRecords } from "@mako/sessions/record-streams"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import type { InstalledReading, SessionWriters } from "@mako/sessions/record-writers"
-import type { ReceivedRecords, RecordsLink, SentRecords } from "@mako/sessions/record-sync"
+import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords } from "@mako/sessions/record-sync"
 import { isReplyEntry } from "@mako/sessions/entries"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { existsSync } from "node:fs"
@@ -286,7 +286,7 @@ export interface ThreadCatalog {
   /** Sends the sessions at `paths` to a remote store now and through to their newest, as a move hands them on (`SessionCatalog.sendRecords`). */
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   /** Takes sessions from a remote store into their harnesses' own stores here, as a move's destination does (`SessionCatalog.receiveRecords`). */
-  receiveRecords(link: RecordsLink, sessions: Array<{ harness: string; nativeId: string }>, installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]>
+  receiveRecords(link: RecordsLink, sessions: ReceivingSession[], installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]>
   /** Every harness version that wrote the session at `path`, as the record store keeps them, read without writing; null when it holds none. */
   recordWriters(path: string): SessionWriters | null
   /** A page for the viewer; a tool row fetches its whole output (`block`) when it opens. */
@@ -1264,7 +1264,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return source.sendRecords(link, paths)
   }
 
-  async function receiveRecords(link: RecordsLink, sessions: Array<{ harness: string; nativeId: string }>, installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]> {
+  async function receiveRecords(link: RecordsLink, sessions: ReceivingSession[], installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]> {
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
     return source.receiveRecords(link, sessions, installed)

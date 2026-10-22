@@ -186,14 +186,33 @@ export class LiveMoves {
   }
 
   /**
+   * What keeps a Thread from leaving now, as its release would say it, with
+   * no move begun: a move asks first so a busy Thread makes nothing in the
+   * cloud. Empty when it could go; the release still asks again itself.
+   */
+  blockers(thread: ThreadId): string[] {
+    try {
+      this.residentsQuiet(this.store().threadSessions(thread))
+      return []
+    } catch (error) {
+      if (error instanceof MoveNotQuietError) return error.reasons
+      throw error
+    }
+  }
+
+  /**
    * The residents of a leaving move, once none of them is working and no
    * other host holds one of its native sessions. Queued prompts are allowed:
    * the move holds them.
    */
   private quiet(threads: ThreadStore, move: MoveId): Resident[] {
+    return this.residentsQuiet(threads.moveJournals(move))
+  }
+
+  private residentsQuiet(sessions: ReadonlyArray<{ journals: readonly string[]; natives: ReadonlyArray<{ harness: string; nativeId: string }> }>): Resident[] {
     const reasons: string[] = []
     const residents: Resident[] = []
-    for (const moving of threads.moveJournals(move)) {
+    for (const moving of sessions) {
       for (const native of moving.natives) {
         const hold = this.access.dependencies.memory?.heldBy(native.harness, native.nativeId)
         if (hold) reasons.push(`a session in it is open in ${hold.hostLabel}`)

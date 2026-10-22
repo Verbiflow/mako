@@ -33,9 +33,19 @@ export class RecordSyncConflictError extends Error {
 export const SyncReportSchema = z.object({ versions: z.number(), held: z.number(), chunks: z.number(), bytes: z.number(), requests: z.number(), ms: z.number() })
 export type SyncReport = z.infer<typeof SyncReportSchema>
 
-/** One session sent to a remote store (`SessionCatalog.sendRecords`). */
-export const SentRecordsSchema = SyncReportSchema.extend({ harness: z.string(), nativeId: z.string() })
+/** Each unit of a session by its key, at its head version: what a store holds of it (`RecordStore.holdings`). */
+export const RecordHoldingsSchema = z.record(z.string(), z.number().int())
+
+/**
+ * One session sent to a remote store (`SessionCatalog.sendRecords`). `holdings`: what went, each unit at its head, for
+ * whoever takes it from the remote to check it took all of it.
+ */
+export const SentRecordsSchema = SyncReportSchema.extend({ harness: z.string(), nativeId: z.string(), holdings: RecordHoldingsSchema })
 export type SentRecords = z.infer<typeof SentRecordsSchema>
+
+/** A session to take from a remote store (`SessionCatalog.receiveRecords`), with what its sender pushed of it when known. */
+export const ReceivingSessionSchema = z.object({ harness: z.string().min(1), nativeId: z.string().min(1), holdings: RecordHoldingsSchema.optional() })
+export type ReceivingSession = z.infer<typeof ReceivingSessionSchema>
 
 /** One session taken from a remote store and written into its harness's store here (`SessionCatalog.receiveRecords`). */
 export const ReceivedRecordsSchema = z.object({ harness: z.string(), nativeId: z.string(), pulled: SyncReportSchema, restored: KeptRestoreSchema })

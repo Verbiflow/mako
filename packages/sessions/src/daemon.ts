@@ -25,7 +25,7 @@
  * client; if something answers the ping, it exits quietly.
  */
 
-import type { ReceivedRecords, RecordsLink, SentRecords } from "./record-sync.js"
+import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords } from "./record-sync.js"
 import type { InstalledReading } from "./record-writers.js"
 import {
   createConnection,
@@ -597,7 +597,7 @@ export interface DaemonClient {
   /** Sends sessions' records to a remote store now (`SessionCatalog.sendRecords`). */
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   /** Takes sessions' records from a remote store into their harnesses' stores here (`SessionCatalog.receiveRecords`). */
-  receiveRecords(link: RecordsLink, sessions: Array<{ harness: string; nativeId: string }>, installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]>
+  receiveRecords(link: RecordsLink, sessions: ReceivingSession[], installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]>
   onEvent(listener: (event: DaemonEvent) => void): () => void
   /** Fires once if the daemon goes away; the client is dead afterwards. */
   onClose(listener: () => void): void
@@ -870,7 +870,7 @@ async function connectDaemonLink(
       send({ id, op: "send-records", link, paths })
     })
 
-  const requestReceiveRecords = (link: RecordsLink, sessions: Array<{ harness: string; nativeId: string }>, installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]> =>
+  const requestReceiveRecords = (link: RecordsLink, sessions: ReceivingSession[], installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]> =>
     new Promise((resolve, reject) => {
       const id = nextId++
       const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))

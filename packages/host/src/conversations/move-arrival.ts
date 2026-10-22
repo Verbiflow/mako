@@ -7,7 +7,7 @@ import { z } from "zod"
 import type { Git } from "@mako/git"
 import { MoveCheckpointSchema } from "@mako/protocol/moves"
 import type { InstalledReading } from "@mako/sessions/record-writers"
-import type { ReceivedRecords, RecordsLink } from "@mako/sessions/record-sync"
+import { RecordHoldingsSchema, type ReceivedRecords, type ReceivingSession, type RecordsLink } from "@mako/sessions/record-sync"
 import { hostLog } from "../base/host-log.js"
 import { applyMoveCheckpoint } from "../workspaces/index.js"
 
@@ -24,7 +24,8 @@ export const MoveArrivalInputSchema = z.object({
   move: z.uuid(),
   folder: z.string().min(1),
   checkpoint: MoveCheckpointSchema,
-  sessions: z.array(z.object({ harness: z.string().min(1), nativeId: z.string().min(1) })).min(1),
+  /** `holdings`: what the device pushed of each session, which the machine holds at least before it writes any of it. */
+  sessions: z.array(z.object({ harness: z.string().min(1), nativeId: z.string().min(1), holdings: RecordHoldingsSchema.optional() })).min(1),
 }).strict()
 export type MoveArrivalInput = z.infer<typeof MoveArrivalInputSchema>
 
@@ -41,7 +42,7 @@ export type MoveArrivalDeps = {
   records(): RecordsLink | undefined
   /** The folder this machine's agent made the clone at. */
   workspace(): string | undefined
-  receive(link: RecordsLink, sessions: Array<{ harness: string; nativeId: string }>, installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]>
+  receive(link: RecordsLink, sessions: ReceivingSession[], installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]>
   installed(harness: string): InstalledReading | null
   /** A folder of this host's own for the checkpoint while it's applied. */
   scratch: string
