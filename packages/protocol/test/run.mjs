@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
-import { runGatewayConformance } from "../dist/conformance.js"
+import { runGatewayConformance, runMediaConformance } from "../dist/conformance.js"
 import { GatewayHttpError } from "../dist/gateway-http.js"
 import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
 import { recipesOverHttp } from "../dist/recipes-http.js"
@@ -16,7 +16,13 @@ import {
   decodeGatewayClientFrame,
   encodeClientFrame,
   encodeGatewayClientFrame,
+  encodeMediaMessage,
   gatewayOverSockets,
+  LINK_VERSION,
+  MEDIA_MESSAGE_LIMIT,
+  MediaTooLargeError,
+  decodeMediaMessage,
+  mediaStreamOf,
   GatewayFrameEnvelopeSchema,
   OperationEnvelopeSchema,
   PROBLEM_DETAIL_LIMIT,
@@ -42,6 +48,7 @@ import {
   nextStep,
   offeredCredential,
   problem,
+  problemType,
   renewal,
   runtimeLinkOverSocket,
   serveRuntime,
@@ -68,7 +75,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 2)
+    assert.equal(SUPPORTED_VERSIONS.max, 3)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -414,7 +421,7 @@ describe("a runtime served through serveRuntime", () => {
     const runtime = await serveRuntime(link, { runtimeId: "machine", build: "test", handle: async (operation) => answer(operation, null) })
     await gateway.assign("th-1", "machine")
     while (!runtime.claims().length) await new Promise((resolve) => setImmediate(resolve))
-    assert.equal(runtime.version, 2)
+    assert.equal(runtime.version, LINK_VERSION)
     assert.equal(runtime.activity(true, ["Claude Code: a turn"]), true)
     await new Promise((resolve) => setImmediate(resolve))
     assert.deepEqual({ busy: gateway.activity("th-1").busy, work: gateway.activity("th-1").work }, { busy: true, work: ["Claude Code: a turn"] })
@@ -862,7 +869,9 @@ function servedOverSockets(gateway) {
     async runtime() {
       const [near, far] = socketPair()
       const link = await gateway.connectRuntime()
-      far.addEventListener("message", (event) => link.sendUnchecked(event.data))
+      far.addEventListener("message", (event) =>
+        event.data instanceof Uint8Array ? link.sendMedia(event.data) : link.sendUnchecked(event.data)
+      )
       far.addEventListener("close", () => link.close())
       void (async () => {
         for await (const frame of link.frames()) if (far.readyState === 1) far.send(encodeGatewayFrame(frame))
@@ -870,10 +879,11 @@ function servedOverSockets(gateway) {
       })()
       return near
     },
-    async client(actor) {
+    async client(actor, endpoint) {
       const [near, far] = socketPair()
       const session = await gateway.connectClient(actor)
       const subscriptions = new Map()
+      const watches = new Map()
       far.addEventListener("message", async (event) => {
         let frame
         try {
@@ -895,6 +905,27 @@ function servedOverSockets(gateway) {
             }
           })()
         } else if (frame.type === "unsubscribe") subscriptions.get(frame.stream)?.close()
+        else if (frame.type === "media-watch") {
+          const watching = watches.get(frame.stream)
+          if (watching) return watching.update(frame.request)
+          const watch = session.watch({ threadId: endpoint.threadId, stream: frame.stream, request: frame.request })
+          watches.set(frame.stream, watch)
+          void (async () => {
+            for (;;) {
+              const delivery = await watch.next().catch(() => undefined)
+              if (!delivery || far.readyState !== 1) return
+              if (delivery.kind === "data") far.send(encodeMediaMessage(frame.stream, delivery.data))
+              else {
+                watches.delete(frame.stream)
+                return far.send(encodeGatewayClientFrame({ type: "media-ended", stream: frame.stream, problem: delivery.problem }))
+              }
+            }
+          })()
+        } else if (frame.type === "media-ack") watches.get(frame.stream)?.ack(frame.received)
+        else if (frame.type === "media-unwatch") {
+          watches.get(frame.stream)?.close()
+          watches.delete(frame.stream)
+        }
       })
       return near
     },
@@ -905,6 +936,175 @@ function servedOverSockets(gateway) {
 
 describe("conformance over sockets", () => {
   runGatewayConformance(async () => servedOverSockets(createFakeGateway()), test)
+})
+
+/** The media suite's view of any gateway the conformance suite drives: a Thread is a runtime that enrolled and was assigned it. */
+function mediaGateway(gateway) {
+  return {
+    async thread(versions = SUPPORTED_VERSIONS) {
+      const runtimeId = `rt-${crypto.randomUUID()}`
+      const threadId = `th-${crypto.randomUUID()}`
+      const runtime = await gateway.connectRuntime()
+      runtime.send({ type: "enroll", runtimeId, versions, build: "media-conformance", threads: [] })
+      assert.equal((await runtime.next()).type, "enrolled")
+      await gateway.assign(threadId, runtimeId)
+      assert.equal((await runtime.next()).type, "assign")
+      return { threadId, runtime }
+    },
+    client: () => gateway.connectClient({ kind: "client", client: "desktop", deviceId: "media-conformance" }),
+    close: () => gateway.close(),
+  }
+}
+
+describe("media conformance", () => {
+  runMediaConformance(async () => mediaGateway(createFakeGateway()), test)
+})
+
+describe("media conformance over sockets", () => {
+  runMediaConformance(async () => mediaGateway(servedOverSockets(createFakeGateway())), test)
+})
+
+describe("media messages", () => {
+  test("carry the stream's name and its bytes, and a hop reads the name from the header alone", () => {
+    const data = Uint8Array.of(0, 1, 2, 255)
+    const message = encodeMediaMessage("stream-1", data)
+    assert.deepEqual([...message.subarray(0, 3)], [0x6d, 1, 8])
+    assert.equal(mediaStreamOf(message), "stream-1")
+    const decoded = decodeMediaMessage(message)
+    assert.equal(decoded.stream, "stream-1")
+    assert.deepEqual(decoded.data, data)
+    assert.equal(decoded.data.buffer, message.buffer, "a view, not a copy")
+  })
+
+  test("hold at most the limit, header included", () => {
+    const header = 3 + "stream-1".length
+    assert.equal(encodeMediaMessage("stream-1", new Uint8Array(MEDIA_MESSAGE_LIMIT - header)).byteLength, MEDIA_MESSAGE_LIMIT)
+    assert.throws(() => encodeMediaMessage("stream-1", new Uint8Array(MEDIA_MESSAGE_LIMIT - header + 1)), MediaTooLargeError)
+    assert.throws(() => mediaStreamOf(new Uint8Array(MEDIA_MESSAGE_LIMIT + 1).fill(0x6d)), WireError)
+  })
+
+  test("that aren't one, or name no valid stream, are refused as unreadable", () => {
+    const valid = encodeMediaMessage("stream-1", Uint8Array.of(9))
+    const broken = [
+      new Uint8Array(),
+      Uint8Array.of(0x6d, 1),
+      Uint8Array.of(0x7b, 1, 8, ...valid.subarray(3)),
+      Uint8Array.of(0x6d, 2, 8, ...valid.subarray(3)),
+      Uint8Array.of(0x6d, 1, 20, ...valid.subarray(3)),
+      Uint8Array.of(0x6d, 1, 3, 0x61, 0x62, 0x63),
+      Uint8Array.of(0x6d, 1, 8, ...new TextEncoder().encode("stream/1")),
+    ]
+    for (const message of broken) assert.throws(() => mediaStreamOf(message), WireError)
+    assert.throws(() => encodeMediaMessage("short", Uint8Array.of(1)))
+  })
+
+  test("a watch's request crosses the client frames unread", () => {
+    const request = Payload.encoded('{"box": {"width": 640,  "height": 400}}')
+    const frame = decodeClientFrame(encodeClientFrame({ type: "media-watch", stream: "stream-1", request }))
+    assert.equal(frame.type, "media-watch")
+    assert.equal(frame.request.text, request.text)
+    const gateway = decodeGatewayFrame(encodeGatewayFrame({ type: "media-watch", threadId: "th-1", stream: "stream-1", request }))
+    assert.equal(gateway.request.text, request.text)
+  })
+})
+
+describe("a runtime's media", () => {
+  /** A runtime serving media on the fake gateway, running th-1, and a client of it. */
+  async function served(options = {}) {
+    const gateway = createFakeGateway()
+    const calls = []
+    const senders = new Map()
+    const media = {
+      watch: (stream, threadId, request, sender) => {
+        calls.push(["watch", stream, threadId, request.decode()])
+        senders.set(stream, sender)
+      },
+      acked: (stream, received) => calls.push(["acked", stream, received]),
+      unwatched: (stream) => calls.push(["unwatched", stream]),
+    }
+    const runtime = await serveRuntime(await gateway.connectRuntime(), {
+      runtimeId: "machine",
+      build: "test",
+      handle: async (operation) => answer(operation, null),
+      media: options.noMedia ? undefined : media,
+      versions: options.versions,
+    })
+    await gateway.assign("th-1", "machine")
+    while (runtime.generation("th-1") === undefined) await settle()
+    return { gateway, runtime, calls, senders, session: await gateway.connectClient(client) }
+  }
+  const until = async (check) => {
+    while (!check()) await settle()
+  }
+
+  test("a viewer's watch reaches the handler with its request and a sender whose messages reach the viewer", async () => {
+    const { gateway, runtime, calls, senders, session } = await served()
+    const watch = session.watch({ threadId: "th-1", stream: "stream-1", request: Payload.of({ width: 640 }) })
+    await until(() => calls.length)
+    assert.deepEqual(calls, [["watch", "stream-1", "th-1", { width: 640 }]])
+    const sender = senders.get("stream-1")
+    assert.equal(sender.send(Uint8Array.of(1, 2, 3)), true)
+    assert.deepEqual(await watch.next(), { kind: "data", data: Uint8Array.of(1, 2, 3) })
+    watch.ack(3)
+    watch.update(Payload.of({ width: 1280 }))
+    await until(() => calls.length === 3)
+    assert.deepEqual(calls.slice(1), [["acked", "stream-1", 3], ["watch", "stream-1", "th-1", { width: 1280 }]])
+    assert.equal(senders.get("stream-1"), sender, "the same stream, asked again")
+    watch.close()
+    await until(() => calls.length === 4)
+    assert.deepEqual(calls[3], ["unwatched", "stream-1"])
+    assert.equal(sender.send(Uint8Array.of(4)), false, "nothing is sent for a stream nobody watches")
+    runtime.close()
+    await runtime.done
+    await gateway.close()
+  })
+
+  test("a runtime ends its stream for the viewer, with its reason, and hears nothing more of it", async () => {
+    const { gateway, runtime, calls, senders, session } = await served()
+    const watch = session.watch({ threadId: "th-1", stream: "stream-1", request: Payload.of({}) })
+    await until(() => senders.has("stream-1"))
+    const reason = problem("failed", "The tab closed", "c-1", "not-applied")
+    senders.get("stream-1").end(reason)
+    assert.deepEqual(await watch.next(), { kind: "ended", problem: reason })
+    assert.equal(senders.get("stream-1").send(Uint8Array.of(1)), false)
+    runtime.close()
+    await runtime.done
+    assert.deepEqual(calls.map(([kind]) => kind), ["watch"], "a stream the runtime ended isn't unwatched")
+    await gateway.close()
+  })
+
+  test("a Thread taken from the runtime, or its link closing, ends its streams for both sides", async () => {
+    const { gateway, runtime, calls, senders, session } = await served()
+    const taken = session.watch({ threadId: "th-1", stream: "stream-1", request: Payload.of({}) })
+    await until(() => senders.has("stream-1"))
+    await gateway.assign("th-1", "elsewhere")
+    assert.equal((await taken.next()).kind, "ended")
+    await until(() => calls.some(([kind]) => kind === "unwatched"))
+    assert.equal(senders.get("stream-1").send(Uint8Array.of(1)), false)
+    await gateway.assign("th-1", "machine")
+    while (runtime.generation("th-1") === undefined) await settle()
+    const left = session.watch({ threadId: "th-1", stream: "stream-2", request: Payload.of({}) })
+    await until(() => senders.has("stream-2"))
+    runtime.close()
+    await runtime.done
+    assert.deepEqual(calls.at(-1), ["unwatched", "stream-2"])
+    assert.equal(problemType((await left.next()).problem), "unavailable")
+    await gateway.close()
+  })
+
+  test("a runtime without a handler, or that agreed a version before media, never serves a watch", async () => {
+    for (const options of [{ noMedia: true }, { versions: { min: 1, max: 2 } }]) {
+      const { gateway, runtime, calls, session } = await served(options)
+      const watch = session.watch({ threadId: "th-1", stream: "stream-1", request: Payload.of({}) })
+      const end = await watch.next()
+      assert.equal(end.kind, "ended")
+      assert.equal(problemType(end.problem), "unsupported-version")
+      assert.deepEqual(calls, [])
+      runtime.close()
+      await runtime.done
+      await gateway.close()
+    }
+  })
 })
 
 describe("client frames", () => {

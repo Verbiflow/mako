@@ -6,10 +6,11 @@ import {
 } from "./envelope.js"
 import { type ConnectionCredential, renewal } from "./credential.js"
 import type { RuntimeLink } from "./gateway.js"
+import { type MediaHandler, type MediaSender, type MediaStreamId, encodeMediaMessage } from "./media.js"
 import type { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
-import { ACTIVITY_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { ACTIVITY_VERSION, MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 
 export class RuntimeRefusedError extends Error {
   readonly problem: Problem
@@ -40,6 +41,8 @@ export type RuntimeOptions = {
   onFrame?: (frame: GatewayFrame) => void
   /** Renews the link's token in the link before it's due; a machine's credential doesn't need it. */
   credential?: ConnectionCredential
+  /** Serves the live streams clients watch (`media.ts`); without it, every watch ends at once. */
+  media?: MediaHandler
 }
 
 export type ServedRuntime = {
@@ -139,6 +142,44 @@ export async function serveRuntime(
     if (!link.closed) link.send({ type: "reply", reply })
   }
 
+  /** The streams this link serves, each until its viewer leaves, the runtime ends it, or the link closes. */
+  const streams = new Map<MediaStreamId, MediaSender & { threadId: string }>()
+  const endStream = (stream: MediaStreamId, reason?: Problem) => {
+    if (!link.closed) link.send(reason ? { type: "media-end", stream, problem: reason } : { type: "media-end", stream })
+  }
+  const watched = (frame: Extract<GatewayFrame, { type: "media-watch" }>) => {
+    const handler = options.media
+    if (!handler || first.version < MEDIA_VERSION)
+      return endStream(frame.stream, problem("unsupported-version", "This runtime serves no media", crypto.randomUUID(), "not-applied", { status: 501 }))
+    if (threads.generation(frame.threadId) === undefined)
+      return endStream(frame.stream, problem("fenced", "This runtime doesn't run the Thread", crypto.randomUUID(), "not-applied", { status: 409 }))
+    let sender = streams.get(frame.stream)
+    if (sender && sender.threadId !== frame.threadId) {
+      streams.delete(frame.stream)
+      handler.unwatched(frame.stream)
+      sender = undefined
+    }
+    if (!sender) {
+      const { stream, threadId } = frame
+      const open = () => streams.get(stream) === sender && !link.closed
+      sender = {
+        threadId,
+        send: (data) => {
+          if (!open()) return false
+          link.sendMedia(encodeMediaMessage(stream, data))
+          return true
+        },
+        end: (reason) => {
+          if (!open()) return
+          streams.delete(stream)
+          endStream(stream, reason)
+        },
+      }
+      streams.set(stream, sender)
+    }
+    handler.watch(frame.stream, frame.threadId, frame.request, sender)
+  }
+
   let ending: Problem | undefined
   const done = (async () => {
     for await (const frame of link.frames()) {
@@ -147,12 +188,29 @@ export async function serveRuntime(
       else if (frame.type === "renewed") renewing?.renewed()
       else if (frame.type === "operation")
         void answer(frame.operation, frame.generation)
-      else threads.receive(frame)
+      else if (frame.type === "media-watch") watched(frame)
+      else if (frame.type === "media-ack") {
+        if (streams.has(frame.stream)) options.media?.acked(frame.stream, frame.received)
+      } else if (frame.type === "media-unwatch") {
+        if (streams.delete(frame.stream)) options.media?.unwatched(frame.stream)
+      } else {
+        threads.receive(frame)
+        // A Thread taken from this runtime takes its streams with it.
+        if (frame.type === "fence")
+          for (const [stream, sender] of streams)
+            if (sender.threadId === frame.threadId && threads.generation(frame.threadId) === undefined) {
+              streams.delete(stream)
+              options.media?.unwatched(stream)
+            }
+      }
     }
   })().finally(() => {
     threads.detach(send)
     clearInterval(heartbeat)
     renewing?.stop()
+    const left = [...streams.keys()]
+    streams.clear()
+    for (const stream of left) options.media?.unwatched(stream)
   })
 
   return {

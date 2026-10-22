@@ -432,6 +432,19 @@ state.recording = await state.tab.record({
 state.recording;
 ```
 
+Agents pause between actions, so by default (`idle: 'trim'`) a still stretch
+longer than a second plays for about one second. Times in the timeline stay
+wall-clock: `timeline.idle.trims` lists each cut as `{at, videoAt, trimmedMs}`,
+where `at` is the wall-clock time the cut starts and `videoAt` the matching video
+time, and the receipt's `idleTrimmedMs` totals them. Pass `idle: 'keep'` for a
+real-time video. A native window's video is cut by shifting packet timestamps,
+without re-encoding; it is re-encoded only to draw dispatched pointer events. If
+FFmpeg cannot cut it safely, the video keeps real time and `timeline.idle.kept`
+says why.
+
+Browser video seals each pause with two copies of its last frame, the first a
+keyframe, so a crash mid-pause still leaves every change in the partial file.
+
 Browser previews and recordings share a temporary CDP focus-emulation hold.
 The first consumer enables it so an inactive tab can paint; the last consumer
 disables it. Input actions share that hold, so finishing a click cannot freeze

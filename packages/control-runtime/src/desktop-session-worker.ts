@@ -39,6 +39,8 @@ function bind(config: DesktopSessionConfig, descriptor: SessionDescriptor, direc
   transport = serveHandedControlSession(session, {
     descriptor,
     listener,
+    journal: config.journal,
+    task: config.taskId,
     onStop: () => {
       void stop()
     },

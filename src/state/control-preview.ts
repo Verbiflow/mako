@@ -1,3 +1,4 @@
+import { decodeControlVideoBatch, type ControlVideoBatch } from "@mako/control-runtime/contracts"
 import { getMako } from "@/lib/bridge"
 import {
   controlPreviewDemand,
@@ -75,6 +76,7 @@ function startWatchingControlPreview(conversationId: string): () => void {
         if (
           previous?.frame?.id !== preview?.frame?.id ||
           previous?.activity.updatedAt !== preview?.activity.updatedAt ||
+          previous?.paused !== preview?.paused ||
           previous?.window?.windowId !== preview?.window?.windowId ||
           previous?.window?.pid !== preview?.window?.pid ||
           controlPreviewStore.get().errors[conversationId]
@@ -97,9 +99,12 @@ function startWatchingControlPreview(conversationId: string): () => void {
       if (closed || document.hidden) release()
       else if (refreshRequested) { refreshRequested = false; void poll() }
       else {
+        // A paused or ended preview changes only when the agent acts, which arrives as an activity.
         const state = controlPreviewStore.get()
-        const activity = state.previews[conversationId]?.activity ?? state.activities[conversationId]
-        if (!activity || activity.kind === "browser" || activity.status === "running" || Date.now() - activity.updatedAt < 5000)
+        const preview = state.previews[conversationId]
+        const activity = preview?.activity ?? state.activities[conversationId]
+        const settled = preview === null || preview?.paused
+        if (!settled && (!activity || activity.kind === "browser" || activity.status === "running" || Date.now() - activity.updatedAt < 5000))
           timer = setTimeout(() => void poll(), 1000)
       }
     }
@@ -149,6 +154,82 @@ function startWatchingControlPreview(conversationId: string): () => void {
         Object.entries(state.errors).filter(([id]) => id !== conversationId)
       ),
     }))
+  }
+}
+
+/** After a failed video read, the next waits this long, doubling to the most. */
+const VIDEO_RETRY_MS = 250
+const VIDEO_RETRY_MAX_MS = 5_000
+
+export interface ControlVideoWatch {
+  /** Start over as a new viewer, which the machine sends a fresh picture. */
+  restart(): void
+  stop(): void
+}
+
+/**
+ * Reads a cloud machine's tab as video packets while the page is visible. When the machine stops sending (the turn
+ * paused), it waits for the agent's next action rather than asking again. A packet the caller can't take restarts the
+ * viewer.
+ */
+export function watchControlVideo(
+  conversationId: string,
+  options: { box(): Size | undefined; packet(bytes: Uint8Array): void }
+): ControlVideoWatch {
+  let closed = false
+  let viewer = crypto.randomUUID()
+  let wake: (() => void) | undefined
+  const woken = () => new Promise<void>((resolve) => { wake = resolve })
+  const nudge = () => { wake?.(); wake = undefined }
+  const restart = () => { viewer = crypto.randomUUID() }
+  let activity = controlPreviewStore.get().activities[conversationId]
+  const unsubscribe = controlPreviewStore.subscribe(() => {
+    const next = controlPreviewStore.get().activities[conversationId]
+    if (next === activity) return
+    activity = next
+    nudge()
+  })
+  document.addEventListener("visibilitychange", nudge)
+  void (async () => {
+    let failures = 0
+    while (!closed) {
+      if (document.hidden) {
+        await woken()
+        continue
+      }
+      let batch: ControlVideoBatch
+      try {
+        batch = decodeControlVideoBatch(await getMako().controlVideo(conversationId, viewer, options.box()))
+        failures = 0
+      } catch {
+        if (closed) return
+        const wait = Math.min(VIDEO_RETRY_MAX_MS, VIDEO_RETRY_MS * 2 ** failures++)
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, wait)
+          wake = () => { clearTimeout(timer); resolve() }
+        })
+        continue
+      }
+      if (closed) return
+      for (const packet of batch.packets) {
+        try {
+          options.packet(packet)
+        } catch {
+          restart()
+          break
+        }
+      }
+      if (!batch.live) await woken()
+    }
+  })()
+  return {
+    restart,
+    stop() {
+      closed = true
+      nudge()
+      unsubscribe()
+      document.removeEventListener("visibilitychange", nudge)
+    },
   }
 }
 

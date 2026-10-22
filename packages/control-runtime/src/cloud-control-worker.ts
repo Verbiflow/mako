@@ -284,7 +284,12 @@ async function initialize(current: CloudControlConfig, directory: string) {
     onProgramCancelled: () => { void shutdown("request-cancelled") },
   }
   const engine = createControlSession(backend, owner, undefined, options)
-  const transport = await serveControlSession(engine, { build, onStop: () => { void shutdown("session-stop") } })
+  const transport = await serveControlSession(engine, {
+    build,
+    journal: join(current.output, "calls.jsonl"),
+    task: owner,
+    onStop: () => { void shutdown("session-stop") },
+  })
   server = transport
   const sessionFile = join(current.output, ".session.json")
   await writeFile(sessionFile, JSON.stringify(transport.descriptor) + "\n", { mode: 0o600, flag: "wx" })

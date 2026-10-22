@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { NativeRecordings, nativeRecordingRate } from "../packages/control-runtime/src/native-recording.js"
+import { NativeRecordings, nativeRecordingRate, type NativeDriverCall } from "../packages/control-runtime/src/native-recording.js"
 import type { ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 const target = { kind: "window" as const, pid: 42, window_id: 7 }
@@ -19,6 +19,9 @@ const tools: Tool[] = [
     inputSchema: { type: "object", properties: { recording_id: {} } },
   },
 ]
+// The control session names its driver session on every call it makes.
+const inSession = (driver: ComputerDriverClient, session: string): NativeDriverCall =>
+  (name, args, timeout) => driver.callTool(name, { ...args, session }, { timeout })
 const directory = await mkdtemp(join(tmpdir(), "native-recording-lifecycle-"))
 for (const fault of ["none", "lost-receipt", "wrong-id", "wrong-pid", "wrong-window"]) {
   const manager = new NativeRecordings()
@@ -78,9 +81,8 @@ for (const fault of ["none", "lost-receipt", "wrong-id", "wrong-pid", "wrong-win
       manager.start(
         target,
         { directory },
-        driver,
+        inSession(driver, "task-session"),
         tools,
-        "task-session",
         new AbortController().signal
       ),
       fault === "lost-receipt" ? /receipt was lost/ : /identity changed during startup/
@@ -89,9 +91,8 @@ for (const fault of ["none", "lost-receipt", "wrong-id", "wrong-pid", "wrong-win
     const started = await manager.start(
       target,
       { directory },
-      driver,
+      inSession(driver, "task-session"),
       tools,
-      "task-session",
       new AbortController().signal
     )
     assert.throws(
@@ -107,9 +108,8 @@ for (const fault of ["none", "lost-receipt", "wrong-id", "wrong-pid", "wrong-win
       manager.start(
         target,
         { directory },
-        driver,
+        inSession(driver, "task-session"),
         tools,
-        "task-session",
         new AbortController().signal
       ),
       /Finish/
@@ -127,16 +127,10 @@ await assert.rejects(
   old.start(
     target,
     { directory },
-    {
-      listTools: async () => [],
-      callTool: async () => {
-        throw new Error("old driver must not receive capture")
-      },
-      onClose() {},
-      async close() {},
+    async () => {
+      throw new Error("old driver must not receive capture")
     },
     [],
-    "session",
     new AbortController().signal
   ),
   /installed native driver/
@@ -175,9 +169,9 @@ for (const maxFps of [5, 60]) {
       }}
     },
   }
-  await assert.rejects(manager.start(target, {directory, fps:maxFps+1}, driver, catalog, "rates", new AbortController().signal), {code:"unsupported", outcome:"not-dispatched"})
+  await assert.rejects(manager.start(target, {directory, fps:maxFps+1}, inSession(driver, "rates"), catalog, new AbortController().signal), {code:"unsupported", outcome:"not-dispatched"})
   assert.equal(starts, 0)
-  const receipt = await manager.start(target, {directory}, driver, catalog, "rates", new AbortController().signal)
+  const receipt = await manager.start(target, {directory}, inSession(driver, "rates"), catalog, new AbortController().signal)
   assert.equal(requested, maxFps)
   await manager.get(target, receipt.id).stop()
   await manager.close()

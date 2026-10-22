@@ -1,4 +1,5 @@
 import { z } from "zod"
+import type { ClientFrame } from "./client-frames.js"
 import { type ConnectionCredential, type Renewal, renewal } from "./credential.js"
 import {
   type Actor,
@@ -16,6 +17,17 @@ import {
   type Subscription,
 } from "./gateway.js"
 import { PING } from "./heartbeat.js"
+import {
+  BinaryMessageSchema,
+  type MediaDelivery,
+  type MediaMessage,
+  type MediaStreamId,
+  MediaStreamIdSchema,
+  type MediaWatch,
+  type MediaWatchRequest,
+  decodeMediaMessage,
+} from "./media.js"
+import type { Payload } from "./payload.js"
 import type { GatewayFrame } from "./runtime-frames.js"
 import { PROTOCOL_VERSION } from "./version.js"
 import {
@@ -29,7 +41,9 @@ import {
 /** What every WebSocket offers: the browser's, Node's (24 and later) and workerd's. */
 export interface MessageSocket {
   readonly readyState: number
-  send(data: string): void
+  /** Set to `arraybuffer` where a runtime has it, so a binary message arrives as bytes rather than a Blob. */
+  binaryType?: string
+  send(data: string | Uint8Array<ArrayBuffer>): void
   close(code?: number, reason?: string): void
   addEventListener(
     type: "message",
@@ -41,7 +55,10 @@ export interface MessageSocket {
 
 const OPEN = 1
 
-/** Every frame is text; a binary message isn't one (close code 1003, unsupported data). */
+/**
+ * Every frame is text; a binary message isn't one (close code 1003, unsupported data), except media to a client
+ * (`media.ts`), which only comes for a stream it watches.
+ */
 const TextMessageSchema = z.string()
 /** Where a client's connection goes: one socket per Thread, runtime or account it talks to. */
 export type ClientEndpoint =
@@ -103,12 +120,13 @@ export function runtimeLinkOverSocket(socket: MessageSocket): RuntimeLink {
   })
   socket.addEventListener("close", end)
   socket.addEventListener("error", end)
-  const send = (text: string) => {
-    if (!closed && socket.readyState === OPEN) socket.send(text)
+  const send = (data: string | Uint8Array<ArrayBuffer>) => {
+    if (!closed && socket.readyState === OPEN) socket.send(data)
   }
   return {
     send: (frame) => send(encodeRuntimeFrame(frame)),
     sendUnchecked: send,
+    sendMedia: send,
     next: (timeoutMs) => inbox.next(timeoutMs),
     frames: () => inbox,
     close: () => {
@@ -131,6 +149,7 @@ type Connection = {
   calls: Map<string, Array<(reply: Reply) => void>>
   correlations: Map<string, string>
   streams: Map<StreamId, Inbox<EventFrame>>
+  media: Map<MediaStreamId, Inbox<MediaDelivery>>
   heartbeat: ReturnType<typeof setInterval> | undefined
   renewal: Renewal | undefined
 }
@@ -192,6 +211,7 @@ export function clientSessionOverSockets(
       calls: new Map(),
       correlations: new Map(),
       streams: new Map(),
+      media: new Map(),
       heartbeat: undefined,
       renewal: undefined,
     }
@@ -217,17 +237,36 @@ export function clientSessionOverSockets(
         for (const resolve of waiting) resolve(reply)
       }
       for (const stream of connection.streams.values()) stream.close()
+      const gone = problem("unavailable", "The connection to the gateway closed", crypto.randomUUID(), "not-applied", { status: 503 })
+      for (const watch of connection.media.values()) {
+        watch.push({ kind: "ended", problem: gone })
+        watch.close()
+      }
+      connection.media.clear()
     }
     connection.socket.then(
       (socket) => {
+        socket.binaryType = "arraybuffer"
         socket.addEventListener("close", lost)
         socket.addEventListener("error", lost)
         socket.addEventListener("message", (event) => {
           connection.heard = Date.now()
           const text = TextMessageSchema.safeParse(event.data)
           if (!text.success) {
-            socket.close(1003, "frames are text")
-            return lost()
+            const bytes = BinaryMessageSchema.safeParse(event.data)
+            let message: MediaMessage | undefined
+            try {
+              message = bytes.success ? decodeMediaMessage(bytes.data) : undefined
+            } catch (error) {
+              if (!(error instanceof WireError)) throw error
+            }
+            if (!message) {
+              socket.close(1003, "frames are text")
+              return lost()
+            }
+            // Media for a stream this client stopped watching may still be on its way; it's dropped.
+            connection.media.get(message.stream)?.push({ kind: "data", data: message.data })
+            return
           }
           let frame
           try {
@@ -247,6 +286,11 @@ export function clientSessionOverSockets(
           else if (frame.type === "refused" && frame.stream) {
             connection.streams.get(frame.stream)?.close()
             connection.streams.delete(frame.stream)
+          } else if (frame.type === "media-ended") {
+            const watch = connection.media.get(frame.stream)
+            connection.media.delete(frame.stream)
+            watch?.push(frame.problem ? { kind: "ended", problem: frame.problem } : { kind: "ended" })
+            watch?.close()
           } else if (frame.type === "renewed") connection.renewal?.renewed()
           else if (frame.type === "closing") {
             // Ended now, not when the close arrives, which a proxy can hold back.
@@ -315,6 +359,35 @@ export function clientSessionOverSockets(
                 })
               )
           })
+        },
+      }
+    },
+    watch({ threadId, stream, request }: MediaWatchRequest): MediaWatch {
+      MediaStreamIdSchema.parse(stream)
+      const connection = connect({ kind: "thread", threadId })
+      const inbox = new Inbox<MediaDelivery>()
+      connection.media.get(stream)?.close()
+      connection.media.set(stream, inbox)
+      const current = () => connection.media.get(stream) === inbox
+      const send = (frame: ClientFrame) =>
+        void connection.socket.then((socket) => {
+          if (socket.readyState === OPEN) socket.send(encodeClientFrame(frame))
+        }, () => undefined)
+      const ask = (asked: Payload) => send({ type: "media-watch", stream, request: asked })
+      ask(request)
+      return {
+        next: (timeoutMs) => inbox.next(timeoutMs),
+        update: (asked) => {
+          if (current()) ask(asked)
+        },
+        ack: (received) => {
+          if (current()) send({ type: "media-ack", stream, received })
+        },
+        close: () => {
+          inbox.close()
+          if (!current()) return
+          connection.media.delete(stream)
+          send({ type: "media-unwatch", stream })
         },
       }
     },

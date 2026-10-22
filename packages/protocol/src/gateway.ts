@@ -1,5 +1,6 @@
 import type { Actor, Operation, Reply } from "./envelope.js"
 import type { EventFrame, Subscribe } from "./events.js"
+import type { MediaWatch, MediaWatchRequest } from "./media.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 
 export class LinkClosedError extends Error {
@@ -25,7 +26,10 @@ export interface Link<Incoming, Outgoing> {
   readonly closed: boolean
 }
 
-export type RuntimeLink = Link<GatewayFrame, RuntimeFrame>
+export type RuntimeLink = Link<GatewayFrame, RuntimeFrame> & {
+  /** A binary media message (`encodeMediaMessage`), on a link of `MEDIA_VERSION` or later. */
+  sendMedia(message: Uint8Array<ArrayBuffer>): void
+}
 
 export interface Subscription {
   next(timeoutMs?: number): Promise<EventFrame>
@@ -36,6 +40,8 @@ export interface ClientSession {
   /** The reply says what happened, including that the gateway refused an operation it couldn't read. */
   call(operation: Operation): Promise<Reply>
   subscribe(request: Subscribe): Subscription
+  /** Watches a live stream of the Thread's runtime (`media.ts`). A stream of the same name already watched is closed first. */
+  watch(request: MediaWatchRequest): MediaWatch
 }
 
 /**

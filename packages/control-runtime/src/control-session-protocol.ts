@@ -20,7 +20,8 @@ export const SessionDescriptorSchema = z
 export type SessionDescriptor = z.infer<typeof SessionDescriptorSchema>
 export const ControlJsInputSchema = z.object({
   code: z.string().min(1).max(100_000).describe("JavaScript with top-level await; normal bindings persist between calls."),
-  timeout_ms: z.number().int().min(1).max(60_000).default(30_000).describe("Execution deadline in milliseconds, 1–60000. Timeout resets program bindings; never replay an uncertain action."),
+  timeout_ms: z.number().int().min(1).optional().describe("Execution deadline in milliseconds, default 30000; values past 60000 run with 60000. Timeout resets program bindings; never replay an uncertain action."),
+  timeoutMs: z.number().int().min(1).optional().describe("The same deadline under the SDK's spelling."),
   title: z.string().min(1).max(100).optional().describe("Short description of the operation for the user."),
 }).strict()
 export const CONTROL_HELP_TOPICS = [

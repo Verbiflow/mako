@@ -5,14 +5,14 @@ import { rename, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import { mediaExecutable, recordingVideoEncoding } from "./control-media.js"
-import { RecordingVideoInput } from "./recording-video-input.js"
+import { MovVideoInput } from "./mov-video-input.js"
 
 const execute = promisify(execFile)
 
 /** One encoder process per recording. A write is complete only after pipe admission;
  * the worker submits one raw frame at a time and the owner bounds source history. */
 export class RecordingEncoderProcess {
-  private readonly input: RecordingVideoInput
+  private readonly input: MovVideoInput
   private readonly child
   private readonly closed: Promise<void>
   private failure?: string
@@ -33,7 +33,7 @@ export class RecordingEncoderProcess {
     fps: number,
     failed: (reason: string) => void
   ) {
-    this.input = new RecordingVideoInput(width, height, fps)
+    this.input = new MovVideoInput(width, height, fps)
     this.partial = join(directory, "recording.partial.mp4")
     this.output = join(directory, "recording.mp4")
     this.child = spawn(

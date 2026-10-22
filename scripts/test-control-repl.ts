@@ -27,7 +27,8 @@ const runtime = createControlRuntime({
   artifacts,
   browsers: [fixture.definition],
 })
-const owner = await serveControlSession(runtime)
+const journal = join(artifacts, "journal", "calls.jsonl")
+const owner = await serveControlSession(runtime, { journal, task: "repl-task" })
 const descriptor = await readControlSession(owner.file)
 const signal = new AbortController().signal
 const request = (
@@ -65,6 +66,8 @@ const text = (value: z.infer<typeof output>) =>
     .map((x) => x.text)
     .join("\n")
 const summary: Record<string, number | boolean> = {}
+let journaled = false
+let written = ""
 try {
   const tools = await client.listTools()
   assert.deepEqual(
@@ -133,6 +136,12 @@ try {
   )
   assert.equal(named.isError, undefined, text(named))
   assert.deepEqual(JSON.parse(text(named)), [true, 1, 1])
+  const roleOnly = await js(
+    '[(await tab.observe({match:{role:"textbox"}})).nodes.length, (await tab.observe({match:{role:"TextBox"}})).nodes.length, (await tab.expect({role:"textbox"},{timeoutMs:0})).status, (await tab.expect({role:"dialog",absent:true},{timeoutMs:0})).status, (await tab.expect({role:"textbox",name:"Proof",states:["focused"]},{timeoutMs:0}).catch((error) => error.code))]'
+  )
+  assert.equal(roleOnly.isError, undefined, text(roleOnly))
+  assert.deepEqual(JSON.parse(text(roleOnly)), [1, 1, "matched", "matched", "assertion-failed"],
+    "a role alone filters a read and makes an expectation, in any spelling, and states may be listed")
   const missed = await js('await tab.locator({role:"textbox",name:"Proo"}).setValue("x")')
   assert.equal(missed.isError, true)
   assert.match(text(missed), /^Error target-not-found \(nothing dispatched\): No textbox is named "Proo"\. "Proo" is part of the name of textbox "Proof" \(e\d+\)\. .*name:\{contains:"Proo"\}/)
@@ -160,6 +169,9 @@ try {
   assert.equal(redeclared.isError, undefined, text(redeclared))
   assert.equal(JSON.parse(text(await js("const marker = 2; marker"))), 2, "const redeclares across cells")
   assert.equal(JSON.parse(text(await js("const local = 5\nreturn local * 2"))), 10, "a cell may return")
+  assert.equal((await js('throw new Error("before its declarations"); const early = 1; let {deep: [inner]} = {deep: [2]}')).isError, true)
+  assert.equal(JSON.parse(text(await js("early = 3; inner = 4; [early, inner]"))).join(), "3,4",
+    "a cell that throws before its own declarations leaves those names assignable, not uninitialized")
   const docless = await js(
     'let view=await tab.observe(); let field=view.get({role:"textbox",name:"Proof"}); console.log(field.ref); view'
   )
@@ -182,6 +194,11 @@ try {
     fixture.calls.filter((c) => c.method.startsWith("Input.")).length,
     dispatched
   )
+  const keysBefore = fixture.calls.length
+  const chord = await js('await tab.observe(); await tab.pressKey("Shift+Tab")')
+  assert.equal(chord.isError, undefined, text(chord))
+  assert.ok(fixture.calls.slice(keysBefore).some((c) => c.method === "Input.dispatchKeyEvent" && JSON.stringify(c.params).includes('"key":"Tab"') && JSON.stringify(c.params).includes('"modifiers":8')),
+    "a chord written as Shift+Tab presses Tab with Shift held")
   const unknown = await js('await tab.click("e999")')
   assert.match(text(unknown), /No read of this tab has printed ref "e999"; use a ref from its latest observe\(\), or a locator/, "a ref the tab never had is not reported as expired")
   const ordinary = await js(
@@ -251,9 +268,14 @@ try {
   )
   assert.equal(invalid.isError, true)
   assert.doesNotMatch(text(invalid), /should not execute/)
+  for (const deadline of [{ timeoutMs: 5000 }, { timeout_ms: 600_000 }]) {
+    const accepted = output.parse(await client.callTool({ name: "js", arguments: { code: "1 + 1", ...deadline } }))
+    assert.equal(text(accepted), "2", `the SDK's spelling and a deadline past the limit run instead of failing validation: ${JSON.stringify(deadline)}`)
+  }
   const broken = await js("let unclosed = (1")
   assert.equal(broken.isError, true)
   assert.match(text(broken), /^Error syntax-error \(nothing dispatched\): The program did not run: .*fix the source and run it again\.$/)
+  assert.equal(text(await js('"journal-secret" + "-marker"')), "journal-secret-marker")
   await client.close()
   assert.equal(
     fixture.targets.size,
@@ -266,6 +288,7 @@ try {
     request({ method: "exec", source: "return (1" }),
     (error) => controlFaultData(error)?.outcome === "not-dispatched"
   )
+  journaled = true
 } finally {
   await client.close()
   await server.close()
@@ -273,7 +296,18 @@ try {
   await runtime.close()
   assert.equal(fixture.targets.size, 0, "task owner cleans up targets")
   await fixture.close()
-  await rm(artifacts, { recursive: true, force: true })
+  written = await readFile(journal, "utf8").finally(() => rm(artifacts, { recursive: true, force: true }))
+}
+if (journaled) {
+  assert.doesNotMatch(written, /journal-secret-marker/, "the journal keeps neither a cell's source nor its returned value")
+  const lines = written.trim().split("\n").map((line) => z.object({
+    at: z.number(), ms: z.number(), session: z.string(), requestId: z.string(), method: z.string(), outcome: z.string(), task: z.literal("repl-task"),
+    fault: z.object({ code: z.string() }).optional(),
+    program: z.object({ bytes: z.number(), sha256: z.string(), report: z.object({ status: z.string(), error: z.object({ code: z.string().optional() }).optional() }).optional() }).optional(),
+  }).parse(JSON.parse(line)))
+  assert.ok(lines.length > 20, "every request is journaled once the session closes")
+  assert.ok(lines.some((line) => line.method === "js" && line.program?.report?.status === "failed" && line.program.report.error?.code === "syntax-error"), "a failed cell is told by its report, not a transport fault")
+  assert.ok(lines.some((line) => line.method === "exec" && line.fault?.code === "syntax-error"), "a CLI fault is journaled with its code")
 }
 
 // Real program worker, fake native transport: cross-cell handles, structured

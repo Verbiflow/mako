@@ -47,14 +47,16 @@ export class ControlSessions {
   async start(
     bindingId: string,
     browser?: ControlCredentials,
-    onEnded: (reason: "stopped" | "failed") => Promise<void> = async () => {}
+    onEnded: (reason: "stopped" | "failed") => Promise<void> = async () => {},
+    /** The JSONL file that gets a line for each of the session's requests. */
+    journal?: string
   ): Promise<ControlLaunch> {
     if (this.closing) throw new Error("Local Control supervisor is closing")
     if (this.workers.stale) throw new ControlFault("incompatible-session", STALE, "not-dispatched")
     if (this.sessions.has(bindingId) || this.finishing.has(bindingId))
       throw new Error("Local Control binding is already running")
     const pending = this.launchSession(
-      { taskId: bindingId, browser },
+      { taskId: bindingId, browser, journal },
       { workers: this.workers, native: () => this.native(bindingId) }
     )
     this.sessions.set(bindingId, pending)

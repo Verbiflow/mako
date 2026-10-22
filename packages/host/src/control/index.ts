@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs"
+import { existsSync, readlinkSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { BrowserService } from "@mako/control-runtime/browser"
 import { DriverBroker, type DriverBrokerStatus } from "@mako/control-runtime/host"
-import { InstalledBrowsers, localBrowsers, publishDeskBrowserRegistration } from "@mako/control-runtime/desktop"
+import { InstalledBrowsers, MachineBrowser, localBrowsers, publishDeskBrowserRegistration } from "@mako/control-runtime/desktop"
 import type { MethodTable } from "../base/methods.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { hostClient } from "../base/host-client.js"
@@ -20,12 +20,13 @@ import { BrowserIcons } from "./browser-icon.js"
 import { ControlSessions } from "./sessions.js"
 import { startControlService } from "./service.js"
 import { resolveExecutable } from "../base/executable.js"
+import { trackProviderPid, untrackProviderPid } from "../base/provider-children.js"
 import { CuaEmbedded } from "./cua-embedded.js"
 import { CuaDriverVersions } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../application/index.js"
 import { computerPermissions } from "./computer-permissions.js"
 import type { MachineCapability } from "../base/machine.js"
-import { nodePlatform, onMac } from "../base/platform.js"
+import { nodePlatform, onLinux, onMac } from "../base/platform.js"
 import type { CuaDriverStatus, MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { AppshotFrontRequest, AppshotTarget } from "@mako/control-runtime/contracts"
 import type { HostEvent } from "../contracts/host-events-boot.js"
@@ -33,6 +34,8 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import type { HostJobs } from "../base/host-jobs.js"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
+export { ControlResidency } from "./residency.js"
+export { controlVideoMedia } from "./video-media.js"
 
 /** Browser and computer use, and the desktop app that does what only Electron can. */
 export interface Control {
@@ -151,11 +154,35 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
   const developmentMedia = join(environment.appRoot, "vendor/control-media", `${nodePlatform()}-${process.arch}`)
   if (!environment.packaged && existsSync(developmentMedia))
     process.env.MAKO_CONTROL_MEDIA_ROOT ??= developmentMedia
+  // A Linux machine has no person's browser for Mako to connect to, so it runs its own.
+  const chromium = onLinux() ? resolveExecutable("chromium") : undefined
+  const machineBrowser = chromium
+    ? new MachineBrowser({
+        executable: chromium,
+        profile: join(environment.dataRoot, "machine-browser"),
+        // Chromium refuses its sandbox to root, who owns the machine already.
+        sandbox: process.getuid?.() !== 0,
+        started(child) {
+          const pid = child.pid
+          if (!pid) return
+          let executable: string
+          try {
+            // Debian's `chromium` is a script that execs the browser: the registry checks what the process runs now.
+            executable = readlinkSync(`/proc/${pid}/exe`)
+          } catch {
+            return
+          }
+          trackProviderPid({ pid, executable, kind: "browser", owner: "machine-browser" })
+          child.once("exit", () => untrackProviderPid(pid))
+        },
+      })
+    : undefined
   const browser = new BrowserService(
     async () => {
       const defaultPath = await preferredBrowserApplication()
       const browsers = await localBrowsers(installedBrowsers, defaultPath ? [defaultPath] : [])
       return [
+        ...(machineBrowser ? [machineBrowser.definition] : []),
         ...(await Promise.all(
           browsers.map(async (found) => {
             const path = found.applicationPath
@@ -169,6 +196,7 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
     {
       preferencePath: join(environment.dataRoot, "browser-preference.json"),
       defaultApplication: preferredBrowserApplication,
+      defaultBrowser: machineBrowser?.definition.id,
     }
   )
   let devRendererGeneration = 0
@@ -257,6 +285,7 @@ export function openControl(config: ControlConfig, machine: MachineCapability, j
       removeDeskBrowserRegistration?.()
       removeDeskBrowserRegistration = undefined
       deskBrowser.close()
+      machineBrowser?.close()
       unsubscribe?.()
     },
   }
@@ -279,7 +308,7 @@ export function declareControlMethods(methods: MethodTable, control: Control, ap
   methods.handle(
     "mako:control-preview",
     (conversationId: string, watching: boolean, watcher: string, box?: { width: number; height: number }) => {
-      const preview = previews.read(conversationId, watching, watcher, hostClient())
+      const preview = previews.read(conversationId, watching, watcher, hostClient(), box)
       return watching && preview ? previews.sized(preview, box) : null
     }
   )

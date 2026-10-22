@@ -13,6 +13,8 @@ import {
   StreamIdSchema,
 } from "./events.js"
 import { CorrelationIdSchema } from "./ids.js"
+import { MediaStreamIdSchema } from "./media.js"
+import type { Payload } from "./payload.js"
 import { PROTOCOL_VERSION } from "./version.js"
 
 /**
@@ -43,6 +45,20 @@ export const ClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
   z
     .object({ type: z.literal("renew"), token: z.string().min(1).max(8_192) })
     .strict(),
+  /**
+   * Watch a live stream of the Thread's runtime (`media.ts`); its request for the runtime crosses after it, unread.
+   * Sent again for the same stream, it changes the request.
+   */
+  z.object({ type: z.literal("media-watch"), stream: MediaStreamIdSchema }).strict(),
+  /** Every byte of the stream's messages this client has taken so far. */
+  z
+    .object({
+      type: z.literal("media-ack"),
+      stream: MediaStreamIdSchema,
+      received: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z.object({ type: z.literal("media-unwatch"), stream: MediaStreamIdSchema }).strict(),
 ])
 
 export const GatewayClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
@@ -74,6 +90,17 @@ export const GatewayClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * refused (connect again with a fresh one), `forbidden` when its device was removed. The close follows.
    */
   z.object({ type: z.literal("closing"), problem: ProblemSchema }).strict(),
+  /**
+   * A watched stream ended and nothing more of it comes: the runtime ended it, its runtime left, or it couldn't be
+   * watched at all (`unavailable` when nothing runs the Thread now, `unsupported-version` for a runtime too old).
+   */
+  z
+    .object({
+      type: z.literal("media-ended"),
+      stream: MediaStreamIdSchema,
+      problem: ProblemSchema.optional(),
+    })
+    .strict(),
 ])
 
 export type ClientFrameEnvelope = z.infer<typeof ClientFrameEnvelopeSchema>
@@ -82,8 +109,9 @@ export type GatewayClientFrameEnvelope = z.infer<
 >
 
 export type ClientFrame =
-  | Exclude<ClientFrameEnvelope, { type: "call" }>
+  | Exclude<ClientFrameEnvelope, { type: "call" | "media-watch" }>
   | { type: "call"; operation: Operation }
+  | (Extract<ClientFrameEnvelope, { type: "media-watch" }> & { request: Payload })
 export type GatewayClientFrame =
   | Exclude<GatewayClientFrameEnvelope, { type: "reply" | "event" }>
   | { type: "reply"; reply: Reply }

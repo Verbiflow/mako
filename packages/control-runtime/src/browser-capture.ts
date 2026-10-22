@@ -28,16 +28,25 @@ const frameSchema = z.object({
     timestamp: z.number().finite().optional(),
   }),
 })
+export interface CaptureSize {
+  width: number
+  height: number
+}
 interface Subscriber {
   frame: (frame: BrowserFrame) => void
   ended: (reason: string) => void
+  /** The largest frame this consumer shows, in device pixels; without one it takes full size. */
+  size?: () => CaptureSize | undefined
 }
-
+/** The 1080p video budget; the page viewport and full-detail screenshots are unaffected. */
+const FULL: CaptureSize = { width: 1920, height: 1080 }
 /** A tab has one screencast, shared by recording and visible previews. */
 export class BrowserCapture {
   private readonly subscribers = new Set<Subscriber>()
   private tail: Promise<void> = Promise.resolve()
   private running = false
+  /** The frame size the running screencast was asked for. */
+  private size: CaptureSize = FULL
   private closed = false
   private suspended = false
   private latest: BrowserFrame | undefined
@@ -140,16 +149,17 @@ export class BrowserCapture {
       this.releaseFocus = release
     }
     this.running = true
+    this.size = this.demand()
     try {
       await this.connection.send(
         "Page.startScreencast",
         {
           format: "jpeg",
           quality: 90,
-          // Bound video at the selected 1080p budget without changing the page
-          // viewport or the independent full-detail screenshot route.
-          maxWidth: 1920,
-          maxHeight: 1080,
+          // Chrome encodes no more pixels than the largest consumer shows,
+          // without changing the page viewport.
+          maxWidth: this.size.width,
+          maxHeight: this.size.height,
           everyNthFrame: 1,
         },
         AbortSignal.timeout(5000),
@@ -159,6 +169,35 @@ export class BrowserCapture {
       this.end("Capture startup failed")
       throw error
     }
+  }
+  /** The largest size any consumer shows; one without a size, like a recording, takes full size. */
+  private demand(): CaptureSize {
+    let width = 0,
+      height = 0
+    for (const subscriber of this.subscribers) {
+      const wanted = subscriber.size?.()
+      if (!wanted) return FULL
+      width = Math.max(width, wanted.width)
+      height = Math.max(height, wanted.height)
+    }
+    if (!width || !height) return FULL
+    // The page's compositor scales on the GPU; frames at the viewer's exact
+    // pixels leave neither the host nor the viewer anything to resample.
+    return { width: Math.min(FULL.width, Math.ceil(width)), height: Math.min(FULL.height, Math.ceil(height)) }
+  }
+  /** Restarts the screencast when what its consumers show needs another frame size. */
+  private async fit() {
+    if (!this.running || this.closed || this.suspended) return
+    const wanted = this.demand()
+    if (wanted.width === this.size.width && wanted.height === this.size.height) return
+    // A consumer joining now waits for a frame of the new size.
+    this.latest = undefined
+    await this.stop()
+    await this.start()
+  }
+  /** A consumer's size changed. */
+  resized(): Promise<void> {
+    return this.enqueue(() => this.fit())
   }
   private async stop() {
     if (!this.running || this.closed) return
@@ -195,7 +234,10 @@ export class BrowserCapture {
     const cached = this.latest
     this.subscribers.add(subscriber)
     try {
-      await this.enqueue(() => this.start())
+      await this.enqueue(async () => {
+        await this.fit()
+        await this.start()
+      })
       if (this.closed) throw new Error("Browser capture attachment ended")
       if (cached && this.latest === cached) subscriber.frame(cached)
     } catch (error) {
@@ -215,7 +257,7 @@ export class BrowserCapture {
         if (!this.subscribers.size) {
           await this.stop()
           this.latest = undefined
-        }
+        } else await this.fit()
       })
     }
   }

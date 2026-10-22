@@ -1,6 +1,7 @@
 import { controlFaultData, type ControlFaultData } from "@mako/control/control"
 import {
   ControlProgramError,
+  PROGRAM_TIME_LIMIT_MS,
   programErrorText,
   type ControlCellReport,
   type ControlEffect,
@@ -80,7 +81,7 @@ export function controlAgent(
         {
           yield: false,
           mode: "repl",
-          timeoutMs: operation.timeout_ms,
+          timeoutMs: Math.min(operation.timeout_ms ?? operation.timeoutMs ?? 30_000, PROGRAM_TIME_LIMIT_MS),
           report: (cell) => {
             report = cell
           },

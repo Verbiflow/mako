@@ -3,6 +3,9 @@ import { z } from "zod"
 /** Wire compatibility, independent of release and registration file versions. */
 export const BROWSER_EXTENSION_PROTOCOL = 1
 
+/** The extension's answer for a session it no longer holds, as after Chrome detached its debugger; the host ends that binding. */
+export const EXTENSION_SESSION_GONE = "The exact tab session is no longer owned by this client"
+
 export const ExtensionFieldsSchema = z.record(z.string(), z.json())
 const fields = ExtensionFieldsSchema
 export const ExtensionCommandSchema = z.object({

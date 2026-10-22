@@ -60,7 +60,7 @@ async function inspect(video: string) {
 try {
   const staticRecording = await ControlRecording.create(
     target,
-    { directory, fps: 10, cursor: false },
+    { directory, fps: 10, cursor: false, idle: "keep" },
     async () => {}
   )
   const solid = await sharp({
@@ -111,7 +111,7 @@ try {
       if (pending.length === 2) await pending.shift()
       const color = Math.floor(index / 3) % colors.length
       expected.push(colors[color]!)
-      pending.push(ordered.write(index * 1000 / 60, index % 3 === 0 ? {
+      pending.push(ordered.write(index * 1000 / 60, index * 1000 / 60, index % 3 === 0 ? {
         bytes: images[color]!, frame: { width: 1920, height: 1080 },
       } : undefined))
     }
@@ -149,7 +149,7 @@ try {
   assert.ok(frameCount * jpeg.length < 512 * 1024 * 1024)
   const dense = await ControlRecording.create(
     target,
-    { directory, fps: 60, maxSide: width, cursor: false },
+    { directory, fps: 60, maxSide: width, cursor: false, idle: "keep" },
     async () => {}
   )
   for (let i = 0; i < frameCount; i++) {

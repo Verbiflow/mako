@@ -29,6 +29,7 @@ import {
   type RuntimeFrameEnvelope,
   RuntimeFrameEnvelopeSchema,
 } from "./runtime-frames.js"
+import { WireError } from "./wire-error.js"
 
 /**
  * How frames cross a connection. A frame is its envelope as one line of JSON, then, for a frame
@@ -43,13 +44,7 @@ import {
  * envelope; the payload after it may hold any.
  */
 
-/** Text that isn't the frame it should be; the message says how, for the refusal's detail. */
-export class WireError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = "WireError"
-  }
-}
+export { WireError }
 
 export function encodeOperation({ input, ...envelope }: Operation): string {
   return framed(envelope, input)
@@ -109,6 +104,10 @@ export function decodeRuntimeFrame(text: string): RuntimeFrame {
 }
 
 export function encodeGatewayFrame(frame: GatewayFrame): string {
+  if (frame.type === "media-watch") {
+    const { request, ...watch } = frame
+    return framed(watch, request)
+  }
   if (frame.type !== "operation") return framed(frame, undefined)
   const { input, ...operation } = frame.operation
   return framed({ ...frame, operation }, input)
@@ -117,6 +116,8 @@ export function encodeGatewayFrame(frame: GatewayFrame): string {
 export function decodeGatewayFrame(text: string): GatewayFrame {
   const { head, payload } = split(text)
   const frame = envelope(GatewayFrameEnvelopeSchema, head)
+  if (frame.type === "media-watch")
+    return { ...frame, request: required(payload, "A media watch") }
   if (frame.type !== "operation") return bare(frame, payload)
   return {
     ...frame,
@@ -128,6 +129,10 @@ export function decodeGatewayFrame(text: string): GatewayFrame {
 }
 
 export function encodeClientFrame(frame: ClientFrame): string {
+  if (frame.type === "media-watch") {
+    const { request, ...watch } = frame
+    return framed(watch, request)
+  }
   if (frame.type !== "call") return framed(frame, undefined)
   const { input, ...operation } = frame.operation
   return framed({ type: "call", operation }, input)
@@ -136,6 +141,8 @@ export function encodeClientFrame(frame: ClientFrame): string {
 export function decodeClientFrame(text: string): ClientFrame {
   const { head, payload } = split(text)
   const frame = envelope(ClientFrameEnvelopeSchema, head)
+  if (frame.type === "media-watch")
+    return { ...frame, request: required(payload, "A media watch") }
   if (frame.type !== "call") return bare(frame, payload)
   return {
     type: "call",

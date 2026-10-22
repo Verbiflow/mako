@@ -483,6 +483,7 @@ export class LiveTransfers {
             actor: transfer.actor,
             continues: transfer.continues,
             id: transfer.input.id,
+            createdAt: Date.now(),
             targetBindingId: transfer.input.bindingId ? bindingId : undefined,
             text: transfer.input.text,
             displayText: transfer.input.displayText ?? transfer.input.text,

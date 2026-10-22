@@ -13,6 +13,7 @@ import { parseArgs, promisify } from "node:util"
  *           image installs the host from the same lockfile the Mac app ships
  *   proof/  the kit in scripts/linux-host that installs the harnesses and proves the host,
  *           and in proof/measure, scripts/measure-host.mjs with the fixtures it runs
+ *   media/  the FFmpeg recipe and its pinned sources, which the image builds as the Mac does
  *
  * No source, test, environment file or .git enters it. `manifest.json`
  * records every file with its hash and the commit it was built from.
@@ -48,6 +49,7 @@ for (const { name, files: published } of packed) {
 for (const file of ["host-process.mjs", "install-harnesses.mjs", "prove.mjs"]) await copy(join("scripts/linux-host", file), join("proof", file))
 for (const file of ["measure-host.mjs", "lib/scratch-git.mjs", "fixtures/acp-stream-agent.mjs", "fixtures/host-measure-preload.cjs"])
   await copy(join("scripts", file), join("proof/measure/scripts", file))
+for (const file of ["scripts/build-control-media.mjs", "vendor/control-media/sources.json"]) await copy(file, join("media", file))
 
 const commit = (await run("git", ["rev-parse", "HEAD"])).stdout.trim()
 const dirty = (await run("git", ["status", "--porcelain", "--untracked-files=no"])).stdout.trim() !== ""

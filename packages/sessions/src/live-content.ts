@@ -75,6 +75,10 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     attachments: z.array(AttachmentContentSchema).optional(),
     unfinished,
     effects,
+    /** When the host first saw the call; a later `tool` for the same call keeps the first. */
+    at,
+    /** When the host first saw it finished (`liveToolFinished`). */
+    endedAt: at,
     stream,
   }),
   z.object({
@@ -94,6 +98,7 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
     attachments: z.array(AttachmentContentSchema).optional(),
     unfinished,
     effects,
+    endedAt: at,
     stream,
   }),
   z.object({ kind: z.literal("plan"), entries: plan, stream }),
@@ -226,6 +231,7 @@ export function mergeLiveUpdates(
       details: next.details ?? previous.details,
       attachments: next.attachments ?? previous.attachments,
       effects: next.effects ?? previous.effects,
+      endedAt: previous.endedAt ?? next.endedAt,
     }
     if (next.unfinished) merged.unfinished = true
     const frames = joined(previous.stream, next.stream)
@@ -483,12 +489,14 @@ function toolDelivery(block: Extract<Entry, { type: "tool" }>, update: Extract<L
   const title = update.title !== undefined && update.title === block.title
   const status = update.status !== undefined && update.status === block.status
   const effects = update.effects !== undefined && sameEffects(update.effects, block.effects)
+  const ended = update.endedAt !== undefined && block.endedAt !== undefined
   let sent = update
-  if (input || output || title || status || effects) {
+  if (input || output || title || status || effects || ended) {
     sent = { ...update }
     if (title) delete sent.title
     if (status) delete sent.status
     if (effects) delete sent.effects
+    if (ended) delete sent.endedAt
     if (input) {
       delete sent.input
       if (input.append === undefined) delete sent.inputAppend
@@ -508,6 +516,7 @@ function toolDelivery(block: Extract<Entry, { type: "tool" }>, update: Extract<L
     sent.details === undefined &&
     sent.attachments === undefined &&
     sent.effects === undefined &&
+    sent.endedAt === undefined &&
     (!sent.unfinished || block.unfinished === true)
   return { update: sent, grows }
 }
@@ -689,6 +698,12 @@ function reduce(
         }
         if (update.unfinished) block.unfinished = true
         if (update.effects) block.effects = update.effects
+        const previous = next[index]
+        const known = previous?.type === "tool" ? previous : undefined
+        const at = known?.at ?? update.at
+        const endedAt = known?.endedAt ?? update.endedAt
+        if (at !== undefined) block.at = at
+        if (endedAt !== undefined) block.endedAt = endedAt
         tools.set(update.id, index >= 0 ? index : next.length)
         replace(index, block)
         break
@@ -708,6 +723,7 @@ function reduce(
         }
         if (update.unfinished) updated.unfinished = true
         if (update.effects) updated.effects = update.effects
+        if (update.endedAt !== undefined && block.endedAt === undefined) updated.endedAt = update.endedAt
         replace(index, updated)
         break
       }

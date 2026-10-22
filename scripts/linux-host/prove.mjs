@@ -7,6 +7,9 @@ import { arch, homedir, release } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
+import { BrowserService, BrowserVideo } from "@mako/control-runtime/browser"
+import { BrowserCommandSchema, BrowserTargetSchema, decodeControlVideo } from "@mako/control-runtime/contracts"
+import { MACHINE_BROWSER_ID, MachineBrowser } from "@mako/control-runtime/desktop"
 import { classifyStartFailure } from "@mako/host/contracts/provider-failure"
 import { othersRunning, SHARED_DAEMONS, startHost, until } from "./host-process.mjs"
 
@@ -21,6 +24,11 @@ import { othersRunning, SHARED_DAEMONS, startHost, until } from "./host-process.
  * that doesn't exit cleanly on SIGTERM, or a process that outlives its data.
  *
  *   node prove.mjs <evidence directory>
+ *
+ * The image's entry point runs it. As a machine is a VM, with no syscall filter
+ * to refuse the browser's sandbox its namespaces, the container runs without one:
+ *
+ *   docker run --rm --security-opt seccomp=unconfined -v <dir>:/evidence <image>
  */
 const evidence = process.argv[2]
 assert.ok(evidence, "Pass the evidence directory")
@@ -78,6 +86,57 @@ try {
   const catalog = await until(() => readFile(host.log, "utf8"), (log) => / shared catalog (connected|unavailable)/.test(log), "the threads catalog's reader", 20_000)
   assert.match(catalog, / shared catalog connected/, "the shared catalog reader serves the host")
   passed("the shared catalog reader serves the host")
+
+  // The machine's own browser: preferred, not running until an agent connects, sandboxed when it runs.
+  const chromium = async (profile = "") => (await othersRunning()).filter(({ args }) => /\/chromium(\s|$)/.test(args) && args.includes(profile))
+  const own = (statuses) => statuses.find((status) => status.id === MACHINE_BROWSER_ID)
+  const listed = own(await host.call("mako:browser-control-status"))
+  assert.equal(listed?.preferred, true, "the machine's browser is preferred")
+  assert.equal(listed.connection.status, "disconnected")
+  assert.deepEqual(await chromium(), [], "no browser runs until an agent connects")
+  const connecting = performance.now()
+  assert.equal(own(await host.call("mako:browser-control-connect", MACHINE_BROWSER_ID))?.connection.status, "connected")
+  const connectMs = Math.round(performance.now() - connecting)
+  const launched = await chromium()
+  assert.ok(launched.length && !launched.some(({ args }) => args.includes("--no-sandbox")), "Chromium runs in its sandbox")
+  passed("the machine's browser starts on an agent's first connect", { ms: connectMs, note: `connected in ${connectMs} ms, sandboxed` })
+
+  // A page in that browser as remote viewers see it, through the FFmpeg the image built, as the host finds it.
+  const media = join(program, "../../../../vendor/control-media/linux-x64")
+  process.env.MAKO_CONTROL_MEDIA_ROOT = media
+  const machine = new MachineBrowser({ executable: "/usr/bin/chromium", profile: join(dataRoot, "proof-browser") })
+  const browser = new BrowserService([machine.definition])
+  const command = (input) => browser.execute("proof", BrowserCommandSchema.parse(input), AbortSignal.timeout(30_000))
+  try {
+    await command({ action: "connect", browser: MACHINE_BROWSER_ID })
+    const page = `<body style="margin:0;font:48px sans-serif"><p id=t>Mako 😀</p><script>let n=0;setInterval(()=>t.textContent='Mako 😀 '+ ++n,33)</script>`
+    const { navigation, ...opened } = await command({ action: "open", browser: MACHINE_BROWSER_ID, url: `data:text/html,${encodeURIComponent(page)}` })
+    assert.ok(!navigation?.fault, `the page loads: ${JSON.stringify(navigation?.fault)}`)
+    const target = BrowserTargetSchema.parse(opened)
+    const video = new BrowserVideo(async ({ frame, ended, size }) => ({
+      stop: await browser.previewStream("proof", target, () => {}, frame, ended, size),
+      resized: () => browser.previewResized("proof", target),
+    }))
+    const packets = []
+    const joined = performance.now()
+    const leave = await video.join({
+      size: () => ({ width: 640, height: 400 }),
+      backlog: () => 0,
+      send: (bytes) => packets.push({ ...decodeControlVideo(bytes), at: performance.now() - joined }),
+      ended: (reason) => failed(`the live video ended: ${reason}`),
+    })
+    await until(async () => packets, (sent) => sent.filter((packet) => packet.kind === "delta").length >= 30, "30 frames of live video", 20_000)
+    await leave()
+    video.close()
+    const key = packets.find((packet) => packet.kind === "key")
+    assert.equal(packets[0].kind, "poster", "a viewer paints the screencast's picture first")
+    assert.ok(key && key.width <= 640 && key.height <= 400, `the video fits the viewer: ${key?.width}x${key?.height}`)
+    passed("a page in that browser streams as H.264", { note: `poster in ${Math.round(packets[0].at)} ms, key frame ${key.width}x${key.height} in ${Math.round(key.at)} ms, then deltas` })
+  } finally {
+    browser.close()
+    machine.close()
+  }
+  await until(() => chromium("proof-browser"), (left) => left.length === 0, "the proof's Chromium to exit", 10_000)
 
   // Each harness, started as a window starts one, to ready or signed out.
   const installed = JSON.parse(await readFile(join(homedir(), "harnesses.json"), "utf8"))

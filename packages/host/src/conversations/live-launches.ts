@@ -159,6 +159,7 @@ export class LiveLaunches {
       requests: options.initialRequest
         ? [
             LiveRequestSchema.parse({
+              createdAt: Date.now(),
               ...options.initialRequest,
               actor: this.access.actor(actor),
               targetBindingId: options.resume ? id : undefined,

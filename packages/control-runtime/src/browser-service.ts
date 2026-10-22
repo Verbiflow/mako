@@ -1,4 +1,4 @@
-import { BrowserCapture, type BrowserFrame } from "./browser-capture.js"
+import { BrowserCapture, type BrowserFrame, type CaptureSize } from "./browser-capture.js"
 import { BrowserFocus } from "./browser-focus.js"
 import { BrowserRecordings } from "./browser-recording.js"
 import { BrowserPreferences } from "./browser-preference.js"
@@ -29,6 +29,8 @@ import {
   OBSERVATION_BUDGET_BYTES,
 } from "./browser-observation.js"
 import { localBrowsers, type LocalBrowser } from "./browser-discovery.js"
+import { DESK_OUTSIDE_ORIGIN } from "./desk-browser-registration.js"
+import { EXTENSION_SESSION_GONE } from "./browser-extension-protocol.js"
 import { InstalledBrowsers } from "./browser-installed.js"
 import { inScope, isExactName, scopeLabel } from "@mako/control/control/scope"
 import {
@@ -52,9 +54,46 @@ const targetInfo = z.object({
 })
 const targetsResult = z.object({ targetInfos: z.array(targetInfo) })
 const sessionResult = z.object({ sessionId: z.string() })
+/**
+ * Chrome's and the extension's words for a debugger session that no longer
+ * exists while its tab may live on, as when Chromium detaches an extension
+ * from a page that embeds another extension's frame.
+ */
+const SESSION_GONE = ["Session with given id not found", "Detached while handling command", EXTENSION_SESSION_GONE]
+const sessionGone = (message: string) => SESSION_GONE.some((words) => message.includes(words))
+const TARGET_GONE = /No target with given id|Target closed/i
 const pointResult = z.object({
-  result: z.object({ value: z.object({ x: z.number(), y: z.number() }) }),
+  result: z.object({
+    value: z.union([
+      z.object({ x: z.number(), y: z.number() }),
+      z.object({ blocked: z.literal("covered"), by: z.string() }),
+      z.object({ blocked: z.literal("hidden"), why: z.string() }),
+    ]),
+  }),
 })
+/** How long a click waits for its element to be hit-testable: an overlay fading out, a menu opening. */
+const POINT_SETTLE_MS = 1_500
+/**
+ * Scroll the element into view and find a point on it that receives the
+ * click: its centre, else the nearest of a 5×5 grid over its visible part.
+ * Says what covers it, or why it shows nothing, instead of guessing.
+ */
+const POINT_FUNCTION = `function(){
+if(!this.isConnected)throw Error('Element detached: observe again');
+const describe=(e)=>{if(!e)return 'nothing on the page';const tag='<'+e.tagName.toLowerCase()+(e.id?'#'+e.id:'')+(typeof e.className==='string'&&e.className.trim()?'.'+e.className.trim().split(/\\s+/).slice(0,2).join('.'):'')+'>';const role=e.getAttribute('role');const label=(e.getAttribute('aria-label')||e.getAttribute('title')||e.innerText||'').replace(/\\s+/g,' ').trim().slice(0,60);const modal=e.closest('dialog,[role=dialog],[role=alertdialog],[aria-modal=true]');const within=modal&&modal!==e?' inside '+(modal.getAttribute('aria-label')?'dialog "'+modal.getAttribute('aria-label')+'"':'a dialog'):'';return tag+(role?' role='+role:'')+(label?' "'+label+'"':'')+within};
+this.scrollIntoView({block:'center',inline:'center',behavior:'instant'});
+const r=this.getBoundingClientRect();
+if(!r.width||!r.height){for(let e=this;e;e=e.parentElement)if(getComputedStyle(e).display==='none')return {blocked:'hidden',why:e===this?'is display:none':'is inside '+describe(e)+', which is display:none'};return {blocked:'hidden',why:'has no size'}}
+const style=getComputedStyle(this);
+if(style.visibility!=='visible')return {blocked:'hidden',why:'is visibility:'+style.visibility};
+const left=Math.max(r.left,0),top=Math.max(r.top,0),right=Math.min(r.right,innerWidth),bottom=Math.min(r.bottom,innerHeight);
+if(right<=left||bottom<=top)return {blocked:'hidden',why:'stays outside the viewport after scrolling'};
+const root=this.getRootNode(),cx=(left+right)/2,cy=(top+bottom)/2,steps=[0.5,0.3,0.7,0.1,0.9],points=[];
+for(const a of steps)for(const b of steps)points.push([left+(right-left)*a,top+(bottom-top)*b]);
+points.sort((p,q)=>Math.hypot(p[0]-cx,p[1]-cy)-Math.hypot(q[0]-cx,q[1]-cy));
+let cover=null;
+for(const [x,y] of points){const hit=root.elementFromPoint(x,y);if(hit&&(hit===this||this.contains(hit)||hit.contains(this)))return {x,y};cover=cover||hit}
+return {blocked:'covered',by:describe(cover)}}`
 const boxResult = z.object({
   result: z.object({
     value: z.object({
@@ -304,6 +343,8 @@ export type BrowserFocusPolicy = "lease" | "action" | "off"
 export interface BrowserServiceOptions {
   preferencePath?: string
   defaultApplication?: () => Promise<string | undefined>
+  /** The browser preferred until someone chooses one, such as a machine's own; it needs no setup. */
+  defaultBrowser?: string
   focusPolicy?: BrowserFocusPolicy
 }
 const FOCUS_INPUT_ACTIONS: ReadonlySet<BrowserCommand["action"]> = new Set([
@@ -318,6 +359,8 @@ function fault(
   code:
     | "target-closed"
     | "target-busy"
+    | "target-covered"
+    | "target-hidden"
     | "stale-target"
     | "invalid-request"
     | "disconnected"
@@ -326,7 +369,7 @@ function fault(
 ): never {
   throw new BrowserFault({ code, message, outcome: "not-dispatched" })
 }
-function pageUrl(url: string): string {
+function pageUrl(url: string, transport?: LocalBrowser["transport"]): string {
   const parsed = z.string().url().safeParse(url).success
     ? new URL(url)
     : fault(
@@ -337,6 +380,11 @@ function pageUrl(url: string): string {
     fault(
       "invalid-request",
       "Navigation supports http, https, about and data URLs."
+    )
+  if (parsed.protocol === "data:" && transport === "extension")
+    fault(
+      "invalid-request",
+      "This browser is connected through the Mako extension, and Chrome does not let extensions open data: URLs. Serve the page over http, or navigate to about:blank and write the page with tab.evaluate()."
     )
   return parsed.href
 }
@@ -392,12 +440,15 @@ export class BrowserService {
   private readonly recordings = new BrowserRecordings()
   private readonly browsers: Map<string, BrowserEntry>
   private readonly bindings = new Map<string, Binding>()
+  /** Why a recent lease ended, so its next command hears the cause rather than a bare "released". */
+  private readonly endings = new Map<string, { code: "target-closed" | "stale-target"; message: string }>()
   private readonly ownedTargets = new Map<string, OwnedTarget>()
   private readonly listeners = new Set<
     (statuses: BrowserControlStatus[]) => void
   >()
   private readonly preference: BrowserPreferences
   private readonly defaultApplication?: () => Promise<string | undefined>
+  private readonly defaultBrowser?: string
   private closing = false
   /** Page refs are e1, e2, … across every tab of this service and never
    * reused, so a ref from one tab or document can never name another node. */
@@ -440,6 +491,7 @@ export class BrowserService {
     ]
     this.preference = new BrowserPreferences(options.preferencePath)
     this.defaultApplication = options.defaultApplication
+    this.defaultBrowser = options.defaultBrowser
     this.focusPolicy = options.focusPolicy ?? "action"
     this.browsers = new Map(
       (Array.isArray(definitions) ? definitions : []).map((definition) => [
@@ -604,6 +656,16 @@ export class BrowserService {
         changed = true
       }
     }
+    const fallback = this.defaultBrowser ? this.browsers.get(this.defaultBrowser)?.definition : undefined
+    if (!this.closing && !this.preference.hasSavedChoice && fallback) {
+      await this.preference.set({
+        id: fallback.id,
+        name: fallback.name,
+        product: fallback.product,
+        transport: fallback.transport,
+      })
+      changed = true
+    }
     if (changed) this.changed()
     return this.status()
   }
@@ -615,6 +677,30 @@ export class BrowserService {
   }
   private changed(): void {
     for (const listener of this.listeners) listener(this.status())
+  }
+  /** A desk window carries Mako's privileged bridge, so another site never loads in one; name where it can. */
+  private outsideDesk(desk: string, url: string): never {
+    const others = this.status().filter(
+      (status) =>
+        status.id !== desk &&
+        status.kind !== "desk" &&
+        status.connection.status !== "setup-required" &&
+        status.connection.status !== "unavailable"
+    )
+    const connected = others
+      .filter((status) => status.connection.status === "connected")
+      .sort((a, b) => Number(b.preferred === true) - Number(a.preferred === true))[0]
+    const open = (id: string) =>
+      `control.openTab({browser:${JSON.stringify(id)}, url:${JSON.stringify(url)}})`
+    const next = connected
+      ? `Open it in ${connected.name} instead: await ${open(connected.id)}`
+      : others[0]
+        ? `Connect ${others[0].name} first with await control.connectBrowser(${JSON.stringify(others[0].id)}), then await ${open(others[0].id)}`
+        : "No browser that opens other sites is set up; ask the user to connect Chrome in Settings > MCP > Browser use"
+    return fault(
+      "invalid-request",
+      `${desk} is a Mako desk: it opens only Mako's own interface, and ${url} is another site. Nothing was opened. ${next}.`
+    )
   }
   private entry(id: string): BrowserEntry {
     const entry = this.browsers.get(id)
@@ -811,6 +897,7 @@ export class BrowserService {
         this.endBinding(this.bindings.get(key), "Tab binding ended")
         this.bindings.delete(key)
         this.ownedTargets.delete(key)
+        this.ended(binding, "target-closed", "The exact tab closed. No other tab was selected.")
         continue
       }
       if (
@@ -819,17 +906,13 @@ export class BrowserService {
       ) {
         const entry = this.browsers.get(binding.target.browser)
         if (entry && !binding.intentionalDetach) {
+          const interruption = tabInterruption(binding.events, z.string().safeParse(event.params.reason).data)
           entry.status = {
             ...entry.status,
-            lastInterruption: {
-              tab: binding.target.tab,
-              message: tabInterruption(
-                binding.events,
-                z.string().safeParse(event.params.reason).data
-              ),
-            },
+            lastInterruption: { tab: binding.target.tab, message: interruption },
           }
           this.changed()
+          this.ended(binding, "stale-target", this.detachedMessage(binding, interruption))
         }
         this.recordings.stopTarget(
           binding.owner,
@@ -989,8 +1072,16 @@ export class BrowserService {
       lease: randomUUID(),
     }
     const key = this.key(target)
-    const existing = this.bindings.get(key)
     const owned = this.ownedTargets.get(key)
+    let existing = this.bindings.get(key)
+    // A claim is how a task recovers, so it never hands back a session Chrome
+    // already dropped; one round trip proves the binding is alive.
+    if (existing && !(await this.alive(existing, signal))) {
+      this.recordings.stopTarget(existing.owner, existing.target, "Tab lease ended")
+      this.endBinding(existing, "Tab binding ended")
+      if (this.bindings.get(key) === existing) this.bindings.delete(key)
+      existing = undefined
+    }
     if (existing?.owner === owner) return existing.target
     if (!existing && this.bindings.size >= 512)
       fault(
@@ -1260,22 +1351,50 @@ export class BrowserService {
     }
   }
 
+  private ended(binding: Binding, code: "target-closed" | "stale-target", message: string) {
+    this.endings.set(binding.target.lease, { code, message })
+    if (this.endings.size > 256) this.endings.delete(this.endings.keys().next().value!)
+  }
+
+  private detachedMessage(binding: Binding, interruption: string) {
+    const claim = JSON.stringify({ browser: binding.target.browser, tab: binding.target.tab })
+    return `${interruption} Nothing was retried, and this handle is finished. Claim the tab again with await control.claimTab(${claim}) and observe before acting.`
+  }
+
+  /** False only when the browser says the binding's session is gone; any other answer leaves it to the next command. */
+  private async alive(binding: Binding, signal: AbortSignal): Promise<boolean> {
+    try {
+      await binding.connection.send("Page.getFrameTree", {}, AbortSignal.any([signal, AbortSignal.timeout(2_000)]), binding.sessionId)
+      return true
+    } catch (error) {
+      signal.throwIfAborted()
+      return !(error instanceof BrowserFault && (sessionGone(error.message) || TARGET_GONE.test(error.message)))
+    }
+  }
+
   private endBinding(binding: Binding | undefined, reason: string) {
     if (!binding) return
     binding.capture.end(reason)
     void binding.focus.close().catch(() => {})
   }
 
-  /** UI consumers share the tab's compositor stream, independent of agent observations. */
+  /** UI consumers share the tab's compositor stream, independent of agent observations. `size` is
+   * the largest frame the preview's viewers draw; the screencast is no larger unless another consumer needs it. */
   async previewStream(
     owner: string, target: BrowserTarget, authorize: () => void,
-    frame: (value: BrowserFrame) => void, ended: (reason: string) => void
+    frame: (value: BrowserFrame) => void, ended: (reason: string) => void,
+    size?: () => CaptureSize | undefined
   ) {
     authorize()
     const binding = this.binding(owner, target)
     return binding.capture.subscribe({
-      frame: value => { authorize(); frame(value) }, ended,
+      frame: value => { authorize(); frame(value) }, ended, size,
     })
+  }
+
+  /** A preview's viewers now draw another size. */
+  async previewResized(owner: string, target: BrowserTarget): Promise<void> {
+    await this.binding(owner, target).capture.resized()
   }
 
   async execute(
@@ -1298,6 +1417,11 @@ export class BrowserService {
       this.browserOperations.set(browser, (this.browserOperations.get(browser) ?? 0) + 1)
     }
     try { return await this.executeCommand(owner, command, signal, authorize) }
+    catch (error) {
+      if (error instanceof BrowserFault && error.message === DESK_OUTSIDE_ORIGIN && "url" in command && command.url)
+        this.outsideDesk("target" in command ? command.target.browser : browser ?? "", command.url)
+      throw error
+    }
     finally {
       if (browser) {
         const remaining = (this.browserOperations.get(browser) ?? 1) - 1
@@ -1430,7 +1554,7 @@ export class BrowserService {
           "invalid-request",
           "Choose a preferred browser in Settings, or pass an explicit browser ID."
         )
-      const url = pageUrl(command.url)
+      const url = pageUrl(command.url, this.entry(browser).definition.transport)
       this.authorizeBrowser(owner, browser)
       const connection = this.connection(browser)
       if (command.context === "isolated" && command.lifetime === "persistent")
@@ -1656,25 +1780,36 @@ export class BrowserService {
         if (effect === "mutate" || effect === "release") binding.view = undefined
         return value
       } catch (error) {
-        if (
-          error instanceof BrowserFault &&
-          /Session with given id not found|No target with given id|Target closed/i.test(
-            error.message
-          )
-        ) {
+        const detached = error instanceof BrowserFault && sessionGone(error.message)
+        const closed = error instanceof BrowserFault && (
+          TARGET_GONE.test(error.message) ||
+          (detached && !(await binding.connection
+            .send("Target.getTargetInfo", { targetId: binding.target.tab }, AbortSignal.timeout(2_000))
+            .then(() => true, () => false)))
+        )
+        if (error instanceof BrowserFault && (closed || detached)) {
           this.recordings.stopTarget(
             binding.owner,
             binding.target,
             "Tab lease ended"
           )
           this.endBinding(binding, "Tab binding ended")
-          this.bindings.delete(this.key(binding.target))
-          throw new BrowserFault({
-            code: "target-closed",
-            message:
-              "The exact tab session closed. No command was retried and no other tab was selected.",
-            outcome: error.detail.outcome,
-          })
+          if (this.bindings.get(this.key(binding.target)) === binding)
+            this.bindings.delete(this.key(binding.target))
+          if (closed) {
+            const message = "The exact tab closed. No command was retried and no other tab was selected."
+            this.ended(binding, "target-closed", message)
+            throw new BrowserFault({ code: "target-closed", message, outcome: error.detail.outcome })
+          }
+          const interruption = tabInterruption(binding.events, undefined)
+          const entry = this.browsers.get(binding.target.browser)
+          if (entry) {
+            entry.status = { ...entry.status, lastInterruption: { tab: binding.target.tab, message: interruption } }
+            this.changed()
+          }
+          const message = this.detachedMessage(binding, interruption)
+          this.ended(binding, "stale-target", message)
+          throw new BrowserFault({ code: "stale-target", message, outcome: error.detail.outcome })
         }
         if (
           !observation &&
@@ -1720,6 +1855,8 @@ export class BrowserService {
         "This target belongs to an earlier browser connection. List and select the exact page again."
       )
     const binding = this.bindings.get(this.key(target))
+    const ending = binding ? undefined : this.endings.get(target.lease)
+    if (ending) fault(ending.code, ending.message)
     if (!binding)
       fault(
         "target-closed",
@@ -1891,8 +2028,9 @@ export class BrowserService {
                 returnByValue: true,
               })
             ).result.value
+          // queryAXTree compares roles case-sensitively; any other spelling filters the snapshot instead.
           const exactNames = [...command.within, ...(command.match ? [command.match] : [])].every(
-            (scope) => scope.name !== undefined && isExactName(scope.name)
+            (scope) => scope.name !== undefined && isExactName(scope.name) && scope.role === scope.role.toLowerCase()
           )
           if (visibility === "hidden" || !exactNames) {
             // queryAXTree waits for a visual lifecycle update, which Chromium
@@ -2185,7 +2323,7 @@ export class BrowserService {
         return navigatePage(
           binding.connection,
           binding.sessionId,
-          pageUrl(command.url),
+          pageUrl(command.url, this.entry(binding.target.browser).definition.transport),
           signal,
           command.waitUntil ?? "load",
           command.timeoutMs
@@ -2261,7 +2399,7 @@ export class BrowserService {
           if (!url.success) fault("invalid-request", "Page.navigate needs url.")
           return send(command.method, {
             ...command.params,
-            url: pageUrl(url.data),
+            url: pageUrl(url.data, this.entry(binding.target.browser).definition.transport),
           })
         }
         return command.method.startsWith("Target.") ||
@@ -3122,13 +3260,17 @@ export class BrowserService {
     ref: string,
     signal: AbortSignal
   ): Promise<{ x: number; y: number }> {
-    const result = await this.callOnNode(
-      binding,
-      ref,
-      "function(){if(!this.isConnected)throw Error('Element detached: observe again');this.scrollIntoView({block:'center',inline:'center',behavior:'instant'});const r=this.getBoundingClientRect();const x=r.x+r.width/2,y=r.y+r.height/2;const hit=this.getRootNode().elementFromPoint(x,y);if(!r.width||!r.height||!(hit===this||this.contains(hit)||(hit&&hit.contains(this))))throw Error('Element is hidden or covered at its centre; observe again or use coordinates from a screenshot');return {x,y}}",
-      signal
-    )
-    return pointResult.parse(result).result.value
+    const deadline = Date.now() + POINT_SETTLE_MS
+    for (;;) {
+      const point = pointResult.parse(await this.callOnNode(binding, ref, POINT_FUNCTION, signal)).result.value
+      if ("x" in point) return point
+      if (Date.now() >= deadline && point.blocked === "covered")
+        fault("target-covered", `${ref} is covered at every visible point by ${point.by}. Nothing was clicked. Close or dismiss that first (often a dialog, menu or toast), or wait for it to go with tab.waitFor({hidden:true,selector}), then act again.`)
+      if (Date.now() >= deadline && point.blocked === "hidden")
+        fault("target-hidden", `${ref} ${point.why}, so there is nothing to click. Nothing was clicked. It may need a menu, tab or section opened first; observe again to find it shown.`)
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      signal.throwIfAborted()
+    }
   }
 
   private async box(

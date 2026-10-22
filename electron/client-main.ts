@@ -12,7 +12,7 @@ import { MachineOfferSchema, UNSTATED_MACHINE_OFFER, type MachineOffer } from "@
 import { AGENT_VIEWS_ENV, type DesktopRole } from "@mako/host/contracts/desktop-channel"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contracts/fixture-desk-policy"
 import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
-import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
+import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, invokeRuntimeVideo, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { runtimeEventRouting } from "@mako/host/contracts/runtime"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
@@ -488,7 +488,7 @@ async function serveWindows() {
       const client = clients.get(event.sender.id)
       if (!client) throw new Error("This Mako client has closed")
       crashes.breadcrumb(`renderer=${event.sender.id} invoke ${channel}`)
-      // Every answer but a preview's crosses to the window as its encoding (`answerCrossesEncoded`): the host's is forwarded unread, this process's own is encoded here.
+      // Every answer but a preview's and its video's crosses to the window as its encoding (`answerCrossesEncoded`): the host's is forwarded unread, this process's own is encoded here.
       // Reporting must work even when the shared host is unavailable.
       if (channel === "mako:report-crash") {
         const [kind, payload] = inputs.of("mako:report-crash").parse(args)
@@ -511,6 +511,8 @@ async function serveWindows() {
       if (!runtime.info.methods.includes(channel)) throw new Error("This action requires a newer shared host. Existing agents have not been restarted.")
       if (channel === "mako:control-preview")
         return invokeWithRecovery(channel, () => invokeRuntimePreview(runtime.socket, client.id, runtime.info.previewSizing ? args : args.slice(0, 3)), client.link)
+      if (channel === "mako:control-video")
+        return invokeWithRecovery(channel, () => invokeRuntimeVideo(runtime.socket, client.id, args), client.link)
       const correlationId = randomUUID()
       const encoded = await invokeWithRecovery(channel, (attempt) => invokeRuntimeEncoded(runtime.socket, client.id, channel, args, attempt, { history: true, correlationId }), client.link)
       if (channel === "mako:boot") {

@@ -107,7 +107,8 @@ export class LiveClosing {
     if (transferOperation) await transferOperation
     const bindingIds = [...resident.connections.keys()]
     const activeBindingId = this.access.control(resident).activeBindingId
-    if (resident.opening && !bindingIds.includes(activeBindingId))
+    // A hibernated binding has no connection but can still hold its Local Control session.
+    if (!bindingIds.includes(activeBindingId))
       bindingIds.push(activeBindingId)
     const closings = [...resident.connections].map(
       ([bindingId, connection]) => ({

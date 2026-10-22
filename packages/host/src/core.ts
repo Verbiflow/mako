@@ -34,8 +34,9 @@ import { hostPlatform, nodePlatform, onMac } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
-import { controlLine, openControl, declareControlMethods, type ControlService } from "./control/index.js"
-import { openConversations, declareConversationMethods, CloudConversations, folderRepository, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
+import type { MediaHandler } from "@mako/protocol"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, folderRepository, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -79,6 +80,8 @@ export interface Core {
   warm(): Promise<string[]>
   /** On a cloud machine: the folder its agent prepared, where every client's tabs open. */
   openMachineWorkspace(path: string): Promise<void>
+  /** On a cloud machine: the live video of its previews its Threads' clients watch. */
+  media: MediaHandler
   /**
    * On a cloud machine: the gateway it works through, as its agent linked it. Its records are kept in step with its
    * Thread's there (`ThreadCatalog.syncRecords`), and its project's recipe with the account's (`RecipeAccounts`).
@@ -98,6 +101,8 @@ export interface Core {
   /** Everything the core holds, released in order, with the socket and the terminals. */
   stop(): Promise<void>
 }
+
+/** How long a hibernated provider's Local Control session waits for it to wake. */
 
 const trace = (stage: string) => {
   if (process.env.MAKO_RUNTIME_TRACE === "1") console.info("[mako-runtime]", stage)
@@ -358,8 +363,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       })
   late.cloudConversations = cloudConversations
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
-  /** Each reason is told once per host; every failed start is still logged. */
-  const controlUnavailableNotices = new Set<string>()
+  const residency = new ControlResidency({
+    sessions: control.sessions,
+    grants: () => late.agentServers,
+    browser: () => late.controlService,
+    journal: (conversationId) => join(logsRoot(environment.dataRoot), "local-control", `${conversationId}.jsonl`),
+    notice: (message) => emit({ type: "notice", level: "error", message }),
+  })
   const opened = await openConversations({
     streams,
     environment,
@@ -371,33 +381,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     emit,
     foreground: shell.foreground,
     mcpSnapshot: (cwd) => tools.mcp.discover(cwd),
-    tools: async (bindingId, conversationId) => {
-      const minted = late.agentServers?.mint(bindingId, conversationId)
-      if (!minted) return undefined
-      const browser = late.controlService?.mint(conversationId, bindingId)
-      const started = await control.sessions.startOptional(bindingId, browser, async (reason) => {
-        await late.controlService?.revoke(conversationId, bindingId)
-        if (reason === "failed") emit({ type: "notice", level: "error", message: "Local Control stopped unexpectedly. Its browser access has ended; start a new task before continuing control." })
-      })
-      if ("launch" in started) return { ...minted, control: started.launch }
-      await late.controlService?.revoke(conversationId, bindingId)
-      if (!controlUnavailableNotices.has(started.unavailable)) {
-        controlUnavailableNotices.add(started.unavailable)
-        emit({ type: "notice", level: "error", message: started.unavailable })
-      }
-      return minted
-    },
+    tools: (bindingId, conversationId) => residency.tools(bindingId, conversationId),
     controlInstructions: (bindingId, conversationId) => {
       const launched = workspaces.environments?.launchedWith(conversationId)
       if (launched) void workspaces.processes?.touch(launched.app).catch(() => {})
       const session = control.sessions.get(bindingId)
       return [session && controlLine(session), launched && threadEnvironmentInstructions(launched), ...(workspaces.worktrees?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
     },
-    revokeTools: async (bindingId, conversationId) => {
-      late.agentServers?.revoke(bindingId, conversationId)
-      await late.controlService?.revoke(conversationId, bindingId)
-      await control.sessions.stop(bindingId)
-    },
+    revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
+    suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),
     settled: (id) => {
       late.movers?.moves.settled(id)
       late.movers?.leaves.settled(id)
@@ -487,6 +479,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets, recordHelperRun: helperRuns.record })
   declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
   declareControlMethods(methods, control, environment.appRoot, config.executable)
+  declareCloudControlPreviewMethods(methods, () => cloudConversations?.controlPreviews)
   declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine })
   const usage = declareUsageMethods(methods, {
     dataRoot: environment.dataRoot,
@@ -611,6 +604,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       await workspaceClients.home(path)
       await workspaceAutomations.watch(path)
     },
+    media: controlVideoMedia(control.previews),
     activeWork: () => application.lifecycle.snapshot().work.length > 0,
     work: () => application.lifecycle.snapshot().work,
     lifecycleBlocked: () => application.lifecycle.blocked,

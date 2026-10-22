@@ -135,7 +135,30 @@ try {
   await delay(50)
   assert.equal(previews.read("task", true, "overlay")?.frame?.sequence, counted + 6,
     "Frames within one 60 fps slot count once, so a faster source is not a shortfall")
+  const shown = previews.read("task", true, "overlay")?.frame?.id
+  previews.observe({ ...activity, kind: "computer", operation: "exec", target: "Selected application", status: "error" })
+  previews.observe({ ...activity, operation: "open", target: "fixture", status: "running" }, undefined, false)
+  previews.observe({ ...activity, operation: "click", status: "error" })
+  const over = previews.read("task", true, "overlay")
+  assert.deepEqual([over?.frame?.id, over?.activity.kind, over?.activity.target, over?.activity.status], [shown, "browser", "fixture:tab", "error"],
+    "A failed program, a failed call and a call that names no tab report over the picture instead of blanking it")
+  assert.deepEqual(previews.viewers("task", "local"), { own: 1, others: 0, capturing: true }, "and keep the live stream")
+  assert.equal(fixture.calls.filter((c) => c.method === "Page.stopScreencast").length, 0)
+  let turn = true
+  previews.browserTarget("task", target, () => {
+    if (!turn) throw new Error("This provider no longer owns an active turn in this conversation")
+  })
+  turn = false
+  const between = previews.read("task", true, "overlay")
+  assert.deepEqual([between?.paused, between?.frame?.id], [true, shown], "Between turns the card keeps its last picture")
+  assert.equal(previews.viewers("task", "local").capturing, false, "and streams nothing")
+  turn = true
+  previews.observe({ ...activity, operation: "click", status: "running" })
+  const resumed = previews.read("task", true, "overlay")
+  assert.deepEqual([resumed?.paused, resumed?.frame?.id], [undefined, shown], "The next turn's call on that tab resumes over the same picture")
+  assert.equal(previews.viewers("task", "local").capturing, true, "and streams again")
   previews.read("task", false, "overlay")
+  for (let i = 0; i < 100 && previews.viewers("task", "local").capturing; i++) await delay(5)
   assert.deepEqual(previews.viewers("task", "local"), { own: 0, others: 0, capturing: false },
     "The last viewer leaving stops the stream")
   previews.observe({
@@ -144,9 +167,9 @@ try {
     target: "different-window",
   })
   assert.equal(
-    previews.read("task", false)?.frame,
-    null,
-    "Target change clears the old image"
+    previews.read("task", false)?.frame?.id,
+    shown,
+    "A new target keeps the old picture until its own first frame, so the card never blanks"
   )
   let authorized = true
   previews.computerTarget("task", { pid: 42, windowId: 70 }, () => {
@@ -168,11 +191,28 @@ try {
   clock.mock.restore()
   authorized = false
   assert.throws(() => previews.nativeWindow("task"), /Binding closed/)
-  assert.equal(
-    previews.read("task", true),
-    null,
-    "Revoked tasks remove retained previews and stop live video"
-  )
+  const idle = previews.read("task", true)
+  assert.deepEqual([idle?.paused, idle?.window, idle?.frame?.id], [true, undefined, shown],
+    "Between turns a native preview keeps its picture and releases live video")
+  const ends = events
+  previews.revoked("task", "binding")
+  assert.equal(previews.read("task", true), null, "The end of its Local Control grant ends the card")
+  await delay(300)
+  assert.equal(events, ends + 1, "and tells viewers at once")
+
+  const closing = new ControlPreviews(browser, async (image) => image, () => {})
+  closing.observe(activity)
+  closing.browserTarget("task", target, () => {}, "binding-a")
+  closing.closed("task", { browser: target.browser, tab: "another-tab" })
+  closing.revoked("task", "binding-b")
+  assert.ok(closing.read("task", false), "Closing another tab or another binding's grant keeps the card")
+  closing.closed("task", target)
+  assert.equal(closing.read("task", false), null, "Closing the tab it shows ends the card")
+  closing.observe(activity)
+  closing.browserTarget("task", target, () => {}, "binding-a")
+  closing.revoked("task", "binding-a")
+  assert.equal(closing.read("task", false), null, "The grant of the binding it shows ends the card")
+  closing.close()
   for (let index = 0; index < 65; index++)
     previews.observe({ ...activity, conversationId: `task-${index}` })
   assert.equal(previews.read("task", false), null, "Retention is bounded")
@@ -239,7 +279,7 @@ try {
   ordered.observe({ ...computer, target: "app:3" })
   thumbnails[2]?.(image("first window"))
   await delay(20)
-  assert.equal(ordered.read("native", false)?.frame, null, "A snapshot of a target the task has left is dropped")
+  assert.equal(Buffer.from(ordered.read("native", false)?.frame?.image.bytes ?? []).toString(), "newer", "A snapshot of a target the task has left is dropped")
   ordered.close()
   console.log(
     "Control previews: hidden capture suppression, one shared stream, task isolation, viewer ownership, event coalescing, target invalidation, bounded retention, viewer-sized frames and native snapshot thumbnails passed"

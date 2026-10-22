@@ -334,7 +334,7 @@ export class LiveHibernation {
     if (resident.generation !== retiringGeneration) return
     await Promise.all(
       connectionIds.map((bindingId) =>
-        revokeTools(this.access.dependencies, bindingId, resident.snapshot.session.id)
+        revokeTools(this.access.dependencies, bindingId, resident.snapshot.session.id, true)
       )
     )
     if (resident.generation !== retiringGeneration) return

@@ -61,10 +61,10 @@ export function decodeRuntimeEvent<Event extends HostEvent | TerminalEvent>(payl
 /**
  * Whether a call's answer crosses from the desktop's main process to its window as its
  * encoding, which the window decodes. Every answer does, so main forwards the host's text
- * unread, except a preview's, whose pixels cross as bytes.
+ * unread, except a preview's and its video's, whose pixels cross as bytes.
  */
 export function answerCrossesEncoded(channel: string): boolean {
-  return channel !== "mako:control-preview"
+  return channel !== "mako:control-preview" && channel !== "mako:control-video"
 }
 
 const EMPTY_SUCCESS = '{"ok":true}'

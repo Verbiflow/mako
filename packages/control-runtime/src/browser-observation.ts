@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { PAGE_GROUPING_ROLES as GROUPING_ROLES } from "@mako/control/browser"
-import { inScope, nameMatches, scopeLabel, type ControlScope, type NameMatch } from "@mako/control/control/scope"
+import { inScope, scopeLabel, type ControlScope } from "@mako/control/control/scope"
 import { z } from "zod"
 import type { BrowserTarget } from "./contracts/browser-control.js"
 import type { JsonObject, JsonValue } from "./json.js"
@@ -59,7 +59,7 @@ export function scopeAccessibilityNodes(
   nodes: AccessibilityNode[],
   scope: {
     within: ControlScope[]
-    match?: { role: string; name: NameMatch }
+    match?: ControlScope
   }
 ): AccessibilityNode[] {
   let selected = nodes
@@ -88,12 +88,10 @@ export function scopeAccessibilityNodes(
     }
     selected = selected.filter((node) => descendants.has(node.nodeId))
   }
-  if (scope.match)
+  const match = scope.match
+  if (match)
     selected = selected.filter(
-      (node) =>
-        !node.ignored &&
-        node.role?.value === scope.match!.role &&
-        nameMatches(node.name?.value ?? "", scope.match!.name)
+      (node) => !node.ignored && inScope(node.role?.value, node.name?.value ?? "", match)
     )
   return selected
 }

@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { promisify } from "node:util"
-import { access, stat } from "node:fs/promises"
+import { access, chmod, mkdir, mkdtemp, stat } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { setTimeout as delay } from "node:timers/promises"
 import { pathToFileURL } from "node:url"
-import { resolve } from "node:path"
+import { join, resolve } from "node:path"
 import { startDesktopControlSession } from "../packages/control-runtime/dist/session.js"
 const run = promisify(execFile)
 async function absent(path) {
@@ -127,12 +128,22 @@ await absent((await crashedParent(true)).bin)
 // A session no worker took is swept by the next owner process's first launch.
 const abandoned = await crashedParent(false)
 await access(abandoned.bin)
+// A folder from before launches carried a pid goes once its socket is dead.
+const legacy = await mkdtemp(join(tmpdir(), "mako-cli-"))
+await chmod(legacy, 0o700)
+await mkdir(join(legacy, "session"), { mode: 0o700 })
+const listening = spawn(process.execPath, ["-e", `require("net").createServer().listen(${JSON.stringify(join(legacy, "session", "session.sock"))}, () => console.log("up"))`], { stdio: ["ignore", "pipe", "inherit"] })
+await new Promise((done) => listening.stdout.once("data", done))
+listening.kill("SIGKILL")
+await new Promise((done) => listening.once("exit", done))
+await access(join(legacy, "session", "session.sock"))
 await run(process.execPath, [
   "--input-type=module",
   "-e",
   `import {startDesktopControlSession} from ${JSON.stringify(module)};const owner=await startDesktopControlSession({taskId:'sweeper'});await new Promise(r=>setTimeout(r,200));await owner.close();`,
 ])
 await absent(abandoned.bin)
+await absent(legacy)
 console.log(
-  "Desktop lifecycle: no worker until the first command; exact values survive separate CLI processes; offline command help, explicit stop, worker crash and parent crash clean up private launch files, and a launch whose parent died unused is swept by the next"
+  "Desktop lifecycle: no worker until the first command; exact values survive separate CLI processes; offline command help, explicit stop, worker crash and parent crash clean up private launch files, and a launch whose parent died unused, or an unnamed one whose socket is dead, is swept by the next"
 )

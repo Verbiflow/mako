@@ -13,6 +13,7 @@ import {
   SeqSchema,
   ThreadIdSchema,
 } from "./ids.js"
+import { MediaStreamIdSchema } from "./media.js"
 import type { Payload } from "./payload.js"
 import { VersionRangeSchema } from "./version.js"
 
@@ -72,6 +73,14 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       generation: GenerationSchema,
       busy: z.boolean(),
       work: z.array(z.string().min(1).max(120)).max(20),
+    })
+    .strict(),
+  /** The runtime ended a stream it served (version 3 on, `media.ts`); its viewer hears why. */
+  z
+    .object({
+      type: z.literal("media-end"),
+      stream: MediaStreamIdSchema,
+      problem: ProblemSchema.optional(),
     })
     .strict(),
 ])
@@ -148,6 +157,27 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
       problem: ProblemSchema,
     })
     .strict(),
+  /**
+   * A client watches a stream of a Thread this runtime runs (version 3 on, `media.ts`); the client's request crosses
+   * after it, unread. Again for the same stream when the client changes its request.
+   */
+  z
+    .object({
+      type: z.literal("media-watch"),
+      threadId: ThreadIdSchema,
+      stream: MediaStreamIdSchema,
+    })
+    .strict(),
+  /** Every byte of the stream's messages its viewer has taken so far. */
+  z
+    .object({
+      type: z.literal("media-ack"),
+      stream: MediaStreamIdSchema,
+      received: z.number().int().nonnegative(),
+    })
+    .strict(),
+  /** The stream's viewer stopped watching or left: send nothing more on it. */
+  z.object({ type: z.literal("media-unwatch"), stream: MediaStreamIdSchema }).strict(),
 ])
 
 export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>
@@ -158,7 +188,8 @@ export type RuntimeFrame =
   | (Extract<RuntimeFrameEnvelope, { type: "event" }> & { event: Payload })
   | { type: "reply"; reply: Reply }
 export type GatewayFrame =
-  | Exclude<GatewayFrameEnvelope, { type: "operation" }>
+  | Exclude<GatewayFrameEnvelope, { type: "operation" | "media-watch" }>
   | (Omit<Extract<GatewayFrameEnvelope, { type: "operation" }>, "operation"> & {
       operation: Operation
     })
+  | (Extract<GatewayFrameEnvelope, { type: "media-watch" }> & { request: Payload })

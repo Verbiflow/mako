@@ -27,8 +27,7 @@ export function encodePreviewMedia(input: ControlPreview | null) {
   const metadata = new TextEncoder().encode(
     JSON.stringify(
       preview && {
-        activity: preview.activity,
-        window: preview.window,
+        ...preview,
         frame: frame
           ? {
               id: frame.id,

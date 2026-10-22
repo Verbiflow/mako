@@ -6,10 +6,7 @@ import {
   type RecordingOptions,
   type WindowControlTarget,
 } from "@mako/control/control"
-import type {
-  ComputerDriverClient,
-  ComputerDriverResult,
-} from "./computer-driver-client.js"
+import type { ComputerDriverResult } from "./computer-driver-client.js"
 import type { JsonObject } from "./json.js"
 import { ControlRecording } from "./control-recording.js"
 
@@ -53,6 +50,9 @@ export function nativeRecordingRate(tool: Tool | undefined) {
   return { maxFps: rate.maximum, configurable: true }
 }
 
+/** A driver call under the task's current driver session, renewed when the driver ended it. */
+export type NativeDriverCall = (name: string, args: JsonObject, timeout: number) => Promise<ComputerDriverResult>
+
 /** One host task owns these handles. Driver ownership is independently enforced. */
 export class NativeRecordings {
   private closed = false
@@ -61,9 +61,8 @@ export class NativeRecordings {
   async start(
     target: WindowControlTarget,
     options: RecordingOptions,
-    client: ComputerDriverClient,
+    call: NativeDriverCall,
     tools: Tool[],
-    session: string,
     signal: AbortSignal
   ) {
     if (this.closed)
@@ -121,13 +120,7 @@ export class NativeRecordings {
         // Start can complete after cancellation. Wait for completion, then stop by the id supplied before dispatch.
         await began?.catch(() => {})
         if (!began) return
-        const result = data(
-          await client.callTool(
-            "stop_recording",
-            { recording_id: recording!.id, session },
-            { timeout: 20_000 }
-          )
-        )
+        const result = data(await call("stop_recording", { recording_id: recording!.id }, 20_000))
         if (
           result.recording_id !== recording!.id ||
           result.target.pid !== target.pid ||
@@ -151,7 +144,6 @@ export class NativeRecordings {
       // Do not cancel a dispatched start and lose its receipt. Cleanup waits for this call.
       began = (async () => {
         const args: JsonObject = {
-          session,
           recording_id: active.id,
           output_dir: active.directory,
           record_video: true,
@@ -159,13 +151,7 @@ export class NativeRecordings {
           window_target: { pid: target.pid, window_id: target.window_id },
         }
         if (rate.configurable) args.fps = fps
-        const result = data(
-          await client.callTool(
-            "start_recording",
-            args,
-            { timeout: 20_000 }
-          )
-        )
+        const result = data(await call("start_recording", args, 20_000))
         if (
           result.recording_id !== active.id ||
           result.target.pid !== target.pid ||
@@ -209,19 +195,12 @@ export class NativeRecordings {
   async status(
     target: WindowControlTarget,
     id: string,
-    client: ComputerDriverClient | undefined,
-    session: string
+    call: NativeDriverCall | undefined
   ) {
     const recording = this.get(target, id)
     if (recording.receipt().status !== "recording") return recording.receipt()
-    if (!client) return recording.stop("Native driver connection ended")
-    const result = data(
-      await client.callTool(
-        "get_recording_state",
-        { session },
-        { timeout: 5000 }
-      )
-    )
+    if (!call) return recording.stop("Native driver connection ended")
+    const result = data(await call("get_recording_state", {}, 5000))
     if (
       result.recording_id !== id ||
       result.target.pid !== target.pid ||

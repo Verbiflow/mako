@@ -3,7 +3,7 @@
 # install from the checkout's lockfile, no Electron, and the tools the host
 # itself starts. Built only from the directory scripts/linux-host/prepare.mjs
 # writes, never the checkout.
-FROM debian:bookworm-slim AS host
+FROM debian:bookworm-slim AS node
 # Node publishes its pointer-compressed build from its unofficial-builds
 # farm, for x64 only. Every native module the host loads is Node-API, which
 # does not depend on V8's pointer size; each isolate's heap is capped at 4 GB.
@@ -18,7 +18,24 @@ RUN test "$(dpkg --print-architecture)" = amd64 || { echo "Mako's Linux host ima
     && echo "${NODE_SHA256}  /tmp/node.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1 --no-same-owner --exclude=CHANGELOG.md --exclude=README.md --exclude=LICENSE --exclude=include --exclude=share \
     && rm /tmp/node.tar.gz \
-    && node -e 'if (!process.config.variables.v8_enable_pointer_compression) throw new Error("this Node lacks pointer compression")' \
+    && node -e 'if (!process.config.variables.v8_enable_pointer_compression) throw new Error("this Node lacks pointer compression")'
+
+# FFmpeg as the Mac app bundles it (vendor/control-media): static, with x264
+# and only what recordings and live video use, a few megabytes where Debian's
+# package and its libraries are hundreds. Its sources and licenses go with it.
+FROM node AS media
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential nasm pkg-config xz-utils zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY media/ /build/
+RUN node /build/scripts/build-control-media.mjs
+
+FROM node AS host
+# Chromium, the machine's own browser, which the host starts headless when an
+# agent first connects to it; and fonts for the pages it renders. Its sandbox
+# needs user namespaces: a VM gives them, Docker's default seccomp profile
+# refuses them, so a container needs a profile that permits them.
+RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-noto-color-emoji \
+    && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 1000 node && useradd --uid 1000 --gid node --shell /bin/bash --create-home node
 WORKDIR /opt/mako
 # Root owns the host's code; the machine's user, who runs the host and its
@@ -29,6 +46,8 @@ RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --workspace @mako/hos
     && chmod 755 /opt/mako/packages/host/dist/mako-host.js \
     && if node -e 'require.resolve("electron")' 2>/dev/null; then echo "electron resolves in the host's install" >&2; exit 1; fi \
     && mako-host --help >/dev/null
+# Where the host looks for its media beside its install, as a checkout keeps it.
+COPY --from=media /build/vendor/control-media/linux-x64/ /opt/mako/vendor/control-media/linux-x64/
 USER node
 # Harnesses install into the user's home, as on a person's machine.
 ENV NPM_CONFIG_PREFIX=/home/node/.local PATH=/home/node/.local/bin:$PATH

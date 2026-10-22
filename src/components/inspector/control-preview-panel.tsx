@@ -1,5 +1,6 @@
 import { NativeControlPreview } from "./native-control-preview"
 import { ControlPreviewImage } from "./control-preview-image"
+import { RemoteControlPreview } from "./remote-control-preview"
 import { useEffect, useState } from "react"
 import {
   controlPreviewRateDescription,
@@ -114,7 +115,7 @@ export function ControlPreviewPanel() {
         ) : null}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
-        {conversationId && (preview?.window || frame) ? (
+        {conversationId && (preview?.window || frame || preview?.video) ? (
           <button
             type="button"
             aria-label="Enlarge over the chat"
@@ -127,6 +128,13 @@ export function ControlPreviewPanel() {
                 id={conversationId}
                 poster={frame ?? undefined}
                 className="block h-auto w-full object-contain"
+              />
+            ) : preview?.video ? (
+              <RemoteControlPreview
+                id={conversationId}
+                className="block h-auto w-full object-contain"
+                label="Browser tab on this task’s cloud machine"
+                onRate={setRate}
               />
             ) : frame ? (
               <ControlPreviewImage

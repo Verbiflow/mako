@@ -26,6 +26,8 @@ let checkpointEntered = false
 let releaseCheckpoint: ((value: string) => void) | undefined
 let pauseCheckpoint = false
 let catalogPath: string | undefined
+const revoked: string[] = []
+const suspended: string[] = []
 const session: LiveSessionState = { id, nativeId: "native-parent", harness: "devin-fixture", cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
 const driver: ProviderLiveDriver = {
   ...noCapabilities,
@@ -50,6 +52,8 @@ const driver: ProviderLiveDriver = {
 owner = new LiveConversations({
   root: join(root, "journals"), appPath: root, driver: () => driver,
   history: async () => null, emit() {}, providerIdleMs: 60_000, providerWarmLimit: 10,
+  revokeTools: (bindingId) => { revoked.push(bindingId) },
+  suspendTools: (bindingId) => { suspended.push(bindingId) },
   nativePath: () => catalogPath,
   checkpoint: async () => {
     if (!pauseCheckpoint) return "checkpoint"
@@ -100,6 +104,10 @@ try {
   assert.equal(owner.hibernateIfIdle(id), true)
   await until(() => owner.snapshot(id)?.session.connection === "hibernated")
   assert.equal(closes, 1)
+  const binding = owner.snapshot(id)?.control?.activeBindingId
+  assert.deepEqual([suspended, revoked], [[binding], []], "hibernation suspends the binding's tools, so its Local Control session waits for the wake")
+  await owner.close(id)
+  assert.deepEqual(revoked, [binding], "closing a hibernated conversation revokes what its binding still holds")
 } finally {
   releaseCheckpoint?.("cleanup")
   observer.dispose(); owner.stop(); rmSync(root, { recursive: true, force: true })

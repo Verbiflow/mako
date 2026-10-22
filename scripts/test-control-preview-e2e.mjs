@@ -27,6 +27,9 @@ async function run() {
   const root = process.env.MAKO_PREVIEW_TEST_ROOT
   assert.ok(root)
   app.setPath("userData", join(root, "data"))
+  // The viewer stays unfocused behind the user's windows; macOS then reports it
+  // occluded and Chromium hides its document, which unmounts the preview.
+  app.commandLine.appendSwitch("disable-backgrounding-occluded-windows")
   await app.whenReady()
   app.setActivationPolicy("prohibited")
   const execute = promisify(execFile)
@@ -63,11 +66,22 @@ async function run() {
     viewer.showInactive()
     const deadline = Date.now() + 25_000
     let outcome
+    let pausedCapture = false
     while (Date.now() < deadline) {
       outcome = await viewer.webContents.executeJavaScript(
-        "({status:document.getElementById('result')?.dataset.status,text:document.getElementById('result')?.textContent})"
+        "({status:document.getElementById('result')?.dataset.status,text:document.getElementById('result')?.textContent,paused:Boolean(document.querySelector('[aria-label=\"Control preview, last view\"]'))})"
       )
       if (outcome.status) break
+      // The paused card is evidence for review; its look is a design decision.
+      if (outcome.paused && !pausedCapture) {
+        pausedCapture = true
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        await writeFile(join(root, "paused.png"), (await viewer.webContents.capturePage()).toPNG())
+      } else if (pausedCapture === true && !outcome.paused) {
+        pausedCapture = "resumed"
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        await writeFile(join(root, "resumed.png"), (await viewer.webContents.capturePage()).toPNG())
+      }
       await new Promise((resolve) => setTimeout(resolve, 100))
     }
     console.log(outcome?.text)
@@ -136,6 +150,27 @@ async function run() {
     assert.equal(pinched.scale, 2, "Pinch zoom applied")
     assert.ok(pinched.pixels[0] > unpinched.pixels[0], "Pinch zoom decodes more detail")
     assert.ok(Math.abs(pinched.pixels[0] - pinched.wanted[0]) <= 1 && Math.abs(pinched.pixels[1] - pinched.wanted[1]) <= 1, "Pinched viewer holds its magnified device pixels")
+    // A cloud machine's tab as live H.264, with each stage's look kept for review.
+    const cloud = new URL("/scripts/control-video-browser.html", url)
+    await viewer.loadURL(cloud.href)
+    const shots = new Set()
+    let cloudOutcome
+    const cloudDeadline = Date.now() + 40_000
+    while (Date.now() < cloudDeadline) {
+      cloudOutcome = await viewer.webContents.executeJavaScript(
+        "({status:document.getElementById('result')?.dataset.status,stage:document.getElementById('result')?.dataset.stage,text:document.getElementById('result')?.textContent})"
+      )
+      if (cloudOutcome.stage && !shots.has(cloudOutcome.stage)) {
+        shots.add(cloudOutcome.stage)
+        await writeFile(join(root, `cloud-${cloudOutcome.stage}.png`), (await viewer.webContents.capturePage()).toPNG())
+      }
+      if (cloudOutcome.status) break
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    console.log(cloudOutcome?.text)
+    if (cloudOutcome?.status !== "passed")
+      await writeFile(join(root, "cloud-failure.png"), (await viewer.webContents.capturePage()).toPNG())
+    assert.equal(cloudOutcome?.status, "passed", "Cloud preview video")
     assert.equal(
       await frontmost(),
       before,

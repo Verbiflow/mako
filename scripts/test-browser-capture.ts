@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import sharp from "sharp"
+import { z } from "zod"
 import {
   BrowserCapture,
   type CaptureConnection,
@@ -122,6 +123,36 @@ await assert.rejects(
   /ended/
 )
 assert.equal(listeners.size, 0)
+// Chrome encodes exactly the pixels the largest consumer shows: previews give
+// their viewer's size, a recording takes full size, and the screencast restarts
+// only when that changes.
+const sized: Array<{ method: string; params?: unknown }> = []
+const sizedConnection: CaptureConnection = {
+  async send(method, params) {
+    sized.push({ method, params })
+    return {}
+  },
+  onEvent: () => () => {},
+  onClose: () => () => {},
+}
+const ScreencastStart = z.object({ maxWidth: z.number(), maxHeight: z.number() }).passthrough()
+const starts = () => sized.filter((call) => call.method === "Page.startScreencast").map((call) => ScreencastStart.parse(call.params))
+const viewer = new BrowserCapture(sizedConnection, "sized")
+let box = { width: 700, height: 420 }
+const stopSmall = await viewer.subscribe({ frame: () => {}, ended: () => {}, size: () => box })
+assert.deepEqual(starts().map(({ maxWidth, maxHeight }) => [maxWidth, maxHeight]), [[700, 420]], "a preview alone streams its viewer's size")
+box = { width: 699.5, height: 419.2 }
+await viewer.resized()
+assert.equal(starts().length, 1, "a size that rounds to the same pixels keeps the stream")
+const stopFull = await viewer.subscribe({ frame: () => {}, ended: () => {} })
+assert.deepEqual(starts().at(-1), { format: "jpeg", quality: 90, maxWidth: 1920, maxHeight: 1080, everyNthFrame: 1 }, "a recording takes full size")
+assert.equal(sized.filter((call) => call.method === "Page.stopScreencast").length, 1, "growing restarts the stream once")
+await stopFull()
+assert.deepEqual([starts().at(-1)!.maxWidth, starts().at(-1)!.maxHeight], [700, 420], "the stream shrinks back when the recording ends")
+box = { width: 2400, height: 1350 }
+await viewer.resized()
+assert.deepEqual([starts().at(-1)!.maxWidth, starts().at(-1)!.maxHeight], [1920, 1080], "a retina viewer never asks past 1080p")
+await stopSmall()
 console.log(
-  "Browser capture: shared stream, actual pixels, screenshot isolation, independent consumers and failed-stop cleanup passed"
+  "Browser capture: shared stream, actual pixels, screenshot isolation, independent consumers, failed-stop cleanup and viewer-sized screencasts passed"
 )

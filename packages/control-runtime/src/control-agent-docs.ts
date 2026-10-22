@@ -34,7 +34,7 @@ Reading a page
 - await tab.observe() prints the title, URL and scroll position, then the accessible outline, one element per line, indented under its container: e12 button "Save" disabled. The leading e12 is its ref.
 - Prose prints as text: lines, with links inside as [name](e12). Text that a control's name or label already contains is not printed again.
 - text: lines and unnamed list, row and cell lines print without a ref, but they have one: view.nodes keeps every row as {ref?,role,name,depth,...}, and a text: line's rows there have role StaticText with the text in name.
-- Long pages print in parts: the first line says rows 1–200 of 1450, and observe({offset:200}) reads on. When you know what you want, narrow instead: observe({within:[{role,name}],match:{role,name},query,max}), or observe({interactive:true}) for a flat list of controls. A filtered read (interactive or query) cannot prove absence.
+- Long pages print in parts: the first line says rows 1–200 of 1450, and observe({offset:200}) reads on. When you know what you want, narrow instead: observe({within:[{role,name}],match:{role,name?},query,max}); match:{role:'button'} keeps every button, or observe({interactive:true}) for a flat list of controls. A filtered read (interactive or query) cannot prove absence.
 - In code, view.get({role,name}).ref picks one element, and view.select({role?,text?}) prints the matching rows and keeps them in its .nodes.
 - Roles are the browser's accessibility roles and can differ from a role attribute; copy them from observe().
 
@@ -48,7 +48,7 @@ Acting
 
 Verifying: never sleep.
 - A failed action throws. A receipt, printed when it is a cell's value or logged, is one line, dispatched setValue e4 · route · delivery. It means the input was sent; no action checks its own effect, so check it yourself.
-- await tab.expect({role,name,within?,value?,states?,absent?},{timeoutMs}) polls fresh evidence for one element; absent:true waits until no such element exists.
+- await tab.expect({role,name?,within?,value?,states?,absent?},{timeoutMs}) polls fresh evidence; absent:true waits until no such element exists. Without a name, {role:'dialog'} waits for any dialog. states is {disabled:true} or ['disabled'].
 - tab.expect({url?,title?,text?,selector?,hidden?},{timeoutMs}), the same as tab.waitFor, waits on the page; url, title and text are case-sensitive substrings, and hidden:true waits until the text and selector are gone.
 - Both throw assertion-failed at the deadline. Text already on the page satisfies a wait at once, so to prove an action caused it, check its absence first or wait on something only the action produces.
 - When an outcome is unknown, observe before deciding; never replay the input.

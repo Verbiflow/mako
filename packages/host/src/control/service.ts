@@ -116,7 +116,8 @@ export async function startControlService(
             target: observation.target,
             status: observation.status,
           },
-          observation.image
+          observation.image,
+          observation.window !== undefined
         )
         if (observation.window)
           previews?.computerTarget(
@@ -154,7 +155,7 @@ export async function startControlService(
           operation: command.action,
           target,
           status: "running",
-        })
+        }, undefined, "target" in command)
       const value = await browser
         .execute(scope.bindingId, command, abort.signal, () => {
           assertScope(token, scope)
@@ -185,9 +186,12 @@ export async function startControlService(
           },
           command.action === "screenshot"
             ? ControlImageSchema.safeParse(value).data
-            : undefined
+            : undefined,
+          bound !== undefined
         )
-        if (bound && command.action !== "close")
+        if (command.action === "close" && "target" in command)
+          previews?.closed(scope.conversationId, command.target)
+        else if (bound)
           previews?.browserTarget(scope.conversationId, bound, () =>
             assertScope(token, scope), scope.bindingId
           )
@@ -259,8 +263,10 @@ export async function startControlService(
           removedLatest = true
       }
       const hasReplacement = refreshLatest(bindingId)
-      if (removedLatest && !hasReplacement)
+      if (removedLatest && !hasReplacement) {
+        previews?.revoked(conversationId, bindingId)
         await browser.releaseOwner(bindingId)
+      }
     },
     close() {
       for (const controllers of inFlight.values())

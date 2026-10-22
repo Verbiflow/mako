@@ -507,6 +507,9 @@ export function createMakoBridge(transport: BridgeTransport) {
         watcher,
         ...(box ? [box] : [])
       ),
+    /** A viewer's next packets of a cloud conversation's preview video, as a `ControlVideoBatch`'s bytes; waits up to a second for one. */
+    controlVideo: (conversationId: string, viewer: string, box?: { width: number; height: number }) =>
+      invokeTrustedHost<Uint8Array<ArrayBuffer>>("mako:control-video", conversationId, viewer, ...(box ? [box] : [])),
     elementPickTargets: () =>
       invokeTrustedHost<import("./element-picks.js").ElementPickTargets>("mako:element-pick-targets"),
     startElementPick: (request: import("./element-picks.js").ElementPickRequest) =>

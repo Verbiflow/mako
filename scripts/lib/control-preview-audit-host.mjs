@@ -37,7 +37,7 @@ process.once(
         focusPolicy,
       })
       const subscribe = browser.previewStream.bind(browser)
-      browser.previewStream = (owner, target, authorize, frame, ended) => {
+      browser.previewStream = (owner, target, authorize, frame, ended, size) => {
         console.error("Fixture capture subscribing")
         let count = 0
         return subscribe(
@@ -56,7 +56,8 @@ process.once(
           (reason) => {
             console.error("Fixture capture ended:", reason)
             ended(reason)
-          }
+          },
+          size
         ).catch((error) => {
           console.error("Fixture capture startup:", error.message)
           throw error
@@ -83,7 +84,7 @@ process.once(
             const [id, watching, watcher, box] =
               hostCallSchema("mako:control-preview").parse(args)
             assert.equal(id, "preview-audit")
-            const read = previews.read(id, watching, watcher, client)
+            const read = previews.read(id, watching, watcher, client, box)
             const value = read && (await previews.sized(read, box))
             return JSON.stringify(watching && value ? { ...value,
                 frame: value.frame ? { ...value.frame, image: { mimeType: value.frame.image.mimeType,
@@ -154,7 +155,7 @@ process.once(
         async (args, client) => {
           const [id, watching, watcher, box] = hostCallSchema("mako:control-preview").parse(args)
           assert.equal(id, "preview-audit")
-          const value = previews.read(id, watching, watcher, client)
+          const value = previews.read(id, watching, watcher, client, box)
           if (watching) served.push(performance.timeOrigin + performance.now())
           return watching && value ? previews.sized(value, box) : null
         }

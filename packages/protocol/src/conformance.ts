@@ -7,11 +7,12 @@ import {
   problemType,
 } from "./envelope.js"
 import { type EventFrame, threadStream } from "./events.js"
-import type { GatewayUnderTest, RuntimeLink } from "./gateway.js"
+import { type ClientSession, type GatewayUnderTest, LinkClosedError, type RuntimeLink } from "./gateway.js"
 import type { Json } from "./ids.js"
+import { type MediaWatch, encodeMediaMessage } from "./media.js"
 import { Payload } from "./payload.js"
 import type { GatewayFrame } from "./runtime-frames.js"
-import { PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, type VersionRange } from "./version.js"
 
 /** `test` from `node:test`, or any runner's equivalent. */
 export type ConformanceTest = (
@@ -628,6 +629,183 @@ export function runGatewayConformance(
       await nothingArrives(runtime)
     }
   )
+}
+
+/** A gateway that relays a Thread's media (`media.ts`), as the media suite drives it. */
+export type MediaGatewayUnderTest = {
+  /**
+   * A Thread run by a runtime that enrolled at `versions` (every version this build speaks unless given), its link
+   * read past `enrolled` and `assign`, so the next frame it reads is the first about media.
+   */
+  thread(versions?: VersionRange): Promise<{ threadId: string; runtime: RuntimeLink }>
+  /** A client admitted to every Thread `thread` makes. */
+  client(): Promise<ClientSession>
+  close(): Promise<void>
+}
+
+/**
+ * What every gateway owes a Thread's live media: the client's request and the runtime's bytes cross unread, the
+ * viewer's acknowledgements reach the runtime, nothing of it enters the Thread's stream, and each side hears when
+ * the other ends it. Each case gets a fresh gateway from `makeGateway`.
+ */
+export function runMediaConformance(
+  makeGateway: () => Promise<MediaGatewayUnderTest>,
+  test: ConformanceTest,
+  options: { deadlineMs?: number } = {}
+): void {
+  const deadlineMs = options.deadlineMs ?? 5_000
+  const scenario = (name: string, body: (gateway: MediaGatewayUnderTest) => Promise<void>) =>
+    test(name, async () => {
+      const gateway = await makeGateway()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`no outcome within ${deadlineMs} ms; a frame or message never came`)), deadlineMs)
+      })
+      try {
+        await Promise.race([body(gateway), deadline])
+      } finally {
+        clearTimeout(timer)
+        await gateway.close()
+      }
+    })
+  const streamName = () => `s-${crypto.randomUUID()}`
+  const watched = async (runtime: RuntimeLink, threadId: string, stream: string) => {
+    const frame = expect(await runtime.next(), "media-watch")
+    assert.deepEqual({ type: frame.type, threadId: frame.threadId, stream: frame.stream }, { type: "media-watch", threadId, stream })
+    return frame.request
+  }
+  const data = async (watch: MediaWatch) => {
+    const delivery = await watch.next()
+    if (delivery.kind !== "data") assert.fail(`expected data, got ${JSON.stringify(delivery)}`)
+    return delivery.data
+  }
+  const ended = async (watch: MediaWatch) => {
+    const delivery = await watch.next()
+    if (delivery.kind !== "ended") assert.fail(`expected the end, got ${delivery.data.byteLength} bytes`)
+    return delivery.problem
+  }
+
+  scenario(
+    "a watch's request reaches the runtime unread, its messages reach the viewer byte for byte, and the viewer's acknowledgements reach the runtime",
+    async (gateway) => {
+      const { threadId, runtime } = await gateway.thread()
+      const client = await gateway.client()
+      const stream = streamName()
+      // Spacing and key order a re-encoding would lose.
+      const request = Payload.encoded('{"z": 1,  "a": [true]}')
+      const watch = client.watch({ threadId, stream, request })
+      assert.equal((await watched(runtime, threadId, stream)).text, request.text)
+      const bytes = [Uint8Array.of(0, 255, 10, 13, 0x7b), new Uint8Array(200_000).map((_, index) => index % 251)]
+      for (const each of bytes) runtime.sendMedia(encodeMediaMessage(stream, each))
+      for (const each of bytes) assert.deepEqual(await data(watch), each)
+      watch.ack(bytes[0]!.byteLength + bytes[1]!.byteLength)
+      assert.deepEqual(await runtime.next(), { type: "media-ack", stream, received: 200_005 })
+      watch.close()
+    }
+  )
+
+  scenario("a viewer changing its request reaches the runtime as a watch of the same stream", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread()
+    const client = await gateway.client()
+    const stream = streamName()
+    const watch = client.watch({ threadId, stream, request: Payload.of({ width: 640 }) })
+    await watched(runtime, threadId, stream)
+    watch.update(Payload.of({ width: 1280 }))
+    assert.deepEqual((await watched(runtime, threadId, stream)).decode(), { width: 1280 })
+    watch.close()
+  })
+
+  scenario("a viewer that stops watching tells the runtime, and media still on its way after is dropped", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread()
+    const client = await gateway.client()
+    const stream = streamName()
+    const watch = client.watch({ threadId, stream, request: Payload.of({}) })
+    await watched(runtime, threadId, stream)
+    watch.close()
+    assert.deepEqual(await runtime.next(), { type: "media-unwatch", stream })
+    runtime.sendMedia(encodeMediaMessage(stream, Uint8Array.of(1)))
+    assert.deepEqual(await runtime.next(), { type: "media-unwatch", stream }, "the gateway says again that nobody watches")
+  })
+
+  scenario("media nobody watches is answered with an unwatch", async (gateway) => {
+    const { runtime } = await gateway.thread()
+    const stream = streamName()
+    runtime.sendMedia(encodeMediaMessage(stream, Uint8Array.of(1, 2, 3)))
+    assert.deepEqual(await runtime.next(), { type: "media-unwatch", stream })
+  })
+
+  scenario("media never enters the Thread's stream", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread()
+    const client = await gateway.client()
+    const events = client.subscribe({ stream: threadStream(threadId), after: 0 })
+    const before = await drain(events)
+    const stream = streamName()
+    const watch = client.watch({ threadId, stream, request: Payload.of({}) })
+    await watched(runtime, threadId, stream)
+    for (let index = 0; index < 5; index++) runtime.sendMedia(encodeMediaMessage(stream, Uint8Array.of(index)))
+    for (let index = 0; index < 5; index++) await data(watch)
+    watch.ack(5)
+    expect(await runtime.next(), "media-ack")
+    watch.close()
+    expect(await runtime.next(), "media-unwatch")
+    assert.deepEqual(await drain(events), [], `nothing was recorded after the ${before.length} events already there`)
+    events.close()
+  })
+
+  scenario("a runtime ending a stream ends it for its viewer, with its reason", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread()
+    const client = await gateway.client()
+    const stream = streamName()
+    const watch = client.watch({ threadId, stream, request: Payload.of({}) })
+    await watched(runtime, threadId, stream)
+    const reason = problem("failed", "The tab closed", crypto.randomUUID(), "not-applied")
+    runtime.send({ type: "media-end", stream, problem: reason })
+    assert.deepEqual(await ended(watch), reason)
+    await assert.rejects(watch.next(), LinkClosedError)
+  })
+
+  scenario("a viewer's stream ends when its runtime's link closes", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread()
+    const client = await gateway.client()
+    const stream = streamName()
+    const watch = client.watch({ threadId, stream, request: Payload.of({}) })
+    await watched(runtime, threadId, stream)
+    runtime.close()
+    const reason = await ended(watch)
+    assert.equal(reason && problemType(reason), "unavailable")
+  })
+
+  scenario("a Thread whose runtime isn't connected can't be watched", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread()
+    const client = await gateway.client()
+    runtime.close()
+    // Whether the gateway has heard of the close yet or ends the watch when it does, the answer is the same.
+    const watch = client.watch({ threadId, stream: streamName(), request: Payload.of({}) })
+    const reason = await ended(watch)
+    assert.equal(reason && problemType(reason), "unavailable")
+  })
+
+  scenario("a runtime that agreed a version before media is never asked for it", async (gateway) => {
+    const { threadId, runtime } = await gateway.thread({ min: 1, max: MEDIA_VERSION - 1 })
+    const client = await gateway.client()
+    const watch = client.watch({ threadId, stream: streamName(), request: Payload.of({}) })
+    const reason = await ended(watch)
+    assert.equal(reason && problemType(reason), "unsupported-version")
+    await nothingArrives(runtime)
+  })
+}
+
+/** Every event that arrives within a short wait. */
+async function drain(events: { next(timeoutMs?: number): Promise<EventFrame> }): Promise<EventFrame[]> {
+  const seen: EventFrame[] = []
+  for (;;) {
+    try {
+      seen.push(await events.next(200))
+    } catch (error) {
+      if (error instanceof Error && /nothing arrived/.test(error.message)) return seen
+      throw error
+    }
+  }
 }
 
 async function enroll(

@@ -1,5 +1,6 @@
 import { NativeControlPreview } from "./native-control-preview"
 import { ControlPreviewImage } from "./control-preview-image"
+import { RemoteControlPreview } from "./remote-control-preview"
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { GlobeIcon, Minimize2Icon, MonitorIcon, XIcon } from "lucide-react"
 import {
@@ -158,21 +159,27 @@ function PreviewCard({
   const frame = preview?.frame
   const activity = preview?.activity
   const nativeWindow = preview?.window
+  const video = preview?.video === true
   // A failed read is news only over a picture; alone it would flash a card in
   // every finished task the host is slow to answer for.
-  if (!frame && !nativeWindow) return null
+  if (!frame && !nativeWindow && !video) return null
   const surface = activity?.kind === "browser" ? "Browser" : "Computer"
-  const working = activity?.status === "running"
-  const label = activity
-    ? `${surface} · ${activity.operation.replaceAll("_", " ")}${working ? " · working" : ""}`
-    : surface
-  const media = zoomed
-    ? "block h-auto max-h-[100cqh] w-full object-contain"
-    : "block max-h-64 w-full object-contain"
+  const paused = preview?.paused === true
+  const working = !paused && activity?.status === "running"
+  const label = paused
+    ? `${surface} · last view, not live`
+    : activity
+      ? `${surface} · ${activity.operation.replaceAll("_", " ")}${working ? " · working" : ""}`
+      : surface
+  const media = cn(
+    zoomed ? "block h-auto max-h-[100cqh] w-full object-contain" : "block max-h-64 w-full object-contain",
+    "transition-[filter,opacity] duration-300 ease-out motion-reduce:transition-none",
+    paused && "opacity-80 saturate-[.35]"
+  )
   return (
     <section
       ref={card}
-      aria-label="Live control preview"
+      aria-label={paused ? "Control preview, last view" : "Live control preview"}
       className={cn(
         "control-preview-card glass-panel pointer-events-auto relative overflow-hidden text-popover-foreground",
         zoomed ? "w-full max-w-5xl rounded-2xl" : "rounded-xl"
@@ -187,12 +194,19 @@ function PreviewCard({
             poster={frame ?? undefined}
             className={media}
           />
+        ) : video ? (
+          <RemoteControlPreview
+            id={id}
+            label={paused ? "Last view of the tab this task used" : "Live view of the tab this task is using"}
+            className={media}
+            onRate={setRate}
+          />
         ) : (
           frame && (
             <ControlPreviewImage
               key={`${id}:${activity?.kind}:${activity?.target}`}
               frame={frame}
-              label="Live view of the tab this task is using"
+              label={paused ? "Last view of the tab this task used" : "Live view of the tab this task is using"}
               className={media}
               onRate={setRate}
             />
@@ -230,7 +244,8 @@ function PreviewCard({
           {working && (
             <span className="size-1.5 shrink-0 rounded-full bg-ember" />
           )}
-          {zoomed && activity && (
+          {paused && <span className="text-label">Last view</span>}
+          {zoomed && activity && !paused && (
             <span className="text-label first-letter:uppercase">
               {activity.operation.replaceAll("_", " ")}
             </span>
@@ -257,7 +272,7 @@ function PreviewCard({
             <XIcon className="size-3.5" />
           </button>
         )}
-        {rate && !error && (
+        {rate && !error && !paused && (
           <span
             data-control-preview-rate
             title={controlPreviewRateDescription(rate)}

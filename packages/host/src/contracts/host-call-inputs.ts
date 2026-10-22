@@ -152,6 +152,12 @@ const inputs = {
     ]),
   "mako:control-preview-source": () => z.tuple([z.string()]),
   "mako:control-preview-viewers": () => z.tuple([z.string()]),
+  "mako:control-video": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z.object({ width: z.number(), height: z.number() }).optional(),
+    ]),
   "mako:copy": () => z.tuple([z.string()]),
   "mako:crashes": () => z.tuple([]),
   "mako:crashes-dir": () => z.tuple([]),
@@ -1503,6 +1509,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:control-preview", "control"],
   ["mako:control-preview-source", "control"],
   ["mako:control-preview-viewers", "control"],
+  ["mako:control-video", "conversations"],
   ["mako:crashes", "application"],
   ["mako:crashes-dir", "application"],
   ["mako:create-pull", "git"],

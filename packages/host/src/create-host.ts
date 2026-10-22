@@ -205,6 +205,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         prefetchStart: async (harness) => (await core.load("run a start ahead")).prefetchStart(harness),
         prefetchSignedIn: async (harness) => (await core.load("run a start's sign-in stage ahead")).prefetchSignedIn(harness),
         work: () => core.current()?.work() ?? [],
+        media: () => core.current()?.media,
         linked: async (link) => (await core.load("the machine's link")).machineLinked(link),
       })
     }
@@ -379,7 +380,8 @@ async function listen(config: HostConfig, methods: HostMethods, handover: Secret
     handlers.desktop,
     jobs,
     subscribed,
-    handlers.outlet
+    handlers.outlet,
+    (args, client) => methods.invokeVideo(args, client)
   )
   return {
     ...web,

@@ -253,6 +253,7 @@ try {
     let drops = 0
     const dropping: ClientSession = {
       subscribe: (request) => session.subscribe(request),
+      watch: (request) => session.watch(request),
       call: (operation) => drops-- > 0 ? Promise.reject(new Error("The link to the gateway closed")) : session.call(operation),
     }
     const overDropping = gatewayHostCalls(dropping, { runtimeId: "laptop", actor: desktop })

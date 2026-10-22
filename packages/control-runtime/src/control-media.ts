@@ -17,8 +17,24 @@ export function recordingVideoEncoding(platform = nodePlatform()) {
     : {
         codec: "libx264" as const,
         hardwareRequired: false,
-        args: ["-c:v", "libx264", "-preset", "fast", "-crf", "18"],
+        // A recording is written live: lookahead and frame threads would hold
+        // about 47 frames, which at one frame a second keeps the file and any
+        // crash-recovered prefix most of a minute behind.
+        args: ["-c:v", "libx264", "-preset", "fast", "-tune", "zerolatency", "-crf", "18"],
       }
+}
+
+/** Live video for a remote viewer, at the size the viewers draw. Nothing may
+ * hold a frame: no B-frames, no lookahead, no frame threads (`zerolatency`).
+ * The transport is reliable, so key frames come only when a viewer needs one
+ * (the caller restarts the encoder) and quality is capped by bitrate. */
+export function liveVideoEncoding(size: { width: number; height: number }, fps: number) {
+  const bitrate = Math.round(Math.min(8_000_000, Math.max(400_000, size.width * size.height * fps * 0.08)))
+  return [
+    "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
+    "-pix_fmt", "yuv420p", "-x264-params", "keyint=infinite",
+    "-crf", "23", "-maxrate", String(bitrate), "-bufsize", String(bitrate),
+  ]
 }
 
 /** Packaged recording always uses its reviewed binary, independent of shell PATH. */

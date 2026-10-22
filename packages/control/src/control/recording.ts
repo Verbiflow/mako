@@ -10,8 +10,14 @@ export const RecordingOptionsSchema = z
     maxDurationMs: z.number().int().min(1000).max(600_000).default(120_000),
     maxSide: z.number().int().min(320).max(2560).default(1920),
     fps: z.number().int().min(1).max(60).optional(),
+    /** `trim` plays any still stretch longer than a second for one second;
+     * the timeline keeps wall-clock times and every cut. `keep` plays the
+     * recording in real time. */
+    idle: z.enum(["trim", "keep"]).default("trim"),
   })
   .strict()
+/** How long a still stretch plays once idle time is trimmed. */
+export const RECORDING_IDLE_HOLD_MS = 1000
 export type RecordingOptions = z.input<typeof RecordingOptionsSchema>
 export const RecordingReceiptSchema = z.object({
   id: z.string().min(1),
@@ -32,6 +38,8 @@ export const RecordingReceiptSchema = z.object({
   /** Retained video, which may be shorter than capture after interruption. */
   encodedFrames: z.number().int().nonnegative().optional(),
   encodedDurationMs: z.number().nonnegative().optional(),
+  /** Still time cut from the video; durationMs stays wall-clock. */
+  idleTrimmedMs: z.number().nonnegative().optional(),
   /** Timestamped browser encoding: encoded FPS is not distinct visual FPS.
    * Unchanged slots save work; skipped slots report scheduling/backpressure loss.
    * droppedFrames separately counts source images evicted by queue limits. */

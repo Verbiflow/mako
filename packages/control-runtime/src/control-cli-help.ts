@@ -115,16 +115,17 @@ export const controlCommands = new Map<string, CommandHelp>(
     },
     expect: {
       summary:
-        "Wait until an exact element shows the expected value, states or absence.",
+        "Wait until an element exists or is gone, or shows the expected value or states.",
       usage:
-        "expect --target-file FILE|- --input FILE|- [--role ROLE --name NAME]",
+        "expect --target-file FILE|- [--input FILE|-] [--role ROLE [--name NAME]]",
       flags: ["target-file", "input", "role", "name"],
       output:
         "JSON {status:'matched',evidence,coverage}. If the expectation is not met before timeoutMs (default 5000), it exits 5 with code assertion-failed and the last observation. Never dispatches input.",
       notes:
-        "Input: {role,name,within?,value?,states?,absent?,timeoutMs?,everyMs?}; --role/--name set role and name. Value equality is exact. absent:true needs complete coverage.",
+        "Input: {role,name?,within?,value?,states?,absent?,timeoutMs?,everyMs?}; --role/--name set role and name. A role alone waits for one to exist (with absent:true, for none); a value or states need exactly one match. states is {disabled:true} or [\"disabled\"]. Value equality is exact. absent:true needs complete coverage.",
       examples: [
         `printf '%s' '{"role":"textbox","name":"Name","within":[{"role":"form","name":"Shipping"}],"value":"Ada"}' | mako-control expect --target-file target.json --input -`,
+        "mako-control expect --target-file target.json --role dialog",
       ],
     },
     close: {
@@ -181,7 +182,7 @@ export const controlCommands = new Map<string, CommandHelp>(
       output:
         "JSON recording receipt with id and target. Save it to stop/status later; command exit does not stop recording. Its timeline is timeline.jsonl, a journal appended during capture; the finished receipt names timeline.json instead.",
       notes:
-        "--input accepts {options:{cursor,maxDurationMs,...}}. Rates depend on the backend; unsupported requests refuse. Requested/output fps does not establish distinct source fps. The receipt’s frames field counts source frames or retained samples, not encoded constant-rate frames; the encoder may duplicate frames.",
+        "--input accepts {options:{cursor,idle,maxDurationMs,...}}. Still stretches over a second play for about one second unless idle is \"keep\"; the timeline lists every cut. Rates depend on the backend; unsupported requests refuse. Requested/output fps does not establish distinct source fps. The receipt’s frames field counts source frames or retained samples, not encoded constant-rate frames; the encoder may duplicate frames.",
       examples: [
         "mako-control record start --target-file target.json --directory ./recordings > recording.json",
       ],

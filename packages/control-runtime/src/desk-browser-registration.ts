@@ -19,6 +19,9 @@ import {
   registeredProcessIsCurrentAsync,
 } from "./process-registration.js"
 
+/** A desk's CDP error for a URL outside its origin; the browser service answers it with a call that opens the URL elsewhere. */
+export const DESK_OUTSIDE_ORIGIN = "A Mako desk opens only its own origin; open other sites in Chrome."
+
 const MAX_REGISTRATION_BYTES = 8_192
 const DeskBrowserRegistrationSchema = z
   .object({

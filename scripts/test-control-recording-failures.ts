@@ -295,8 +295,9 @@ exec ${quote(ffmpeg)} "$@"
     assert.ok(backlogResult.frameRate!.skippedFrameSlots > 60,
       "The reduced temporal sampling must be reported")
     assert.ok(backlogResult.frameRate!.encodedFps < 40)
-    assert.ok(Math.abs(backlogResult.encodedDurationMs! - backlogResult.durationMs) < 18,
-      "Backpressure must not speed up or shorten the recording")
+    assert.ok(backlogResult.idleTrimmedMs! > 300, "The opening still second is trimmed")
+    assert.ok(Math.abs(backlogResult.encodedDurationMs! - (backlogResult.durationMs - backlogResult.idleTrimmedMs!)) < 18,
+      "Backpressure must not speed up or shorten the recording beyond its idle cuts")
     assert.ok(
       backlogResult.video,
       "The entire recording survives source overflow"

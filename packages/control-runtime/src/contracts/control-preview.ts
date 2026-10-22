@@ -47,5 +47,9 @@ export const ControlPreviewSchema = z.object({
   activity: ControlActivitySchema,
   window: AppshotTargetSchema.optional(),
   frame: ControlPreviewFrameSchema.nullable(),
+  /** No turn is driving the target: `frame` is the last one and nothing streams until the agent acts again. */
+  paused: z.boolean().optional(),
+  /** The picture comes as live video (`mako:control-video`) rather than as `frame`: a cloud machine's tab. */
+  video: z.literal(true).optional(),
 })
 export type ControlPreview = z.infer<typeof ControlPreviewSchema>
