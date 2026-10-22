@@ -378,7 +378,15 @@ export class MachineRuntime {
 
   #linkTo(link: Link): void {
     const current = this.#link
-    if (current && current.runtimeId === link.runtimeId && current.credential === link.credential && current.gatewayUrl === link.gatewayUrl && this.#cloud) return this.#cloud.wake()
+    if (current && sameRuntime(current, link) && this.#cloud) {
+      if (current.credential === link.credential) return this.#cloud.wake()
+      // The agent renewed the machine's credential: the connection goes on, and its next one, the records and the
+      // recipes use the new credential.
+      this.#link = link
+      hostLog("machine", "credential renewed", { runtimeId: link.runtimeId })
+      void this.#options.linked?.({ gatewayUrl: link.gatewayUrl, machine: link.machine, credential: link.credential }).catch((error: Error) => hostWarn("machine", "the gateway's link wasn't taken", { error: error.message }))
+      return
+    }
     this.#cloud?.stop()
     // Another runtime's events are another generation's: nothing the old one owed would be recorded.
     if (current?.runtimeId !== link.runtimeId) {
@@ -403,14 +411,15 @@ export class MachineRuntime {
       name: "machine runtime",
       url,
       token: async () => {
-        if (this.#link !== link) throw new Error("This credential was replaced")
-        return link.credential
+        const now = this.#link
+        if (!now || !sameRuntime(now, link)) throw new Error("This runtime was replaced")
+        return now.credential
       },
       refused: () => {},
       attach: (socket, end) => this.#attach(link, threads, socket, end),
       removed: () => this.#unlink("the gateway refused this runtime"),
       onState: (state) => this.#setLink(state),
-      signedIn: () => this.#link === link,
+      signedIn: () => this.#link !== undefined && sameRuntime(this.#link, link),
       log: (message, fields) => hostLog("machine", message, fields),
     })
     this.#cloud = cloud
@@ -606,4 +615,9 @@ class FileNumbers implements LocalSeqStore {
     this.#writing = write.catch(() => {})
     return write
   }
+}
+
+/** The same runtime of the same gateway: a link with another credential for it is a renewal, not another runtime. */
+function sameRuntime(left: Link, right: Link): boolean {
+  return left.runtimeId === right.runtimeId && left.gatewayUrl === right.gatewayUrl && left.machine === right.machine && left.generation === right.generation
 }
