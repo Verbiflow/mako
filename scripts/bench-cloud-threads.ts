@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
