@@ -1,3 +1,4 @@
+import type { AccountEvent } from "@mako/protocol/account-events"
 /**
  * The desktop's Mako account against a fake cloud that speaks the gateway's
  * protocol: the loopback hand-off with PKCE, the encrypted credential, token
@@ -77,7 +78,14 @@ async function fakeCloud() {
   const threads: Array<{ threadId: string; prepare?: boolean }> = []
   /** Repositories asked for project bases. */
   const bases: unknown[] = []
-  const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false, failRefreshes: 0, rotate: false }
+  const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false, failRefreshes: 0, rotate: false, failRemovals: 0 }
+  /** The account's stream: its events, numbered, and the connections following it. */
+  const accountEvents: Array<{ seq: number; at: string; text: string }> = []
+  const following = new Set<ServerSocket>()
+  /** Each subscription to the account's stream: `<stream> after <n>`. */
+  const subscribes: string[] = []
+  const eventFrame = (event: { seq: number; at: string; text: string }) =>
+    encodeGatewayClientFrame({ type: "event", event: { v: PROTOCOL_VERSION, stream: `account:${account.id}`, seq: event.seq, at: event.at, event: Payload.encoded(event.text) } })
   /** The credential each refresh came with, in order. */
   const refreshedWith: string[] = []
   const account = { id: "u1", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: ["cloud"] }
@@ -174,6 +182,10 @@ async function fakeCloud() {
     }
     const removing = /^\/v1\/devices\/([\w-]+)$/.exec(url.pathname)?.[1]
     if (request.method === "DELETE" && removing) {
+      if (options.failRemovals > 0) {
+        options.failRemovals -= 1
+        return send(503, JSON.stringify({ title: "The cloud is busy" }))
+      }
       const device = devices.get(removing)
       if (!device || device.removed) return send(404, JSON.stringify({ title: "No such device" }))
       device.removed = true
@@ -212,6 +224,12 @@ async function fakeCloud() {
         // Answered by the cloud's edge without waking anything.
         if (text === PING) return ws.send(PONG)
         const frame = decodeClientFrame(text)
+        if (frame.type === "subscribe") {
+          subscribes.push(`${frame.stream} after ${frame.after}`)
+          following.add(ws)
+          for (const event of accountEvents.filter((entry) => entry.seq > frame.after)) ws.send(eventFrame(event))
+          return
+        }
         if (frame.type !== "renew") return
         calls.push("renew")
         if (verify(frame.token)?.id === device.id) ws.send(encodeGatewayClientFrame({ type: "renewed", expiresAt: Math.floor(Date.now() / 1000) + options.tokenSeconds }))
@@ -277,6 +295,13 @@ async function fakeCloud() {
     bases,
     options,
     refreshedWith,
+    subscribes,
+    /** Records an event on the account's stream, as the account's object does, and sends it to every follower. */
+    announce(event: AccountEvent | { type: string }, at = new Date().toISOString()) {
+      const entry = { seq: accountEvents.length + 1, at, text: JSON.stringify(event) }
+      accountEvents.push(entry)
+      for (const ws of following) if (ws.readyState === ws.OPEN) ws.send(eventFrame(entry))
+    },
     stop: () => {
       server.closeAllConnections()
       server.close()
@@ -611,6 +636,72 @@ test("a sign-in the cloud saw used from somewhere else signs this Mac out, sayin
   const state = await again.until((entry) => entry.status === "signed-out", "signed out")
   assert.equal(state.status === "signed-out" && state.notice?.kind, "reused")
   assert.match(state.status === "signed-out" ? state.notice?.message ?? "" : "", /used from somewhere else/)
+})
+
+/** Waits for `check` to hold, a few ms at a time, failing with `label` after five seconds. */
+async function waitFor(check: () => boolean, label: string): Promise<void> {
+  for (const deadline = Date.now() + 5_000; !check(); await new Promise((resolve) => setTimeout(resolve, 10)))
+    if (Date.now() > deadline) throw new Error(`timed out: ${label}`)
+}
+
+test("the account's stream says when a device joins, once, and a Mac that was off hears it when it's back", async () => {
+  const cloud = await fakeCloud()
+  const secretName = "cloud/account-events"
+  const heard: Array<{ seq: number; type: string; mine: boolean }> = []
+  const first = await signedIn(cloud, { secretName, onAccountEvent: (event) => heard.push({ seq: event.seq, type: event.event.type, mine: event.mine }) })
+  const self = [...cloud.devices.values()][0]
+  assert.ok(self)
+  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 0`), "followed the account's stream from its start")
+  const joined = (id: string) => ({ type: "device-joined", device: { id, kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+  cloud.announce(joined(randomUUID()))
+  await waitFor(() => heard.length === 1, "a device that joined is said")
+  assert.deepEqual(heard[0], { seq: 1, type: "device-joined", mine: false })
+  cloud.announce({ type: "a-kind-this-build-doesnt-know" })
+  cloud.announce({ type: "device-removed", deviceId: self.id, reason: "removed", by: null }, new Date().toISOString())
+  await waitFor(() => heard.length === 2, "a removal is said, as this Mac's own")
+  assert.deepEqual(heard[1], { seq: 3, type: "device-removed", mine: true }, "an unknown kind is passed over, never refused")
+  first.accounts.close()
+
+  // While this Mac was off a device joined; another joined before this Mac did, which isn't news to it.
+  cloud.announce(joined(randomUUID()))
+  const again: typeof heard = []
+  const later = desktop({ url: cloud.url, secretName, onAccountEvent: (event) => again.push({ seq: event.seq, type: event.event.type, mine: event.mine }) })
+  await later.accounts.ready()
+  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 3`), "followed on from the last event heard")
+  await waitFor(() => again.length === 1, "what happened while it was off is said when it's back")
+  assert.equal(again[0]?.seq, 4)
+  later.accounts.close()
+  const fresh = await fakeCloud()
+  fresh.announce(joined(randomUUID()), "2020-01-01T00:00:00.000Z")
+  const seen: number[] = []
+  const newMac = await signedIn(fresh, { secretName: "cloud/account-events-new", onAccountEvent: (event) => seen.push(event.seq) })
+  await waitFor(() => fresh.subscribes.length > 0, "followed")
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.deepEqual(seen, [], "a device that joined before this Mac did isn't news to it")
+  newMac.accounts.close()
+})
+
+test("a sign-out the cloud didn't hear is kept sealed and finished, here or after a restart, never leaving a working credential", async () => {
+  const cloud = await fakeCloud()
+  const secretName = "cloud/sign-out-unfinished"
+  const mac = await signedIn(cloud, { secretName })
+  const device = [...cloud.devices.values()][0]
+  assert.ok(device)
+  // The cloud fails the removal: the sign-out is finished by the next asking, here or after a restart.
+  cloud.options.failRemovals = 1
+  const account = await mac.accounts.signOut()
+  assert.deepEqual(account.state, { status: "signed-out", finishing: true }, "signed out here at once, and said to be finishing")
+  assert.equal(device.removed, false, "the cloud hasn't heard yet")
+  assert.ok(!(await readFile(recordPath(`${secretName}.signing-out`), "utf8")).includes(device.credential), "the credential kept to finish it is sealed")
+  mac.accounts.close()
+
+  // After a restart, the sign-out is finished first: the device is removed in the cloud.
+  const again = desktop({ url: cloud.url, secretName })
+  await again.accounts.ready()
+  await waitFor(() => device.removed, "the device removed once the cloud answers")
+  assert.deepEqual(again.accounts.account().state, { status: "signed-out" }, "not said to be finishing")
+  await assert.rejects(stat(recordPath(`${secretName}.signing-out`)), "and the credential it kept is gone")
+  again.accounts.close()
 })
 
 test("signing out removes this device from the account", async () => {

@@ -13,7 +13,7 @@ export const MOCK_GITHUB_USER_ID = "583231"
  * the connection down and `cloud=connecting` still connecting. The account signed in with GitHub, as the mock's gh
  * user; `signin=google` with Google and no GitHub user, and `signin=legacy`
  * before the cloud said either. `invited` gives the account the cloud, and
- * `sharing` has this Mac already sharing its harnesses' sign-ins with it, and `kept` has the cloud keeping
+ * `sharing` has this Mac already sharing its harnesses' sign-ins with it, and `joined` has a terminal join the account a moment after the desk opens, and `kept` has the cloud keeping
  * Codex fresh, retrying Grok and needing Claude signed in again.
  */
 export function mockCloudAccount(emit: (event: HostEvent) => void) {
@@ -101,6 +101,10 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     emit({ type: "cloud-sign-ins", signIns })
     return signIns
   }
+
+  // `joined`: a terminal joins the account a moment after the desk opens, as the account's stream would say it.
+  if (params.has("joined"))
+    setTimeout(() => emit({ type: "cloud-account-event", seq: 1, at: new Date().toISOString(), mine: false, event: { type: "device-joined", device: { id: "d4f5a6b7-1c2d-4e3f-8a9b-0c1d2e3f4a5b", kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: "Hesse", country: "DE" } } } }), 1_500)
 
   return {
     cloudAccount: async () => account,

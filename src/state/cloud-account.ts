@@ -1,3 +1,6 @@
+import { toast } from "sonner"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { CloudAccount, CloudDevice, CloudSignInsState } from "@/lib/types"
@@ -101,4 +104,49 @@ export const cloudAccount = {
   dismissFailure() {
     cloudAccountStore.set({ failure: undefined })
   },
+}
+
+/** A place as the cloud read it, in words: "Frankfurt, Germany"; empty when it couldn't say. */
+function placeWords(from: { city: string | null; country: string | null } | null): string {
+  if (!from) return ""
+  let country = from.country
+  try {
+    if (country) country = new Intl.DisplayNames(undefined, { type: "region" }).of(country) ?? country
+  } catch {
+    // A code the runtime doesn't know is shown as it came.
+  }
+  return [from.city, country].filter(Boolean).join(", ")
+}
+
+type AccountEvent = Extract<HostEvent, { type: "cloud-account-event" }>["event"]
+
+const KIND_WORDS = { desktop: "A Mac", cli: "A terminal", runtime: "A machine" } as const
+
+/**
+ * Something happened to the account's devices, heard as it happened or when this Mac connected again: a device that
+ * joined from elsewhere is said at once, with Remove, so a person who didn't add it can take it off in one click; one
+ * the cloud signed out because its sign-in was used elsewhere is said too. The device list follows either way.
+ */
+export function heardAccountEvent(heard: { event: AccountEvent; mine: boolean }): void {
+  const { event, mine } = heard
+  if (cloudAccountStore.get().devices) void cloudAccount.loadDevices()
+  if (mine) return
+  if (event.type === "device-joined") {
+    const { device } = event
+    const place = placeWords(device.from)
+    const how = device.enrolledBy === "browser" ? "signed in through the browser" : "with a code you approved"
+    toast(`${device.name} joined your account`, {
+      id: `device-joined:${device.id}`,
+      duration: ACTION_TOAST_MS,
+      description: `${KIND_WORDS[device.kind]} on ${device.platform}${place ? `, from ${place}` : ""}, ${how}. If it isn't yours, remove it.`,
+      action: { label: "Remove", onClick: () => void cloudAccount.removeDevice(device.id) },
+    })
+  } else if (event.reason === "credential-reused") {
+    const name = cloudAccountStore.get().devices?.list.find((device) => device.id === event.deviceId)?.name ?? "A device"
+    toast(`Mako signed out ${name}`, {
+      id: `device-reused:${event.deviceId}`,
+      duration: ACTION_TOAST_MS,
+      description: "Its sign-in was used from somewhere else. It can sign in again; check Devices for any you don't know.",
+    })
+  }
 }
