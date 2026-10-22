@@ -9,7 +9,7 @@ import { MoveCheckpointSchema } from "@mako/protocol/moves"
 import type { InstalledReading } from "@mako/sessions/record-writers"
 import type { ReceivedRecords, RecordsLink } from "@mako/sessions/record-sync"
 import { hostLog } from "../base/host-log.js"
-import { applyMoveCheckpoint } from "../workspaces/move-checkpoint.js"
+import { applyMoveCheckpoint } from "../workspaces/index.js"
 
 /**
  * A Thread arriving on a cloud machine from a device, before anything runs: its checkout applied to the machine's

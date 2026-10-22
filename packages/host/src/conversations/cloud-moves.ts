@@ -13,8 +13,8 @@ import type { EncodedValue } from "../contracts/runtime-value.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
 import { HandoffSchema, MoveIdSchema, RuntimeIdSchema, type ClaimReceipt, type ExecutionOwner, type Handoff, type MoveId, type Refusal, type RuntimeId } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "../contracts/thread-identity.js"
-import type { CloudAccount } from "../usage/cloud-account-methods.js"
-import { captureMoveCheckpoint } from "../workspaces/move-checkpoint.js"
+import type { CloudAccount } from "../usage/index.js"
+import { captureMoveCheckpoint } from "../workspaces/index.js"
 import { MoveNotQuietError } from "./live-moves.js"
 
 /**

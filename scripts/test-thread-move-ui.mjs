@@ -97,16 +97,6 @@ async function checkWindow() {
     await capture(`${name}-light`, around)
     await theme("dark")
   }
-  /** A Settings page from its top, and scrolled to its end. */
-  const settingsPage = async (name) => {
-    const scroll = (to) => evaluate(`(() => { const main = document.querySelector('[role="dialog"] main'); main.scrollTop = ${to === "end" ? "main.scrollHeight" : 0}; return true })()`)
-    await both(name, ['[role="dialog"] main > div'])
-    if (await evaluate(`(() => { const main = document.querySelector('[role="dialog"] main'); return main.scrollHeight > main.clientHeight + 4 })()`)) {
-      await scroll("end")
-      await both(`${name}-end`, ['[role="dialog"] main > div'])
-      await scroll("top")
-    }
-  }
   const until = async (code, label = code) => {
     const deadline = Date.now() + 30_000
     while (!(await evaluate(code))) {
@@ -126,11 +116,6 @@ async function checkWindow() {
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button, clickCount: 1, ...at })
   }
   const click = (selector) => press(selector, "left")
-  const rightClick = (selector) => press(selector, "right")
-  const escape = async () => {
-    await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
-    await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
-  }
   const type = (text) => page.debugger.sendCommand("Input.insertText", { text })
   const enter = async () => {
     await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, text: "\r" })
