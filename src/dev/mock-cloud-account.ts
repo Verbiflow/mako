@@ -9,7 +9,7 @@ export const MOCK_GITHUB_USER_ID = "583231"
  * The Mako account without a cloud: signing in "finishes in the browser"
  * after a moment, and the other devices can be removed, so every state of
  * Settings › Account can be looked at in `?mock`. `?mock&cloud=signed-in`
- * starts signed in, `cloud=removed` as just removed, `cloud=offline` with
+ * starts signed in, `cloud=removed` as just removed, `cloud=reused` as signed out for a sign-in used elsewhere, `cloud=offline` with
  * the connection down and `cloud=connecting` still connecting. The account signed in with GitHub, as the mock's gh
  * user; `signin=google` with Google and no GitHub user, and `signin=legacy`
  * before the cloud said either. `invited` gives the account the cloud, and
@@ -32,12 +32,13 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     platform: "macOS 26.0",
     appVersion: "0.4.0",
     enrolledBy: "browser",
+    enrolledFrom: { city: "San Francisco", region: "California", country: "US" },
     createdAt: minutesAgo(60 * 24 * 9),
     lastSeenAt: minutesAgo(1),
   }
   let others: CloudDevice[] = [
     { ...thisMac, id: "d2", name: "Studio", platform: "macOS 15.5", appVersion: "0.3.9", lastSeenAt: minutesAgo(60 * 5) },
-    { ...thisMac, id: "d3", kind: "cli", name: "build-box", platform: "Linux", appVersion: null, enrolledBy: "device-code", lastSeenAt: minutesAgo(60 * 24 * 12) },
+    { ...thisMac, id: "d3", kind: "cli", name: "build-box", platform: "Linux", appVersion: null, enrolledBy: "device-code", enrolledFrom: { city: "Frankfurt", region: "Hesse", country: "DE" }, createdAt: minutesAgo(60 * 24 * 40), lastSeenAt: minutesAgo(60 * 24 * 12) },
   ]
   const start = params.get("cloud")
   let account: CloudAccount = {
@@ -47,6 +48,8 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
         ? { status: "signed-in", account: person, device: thisMac, connection: start === "signed-in" ? "connected" : start, kept: "keychain" }
         : start === "removed"
           ? { status: "signed-out", notice: { kind: "removed", message: "This Mac was removed from your Mako account. Sign in to connect it again." } }
+          : start === "reused"
+            ? { status: "signed-out", notice: { kind: "reused", message: "This Mac's sign-in was used from somewhere else, so Mako signed it out to keep your account safe. Sign in again, then check Devices for any you don't know." } }
           : { status: "signed-out" },
   }
   let finishing: ReturnType<typeof setTimeout> | undefined

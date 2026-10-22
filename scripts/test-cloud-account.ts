@@ -63,7 +63,7 @@ const vault = join(scratch, "secrets")
 const secrets = (keychain = encryption) => fileSecrets(vault, aesSealer(wrappedKey(join(vault, "data-key"), keychain)))
 const recordPath = (name: string) => join(vault, "mako-sign-in", ...`${name}.json`.split("/"))
 
-type FakeDevice = CloudDevice & { credential: string; removed: boolean }
+type FakeDevice = CloudDevice & { credential: string; removed: boolean; successor?: string | undefined; retired: string[] }
 
 /** The gateway's identity API, in memory. */
 async function fakeCloud() {
@@ -77,7 +77,9 @@ async function fakeCloud() {
   const threads: Array<{ threadId: string; prepare?: boolean }> = []
   /** Repositories asked for project bases. */
   const bases: unknown[] = []
-  const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false, failRefreshes: 0 }
+  const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false, failRefreshes: 0, rotate: false }
+  /** The credential each refresh came with, in order. */
+  const refreshedWith: string[] = []
   const account = { id: "u1", name: "Ada Lovelace", email: "ada@example.com", image: null, entitlements: ["cloud"] }
   /** The gateway a runtime's link reaches: the protocol's fake, which answers renewals with the same check. */
   const gateway = createFakeGateway({ renew: (value) => (verify(value) ? Math.floor(Date.now() / 1000) + options.tokenSeconds : undefined) })
@@ -93,7 +95,7 @@ async function fakeCloud() {
     const device = claims && devices.get(claims.did)
     return device && !device.removed && !options.refuseTokens ? device : undefined
   }
-  const publicDevice = ({ credential: _credential, removed: _removed, ...device }: FakeDevice): CloudDevice => device
+  const publicDevice = ({ credential: _credential, removed: _removed, successor: _successor, retired: _retired, ...device }: FakeDevice): CloudDevice => device
   const json = async (request: IncomingMessage) => {
     let text = ""
     for await (const chunk of request) text += chunk
@@ -121,6 +123,7 @@ async function fakeCloud() {
         createdAt: new Date().toISOString(),
         lastSeenAt: new Date().toISOString(),
         credential: `mako_dc_${"a".repeat(30)}${randomUUID().replaceAll("-", "").slice(0, 13)}`,
+        retired: [],
         removed: false,
       }
       devices.set(device.id, device)
@@ -131,9 +134,26 @@ async function fakeCloud() {
         options.failRefreshes -= 1
         return send(503, JSON.stringify({ title: "The cloud is busy" }))
       }
+      refreshedWith.push(bearer ?? "")
+      // As the gateway rotates: a successor offered while rotation is due, the old one working until it's used.
+      const successor = [...devices.values()].find((entry) => entry.successor === bearer && !entry.removed)
+      if (successor) {
+        successor.retired.push(successor.credential)
+        successor.credential = successor.successor ?? ""
+        successor.successor = undefined
+        options.rotate = false
+      }
+      const reused = [...devices.values()].find((entry) => bearer !== undefined && entry.retired.includes(bearer))
+      if (reused) {
+        reused.removed = true
+        return send(401, JSON.stringify({ title: "This device's sign-in was used somewhere else", detail: "Mako signed it out to keep your account safe. Sign in again" }))
+      }
       const device = [...devices.values()].find((entry) => entry.credential === bearer && !entry.removed)
       if (!device) return send(401, JSON.stringify({ title: "This device was removed", detail: "Sign in again to use it" }))
-      return send(200, JSON.stringify({ device: publicDevice(device), connection: token(device.id), account }))
+      const answer = { device: publicDevice(device), connection: token(device.id), account }
+      if (!options.rotate) return send(200, JSON.stringify(answer))
+      device.successor = `mako_dc_${"s".repeat(30)}${randomUUID().replaceAll("-", "").slice(0, 13)}`
+      return send(200, JSON.stringify({ ...answer, credential: device.successor }))
     }
     const caller = verify(bearer)
     if (!caller) return send(401, JSON.stringify({ title: "The connection token isn't valid here" }))
@@ -256,6 +276,7 @@ async function fakeCloud() {
     threads,
     bases,
     options,
+    refreshedWith,
     stop: () => {
       server.closeAllConnections()
       server.close()
@@ -543,6 +564,53 @@ test("a Mac removed while Mako was closed finds out on its first refresh", async
   assert.equal((await again.accounts.ready()).state.status, "signed-in", "it doesn't know yet")
   const state = await again.until((entry) => entry.status === "signed-out", "signed out on resume")
   assert.equal(state.status === "signed-out" && state.notice?.kind, "removed")
+})
+
+test("a successor credential is kept before it's used, and used from the next refresh on, across a restart", async () => {
+  const cloud = await fakeCloud()
+  const secretName = "cloud/rotate"
+  const first = await signedIn(cloud, { secretName })
+  const device = [...cloud.devices.values()][0]
+  assert.ok(device)
+  const original = device.credential
+  first.accounts.close()
+
+  // A day on, the cloud offers a successor with the next token: kept sealed, then used.
+  cloud.options.rotate = true
+  const again = desktop({ url: cloud.url, secretName })
+  await again.accounts.ready()
+  await again.until(connected, "connected from the sealed credential")
+  assert.equal(cloud.refreshedWith.at(-1), original, "the refresh that was offered one came with the old credential")
+  const successor = device.successor
+  assert.ok(successor, "a successor was offered")
+  assert.ok(!(await readFile(recordPath(secretName), "utf8")).includes(successor), "kept sealed, never in the clear")
+  again.accounts.close()
+
+  // After a restart, the successor is this Mac's credential: the old one is never sent again.
+  const later = desktop({ url: cloud.url, secretName })
+  await later.accounts.ready()
+  await later.until(connected, "connected with the successor")
+  assert.equal(cloud.refreshedWith.at(-1), successor)
+  assert.equal(device.credential, successor, "the cloud took the successor as the device's own")
+  assert.ok(!cloud.refreshedWith.slice(cloud.refreshedWith.indexOf(successor)).includes(original), "the retired credential is never used again")
+  later.accounts.close()
+})
+
+test("a sign-in the cloud saw used from somewhere else signs this Mac out, saying so", async () => {
+  const cloud = await fakeCloud()
+  const secretName = "cloud/reused"
+  const mac = await signedIn(cloud, { secretName })
+  mac.accounts.close()
+  const device = [...cloud.devices.values()][0]
+  assert.ok(device)
+  // Someone else's copy took over first: the credential this Mac holds is retired.
+  device.retired.push(device.credential)
+  device.credential = `mako_dc_${"t".repeat(43)}`
+  const again = desktop({ url: cloud.url, secretName })
+  await again.accounts.ready()
+  const state = await again.until((entry) => entry.status === "signed-out", "signed out")
+  assert.equal(state.status === "signed-out" && state.notice?.kind, "reused")
+  assert.match(state.status === "signed-out" ? state.notice?.message ?? "" : "", /used from somewhere else/)
 })
 
 test("signing out removes this device from the account", async () => {

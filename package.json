@@ -107,6 +107,7 @@
     "harness:descriptors": "tsx scripts/harness-descriptors.ts",
     "harness:catalogs": "tsx scripts/record-model-catalogs.ts",
     "test:cloud-account": "tsx scripts/test-cloud-account.ts",
+    "test:account-devices-ui": "node scripts/test-account-devices-ui.mjs",
     "test:machine-runtime": "tsx scripts/test-machine-runtime.ts",
     "test:client": "npm run -s build --workspace @mako/client && node packages/client/test/client.mjs && tsx scripts/test-mako-client.ts",
     "test:cloud-conversations": "tsx scripts/test-cloud-conversations.ts && tsx scripts/test-cloud-previews.ts",
