@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
 import { mkdir, rm, writeFile } from "node:fs/promises"

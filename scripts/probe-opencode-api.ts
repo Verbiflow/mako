@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 /**
  * The OpenCode requests Mako sends that `harness:decode-pairs` doesn't, run
  * through Mako's own client against one OpenCode executable in a sealed home:

@@ -3,11 +3,18 @@ import { acp } from "@/state/acp"
 import { acpStore, activeLiveAcp } from "@/state/acp-state"
 import { draftText, rememberDraft } from "@/state/drafts"
 import { useBranchPull } from "@/state/github"
-import { useSession } from "@/state/session"
+import { store as sessionStore, useSession } from "@/state/session"
 import { openSessionDraft, sessionDraftKey, threadGroupsStore } from "@/state/thread-groups"
 import { newSessionInThread } from "@/state/thread-sessions"
 import { useWorktrees, useWorktreeSummaries, worktreeAt } from "@/state/worktrees"
-import { gitActionPrompt, gitCommands, pullSetupReason, type GitAction, type GitCommand } from "@mako/host/contracts/git-actions"
+import { gitActionPrompt, gitCommands, gitRepositoryName, pullSetupReason, type GitAction, type GitCommand } from "@mako/host/contracts/git-actions"
+
+/** In a project folder of several repositories, the action names the one the Git panel shows; worktree_update acts on all of them. */
+function forShownRepository(action: GitAction): GitAction {
+  if (action.kind === "update" || action.repository) return action
+  const repository = gitRepositoryName(sessionStore.get().git)
+  return repository ? { ...action, repository } : action
+}
 
 /**
  * Put a message in the composer that asks the Thread's agent to take a Git
@@ -15,10 +22,11 @@ import { gitActionPrompt, gitCommands, pullSetupReason, type GitAction, type Git
  * sent until the person sends it.
  */
 export function stageGitAction(action: GitAction, files: AttachmentInput[] = []): void {
+  const named = forShownRepository(action)
   window.dispatchEvent(new CustomEvent("mako:attach", {
     detail: {
       files,
-      text: (references: string) => gitActionPrompt(action.kind === "resolve" ? { ...action, reference: references || undefined } : action),
+      text: (references: string) => gitActionPrompt(named.kind === "resolve" ? { ...named, reference: references || undefined } : named),
     },
   }))
 }
@@ -33,7 +41,7 @@ export type GitHandoff = "here" | "new"
  * the tab picks, as a plan builds in a new session.
  */
 export async function handGitAction(action: GitAction, where: GitHandoff): Promise<void> {
-  const prompt = gitActionPrompt(action)
+  const prompt = gitActionPrompt(forShownRepository(action))
   if (where === "new") {
     if (!newSessionInThread()) throw new Error("This conversation isn't in a Thread, so there's no Thread to add a session to.")
     const key = sessionDraftKey(openSessionDraft(threadGroupsStore.get()))
@@ -55,6 +63,7 @@ export function useGitCommands(): GitCommand[] {
   const operation = useSession((state) => state.git?.operation)
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, root)?.worktree)
   const summary = useWorktreeSummaries((state) => (worktree ? state.byPath[worktree.path] : undefined))
+  const repository = useSession((state) => gitRepositoryName(state.git))
   const branchPull = useBranchPull()
   if (!root) return []
   const pull = branchPull?.pull?.state === "open" && branchPull.pull.head === branch ? branchPull.pull : null
@@ -65,5 +74,6 @@ export function useGitCommands(): GitCommand[] {
     operation,
     worktree: worktree ? { into: summary?.into ?? null, behind: summary?.behind ?? null } : undefined,
     pull: pull && { number: pull.number, failing: pull.checks.filter((check) => check.state === "failed").map((check) => check.name) },
+    repository,
   })
 }

@@ -1,4 +1,4 @@
-import type { CheckSummary, GitHubStatus, PullRequest } from "./git-workspace-search.js"
+import type { CheckSummary, GitHubStatus, GitStatus, PullRequest } from "./git-workspace-search.js"
 
 /*
  * Git actions that a person takes with a button, an agent takes with a `mako`
@@ -81,26 +81,46 @@ function listed(names: readonly string[], more: string): string {
   return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names.join("")
 }
 
-/** A message staged in the composer that asks the Thread's agent to take a Git action, with the tool it uses. */
+/**
+ * The repository the Git panel shows, by the name the agent's
+ * `pull_request_*` tools take (its folder in the project), when the folder
+ * holds several; undefined in a single repository.
+ */
+export function gitRepositoryName(git: Pick<GitStatus, "root" | "repositories"> | undefined): string | undefined {
+  if (!git?.root || !git.repositories || git.repositories.length < 2) return undefined
+  return git.repositories.find((repository) => repository.root === git.root)?.label
+}
+
+/**
+ * A message staged in the composer that asks the Thread's agent to take a Git
+ * action, with the tool it uses. `repository` names one repository of a
+ * project folder that holds several, by its folder there, as the
+ * `pull_request_*` tools take it; worktree_update acts on all of them.
+ */
 export type GitAction =
-  | { kind: "pr"; branch: string; base?: string; draft?: boolean }
-  | { kind: "push"; number: number }
+  | { kind: "pr"; branch: string; base?: string; draft?: boolean; repository?: string }
+  | { kind: "push"; number: number; repository?: string }
   | { kind: "update"; branch: string; from: string }
-  | { kind: "resolve"; branch: string; from: string; files: readonly string[]; reference?: string }
-  | { kind: "fix-checks"; number: number; failing: readonly string[] }
+  | { kind: "resolve"; branch: string; from: string; files: readonly string[]; reference?: string; repository?: string }
+  | { kind: "fix-checks"; number: number; failing: readonly string[]; repository?: string }
 
 export function gitActionPrompt(action: GitAction): string {
+  const repository = "repository" in action ? action.repository : undefined
+  const inRepository = repository ? ` in \`${repository}\`` : ""
+  const withRepository = repository ? ` with repository \`${repository}\`` : ""
   switch (action.kind) {
-    case "pr":
-      return `Open a pull request for \`${action.branch}\`${action.base ? ` into \`${action.base}\`` : ""}${action.draft ? " as a draft" : ""}. Call pull_request_status for the base, the commits it would carry and the repository's template, and commit anything that belongs in it. Then write the title and body from what this branch does and why, and open it with pull_request_open${action.base ? ` with base \`${action.base}\`` : ""}${action.draft ? " and draft: true" : ""}. Reply with its link.`
+    case "pr": {
+      const passed = [repository && `repository \`${repository}\``, action.base && `base \`${action.base}\``, action.draft && "draft: true"].filter((part): part is string => Boolean(part))
+      return `Open a pull request for \`${action.branch}\`${inRepository}${action.base ? ` into \`${action.base}\`` : ""}${action.draft ? " as a draft" : ""}. Call pull_request_status${withRepository} for the base, the commits it would carry and the repository's template, and commit anything that belongs in it. Then write the title and body from what this branch does and why, and open it with pull_request_open${passed.length ? ` with ${listed(passed, "more")}` : ""}. Reply with its link.`
+    }
     case "push":
-      return `Bring #${action.number} up to date: commit what belongs in it, then call pull_request_open to push. If its title or body no longer says what the branch does, pass new ones.`
+      return `Bring #${action.number}${inRepository} up to date: commit what belongs in it, then call pull_request_open${withRepository} to push. If its title or body no longer says what the branch does, pass new ones.`
     case "update":
       return `Update \`${action.branch}\` from \`${action.from}\` with worktree_update. If it stops on conflicts, resolve each one keeping what both sides meant, stage the files, finish with \`git merge --continue\`, then run the checks.`
     case "resolve":
-      return `Merging ${action.from} into ${action.branch} stopped on conflicts in ${listed(action.files, "more file")}.${action.reference ? ` ${action.reference} has what Git reported.` : ""} Resolve each one keeping what both sides meant, stage the files, and finish with \`git merge --continue\`.`
+      return `Merging ${action.from} into ${action.branch}${inRepository} stopped on conflicts in ${listed(action.files, "more file")}.${action.reference ? ` ${action.reference} has what Git reported.` : ""} Resolve each one keeping what both sides meant, stage the files, and finish with \`git merge --continue\`${repository ? " in that repository's folder" : ""}.`
     case "fix-checks":
-      return `${action.failing.length ? `${listed(action.failing, "more check")} ${action.failing.length === 1 ? "is" : "are"} failing` : "Checks are failing"} on #${action.number}. Call pull_request_status with logs: true to read why, fix the cause here, run the same check locally when you can, commit, and push with pull_request_open.`
+      return `${action.failing.length ? `${listed(action.failing, "more check")} ${action.failing.length === 1 ? "is" : "are"} failing` : "Checks are failing"} on #${action.number}${inRepository}. Call pull_request_status with logs: true${repository ? ` and repository \`${repository}\`` : ""} to read why, fix the cause here, run the same check locally when you can, commit, and push with pull_request_open${withRepository}.`
   }
 }
 
@@ -121,6 +141,8 @@ export interface GitCommandFacts {
   }
   /** The branch's open pull request. */
   pull?: { number: number; failing: readonly string[] } | null
+  /** In a project folder holding several repositories, the one shown, as the `pull_request_*` tools take it. */
+  repository?: string
 }
 
 export type GitCommandName = "pr" | "update" | "fix-checks"
@@ -137,15 +159,16 @@ export interface GitCommand {
 
 /** Mako's Git commands for the slash menu, each with what it does here or why it can't. */
 export function gitCommands(facts: GitCommandFacts): GitCommand[] {
-  const { branch, worktree, pull } = facts
+  const { branch, worktree, pull, repository } = facts
+  const inRepository = repository ? ` in ${repository}` : ""
   const pr = ((): GitCommand => {
     if (facts.github === undefined) return { name: "pr", hint: "Open a pull request", blocked: "Checking GitHub…" }
     if (facts.github) return { name: "pr", hint: "Open a pull request", blocked: facts.github }
     if (!branch) return { name: "pr", hint: "Open a pull request", blocked: "Check out a branch first." }
-    if (pull) return { name: "pr", hint: `Push new commits to #${pull.number}`, prompt: gitActionPrompt({ kind: "push", number: pull.number }) }
+    if (pull) return { name: "pr", hint: `Push new commits to #${pull.number}${inRepository}`, prompt: gitActionPrompt({ kind: "push", number: pull.number, repository }) }
     if (!worktree && branch === facts.defaultBranch)
       return { name: "pr", hint: "Open a pull request", blocked: `Pull requests come from a branch other than ${branch}. Start this work on its own branch first.` }
-    return { name: "pr", hint: `Open a pull request for ${branch}`, prompt: gitActionPrompt({ kind: "pr", branch }) }
+    return { name: "pr", hint: `Open a pull request for ${branch}${inRepository}`, prompt: gitActionPrompt({ kind: "pr", branch, repository }) }
   })()
   const update = ((): GitCommand => {
     const hint = `Merge ${worktree?.behind?.from ?? "main"}'s new commits into this branch`
@@ -160,7 +183,7 @@ export function gitCommands(facts: GitCommandFacts): GitCommand[] {
     const hint = "Read why checks fail, fix and push"
     if (!pull) return { name: "fix-checks", hint, blocked: "Open a pull request first; its checks run on GitHub." }
     if (!pull.failing.length) return { name: "fix-checks", hint, blocked: `No checks are failing on #${pull.number}.` }
-    return { name: "fix-checks", hint: `${listed(pull.failing, "more check")} failing on #${pull.number}`, prompt: gitActionPrompt({ kind: "fix-checks", number: pull.number, failing: pull.failing }) }
+    return { name: "fix-checks", hint: `${listed(pull.failing, "more check")} failing on #${pull.number}${inRepository}`, prompt: gitActionPrompt({ kind: "fix-checks", number: pull.number, failing: pull.failing, repository }) }
   })()
   return [pr, update, fix]
 }
