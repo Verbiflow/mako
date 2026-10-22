@@ -247,7 +247,7 @@ export class CloudMoves {
       await this.#write(plan)
       hostLog("moves", "a Thread moved to the cloud", { move: plan.move, cloudThread: plan.cloudThread, sessions: plan.sessions.length, ...plan.timings })
     }
-    step({ kind: "moved" })
+    step({ kind: "moved", conversations: plan.sessions.map((session) => session.conversationId) })
     return { kind: "moved", cloudThread: plan.cloudThread }
   }
 

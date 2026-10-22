@@ -66,7 +66,8 @@ export type ThreadMoveStep =
   | { kind: "packing" }
   | { kind: "handing-over" }
   | { kind: "resuming" }
-  | { kind: "moved" }
+  /** Every conversation of the Thread that moved, each the cloud's now under its own id. */
+  | { kind: "moved"; conversations: string[] }
   | { kind: "kept-here"; reason: string }
   | { kind: "unsettled"; reason: string }
 
