@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { cp, mkdir, mkdtemp, readFile, rename, writeFile } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { availableParallelism, tmpdir } from "node:os"
 import { fileURLToPath } from "node:url"
@@ -84,6 +84,14 @@ await cp(join(x264Root, "COPYING"), join(staging, "COPYING.x264"))
 await cp(fileURLToPath(import.meta.url), join(staging, "build-control-media.mjs"))
 await cp(manifestPath, join(staging, "sources.json"))
 await writeFile(join(staging, "provenance.json"), JSON.stringify({ recipe: manifest.recipe, platform: process.platform, arch: process.arch, sources: manifest.sources, binaries, x264Args, ffmpegArgs }, null, 2) + "\n")
-// A build is immutable; never overwrite a reviewed binary silently.
+// A build is immutable: an earlier one is replaced only in the open, named with its recipe, and only once this one
+// is whole, so a stop at any point leaves one complete build in place.
+const earlier = await readFile(join(destination, "provenance.json"), "utf8").then((text) => JSON.parse(text), () => undefined)
+const replaced = `${destination}.replaced-${Date.now().toString(36)}`
+if (earlier !== undefined || (await readdir(destination).then(() => true, () => false))) {
+  console.log(`Replacing the recording executables built for recipe ${earlier?.recipe ?? "unknown"} with recipe ${manifest.recipe}'s`)
+  await rename(destination, replaced)
+}
 await rename(staging, destination)
+await rm(replaced, { recursive: true, force: true })
 console.log(`Built self-contained recording executables: ${destination}`)
