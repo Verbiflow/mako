@@ -63,9 +63,10 @@ async function checkWindow() {
   })
   const evaluate = (code) => page.executeJavaScript(code)
   const frames = () => evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))")
+  let showToasts = false
   const settle = async () => {
-    // The fixture desk's own toasts, such as its deliberately broken plugin, aren't what's shown here.
-    await evaluate(`(() => { if (!document.getElementById('hide-toasts')) document.head.insertAdjacentHTML('beforeend', '<style id="hide-toasts">[data-sonner-toaster]{display:none!important}</style>'); return true })()`)
+    // The fixture desk's own toasts, such as its deliberately broken plugin, aren't what's shown here, but for the one a step looks at.
+    if (!showToasts) await evaluate(`(() => { if (!document.getElementById('hide-toasts')) document.head.insertAdjacentHTML('beforeend', '<style id="hide-toasts">[data-sonner-toaster]{display:none!important}</style>'); return true })()`)
     await evaluate("document.fonts.ready.then(() => true)")
     await evaluate(`Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {}))).then(() => true)`)
     await frames()
@@ -127,7 +128,15 @@ async function checkWindow() {
   await until(`document.body.innerText.includes('used from somewhere else')`, "the reused notice")
   assert.match(await evaluate(`document.querySelector('[role="dialog"] main').innerText`), /This Mac was signed out[\s\S]*used from somewhere else[\s\S]*Sign in/)
   await both("signed-out-reused", ['[role="dialog"] main'])
-  console.log("Account devices UI: each device's joining said, a reused sign-in's sign-out said")
+  // 3. A device joins while this Mac is open: said at once, with Remove.
+  await window.loadURL(`${base}?mock&cloud=signed-in&invited&joined`)
+  await until(`Boolean(document.querySelector('[data-sonner-toast]')) && document.body.innerText.includes('build-box joined your account')`, "the joined alert")
+  const alert = await evaluate(`document.querySelector('[data-sonner-toast]').innerText`)
+  assert.match(alert, /A terminal on Linux, from Frankfurt, Germany, with a code you approved\. If it isn't yours, remove it\./)
+  assert.match(alert, /Remove/)
+  showToasts = true
+  await both("device-joined", ['[data-sonner-toast]'])
+  console.log("Account devices UI: each device's joining said, a reused sign-in's sign-out said, a device that joins said at once")
   clearTimeout(watchdog)
   app.exit(0)
 }

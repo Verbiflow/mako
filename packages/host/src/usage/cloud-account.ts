@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net"
 import { createReadStream } from "node:fs"
 import type { Readable } from "node:stream"
 import { basename, join } from "node:path"
+import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
 import { MoveAnswerSchema, MoveClaimRequestSchema, type MoveAnswer, type MoveCheckpoint, type MoveClaimRequest } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
@@ -12,6 +13,7 @@ import {
   type ClientEndpoint,
   type ClientSessionOverSockets,
   type ConnectionCredential,
+  type EventFrame,
   type Problem,
   clientSessionOverSockets,
   type RuntimeLink,
@@ -131,6 +133,8 @@ const StoredSchema = z.object({
   credential: z.string(),
   device: CloudDeviceSchema,
   account: CloudPersonSchema,
+  /** The last event of the account's stream this device heard; it follows on from there when it connects again. */
+  seen: z.number().int().nonnegative().optional(),
 })
 type Stored = z.infer<typeof StoredSchema>
 
@@ -183,6 +187,11 @@ export type CloudAccountOptions = {
   runtime?: CloudRuntime
   /** A connection down this long shows as offline; a shorter blip isn't shown. For tests. */
   offlineAfterMs?: number
+  /**
+   * Something happened to the account's devices (its stream, `account:<id>`): heard live, or on connecting again
+   * after it happened. `mine`: about this Mac. A device that joined before this Mac did isn't news to it.
+   */
+  onAccountEvent?: (heard: { seq: number; at: string; event: AccountEvent; mine: boolean }) => void
 }
 
 export class CloudAccountError extends Error {
@@ -782,11 +791,17 @@ export class CloudAccounts {
     return { token: () => this.#connectionToken(), renewInMs: () => (this.#token?.renewAt ?? 0) - Date.now() }
   }
 
-  /** The account's connection: its token renewed in place, and the cloud's word when it ends it. */
+  /**
+   * The account's connection: its token renewed in place, the cloud's word when it ends it, and the account's stream
+   * followed from the last event this device heard, so what happened while it was off is heard now.
+   */
   #attachAccount(socket: WebSocket, end: (ending: CloudLinkEnding) => void): CloudLinkAttachment {
     const renewing = renewal(this.#credential(), (token) => {
       if (socket.readyState === WebSocket.OPEN) socket.send(encodeClientFrame({ type: "renew", token }))
     })
+    const following = this.#stored
+    if (following && socket.readyState === WebSocket.OPEN)
+      socket.send(encodeClientFrame({ type: "subscribe", stream: accountStream(following.account.id), after: following.seen ?? 0 }))
     socket.addEventListener("message", (event) => {
       const text = TextSchema.safeParse(event.data)
       if (!text.success) return
@@ -799,8 +814,25 @@ export class CloudAccounts {
       }
       if (frame.type === "renewed") renewing.renewed()
       else if (frame.type === "closing") end(endingOf(frame.problem))
+      else if (frame.type === "event") void this.#heard(frame.event)
     })
     return { close: () => renewing.stop() }
+  }
+
+  /** One event of the account's stream: told once, in order, and remembered as heard. */
+  async #heard(frame: EventFrame): Promise<void> {
+    const stored = this.#stored
+    if (!stored || frame.stream !== accountStream(stored.account.id) || frame.seq <= (stored.seen ?? 0)) return
+    const heard = { ...stored, seen: frame.seq }
+    this.#stored = heard
+    await this.#save(heard).catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
+    const parsed = AccountEventSchema.safeParse(frame.event.decode())
+    // A kind of event this build doesn't know is passed over, never refused.
+    if (!parsed.success) return
+    const event = parsed.data
+    const mine = event.type === "device-joined" ? event.device.id === stored.device.id : event.deviceId === stored.device.id
+    if (event.type === "device-joined" && Date.parse(frame.at) < Date.parse(stored.device.createdAt)) return
+    this.#options.onAccountEvent?.({ seq: frame.seq, at: frame.at, event, mine })
   }
 
   /** This Mac's runtime: the host served to the cloud, claiming again the Threads it ran when the link last ended. */

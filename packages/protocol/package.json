@@ -12,6 +12,7 @@
     "./records": "./dist/records.js",
     "./records-http": "./dist/records-http.js",
     "./moves": "./dist/moves.js",
+    "./account-events": "./dist/account-events.js",
     "./recipes": "./dist/recipes.js",
     "./recipes-http": "./dist/recipes-http.js",
     "./gateway-http": "./dist/gateway-http.js",

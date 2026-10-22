@@ -1,3 +1,4 @@
+import type { AccountEvent } from "@mako/protocol/account-events"
 import type { LifecycleState, LifecycleAction, UpdateInstallation } from "./app-lifecycle.js"
 import type { ThreadArchiveSnapshot } from "./thread-lifecycle.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
@@ -120,6 +121,8 @@ export type HostEventBody =
   | { type: "cloud-account"; account: CloudAccount }
   /** Whether this Mac shares its harnesses' sign-ins with Mako Cloud, and how each stands; window-wide. */
   | { type: "cloud-sign-ins"; signIns: CloudSignInsState }
+  /** Something happened to the account's devices (`@mako/protocol/account-events`); `mine` when it's about this Mac. */
+  | { type: "cloud-account-event"; seq: number; at: string; event: AccountEvent; mine: boolean }
   /** A runtime's installed or public version was read, or an update moved; window-wide. */
   | { type: "runtime-updates"; updates: HarnessUpdates }
   | { type: "notice"; level: "info" | "success" | "error"; message: string }

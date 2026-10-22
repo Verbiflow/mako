@@ -143,6 +143,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       standing = next
     },
     log: (message, fields) => hostLog("cloud", message, fields),
+    // Every window hears of the account's devices, so one that joined is said wherever this Mac is looked at.
+    onAccountEvent: (heard) => {
+      hostLog("cloud", "account event", { seq: heard.seq, type: heard.event.type, mine: heard.mine })
+      emit({ type: "cloud-account-event", ...heard })
+    },
     onRequest: request,
     // With the cloud entitlement, this Mac answers its account's other devices and the cloud through the same
     // dispatcher as its own windows: the same schemas, the same refusals, the same logs.
