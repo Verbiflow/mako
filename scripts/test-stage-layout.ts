@@ -142,6 +142,12 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   [".shimmer-chars > span", { animation: "mako-glyph", reduced: "global" }],
   [".control-preview-rim > span", { animation: "control-preview-sweep", reduced: /\.control-preview-rim\s*\{\s*display:\s*none;/ }],
   ['.cloud-wire[data-state="waiting"]::before', { animation: "cloud-wire-flow", reduced: /\.cloud-wire::before\s*\{\s*animation:\s*none\s*!important;/ }],
+  // A connection's bead turns while it connects and breathes while it's offline; its chip's tone and words say which.
+  ['.link-bead[data-state="connecting"]::after', { animation: "link-bead-turn", reduced: "global" }],
+  ['.link-bead[data-state="offline"]::after', { animation: "link-bead-turn", reduced: "global" }],
+  ['.link-bead[data-state="offline"]::before', { animation: "link-bead-breathe", reduced: "global" }],
+  // A side question's mark pulses only while it's being answered.
+  [".side-panel-glyph", { animation: "side-glyph", reduced: /\.side-panel-glyph\s*\{\s*animation:\s*none;/ }],
 ])
 const cssWithoutComments = css.replace(/\/\*[\s\S]*?\*\//g, "")
 const rules = [...cssWithoutComments.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
