@@ -1214,14 +1214,20 @@ export class ThreadStore {
    */
   moveJournals(move: MoveId): MovingSession[] {
     return this.sql("SELECT session_id FROM executions WHERE move_id = ? ORDER BY session_id").all(move)
-      .map((row) => {
-        const session = SessionRowSchema.parse(row).session_id
-        const natives = this.sql(`SELECT harness, native_id FROM locators WHERE device_id = ? AND session_id = ? AND native_id IS NOT NULL
-          UNION SELECT harness, native_id FROM native_claims WHERE device_id = ? AND session_id = ?`).all(this.deviceId, session, this.deviceId, session)
-          .map((native) => NativeRowSchema.parse(native))
-          .map((native) => ({ harness: native.harness, nativeId: native.native_id }))
-        return { session: SessionIdSchema.parse(session), journals: this.journalsOf(session), natives }
-      })
+      .map((row) => this.movingSession(SessionRowSchema.parse(row).session_id))
+  }
+
+  /** A Thread's Sessions as a move would carry them, in tab order, before any move begins. */
+  threadSessions(thread: ThreadId): MovingSession[] {
+    return (this.thread(thread)?.sessions ?? []).map((session) => this.movingSession(session))
+  }
+
+  private movingSession(session: string): MovingSession {
+    const natives = this.sql(`SELECT harness, native_id FROM locators WHERE device_id = ? AND session_id = ? AND native_id IS NOT NULL
+      UNION SELECT harness, native_id FROM native_claims WHERE device_id = ? AND session_id = ?`).all(this.deviceId, session, this.deviceId, session)
+      .map((native) => NativeRowSchema.parse(native))
+      .map((native) => ({ harness: native.harness, nativeId: native.native_id }))
+    return { session: SessionIdSchema.parse(session), journals: this.journalsOf(session), natives }
   }
 
   /** Keep the Thread here: a move that was never released changes nothing. */

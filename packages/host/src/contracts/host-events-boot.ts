@@ -11,7 +11,7 @@ import type { Entry } from "@mako/sessions/entries"
 import type { WorktreeStep } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
-import type { CloudStartStep } from "./cloud-threads.js"
+import type { CloudStartStep, ThreadMoveStep } from "./cloud-threads.js"
 import type {
   ControlActivity,
   BrowserControlStatus,
@@ -83,6 +83,8 @@ export type HostEventBody =
    * once the harness is starting there. A start whose machine was ready from the composer goes straight to `starting`.
    */
   | { type: "cloud-start-step"; conversationId: string; step: CloudStartStep; project: string }
+  /** A Thread's move to the cloud (`mako:thread-move`), step by step, for the conversation it was asked from. */
+  | { type: "thread-move-step"; conversationId: string; move: string; step: ThreadMoveStep }
   /** An agent's tool changed this device's worktrees; windows read them again. */
   | { type: "worktrees-changed" }
   /** An agent's tool pushed, opened or merged a pull request; windows read GitHub and the worktrees' summaries again. */

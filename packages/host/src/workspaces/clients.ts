@@ -45,6 +45,11 @@ export class WorkspaceClients {
     }))
   }
 
+  /** The folder every client works in, once one was given (`home`). */
+  homePath(): string | undefined {
+    return this.homeFolder
+  }
+
   /** A client's tabs, if it opened any; asking opens none. */
   opened(id: string): HostPool | undefined {
     return this.starting.has(id) ? undefined : this.pools.get(id)

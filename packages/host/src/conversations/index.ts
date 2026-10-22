@@ -37,12 +37,15 @@ import { ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
-import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer } from "../contracts/cloud-threads.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, ThreadMoveOutcome } from "../contracts/cloud-threads.js"
+import { arriveMove, MoveArrivalInputSchema, type MoveArrivalDeps, type MoveArrivalInput } from "./move-arrival.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
+export { CloudMoves } from "./cloud-moves.js"
+export { installedReading } from "./kept-resume.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 
@@ -266,6 +269,8 @@ export interface ConversationMethodsDeps {
   /** The folder of the tab in front, where a fresh native run starts. */
   workspace(): Promise<string>
   emit(event: HostEvent): void
+  /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`). */
+  arrival?: MoveArrivalDeps
 }
 
 /** Starting, continuing, steering and moving conversations, live or headless. */
@@ -474,6 +479,15 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:cloud-prepare", prepareNowhere)
   const offerNowhere: (folders: string[]) => CloudProjectsOffer = () => "none"
   methods.handle("mako:cloud-offer-projects", offerNowhere)
+  /** Where no person's Mac moves Threads to the cloud (a cloud machine, the fixture desk); on a Mac, `CloudMoves` answers first. */
+  const moveNowhere: (conversationId: string, move: string) => ThreadMoveOutcome = () => ({ kind: "kept-here", reason: "This Mako doesn't move Threads to the cloud." })
+  methods.handle("mako:thread-move", moveNowhere)
+  /** A Thread arriving from a device: on a cloud machine, its checkout applied and its sessions' records written here. */
+  methods.handle("mako:move-arrive", (input: MoveArrivalInput) => {
+    const arrival = deps.arrival
+    if (!arrival) throw new Error("Only a cloud machine's host takes a Thread's move.")
+    return arriveMove(arrival, MoveArrivalInputSchema.parse(input))
+  })
   /** A new conversation on another harness, from the main composer. */
   methods.handle("mako:harness-start", async (harness: string, prompt: string, options?: SessionSettings) => {
     const cwd = await deps.workspace()

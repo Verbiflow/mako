@@ -5,6 +5,7 @@ import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
+import type { ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
@@ -2680,6 +2681,25 @@ export function installMockBridge() {
     launchPrewarm: async () => {},
     cloudPrepare: async () => "none" as const,
     cloudOfferProjects: async () => "none" as const,
+    /**
+     * A fixture's move: its steps a moment apart, as a real one takes them; `?move=busy` stays here, as a Thread
+     * with a turn running does.
+     */
+    threadMove: async (conversationId: string, move: string) => {
+      const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+      const step = (next: ThreadMoveStep) => emit({ type: "thread-move-step", conversationId, move, step: next })
+      if (new URLSearchParams(globalThis.location?.search).get("move") === "busy") {
+        const reason = "Moves happen between turns: Codex is running a turn."
+        step({ kind: "kept-here", reason })
+        return { kind: "kept-here" as const, reason }
+      }
+      for (const next of [{ kind: "packing" }, { kind: "handing-over" }, { kind: "resuming" }] as const) {
+        step(next)
+        await pause(900)
+      }
+      step({ kind: "moved", conversations: [conversationId] })
+      return { kind: "moved" as const, cloudThread: "t-0123456789abcdef" }
+    },
     liveClose: async (id: string) => {
       const session = acpSessions.get(id)
       if (!session) return

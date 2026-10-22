@@ -10,6 +10,7 @@ import { ModelChoiceNotice } from "@/components/composer/model-notice"
 import { RuntimeVersionNotice } from "@/components/composer/runtime-version-notice"
 import { RestoreVersionNotice } from "@/components/composer/restore-version-notice"
 import { LedgerNotice } from "@/components/composer/ledger-notice"
+import { ThreadMoveNotice } from "@/components/composer/thread-move-notice"
 import { SignInRecovery } from "@/components/composer/sign-in-recovery"
 import { MovedReviewCard } from "@/components/composer/moved-review-card"
 import { WorkspaceMoveCard } from "@/components/composer/workspace-move-card"
@@ -132,6 +133,7 @@ export function installBuiltins(): () => void {
     registerSlot("account-limit", "composer.above", AccountLimitNotice),
     registerSlot("model-choice", "composer.above", ModelChoiceNotice),
     registerSlot("workspace-move", "composer.above", WorkspaceMoveCard),
+    registerSlot("thread-move", "composer.above", ThreadMoveNotice),
     registerSlot("moved-review", "composer.above", MovedReviewCard),
 
     // Views by the shared kind (packages/sessions/src/tool-identity.ts), so

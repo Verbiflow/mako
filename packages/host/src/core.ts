@@ -1,4 +1,7 @@
+import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
+import type { RecordsLink } from "@mako/sessions/record-sync"
+import { encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { githubRepositoryUrl } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
 import { homedir } from "node:os"
@@ -36,7 +39,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, folderRepository, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudMoves, folderRepository, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -398,6 +401,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   late.conversations = opened
   const { live, runs, native } = opened
+  // A person's Mac moves its Threads to the cloud (`mako:thread-move`); a machine takes them (`mako:move-arrive`).
+  const cloudMoves = cloudConversations && new CloudMoves({
+    folder: join(environment.dataRoot, "cloud", "moves"),
+    git,
+    account: () => late.cloud,
+    threads: () => threads.store ?? undefined,
+    moves: live.moves,
+    snapshot: (id) => live.snapshot(id),
+    checkout: (id) => workspaces.worktrees?.threadCheckout(id),
+    repositoryOf: (cwd) => folderRepository(git, cwd),
+    sendRecords: (link, paths) => catalog.sendRecords(link, paths),
+    cloud: cloudConversations,
+    remembered: (harness, nativeId) => threads.memory?.recall(harness, nativeId),
+    step: (conversationId, move, step) => emit({ type: "thread-move-step", conversationId, move, step }),
+    newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
+  })
+  void cloudMoves?.settle().catch((error: Error) => hostWarn("moves", "moves a stopped host left couldn't be settled", { error: error.message }))
   const workspaceAutomations = new Automations({
     git,
     watch: watchBackend,
@@ -461,7 +481,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     automations: workspaceAutomations,
     withHost,
     session: {
-      liveSummaries: () => [...live.summaries(), ...(cloudConversations?.summaries() ?? [])],
+      // A conversation that moved to the cloud is the cloud's: its journal here stands aside.
+      liveSummaries: () => [...live.summaries().filter((summary) => !cloudConversations?.has(summary.session.id)), ...(cloudConversations?.summaries() ?? [])],
       archives: () => threads.archives.snapshot(),
       ready,
       withHost,
@@ -498,6 +519,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     workspace,
     emit,
+    ...(config.machineAgentFd !== undefined && {
+      arrival: {
+        git,
+        records: () => machineRecords(machineLink),
+        workspace: () => workspaceClients.homePath(),
+        receive: (link, sessions, installed) => catalog.receiveRecords(link, sessions, installed),
+        installed: (harness) => installedReading(harnesses.updates.restoreRuntime(harness)),
+        scratch: join(environment.dataRoot, "moves"),
+      },
+    }),
   })
   const application: Application = declareApplicationMethods(methods, {
     live,
@@ -546,6 +577,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         const refusal = elsewhereRefusal(channel, elsewhere.where)
         if (refusal) throw new Error(refusal)
         if (answeredElsewhere(channel, args, tab.workspace)) return { handled: true, value: await elsewhere.call(channel, args) }
+      }
+      if (channel === "mako:thread-move" && cloudMoves) {
+        // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-move`'s schema before routing it.
+        const [conversationId, move] = args as [string, string]
+        return { handled: true, value: encodeRuntimeValue(await cloudMoves.move(conversationId, move)) }
       }
       const cloud = await cloudConversations?.route(channel, args)
       return cloud?.handled ? cloud : opened.route(channel, args)
@@ -596,9 +632,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     machineLinked: async (link) => {
       machineLink = link
-      if (!link) return catalog.syncRecords(null)
-      const records = new URL(`/v1/machines/${encodeURIComponent(link.machine)}/records`, link.gatewayUrl).toString()
-      await catalog.syncRecords({ id: records, base: records, authorization: `Bearer ${link.credential}` })
+      await catalog.syncRecords(machineRecords(link) ?? null)
     },
     openMachineWorkspace: async (path) => {
       await workspaceClients.home(path)
@@ -642,6 +676,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       hostLog("lifecycle", "stopped")
     },
   }
+}
+
+/** Where a cloud machine's Thread's session records are kept at the gateway, as the machine reaches them. */
+function machineRecords(link: MachineGatewayLink | null): RecordsLink | undefined {
+  if (!link) return undefined
+  const records = new URL(`/v1/machines/${encodeURIComponent(link.machine)}/records`, link.gatewayUrl).toString()
+  return { id: records, base: records, authorization: `Bearer ${link.credential}` }
 }
 
 async function readFilePreview(request: Request, withHost: <T>(run: (host: AgentHost) => T | Promise<T>) => Promise<T>): Promise<Response> {

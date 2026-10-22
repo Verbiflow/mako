@@ -32,6 +32,16 @@ import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { CloudAccount } from "@mako/host/usage/cloud-account-methods"
 import { z } from "zod"
 
+/** A move's calls, which these conversations never make (`test-cloud-moves.ts` covers them). */
+const unused = () => Promise.reject(new Error("no move in this test"))
+const movesUnused: Pick<CloudAccount, "sendCheckpoint" | "claimMove" | "refuseMove" | "moveAnswer" | "threadRecords"> = {
+  sendCheckpoint: unused,
+  claimMove: unused,
+  refuseMove: unused,
+  moveAnswer: unused,
+  threadRecords: unused,
+}
+
 const CLONE = "/home/node/work/octocat/Hello-World"
 const REPOSITORY: CloudRepository = { url: "https://github.com/octocat/Hello-World" }
 const scratch = await mkdtemp(join(tmpdir(), "mako-cloud-conversations-"))
@@ -99,6 +109,7 @@ async function cloudMachine(reach: Reach = {}) {
       return { ready: options?.prepare ? machineState.ready : false }
     },
     askBases: async (repositories) => void bases.push(...repositories),
+    ...movesUnused,
     wake: () => {},
     stop: () => {},
   }
@@ -466,6 +477,7 @@ test("a close is taken at once while nothing runs the Thread, and reaches the ma
       return { ready: false }
     },
     askBases: async () => {},
+    ...movesUnused,
     wake: () => {},
     stop: () => {},
   }
