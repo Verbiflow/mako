@@ -17,7 +17,10 @@ export const MACHINE_AGENT_PROTOCOL = 6
 
 /** What the agent tells the host. */
 export const AgentMessageSchema = z.discriminatedUnion("type", [
-  /** Connect as this runtime with this credential: after enrolling, and again whenever either changes. */
+  /**
+   * Connect as this runtime with this credential: after enrolling, and again whenever either changes. The same
+   * runtime with another credential is a renewal: the connection goes on, and the next one carries it.
+   */
   z
     .object({
       type: z.literal("link"),

@@ -353,6 +353,8 @@ export class SessionCatalog {
   /** The store captures write, for keeping a remote in step (`syncRecords`). */
   private recordWriter: RecordStore | null = null
   private recordPushes: RecordPushes | null = null
+  /** The remote the pushes go to, read at each request: a renewed credential is taken without starting over. */
+  private recordLink: { current: RecordsLink } | null = null
   /** Where each session last read back from the record store was restored, which its entries' records name. */
   private readonly restoredFrom = new Map<string, string>()
   private recordReads: RecordReads | null = null
@@ -1558,13 +1560,22 @@ export class SessionCatalog {
    * capture is pushed as it lands, and what was captured before is pushed now. Another link replaces it; null stops.
    */
   syncRecords(link: RecordsLink | null): void {
+    const held = this.recordLink
+    if (link && held && this.recordPushes && !this.stopped && held.current.id === link.id && held.current.base === link.base) {
+      // The same remote with a renewed credential: the pushes go on, and their next request carries it.
+      held.current = link
+      return
+    }
     this.recordPushes?.stop()
     this.recordPushes = null
+    this.recordLink = null
     const store = this.recordWriter
     if (!link || !store || this.stopped) return
     const log = (level: "info" | "warn", message: string, fields: Record<string, string | number>) => (level === "warn" ? console.warn : console.info)(`Session records: ${message}`, JSON.stringify(fields))
-    const pushes = new RecordPushes(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization }), log)
+    const remote = { current: link }
+    const pushes = new RecordPushes(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => remote.current.authorization }), log)
     this.recordPushes = pushes
+    this.recordLink = remote
     void pushes.catchUp(store.sessions()).catch((error: Error) => log("warn", "catching up stopped", { error: error.message }))
   }
 

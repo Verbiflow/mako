@@ -39,6 +39,8 @@ const desktop: Actor = { kind: "client", client: "desktop", deviceId: "d-1" }
 /** The gateway's runtime route over a fake gateway: the machine credential checked at the upgrade, then frames carried both ways. */
 async function machineGateway() {
   const gateway = createFakeGateway()
+  /** The credentials the Machine object takes now. */
+  const accepted = new Set([CREDENTIAL])
   const sockets = new Set<ServerSocket>()
   let upgrades = 0
   /** Connections that answer nothing, as one dead across a pause looks before its close arrives. */
@@ -53,7 +55,7 @@ async function machineGateway() {
     const at = Date.now() - started
     if (!attempts.length || at - attempts.at(-1)! > 100) attempts.push(at)
     const path = new URL(request.url ?? "/", "http://gateway").pathname
-    if (path !== `/v1/runtimes/${RUNTIME}/connect` || offeredCredential(request.headers["sec-websocket-protocol"]) !== CREDENTIAL) {
+    if (path !== `/v1/runtimes/${RUNTIME}/connect` || !accepted.has(offeredCredential(request.headers["sec-websocket-protocol"]) ?? "")) {
       socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n")
       return
     }
@@ -87,6 +89,7 @@ async function machineGateway() {
   const { port } = server.address() as AddressInfo
   return {
     gateway,
+    accepted,
     url: `http://127.0.0.1:${port}`,
     upgrades: () => upgrades,
     attempts: () => attempts,
@@ -295,6 +298,27 @@ test("a machine that woke keeps a connection that survived its pause, and replac
   await agent.until("enrolled on it", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 3_000)
   const replacedMs = Date.now() - woke
   assert.ok(replacedMs >= 1_400 && replacedMs < 2_800, `replaced after ${replacedMs} ms`)
+})
+
+test("a credential the agent renewed keeps the connection, and the next connection and the records carry it", async () => {
+  const cloud = await machineGateway()
+  const agent = machineAgent({ dataRoot: join(scratch, "renewed") })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
+  const link = { type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 } as const
+  agent.tell(link)
+  await agent.until("enrolled", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 1)
+  const renewed = `mmc_${"r".repeat(43)}`
+  cloud.accepted.add(renewed)
+  const upgrades = cloud.upgrades()
+  agent.tell({ ...link, credential: renewed })
+  await agent.until("the records given the renewed credential", () => agent.links.at(-1)?.credential === renewed)
+  await new Promise((resolve) => setTimeout(resolve, 500))
+  assert.equal(cloud.upgrades(), upgrades, "the connection goes on")
+  assert.equal(agent.state()?.enrolls, 1)
+  // The old credential is retired: the next connection must carry the renewed one.
+  cloud.accepted.delete(CREDENTIAL)
+  cloud.drop()
+  await agent.until("enrolled again on the renewed credential", () => agent.state()?.link === "connected" && agent.state()?.enrolls === 2, 15_000)
 })
 
 test("the sign-ins the agent gives are installed one set at a time, the newest last, and what became of each is in the runtime's state", async () => {
