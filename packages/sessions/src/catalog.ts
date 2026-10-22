@@ -63,7 +63,7 @@ import { EVIDENCE_RULES, type WriterEvidence } from "./record-writers.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore } from "./record-store.js"
-import { RecordPushes, type PushStatus, type RecordsLink } from "./record-sync.js"
+import { RecordPushes, RecordSync, type PushStatus, type ReceivedRecords, type RecordsLink, type SentRecords } from "./record-sync.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { readOriginal, type EntryOriginal } from "./record-original.js"
 import { streamOwner, streamsRoot } from "./record-streams.js"
@@ -1571,6 +1571,69 @@ export class SessionCatalog {
   /** How keeping the remote in step has gone; null without a link. */
   recordsStatus(): PushStatus | null {
     return this.recordPushes?.status() ?? null
+  }
+
+  /**
+   * Sends the sessions at `paths` to a remote store now and through to their newest, as a move hands them on: each
+   * taken whole first (`hold`), so what goes is what the harness has written. A session the store can't take is
+   * refused by name, and nothing of the others is undone: a remote holding more than a move needs is harmless.
+   */
+  async sendRecords(link: RecordsLink, paths: readonly string[]): Promise<SentRecords[]> {
+    const store = this.recordWriter
+    if (!store || this.readOnly) throw new Error("Mako keeps no records here to send.")
+    const sync = new RecordSync(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization }))
+    const sent: SentRecords[] = []
+    for (const path of paths) {
+      const ref = this.byPath.get(path)?.ref ?? (await this.open(path, false))?.ref
+      if (!ref) throw new Error(`No session is listed at ${path}.`)
+      if (!(await this.hold(path))) throw new Error(`Mako couldn't take ${ref.harness}'s session ${ref.nativeId} into its records whole, so it can't be sent.`)
+      sent.push({ harness: ref.harness, nativeId: ref.nativeId, ...(await sync.push(ref.harness, ref.nativeId)) })
+    }
+    return sent
+  }
+
+  /**
+   * Takes sessions from a remote store and writes each into its harness's own store here, as a move's destination
+   * does before the harness resumes it: the same session, in this home, at the paths the harness keeps it. `installed`
+   * is each harness's version here, gating a restore as `restoreKept` does. A session the harness here already has is
+   * left as it is (`present`).
+   */
+  async receiveRecords(link: RecordsLink, sessions: ReadonlyArray<{ harness: string; nativeId: string }>, installed: Readonly<Record<string, InstalledReading | null>> = {}): Promise<ReceivedRecords[]> {
+    const store = this.recordWriter
+    if (!store || this.readOnly || !this.harnessStores) throw new Error("Mako keeps no records here to receive into.")
+    const sync = new RecordSync(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization }))
+    const received: ReceivedRecords[] = []
+    for (const { harness, nativeId } of sessions) {
+      const provider = this.providers.find((each) => each.harness === harness)
+      if (!provider) throw new Error(`No harness here reads ${harness}'s sessions.`)
+      const pulled = await sync.pull(harness, nativeId)
+      if (!store.captured(harness, nativeId)) throw new Error(`The remote holds no finished copy of ${harness}'s session ${nativeId}.`)
+      const started = performance.now()
+      const report = await store.restore({ harness, nativeId, home: this.recordsHome, stores: this.harnessStores, ...provider.fork && { fork: provider.fork }, ...installed[harness] !== undefined && { installed: installed[harness] } })
+      if (report.written || report.fork?.written) provider.storeWritten?.()
+      const restored: KeptRestore = report.outdated
+        ? { kind: "outdated", ...report.outdated }
+        : report.fork
+          ? report.fork.written || !report.fork.diverged.length ? { kind: "forked", nativeId: report.fork.nativeId } : { kind: "refused", reason: `${provider.displayName} holds a copy of this session that went on elsewhere, and its fork couldn't be written.` }
+          : report.diverged.length && !report.written
+            ? { kind: "refused", reason: `${provider.displayName} holds part of this session that Mako never saw (${report.diverged[0]!.reason}), so nothing was restored.` }
+            : report.written
+              ? { kind: "restored", path: "", files: report.actions.filter((action) => action.action !== "skip").length, rows: report.rows.reduce((total, rows) => total + rows.insert + rows.replace + rows.delete, 0), ms: Math.round(performance.now() - started) }
+              : { kind: "present", path: "" }
+      received.push({ harness, nativeId, pulled, restored })
+    }
+    // Each harness lists what was written, and each restored session is named by the path it's listed at.
+    await this.scan({ emitChanges: true })
+    this.recordRows = null
+    this.orderedRefs = null
+    for (const each of received) {
+      if (each.restored.kind !== "restored" && each.restored.kind !== "present") continue
+      const listed = [...this.byPath.values()].find((entry) => entry.ref?.harness === each.harness && entry.ref.nativeId === each.nativeId)?.ref
+      each.restored = listed
+        ? { ...each.restored, path: listed.path }
+        : { kind: "refused", reason: `Mako restored ${each.harness}'s session ${each.nativeId}, but the harness doesn't list it.` }
+    }
+    return received
   }
 
   async stop(): Promise<void> {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { runGatewayConformance, runMediaConformance } from "../dist/conformance.js"
 import { GatewayHttpError } from "../dist/gateway-http.js"
+import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, MoveClaimRequestSchema } from "../dist/moves.js"
 import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
 import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
@@ -1361,5 +1362,28 @@ describe("a project's recipe authority over HTTP", () => {
   test("a recipe fits while its JSON is within the wire's bound", () => {
     assert.ok(recipeFits(JSON.stringify({ values: { A: "x".repeat(RECIPE_WIRE_BYTES - 100) } })))
     assert.ok(!recipeFits(JSON.stringify({ values: { A: "x".repeat(RECIPE_WIRE_BYTES) } })))
+  })
+})
+
+describe("a Thread moving between a device and the cloud", () => {
+  const sha = (char) => char.repeat(40)
+  const checkpoint = { version: 1, sha256: "a".repeat(64), bytes: 1_000, head: sha("1"), branch: "mako/fix", index: sha("2"), work: sha("3") }
+
+  test("a checkpoint names its bundle and its three commits, within the limit", () => {
+    assert.deepEqual(MoveCheckpointSchema.parse(checkpoint), checkpoint)
+    assert.ok(MoveCheckpointSchema.safeParse({ ...checkpoint, branch: undefined }).success, "a detached HEAD has no branch")
+    assert.ok(!MoveCheckpointSchema.safeParse({ ...checkpoint, bytes: MOVE_CHECKPOINT_MAX_BYTES + 1 }).success)
+    assert.ok(!MoveCheckpointSchema.safeParse({ ...checkpoint, sha256: "A".repeat(64) }).success)
+    assert.ok(!MoveCheckpointSchema.safeParse({ ...checkpoint, extra: true }).success, "nothing else rides along")
+  })
+
+  test("a claim carries the Sessions released, and the answer is a claim or a refusal", () => {
+    const session = { id: crypto.randomUUID(), generation: 3 }
+    assert.ok(MoveClaimRequestSchema.safeParse({ thread: crypto.randomUUID(), sessions: [session], handoff: { any: ["json"] } }).success)
+    assert.ok(!MoveClaimRequestSchema.safeParse({ thread: crypto.randomUUID(), sessions: [], handoff: {} }).success, "a move carries a Session")
+    assert.ok(!MoveClaimRequestSchema.safeParse({ thread: crypto.randomUUID(), sessions: [{ ...session, generation: 0 }], handoff: {} }).success)
+    const move = crypto.randomUUID()
+    assert.equal(MoveAnswerSchema.parse({ kind: "claimed", move, at: 1, sessions: [{ ...session, generation: 4 }] }).kind, "claimed")
+    assert.equal(MoveAnswerSchema.parse({ kind: "refused", move, at: 1, reason: "the checkout didn't arrive" }).kind, "refused")
   })
 })

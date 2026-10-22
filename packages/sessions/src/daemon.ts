@@ -25,7 +25,7 @@
  * client; if something answers the ping, it exits quietly.
  */
 
-import type { RecordsLink } from "./record-sync.js"
+import type { ReceivedRecords, RecordsLink, SentRecords } from "./record-sync.js"
 import type { InstalledReading } from "./record-writers.js"
 import {
   createConnection,
@@ -419,6 +419,12 @@ function catalogService(
             catalog.syncRecords(frame.link)
             reply({ id: frame.id, ok: true, result: null })
             return
+          case "send-records":
+            reply({ id: frame.id, ok: true, result: await catalog.sendRecords(frame.link, frame.paths) })
+            return
+          case "receive-records":
+            reply({ id: frame.id, ok: true, result: await catalog.receiveRecords(frame.link, frame.sessions, frame.installed) })
+            return
           case "retire": {
             // A newer client wants this vintage gone. Answer, then leave —
             // the socket frees, and the successor takes over the watchers.
@@ -588,6 +594,10 @@ export interface DaemonClient {
   retire(): Promise<void>
   /** Keeps a remote store in step with the catalog's (`SessionCatalog.syncRecords`); null stops. */
   syncRecords(link: RecordsLink | null): Promise<void>
+  /** Sends sessions' records to a remote store now (`SessionCatalog.sendRecords`). */
+  sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
+  /** Takes sessions' records from a remote store into their harnesses' stores here (`SessionCatalog.receiveRecords`). */
+  receiveRecords(link: RecordsLink, sessions: Array<{ harness: string; nativeId: string }>, installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]>
   onEvent(listener: (event: DaemonEvent) => void): () => void
   /** Fires once if the daemon goes away; the client is dead afterwards. */
   onClose(listener: () => void): void
@@ -696,6 +706,12 @@ async function connectDaemonLink(
           response.pending.resolve(response.result)
           break
         case "restore":
+          response.pending.resolve(response.result)
+          break
+        case "send-records":
+          response.pending.resolve(response.result)
+          break
+        case "receive-records":
           response.pending.resolve(response.result)
           break
         case "ack":
@@ -845,6 +861,23 @@ async function connectDaemonLink(
       send(installed === undefined ? { id, op: "restore", path } : { id, op: "restore", path, installed })
     })
 
+  // Records go over the network: a move's session may be large.
+  const requestSendRecords = (link: RecordsLink, paths: string[]): Promise<SentRecords[]> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))
+      pending.set(id, { kind: "send-records", resolve, reject, timer })
+      send({ id, op: "send-records", link, paths })
+    })
+
+  const requestReceiveRecords = (link: RecordsLink, sessions: Array<{ harness: string; nativeId: string }>, installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))
+      pending.set(id, { kind: "receive-records", resolve, reject, timer })
+      send({ id, op: "receive-records", link, sessions, installed })
+    })
+
   const requestAck = (
     frame: (id: number) => DaemonRequestFrame
   ): Promise<void> =>
@@ -873,6 +906,8 @@ async function connectDaemonLink(
       unfollow: (path) => requestAck((id) => ({ id, op: "unfollow", path })),
       retire: () => requestAck((id) => ({ id, op: "retire" })),
       syncRecords: (link) => requestAck((id) => ({ id, op: "records", link })),
+      sendRecords: requestSendRecords,
+      receiveRecords: requestReceiveRecords,
       onEvent: (listener) => {
         eventListeners.add(listener)
         return () => eventListeners.delete(listener)

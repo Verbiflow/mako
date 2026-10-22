@@ -1,4 +1,4 @@
-import { RecordsLinkSchema, type RecordsLink } from "./record-sync.js"
+import { ReceivedRecordsSchema, RecordsLinkSchema, SentRecordsSchema, type ReceivedRecords, type RecordsLink, type SentRecords } from "./record-sync.js"
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
 import {
@@ -125,6 +125,10 @@ export type DaemonRequestFrame =
   | { id: number; op: "retire" }
   /** Where the store's records are kept in step (`SessionCatalog.syncRecords`); null stops. */
   | { id: number; op: "records"; link: RecordsLink | null }
+  /** Sends sessions' records to a remote store now (`SessionCatalog.sendRecords`). */
+  | { id: number; op: "send-records"; link: RecordsLink; paths: string[] }
+  /** Takes sessions' records from a remote store into their harnesses' stores here (`SessionCatalog.receiveRecords`). */
+  | { id: number; op: "receive-records"; link: RecordsLink; sessions: Array<{ harness: string; nativeId: string }>; installed: Record<string, InstalledReading | null> }
 
 export type DaemonResponseFrame =
   | {
@@ -139,6 +143,8 @@ export type DaemonResponseFrame =
         | EntryOriginal
         | ChildTranscripts
         | KeptRestore
+        | SentRecords[]
+        | ReceivedRecords[]
         | boolean
         | null
     }
@@ -209,6 +215,16 @@ interface RestorePending extends PendingBase {
   resolve: (restored: KeptRestore) => void
 }
 
+interface SendRecordsPending extends PendingBase {
+  kind: "send-records"
+  resolve: (sent: SentRecords[]) => void
+}
+
+interface ReceiveRecordsPending extends PendingBase {
+  kind: "receive-records"
+  resolve: (received: ReceivedRecords[]) => void
+}
+
 interface AckPending extends PendingBase {
   kind: "ack"
   resolve: () => void
@@ -224,6 +240,8 @@ export type PendingRequest =
   | ChildrenPending
   | HoldPending
   | RestorePending
+  | SendRecordsPending
+  | ReceiveRecordsPending
   | AckPending
 
 export type ParsedDaemonResponse =
@@ -236,6 +254,8 @@ export type ParsedDaemonResponse =
   | { kind: "children"; pending: ChildrenPending; result: ChildTranscripts | null }
   | { kind: "hold"; pending: HoldPending; result: boolean }
   | { kind: "restore"; pending: RestorePending; result: KeptRestore }
+  | { kind: "send-records"; pending: SendRecordsPending; result: SentRecords[] }
+  | { kind: "receive-records"; pending: ReceiveRecordsPending; result: ReceivedRecords[] }
   | { kind: "ack"; pending: AckPending }
   | { kind: "error"; pending: PendingRequest; error: Error }
 
@@ -321,6 +341,18 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       const link = RecordsLinkSchema.safeParse(record.link)
       return link.success ? { id, op, link: link.data } : null
     }
+    case "send-records": {
+      const parsed = z.object({ link: RecordsLinkSchema, paths: z.array(z.string().min(1)) }).safeParse(record)
+      return parsed.success ? { id, op, ...parsed.data } : null
+    }
+    case "receive-records": {
+      const parsed = z.object({
+        link: RecordsLinkSchema,
+        sessions: z.array(z.object({ harness: z.string().min(1), nativeId: z.string().min(1) })),
+        installed: z.record(z.string(), InstalledReadingSchema.nullable()),
+      }).safeParse(record)
+      return parsed.success ? { id, op, ...parsed.data } : null
+    }
     default:
       return null
   }
@@ -380,6 +412,14 @@ export function parseDaemonResponse(
     case "restore": {
       const result = KeptRestoreSchema.safeParse(record.result)
       return result.success ? { kind: "restore", pending, result: result.data } : null
+    }
+    case "send-records": {
+      const result = z.array(SentRecordsSchema).safeParse(record.result)
+      return result.success ? { kind: "send-records", pending, result: result.data } : null
+    }
+    case "receive-records": {
+      const result = z.array(ReceivedRecordsSchema).safeParse(record.result)
+      return result.success ? { kind: "receive-records", pending, result: result.data } : null
     }
     case "ack":
       return record.result === null ? { kind: "ack", pending } : null
