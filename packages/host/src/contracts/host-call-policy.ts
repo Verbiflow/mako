@@ -187,6 +187,10 @@ const replays = [
   "mako:cloud-prepare",
   /** Offered once per account on this Mac: a repeat finds it offered. */
   "mako:cloud-offer-projects",
+  /** A move is settled by its id: a repeat joins the move running, or answers how it went. */
+  "mako:thread-move",
+  /** A move's arrival on a machine is marked by its id: a repeat answers what it did without doing it again. */
+  "mako:move-arrive",
   /** Cancelling a sign-in that has ended cancels nothing. */
   "mako:account-login-cancel",
   /** Cancelling a Mako sign-in that has ended cancels nothing. */

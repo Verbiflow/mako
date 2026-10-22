@@ -4,6 +4,8 @@ import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking } from "./cloud-account.js"
+import type { MoveAnswer, MoveCheckpoint, MoveClaimRequest } from "@mako/protocol/moves"
+import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
@@ -39,6 +41,16 @@ export interface CloudAccount {
   createThread(threadId: string, repository: CloudRepository, options?: CloudThreadMaking): Promise<{ ready: boolean }>
   /** Project bases for these repositories, made in the background ahead of their first cloud Thread. */
   askBases(repositories: CloudRepository[]): Promise<void>
+  /** A move's checkpoint, sent to the cloud Thread once (`CloudAccounts.sendCheckpoint`). */
+  sendCheckpoint(threadId: string, checkpoint: MoveCheckpoint, file: string): Promise<{ sent: boolean }>
+  /** The cloud's claim of a move this Mac released, or its refusal if that came first. */
+  claimMove(threadId: string, move: string, request: MoveClaimRequest): Promise<MoveAnswer>
+  /** The cloud's promise never to take a move, or its claim if that came first. */
+  refuseMove(threadId: string, move: string, reason: string): Promise<MoveAnswer>
+  /** What the cloud answered a move; undefined while it hasn't. */
+  moveAnswer(threadId: string, move: string): Promise<MoveAnswer | undefined>
+  /** Where a cloud Thread's session records are kept, as this Mac's device reaches them. */
+  threadRecords(threadId: string): Promise<RecordsLink>
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   stop(): void
@@ -168,6 +180,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     deviceId: () => cloud.deviceId(),
     createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),
     askBases: (repositories) => cloud.askBases(repositories),
+    sendCheckpoint: (threadId, checkpoint, file) => cloud.sendCheckpoint(threadId, checkpoint, file),
+    claimMove: (threadId, move, request) => cloud.claimMove(threadId, move, request),
+    refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),
+    moveAnswer: (threadId, move) => cloud.moveAnswer(threadId, move),
+    threadRecords: (threadId) => cloud.threadRecords(threadId),
     wake: () => {
       cloud.wake()
       sync?.wake()

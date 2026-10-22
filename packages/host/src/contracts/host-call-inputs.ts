@@ -751,6 +751,25 @@ const inputs = {
     z.tuple([
       z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
     ]),
+  "mako:move-arrive": () =>
+    z.tuple([
+      z.object({
+        move: z.string(),
+        folder: z.string(),
+        checkpoint: z.object({
+          version: z.literal(1),
+          sha256: z.string(),
+          bytes: z.number(),
+          head: z.string(),
+          index: z.string(),
+          work: z.string(),
+          branch: z.string().optional(),
+        }),
+        sessions: z.array(
+          z.object({ harness: z.string(), nativeId: z.string() })
+        ),
+      }),
+    ]),
   "mako:native-authoring-apply": () =>
     z.tuple([
       z.object({
@@ -1283,6 +1302,7 @@ const inputs = {
   "mako:thread-file": () => z.tuple([z.string(), z.string()]),
   "mako:thread-follow": () => z.tuple([z.string(), z.number()]),
   "mako:thread-groups": () => z.tuple([]),
+  "mako:thread-move": () => z.tuple([z.string(), z.string()]),
   "mako:thread-open": () => z.tuple([z.string()]),
   "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
@@ -1612,6 +1632,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:mcp-sync-apply", "tools"],
   ["mako:mcp-sync-preview", "tools"],
   ["mako:merge-pull", "git"],
+  ["mako:move-arrive", "conversations"],
   ["mako:native-authoring-apply", "tools"],
   ["mako:native-authoring-catalog", "tools"],
   ["mako:native-authoring-preview", "tools"],
@@ -1711,6 +1732,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-file", "threads"],
   ["mako:thread-follow", "threads"],
   ["mako:thread-groups", "threads"],
+  ["mako:thread-move", "conversations"],
   ["mako:thread-open", "threads"],
   ["mako:thread-original", "threads"],
   ["mako:thread-owner-resolve", "conversations"],

@@ -500,6 +500,40 @@ export class CloudConversations {
   }
 
   /**
+   * A conversation of this Mac's that moved to a cloud Thread: answered there from now on, under its own id, and
+   * followed with the Thread's other conversations. Remembered before anything starts on the machine, so a host
+   * that stops between finds it and starts it again (`started`).
+   */
+  async adopt(conversation: { conversationId: string; threadId: string; harness: string; repository: CloudRepository }): Promise<void> {
+    await this.start()
+    if (this.#entries.has(conversation.conversationId)) return
+    const entry: Entry = { ...conversation, createdAt: Date.now(), created: true, seq: 0 }
+    this.#entries.set(entry.conversationId, entry)
+    await this.#save()
+    this.#follow(entry)
+    hostLog("cloud-conversations", "a conversation of this Mac's moved to a cloud Thread", { conversationId: entry.conversationId, threadId: entry.threadId, harness: entry.harness })
+  }
+
+  /** An adopted conversation's start on its machine, as the machine answered it: what windows list from now on. */
+  started(conversationId: string, value: EncodedValue): LiveSummary {
+    const entry = this.#entries.get(conversationId)
+    if (!entry) throw new Error("That conversation isn't one of the cloud's here")
+    entry.summary = summaryOf(LiveSummarySchema.parse(decodeRuntimeValue(value)))
+    this.#saveSoon()
+    return entry.summary
+  }
+
+  /** Whether a conversation is answered by its cloud Thread: the Mac's own journal of it, if any, stands aside. */
+  has(conversationId: string): boolean {
+    return this.#entries.has(conversationId)
+  }
+
+  /** One call to a cloud Thread's machine, for a conversation when it has one: `#callThread`, for a move's steps. */
+  callThread(threadId: string, channel: string, args: readonly unknown[], conversationId?: string): Promise<EncodedValue> {
+    return this.#callThread(threadId, channel, args, conversationId ? { conversationId } : {})
+  }
+
+  /**
    * One of its conversations' folders, on its machine, for a window to read: the calls go to that conversation's
    * Thread, waking its machine if it sleeps, as any call to it would. Undefined for a conversation it doesn't have.
    */
@@ -652,21 +686,23 @@ export class CloudConversations {
     if (head.data.type === "control-activity") {
       // The machine's host emits every conversation's; only this one's is this Thread's to show.
       const event = ControlActivityEventSchema.safeParse(JSON.parse(parts.payload))
-      if (!event.success || event.data.activity.conversationId !== entry.conversationId) return
+      if (!event.success || this.#entries.get(event.data.activity.conversationId)?.threadId !== entry.threadId) return
       const { activity } = event.data
       this.controlPreviews.activity(entry.threadId, activity)
       this.#options.emit({ type: "control-activity", payload: parts.payload })
       return
     }
-    if (head.data.type !== "live-batch" || head.data.conversation !== entry.conversationId) return
-    if (entry.summary) {
+    // One subscription follows a Thread; a Thread moved from this Mac can carry several of its conversations.
+    const target = head.data.type === "live-batch" && head.data.conversation ? this.#entries.get(head.data.conversation) : undefined
+    if (!target || target.threadId !== entry.threadId) return
+    if (target.summary) {
       const { batch } = z.object({ batch: LiveBatchSchema }).parse(JSON.parse(parts.payload))
-      const summary: LiveSummary = { ...entry.summary, session: sessionAfter(entry.summary.session, batch), revision: batch.revision }
+      const summary: LiveSummary = { ...target.summary, session: sessionAfter(target.summary.session, batch), revision: batch.revision }
       if (batch.epoch) summary.epoch = batch.epoch
-      entry.summary = summaryOf(summary)
+      target.summary = summaryOf(summary)
     }
-    this.#options.emit({ type: "live-batch", conversation: entry.conversationId, payload: parts.payload })
-    this.#noteChange(entry.conversationId)
+    this.#options.emit({ type: "live-batch", conversation: target.conversationId, payload: parts.payload })
+    this.#noteChange(target.conversationId)
   }
 
   /** Its agent worked: a window on its folder reads it again, once a `CHANGED_MS` at most, after the last batch of a burst. */

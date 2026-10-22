@@ -54,3 +54,21 @@ export function githubRepositoryUrl(remote: string): string | undefined {
   const match = SSH_REMOTE.exec(remote.trim()) ?? HTTPS_REMOTE.exec(remote.trim())
   return match ? `https://github.com/${match[1]}/${match[2]}` : undefined
 }
+
+/**
+ * A Thread's move to the cloud as its windows show it: `packing` while its checkout and sessions are sent ahead,
+ * nothing here changed yet; `handing-over` once this Mac released it and its machine takes it, when nothing runs it
+ * anywhere; `resuming` once the cloud claimed it and its sessions resume there; `moved`. `kept-here` says why it
+ * didn't move, with everything as it was; `unsettled` says the cloud's answer isn't known yet, and that it's asked
+ * again: the Thread runs nowhere until it is.
+ */
+export type ThreadMoveStep =
+  | { kind: "packing" }
+  | { kind: "handing-over" }
+  | { kind: "resuming" }
+  | { kind: "moved" }
+  | { kind: "kept-here"; reason: string }
+  | { kind: "unsettled"; reason: string }
+
+/** What `mako:thread-move` came to: the Thread runs on a cloud Thread now, or it stayed here, and why. */
+export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }

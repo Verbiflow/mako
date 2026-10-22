@@ -1,7 +1,11 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"
+import { createReadStream } from "node:fs"
+import type { Readable } from "node:stream"
 import { basename, join } from "node:path"
+import { MoveAnswerSchema, MoveClaimRequestSchema, type MoveAnswer, type MoveCheckpoint, type MoveClaimRequest } from "@mako/protocol/moves"
+import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
 import {
@@ -54,8 +58,20 @@ const SIGN_IN_MS = 10 * 60_000
 /** A connection token is renewed this long before it expires. */
 const RENEW_BEFORE_S = 60
 const REQUEST_MS = 15_000
+/** The slowest upload a move waits for before giving up: 100 KB a second. */
+const UPLOAD_BYTES_PER_MS = 100
 /** A call to the cloud: JSON in and out, never redirected, bounded in time. */
-type CloudRequest = { method: "GET" | "POST" | "PUT" | "DELETE"; headers: Record<string, string>; body?: string; redirect: "error"; signal: AbortSignal }
+type CloudRequest = { method: "GET" | "HEAD" | "POST" | "PUT" | "DELETE"; headers: Record<string, string>; body?: string | Readable; duplex?: "half"; redirect: "error"; signal: AbortSignal }
+
+/** A file's bytes as a request's body, such as a move's checkpoint: read afresh for each attempt, its length given. */
+class FileBody {
+  readonly file: string
+  readonly bytes: number
+  constructor(file: string, bytes: number) {
+    this.file = file
+    this.bytes = bytes
+  }
+}
 
 /** A call to the cloud slower than this is logged, though it succeeded. */
 const SLOW_REQUEST_MS = 2_000
@@ -138,6 +154,8 @@ export type CloudRuntime = {
 export interface CloudThreadMaking {
   prepare?: boolean
   harness?: string
+  /** For a Thread moving from this Mac: its folder here, where its machine clones the repository, so its sessions resume as they are. */
+  folder?: string
 }
 
 export type CloudAccountOptions = {
@@ -381,9 +399,45 @@ export class CloudAccounts {
     const body: JsonObject = { threadId, home: "cloud", repository }
     if (options.prepare) body.prepare = true
     if (options.harness) body.harness = options.harness
+    if (options.folder) body.folder = options.folder
     const response = await this.#call(options.prepare ? "threads.prepare" : "threads.create", "POST", "/v1/threads", body)
     const answer = CreatedThreadSchema.safeParse(await response.json().catch(() => undefined))
     return { ready: answer.success && answer.data.ready === true }
+  }
+
+  /**
+   * A move's checkpoint, sent to the cloud Thread's records once: one the account already has is answered without
+   * sending its bytes. The cloud keeps it only if its bytes are the ones its hash names.
+   */
+  async sendCheckpoint(threadId: string, checkpoint: MoveCheckpoint, file: string): Promise<{ sent: boolean }> {
+    const path = `/v1/threads/${encodeURIComponent(threadId)}/records/checkpoints/${checkpoint.sha256}`
+    if ((await this.#call("moves.checkpoint", "HEAD", path, undefined, false, [404])).status === 200) return { sent: false }
+    await this.#call("moves.checkpoint", "PUT", path, new FileBody(file, checkpoint.bytes))
+    return { sent: true }
+  }
+
+  /** The cloud's claim of a move this Mac released, each Session one generation on, or its refusal if that came first. */
+  async claimMove(threadId: string, move: string, request: MoveClaimRequest): Promise<MoveAnswer> {
+    const response = await this.#call("moves.claim", "POST", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}/claim`, MoveClaimRequestSchema.parse(request))
+    return MoveAnswerSchema.parse(await response.json())
+  }
+
+  /** The cloud's promise never to take a move, or its claim if that came first. */
+  async refuseMove(threadId: string, move: string, reason: string): Promise<MoveAnswer> {
+    const response = await this.#call("moves.refuse", "POST", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}/refuse`, { reason })
+    return MoveAnswerSchema.parse(await response.json())
+  }
+
+  /** What the cloud answered a move, if it answered; undefined while it hasn't. */
+  async moveAnswer(threadId: string, move: string): Promise<MoveAnswer | undefined> {
+    const response = await this.#call("moves.answer", "GET", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}`, undefined, false, [404])
+    return response.status === 404 ? undefined : MoveAnswerSchema.parse(await response.json())
+  }
+
+  /** Where a cloud Thread's session records are kept, as this Mac's device reaches them, for sending a move's. */
+  async threadRecords(threadId: string): Promise<RecordsLink> {
+    const base = new URL(`/v1/threads/${encodeURIComponent(threadId)}/records`, this.#require()).toString()
+    return { id: base, base, authorization: `Bearer ${await this.#connectionToken()}` }
   }
 
   /**
@@ -603,7 +657,7 @@ export class CloudAccounts {
   }
 
   /** A call as this Mac; a status in `answers` is an answer to read, not a refusal. */
-  async #call(route: CloudRoute, method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: JsonValue, retried = false, answers: number[] = []): Promise<CloudResponse> {
+  async #call(route: CloudRoute, method: CloudRequest["method"], path: string, body?: JsonValue | FileBody, retried = false, answers: number[] = []): Promise<CloudResponse> {
     const token = await this.#connectionToken().catch((error) => {
       throw error instanceof Removed ? new CloudAccountError("This Mac isn't signed in to Mako.") : error
     })
@@ -613,7 +667,14 @@ export class CloudAccounts {
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_MS),
     }
-    if (body !== undefined) {
+    if (body instanceof FileBody) {
+      // Bytes, such as a move's checkpoint: streamed with their length, given as long as their size needs.
+      init.headers["content-type"] = "application/octet-stream"
+      init.headers["content-length"] = String(body.bytes)
+      init.body = createReadStream(body.file)
+      init.duplex = "half"
+      init.signal = AbortSignal.timeout(REQUEST_MS + Math.ceil(body.bytes / UPLOAD_BYTES_PER_MS))
+    } else if (body !== undefined) {
       init.headers["content-type"] = "application/json"
       init.body = JSON.stringify(body)
     }
