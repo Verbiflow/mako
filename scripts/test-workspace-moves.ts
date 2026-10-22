@@ -5,7 +5,7 @@ import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, lstatSync, symlinkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -19,7 +19,7 @@ import { MAKO_COMPUTER_SERVER, MAKO_THREAD_SERVER } from "@mako/host/contracts/m
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { WorkspaceMoves, type MoveSource } from "@mako/host/workspaces/moves"
 import { RECIPE_PATH } from "@mako/host/workspaces/thread-recipe"
-import { foldIgnored, moveablePlace, registerWorkspaceTools, workspaceTools } from "@mako/host/workspaces/tools"
+import { foldIgnored, moveablePlace, registerWorkspaceTools, repositoryPlace, workspaceTools } from "@mako/host/workspaces/tools"
 import { WorktreeLeaves } from "@mako/host/workspaces/worktree-leaves"
 import { checkoutConversations } from "@mako/host/workspaces/checkout-conversations"
 import type { Relocation } from "@mako/host/workspaces/conversations"
@@ -69,12 +69,17 @@ try {
     { kind: "updated", from: "origin/main", commits: 2 },
     { kind: "current", from: "origin/main" },
   ]
+  // A project checkout's repositories, each answering an update its own way.
+  const updatesOf = new Map<string, WorktreeUpdate | Error>()
+  let mergeStops: string | undefined
   const worktrees = {
     threadCheckout: () => projectCheckout ?? (placed && { path: placed.path, project: placed.repoRoot, branch: placed.branch, worktrees: [placed] }),
+    startedFrom: async () => "origin/main",
     review: async (path: string) => reviews.get(path) ?? assert.fail(`no review of ${path}`),
     ahead: async () => 0,
     shares: async () => undefined,
     merge: async (path: string) => {
+      if (path === mergeStops) throw new Error("Git stopped the merge and main was left as it was.")
       mergedPaths.push(path)
       return { branch: worktree.branch, into: "main" }
     },
@@ -87,7 +92,11 @@ try {
       removedPaths.push(path)
       return { root, worktrees: [] }
     },
-    update: async () => updates.shift()!,
+    update: async (path: string) => {
+      const answer = updatesOf.get(path)
+      if (answer instanceof Error) throw answer
+      return answer ?? updates.shift()!
+    },
     summary: async (path: string): Promise<WorktreeSummary & { startedFrom: string | null }> => ({
       path, into: "main", ahead: 1, changes: 0, startedFrom: "origin/main",
       landing: { kind: "open", into: "main", commits: 1 },
@@ -357,7 +366,7 @@ try {
   for (const name of ["worktree_status", "worktree_move", "worktree_update", "worktree_merge", "worktree_remove"])
     assert.match(listed.find((tool) => tool.name === name)!.description!, /^Call (when|first|before)\b/, `${name} opens with when to call it`)
   assert.match(agent.getInstructions() ?? "", /^Mako's tools for the Thread this Session belongs to\./, "the mako server says what it's for")
-  for (const word of ["main checkout", "worktree", "checkout", "app", "recipe"])
+  for (const word of ["main checkout", "worktree", "checkout", "project folder", "app", "recipe"])
     assert.match(agent.getInstructions() ?? "", new RegExp(`^- ${word}: `, "m"), `the instructions define "${word}", the word every tool uses`)
   // Each client numbers its own requests, so the same number on both servers is two different calls.
   const slow = computer.callTool({ name: "js", arguments: { code: "1" } })
@@ -487,22 +496,69 @@ try {
   assert.deepEqual(ofProject.threadWorktree, {
     folder: checkoutPath, branch: "mako/thread", mainCheckout: root,
     repositories: members.map((member) => ({
-      folder: member.path, mainCheckout: member.repoRoot, commitsSinceBranching: 0, startedFrom: "origin/main",
+      repository: basename(member.path), folder: member.path, mainCheckout: member.repoRoot, commitsSinceBranching: 0, startedFrom: "origin/main",
       behind: { from: "origin/main", commits: 2 },
       pullRequest: { number: 7, state: "open", url: "https://github.com/o/r/pull/7", checks: "failed" },
     })),
-  }, "each repository's branch stands on its own")
+  }, "each repository's branch stands on its own, under the name the pull request tools take")
+  const apiPath = members[0]!.path
+  const webPath = members[1]!.path
+  const reached = await repositoryPlace(gitRunner, worktrees, "g", checkoutPath)
+  assert.deepEqual(reached, { folder: checkoutPath, repositories: [{ name: "api", root: apiPath, startedFrom: "origin/main" }, { name: "web", root: webPath, startedFrom: "origin/main" }], here: undefined }, "the pull request tools reach each repository of the Thread's checkout, by its own start")
+  mkdirSync(join(webPath, "src"), { recursive: true })
+  assert.equal((await repositoryPlace(gitRunner, worktrees, "g", join(webPath, "src"))).here?.name, "web", "from inside one repository, that's the one meant")
+
+  // Updating: each repository on its own, every one of them accounted for.
+  updatesOf.set(apiPath, new Error("Commit or stash your changes first."))
+  updatesOf.set(webPath, { kind: "updated", from: "origin/main", commits: 3 })
+  const partly = await agent.callTool({ name: "worktree_update", arguments: {} })
+  assert.equal(partly.isError, undefined, "one repository refused doesn't fail the others' update")
+  assert.deepEqual(parseYaml(text(partly)), {
+    done: ["web: merged 3 commits from origin/main into mako/thread."],
+    refused: ["api: Commit or stash your changes first."],
+    next: "Run the checks before going on.",
+  })
+  updatesOf.set(apiPath, { kind: "conflicts", from: "origin/main", files: ["routes.ts"] })
+  updatesOf.set(webPath, { kind: "updated", from: "origin/main", commits: 1 })
+  const stoppedOne = parseYaml(text(await agent.callTool({ name: "worktree_update", arguments: {} })))
+  assert.deepEqual(stoppedOne.done, ["web: merged 1 commit from origin/main into mako/thread."], "a conflict in one repository doesn't stop the next from updating")
+  assert.deepEqual(stoppedOne.stopped, [{
+    repository: "api", folder: apiPath, conflicts: ["routes.ts"],
+    next: `${gitActionPrompt({ kind: "resolve", branch: "mako/thread", from: "origin/main", files: ["routes.ts"], repository: "api" })} \`git merge --abort\` there puts its branch back as it was.`,
+  }])
+  assert.match(stoppedOne.next, /^Each stopped merge stays in progress in its repository's folder/)
+  updatesOf.set(apiPath, { kind: "current", from: "origin/main" })
+  updatesOf.set(webPath, { kind: "current", from: "origin/main" })
+  const changesBefore = changed.length
+  assert.equal(text(await agent.callTool({ name: "worktree_update", arguments: {} })), "api: mako/thread already has everything in origin/main.\nweb: mako/thread already has everything in origin/main.")
+  assert.equal(changed.length, changesBefore, "an update that changed nothing tells no window")
+  updatesOf.set(apiPath, new Error("Finish or abort the merge first."))
+  updatesOf.set(webPath, new Error("Commit or stash your changes first."))
+  const noneUpdated = await agent.callTool({ name: "worktree_update", arguments: {} })
+  assert.equal(noneUpdated.isError, true)
+  assert.equal(text(noneUpdated), "Nothing was updated.\napi: Finish or abort the merge first.\nweb: Commit or stash your changes first.")
+  updatesOf.clear()
+
   const review = (path: string, commits: number, merge: WorktreeReview["merge"]): WorktreeReview =>
     ({ path, branch: "mako/thread", into: "main", base: worktree.base, commits, files: [], merge, behind: null })
-  reviews.set(members[0]!.path, review(members[0]!.path, 1, { ok: false, reason: "It conflicts with main." }))
-  reviews.set(members[1]!.path, review(members[1]!.path, 2, { ok: true, into: "main" }))
+  reviews.set(apiPath, review(apiPath, 1, { ok: false, reason: "It conflicts with main." }))
+  reviews.set(webPath, review(webPath, 2, { ok: true, into: "main" }))
   const refusedMerge = await agent.callTool({ name: "worktree_merge", arguments: {} })
   assert.equal(refusedMerge.isError, true)
   assert.equal(text(refusedMerge), "Nothing was merged. api: It conflicts with main.")
   assert.deepEqual(mergedPaths, [worktreePath], "one repository's refusal merges none of them")
-  reviews.set(members[0]!.path, review(members[0]!.path, 0, { ok: false, reason: "Nothing is committed here that main doesn't have." }))
+  // Git can still stop after every check passed: what merged and what didn't is said.
+  reviews.set(apiPath, review(apiPath, 1, { ok: true, into: "main" }))
+  mergeStops = webPath
+  const stoppedMerge = await agent.callTool({ name: "worktree_merge", arguments: {} })
+  assert.equal(stoppedMerge.isError, true)
+  assert.equal(text(stoppedMerge), "Merged mako/thread in api into main. web: Git stopped the merge and main was left as it was.")
+  assert.deepEqual(mergedPaths, [worktreePath, apiPath])
+  mergeStops = undefined
+  mergedPaths.pop()
+  reviews.set(apiPath, review(apiPath, 0, { ok: false, reason: "Nothing is committed here that main doesn't have." }))
   assert.equal(text(await agent.callTool({ name: "worktree_merge", arguments: {} })), "Merged mako/thread in web into main. The branch and this Thread's worktree are still there.")
-  assert.deepEqual(mergedPaths, [worktreePath, members[1]!.path], "a repository with nothing committed is left out")
+  assert.deepEqual(mergedPaths, [worktreePath, webPath], "a repository with nothing committed is left out")
   assert.match(text(await agent.callTool({ name: "worktree_remove", arguments: {} })), new RegExp(`^Removed this Thread's worktree, ${checkoutPath}\\. .* kept with everything committed on it in each repository\\.$`))
   assert.deepEqual(removedPaths, [worktreePath, members[0]!.path], "removing any of a project's worktrees removes its checkout")
   projectCheckout = undefined
@@ -527,6 +583,17 @@ try {
   assert.equal(ofFolder.uncommittedFiles, 1)
   assert.equal(ofFolder.ignoredInMain.folder, many)
   assert.ok(ofFolder.ignoredInMain.paths.includes("api/local.env"), "its ignored files are listed for bringing along")
+  assert.deepEqual(await repositoryPlace(gitRunner, worktrees, "g", many), {
+    folder: many,
+    repositories: [{ name: "api", root: join(many, "api"), startedFrom: null }, { name: "web", root: join(many, "web"), startedFrom: null }],
+    here: undefined,
+  }, "in the main checkout, the pull request tools reach each repository of the project folder by the names worktree_status lists")
+  assert.deepEqual(await repositoryPlace(gitRunner, worktrees, "g", join(many, "web")), {
+    folder: join(many, "web"), repositories: [{ name: "web", root: join(many, "web"), startedFrom: null }], here: { name: "web", root: join(many, "web"), startedFrom: null },
+  }, "a Session inside one repository reaches that one")
+  const noRepository = join(root, "no-repository")
+  mkdirSync(noRepository)
+  await assert.rejects(repositoryPlace(gitRunner, worktrees, "g", noRepository), /isn't in a Git repository, nor a project folder of a few/)
   assert.match(listed.find((tool) => tool.name === "worktree_move")!.description!, /several repositories/)
   assert.match(listed.find((tool) => tool.name === "worktree_move")!.description!, /the Thread's other Sessions in this checkout move together/)
 
@@ -615,7 +682,7 @@ try {
   ], "same place inside, or the main checkout's top when that folder isn't there; closed ones and a sibling folder stay out of it")
   summaries = [summary("raced", checkoutFolder)]
   assert.deepEqual(await conversationsOut.leave(checkoutFolder, join(root, "main-checkout")), ["“raced”"], "one that didn't move is named")
-  console.log("Workspace moves: ask, allow once or for the project, move at turn end with the whole Thread, the person's own move with its short wait and refusal, decline, failure, closed conversations; worktree tools over HTTP MCP scoped to the calling conversation; an agent's removal of its own worktree at turn end, its conversations going on in the main checkout")
+  console.log("Workspace moves: ask, allow once or for the project, move at turn end with the whole Thread, the person's own move with its short wait and refusal, decline, failure, closed conversations; worktree tools over HTTP MCP scoped to the calling conversation; a project checkout's repositories updated each on its own and merged together, every one accounted for, and reached by name for pull requests; an agent's removal of its own worktree at turn end, its conversations going on in the main checkout")
 } finally {
   await agent.close().catch(() => {})
   grants?.close()

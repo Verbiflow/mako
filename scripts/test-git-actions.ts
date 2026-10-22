@@ -9,9 +9,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { parse as parseYaml } from "yaml"
 import { z } from "zod"
-import { gitActionPrompt, gitCommands, PULL_REQUEST_WRITING, pullBaseFor, type GitCommandFacts } from "@mako/host/contracts/git-actions"
+import { gitActionPrompt, gitCommands, gitRepositoryName, PULL_REQUEST_WRITING, pullBaseFor, type GitCommandFacts } from "@mako/host/contracts/git-actions"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
-import { pullRequestTools, registerPullRequestTools } from "@mako/host/git/pull-request-tools"
+import { pullRequestTools, registerPullRequestTools, type ReachableRepository, type RepositoryPlace } from "@mako/host/git/pull-request-tools"
 import { mergePullRequest, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "@mako/host/git/pull-requests"
 
 const gitRunner = new Git()
@@ -44,6 +44,8 @@ const out = (value) => process.stdout.write(typeof value === "string" ? value : 
 const fail = (message) => { process.stderr.write(message + "\\n"); process.exit(1) }
 const flag = (name) => { const at = args.indexOf(name); return at < 0 ? undefined : args[at + 1] }
 const branch = () => execFileSync("git", ["branch", "--show-current"], { encoding: "utf8" }).trim()
+// Each repository's pull requests are its own, as on GitHub: two repositories may have the same branch.
+const repo = () => require("node:path").basename(execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim())
 db.calls.push(args.filter((arg) => !arg.startsWith("query=")).join(" "))
 save()
 const [a, b] = args
@@ -52,14 +54,14 @@ else if (a === "api" && b === "user") out({ login: "you" })
 else if (a === "api" && b === "graphql") out({ data: { repository: { pullRequest: { reviewThreads: { nodes: db.threads } } } } })
 else if (a === "repo" && b === "view") out(flag("--json").includes("squash") ? db.methods : { nameWithOwner: "o/r", defaultBranchRef: { name: "main" } })
 else if (a === "pr" && b === "view") {
-  const pull = db.pulls.filter((entry) => entry.headRefName === branch()).at(-1)
+  const pull = db.pulls.filter((entry) => entry.headRefName === branch() && entry.repo === repo()).at(-1)
   pull ? out(pull) : fail("no pull requests found for branch " + branch())
 } else if (a === "pr" && b === "create") {
   const head = branch()
   const pushed = execFileSync("git", ["ls-remote", "origin", "refs/heads/" + head], { encoding: "utf8" }).trim()
   if (!pushed) fail("aborted: you must first push the current branch to a remote")
   const number = 100 + db.pulls.length
-  db.pulls.push({ number, title: flag("--title"), body: flag("--body"), state: "OPEN", isDraft: args.includes("--draft"), url: "https://github.com/o/r/pull/" + number,
+  db.pulls.push({ number, repo: repo(), title: flag("--title"), body: flag("--body"), state: "OPEN", isDraft: args.includes("--draft"), url: "https://github.com/o/r/pull/" + number,
     headRefName: head, baseRefName: flag("--base"), mergeable: "MERGEABLE", reviewDecision: "", statusCheckRollup: [], latestReviews: [] })
   save()
   out("https://github.com/o/r/pull/" + number + "\\n")
@@ -81,6 +83,7 @@ else fail("unknown command: " + args.join(" "))
 chmodSync(ghPath, 0o755)
 interface FakePull {
   number: number
+  repo: string
   title: string
   body: string
   state: "OPEN" | "MERGED" | "CLOSED"
@@ -135,6 +138,23 @@ try {
   assert.equal(byName({ ...facts, operation: "merge" }).update!.blocked, "Finish the merge first.")
   assert.equal(byName({ ...facts, worktree: { into: "main", behind: { from: "origin/main", commits: 0 } } }).update!.blocked, "Already has everything in origin/main.")
   for (const command of gitCommands(facts)) assert.ok(Boolean(command.prompt) !== Boolean(command.blocked), `${command.name} either stages a message or says why not`)
+  // In a project folder of several repositories, every tool call the message asks for names the repository on screen.
+  assert.equal(
+    gitActionPrompt({ kind: "pr", branch: "mako/x", base: "release", draft: true, repository: "web" }),
+    "Open a pull request for `mako/x` in `web` into `release` as a draft. Call pull_request_status with repository `web` for the base, the commits it would carry and the repository's template, and commit anything that belongs in it. Then write the title and body from what this branch does and why, and open it with pull_request_open with repository `web`, base `release` and draft: true. Reply with its link.",
+  )
+  assert.equal(gitActionPrompt({ kind: "push", number: 7, repository: "web" }), "Bring #7 in `web` up to date: commit what belongs in it, then call pull_request_open with repository `web` to push. If its title or body no longer says what the branch does, pass new ones.")
+  assert.match(gitActionPrompt({ kind: "fix-checks", number: 7, failing: ["test"], repository: "web" }), /^test is failing on #7 in `web`\. Call pull_request_status with logs: true and repository `web` to read why, .* push with pull_request_open with repository `web`\.$/)
+  assert.match(gitActionPrompt({ kind: "resolve", branch: "mako/x", from: "origin/main", files: ["a.ts"], repository: "web" }), /^Merging origin\/main into mako\/x in `web` stopped on conflicts in a\.ts\. .* `git merge --continue` in that repository's folder\.$/)
+  const shown = { root: "/p/web", repositories: [{ label: "api", root: "/p/api" }, { label: "web", root: "/p/web" }] }
+  assert.equal(gitRepositoryName(shown), "web", "the window names the repository its Git panel shows")
+  assert.equal(gitRepositoryName({ root: "/p/web", repositories: [{ label: "web", root: "/p/web" }] }), undefined, "and none in a single repository")
+  assert.equal(gitRepositoryName({ root: "/p/web" }), undefined)
+  const inWeb = byName({ ...facts, repository: "web", pull: { number: 7, failing: ["test"] } })
+  assert.equal(inWeb.pr!.hint, "Push new commits to #7 in web")
+  assert.equal(inWeb.pr!.prompt, gitActionPrompt({ kind: "push", number: 7, repository: "web" }))
+  assert.equal(inWeb["fix-checks"]!.prompt, gitActionPrompt({ kind: "fix-checks", number: 7, failing: ["test"], repository: "web" }))
+  assert.equal(inWeb.update!.prompt, gitActionPrompt({ kind: "update", branch: "mako/x", from: "origin/main" }), "worktree_update acts on every repository, so its message names none")
 
   // An origin with main and release, and a clone to work in.
   const origin = join(root, "origin.git")
@@ -247,7 +267,8 @@ try {
   git(project, "checkout", "-q", "-b", "mako/second", "origin/main")
   commit(project, "f.txt", "f", "Add f")
   let changed = 0
-  const tools = pullRequestTools({ git: gitRunner, cwd: () => project, startedFrom: async () => "origin/release", changed: () => { changed += 1 } })
+  const alone: ReachableRepository = { name: "project", root: project, startedFrom: "origin/release" }
+  const tools = pullRequestTools({ git: gitRunner, place: async () => ({ folder: project, repositories: [alone], here: alone }), changed: () => { changed += 1 } })
   grants = await startConversationMcp({ authorizeAgent: () => {} }, async () => ({ content: [] }), [(server, id) => registerPullRequestTools(server, tools, id)])
   const grant = grants.mint("binding", "c")
   await agent.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl!), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
@@ -272,8 +293,73 @@ try {
   assert.equal(changed, 1, "windows read GitHub again after opening")
   rmSync(join(project, "draft.txt"))
   assert.equal(text(await agent.callTool({ name: "pull_request_open", arguments: {} })), "#101 was already open; nothing new to push: https://github.com/o/r/pull/101.")
+  for (const tool of listed) {
+    assert.ok(z.object({ properties: z.object({ repository: z.object({ type: z.literal("string") }) }) }).safeParse(tool.inputSchema).success, `${tool.name} takes a repository`)
+    assert.match(tool.description ?? "", /one pull request per repository/, `${tool.name} says how it picks a project's repository`)
+  }
+  assert.match(describe("pull_request_merge").description!, /the one the others depend on first, and use method merge for a repository whose commits another one pins/)
 
-  console.log("Git actions: shared base, writing rules and commands; open pushes first and never forces, updates the open one, refuses the default branch and empty branches; status with checks, comments and failed logs; re-run names each run; merge by the shared guard and allowed methods; the tools over HTTP MCP")
+  // A project folder of two repositories on one branch: a pull request each, the repository named by its folder.
+  const multi = join(root, "multi")
+  const members = ["api", "web"].map((name) => {
+    const memberOrigin = join(root, `${name}.git`)
+    git(root, "init", "-q", "--bare", "-b", "main", memberOrigin)
+    const memberSeed = join(root, `${name}-seed`)
+    git(root, "clone", "-q", memberOrigin, memberSeed)
+    git(memberSeed, "checkout", "-q", "-b", "main")
+    commit(memberSeed, "one.txt", "one", "one")
+    git(memberSeed, "push", "-q", "origin", "main")
+    const member = join(multi, name)
+    git(root, "clone", "-q", memberOrigin, member)
+    git(member, "checkout", "-q", "-b", "mako/multi", "origin/main")
+    return { repository: { name, root: member, startedFrom: "origin/main" }, origin: memberOrigin }
+  })
+  const api = { ...members[0]!.repository, origin: members[0]!.origin }
+  const web = { ...members[1]!.repository, origin: members[1]!.origin }
+  let here: ReachableRepository | undefined
+  const place = async (): Promise<RepositoryPlace> => ({ folder: multi, repositories: members.map(({ repository }) => repository), here })
+  const project2 = pullRequestTools({ git: gitRunner, place, changed: () => {} })
+  const pullOf = (name: string) => github().pulls.filter((pull) => pull.repo === name)
+
+  commit(api.root, "api.txt", "api", "Add the endpoint")
+  const both = parseYaml(await project2.status("c"))
+  assert.equal(both.projectFolder, multi)
+  assert.deepEqual(both.repositories.map((entry: { repository: string }) => entry.repository), ["api", "web"], "from the project folder, status reports every repository under its name")
+  assert.equal(both.repositories[0].opening.commits.length, 1)
+  assert.equal(both.repositories[1].opening.blocked, "mako/multi has no commits that main doesn't. Commit the work first.")
+  assert.equal(await project2.open("c", { title: "Add the endpoint", body: "## Why\nweb needs it." }), "api: Opened #102 into main: https://github.com/o/r/pull/102.", "the only repository with work is the one opened, and the reply names it")
+  assert.deepEqual([pullOf("api").length, pullOf("web").length], [1, 0])
+
+  commit(web.root, "web.txt", "web", "Call the endpoint")
+  await assert.rejects(project2.open("c", {}), /^Error: A new pull request needs a title\.$/, "web is now the only one with work: api's pull request has nothing new to push")
+  assert.equal(await project2.open("c", { title: "Call the endpoint", body: "Needs #102." }), "web: Opened #103 into main: https://github.com/o/r/pull/103.")
+
+  commit(api.root, "api2.txt", "two", "Validate input")
+  commit(web.root, "web2.txt", "two", "Show errors")
+  const apiPushed = git(api.origin, "rev-parse", "mako/multi")
+  await assert.rejects(project2.open("c", {}), (error: Error) => {
+    assert.equal(error.message, "Several of this project's repositories have work to open, and each takes its own pull request. Nothing was pushed. Call pull_request_open once for each, passing repository and a title and body for that repository's own change:\n- api: #102 is open, 1 commit to push; GitHub would merge it now\n- web: #103 is open, 1 commit to push; GitHub would merge it now")
+    return true
+  })
+  assert.equal(git(api.origin, "rev-parse", "mako/multi"), apiPushed, "an ambiguous call pushes nothing")
+  assert.equal(await project2.open("c", { repository: "web" }), "web: #103 was already open; pushed 1 commit: https://github.com/o/r/pull/103.")
+  assert.equal(await project2.open("c", { repository: `${multi}/api/` }), "api: #102 was already open; pushed 1 commit: https://github.com/o/r/pull/102.", "a repository is named by its folder, absolute or from the project")
+  await assert.rejects(project2.status("c", { repository: "nope" }), /^Error: .*multi has no repository named "nope"\. Pass one of: api, web\.$/)
+
+  const onlyApi = parseYaml(await project2.status("c", { repository: "api" }))
+  assert.deepEqual([onlyApi.repository, onlyApi.pullRequest.number, onlyApi.otherRepositories], ["api", 102, ["web"]], "one repository's report names it and its siblings")
+  here = { name: "web", root: web.root, startedFrom: "origin/main" }
+  assert.equal(parseYaml(await project2.status("c")).repository, "web", "from inside a repository, the tools act on it")
+  here = undefined
+
+  const mergedBefore = github().merged.length
+  await assert.rejects(project2.merge("c"), /^Error: Several of this project's repositories have an open pull request; nothing was merged\. Pass repository to merge one at a time, the one the others depend on first:\n- api: #102 is open/)
+  assert.equal(github().merged.length, mergedBefore, "nothing merged without a repository named")
+  assert.equal(await project2.merge("c", { repository: "api", method: "merge" }), "api: Merged #102 into main (merge). The branch is kept.")
+  assert.equal(await project2.merge("c"), "web: Merged #103 into main (merge). The branch is kept.", "with one left open, it's the one merged")
+  await assert.rejects(project2.merge("c"), /^Error: None of this project's repositories has an open pull request:\n- api: .*\n- web: /)
+
+  console.log("Git actions: shared base, writing rules and commands; open pushes first and never forces, updates the open one, refuses the default branch and empty branches; status with checks, comments and failed logs; re-run names each run; merge by the shared guard and allowed methods; the tools over HTTP MCP; a project folder's repositories each with its own pull request, named or found, and refused with where each stands when it's ambiguous")
 } finally {
   await agent.close().catch(() => {})
   grants?.close()

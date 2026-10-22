@@ -14,7 +14,7 @@ import { ThreadWorktreeService, type CheckoutConversations } from "./thread-work
 import { moveHold, moveSource, ThreadWorktreeMoves } from "./thread-worktree-moves.js"
 import { WorkspaceMoves } from "./moves.js"
 import { WorktreeLeaves } from "./worktree-leaves.js"
-import { moveablePlace, registerWorkspaceTools, within, workspaceTools } from "./tools.js"
+import { moveablePlace, registerWorkspaceTools, repositoryPlace, workspaceTools } from "./tools.js"
 import { projectRecipe, type RecipeAccounts, type RecipeWhere } from "./thread-recipe.js"
 export { RecipeAccounts } from "./thread-recipe.js"
 import { CheckoutHeadService } from "./checkout-heads.js"
@@ -316,11 +316,10 @@ function agentTools({ git, workspaces, live, emit }: WorkspaceMoversDeps, moves:
   const workspace = workspaceTools({ git, cwd, worktrees, moves, leaves, changed, pullsOf: listBranchPulls, recipesRoot: workspaces.recipes })
   const pulls = pullRequestTools({
     git,
-    cwd,
-    async startedFrom(id, folder) {
-      const worktree = worktrees?.ofConversation(id)
-      if (!worktree || !(await within(worktree.path, folder))) return null
-      return (await worktrees?.startedFrom(worktree.path)) ?? null
+    async place(id) {
+      const folder = cwd(id)
+      if (!folder) throw new Error("Mako isn't running this conversation.")
+      return repositoryPlace(git, worktrees, id, folder)
     },
     changed,
   })

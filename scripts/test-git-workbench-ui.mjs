@@ -522,7 +522,17 @@ async function check() {
     await evaluate(`[...${card}.querySelectorAll('button')].find(b => b.textContent.startsWith('Ask ')).click()`)
     await until("window.__attached.length === 1 && !document.querySelector('section[aria-label=\"Open a pull request\"]')")
     assert.match(await evaluate("window.__attached[0]"), /^Open a pull request for `feature\/logo` into `main`\. Call pull_request_status/)
-    console.log("Pull request: the harness writes it by default, here or in a new session; Write it yourself is the override; no sparkles")
+    // In a project folder of several repositories, the agent is told which one the Git panel shows.
+    await evaluate(`(async () => {
+      const m = await import('/src/dev/git-workbench-check.tsx')
+      const previous = m.store.get().git
+      m.store.set({ git: { ...previous, cwd: '/fixture/mono', root: '/fixture/mono/mako-backend', repositories: [{ label: 'mako', root: '/fixture/mono/mako' }, { label: 'mako-backend', root: '/fixture/mono/mako-backend' }] } })
+      const { stageGitAction } = await import('/src/state/git-actions.ts')
+      stageGitAction({ kind: 'fix-checks', number: 88, failing: ['test'] })
+      m.store.set({ git: previous })
+    })()`)
+    assert.match(await evaluate("window.__attached.at(-1)"), /^test is failing on #88 in `mako-backend`\. Call pull_request_status with logs: true and repository `mako-backend` to read why/)
+    console.log("Pull request: the harness writes it by default, here or in a new session; Write it yourself is the override; no sparkles; a project folder's repository named to the agent")
     console.log(
       "Git UI: 13,000 files with bounded DOM, last-file staging, frame responsiveness, one Push control, pending/success/failure with counts, pull/merge/conflicts, project isolation, history skeletons, commit feedback and reduced motion passed; fixture transport only, no remote pushes"
     )

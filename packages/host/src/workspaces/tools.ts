@@ -3,7 +3,7 @@ import { realpath } from "node:fs/promises"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { z } from "zod"
 import { locateCheckout } from "../base/checkout-location.js"
-import { discoverRepositories } from "../git/index.js"
+import { discoverRepositories, projectRepositories, type ReachableRepository, type RepositoryPlace } from "../git/index.js"
 import type { ThreadCheckout, ThreadWorktreeService } from "./thread-worktrees.js"
 import { toolText } from "../base/tool-text.js"
 import type { WorkspaceMoves } from "./moves.js"
@@ -12,7 +12,7 @@ import type { Git } from "@mako/git"
 import { checkoutPattern, projectRoot, projectRecipe } from "./thread-recipe.js"
 import { bringFiles, ignoredEntries, type BringEntry } from "./worktree-carry.js"
 import { gitActionPrompt } from "../contracts/git-actions.js"
-import type { ThreadWorktree, WorktreeBranchPull } from "../contracts/thread-worktrees.js"
+import type { ThreadWorktree, WorktreeBranchPull, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 import type { MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 
 type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary" | "shares">
@@ -51,8 +51,8 @@ export interface WorkspaceStatus {
     folder: string
     branch: string
     mainCheckout: string
-    /** A project folder of several repositories: each one's worktree inside `folder`, and how its branch stands. */
-    repositories?: (BranchState & { folder: string; mainCheckout: string })[]
+    /** A project folder of several repositories: each one's name (its folder inside `folder`, as the pull request tools take it), its worktree, and how its branch stands. */
+    repositories?: (BranchState & { repository: string; folder: string; mainCheckout: string })[]
   }
   move?: "asking" | "allowed" | "declined" | "moving"
   /**
@@ -167,6 +167,40 @@ async function uncommittedIn(git: Git, folder: string): Promise<number | undefin
   return roots.length ? uncommittedAcross(git, roots) : undefined
 }
 
+/**
+ * The repositories a conversation's pull request tools reach from `cwd`:
+ * this Thread's worktrees when it edits in its checkout, the repository
+ * `cwd` is in, or each repository of a project folder holding several.
+ * Each is named by its folder in the project, as worktree_status lists it.
+ */
+export async function repositoryPlace(git: Git, worktrees: Pick<ThreadWorktreeService, "threadCheckout" | "startedFrom"> | null, conversationId: string, cwd: string): Promise<RepositoryPlace> {
+  const checkout = worktrees?.threadCheckout(conversationId)
+  const listed = checkout && (await within(checkout.path, cwd))
+    ? await Promise.all(checkout.worktrees.map(async (worktree) => ({ name: named(checkout, worktree), root: worktree.path, startedFrom: await worktrees!.startedFrom(worktree.path).catch(() => null) })))
+    : undefined
+  if (checkout && listed) return { folder: checkout.path, repositories: listed, here: await inside(listed, cwd) }
+  const top = await git.output(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")
+  if (top) {
+    const only = { name: basename(top), root: top, startedFrom: null }
+    return { folder: top, repositories: [only], here: only }
+  }
+  const found = await projectRepositories(git, cwd)
+  if ("refusal" in found) throw new Error(`${cwd} isn't in a Git repository, nor a project folder of a few, so it has no branch for a pull request. Work in a repository's folder.`)
+  const folder = await realpath(cwd).catch(() => cwd)
+  const repositories = found.roots.map((root) => ({ name: relative(folder, root) || basename(root), root, startedFrom: null }))
+  return { folder, repositories, here: await inside(repositories, cwd) }
+}
+
+async function inside(repositories: readonly ReachableRepository[], cwd: string): Promise<ReachableRepository | undefined> {
+  for (const repository of repositories) if (await within(repository.root, cwd)) return repository
+  return undefined
+}
+
+/** The repository a project checkout's worktree holds, as a person names it: its folder inside the checkout. */
+function named(checkout: Pick<ThreadCheckout, "path">, worktree: Pick<ThreadWorktree, "path">): string {
+  return relative(checkout.path, worktree.path) || basename(worktree.path)
+}
+
 /** The same folder's project root and uncommitted files, for a move's request. */
 export async function moveablePlace(git: Git, worktrees: Worktrees | null, conversationId: string, cwd: string) {
   if (!worktrees) return { refused: "Worktrees need the Thread store, which didn't open." }
@@ -213,8 +247,6 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
     }
     return state
   }
-  /** The repository a project checkout's worktree holds, as a person names it: its folder inside the checkout. */
-  const named = (checkout: ThreadCheckout, worktree: ThreadWorktree) => relative(checkout.path, worktree.path) || basename(worktree.path)
   return {
     async status(conversationId) {
       const cwd = cwdOf(conversationId)
@@ -256,7 +288,7 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
           folder: several.path,
           branch: several.branch,
           mainCheckout: several.project,
-          repositories: await Promise.all(several.worktrees.map(async (worktree) => ({ folder: worktree.path, mainCheckout: worktree.repoRoot, ...await branchState(worktree.path) }))),
+          repositories: await Promise.all(several.worktrees.map(async (worktree) => ({ repository: named(several, worktree), folder: worktree.path, mainCheckout: worktree.repoRoot, ...await branchState(worktree.path) }))),
         }
       } else if (current?.worktrees[0]) {
         const [worktree] = current.worktrees
@@ -280,27 +312,54 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
     },
     async update(conversationId) {
       const checkout = threadCheckout(conversationId)
-      const lines: string[] = []
-      for (const worktree of checkout.worktrees) {
-        const where = checkout.worktrees.length > 1 ? `${named(checkout, worktree)}: ` : ""
-        const result = await deps.worktrees!.update(worktree.path)
-        if (result.kind === "current") {
-          lines.push(`${where}${worktree.branch} already has everything in ${result.from}.`)
-          continue
-        }
+      if (checkout.worktrees.length === 1) {
+        const [worktree] = checkout.worktrees
+        const result = await deps.worktrees!.update(worktree!.path)
+        if (result.kind === "current") return `${worktree!.branch} already has everything in ${result.from}.`
         deps.changed()
-        if (result.kind === "updated") {
-          lines.push(`${where}Merged ${plural(result.commits, "commit")} from ${result.from} into ${worktree.branch}. Run the checks before going on.`)
-          continue
-        }
+        if (result.kind === "updated") return `Merged ${plural(result.commits, "commit")} from ${result.from} into ${worktree!.branch}. Run the checks before going on.`
         return toolText({
-          done: lines.length ? lines : undefined,
-          stopped: `The merge is in progress in ${worktree.path}.`,
+          stopped: `The merge is in progress in ${worktree!.path}.`,
           conflicts: result.files,
-          next: `${gitActionPrompt({ kind: "resolve", branch: worktree.branch, from: result.from, files: result.files })} \`git merge --abort\` puts the branch back as it was.${checkout.worktrees.length > 1 ? " Call worktree_update again afterwards for the other repositories." : ""}`,
+          next: `${gitActionPrompt({ kind: "resolve", branch: worktree!.branch, from: result.from, files: result.files })} \`git merge --abort\` puts the branch back as it was.`,
         })
       }
-      return lines.join("\n")
+      // Each repository updates on its own: one refused or stopped on conflicts doesn't hold the others back.
+      const done: string[] = []
+      const refused: string[] = []
+      const stopped: { repository: string; folder: string; conflicts: string[]; next: string }[] = []
+      let moved = false
+      for (const worktree of checkout.worktrees) {
+        const repository = named(checkout, worktree)
+        let result: WorktreeUpdate
+        try {
+          result = await deps.worktrees!.update(worktree.path)
+        } catch (error) {
+          refused.push(`${repository}: ${error instanceof Error ? error.message : String(error)}`)
+          continue
+        }
+        if (result.kind === "current") done.push(`${repository}: ${worktree.branch} already has everything in ${result.from}.`)
+        else {
+          moved = true
+          if (result.kind === "updated") done.push(`${repository}: merged ${plural(result.commits, "commit")} from ${result.from} into ${worktree.branch}.`)
+          else stopped.push({
+            repository,
+            folder: worktree.path,
+            conflicts: result.files,
+            next: `${gitActionPrompt({ kind: "resolve", branch: worktree.branch, from: result.from, files: result.files, repository })} \`git merge --abort\` there puts its branch back as it was.`,
+          })
+        }
+      }
+      if (moved) deps.changed()
+      if (!stopped.length && !done.length) throw new Error(`Nothing was updated.\n${refused.join("\n")}`)
+      const checks = moved ? "Run the checks before going on." : undefined
+      if (!stopped.length && !refused.length) return [...done, ...(checks ? [checks] : [])].join("\n")
+      return toolText({
+        done: done.length ? done : undefined,
+        refused: refused.length ? refused : undefined,
+        stopped: stopped.length ? stopped : undefined,
+        next: stopped.length ? "Each stopped merge stays in progress in its repository's folder; resolve them there, then run the checks." : checks,
+      })
     },
     async merge(conversationId) {
       const checkout = threadCheckout(conversationId)
@@ -317,9 +376,20 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       const refused = working.flatMap(({ worktree, review }) => review.merge.ok ? [] : [`${named(checkout, worktree)}: ${review.merge.reason}`])
       if (refused.length) throw new Error(`Nothing was merged. ${refused.join(" ")}`)
       const merged: string[] = []
-      for (const { worktree } of working) {
-        const done = await deps.worktrees!.merge(worktree.path)
-        merged.push(`${named(checkout, worktree)} into ${done.into}`)
+      for (const [index, { worktree }] of working.entries()) {
+        try {
+          const done = await deps.worktrees!.merge(worktree.path)
+          merged.push(`${named(checkout, worktree)} into ${done.into}`)
+        } catch (error) {
+          // The check can pass and Git still stop: the main checkout changed in between. Say what's merged and what isn't.
+          if (merged.length) deps.changed()
+          const left = working.slice(index + 1).map((rest) => named(checkout, rest.worktree))
+          throw new Error([
+            merged.length ? `Merged ${checkout.branch} in ${merged.join(", ")}.` : "Nothing was merged.",
+            `${named(checkout, worktree)}: ${error instanceof Error ? error.message : String(error)}`,
+            left.length ? `Not merged yet: ${left.join(", ")}.` : "",
+          ].filter(Boolean).join(" "), { cause: error })
+        }
       }
       deps.changed()
       return `Merged ${checkout.branch} in ${merged.join(", ")}. The branch and this Thread's worktree are still there.`
@@ -363,7 +433,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_status",
     {
       description:
-        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. A project folder holding several repositories is a main checkout too, with its repositories listed. Returns the folder with its branch and uncommitted files, and, in the main checkout, whose those changes are: how many changed files and lines are this Thread's (each line counts for its last writer), other Threads', the user's, might be this Thread's, or not attributed (changed before Mako tracked the checkout); this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks (for a project folder holding several repositories, the worktree holds one per repository on the same branch, each listed with these); the user's answer to a move you asked for; and ignored paths in the originating main checkout. Lists names only; ignored folders are named once, and when there are many, a folder of many shows as one folder/** pattern that worktree_bring takes as it is.",
+        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. A project folder holding several repositories is a main checkout too, with its repositories listed. Returns the folder with its branch and uncommitted files, and, in the main checkout, whose those changes are: how many changed files and lines are this Thread's (each line counts for its last writer), other Threads', the user's, might be this Thread's, or not attributed (changed before Mako tracked the checkout); this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks (for a project folder holding several repositories, the worktree holds one per repository on the same branch, each listed with these under its name, which the pull_request_* tools take as repository); the user's answer to a move you asked for; and ignored paths in the originating main checkout. Lists names only; ignored folders are named once, and when there are many, a folder of many shows as one folder/** pattern that worktree_bring takes as it is.",
       inputSchema: none,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -392,7 +462,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_update",
     {
       description:
-        "Call when the user asks to update this branch from main, or before opening a pull request when worktree_status says the branch is behind. Fetches, then merges what the branch new Threads start from has (main, or origin/main when only it moved) into this Thread's worktree branch; the same Update the user has in the Git sidebar. Never rebases or force-pushes. Refused with uncommitted changes to tracked files, during another merge or rebase, or off the branch. When it stops on conflicts, the merge stays in progress and the result lists the files and how to finish it.",
+        "Call when the user asks to update this branch from main, or before opening a pull request when worktree_status says the branch is behind. Fetches, then merges what the branch new Threads start from has (main, or origin/main when only it moved) into this Thread's worktree branch; the same Update the user has in the Git sidebar. Never rebases or force-pushes. Refused with uncommitted changes to tracked files, during another merge or rebase, or off the branch. When it stops on conflicts, the merge stays in progress and the result lists the files and how to finish it. A project folder holding several repositories updates each one's branch on its own: the result names each repository with what happened, and one that's refused or stops on conflicts doesn't keep the others from updating.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -402,7 +472,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_merge",
     {
       description:
-        "Call when the user asks to merge this Thread's work. Merges the branch of this Thread's worktree into the branch the main checkout has out. Mako merges only when it's safe (everything on the branch committed, the main checkout clean and idle, no conflicts); otherwise it says what's in the way and changes nothing. The branch and the worktree stay.",
+        "Call when the user asks to merge this Thread's work. Merges the branch of this Thread's worktree into the branch the main checkout has out. Mako merges only when it's safe (everything on the branch committed, the main checkout clean and idle, no conflicts); otherwise it says what's in the way and changes nothing. A project folder holding several repositories merges every repository with commits together: each is checked first, and one that can't merge keeps all of them from merging. This merges on this computer; a pull request merges on GitHub with pull_request_merge. The branch and the worktree stay.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
