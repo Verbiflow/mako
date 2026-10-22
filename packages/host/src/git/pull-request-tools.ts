@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import { basename, isAbsolute, resolve } from "node:path"
+import { basename, relative, resolve, sep } from "node:path"
 import { z } from "zod"
 import { MERGE_METHODS, PULL_REQUEST_WRITING, type MergeMethod } from "../contracts/git-actions.js"
 import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, type PullRequestDraft, type PullRequestReport } from "./pull-requests.js"
@@ -46,11 +46,11 @@ const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "
 
 /** The repository `wanted` names: its name in the project, its folder from the project or as an absolute path, or its folder's own name when only one has it. */
 function named(place: RepositoryPlace, wanted: string): ReachableRepository {
-  const name = wanted.trim().replace(/^\.\//, "").replace(/\/+$/, "")
-  const path = isAbsolute(name) ? name : resolve(place.folder, name)
+  const path = resolve(place.folder, wanted.trim())
+  const name = relative(place.folder, path)
   const found = place.repositories.find((repository) => repository.name === name || repository.root === path)
   if (found) return found
-  const byFolder = place.repositories.filter((repository) => basename(repository.root) === name)
+  const byFolder = name.includes(sep) ? [] : place.repositories.filter((repository) => basename(repository.root) === name)
   if (byFolder.length === 1) return byFolder[0]!
   const names = place.repositories.map((repository) => repository.name).join(", ")
   throw new Error(`${place.folder} has no repository named ${JSON.stringify(wanted)}. Pass one of: ${names}.`)

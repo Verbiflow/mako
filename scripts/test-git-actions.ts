@@ -345,6 +345,11 @@ try {
   assert.equal(await project2.open("c", { repository: "web" }), "web: #103 was already open; pushed 1 commit: https://github.com/o/r/pull/103.")
   assert.equal(await project2.open("c", { repository: `${multi}/api/` }), "api: #102 was already open; pushed 1 commit: https://github.com/o/r/pull/102.", "a repository is named by its folder, absolute or from the project")
   await assert.rejects(project2.status("c", { repository: "nope" }), /^Error: .*multi has no repository named "nope"\. Pass one of: api, web\.$/)
+  assert.equal(parseYaml(await project2.status("c", { repository: " ./web/ " })).repository, "web", "a name from the project folder may start with ./ and end with /")
+  const slashes = "/".repeat(100_000) + "x"
+  const started = performance.now()
+  await assert.rejects(project2.status("c", { repository: slashes }), /has no repository named/)
+  assert.ok(performance.now() - started < 1000, "a hostile name is refused in linear time")
 
   const onlyApi = parseYaml(await project2.status("c", { repository: "api" }))
   assert.deepEqual([onlyApi.repository, onlyApi.pullRequest.number, onlyApi.otherRepositories], ["api", 102, ["web"]], "one repository's report names it and its siblings")
