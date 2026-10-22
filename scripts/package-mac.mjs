@@ -109,8 +109,16 @@ try {
   // electron/notification-authorization.ts for why it must live there.
   execFileSync(process.execPath, [join(project, "scripts/build-notification-status.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
   const mediaRoot = join(project, "vendor/control-media/darwin-arm64")
-  const mediaProvenance = JSON.parse(await readFile(join(mediaRoot, "provenance.json"), "utf8"))
   const mediaRecipe = JSON.parse(await readFile(join(project, "vendor/control-media/sources.json"), "utf8"))
+  const readProvenance = () => readFile(join(mediaRoot, "provenance.json"), "utf8").then((text) => JSON.parse(text), () => null)
+  let mediaProvenance = await readProvenance()
+  // The encoder is built here from the recipe's pinned sources, each checked by its hash, and never committed: a
+  // checkout whose recipe moved since its last build (or that never built one) builds it now, rather than refusing.
+  if (mediaProvenance?.recipe !== mediaRecipe.recipe || JSON.stringify(mediaProvenance?.sources) !== JSON.stringify(mediaRecipe.sources)) {
+    console.log(`[control-media] the recording encoder is built for recipe ${mediaProvenance?.recipe ?? "none"}, the checkout's is ${mediaRecipe.recipe}: building it`)
+    execFileSync(process.execPath, [join(project, "scripts/build-control-media.mjs")], { cwd: project, stdio: "inherit" })
+    mediaProvenance = await readProvenance()
+  }
   assert.equal(mediaProvenance.recipe, mediaRecipe.recipe, "Recording encoder recipe changed; rebuild with npm run prepare:control-media")
   assert.deepEqual(mediaProvenance.sources, mediaRecipe.sources, "Recording encoder sources changed; rebuild with npm run prepare:control-media")
   for (const name of ["ffmpeg", "ffprobe"]) {
