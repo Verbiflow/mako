@@ -48,7 +48,11 @@ export type CloudSignedOutNotice = z.infer<typeof CloudSignedOutNoticeSchema>
 export const CloudAccountStateSchema = z.discriminatedUnion("status", [
   /** No cloud is configured for this build, or this host may not reach it. */
   z.object({ status: z.literal("unavailable"), message: z.string() }),
-  z.object({ status: z.literal("signed-out"), notice: CloudSignedOutNoticeSchema.optional() }),
+  /**
+   * `finishing`: this Mac signed out, but the cloud hasn't heard yet (it was unreachable). Its credential is kept,
+   * sealed, only to remove this device there, and the host keeps asking until it has.
+   */
+  z.object({ status: z.literal("signed-out"), notice: CloudSignedOutNoticeSchema.optional(), finishing: z.literal(true).optional() }),
   /** The browser is open at `url`; the host finishes by itself when it returns. */
   z.object({ status: z.literal("signing-in"), url: z.string(), startedAt: z.string() }),
   z.object({

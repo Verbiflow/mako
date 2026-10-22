@@ -138,6 +138,12 @@ const StoredSchema = z.object({
 })
 type Stored = z.infer<typeof StoredSchema>
 
+/** A sign-out the cloud hasn't heard of yet: the device's credential, kept sealed only to remove the device there. */
+const UnfinishedSignOutSchema = z.object({ version: z.literal(1), cloud: z.string(), credential: z.string(), device: z.string() })
+type UnfinishedSignOut = z.infer<typeof UnfinishedSignOutSchema>
+/** An unfinished sign-out is asked again this often while it lasts, and at every start and wake. */
+const SIGN_OUT_RETRY_MS = 60_000
+
 /** The record a host's sign-in is kept under; each data root signs in as its own device. */
 export function cloudSignInName(dataRoot: string): string {
   const host = basename(dataRoot).toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[^a-z0-9]+/, "").slice(0, 64)
@@ -232,6 +238,9 @@ export class CloudAccounts {
   readonly #unavailable: string | undefined
   #state: CloudAccountState = { status: "signed-out" }
   #stored: Stored | undefined
+  /** A sign-out the cloud hasn't heard of, held in memory when there's no keychain to keep it in. */
+  #unfinished: UnfinishedSignOut | undefined
+  #finishing: NodeJS.Timeout | undefined
   #signIn: SignIn | undefined
   #token: HeldToken | undefined
   #tokenRequest: Promise<string> | undefined
@@ -485,21 +494,96 @@ export class CloudAccounts {
     return this.account()
   }
 
+  /**
+   * Signs this Mac out: here at once, and in the cloud, which removes the device so its credential works nowhere. One
+   * the cloud didn't hear (unreachable, or failing) is kept sealed as unfinished and asked again until the cloud has
+   * removed the device, so a sign-out never leaves a working credential behind.
+   */
   async signOut(): Promise<CloudAccount> {
     await this.#ready
     const stored = this.#stored
+    let unfinished: UnfinishedSignOut | undefined
     if (stored) {
-      // Best effort: signed out here either way, and the cloud forgets an unreachable device's credential when it's removed elsewhere.
-      await this.#call("devices.remove", "DELETE", `/v1/devices/${encodeURIComponent(stored.device.id)}`).catch((error) => {
-        this.#options.log?.("cloud sign-out couldn't reach the cloud", { error: messageOf(error, "unknown") })
-      })
+      try {
+        await this.#call("devices.remove", "DELETE", `/v1/devices/${encodeURIComponent(stored.device.id)}`, undefined, false, [401, 404])
+      } catch (error) {
+        this.#options.log?.("cloud sign-out didn't reach the cloud; it's finished later", { error: errorMessage({ error }) })
+        unfinished = { version: 1, cloud: stored.cloud, credential: stored.credential, device: stored.device.id }
+        await this.#keepUnfinished(unfinished)
+      }
     }
     await this.#forget()
+    if (unfinished) {
+      this.#set({ status: "signed-out", finishing: true })
+      this.#finishSignOutSoon(0)
+    }
     return this.account()
+  }
+
+  async #keepUnfinished(unfinished: UnfinishedSignOut): Promise<void> {
+    const { secrets, secretName } = this.#options
+    if (await secrets.durable()) await secrets.write("mako-sign-in", `${secretName}.signing-out`, JSON.stringify(unfinished))
+    else this.#unfinished = unfinished
+  }
+
+  /** Asks the cloud again to remove a device this Mac signed out of, after `ms`; once at a time. */
+  #finishSignOutSoon(ms = SIGN_OUT_RETRY_MS): void {
+    if (this.#closed || this.#finishing) return
+    this.#finishing = setTimeout(() => {
+      this.#finishing = undefined
+      void this.#finishSignOut()
+    }, ms)
+    this.#finishing.unref()
+  }
+
+  /**
+   * The unfinished sign-out, finished: the credential buys a token and the device is removed with it. A credential the
+   * cloud no longer takes, or a device it no longer has, means it's done already. Anything else is asked again.
+   */
+  async #finishSignOut(): Promise<void> {
+    const { secrets, secretName } = this.#options
+    const record = this.#unfinished ?? (await secrets.read("mako-sign-in", `${secretName}.signing-out`).then((found) => (found ? UnfinishedSignOutSchema.parse(JSON.parse(found.value)) : undefined), () => undefined))
+    if (!record || this.#closed) return
+    const cloud = this.#cloud
+    if (!cloud || record.cloud !== cloud.origin) return
+    const done = async () => {
+      this.#unfinished = undefined
+      await secrets.delete("mako-sign-in", `${secretName}.signing-out`).catch(() => undefined)
+      this.#options.log?.("cloud sign-out finished: the device is removed", { device: record.device })
+      if (this.#state.status === "signed-out" && this.#state.finishing) this.#set({ status: "signed-out" })
+    }
+    try {
+      const refreshed = await this.#fetch("devices.token", new URL("/v1/devices/token", cloud), {
+        method: "POST",
+        headers: { authorization: `Bearer ${record.credential}`, accept: "application/json" },
+        redirect: "error",
+        signal: AbortSignal.timeout(REQUEST_MS),
+      })
+      if (refreshed.status === 401) return await done()
+      if (!refreshed.ok) throw new CloudAccountError(await problemOf(refreshed, "The Mako cloud didn't answer."))
+      const { connection } = RefreshSchema.parse(await refreshed.json())
+      const removed = await this.#fetch("devices.remove", new URL(`/v1/devices/${encodeURIComponent(record.device)}`, cloud), {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${connection.token}`, accept: "application/json" },
+        redirect: "error",
+        signal: AbortSignal.timeout(REQUEST_MS),
+      })
+      if (removed.ok || removed.status === 401 || removed.status === 404) return await done()
+      throw new CloudAccountError(await problemOf(removed, "The Mako cloud didn't answer."))
+    } catch (error) {
+      this.#options.log?.("cloud sign-out still unfinished; asking again", { error: errorMessage({ error }) })
+      if (this.#state.status === "signed-out" && !this.#state.finishing && !this.#state.notice) this.#set({ status: "signed-out", finishing: true })
+      this.#finishSignOutSoon()
+    }
   }
 
   /** After sleep or a network change: reconnect now rather than at the next backoff step. */
   wake(): void {
+    if (this.#state.status === "signed-out" && this.#state.finishing && this.#finishing) {
+      clearTimeout(this.#finishing)
+      this.#finishing = undefined
+      this.#finishSignOutSoon(0)
+    }
     if (this.#state.status !== "signed-in" || this.#closed) return
     const stale = this.#pool
     this.#pool = new Agent()
@@ -511,6 +595,7 @@ export class CloudAccounts {
 
   close(): void {
     this.#closed = true
+    if (this.#finishing) clearTimeout(this.#finishing)
     if (this.#signIn) this.#endSignIn()
     this.#disconnect()
     void this.#pool.close().catch(() => undefined)
@@ -553,6 +638,8 @@ export class CloudAccounts {
   // The credential.
 
   async #resume(): Promise<void> {
+    // A sign-out the cloud hadn't heard of when Mako last ran is finished first, whatever else this Mac does.
+    void this.#finishSignOut()
     const stored = await this.#load().catch((error) => {
       this.#options.log?.("cloud sign-in couldn't be read back", { error: messageOf(error, "unknown") })
       return undefined

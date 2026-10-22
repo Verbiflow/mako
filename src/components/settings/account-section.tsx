@@ -75,6 +75,11 @@ function SignedOutView({ state, cloud }: { state: Exclude<CloudAccountState, Sig
               : "Connect this Mac to your Mako account, or create one. Signing in happens in your browser with GitHub or Google, so Mako never sees your password."}
       </p>
 
+      {state.status === "signed-out" && state.finishing ? (
+        <p data-sign-out-finishing className="mt-4 max-w-[25rem] text-label leading-relaxed text-faint">
+          Removing this Mac from your account in the cloud. It couldn't be reached just now, so Mako keeps trying until it has.
+        </p>
+      ) : null}
       {notice && notice.kind !== "removed" && notice.kind !== "reused" ? (
         <Note tone="negative" className="mt-5 max-w-[25rem]">
           {notice.message}

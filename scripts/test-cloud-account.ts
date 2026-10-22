@@ -78,7 +78,7 @@ async function fakeCloud() {
   const threads: Array<{ threadId: string; prepare?: boolean }> = []
   /** Repositories asked for project bases. */
   const bases: unknown[] = []
-  const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false, failRefreshes: 0, rotate: false }
+  const options = { tokenSeconds: 300, clockSkewSeconds: 0, refuseTokens: false, failRefreshes: 0, rotate: false, failRemovals: 0 }
   /** The account's stream: its events, numbered, and the connections following it. */
   const accountEvents: Array<{ seq: number; at: string; text: string }> = []
   const following = new Set<ServerSocket>()
@@ -182,6 +182,10 @@ async function fakeCloud() {
     }
     const removing = /^\/v1\/devices\/([\w-]+)$/.exec(url.pathname)?.[1]
     if (request.method === "DELETE" && removing) {
+      if (options.failRemovals > 0) {
+        options.failRemovals -= 1
+        return send(503, JSON.stringify({ title: "The cloud is busy" }))
+      }
       const device = devices.get(removing)
       if (!device || device.removed) return send(404, JSON.stringify({ title: "No such device" }))
       device.removed = true
@@ -675,6 +679,29 @@ test("the account's stream says when a device joins, once, and a Mac that was of
   await new Promise((resolve) => setTimeout(resolve, 200))
   assert.deepEqual(seen, [], "a device that joined before this Mac did isn't news to it")
   newMac.accounts.close()
+})
+
+test("a sign-out the cloud didn't hear is kept sealed and finished, here or after a restart, never leaving a working credential", async () => {
+  const cloud = await fakeCloud()
+  const secretName = "cloud/sign-out-unfinished"
+  const mac = await signedIn(cloud, { secretName })
+  const device = [...cloud.devices.values()][0]
+  assert.ok(device)
+  // The cloud fails the removal: the sign-out is finished by the next asking, here or after a restart.
+  cloud.options.failRemovals = 1
+  const account = await mac.accounts.signOut()
+  assert.deepEqual(account.state, { status: "signed-out", finishing: true }, "signed out here at once, and said to be finishing")
+  assert.equal(device.removed, false, "the cloud hasn't heard yet")
+  assert.ok(!(await readFile(recordPath(`${secretName}.signing-out`), "utf8")).includes(device.credential), "the credential kept to finish it is sealed")
+  mac.accounts.close()
+
+  // After a restart, the sign-out is finished first: the device is removed in the cloud.
+  const again = desktop({ url: cloud.url, secretName })
+  await again.accounts.ready()
+  await waitFor(() => device.removed, "the device removed once the cloud answers")
+  assert.deepEqual(again.accounts.account().state, { status: "signed-out" }, "not said to be finishing")
+  await assert.rejects(stat(recordPath(`${secretName}.signing-out`)), "and the credential it kept is gone")
+  again.accounts.close()
 })
 
 test("signing out removes this device from the account", async () => {
