@@ -72,6 +72,9 @@ export const fixtureCloudHostCalls: ReadonlySet<string> = new Set<string>([
   "mako:cloud-sign-in-cancel",
   "mako:cloud-devices",
   "mako:cloud-device-remove",
+  "mako:cloud-browser-sessions",
+  "mako:cloud-browser-session-end",
+  "mako:cloud-browser-sessions-end",
   "mako:cloud-sign-out",
 ])
 

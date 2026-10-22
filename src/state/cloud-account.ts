@@ -3,23 +3,33 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { CloudAccount, CloudDevice, CloudSignInsState } from "@/lib/types"
+import type { CloudAccount, CloudBrowserSession, CloudDevice, CloudSignInsState } from "@/lib/types"
 
 /**
  * This Mac's Mako account. The host owns it — the sign-in, the device
  * credential and the live connection — and pushes a `cloud-account` event
  * whenever any of it changes, so this store only mirrors it and every window
- * agrees. The account's other devices are read on demand: the Settings
- * section is the only place that lists them.
+ * agrees. The account's other devices, and the browsers signed in to it, are
+ * read on demand: the Settings section is the only place that lists them.
  *
  * A failed action keeps its sentence here, next to the action that asked,
  * because the section shows it inline where the person clicked.
  */
-type Action = "sign-in" | "cancel" | "sign-out" | "devices" | `remove:${string}` | "share-sign-ins"
+type Action =
+  | "sign-in"
+  | "cancel"
+  | "sign-out"
+  | "devices"
+  | `remove:${string}`
+  | "browsers"
+  | `end-browser:${string}`
+  | "end-browsers"
+  | "share-sign-ins"
 
 interface CloudAccountState {
   account?: CloudAccount
   devices?: { list: CloudDevice[]; current: string }
+  browsers?: CloudBrowserSession[]
   /** Whether this Mac's harness sign-ins are shared with the cloud; the host pushes `cloud-sign-ins` as each is sent. */
   signIns?: CloudSignInsState
   busy?: Action
@@ -61,7 +71,7 @@ export const cloudAccount = {
   signOut: () =>
     run("sign-out", async () => {
       const account = await getMako().cloudSignOut()
-      cloudAccountStore.set({ devices: undefined })
+      cloudAccountStore.set({ devices: undefined, browsers: undefined })
       return account
     }),
 
@@ -84,6 +94,29 @@ export const cloudAccount = {
         state.devices ? { devices: { ...state.devices, list: state.devices.list.filter((device) => device.id !== id) } } : state
       )
       return account
+    }),
+
+  /** Quietly, like the devices: a failed refresh keeps the last list shown. */
+  async loadBrowsers() {
+    if (!hasBridge()) return
+    try {
+      cloudAccountStore.set({ browsers: await getMako().cloudBrowserSessions() })
+    } catch (error) {
+      if (!cloudAccountStore.get().browsers)
+        cloudAccountStore.set({ failure: { action: "browsers", message: error instanceof Error ? error.message : String(error) } })
+    }
+  },
+
+  endBrowser: (id: string) =>
+    run(`end-browser:${id}`, async () => {
+      await getMako().cloudBrowserSessionEnd(id)
+      cloudAccountStore.set((state) => (state.browsers ? { browsers: state.browsers.filter((browser) => browser.id !== id) } : state))
+    }),
+
+  endBrowsers: () =>
+    run("end-browsers", async () => {
+      await getMako().cloudBrowserSessionsEnd()
+      cloudAccountStore.set({ browsers: [] })
     }),
 
   /** Quietly, like the devices: the rows fill in, and the host's events keep them current. */

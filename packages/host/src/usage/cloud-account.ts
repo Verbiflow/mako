@@ -28,10 +28,12 @@ import {
   subprotocols,
 } from "@mako/protocol"
 import {
+  CloudBrowserSessionSchema,
   CloudDeviceSchema,
   CloudPersonSchema,
   type CloudAccount,
   type CloudAccountState,
+  type CloudBrowserSession,
   type CloudDevice,
   type CloudPerson,
   type CloudSignedOutNotice,
@@ -101,6 +103,8 @@ const EnrollmentSchema = z.object({
 /** `credential`: a successor to this Mac's credential, once it's due to rotate; the old one works until it's used. */
 const RefreshSchema = EnrollmentSchema.omit({ credential: true }).extend({ credential: z.string().regex(/^mako_dc_[\w-]{43}$/).optional() })
 const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z.string() })
+const BrowserSessionsSchema = z.object({ sessions: z.array(CloudBrowserSessionSchema) })
+const EndedSchema = z.object({ ended: z.number().int().nonnegative() })
 /** What the cloud answers a Thread made or made again with; only whether its machine is ready is read. */
 const CreatedThreadSchema = z.object({ ready: z.boolean().optional() }).loose()
 const ProblemSchema = z.object({ title: z.string(), detail: z.string().optional() }).partial()
@@ -485,6 +489,21 @@ export class CloudAccounts {
   #accountPath(): string {
     if (!this.#stored) throw new CloudAccountError("This Mac isn't signed in to Mako.")
     return `/v1/accounts/${encodeURIComponent(this.#stored.account.id)}`
+  }
+
+  /** The browsers signed in to the account on the cloud's pages, the one used last first. */
+  async browserSessions(): Promise<CloudBrowserSession[]> {
+    return BrowserSessionsSchema.parse(await (await this.#call("browsers.list", "GET", "/v1/browser-sessions")).json()).sessions
+  }
+
+  /** One browser signed out of the account's pages at once; one already signed out counts as done. */
+  async endBrowserSession(id: string): Promise<void> {
+    await this.#call("browsers.end", "DELETE", `/v1/browser-sessions/${encodeURIComponent(id)}`, undefined, false, [404])
+  }
+
+  /** Every browser signed out of the account's pages; the account's devices, this Mac included, stay signed in. */
+  async endBrowserSessions(): Promise<number> {
+    return EndedSchema.parse(await (await this.#call("browsers.end", "DELETE", "/v1/browser-sessions")).json()).ended
   }
 
   /** Removing this Mac is signing out; any other device of the account is cut off within seconds. */

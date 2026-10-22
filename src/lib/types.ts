@@ -41,6 +41,7 @@ export type {
 export type {
   CloudAccount,
   CloudAccountState,
+  CloudBrowserSession,
   CloudDevice,
   CloudPerson,
   CloudSignedOutNotice,

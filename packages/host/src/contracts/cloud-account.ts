@@ -21,6 +21,27 @@ export const CloudDeviceSchema = z.object({
 })
 export type CloudDevice = z.infer<typeof CloudDeviceSchema>
 
+/** Where a request came from, as the cloud read its address: never the address. */
+const CloudPlaceSchema = z.object({ city: z.string().nullable(), region: z.string().nullable(), country: z.string().nullable() })
+
+/**
+ * A browser signed in to the account on the cloud's pages, where it can connect new devices: how and where it signed
+ * in, and when and where it was last used. `browser` and `os` are named by the cloud ("Chrome", "macOS"), null when it
+ * couldn't tell.
+ */
+export const CloudBrowserSessionSchema = z.object({
+  id: z.string(),
+  method: z.enum(["github", "google", "local"]).nullable().catch(null),
+  browser: z.string().nullable(),
+  os: z.string().nullable(),
+  signedInAt: z.string(),
+  signedInFrom: CloudPlaceSchema.nullable(),
+  lastSeenAt: z.string(),
+  lastSeenFrom: CloudPlaceSchema.nullable(),
+  expiresAt: z.string(),
+})
+export type CloudBrowserSession = z.infer<typeof CloudBrowserSessionSchema>
+
 /**
  * `signedInWith` is how the person last signed in, and `githubId` GitHub's numeric ID for them when a GitHub identity
  * is linked. Both are missing from accounts kept before the cloud sent them, and a method this build doesn't know

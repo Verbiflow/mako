@@ -59,7 +59,7 @@ import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissio
 import type { LiveStartOptions, LiveSnapshot, LiveRequest, SignInReadiness, SignInResume } from "./live-conversations.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
-import type { CloudAccount, CloudDevice } from "./cloud-account.js"
+import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, ThreadMoveOutcome } from "./cloud-threads.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
@@ -420,6 +420,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     cloudSignInCancel: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in-cancel"),
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),
     cloudDeviceRemove: (id: string) => invokeTrustedHost<CloudAccount>("mako:cloud-device-remove", id),
+    /* The browsers signed in to the account on the cloud's pages, and signing them out. */
+    cloudBrowserSessions: () => invokeTrustedHost<CloudBrowserSession[]>("mako:cloud-browser-sessions"),
+    cloudBrowserSessionEnd: (id: string) => invokeTrustedHost<void>("mako:cloud-browser-session-end", id),
+    cloudBrowserSessionsEnd: () => invokeTrustedHost<number>("mako:cloud-browser-sessions-end"),
     cloudSignOut: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-out"),
     /* Whether this Mac's harness sign-ins are shared with the account's cloud machines; `cloud-sign-ins` events follow it. */
     cloudSignIns: () => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins"),
