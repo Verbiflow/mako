@@ -3,12 +3,14 @@ import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:f
 import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
-import { MoveCheckpointSchema, type MoveAnswer, type MoveCheckpoint } from "@mako/protocol/moves"
+import { encodeOperation } from "@mako/protocol"
+import { MOVE_ANSWER_WAIT_MS, MoveCheckpointSchema, type MoveAnswer, type MoveCheckpoint } from "@mako/protocol/moves"
 import { RecordHoldingsSchema, describeSync, withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, type CloudRepository, type ThreadHandOff, type ThreadMoveOutcome, type ThreadMoveStep } from "../contracts/cloud-threads.js"
+import { hostCallInput, toHostOperation } from "../contracts/host-operations.js"
 import type { EncodedValue } from "../contracts/runtime-value.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
@@ -55,6 +57,23 @@ export function cloudRuntimeOf(cloudThread: string): RuntimeId {
 
 /** What a sleeping Mac's handoff must leave for the release and the hand-over after the pause. */
 const RELEASE_TAKES_MS = 4_000
+/**
+ * How long this host waits for the cloud's answer to a move it carries through: its arrival refuses the move within
+ * two minutes if its machine can't take the Thread, and a claim follows a machine's arrival at once.
+ */
+const ANSWER_WAIT_MS = 5 * 60_000
+
+/** What a caller of `move` may wait for short of the whole move: this Mac let go (`released`), or the cloud has it (`handed`). */
+export type Milestone = "released" | "handed"
+
+/** A milestone a move reaches once, with the cloud Thread it reached it for. */
+type Reached = { promise: Promise<string>; resolve(cloudThread: string): void }
+
+function deferred(): Reached {
+  let resolve: (cloudThread: string) => void = () => undefined
+  const promise = new Promise<string>((settle) => { resolve = settle })
+  return { promise, resolve }
+}
 /** How long a handoff waits for the turns it paused to settle, and how often it looks. */
 const PAUSE_SETTLES_MS = 15_000
 const PAUSE_LOOK_MS = 100
@@ -91,7 +110,12 @@ const PlanSessionSchema = z.object({
 })
 type PlanSession = z.infer<typeof PlanSessionSchema>
 
-const PhaseSchema = z.enum(["preparing", "released", "claimed", "started", "kept-here"])
+/**
+ * Where a move stands: `preparing` (nothing changed here), `released` (nothing runs the Thread here; this Mac sends
+ * what only it has), `handed` (the cloud carries it through: arrives it, claims it, starts it), `claimed` (the cloud's,
+ * as this Mac now records), `started` (followed here as the cloud's), or `kept-here`.
+ */
+const PhaseSchema = z.enum(["preparing", "released", "handed", "claimed", "started", "kept-here"])
 
 /** A move's plan as it's kept on disk: the way back reads a moved Thread's from it. */
 export const MovePlanSchema = z.object({
@@ -151,7 +175,6 @@ export type CloudMovesOptions = {
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   cloud: {
     adopt(conversation: { conversationId: string; threadId: string; harness: string; repository: CloudRepository }): Promise<void>
-    started(conversationId: string, value: EncodedValue): void
     callThread(threadId: string, channel: string, args: readonly unknown[], conversationId?: string, options?: { refuseUnstarted?: boolean }): Promise<EncodedValue>
   }
   /** The conversations' own work here: a handoff pauses running turns, and a move takes waiting messages along. */
@@ -179,8 +202,13 @@ export class CloudMoves {
   readonly #running = new Map<string, Promise<ThreadMoveOutcome>>()
   /** By move running in this host: the Thread it moves, which nothing keeps ready meanwhile (`leaving`). */
   readonly #leaving = new Map<string, string>()
-  /** By move running in this host: settled with its cloud Thread once this Mac let go of the Thread (`answer: "released"`). */
-  readonly #released = new Map<string, { promise: Promise<string>; resolve(cloudThread: string): void }>()
+  /** Moves running in this host that the cloud carries through now. */
+  readonly #handed = new Set<string>()
+  /**
+   * By move running in this host, what a caller may wait for short of the whole move (`answer`): `released`, once this
+   * Mac let go of the Thread; `handed`, once the cloud carries it through, so this Mac is no longer needed for it.
+   */
+  readonly #milestones = new Map<string, Record<Milestone, Reached>>()
 
   constructor(options: CloudMovesOptions) {
     this.#options = options
@@ -191,42 +219,42 @@ export class CloudMoves {
    * running turns are paused and go along, continuing in the cloud (`ThreadHandOff`); without it, a Thread at work
    * stays here.
    */
-  move(conversationId: string, move: string, handOff?: ThreadHandOff, options: { answer?: "released" } = {}): Promise<ThreadMoveOutcome> {
+  move(conversationId: string, move: string, handOff?: ThreadHandOff, options: { answer?: Milestone } = {}): Promise<ThreadMoveOutcome> {
     let work = this.#running.get(move)
     if (!work) {
-      let resolve: (cloudThread: string) => void = () => undefined
-      const promise = new Promise<string>((settle) => { resolve = settle })
-      this.#released.set(move, { promise, resolve })
+      this.#milestones.set(move, { released: deferred(), handed: deferred() })
       work = this.#move(conversationId, MoveIdSchema.parse(move), handOff).finally(() => {
         this.#running.delete(move)
         this.#leaving.delete(move)
-        this.#released.delete(move)
+        this.#milestones.delete(move)
+        this.#handed.delete(move)
       })
       this.#running.set(move, work)
     }
-    // Answered once this Mac let go: what's left (the last changes sent, the claim, the start) goes on in this host,
-    // which outlives a window, and is reported by the move's steps as it goes.
-    const released = options.answer === "released" ? this.#released.get(move)?.promise : undefined
-    if (!released) return work
-    return Promise.race([work, released.then((cloudThread): ThreadMoveOutcome => ({ kind: "released", cloudThread }))])
+    // Answered short of the whole move: what's left goes on in this host, which outlives a window, and the cloud,
+    // which outlives a sleep; the move's steps report it as it goes.
+    const reached = options.answer ? this.#milestones.get(move)?.[options.answer].promise : undefined
+    if (!reached) return work
+    return Promise.race([work, reached.then((cloudThread): ThreadMoveOutcome => ({ kind: "released", cloudThread }))])
   }
 
   /**
-   * Waits, until `deadline` at most, for every move running in this host to settle (started where it goes, or kept
-   * here): what a Mac about to sleep waits for, so no Thread it let go of is left between here and the cloud. Answers
-   * how many still run.
+   * Waits, until `deadline` at most, for every move running in this host to need this Mac no more: handed to the
+   * cloud, which carries it through, or settled. What a Mac about to sleep waits for, so no Thread it let go of waits
+   * on this Mac between here and the cloud. Answers how many still need it.
    */
   async settled(deadline: number): Promise<number> {
-    const running = [...this.#running.values()]
-    if (running.length) {
+    const needing = () => [...this.#running.keys()].filter((move) => !this.#handed.has(move))
+    const waits = needing().map((move) => Promise.race([this.#running.get(move), this.#milestones.get(move)?.handed.promise]))
+    if (waits.length) {
       let timer: ReturnType<typeof setTimeout> | undefined
       await Promise.race([
-        Promise.allSettled(running),
+        Promise.allSettled(waits),
         new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())) }),
       ])
       clearTimeout(timer)
     }
-    return this.#running.size
+    return needing().length
   }
 
   /** Whether a move of `thread` runs in this host now: from its plan until it moved or stayed. */
@@ -261,9 +289,12 @@ export class CloudMoves {
       const plan = await this.#read(MoveIdSchema.parse(name.slice(0, -".json".length))).catch(() => undefined)
       if (!plan || plan.phase === "started" || plan.phase === "kept-here" || this.#running.has(plan.move)) continue
       this.#leaving.set(plan.move, plan.thread)
+      this.#milestones.set(plan.move, { released: deferred(), handed: deferred() })
       const work = this.#resume(plan).finally(() => {
         this.#running.delete(plan.move)
         this.#leaving.delete(plan.move)
+        this.#milestones.delete(plan.move)
+        this.#handed.delete(plan.move)
       })
       this.#running.set(plan.move, work)
       await work.catch((error: Error) => hostWarn("moves", "a move a stopped host left couldn't be settled yet", { move: plan.move, error: error.message }))
@@ -356,29 +387,43 @@ export class CloudMoves {
       }
     }
     // Let go of here: a caller that waits only for that hears it now, whether this host released it or a stopped one did.
-    if (plan.phase !== "preparing") this.#released.get(plan.move)?.resolve(plan.cloudThread)
+    if (plan.phase !== "preparing") this.#reach(plan, "released")
+    let answer: MoveAnswer | undefined
     if (plan.phase === "released") {
       step({ kind: "handing-over" })
-      let answer: MoveAnswer | undefined
       try {
+        // A move a stopped host already handed over, or the cloud answered, goes on from there.
         answer = await this.#answered(plan)
         if (!answer) {
-          // Nothing runs the Thread now: what changed since it was sent ahead goes, a few files and lines at most, and
-          // the machine arrives with that, never with what went before the release.
+          // What only this Mac has goes first, a few files and lines at most: nothing runs the Thread now, so the
+          // machine arrives with that and never with what went before the release. Then the cloud carries the rest.
           await Promise.all([this.#sendCheckpoint(plan), this.#sendRecords(plan)])
           plan.timings.sent = Date.now() - plan.began
+          await this.#handOver(plan)
+          plan.phase = "handed"
+          plan.timings.handed = Date.now() - plan.began
           await this.#write(plan)
-          await this.#arrive(plan)
-          answer = await this.#account().claimMove(plan.cloudThread, plan.move, this.#claimRequest(plan))
         }
       } catch (error) {
         answer = await this.#refuse(plan, errorMessage({ error }))
         if (!answer) {
-          const reason = `This Mac couldn't hear the cloud's answer: ${errorMessage({ error })}. It asks again; the Thread runs nowhere until it hears.`
+          const reason = `This Mac couldn't hand the Thread to the cloud: ${errorMessage({ error })}. It asks again; the Thread runs nowhere until it hears.`
           step({ kind: "unsettled", reason })
           return { kind: "unsettled", reason }
         }
       }
+    }
+    if (plan.phase === "handed" && !answer) {
+      this.#reach(plan, "handed")
+      step({ kind: "resuming" })
+      answer = await this.#awaitAnswer(plan)
+      if (!answer) {
+        const reason = "The cloud carries this Thread through, and this Mac hasn't heard how it went yet. It asks again; the Thread runs nowhere until it hears."
+        step({ kind: "unsettled", reason })
+        return { kind: "unsettled", reason }
+      }
+    }
+    if (answer) {
       if (answer.kind === "refused") return this.#keep(plan, answer.reason, true)
       this.#confirm(plan, answer)
       plan.phase = "claimed"
@@ -386,9 +431,9 @@ export class CloudMoves {
       await this.#write(plan)
     }
     if (plan.phase === "claimed") {
-      step({ kind: "resuming" })
-      await this.#start(plan)
-      await this.#continueThere(plan)
+      // The cloud starts each conversation and carries each paused turn on; this Mac follows them there.
+      for (const session of plan.sessions)
+        await this.#options.cloud.adopt({ conversationId: session.conversationId, threadId: plan.cloudThread, harness: session.harness, repository: plan.repository })
       plan.phase = "started"
       plan.timings.started = Date.now() - plan.began
       await this.#write(plan)
@@ -462,21 +507,77 @@ export class CloudMoves {
   }
 
   /**
-   * In the cloud, each turn the handoff paused continues as Mako's, and every message that waited here goes there
-   * under its own id, marked here as gone with the Thread. Each is kept by its id, so asked again it does nothing more.
+   * Hands the move to the cloud to carry through (`MoveHandOverRequest`): the claim, and every operation this Mac
+   * would otherwise send itself, encoded as it would send them under ids of the move's, so a repeat reaches the same
+   * end. In order: the machine's arrival (the checkout applied, each Session written and opened there before the
+   * claim, so a harness that can't start on the machine refuses the move); each conversation started; each turn the
+   * handoff paused continued as Mako's; and every message that waited here, sent under its own id and marked here as
+   * gone with the Thread.
    */
-  async #continueThere(plan: Plan): Promise<void> {
+  async #handOver(plan: Plan): Promise<void> {
+    const checkpoint: MoveCheckpoint | undefined = plan.checkpoint
+    if (!checkpoint) throw new Error("The move has no checkpoint to carry.")
+    const account = this.#account()
+    const deviceId = await account.deviceId()
+    if (!deviceId) throw new Error("This Mac isn't signed in to Mako.")
+    const calls: Array<{ channel: string; args: unknown[]; key: string }> = []
+    const sessions = plan.sessions.map(({ harness, nativeId, holdings, conversationId, modeId, tuning }) => ({
+      harness, nativeId, ...holdings && { holdings },
+      open: { conversationId, ...modeId !== undefined && { modeId }, ...tuning !== undefined && { tuning } },
+    }))
+    // With the handoff: the machine's store files the Thread under the same IDs as this Mac's.
+    calls.push({ channel: "mako:move-arrive", args: [{ move: plan.move, folder: plan.folder, checkpoint, sessions, ...plan.handoff && { handoff: plan.handoff } }], key: "arrive" })
+    for (const session of plan.sessions) {
+      const options: LiveStartOptions = { conversationId: session.conversationId, resume: session.nativeId }
+      if (session.modeId) options.modeId = session.modeId
+      if (session.tuning) options.tuning = session.tuning
+      calls.push({ channel: "mako:live-start", args: [session.harness, plan.folder, options], key: `start\0${session.conversationId}` })
+    }
     for (const { conversationId, requestId, stopped } of plan.handingOff?.paused ?? [])
-      await this.#options.cloud.callThread(plan.cloudThread, "mako:live-continue-turn", [conversationId, namedUuid(`mako move\0${plan.move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...stopped.length && { stopped } }], conversationId)
+      calls.push({ channel: "mako:live-continue-turn", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...stopped.length && { stopped } }], key: `continue\0${requestId}` })
+    const carried = new Map<string, string[]>()
     for (const { conversationId } of plan.sessions) {
       const waiting = this.#options.live.waitingPrompts(conversationId)
       for (const prompt of waiting)
-        await this.#options.cloud.callThread(plan.cloudThread, "mako:live-prompt", [conversationId, prompt.id, prompt.text, await inlined(prompt.attachments), prompt.tuning], conversationId)
-      if (waiting.length) {
-        this.#options.live.carried(conversationId, waiting.map((prompt) => prompt.id), "cloud")
-        hostLog("moves", "messages waiting here went with the Thread", { move: plan.move, conversation: conversationId, messages: waiting.length })
+        calls.push({ channel: "mako:live-prompt", args: [conversationId, prompt.id, prompt.text, await inlined(prompt.attachments), prompt.tuning], key: `prompt\0${prompt.id}` })
+      if (waiting.length) carried.set(conversationId, waiting.map((prompt) => prompt.id))
+    }
+    const actor = { kind: "client" as const, client: "desktop" as const, deviceId }
+    const operations = calls.map(({ channel, args, key }) => {
+      const id = namedUuid(`mako move\0${plan.move}\0${key}`)
+      return encodeOperation(toHostOperation(channel, hostCallInput(args, false), { id, target: { kind: "thread", threadId: plan.cloudThread }, actor, correlationId: namedUuid(`mako move\0${plan.move}\0correlation`), attempt: 1 }))
+    })
+    const state = await account.handOverMove(plan.cloudThread, plan.move, { claim: this.#claimRequest(plan), operations })
+    for (const [conversationId, ids] of carried) {
+      this.#options.live.carried(conversationId, ids, "cloud")
+      hostLog("moves", "messages waiting here went with the Thread", { move: plan.move, conversation: conversationId, messages: ids.length })
+    }
+    hostLog("moves", "a move was handed to the cloud to carry through", { move: plan.move, cloudThread: plan.cloudThread, operations: operations.length, phase: state.phase })
+  }
+
+  /**
+   * The cloud's answer to a move it carries through, waited for at the cloud a few seconds at a time: a claim once its
+   * machine took the Thread, or a refusal. Undefined if none came while this host waited (it asks again when it
+   * settles its moves); a Mac that sleeps meanwhile asks again as it wakes.
+   */
+  async #awaitAnswer(plan: Plan): Promise<MoveAnswer | undefined> {
+    const until = Date.now() + ANSWER_WAIT_MS
+    for (let attempt = 0; Date.now() < until; attempt++) {
+      try {
+        const answer = await this.#account().moveAnswer(plan.cloudThread, plan.move, MOVE_ANSWER_WAIT_MS)
+        if (answer) return answer
+      } catch (error) {
+        hostWarn("moves", "the cloud's answer to a move it carries couldn't be read yet; asking again", { move: plan.move, attempt, error: errorMessage({ error }) })
+        await new Promise((resolve) => setTimeout(resolve, Math.min(10_000, 500 * 2 ** attempt)))
       }
     }
+    return undefined
+  }
+
+  /** A move reached a milestone: whoever waits only for that hears it now. */
+  #reach(plan: Plan, milestone: Milestone): void {
+    if (milestone === "handed") this.#handed.add(plan.move)
+    this.#milestones.get(plan.move)?.[milestone].resolve(plan.cloudThread)
   }
 
   async #release(plan: Plan): Promise<void> {
@@ -522,20 +623,6 @@ export class CloudMoves {
     }
   }
 
-  /** The machine applies the checkout and writes each Session into its harness's store; nothing starts. */
-  async #arrive(plan: Plan): Promise<void> {
-    const checkpoint: MoveCheckpoint | undefined = plan.checkpoint
-    if (!checkpoint) throw new Error("The move has no checkpoint to carry.")
-    // Each opened there before the claim: a harness that can't start on the machine refuses the move while it's this Mac's.
-    const sessions = plan.sessions.map(({ harness, nativeId, holdings, conversationId, modeId, tuning }) => ({
-      harness, nativeId, ...holdings && { holdings },
-      open: { conversationId, ...modeId !== undefined && { modeId }, ...tuning !== undefined && { tuning } },
-    }))
-    // With the handoff: the machine's store files the Thread under the same IDs as this Mac's.
-    await this.#options.cloud.callThread(plan.cloudThread, "mako:move-arrive", [{ move: plan.move, folder: plan.folder, checkpoint, sessions, ...plan.handoff && { handoff: plan.handoff } }])
-    plan.timings.arrived = Date.now() - plan.began
-  }
-
   #claimRequest(plan: Plan) {
     const handoff = plan.handoff
     if (!handoff) throw new Error("The move has no handoff to claim.")
@@ -566,18 +653,6 @@ export class CloudMoves {
       sessions: answer.sessions.map((session) => ({ id: SessionIdSchema.parse(session.id), generation: session.generation })),
     }
     this.#options.moves.confirm({ operationId: stepOperation(plan.move, "confirm"), receipt, actor: threads.person() })
-  }
-
-  /** Each Session, its conversation now the cloud's: opened on the machine as it arrived, so its start there answers how it stands. */
-  async #start(plan: Plan): Promise<void> {
-    for (const session of plan.sessions) {
-      await this.#options.cloud.adopt({ conversationId: session.conversationId, threadId: plan.cloudThread, harness: session.harness, repository: plan.repository })
-      const options: LiveStartOptions = { conversationId: session.conversationId, resume: session.nativeId }
-      if (session.modeId) options.modeId = session.modeId
-      if (session.tuning) options.tuning = session.tuning
-      const value = await this.#options.cloud.callThread(plan.cloudThread, "mako:live-start", [session.harness, plan.folder, options], session.conversationId)
-      this.#options.cloud.started(session.conversationId, value)
-    }
   }
 
   /** The Thread stays here: before the release, nothing changed; after a refusal, this Mac takes it back. */

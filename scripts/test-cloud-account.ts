@@ -34,7 +34,7 @@ import {
   serveRuntime,
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
-import { MOVE_REASON_MAX, MoveClaimRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
+import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
 import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
 import { declareCloudAccountMethods } from "@mako/host/usage/cloud-account-methods"
@@ -199,15 +199,15 @@ async function fakeCloud() {
       return send(201, JSON.stringify({ threadId: body.threadId, home: "cloud", machine: "m-0123456789abcdef", ready }))
     }
     // A move's answers, its bodies held to the protocol's own schemas, as the gateway holds them.
-    const moving = /^\/v1\/threads\/([\w-]+)\/moves\/([\w-]+)\/(claim|refuse)$/.exec(url.pathname)
+    const moving = /^\/v1\/threads\/([\w-]+)\/moves\/([\w-]+)\/(hand-over|refuse)$/.exec(url.pathname)
     if (request.method === "POST" && moving) {
       const [, , move = "", step] = moving
       const body = await json(request)
-      if (step === "claim") {
-        const checked = MoveClaimRequestSchema.safeParse(body)
+      if (step === "hand-over") {
+        const checked = MoveHandOverRequestSchema.safeParse(body)
         if (!checked.success) return send(400, JSON.stringify({ title: "The request body isn't valid", detail: z.prettifyError(checked.error) }))
         moves.push({ move, step, body: checked.data })
-        return send(200, JSON.stringify({ kind: "claimed", move, at: 1, sessions: [] }))
+        return send(202, JSON.stringify({ move, phase: "arriving", step: 0, of: checked.data.operations.length, since: 1, attempt: 1 }))
       }
       const checked = MoveRefuseRequestSchema.safeParse(body)
       if (!checked.success) return send(400, JSON.stringify({ title: "The request body isn't valid", detail: z.prettifyError(checked.error) }))
@@ -771,7 +771,7 @@ test("the browsers signed in to the account are listed, and signed out one at a 
   assert.equal(mac.accounts.account().state.status, "signed-in", "this Mac stays signed in")
 })
 
-test("a move's claim goes as JSON carries its handoff, and its refusal within what the cloud keeps, so neither is lost", async () => {
+test("a move handed over goes as JSON carries its handoff, and its refusal within what the cloud keeps, so neither is lost", async () => {
   const cloud = await fakeCloud()
   const mac = await signedIn(cloud, { secretName: "cloud/moves" })
   const move = randomUUID()
@@ -783,9 +783,9 @@ test("a move's claim goes as JSON carries its handoff, and its refusal within wh
     sessions: [{ id: randomUUID(), origin: "started", parent: undefined, position: 0, generation: 2, journals: [randomUUID()] }],
   })
   assert.ok("title" in handoff.thread && handoff.thread.title === undefined, "the store's handoff carries the field, undefined")
-  const claimed = await mac.accounts.claimMove("t-0123456789abcdef", move, { thread: randomUUID(), sessions: [{ id: randomUUID(), generation: 2 }], handoff })
-  assert.equal(claimed.kind, "claimed")
-  const claim = MoveClaimRequestSchema.parse(cloud.moves[0]?.body)
+  const handed = await mac.accounts.handOverMove("t-0123456789abcdef", move, { claim: { thread: randomUUID(), sessions: [{ id: randomUUID(), generation: 2 }], handoff }, operations: ["an operation"] })
+  assert.deepEqual([handed.phase, handed.of], ["arriving", 1])
+  const { claim } = MoveHandOverRequestSchema.parse(cloud.moves[0]?.body)
   assert.deepEqual(claim.handoff, JSON.parse(JSON.stringify(handoff)), "sent as JSON, undefined fields left out")
   // A failure's whole text can run to pages; the cloud keeps a sentence, so it's cut rather than refused.
   const refused = await mac.accounts.refuseMove("t-0123456789abcdef", randomUUID(), `The arrival failed: ${"x".repeat(5_000)}`)

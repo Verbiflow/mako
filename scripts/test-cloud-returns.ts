@@ -121,7 +121,7 @@ function setup(name: string) {
     token: async () => "token", gateway: () => new URL("https://gateway.test"), id: async () => "acct",
     session: () => { throw new Error("no session in this test") },
     deviceId: async () => device,
-    createThread: unused, askBases: unused, sendCheckpoint: unused, claimMove: unused, refuseMove: unused, moveAnswer: unused,
+    createThread: unused, askBases: unused, sendCheckpoint: unused, handOverMove: unused, refuseMove: unused, moveAnswer: unused,
     threadRecords: async (threadId) => ({ id: threadId, base: `https://gateway.test/v1/threads/${threadId}/records`, authorization: "Bearer token" }),
     readCheckpoint: async (_threadId, sha256, file) => copyFileSync(cloud.checkpoints.get(sha256) ?? "/missing", file),
     beginReturn: async (_threadId, move) => cloud.step(move, (record) => record ?? { phase: "returning", move, at: clock++ }),

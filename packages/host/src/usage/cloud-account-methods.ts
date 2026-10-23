@@ -4,7 +4,7 @@ import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking } from "./cloud-account.js"
-import type { MoveAnswer, MoveCheckpoint, MoveClaimRequest, ReturnDeparture, ReturnState } from "@mako/protocol/moves"
+import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState, ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
@@ -45,12 +45,15 @@ export interface CloudAccount {
   askBases(repositories: CloudRepository[]): Promise<void>
   /** A move's checkpoint, sent to the cloud Thread once (`CloudAccounts.sendCheckpoint`). */
   sendCheckpoint(threadId: string, checkpoint: MoveCheckpoint, file: string): Promise<{ sent: boolean }>
-  /** The cloud's claim of a move this Mac released, or its refusal if that came first. */
-  claimMove(threadId: string, move: string, request: MoveClaimRequest): Promise<MoveAnswer>
+  /**
+   * A move this Mac released, handed to the cloud to carry through once it sent what only it has: the cloud arrives
+   * it, claims it (or refuses it), and starts it (`CloudAccounts.handOverMove`).
+   */
+  handOverMove(threadId: string, move: string, request: MoveHandOverRequest): Promise<MoveHandOverState>
   /** The cloud's promise never to take a move, or its claim if that came first. */
   refuseMove(threadId: string, move: string, reason: string): Promise<MoveAnswer>
-  /** What the cloud answered a move; undefined while it hasn't. */
-  moveAnswer(threadId: string, move: string): Promise<MoveAnswer | undefined>
+  /** What the cloud answered a move; undefined while it hasn't, after holding the ask open up to `waitMs`. */
+  moveAnswer(threadId: string, move: string, waitMs?: number): Promise<MoveAnswer | undefined>
   /** Where a cloud Thread's session records are kept, as this Mac's device reaches them. */
   threadRecords(threadId: string): Promise<RecordsLink>
   /** A checkpoint kept beside a cloud Thread's records, read whole into `file`. */
@@ -206,9 +209,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),
     askBases: (repositories) => cloud.askBases(repositories),
     sendCheckpoint: (threadId, checkpoint, file) => cloud.sendCheckpoint(threadId, checkpoint, file),
-    claimMove: (threadId, move, request) => cloud.claimMove(threadId, move, request),
+    handOverMove: (threadId, move, request) => cloud.handOverMove(threadId, move, request),
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),
-    moveAnswer: (threadId, move) => cloud.moveAnswer(threadId, move),
+    moveAnswer: (threadId, move, waitMs) => cloud.moveAnswer(threadId, move, waitMs),
     threadRecords: (threadId) => cloud.threadRecords(threadId),
     readCheckpoint: (threadId, sha256, file) => cloud.readCheckpoint(threadId, sha256, file),
     beginReturn: (threadId, move) => cloud.beginReturn(threadId, move),

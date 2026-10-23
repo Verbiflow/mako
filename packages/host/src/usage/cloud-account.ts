@@ -6,7 +6,7 @@ import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
-import { MOVE_REASON_MAX, MoveAnswerSchema, MoveClaimRequestSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveClaimRequest, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
+import { MOVE_ANSWER_WAIT_MS, MOVE_REASON_MAX, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
@@ -449,14 +449,6 @@ export class CloudAccounts {
     return { sent: true }
   }
 
-  /** The cloud's claim of a move this Mac released, each Session one generation on, or its refusal if that came first. */
-  async claimMove(threadId: string, move: string, request: MoveClaimRequest): Promise<MoveAnswer> {
-    // The handoff goes as JSON carries it: a field left undefined isn't sent, as it was refused here unsent before.
-    const body = MoveClaimRequestSchema.parse({ ...request, handoff: JSON.parse(JSON.stringify(request.handoff)) })
-    const response = await this.#call("moves.claim", "POST", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}/claim`, body)
-    return MoveAnswerSchema.parse(await response.json())
-  }
-
   /** The cloud's promise never to take a move, or its claim if that came first. */
   async refuseMove(threadId: string, move: string, reason: string): Promise<MoveAnswer> {
     // Within what the cloud takes, or a refusal that can never be heard leaves the move unsettled for good.
@@ -515,9 +507,22 @@ export class CloudAccounts {
   }
 
   /** What the cloud answered a move, if it answered; undefined while it hasn't. */
-  async moveAnswer(threadId: string, move: string): Promise<MoveAnswer | undefined> {
-    const response = await this.#call("moves.answer", "GET", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}`, undefined, false, [404])
+  async moveAnswer(threadId: string, move: string, waitMs = 0): Promise<MoveAnswer | undefined> {
+    // Held open at the cloud until there's an answer, within this call's own time.
+    const wait = Math.min(waitMs, MOVE_ANSWER_WAIT_MS, REQUEST_MS - 3_000)
+    const response = await this.#call("moves.answer", "GET", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}${wait > 0 ? `?wait=${wait}` : ""}`, undefined, false, [404])
     return response.status === 404 ? undefined : MoveAnswerSchema.parse(await response.json())
+  }
+
+  /**
+   * A move handed to the cloud to carry through, once this Mac sent what only it has and released the Thread
+   * (`MoveHandOverRequest`): how it stands there. Posted again, the first stands.
+   */
+  async handOverMove(threadId: string, move: string, request: MoveHandOverRequest): Promise<MoveHandOverState> {
+    // The handoff goes as JSON carries it: a field left undefined isn't sent.
+    const body = MoveHandOverRequestSchema.parse({ ...request, claim: { ...request.claim, handoff: JSON.parse(JSON.stringify(request.claim.handoff)) } })
+    const response = await this.#call("moves.hand-over", "POST", `/v1/threads/${encodeURIComponent(threadId)}/moves/${move}/hand-over`, body)
+    return MoveHandOverStateSchema.parse(await response.json())
   }
 
   /** Where a cloud Thread's session records are kept, as this Mac's device reaches them, for sending a move's. */

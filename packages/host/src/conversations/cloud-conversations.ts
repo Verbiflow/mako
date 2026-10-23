@@ -359,7 +359,7 @@ export class CloudConversations {
         // The machine filed the fork into a Session of the Thread's that this Mac has (its parent's, by what was seen
         // on 2026-10-23): filed the same here, so both stores agree and it comes back with the Thread, and said, since
         // a fork belongs in a Session of its own.
-        hostWarn("cloud-conversations", "a fork in the cloud went into a Session its Thread already had; filed the same here", { conversationId: input.id, parent: entry.conversationId, parentSession: placed.session, session, threadId: entry.threadId })
+        hostWarn("cloud-conversations", "a fork in the cloud went into a Session its Thread already had; filed the same here", { conversationId: input.id, parent: entry.conversationId, parentSession: placed.session, session, sameAsParent: session === placed.session, machineThread: z.object({ threadId: z.string() }).partial().safeParse(decoded).data?.threadId, threadId: entry.threadId })
         threads.adoptElsewhere({ operationId: namedUuid(`mako cloud fork\0${input.id}`), conversationId: input.id, session, actor: threads.person() })
       } else {
         threads.adoptElsewhere({ operationId: namedUuid(`mako cloud fork\0${input.id}`), conversationId: input.id, forkOf: entry.conversationId, forkSession: session, actor: threads.person() })
