@@ -178,10 +178,12 @@ try {
     const made: Array<{ threadId: string; standby?: boolean }> = []
     const checkpoints: string[] = []
     const records: string[][] = []
+    /** Cloud Threads the cloud ended unused, as it says when one is made again. */
+    const ended = new Set<string>()
     const account: ReadinessAccount = {
       createThread: async (threadId: string, _repository: CloudRepository, making?: { standby?: boolean }) => {
         made.push({ threadId, ...making?.standby && { standby: true } })
-        return { ready: false }
+        return ended.has(threadId) ? { ready: false, ended: true as const } : { ready: false }
       },
       sendCheckpoint: async (_threadId: string, checkpoint: MoveCheckpoint) => {
         checkpoints.push(checkpoint.sha256)
@@ -222,9 +224,22 @@ try {
     await readiness.refresh()
     assert.equal(checkpoints.length, 2, "changed, it goes again")
     assert.equal(await readiness.take("local-1", folder, { url: "https://github.com/someone/else" }), undefined, "another repository's move doesn't take it")
+    // The cloud ended it unused (nobody kept it ready for a while): the next round stands by with a new one.
+    const first = made.at(-1)!.threadId
+    ended.add(first)
+    await readiness.refresh()
+    const replaced = made.at(-1)!.threadId
+    assert.notEqual(replaced, first, "a new cloud Thread stands by in the ended one's place")
+    assert.equal(JSON.parse(readFileSync(join(root, "ready.json"), "utf8")).threads["local-1"].cloudThread, replaced)
     writeFileSync(join(folder, "a.txt"), "one, changed again\n")
     await readiness.refresh()
     const standing = made.at(-1)?.threadId
+    // One not kept ready lately (the Mac slept) may have ended in the cloud: a move doesn't take it.
+    const kept = JSON.parse(readFileSync(join(root, "ready.json"), "utf8"))
+    const stale = new CloudReadiness({ file: join(root, "stale.json"), git, scratch: join(root, "stale-scratch"), account: () => account, enabled: async () => true, working: () => [], leaving: () => false, plan: async () => ({ thread: "local-1", folder, repository, paths: [], harness: "codex" }), sendRecords: async () => [], newCloudThread: () => "t-stale" })
+    writeFileSync(join(root, "stale.json"), JSON.stringify({ version: 1, threads: { "local-1": { ...kept.threads["local-1"], at: Date.now() - 25 * 60_000 } } }))
+    assert.equal(await stale.take("local-1", folder, repository), undefined, "not taken: the move makes its own")
+    assert.equal(JSON.parse(readFileSync(join(root, "stale.json"), "utf8")).threads["local-1"], undefined, "and forgotten here")
     assert.equal(await readiness.take("local-1", folder, repository), standing, "the move takes the cloud Thread standing by")
     assert.equal(await readiness.take("local-1", folder, repository), undefined, "once")
     const before = made.length

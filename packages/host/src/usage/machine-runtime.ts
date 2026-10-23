@@ -550,6 +550,13 @@ export class MachineRuntime {
     this.#send({ type: "warm", ms, loaded })
   }
 
+  /** Asks the agent to make the Thread's folder again, after it said it couldn't; false while the agent can't hear. */
+  retryWorkspace(): boolean {
+    if (this.#stopped || !this.#options.agent.writable) return false
+    this.#send({ type: "workspace-retry" })
+    return true
+  }
+
   #send(message: HostMessage): void {
     if (this.#stopped && message.type !== "state") return
     this.#options.agent.write(`${JSON.stringify(message)}\n`)

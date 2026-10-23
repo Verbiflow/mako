@@ -107,7 +107,8 @@ const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z
 const BrowserSessionsSchema = z.object({ sessions: z.array(CloudBrowserSessionSchema) })
 const EndedSchema = z.object({ ended: z.number().int().nonnegative() })
 /** What the cloud answers a Thread made or made again with; only whether its machine is ready is read. */
-const CreatedThreadSchema = z.object({ ready: z.boolean().optional() }).loose()
+/** `ended`: a Thread standing by that the cloud ended unused; the device stands by with a new one. */
+const CreatedThreadSchema = z.object({ ready: z.boolean().optional(), ended: z.boolean().optional() }).loose()
 const ProblemSchema = z.object({ title: z.string(), detail: z.string().optional() }).partial()
 /** Text that must be JSON, parsed and then checked against `schema`, in one step. */
 const jsonText = <Schema extends z.ZodType>(schema: Schema) =>
@@ -426,7 +427,7 @@ export class CloudAccounts {
    * do; `ready` says whether its machine runs with its runtime connected. `harness`: the one its first message is for,
    * whose start its machine runs ahead as it boots.
    */
-  async createThread(threadId: string, repository: CloudRepository, options: CloudThreadMaking = {}): Promise<{ ready: boolean }> {
+  async createThread(threadId: string, repository: CloudRepository, options: CloudThreadMaking = {}): Promise<{ ready: boolean; ended?: true }> {
     const body: JsonObject = { threadId, home: "cloud", repository }
     if (options.prepare) body.prepare = true
     if (options.harness) body.harness = options.harness
@@ -434,7 +435,7 @@ export class CloudAccounts {
     if (options.standby) body.standby = true
     const response = await this.#call(options.prepare ? "threads.prepare" : options.standby ? "threads.standby" : "threads.create", "POST", "/v1/threads", body)
     const answer = CreatedThreadSchema.safeParse(await response.json().catch(() => undefined))
-    return { ready: answer.success && answer.data.ready === true }
+    return { ready: answer.success && answer.data.ready === true, ...answer.success && answer.data.ended === true && { ended: true as const } }
   }
 
   /**
