@@ -633,6 +633,29 @@ else process.exit(1);
   assert.ok(calls.includes("share claude"))
   console.log("ok  a store this Mac can't write is never left to the cloud to move: taken back, and sent as access alone")
 
+  // A cloud this Mac doesn't keep in step (a proof's own): every sign-in goes as its access alone, never a chain the
+  // cloud would keep and refresh, and nothing is asked of a chain.
+  const proofRoot = join(root, "proof")
+  await write(join(proofRoot, "cloud", "sign-ins.json"), JSON.stringify({ version: 2, sharing: true, accessOnly: true }))
+  // A cloud of its own: what it's given doesn't reach the store the person's cloud is.
+  const proofStore = {
+    ...store,
+    list: async () => ({ signIns: [], kept: [] }),
+    put: async (signIn: CloudSignIn) => {
+      for (const secret of REFRESH) assert.ok(!JSON.stringify(signIn).includes(secret), "access alone: no refresh token")
+      calls.push(`put ${signIn.harness}`)
+    },
+  }
+  const proof = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store: proofStore, dataRoot: proofRoot, onChange: () => {} })
+  calls.length = 0
+  const proofState = await proof.check()
+  assert.deepEqual(calls.filter((call) => !call.startsWith("put ")), [], "no chain shared, pulled, refreshed or taken back")
+  assert.deepEqual(calls.map((call) => call.slice("put ".length)).sort(), ["claude", "codex", "cursor", "devin", "grok", "opencode"], "each harness's access, refresh token withheld (the store refuses one)")
+  assert.ok(proofState.harnesses.every((entry) => entry.status === "sent" && entry.kept === undefined))
+  assert.equal(JSON.parse(await readFile(join(proofRoot, "cloud", "sign-ins.json"), "utf8")).accessOnly ?? true, true, "the choice stays")
+  proof.stop()
+  console.log("ok  a cloud this Mac doesn't keep in step gets access alone, and no chain to refresh")
+
   // Off: everything this Mac gave the cloud goes, and the choice is kept.
   calls.length = 0
   synced = await sync.share(false)

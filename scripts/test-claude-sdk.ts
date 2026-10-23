@@ -598,7 +598,7 @@ const assistant: SDKAssistantMessage = {
     const message: SDKAssistantMessage = { ...assistant, uuid: randomUUID(), session_id: "turn-fixture", message: { ...assistant.message, content: [{ type: "text", text, citations: null }] } }
     messages.send(message)
   }
-  const result = (origin?: { kind: "task-notification" }) => {
+  const result = (origin?: { kind: "task-notification" }, answers?: string) => {
     const message: SDKMessage = {
       type: "result", subtype: "success", uuid: randomUUID(), session_id: "turn-fixture",
       duration_ms: 1, duration_api_ms: 1, is_error: false, num_turns: 1, result: "", stop_reason: "end_turn", total_cost_usd: 0,
@@ -609,6 +609,7 @@ const assistant: SDKAssistantMessage = {
         server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 }, service_tier: "standard", speed: "standard" },
     }
     if (origin) message.origin = origin
+    if (answers) Object.assign(message, { user_message_uuid: answers, user_message_uuids: [answers] })
     messages.send(message)
   }
   const notify = (summary: string, ambient = false) => messages.send({
@@ -622,8 +623,14 @@ const assistant: SDKAssistantMessage = {
   const markers = () => turnEvents.flatMap((event) =>
     event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : []).filter((update) => update.kind === "event")
 
-  await turnDriver.prompt("turn-fixture", "Start the sleep", [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+  // As Claude Code takes a message: queued, then started once its turn begins (2.1.283, recorded 2026-10-23).
+  const lifecycle = (command: string, state: "queued" | "started") =>
+    messages.send(JSON.parse(JSON.stringify({ type: "command_lifecycle", command_uuid: command, state, uuid: randomUUID(), session_id: "turn-fixture" })))
+  const sleep = randomUUID()
+  await turnDriver.prompt("turn-fixture", "Start the sleep", [], undefined, { operationId: randomUUID(), attemptId: sleep, report: () => {} })
   await turnInput?.next()
+  lifecycle(sleep, "queued")
+  lifecycle(sleep, "started")
   init()
   reply("Started it.")
   notify("Background command \"Sleep 8 seconds\" completed (exit code 0)")
@@ -678,6 +685,22 @@ const assistant: SDKAssistantMessage = {
   result()
   await delay(0)
   assert.equal(session()?.status, "ready")
+
+  // Mako's message sent as Claude starts a turn of its own (its notice of background work it found stopped, as a
+  // reopened session runs first): queued behind it, the notice's result doesn't end Mako's turn; its own result does.
+  const continued = randomUUID()
+  await turnDriver.prompt("turn-fixture", "Continue where you left off", [], undefined, { operationId: randomUUID(), attemptId: continued, report: () => {} })
+  await turnInput?.next()
+  lifecycle(continued, "queued")
+  init()
+  result({ kind: "task-notification" })
+  await delay(0)
+  assert.equal(session()?.status, "running", "the notice's result ends a turn before Mako's, not Mako's")
+  lifecycle(continued, "started")
+  init()
+  reply("Checked the file, and started the command again.")
+  result(undefined, continued)
+  await until(() => session()?.status === "ready", "Mako's own result ends its turn")
 
   notify("Background command \"Watch logs\" completed (exit code 0)")
   init()

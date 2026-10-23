@@ -207,7 +207,10 @@ export class CloudReturns {
         continue
       }
       for (const begun of begunThere.filter((each) => journals.includes(each.conversationId))) {
-        if (begun.nativeId) sessions.push({ session, conversationId: begun.conversationId, harness: begun.harness, nativeId: begun.nativeId, generation, begun: true })
+        // What this Mac heard can trail the machine (a fork names its native session only once its first turn runs
+        // there): the machine, which runs it, says.
+        const nativeId = begun.nativeId ?? (await this.#nativeThere(forward.cloudThread, begun.conversationId))
+        if (nativeId) sessions.push({ session, conversationId: begun.conversationId, harness: begun.harness, nativeId, generation, begun: true })
         else left.push(begun.conversationId)
       }
     }
@@ -216,6 +219,12 @@ export class CloudReturns {
     const device = await account.deviceId()
     if (!device) throw new Error("This Mac isn't one of the account's devices, so nothing can be sent back to it.")
     return { move, thread: placed.thread, asked: conversationId, cloudThread: forward.cloudThread, folder: forward.folder, forward: forward.handoff, sessions, left, phase: "preparing", device, began: Date.now(), timings: {} }
+  }
+
+  /** The native session a conversation begun in the cloud runs there, as its machine says; undefined if it never started. */
+  async #nativeThere(cloudThread: string, conversationId: string): Promise<string | undefined> {
+    const value = await this.#options.cloud.callThread(cloudThread, "mako:live-snapshot", [conversationId], conversationId)
+    return z.object({ session: z.object({ nativeId: z.string().nullish() }).loose() }).loose().nullable().parse(decodeRuntimeValue(value))?.session.nativeId || undefined
   }
 
   /** The move that took the Thread to the cloud runtime `runtime`, as its plan stands done. */

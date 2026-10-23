@@ -115,7 +115,17 @@ export interface CloudSignInStore {
  * what tells a sign-in signed out here apart from one a stale refresh cleared while this Mac was behind.
  */
 const ChoiceSchema = z.union([
-  z.object({ version: z.literal(2), sharing: z.boolean().optional(), inStep: z.record(z.string(), z.object({ token: z.string(), at: z.string() })).default({}) }),
+  z.object({
+    version: z.literal(2),
+    sharing: z.boolean().optional(),
+    /**
+     * A cloud this Mac doesn't keep in step with (a proof's own, gone when it ends) is sent each sign-in's access alone,
+     * never a chain it would keep and refresh: a refresh there rotates the token this Mac and Mako Cloud hold, and
+     * nothing would mirror it back. Machines run on the access while it lasts; refreshing it stays this Mac's.
+     */
+    accessOnly: z.boolean().optional(),
+    inStep: z.record(z.string(), z.object({ token: z.string(), at: z.string() })).default({}),
+  }),
   // Version 1 shared access only; a choice of "off" then was a choice about that, so it isn't carried over.
   z.object({ version: z.literal(1), sharing: z.boolean() }).transform(({ sharing }) => ({ version: 2 as const, sharing: sharing ? true : undefined, inStep: {} })),
 ])
@@ -144,6 +154,7 @@ export class CloudSignInSync {
   readonly #choicePath: string
   readonly #onChange: (state: CloudSignInsState) => void
   #sharing: boolean | undefined
+  #accessOnly = false
   #inStep: Record<string, InStep> = {}
   #state: CloudSignInsState = { sharing: true, harnesses: [] }
   readonly #sent = new Map<CloudSignInHarness, Sent>()
@@ -193,6 +204,7 @@ export class CloudSignInSync {
       (text) => {
         const choice = ChoiceSchema.parse(JSON.parse(text))
         this.#sharing = choice.sharing
+        this.#accessOnly = "accessOnly" in choice && choice.accessOnly === true
         this.#inStep = choice.inStep
       },
       () => undefined,
@@ -370,6 +382,7 @@ export class CloudSignInSync {
     await mkdir(dirname(this.#choicePath), { recursive: true, mode: 0o700 })
     const choice: z.input<typeof ChoiceSchema> = { version: 2, inStep: this.#inStep }
     if (this.#sharing !== undefined) choice.sharing = this.#sharing
+    if (this.#accessOnly) choice.accessOnly = true
     await writeFile(`${this.#choicePath}.tmp`, JSON.stringify(choice), { mode: 0o600 })
     await rename(`${this.#choicePath}.tmp`, this.#choicePath)
   }
@@ -390,7 +403,7 @@ export class CloudSignInSync {
         const harness = CloudSignInHarnessSchema.safeParse(capability.provider)
         const adapter = capability.cloudSignIn
         if (!harness.success || !adapter) return []
-        const read = adapter.mirror && adapter.chain
+        const read = adapter.mirror && adapter.chain && !this.#accessOnly
           ? this.#mirror(harness.data, { chain: adapter.chain.bind(adapter), mirror: adapter.mirror }, send, kept.get(harness.data), mine.has(harness.data))
           : this.#sync(harness.data, send, mine.has(harness.data))
         return [read]

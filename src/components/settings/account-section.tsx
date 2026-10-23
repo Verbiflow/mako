@@ -314,7 +314,7 @@ function HandOffSettings() {
             <div className="text-ui font-medium">Hand off when this Mac sleeps</div>
             <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
               {settings?.unavailable ??
-                "Close the lid while agents work and they go on in the cloud: each turn pauses, moves with its Thread, and continues there. To fit in the few seconds sleep allows, a Thread at work sends its changes ahead every half minute while this is on. Anything that can't go in time stays here and goes on when the Mac wakes."}
+                "Close the lid while agents work and they go on in the cloud: each turn pauses, moves with its Thread, and continues there. To fit in the few seconds sleep allows, a Thread at work keeps a cloud machine ready, paused, and sends its changes ahead every half minute while this is on. Anything that can't go in time stays here and goes on when the Mac wakes."}
             </p>
           </div>
           <Toggle
