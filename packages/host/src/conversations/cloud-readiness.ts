@@ -16,6 +16,12 @@ export const READY_EVERY_MS = 30_000
 const TAKEN_REST_MS = 5 * 60_000
 /** A Thread standing by that nothing has used or brought up to date for this long is forgotten here. */
 const READY_KEPT_MS = 7 * 24 * 60 * 60_000
+/**
+ * A move takes a Thread standing by only if a round brought it up to date this recently. The cloud ends one its device
+ * stopped keeping ready after half an hour (a Thread at work is kept ready every `READY_EVERY_MS`), so a move never
+ * takes one that ended: an older one is left, and the move makes its own.
+ */
+const READY_FRESH_MS = 20 * 60_000
 
 const ReadyEntrySchema = z.object({
   cloudThread: z.string(),
@@ -94,6 +100,13 @@ export class CloudReadiness {
     const entries = await this.#load()
     const entry = entries[thread]
     if (!entry || entry.folder !== folder || entry.repository.url !== repository.url) return undefined
+    if (Date.now() - entry.at > READY_FRESH_MS) {
+      // Not kept ready lately (the Mac slept, or the Thread rested): the cloud may have ended it. Forgotten here.
+      delete entries[thread]
+      await this.#save()
+      hostLog("readiness", "a move didn't take a cloud Thread not kept ready lately", { thread, cloudThread: entry.cloudThread, staleMs: Date.now() - entry.at })
+      return undefined
+    }
     this.#taken.set(thread, Date.now())
     delete entries[thread]
     await this.#save()
@@ -127,10 +140,18 @@ export class CloudReadiness {
       entries[plan.thread] = entry
       await this.#save()
     }
-    const ready = entry
+    let ready = entry
     const began = performance.now()
     try {
-      await account.createThread(ready.cloudThread, ready.repository, { folder: ready.folder, harness: plan.harness, standby: true })
+      const made = await account.createThread(ready.cloudThread, ready.repository, { folder: ready.folder, harness: plan.harness, standby: true })
+      if (made.ended) {
+        // The cloud ended it unused (nothing kept it ready for a while): a new one stands by in its place.
+        hostLog("readiness", "a cloud Thread standing by had ended; standing by with a new one", { thread: plan.thread, ended: ready.cloudThread })
+        ready = { cloudThread: this.#options.newCloudThread(), folder: plan.folder, repository: plan.repository, at: Date.now() }
+        entries[plan.thread] = ready
+        await this.#save()
+        await account.createThread(ready.cloudThread, ready.repository, { folder: ready.folder, harness: plan.harness, standby: true })
+      }
       const [checkpoint, sent] = await Promise.all([
         this.#sendCheckpoint(account, ready),
         withFreshLink(() => account.threadRecords(ready.cloudThread), (link) => this.#options.sendRecords(link, plan.paths)),

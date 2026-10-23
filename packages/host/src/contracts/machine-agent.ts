@@ -107,6 +107,11 @@ export type HostMessage =
   /** A `prepare` is done, or failed and left to the start. */
   | { type: "prepared"; path: string; ms: number; ok: boolean }
   /**
+   * The Thread's folder wasn't made (`workspace-failed`) and a move asks for it: the agent asks the gateway and clones
+   * again, and says how it went as it did the first time (`workspace`, `workspace-failed`).
+   */
+  | { type: "workspace-retry" }
+  /**
    * One of the host's lines a machine's timeline shows beside the agent's (`npm run timeline`): each launch's phases,
    * what the machine runtime does, a held event loop, and every warning and error. The agent keeps them with its own.
    */

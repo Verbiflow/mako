@@ -137,6 +137,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       const { openCore } = await import("./core.js")
       const opened = await openCore({
         config, owner, methods, jobs, foreground, subscribed, secrets, terminals,
+        retryMachineWorkspace: () => machine?.retryWorkspace() ?? false,
         web: () => web,
         closing: () => closing,
         closeSocket,

@@ -40,7 +40,7 @@ export interface CloudAccount {
    * under its ID. `prepare`: made ahead of its first message, as its person writes it; `ready` once its machine is.
    * `harness`: the one its first message is for, whose start its machine runs ahead as it boots.
    */
-  createThread(threadId: string, repository: CloudRepository, options?: CloudThreadMaking): Promise<{ ready: boolean }>
+  createThread(threadId: string, repository: CloudRepository, options?: CloudThreadMaking): Promise<{ ready: boolean; ended?: true }>
   /** Project bases for these repositories, made in the background ahead of their first cloud Thread. */
   askBases(repositories: CloudRepository[]): Promise<void>
   /** A move's checkpoint, sent to the cloud Thread once (`CloudAccounts.sendCheckpoint`). */

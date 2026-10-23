@@ -10,6 +10,7 @@ export { declareTelemetryMethods } from "./telemetry-methods.js"
 export { declareCloudAccountMethods, type CloudAccount } from "./cloud-account-methods.js"
 export type { CloudThreadMaking } from "./cloud-account.js"
 export type { MachineRuntime, MachineGatewayLink } from "./machine-runtime.js"
+export { MachineWorkspace, WORKSPACE_RETRY_MS, type MachineWorkspaceOutcome } from "./machine-workspace.js"
 /** A cloud machine's runtime, loaded only by a host its machine's agent started. */
 export const loadMachineRuntime = () => import("./machine-runtime.js")
 export type { HostTelemetry } from "./host-telemetry.js"

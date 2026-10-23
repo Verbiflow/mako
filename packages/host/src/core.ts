@@ -29,7 +29,7 @@ import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
 import { makoViews } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
-import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
+import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, installCloudSignIns, CloudSignInSync, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
@@ -52,6 +52,8 @@ type WebHost = Awaited<ReturnType<typeof startWebHost>>
 /** What the host gives its core: the socket, the method table, and the domains that load on their own. */
 export interface CoreShell {
   config: HostConfig
+  /** On a cloud machine: asks its agent to make the Thread's folder again, false where it can't be asked. */
+  retryMachineWorkspace?(): boolean
   owner: HostOwner
   methods: HostMethods
   jobs: HostJobs
@@ -154,11 +156,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const late: LateParts = {}
   /** On a cloud machine, the gateway it's linked through; a laptop has none and reaches the account as itself. */
   let machineLink: MachineGatewayLink | null = null
-  /** Why this machine's agent couldn't make the Thread's folder, when it said. */
-  let machineWorkspaceProblem: string | undefined
-  /** On a cloud machine: settles once its agent made the Thread's folder or said why it couldn't. */
-  let settleMachineWorkspace: (settled: { path: string } | { problem: string }) => void = () => undefined
-  const machineWorkspace = new Promise<{ path: string } | { problem: string }>((resolve) => (settleMachineWorkspace = resolve))
+  /** On a cloud machine: the Thread's folder its agent makes, asked for again by a move that finds it unmade. */
+  const machineWorkspace = new MachineWorkspace(() => shell.retryMachineWorkspace?.() ?? false)
   /** On a cloud machine: the account's sign-ins as last installed here; undefined until the agent gave a set. */
   let machineSignIns: readonly CloudSignInInstall[] | undefined
   /**
@@ -612,8 +611,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         git,
         records: () => machineRecords(machineLink),
         workspace: () => workspaceClients.homePath(),
-        workspaceProblem: () => machineWorkspaceProblem,
-        workspaceSettled: () => machineWorkspace,
+        workspaceProblem: () => machineWorkspace.problem,
+        workspaceSettled: () => machineWorkspace.settled(),
         receive: (link, sessions, installed) => catalog.receiveRecords(link, sessions, installed),
         stage: (link, sessions) => catalog.stageRecords(link, sessions),
         installed: (harness) => installedReading(harnesses.updates.restoreRuntime(harness)),
@@ -645,7 +644,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         git,
         records: () => machineRecords(machineLink),
         workspace: () => workspaceClients.homePath(),
-        workspaceProblem: () => machineWorkspaceProblem,
+        workspaceProblem: () => machineWorkspace.problem,
         blockers: (thread) => live.moves.settledBlockers(thread),
         threads: () => threads.store ?? undefined,
         moves: live.moves,
@@ -782,14 +781,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       machineLink = link
       await catalog.syncRecords(machineRecords(link) ?? null)
     },
-    machineWorkspaceFailed: (problem) => {
-      machineWorkspaceProblem = problem
-      settleMachineWorkspace({ problem })
-    },
+    machineWorkspaceFailed: (problem) => machineWorkspace.failed(problem),
     openMachineWorkspace: async (path) => {
       await workspaceClients.home(path)
       await workspaceAutomations.watch(path)
-      settleMachineWorkspace({ path })
+      machineWorkspace.opened(path)
     },
     media: controlVideoMedia(control.previews),
     activeWork: () => application.lifecycle.snapshot().work.length > 0,
