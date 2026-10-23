@@ -153,6 +153,8 @@ export function turnStopLabel(reason: InterruptionReason, provider: string): str
       return `${provider} stopped unexpectedly`
     case "signed-out":
       return `${provider} signed out`
+    case "handed-off":
+      return "Paused to move to the cloud"
   }
 }
 

@@ -68,7 +68,8 @@ function goalHost(goals: GoalsCapability, turns: (text: string, index: number) =
     provider: "test-provider",
     available: () => true,
     start: async () => state("ready"),
-    prompt: async (_id, text) => {
+    prompt: async (_id, text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       sent.push(text)
       order.push(`prompt ${text}`)
       const turn = turns(text, sent.length - 1)

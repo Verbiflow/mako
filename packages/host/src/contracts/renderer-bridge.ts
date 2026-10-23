@@ -61,7 +61,7 @@ import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
-import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, ThreadMoveOutcome, ThreadReturnOutcome } from "./cloud-threads.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
@@ -404,7 +404,14 @@ export function createMakoBridge(transport: BridgeTransport) {
      * Moves the Thread of `conversationId` to the cloud under `move`, a fresh id; asked again with the same id it
      * answers how that move went. Its steps arrive as `thread-move-step` events.
      */
-    threadMove: (conversationId: string, move: string) => invokeTrustedHost<ThreadMoveOutcome>("mako:thread-move", conversationId, move),
+    threadMove: (conversationId: string, move: string, handOff?: ThreadHandOff) => invokeTrustedHost<ThreadMoveOutcome>("mako:thread-move", conversationId, move, handOff),
+    /** This Mac's Threads whose agents are working, each with why it couldn't go to the cloud now, if it couldn't. */
+    handOffCandidates: () => invokeTrustedHost<HandOffCandidate[]>("mako:handoff-candidates"),
+    /** Hands every Thread at work to the cloud as one handoff named `handOff`; each move's steps arrive as `thread-move-step`. */
+    handOff: (handOff: string, why: "quit") => invokeTrustedHost<HandOffResult[]>("mako:handoff", handOff, why),
+    /** Whether agents at work go to the cloud as this Mac sleeps, and whether it can. */
+    handOffSettings: () => invokeTrustedHost<HandOffSettings>("mako:handoff-settings"),
+    setHandOffOnSleep: (onSleep: boolean) => invokeTrustedHost<HandOffSettings>("mako:handoff-settings-set", onSleep),
     /** Brings the Thread of a conversation back from the cloud under `move`; its steps arrive as `thread-return-step` events. */
     threadReturn: (conversationId: string, move: string) => invokeTrustedHost<ThreadReturnOutcome>("mako:thread-return", conversationId, move),
     /** The account has the cloud: this Mac's recent project folders, newest first, offered once for project bases. */

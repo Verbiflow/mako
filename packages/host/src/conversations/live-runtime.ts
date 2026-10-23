@@ -94,6 +94,8 @@ export interface Resident {
   waking?: Promise<void>
   /** At most one automatic account reopen for an input proven unsent. */
   accountRefreshRequest?: string
+  /** A message the harness refused because a turn of its own ran (`TurnInProgressError`), and how often in a row. */
+  turnInProgress?: { request: string; refusals: number }
   /** Set while an input waiting for an account switch retires and reopens this session. */
   accountSwitching?: boolean
   /** The Resume of work paused on a sign-out while it runs; a second press shares it. */
@@ -117,6 +119,8 @@ export interface Resident {
    * result), it settles stopped and is never continued automatically.
    */
   stopping?: string
+  /** Why `stopping` was stopped: the user's Stop, or Mako handing the Thread to another machine. */
+  stoppingFor?: "stopped" | "handed-off"
   /** The running turn's steps and results in the order they arrived; see `TurnSteps`. */
   steps?: TurnSteps
 }

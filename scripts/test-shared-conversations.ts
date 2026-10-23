@@ -60,7 +60,8 @@ const drivers = new Map(providers.map((provider) => [provider, {
     sessions.set(session.id, session)
     return session
   },
-  prompt: async (id, text) => {
+  prompt: async (id, text, _attachments, _settings, dispatch) => {
+    dispatch.report({ kind: "submitted", source: "transport-call" })
     prompts.push(text)
     const session = sessions.get(id)!
     emitters.get(id)?.({ type: "live-session", session: { ...session, status: "running" } })

@@ -1,4 +1,5 @@
 import { accounts } from "@/state/accounts"
+import { handOff } from "@/state/handoff"
 import { noteFolderUse } from "@/state/prefs"
 import { playFeedback } from "@/state/feedback"
 import { workspaceTransitionStore } from "@/state/workspace-transition"
@@ -353,6 +354,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "cloud-sign-ins") {
     cloudAccountStore.set({ signIns: event.signIns })
+    return
+  }
+  if (event.type === "handoff-settings") {
+    handOff.settled(event.settings)
     return
   }
   if (event.type === "runtime-updates") {

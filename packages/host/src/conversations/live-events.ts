@@ -1,5 +1,5 @@
 import { carriedUsage } from "../harnesses/index.js"
-import type { LiveBatch, LiveDriverEvent } from "../contracts/live-conversations.js"
+import type { LiveBatch, LiveDriverEvent, LiveRequest } from "../contracts/live-conversations.js"
 import { GoalObservationSchema } from "../contracts/live-goals.js"
 import type { NativeActivity, NativeActivityObservation } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, NativeAgentObservationSchema, observeNativeAgent } from "../contracts/native-agents.js"
@@ -154,47 +154,51 @@ export class LiveEvents {
       }
       if (event.session.status === "running") this.access.goalSpent(resident)
       const gone = event.session.connection === "disconnected" || event.session.status === "closed"
+      // The request this turn's end settles: only one the harness was given (`handedOver`), unless its process went.
+      const settling = finishedRequest && (gone || handedOver(finishedRequest)) ? finishedRequest : undefined
       if ((previousStatus === "running" && event.session.status !== "running") || gone) {
         actions.settle(resident, bindingId)
         approvals.settle(resident, bindingId)
       }
       // Once the process is gone nothing reports a request it was handed, so
       // it settles here even if its turn never showed as running.
-      if ((previousStatus === "running" && event.session.status !== "running") || (gone && finishedRequest)) {
+      if ((previousStatus === "running" && event.session.status !== "running") || (gone && settling)) {
         const outcome = previousStatus === "running" || event.session.status !== "ready"
           ? event.session
           : { ...event.session, status: "failed" as const, error: event.session.error ?? "The provider stopped before the turn started" }
-        if (previousStatus !== "running" && finishedRequest)
+        if (previousStatus !== "running" && settling)
           hostWarn("live", "a request's provider went away before its turn ran", {
-            conversation: resident.snapshot.session.id, request: finishedRequest.id,
-            delivery: finishedRequest.nativeDelivery?.evidence.kind ?? "none", status: event.session.status,
+            conversation: resident.snapshot.session.id, request: settling.id,
+            delivery: settling.nativeDelivery?.evidence.kind ?? "none", status: event.session.status,
           })
         resident.snapshot = {
           ...resident.snapshot,
           permissions: [],
           requests: resident.snapshot.requests.map((request) =>
-            request.status === "dispatching"
+            request.status === "dispatching" && (gone || handedOver(request))
               ? settleRequest(
                   request,
                   outcome,
-                  resident.closing || resident.stopping === request.id
+                  resident.closing || resident.stopping === request.id,
+                  resident.stopping === request.id ? resident.stoppingFor : undefined
                 )
               : request
           ),
         }
         resident.stopping = undefined
-        if (finishedRequest) {
-          if (resident.snapshot.requests.find((request) => request.id === finishedRequest.id)?.failure === "auth")
+        resident.stoppingFor = undefined
+        if (settling) {
+          if (resident.snapshot.requests.find((request) => request.id === settling.id)?.failure === "auth")
             resident.snapshot = {
               ...resident.snapshot,
-              requests: holdForSignIn(resident.snapshot.requests, this.access.signInHold(resident), finishedRequest.id),
+              requests: holdForSignIn(resident.snapshot.requests, this.access.signInHold(resident), settling.id),
             }
-          recordCutOff(resident, finishedRequest.id, dependencies.root)
-          if (resident.snapshot.requests.find((request) => request.id === finishedRequest.id)?.status === "held")
-            dependencies.workspaceSnapshots?.abandonRun(finishedRequest.id)
-          else checkpoints.settle(resident, finishedRequest.id)
-          this.access.scheduleAutoContinue(resident, finishedRequest.id)
-          this.access.goalSettled(resident, finishedRequest.id)
+          recordCutOff(resident, settling.id, dependencies.root)
+          if (resident.snapshot.requests.find((request) => request.id === settling.id)?.status === "held")
+            dependencies.workspaceSnapshots?.abandonRun(settling.id)
+          else checkpoints.settle(resident, settling.id)
+          this.access.scheduleAutoContinue(resident, settling.id)
+          this.access.goalSettled(resident, settling.id)
         }
       }
     } else if (event.type === "live-rewound") {
@@ -347,4 +351,15 @@ function observeNativeActivity(
   if (!observation) return undefined
   const next = { ...observation, since: current?.kind === observation.kind ? current.since : Date.now() }
   return current && JSON.stringify(current) === JSON.stringify(next) ? current : next
+}
+
+/**
+ * Whether the harness was given a request, so a turn that ends is its turn: not one still being prepared, nor one
+ * it refused before taking it. A turn the harness started itself (Claude Code's notice of background work it found
+ * stopped, as a handed-off session reopens) can begin and end while a message is prepared; that message's own send
+ * or refusal settles it, never the end of a turn it wasn't in. A process that's gone settles everything regardless.
+ */
+function handedOver(request: LiveRequest): boolean {
+  const evidence = request.nativeDelivery?.evidence.kind
+  return evidence !== "prepared" && evidence !== "not-accepted"
 }

@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon, LoaderCircleIcon } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { backgroundWork } from "@mako/host/contracts/background-work"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useCloudAccount } from "@/state/cloud-account"
@@ -52,7 +53,7 @@ export function RunPlaceChoice() {
 function ThreadRunPlace({ thread }: { thread: string }) {
   const live = useAcp((state) => {
     const active = activeLiveAcp(state)
-    return active ? { key: active.key, cwd: active.cwd, elsewhere: Boolean(active.elsewhere), running: active.session.status === "running", started: Boolean(active.session.nativeId) } : null
+    return active ? { key: active.key, cwd: active.cwd, elsewhere: Boolean(active.elsewhere), running: active.session.status === "running", background: backgroundWork(active.session, active.nativeAgents) !== null, started: Boolean(active.session.nativeId) } : null
   }, shallowEqual)
   const worktree = useWorktrees((state) => state.worktrees.find((entry) => entry.thread === thread)?.path)
   const moving = useCloudMoves((state) => (live ? Boolean(state.moving[live.key]) : false))
@@ -98,9 +99,10 @@ function ThreadRunPlace({ thread }: { thread: string }) {
     ? "Send a first message before it moves."
     : !inWorktree
       ? "It works in the project folder. Move it to its own branch first, from the menu beside this; the project folder stays on this Mac."
-      : live.running
-        ? "Moves happen between turns: wait for this turn to end, or stop it."
-        : undefined
+      : undefined
+  // At work, it's handed off: its turn pauses, goes along, and continues in the cloud; what it left running in the
+  // background stops, and the agent is told there what stopped.
+  const handOff = live.running || live.background
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -116,17 +118,25 @@ function ThreadRunPlace({ thread }: { thread: string }) {
         <button
           type="button"
           data-thread-move-offer
+          data-thread-handoff={handOff || undefined}
           disabled={blocked !== undefined}
           onClick={() => {
             setOpen(false)
-            void moveToCloud(live.key)
+            void moveToCloud(live.key, handOff)
           }}
           className="pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60"
         >
           <CloudUploadIcon className="mt-0.5 size-3 shrink-0" />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="text-ui">Move to the cloud</span>
-            <span className="text-label text-faint">{blocked ?? "Its worktree and every session go to a cloud machine, at the same folder, and pick up where they left off. Your Mac can close."}</span>
+            <span className="text-ui">{handOff ? "Hand off to the cloud" : "Move to the cloud"}</span>
+            <span className="text-label text-faint">
+              {blocked ??
+                (live.running
+                  ? "Its turn pauses, and its worktree and every session go to a cloud machine at the same folder. The turn goes on there from where it paused. Your Mac can close."
+                  : handOff
+                  ? "What it left running in the background stops, and its worktree and every session go to a cloud machine at the same folder, where it's told what stopped. Your Mac can close."
+                  : "Its worktree and every session go to a cloud machine, at the same folder, and pick up where they left off. Your Mac can close.")}
+            </span>
           </span>
         </button>
       </PopoverContent>

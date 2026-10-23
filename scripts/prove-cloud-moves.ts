@@ -23,6 +23,9 @@ import { holdHostLease } from "@mako/host/base/host-idle"
  * 5. sends a turn that now runs on the cloud machine: the agent must say from memory what it wrote (the same native
  *    session), and its commands' own output must show the files, the commit and the Mac's path.
  *
+ * With `--handoff <harness>`, a Thread of that harness is then handed off while its agent runs a long command: the
+ * turn must pause here, go on and finish on the machine, and the file it wrote there come back with the Thread.
+ *
  * Prints no secret; writes a JSON report. The Threads stay, on their cloud machines, to be looked at.
  *
  *   npx tsx scripts/prove-cloud-moves.ts [--harness claude --harness codex …] [--report <file>]
@@ -59,9 +62,15 @@ const { values } = parseArgs({
      * unsigned), then a move of a Thread back here must be refused at once, saying the cloud is full, never queued.
      */
     "full-cloud": { type: "string" },
+    /**
+     * At the end, a Thread of this harness handed off mid-turn (rule 2 of moves): its agent runs a long command, the
+     * move pauses the turn, and the turn must go on and finish on the machine; then it comes back with what it wrote.
+     */
+    handoff: { type: "string" },
   },
 })
-const HARNESSES = values.harness?.length ? values.harness : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
+// With `--handoff` alone, only the handoff runs.
+const HARNESSES = values.harness?.length ? values.harness : values.handoff ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
 const dataRoot = values["data-root"] ?? runtimeDataRoot(appDataFolder(), {})
 const { socket } = runtimeLocation(dataRoot)
 const client = randomUUID()
@@ -156,6 +165,7 @@ const RequestSchema = z.object({
   error: z.string().optional(),
   failure: z.string().optional(),
   interruption: z.object({ reason: z.string() }).loose().optional(),
+  continues: z.object({ requestId: z.string(), reason: z.string() }).loose().optional(),
 }).loose()
 const OptionSchema = z.object({ optionId: z.string(), kind: z.string().optional(), name: z.string().optional() }).loose()
 const PermissionSchema = z.object({ id: z.string(), options: z.array(OptionSchema).default([]) }).loose()
@@ -176,7 +186,7 @@ const OutcomeSchema = z.discriminatedUnion("kind", [
 ])
 const ReturnOutcomeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("back") }),
-  z.object({ kind: z.literal("stayed"), reason: z.string() }),
+  z.object({ kind: z.literal("stayed"), reason: z.string(), outdated: z.object({ harness: z.string(), installed: z.string().nullable(), offer: z.object({ kind: z.string() }).loose() }).loose().optional() }),
   z.object({ kind: z.literal("unsettled"), reason: z.string() }),
 ])
 const ReturnTimingsSchema = z.object({ phase: z.string(), timings: z.record(z.string(), z.number()), sessions: z.array(z.object({ conversationId: z.string(), begun: z.boolean().optional() }).loose()).default([]) }).loose()
@@ -234,7 +244,7 @@ async function until(id: string, done: (shot: Snapshot) => boolean, timeoutMs: n
 
 type Step = { step: string; ms: number; ok: boolean; detail?: string }
 /** What `mako:live-start` reads for a Thread in its own worktree, as the composer sends it. */
-type StartOptions = { conversationId: string; worktree: true; modeId?: string; initialRequest: { id: string; text: string; attachments: [] } }
+type StartOptions = { conversationId: string; worktree: true; modeId?: string; tuning?: { model: string }; initialRequest: { id: string; text: string; attachments: [] } }
 type Proved = { steps: Step[]; conversation: string; timings?: Record<string, number> }
 /** What `mako:live-start` reads for a `+` tab's first send, in the Session the tab made. */
 type TabOptions = { conversationId: string; session: string; modeId?: string; initialRequest: { id: string; text: string; attachments: [] } }
@@ -517,6 +527,117 @@ async function fullCloud(places: number, conversation: string): Promise<Proved> 
   return { steps, conversation }
 }
 
+/**
+ * Rule 2 of moves, end to end: a Thread whose agent is mid-turn is handed to the cloud. The turn pauses here, the
+ * Thread moves with it, and Mako continues the turn on the machine, where it finishes what it was doing; then the
+ * Thread comes back with the file the turn wrote there.
+ */
+async function handOffProof(harness: string, project: string): Promise<Proved> {
+  const steps: Step[] = []
+  const id = randomUUID()
+  const answered: string[] = []
+  let timings: Record<string, number> | undefined
+  const timed = async (step: string, work: () => Promise<string>) => {
+    const started = performance.now()
+    const done: Step = await work().then(
+      (detail) => ({ step, ms: Math.round(performance.now() - started), ok: true, detail }),
+      (error: Error) => ({ step, ms: Math.round(performance.now() - started), ok: false, detail: error.message }),
+    )
+    steps.push(done)
+    console.log(`${"handoff".padEnd(9)} ${step.padEnd(30)} ${done.ok ? "ok  " : "FAIL"} ${String(done.ms).padStart(7)} ms  ${done.detail ?? ""}`)
+    return done.ok
+  }
+  const proved = (): Proved => ({ steps, conversation: id, ...timings && { timings } })
+  const token = `handoff-proof-${randomUUID().slice(0, 8)}`
+  const command = `sleep 90 && echo ${token} > handoff-proof.txt`
+  const first = randomUUID()
+  let folder = ""
+
+  // The agent's own call of the command, not the prompt that names it.
+  const running = (shot: Snapshot) => shot.blocks.some((block) => block.type !== "user" && block.type !== "text" && JSON.stringify(block).includes("sleep 90"))
+
+  // 1. A turn at work in a Thread's worktree: the agent is inside a long command.
+  if (!(await timed("a turn at work", async () => {
+    const mode = widestMode(harness)
+    const model = await freeModel(harness, project)
+    const options: StartOptions = {
+      conversationId: id,
+      worktree: true,
+      ...model && { tuning: { model } },
+      initialRequest: { id: first, text: `Run this shell command in the foreground and wait for it to finish: \`${command}\`\nThen reply with one short sentence that includes the word FINISHED.`, attachments: [] },
+      ...mode && { modeId: mode },
+    }
+    await call("mako:live-start", [harness, project, options])
+    const shot = await until(id, (current) => ["dispatching", "running"].includes(current.requests.find((request) => request.id === first)?.status ?? "") && running(current), 300_000, answered)
+    folder = shot.session.cwd ?? ""
+    // Kept ready while it works, as handing off on sleep has it: a round sends it ahead within half a minute or so.
+    const ready = join(dataRoot, "cloud", "ready.json")
+    const kept = async () => Object.keys(z.object({ threads: z.record(z.string(), z.unknown()) }).loose().safeParse(JSON.parse(await readFile(ready, "utf8").catch(() => "null"))).data?.threads ?? {}).length > 0
+    for (const deadline = Date.now() + 60_000; !(await kept()) && Date.now() < deadline; ) await new Promise((resolve) => setTimeout(resolve, 1_000))
+    if (!(await kept())) throw new Error("no cloud Thread stood by for it within a minute")
+    return `${harness}${model ? ` on ${model}` : ""} running \`${command.replace(token, "…")}\``
+  }))) return proved()
+
+  // 2. Handed off mid-turn: the turn pauses, the Thread moves, the turn is carried.
+  const move = randomUUID()
+  if (!(await timed("handed off mid-turn", async () => {
+    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, move, { why: "asked" }]))
+    if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    const plan = PlanTimingsSchema.parse(JSON.parse(await readFile(join(dataRoot, "cloud", "moves", `${move}.json`), "utf8")))
+    timings = plan.timings
+    if (plan.phase !== "started") throw new Error(`the plan reads ${plan.phase}`)
+    const order = ["made", "ready", "ahead", "paused", "released", "sent", "arrived", "claimed", "started"]
+    return `${outcome.cloudThread}${"standby" in plan.timings ? ", the one kept ready" : ", a new one"}; ${order.filter((name) => name in plan.timings).map((name) => `${name} ${(plan.timings[name]! / 1000).toFixed(1)} s`).join(", ")}`
+  }))) return proved()
+
+  // 3. The turn goes on there: Mako's continuation of the paused turn finishes on the machine.
+  if (!(await timed("the turn goes on in the cloud", async () => {
+    const shot = await until(id, (current) => current.requests.some((request) => request.continues?.reason === "handed-off" && settled(current, request.id)), 600_000, answered)
+    const continued = shot.requests.find((request) => request.continues?.reason === "handed-off")!
+    if (continued.continues?.requestId !== first) throw new Error(`the continuation continues ${continued.continues?.requestId}`)
+    // The turn paused mid-way, or, when the agent had sent its command to the background and ended it, the command
+    // stopped and named in the continuation's words.
+    const paused = shot.requests.find((request) => request.id === first)
+    const named = blockText(shot, 0).includes("The handoff stopped what you had left running in the background")
+    if (paused && paused.interruption?.reason !== "handed-off" && !named) throw new Error(`the first turn reads ${ended(shot, first)}, and nothing stopped was named`)
+    const how = paused?.interruption?.reason === "handed-off" ? "its turn paused here" : "its background command stopped and named"
+    // A machine with no sign-ins (a host of its own) can't let every harness answer: Mako's part is the continuation.
+    if (ownHost && (continued.status === "failed" || continued.interruption?.reason === "signed-out") && ["auth", "rate-limited", "provider-unavailable"].includes(continued.failure ?? ""))
+      return `${how}, continued on the machine as Mako's; the harness couldn't answer there (${continued.failure}), as a machine without sign-ins`
+    if (continued.status !== "completed") throw new Error(`the continuation ended ${ended(shot, continued.id)}`)
+    if (!proseText(shot, 0).includes("FINISHED")) throw new Error(`it didn't say FINISHED: ${proseText(shot, 0).slice(-300)}`)
+    return `${how}, continued and finished on the machine`
+  }))) return proved()
+
+  // 4. Back with what the turn wrote there.
+  await timed("back with its work", async () => {
+    const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, randomUUID()]))
+    // This Mac's harness older than the machine's, which wrote the continued turn: the way back stays, offering the
+    // update, and the Thread goes on in the cloud whole.
+    if (outcome.kind === "stayed" && outcome.outdated) {
+      if ((await snapshot(id)).elsewhere === undefined) throw new Error("it stayed, but the conversation reads as this Mac's")
+      return `stayed, rightly: ${outcome.reason.slice(0, 200)}; offered ${outcome.outdated.offer.kind} for ${outcome.outdated.harness} ${outcome.outdated.installed ?? "not installed"}`
+    }
+    if (outcome.kind !== "back") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    const written = (await readFile(join(folder, "handoff-proof.txt"), "utf8").catch(() => "")).trim()
+    if (written !== token) throw new Error(`handoff-proof.txt holds ${JSON.stringify(written.slice(0, 80))}`)
+    return "handoff-proof.txt came back as the turn wrote it in the cloud"
+  })
+  return proved()
+}
+
+/**
+ * A model a turn handed to a machine with no sign-ins can go on with: for OpenCode, one of its free models
+ * (`MAKO_OPENCODE_MODEL` choosing), its default first. Undefined for other harnesses: their own default.
+ */
+async function freeModel(harness: string, cwd: string): Promise<string | undefined> {
+  if (harness !== "opencode") return undefined
+  if (process.env.MAKO_OPENCODE_MODEL) return process.env.MAKO_OPENCODE_MODEL
+  const profile = z.object({ models: z.array(z.object({ id: z.string() }).loose()).default([]), defaultModel: z.string().optional() }).loose().parse(await call("mako:harness-tuning", [harness, cwd]))
+  const free = profile.models.map((model) => model.id).filter((id) => id.startsWith("opencode/") && id.endsWith("-free"))
+  return free.find((id) => id === profile.defaultModel) ?? free[0]
+}
+
 // A clone of the repository as a person's project: the Threads take worktrees of it.
 const scratch = await mkdtemp(join(tmpdir(), "mako-move-proof-"))
 const project = join(scratch, "project")
@@ -527,6 +648,7 @@ const places = values["full-cloud"] === undefined ? 0 : Number(values["full-clou
 // Any Thread that's here again (back from the cloud, or kept here) moves no differently.
 const here = Object.values(report).find(({ steps }) => steps.some((step) => (step.step === "back to this Mac" || step.step === "runs here after the refusal") && step.ok))?.conversation
 if (ownHost && places > 0 && here) report["full cloud"] = await fullCloud(places, here)
+if (values.handoff) report["handoff"] = await handOffProof(values.handoff, project)
 // A host of its own signs out as it ends: its device leaves the account, and its credential leaves the keychain.
 if (ownHost) await call("mako:cloud-sign-out", [])
 if (values.report) await writeFile(values.report, `${JSON.stringify(report, null, 2)}\n`)

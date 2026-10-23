@@ -14,7 +14,7 @@ import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LiveSessionState } f
  * or closed the conversation: unless the turn finished first, it settles
  * stopped however the driver reported the end.
  */
-export function settleRequest(request: LiveRequest, session: LiveSessionState, ended: boolean): LiveRequest {
+export function settleRequest(request: LiveRequest, session: LiveSessionState, ended: boolean, reason: "stopped" | "handed-off" = "stopped"): LiveRequest {
   const stopped = (ended && session.status !== "ready") || /cancel|interrupt/i.test(session.lastStop ?? "")
   const dropped = stopped ? undefined : continuableInterruption(request, session)
   const status = stopped || dropped ? "interrupted" : session.status === "ready" ? "completed" : "failed"
@@ -36,7 +36,7 @@ export function settleRequest(request: LiveRequest, session: LiveSessionState, e
     // recorded so the panel can say what ended it.
     settled.interruption = { reason: dropped, at: Date.now() }
     settled.failure = dropped === "connection-lost" ? "network" : classifyProviderFailure(session.error).kind
-  } else if (status === "interrupted") settled.interruption = { reason: "stopped", at: Date.now() }
+  } else if (status === "interrupted") settled.interruption = { reason, at: Date.now() }
   if (status === "failed") settled.failure = classifyProviderFailure(session.error).kind
   const spend = spendBetween(request.usageFrom, session.usage)
   if (spend.tokens || spend.cost !== undefined || spend.unrecorded) {

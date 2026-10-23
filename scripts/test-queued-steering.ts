@@ -57,7 +57,8 @@ try {
           state = { id: options.conversationId, harness: provider, cwd, nativeId: "fixture", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] }
           return state
         },
-        async prompt(_id, text) {
+        async prompt(_id, text, _attachments, _settings, dispatch) {
+          dispatch.report({ kind: "submitted", source: "transport-call" })
           sent.push(text)
           state = { ...state, status: "running", nativeRunId: randomUUID() }
           owner.observe({ type: "live-session", session: state })

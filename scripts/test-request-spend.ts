@@ -64,7 +64,8 @@ const driver: ProviderLiveDriver = {
     sessions.set(options.conversationId, session)
     return session
   },
-  async prompt(id) {
+  async prompt(id, _text, _attachments, _settings, dispatch) {
+    dispatch.report({ kind: "submitted", source: "transport-call" })
     const session = sessions.get(id)!
     const emit = emitters.get(id)!
     emit({ type: "live-session", session: { ...session, status: "running" } })

@@ -72,7 +72,8 @@ function reviewHost(review: ReviewCapability, options: { hold?: true } = {}) {
     provider: "test-provider",
     available: () => true,
     start: async () => state("ready"),
-    prompt: async (_id, text) => {
+    prompt: async (_id, text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       sent.push(text)
       turn("Done.")
     },

@@ -37,7 +37,7 @@ import { ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
-import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, ThreadMoveOutcome, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
 import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, MoveStageInputSchema, readyForMove, stageMove, type MoveArrivalDeps, type MoveArrivalWire, type MoveReadyInput, type MoveStageInput } from "./move-arrival.js"
 import { departMove, MoveDepartureInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveStayInput } from "./move-departure.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
@@ -46,6 +46,9 @@ import { declareTranscriptMethods } from "./transcript-methods.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
+export { CloudHandOffs, workingThreads } from "./cloud-handoffs.js"
+export { CloudReadiness, READY_EVERY_MS } from "./cloud-readiness.js"
+export { SleepHandOff, sleepWatchHelper } from "./sleep-handoff.js"
 export { CloudReturns } from "./cloud-returns.js"
 export { installedReading } from "./kept-resume.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
@@ -457,6 +460,10 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const selected = await profiles.resolveLaunch(session.harness, session.cwd, tuning)
     return live.submit(id, requestId, text, attachments, selected)
   })
+  // A turn Mako cut short, continued here as Mako: a handoff's turn on the machine it went to, or here when it stayed.
+  // `stopped`: the background work the handoff stopped, which the continuation names for the agent.
+  methods.handle("mako:live-continue-turn", (id: string, requestId: string, input: { reason: "handed-off"; continues: string; stopped?: string[] }) =>
+    live.continueTurn(id, { requestId, reason: input.reason, continues: input.continues, ...input.stopped?.length && { stopped: input.stopped }, actor: { kind: "service", name: "handoff" } }))
   methods.handle("mako:live-permission", (id: string, requestId: string, response: LivePermissionResponse) =>
     live.permission(id, requestId, response)
   )
@@ -488,8 +495,17 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   const offerNowhere: (folders: string[]) => CloudProjectsOffer = () => "none"
   methods.handle("mako:cloud-offer-projects", offerNowhere)
   /** Where no person's Mac moves Threads to the cloud (a cloud machine, the fixture desk); on a Mac, `CloudMoves` answers first. */
-  const moveNowhere: (conversationId: string, move: string) => ThreadMoveOutcome = () => ({ kind: "kept-here", reason: "This Mako doesn't move Threads to the cloud." })
+  const moveNowhere: (conversationId: string, move: string, handOff?: ThreadHandOff) => ThreadMoveOutcome = () => ({ kind: "kept-here", reason: "This Mako doesn't move Threads to the cloud." })
   methods.handle("mako:thread-move", moveNowhere)
+  /** Handing agents at work to the cloud: on a person's Mac `CloudHandOffs` answers first; elsewhere there's nothing to hand. */
+  const nothingToHand: () => HandOffCandidate[] = () => []
+  methods.handle("mako:handoff-candidates", nothingToHand)
+  const handNothing: (handOff: string, why: "quit") => HandOffResult[] = () => []
+  methods.handle("mako:handoff", handNothing)
+  const noHandOffs: HandOffSettings = { onSleep: false, unavailable: "This Mako doesn't hand agents to the cloud." }
+  methods.handle("mako:handoff-settings", () => noHandOffs)
+  const setNoHandOffs: (onSleep: boolean) => HandOffSettings = () => noHandOffs
+  methods.handle("mako:handoff-settings-set", setNoHandOffs)
   /** Where no person's Mac brings Threads back (a cloud machine, the fixture desk); on a Mac, `CloudReturns` answers first. */
   const returnNowhere: (conversationId: string, move: string) => ThreadReturnOutcome = () => ({ kind: "stayed", reason: "This Mako doesn't bring Threads back from the cloud." })
   methods.handle("mako:thread-return", returnNowhere)

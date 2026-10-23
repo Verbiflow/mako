@@ -69,7 +69,8 @@ const driver: ProviderLiveDriver = {
     states.set(state.id, state)
     return state
   },
-  async prompt(id, text) {
+  async prompt(id, text, _attachments, _settings, dispatch) {
+    dispatch.report({ kind: "submitted", source: "transport-call" })
     const state = states.get(id)
     assert.ok(state)
     sent.push(text)

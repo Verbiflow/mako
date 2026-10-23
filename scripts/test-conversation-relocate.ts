@@ -70,7 +70,8 @@ function fixture(provider: string, elsewhere: boolean, refuses?: string, project
       if (!existsSync(cwd)) throw new Error(`The folder ${cwd} no longer exists. Open this in a folder that exists.`)
       return state(cwd, options.conversationId)
     },
-    prompt: async (id) => {
+    prompt: async (id, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       const cwd = starts.at(-1)!.cwd
       owner!.observe({ type: "live-session", session: { ...state(cwd, id), status: "running" } })
       if (!running) owner!.observe({ type: "live-session", session: state(cwd, id) })

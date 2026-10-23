@@ -56,7 +56,8 @@ try {
       emit = options.emit
       return session(options.conversationId)
     },
-    prompt: async (bindingId) => {
+    prompt: async (bindingId, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       const index = turns++
       emit?.({ type: "live-session", session: session(bindingId, "running", `run-${index}`) })
       emit?.({ type: "live-update", id: bindingId, update: { kind: "text", text: answers[index]! } })

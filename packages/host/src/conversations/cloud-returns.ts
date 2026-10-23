@@ -8,6 +8,7 @@ import { withFreshLink, type ReceivedRecords, type ReceivingSession, type Record
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ThreadReturnOutcome, ThreadReturnStep } from "../contracts/cloud-threads.js"
+import { OutdatedRestoreSchema, type OutdatedRestore, type RuntimeUpdateOffer } from "../contracts/restore-plan.js"
 import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { HandoffSchema, MoveIdSchema, RuntimeIdSchema, type ClaimReceipt, type ExecutionOwner, type Handoff, type MoveId, type SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "../contracts/thread-identity.js"
@@ -73,6 +74,8 @@ const ReturnPlanSchema = z.object({
   /** This Mac's worktree as it was before the return laid the machine's over it, kept until the return is done. */
   kept: z.object({ checkpoint: MoveCheckpointSchema, file: z.string() }).optional(),
   reason: z.string().optional(),
+  /** Why it stayed, when a harness here was older than the one that wrote its sessions there: the update that lets it come. */
+  outdated: OutdatedRestoreSchema.optional(),
   began: z.number(),
   timings: z.record(z.string(), z.number()).default({}),
 })
@@ -98,6 +101,8 @@ export type CloudReturnsOptions = {
   /** The Thread store's claim, through the live conversations so their residents follow (`LiveMoves.claim`). */
   claim(input: { operationId: string; handoff: Handoff; actor: Actor }): ClaimReceipt
   receiveRecords(link: RecordsLink, sessions: ReceivingSession[]): Promise<ReceivedRecords[]>
+  /** How a harness here gets to a newer version (`RuntimeUpdates.restoreRuntime`), for a return it's too old to take. */
+  updateOffer(harness: string): RuntimeUpdateOffer
   cloud: {
     callThread(threadId: string, channel: string, args: readonly unknown[], conversationId?: string): Promise<EncodedValue>
     releaseThread(threadId: string): Promise<string[]>
@@ -154,7 +159,7 @@ export class CloudReturns {
       if (known.phase === "done") return { kind: "back" }
       if (known.phase === "stayed" || known.phase === "staying") {
         if (known.phase === "staying") await this.#tellStay(known).catch(() => undefined)
-        return { kind: "stayed", reason: known.reason ?? "It stayed in the cloud." }
+        return { kind: "stayed", reason: known.reason ?? "It stayed in the cloud.", ...known.outdated && { outdated: known.outdated } }
       }
       return this.#resume(known)
     }
@@ -367,7 +372,11 @@ export class CloudReturns {
       })
       for (const each of received) {
         const restored = each.restored
-        if (restored.kind === "outdated") throw new Error(`${each.harness} here is older than the version that wrote this session in the cloud; update it, then bring the Thread back.`)
+        if (restored.kind === "outdated")
+          throw new OutdatedReturnError(`${each.harness} here is older than the version that wrote this session in the cloud; update it, then bring the Thread back.`, {
+            harness: each.harness, installed: restored.installed, offer: this.#options.updateOffer(each.harness),
+            ...restored.wrote && { wrote: restored.wrote }, ...restored.upTo && { upTo: restored.upTo },
+          })
         if (restored.kind === "forked") throw new Error(`${each.harness} here holds a copy of this session that went on without the cloud's turns.`)
         if (restored.kind === "refused") throw new Error(restored.reason)
         for (const session of plan.sessions) if (session.begun && session.harness === each.harness && session.nativeId === each.nativeId) session.path = restored.path
@@ -377,6 +386,7 @@ export class CloudReturns {
       const reason = errorMessage({ error })
       hostWarn("returns", "a return couldn't be taken here; the worktree is put back and the Thread given back", { move: plan.move, reason })
       await applyMoveCheckpoint(this.#options.git, plan.folder, plan.kept.file, plan.kept.checkpoint, { replace: true })
+      if (error instanceof OutdatedReturnError) plan.outdated = error.outdated
       const given = await account.giveBackReturn(plan.cloudThread, plan.move, reason)
       if (given.phase === "given-back") return this.#stay(plan, given.reason)
       throw new Error(`the cloud reads the return as ${given.phase} after this Mac gave it back`, { cause: error })
@@ -431,8 +441,9 @@ export class CloudReturns {
     // Its machine runs it again once told; until then it's still the cloud's, and a later start tells it.
     await this.#tellStay(plan).catch((error: Error) => hostWarn("returns", "a machine still to be told its Thread stays couldn't be told yet", { move: plan.move, error: error.message }))
     hostLog("returns", "a Thread stayed in the cloud", { move: plan.move, reason })
-    this.#options.step(plan.asked, plan.move, { kind: "stayed", reason })
-    return { kind: "stayed", reason }
+    const outdated = plan.outdated
+    this.#options.step(plan.asked, plan.move, { kind: "stayed", reason, ...outdated && { outdated } })
+    return { kind: "stayed", reason, ...outdated && { outdated } }
   }
 
   /** The machine takes back the Thread it released as it packed; nothing to tell when it was never asked to pack. */
@@ -457,6 +468,15 @@ export class CloudReturns {
     const file = join(this.#options.folder, `${plan.move}.json`)
     await writeFile(`${file}.tmp`, JSON.stringify(ReturnPlanSchema.parse(plan)))
     await rename(`${file}.tmp`, file)
+  }
+}
+
+/** A return refused because a harness here is older than the one that wrote its sessions in the cloud. */
+class OutdatedReturnError extends Error {
+  readonly outdated: OutdatedRestore
+  constructor(message: string, outdated: OutdatedRestore) {
+    super(message)
+    this.outdated = outdated
   }
 }
 

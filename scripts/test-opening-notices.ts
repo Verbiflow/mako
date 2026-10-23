@@ -76,7 +76,8 @@ function driver(provider: string, fork: ProviderLiveDriver["fork"]): ProviderLiv
       if (failing) throw new Error("The harness refused to open the session")
       return { ...session(id), ...options.resume && { nativeId: options.resume } }
     },
-    prompt: async (bindingId, text) => {
+    prompt: async (bindingId, text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       const emit = emits.get(bindingId)!
       const run = `run-${provider}-${turns++}`
       emit({ type: "live-session", session: session(bindingId, "running", run) })

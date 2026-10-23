@@ -43,7 +43,8 @@ const driver: ProviderLiveDriver = {
     }
     return session
   },
-  async prompt(_id, text) {
+  async prompt(_id, text, _attachments, _settings, dispatch) {
+    dispatch.report({ kind: "submitted", source: "transport-call" })
     sent.push(text)
     session = { ...session, status: "running" }
     owner.observe({ type: "live-session", session })

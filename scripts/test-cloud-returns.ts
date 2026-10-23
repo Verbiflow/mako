@@ -132,6 +132,7 @@ function setup(name: string) {
     account: () => account,
     threads: () => threads,
     claim: (input) => threads.claim(input),
+    updateOffer: (harness) => ({ kind: "update", runtimeId: harness, label: harness }),
     receiveRecords: async (_link, sessions) => sessions.map((session) => ({ harness: session.harness, nativeId: session.nativeId, pulled: { versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1 }, restored: restored ?? { kind: "restored", path: `/${session.harness}/${session.nativeId}.jsonl`, files: 1, rows: 0, ms: 1 } })),
     cloud: {
       callThread: async (_threadId, channel, args): Promise<EncodedValue> => {
@@ -220,6 +221,9 @@ try {
     const outcome = await s.returns.bringBack(s.conversation, id)
     assert.equal(outcome.kind, "stayed")
     assert.match(outcome.kind === "stayed" ? outcome.reason : "", /codex here is older than the version that wrote this session/)
+    assert.deepEqual(outcome.kind === "stayed" ? outcome.outdated : undefined, { harness: "codex", installed: "0.150.0", upTo: "0.159.3", offer: { kind: "update", runtimeId: "codex", label: "codex" } }, "with the update that lets it come")
+    assert.deepEqual(s.steps.at(-1), { kind: "stayed", reason: outcome.kind === "stayed" ? outcome.reason : "", outdated: outcome.kind === "stayed" ? outcome.outdated : undefined }, "the window hears the offer too")
+    assert.deepEqual(await s.returns.bringBack(s.conversation, id), outcome, "asked again, the same, offer and all")
     assert.equal(s.cloud.records.get(id)?.phase, "given-back")
     assert.deepEqual(s.files(), before, "this Mac's worktree exactly as it was")
     assert.deepEqual([s.state()?.state, s.state()?.generation], ["elsewhere", 3])

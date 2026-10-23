@@ -25,6 +25,8 @@ const SITUATIONS = {
   "host-quit": "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there.",
   "host-crashed": "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there.",
   stopped: "Continue where you left off. Mako closed before you finished the previous turn; pick it up from there.",
+  "handed-off":
+    "Continue where you left off. Mako stopped your work to hand this conversation to another machine; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
 } as const satisfies Record<InterruptionReason, string>
 
 /**
@@ -39,9 +41,28 @@ const SENDERS = {
 
 const CONTINUATION_SENDERS: readonly ContinuationSender[] = ["mako", "person"]
 
-/** What is sent to pick up a turn that was cut short, worded for what cut it and who sends it. */
-export function continueTurnPrompt(reason: InterruptionReason, sender: ContinuationSender): string {
-  return `${SITUATIONS[reason]} ${SENDERS[sender]}`
+/** At most this many of the commands a move stopped are named, each at most `STOPPED_CHARS` long. */
+const STOPPED_NAMED = 8
+const STOPPED_CHARS = 200
+const STOPPED_OPENS = "The handoff stopped what you had left running in the background: "
+const STOPPED_CLOSES = ". Start again whatever of it you still need."
+
+/** The sentence naming the background work a handoff stopped, its commands or tasks as the harness listed them. */
+function stoppedSentence(stopped: readonly string[]): string {
+  const named = stopped.slice(0, STOPPED_NAMED).map((each) => {
+    const line = each.replace(/\s+/g, " ").trim()
+    return `\`${line.length > STOPPED_CHARS ? `${line.slice(0, STOPPED_CHARS - 1)}…` : line}\``
+  })
+  const more = stopped.length - named.length
+  return `${STOPPED_OPENS}${named.join("; ")}${more > 0 ? `; and ${more} more` : ""}${STOPPED_CLOSES}`
+}
+
+/**
+ * What is sent to pick up a turn that was cut short, worded for what cut it and who sends it. `stopped`: the work the
+ * agent had left running in the background, which a handoff stopped, named so the agent can start again what it needs.
+ */
+export function continueTurnPrompt(reason: InterruptionReason, sender: ContinuationSender, stopped: readonly string[] = []): string {
+  return stopped.length ? `${SITUATIONS[reason]} ${stoppedSentence(stopped)} ${SENDERS[sender]}` : `${SITUATIONS[reason]} ${SENDERS[sender]}`
 }
 
 /**
@@ -57,8 +78,12 @@ export function savedContinuation(text: string): { reason: InterruptionReason; s
   for (const each of INTERRUPTION_REASONS) {
     const reason = SITUATIONS[each] === SITUATIONS["host-quit"] ? "host-quit" : each
     if (words === SITUATIONS[reason]) return { reason }
-    for (const sender of CONTINUATION_SENDERS)
+    for (const sender of CONTINUATION_SENDERS) {
       if (words === continueTurnPrompt(reason, sender)) return { reason, sender }
+      // With the background work a handoff stopped named between the two: Mako's words around commands of the agent's.
+      const middle = words.startsWith(`${SITUATIONS[reason]} `) && words.endsWith(` ${SENDERS[sender]}`) ? words.slice(SITUATIONS[reason].length + 1, -SENDERS[sender].length - 1) : undefined
+      if (middle?.startsWith(STOPPED_OPENS) && middle.endsWith(STOPPED_CLOSES)) return { reason, sender }
+    }
   }
   return undefined
 }

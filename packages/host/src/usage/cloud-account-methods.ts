@@ -33,6 +33,8 @@ export interface CloudAccount {
   session(): ClientSessionOverSockets
   /** This Mac's device in the account, which its calls act for; undefined while signed out. */
   deviceId(): Promise<string | undefined>
+  /** Why this Mac can't use the cloud now: signed out, or an account without it; undefined when it can. */
+  cloudBlocked?(): Promise<"signed-out" | "no-cloud" | undefined>
   /**
    * A cloud Thread in the account, its machine working in a clone of `repository`; the same Thread when made again
    * under its ID. `prepare`: made ahead of its first message, as its person writes it; `ready` once its machine is.
@@ -200,6 +202,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     session: () => cloud.session(),
     deviceId: () => cloud.deviceId(),
+    cloudBlocked: () => cloud.signInsBlocked(),
     createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),
     askBases: (repositories) => cloud.askBases(repositories),
     sendCheckpoint: (threadId, checkpoint, file) => cloud.sendCheckpoint(threadId, checkpoint, file),

@@ -16,6 +16,18 @@ export interface PromptDispatch {
   report(evidence: Exclude<PromptDeliveryEvidence, { kind: "prepared" }>): void
 }
 
+/**
+ * A harness at work on a turn when a message reached it: one it started itself (a notice of background work, say)
+ * between the host's look and the send. Thrown before anything is sent, so the message waits for that turn and goes
+ * after it, whatever the session reads by the time the refusal is handled: such a turn can end at once.
+ */
+export class TurnInProgressError extends Error {
+  constructor(harness: string) {
+    super(`${harness} is already working`)
+    this.name = "TurnInProgressError"
+  }
+}
+
 /** Only preparation before the native send can prove that no input was delivered. */
 export function preparePrompt<Value>(
   dispatch: PromptDispatch,

@@ -50,7 +50,8 @@ try {
       }
       return session(options.conversationId)
     },
-    prompt: async (bindingId) => {
+    prompt: async (bindingId, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       emit?.({ type: "live-session", session: session(bindingId, "running") })
       if (starts === 1) emit?.({ type: "live-update", id: bindingId, update: { kind: "text", text: "the first answer" } })
       emit?.({ type: "live-session", session: session(bindingId) })

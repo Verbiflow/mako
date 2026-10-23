@@ -92,7 +92,8 @@ const driver: ProviderLiveDriver = {
     sessions.set(state.id, state)
     return state
   },
-  prompt: async (id, text) => {
+  prompt: async (id, text, _attachments, _settings, dispatch) => {
+    dispatch.report({ kind: "submitted", source: "transport-call" })
     sent.push({ id, text })
     const session = sessions.get(id)
     if (!session) throw new Error("Missing test session")

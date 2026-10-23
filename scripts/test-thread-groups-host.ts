@@ -64,7 +64,8 @@ function driver(harness: string, owner: () => LiveConversations, threads: Thread
       sessions.set(options.conversationId, session)
       return session
     },
-    prompt: async (id) => {
+    prompt: async (id, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       const session = sessions.get(id)
       assert.ok(session, "a prompt goes to a started session")
       owner().observe({ type: "live-session", session: { ...session, status: "running" } })

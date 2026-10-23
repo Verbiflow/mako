@@ -3,7 +3,7 @@ import { join } from "node:path"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { resumes } from "../harnesses/index.js"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
-import type { Interruption, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
+import type { Interruption, InterruptionReason, LiveRequest, TurnContinuation } from "../contracts/live-conversations.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import { AUTO_CONTINUE_DELAY_MS, autoContinueCandidate, continueTurnPrompt } from "../contracts/turn-continuation.js"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
@@ -115,6 +115,37 @@ export class LiveAutoContinue {
       })
       this.access.flush(resident)
     }
+  }
+
+  /**
+   * Continues a turn cut short now, as Mako, with Mako's words for `reason`: a turn Mako stopped to hand its Thread
+   * to another machine continues where the Thread runs next. `continues` names the request that was cut short, which
+   * may be in another host's journal. Asked again under the same `requestId`, it changes nothing.
+   */
+  continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; actor: Actor }): void {
+    const resident = this.access.resident(id)
+    if (!resident) throw new Error("This conversation is no longer available")
+    if (resident.snapshot.requests.some((request) => request.id === input.requestId)) return
+    this.decline(resident)
+    const tuning = [...resident.snapshot.requests].reverse().find((request) => request.tuning)?.tuning
+    const continues: TurnContinuation = { requestId: input.continues, reason: input.reason, auto: true }
+    const request = LiveRequestSchema.parse({
+      actor: input.actor,
+      id: input.requestId,
+      createdAt: Date.now(),
+      text: continueTurnPrompt(input.reason, "mako", input.stopped),
+      attachments: [],
+      tuning,
+      status: "queued",
+      continues,
+    })
+    request.inputDigest = promptFingerprint(request.text, request.attachments, request.tuning)
+    this.access.admission.assert()
+    const reconnect = this.reconnectBinding(resident)
+    if (reconnect)
+      this.access.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning }, input.actor, continues)
+    else this.access.admit(resident, request)
+    hostLog("live", "continued a turn cut short", { conversation: id, harness: resident.snapshot.session.harness, request: request.id, continues: input.continues, reason: input.reason, reconnect: Boolean(reconnect) })
   }
 
   /** Drop a pending continuation and its stamp; a later prompt, close or host exit made it moot. */
