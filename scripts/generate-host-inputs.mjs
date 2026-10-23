@@ -72,11 +72,14 @@ function schema(type, stack = new Set()) {
     throw new Error(`Recursive wire input ${checker.typeToString(type)}`)
   const nested = new Set(stack).add(type.id)
   if (type.isIntersection()) {
+    // A zod brand (`string & $brand<"MoveId">`) is a tag the compiler alone sees: on the wire it's the value it brands,
+    // and the handler's own schema checks what the brand stands for.
     const members = type.types.filter(
       (member) =>
-        !(member.flags & ts.TypeFlags.Object) ||
-        checker.getPropertiesOfType(member).length ||
-        member.getStringIndexType()
+        !isBrand(member) &&
+        (!(member.flags & ts.TypeFlags.Object) ||
+          checker.getPropertiesOfType(member).length ||
+          member.getStringIndexType())
     )
     if (members.length === 1) return schema(members[0], nested)
     return members
@@ -125,6 +128,12 @@ function schema(type, stack = new Set()) {
       }
     })
     .join(",")}})`
+}
+/** zod's brand: an object whose only property is its `$brand` symbol. */
+function isBrand(type) {
+  if (!(type.flags & ts.TypeFlags.Object)) return false
+  const properties = checker.getPropertiesOfType(type)
+  return properties.length > 0 && properties.every((property) => property.escapedName.toString().startsWith("__@$brand@"))
 }
 function union(types, stack) {
   const choices = [...new Set(types.map((type) => schema(type, stack)))]

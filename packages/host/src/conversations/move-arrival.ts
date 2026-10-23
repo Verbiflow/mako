@@ -1,5 +1,5 @@
 import { createWriteStream, existsSync } from "node:fs"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
@@ -8,10 +8,11 @@ import { z } from "zod"
 import type { Git } from "@mako/git"
 import { MoveCheckpointSchema } from "@mako/protocol/moves"
 import type { InstalledReading } from "@mako/sessions/record-writers"
-import { RecordHoldingsSchema, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink } from "@mako/sessions/record-sync"
+import { RecordHoldingsSchema, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink, type StagedRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { applyMoveCheckpoint } from "../workspaces/index.js"
+import { HandoffSchema, type Handoff } from "../contracts/thread-execution.js"
+import { applyMoveCheckpoint, verifyMoveCheckpoint } from "../workspaces/index.js"
 
 /**
  * A Thread arriving on a cloud machine from a device, before anything runs: its checkout applied to the machine's
@@ -36,14 +37,23 @@ export const MoveArrivalInputSchema = z.object({
     /** The conversation it's opened as here, under the mode and settings it ran with: its journal keeps the device's id. */
     open: z.object({ conversationId: z.uuid(), modeId: z.string().min(1).optional(), tuning: SessionSettingsSchema.optional() }).strict().optional(),
   })).min(1),
+  /**
+   * What the device released, which this machine's store takes before any session opens (`takeArrival`): the Thread
+   * and its Sessions under the device's IDs, so both stores name them alike. Absent from a device before this.
+   */
+  handoff: HandoffSchema.optional(),
 }).strict()
 export type MoveArrivalInput = z.infer<typeof MoveArrivalInputSchema>
+/** What a device sends: its IDs plain strings, which `MoveArrivalInputSchema` parses into the branded ones. */
+export type MoveArrivalWire = z.input<typeof MoveArrivalInputSchema>
 
 export type MoveArrival = {
-  /** `applied` now, or `arrived` before (the move's mark was there). */
-  checkout: "applied" | "arrived"
+  /** `applied` now, `staged` (applied ahead, proven unchanged), or `arrived` before (the move's mark was there). */
+  checkout: "applied" | "staged" | "arrived"
   sessions: Array<{ harness: string; nativeId: string; restored: "restored" | "present"; path: string; opened?: { ms: number } }>
   ms: number
+  /** How long each part took, in ms: the checkout's read, apply or verify, and the records. */
+  parts?: Record<string, number>
 }
 
 /** A Session to open here, resumed from the records just written. */
@@ -60,12 +70,16 @@ export type MoveArrivalDeps = {
   /** Once the agent made the folder (`path`) or said why it couldn't. */
   workspaceSettled(): Promise<{ path: string } | { problem: string }>
   receive(link: RecordsLink, sessions: ReceivingSession[], installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]>
+  /** Pulls records into this machine's record store ahead of the move, writing nothing into the harnesses' stores. */
+  stage(link: RecordsLink, sessions: ReceivingSession[]): Promise<StagedRecords[]>
   installed(harness: string): InstalledReading | null
   /**
    * Opens the conversation, resuming its native session, and resolves once its harness is ready; rejects with why
    * it couldn't start. Asked again, it answers how the conversation stands.
    */
   open(session: ArrivingSession): Promise<void>
+  /** This machine's store takes the Thread under the device's IDs (`ThreadStore.takeArrival`), once per move. */
+  take(handoff: Handoff): void
   /** Reads ahead what a start of `harness` reads first (its catalog), so the sessions open quickly as the move arrives. */
   warm(harness: string, folder: string): Promise<void>
   /** Whether the account gave this machine a sign-in for the harness; undefined before it gave any set. */
@@ -99,6 +113,68 @@ export async function readyForMove(deps: Pick<MoveArrivalDeps, "workspaceSettled
 }
 
 const ArrivedMarkSchema = z.object({ move: z.uuid(), sha256: z.string(), at: z.number() })
+/** The checkout staged ahead of a move's hand-over, by its checkpoint's hash. */
+const StagedMarkSchema = z.object({ move: z.uuid(), sha256: z.string(), at: z.number() })
+
+export const MoveStageInputSchema = z.object({
+  move: z.uuid(),
+  folder: z.string().min(1),
+  /** The checkout and each session's records as the device sent them ahead, while the Thread still runs there. */
+  checkpoint: MoveCheckpointSchema,
+  sessions: z.array(z.object({ harness: z.string().min(1), nativeId: z.string().min(1) })).min(1).max(256),
+}).strict()
+export type MoveStageInput = z.infer<typeof MoveStageInputSchema>
+
+export type MoveStage = { checkpointMs: number; recordsMs: number; staged: Array<{ harness: string; nativeId: string; versions: number; bytes: number }> }
+
+/** Reads the move's checkpoint from the cloud into `file`. */
+async function readCheckpoint(link: RecordsLink, sha256: string, file: string): Promise<void> {
+  const response = await fetchWith(`${link.base}/checkpoints/${sha256}`, { headers: { authorization: link.authorization }, signal: AbortSignal.timeout(10 * 60_000) })
+  if (!response.ok || !response.body) throw new Error(`The move's checkout couldn't be read from the cloud: ${response.status}`)
+  await pipeline(Readable.fromWeb(response.body), createWriteStream(file))
+}
+
+/**
+ * What a move's hand-over can do while the Thread still runs on its device, done ahead: the checkout sent ahead laid
+ * over the machine's clone, and each session's records sent ahead pulled into its record store (not its harness's).
+ * Nothing runs here until the move arrives, so the hand-over only verifies the checkout (or lays the newest over it)
+ * and pulls the last seconds of records. Asked again, as the device sends newer, it stages the newer.
+ */
+export async function stageMove(deps: MoveArrivalDeps, input: MoveStageInput): Promise<MoveStage> {
+  const link = deps.records()
+  if (!link) throw new Error("This host isn't a cloud machine's: no Thread's records are linked here.")
+  const workspace = deps.workspace()
+  if (workspace !== input.folder) throw new Error(`This machine's folder is ${workspace ?? "not made"}, not the move's ${input.folder}.`)
+  const gitDir = (await deps.git.output(input.folder, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim()
+  if (existsSync(join(gitDir, `mako-move-${input.move}.json`))) throw new Error("This move already arrived here.")
+  const began = performance.now()
+  const since = () => Math.round(performance.now() - began)
+  const checkout = async (): Promise<number> => {
+    await mkdir(deps.scratch, { recursive: true })
+    const scratch = await mkdtemp(join(deps.scratch, "stage-"))
+    try {
+      const file = join(scratch, "checkpoint.bundle")
+      await readCheckpoint(link, input.checkpoint.sha256, file)
+      await applyMoveCheckpoint(deps.git, input.folder, file, input.checkpoint, { replace: true })
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
+    }
+    await writeFile(join(gitDir, `mako-stage-${input.move}.json`), JSON.stringify(StagedMarkSchema.parse({ move: input.move, sha256: input.checkpoint.sha256, at: Date.now() })))
+    return since()
+  }
+  const records = async (): Promise<{ ms: number; pulled: StagedRecords[] }> => {
+    const pulled = await withFreshLink(() => deps.records() ?? link, (current) => deps.stage(current, input.sessions))
+    return { ms: since(), pulled }
+  }
+  const [checkpointMs, staged] = await Promise.all([checkout(), records()])
+  const stage: MoveStage = {
+    checkpointMs,
+    recordsMs: staged.ms,
+    staged: staged.pulled.map((each) => ({ harness: each.harness, nativeId: each.nativeId, versions: each.versions, bytes: each.bytes })),
+  }
+  hostLog("moves", "a move was staged ahead of its hand-over", { move: input.move, checkpointMs, recordsMs: staged.ms, sessions: stage.staged.map((each) => `${each.harness}: ${each.versions} versions, ${each.bytes} bytes`).join("; ") })
+  return stage
+}
 
 export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput): Promise<MoveArrival> {
   const began = performance.now()
@@ -108,26 +184,42 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
   if (workspace !== input.folder) throw new Error(`This machine's folder is ${workspace ?? `not made${deps.workspaceProblem() ? ` (${deps.workspaceProblem()})` : ""}`}, not the move's ${input.folder}.`)
   const gitDir = (await deps.git.output(input.folder, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim()
   const mark = join(gitDir, `mako-move-${input.move}.json`)
+  // Each part timed, so a slow hand-over says where it waited.
+  const parts: Record<string, number> = {}
+  const timed = async <Value>(part: string, work: () => Promise<Value>): Promise<Value> => {
+    const at = performance.now()
+    try {
+      return await work()
+    } finally {
+      parts[part] = Math.round(performance.now() - at)
+    }
+  }
   let checkout: MoveArrival["checkout"] = "arrived"
   if (!existsSync(mark)) {
-    await mkdir(deps.scratch, { recursive: true })
-    const scratch = await mkdtemp(join(deps.scratch, "move-"))
-    try {
-      const file = join(scratch, "checkpoint.bundle")
-      const response = await fetchWith(`${link.base}/checkpoints/${input.checkpoint.sha256}`, { headers: { authorization: link.authorization }, signal: AbortSignal.timeout(10 * 60_000) })
-      if (!response.ok || !response.body) throw new Error(`The move's checkout couldn't be read from the cloud: ${response.status}`)
-      await pipeline(Readable.fromWeb(response.body), createWriteStream(file))
-      await applyMoveCheckpoint(deps.git, input.folder, file, input.checkpoint)
-    } finally {
-      await rm(scratch, { recursive: true, force: true })
+    const stagedMark = join(gitDir, `mako-stage-${input.move}.json`)
+    const staged = existsSync(stagedMark) ? StagedMarkSchema.safeParse(JSON.parse(await readFile(stagedMark, "utf8"))).data : undefined
+    // Staged ahead and unchanged since: the clone already reads as the checkout, which is proven, not assumed. Else
+    // the newest is laid over what was staged (nothing has run here, so nothing of the machine's own is lost).
+    const unchanged = staged?.sha256 === input.checkpoint.sha256 && await timed("checkpointVerified", () => verifyMoveCheckpoint(deps.git, input.folder, input.checkpoint).then(() => true, () => false))
+    if (!unchanged) {
+      await mkdir(deps.scratch, { recursive: true })
+      const scratch = await mkdtemp(join(deps.scratch, "move-"))
+      try {
+        const file = join(scratch, "checkpoint.bundle")
+        await timed("checkpointRead", () => readCheckpoint(link, input.checkpoint.sha256, file))
+        await timed("checkpointApplied", () => applyMoveCheckpoint(deps.git, input.folder, file, input.checkpoint, { replace: staged !== undefined }))
+      } finally {
+        await rm(scratch, { recursive: true, force: true })
+      }
     }
     await writeFile(mark, JSON.stringify(ArrivedMarkSchema.parse({ move: input.move, sha256: input.checkpoint.sha256, at: Date.now() })))
-    checkout = "applied"
+    await rm(stagedMark, { force: true })
+    checkout = unchanged ? "staged" : "applied"
   }
   const installed: Record<string, InstalledReading | null> = {}
   for (const session of input.sessions) installed[session.harness] = deps.installed(session.harness)
   // Under the machine's newest credential if the last one lapsed on the way.
-  const received = await withFreshLink(() => deps.records() ?? link, (current) => deps.receive(current, input.sessions, installed))
+  const received = await timed("records", () => withFreshLink(() => deps.records() ?? link, (current) => deps.receive(current, input.sessions, installed)))
   const sessions: MoveArrival["sessions"] = []
   for (const each of received) {
     const restored = each.restored
@@ -136,6 +228,8 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
     else if (restored.kind === "forked") throw new Error(`${each.harness} here already held another copy of this session.`)
     else throw new Error(restored.reason)
   }
+  // Filed under the device's Thread and Sessions before any opens: a conversation's journal joins its own Session.
+  if (input.handoff) deps.take(input.handoff)
   // Opened one at a time: a machine starts one harness much faster than several at once.
   for (const session of input.sessions) {
     if (!session.open) continue
@@ -154,8 +248,9 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
   }
   const ms = Math.round(performance.now() - began)
   hostLog("moves", "a Thread arrived from a device", {
-    move: input.move, folder: input.folder, checkout, sessions: sessions.length, ms,
+    move: input.move, folder: input.folder, checkout, sessions: sessions.length, ms, ...parts,
     openMs: sessions.map((session) => session.opened?.ms ?? "none").join(","),
+    received: received.map((each) => `${each.harness}: pulled ${each.pulled.versions} versions, ${each.pulled.bytes} bytes in ${Math.round(each.pulled.ms)} ms; ${each.restored.kind}${"ms" in each.restored ? ` in ${each.restored.ms} ms` : ""}`).join("; "),
   })
-  return { checkout, sessions, ms }
+  return { checkout, sessions, ms, parts }
 }

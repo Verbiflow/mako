@@ -38,14 +38,14 @@ import type { ForkInput, TransferInput } from "../contracts/conversation-control
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, ThreadMoveOutcome, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
-import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, readyForMove, type MoveArrivalDeps, type MoveArrivalInput, type MoveReadyInput } from "./move-arrival.js"
+import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, MoveStageInputSchema, readyForMove, stageMove, type MoveArrivalDeps, type MoveArrivalWire, type MoveReadyInput, type MoveStageInput } from "./move-arrival.js"
 import { departMove, MoveDepartureInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveStayInput } from "./move-departure.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
-export { CloudMoves } from "./cloud-moves.js"
+export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudReturns } from "./cloud-returns.js"
 export { installedReading } from "./kept-resume.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
@@ -499,8 +499,14 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     if (!arrival) throw new Error("Only a cloud machine's host takes a Thread's move.")
     return readyForMove(arrival, MoveReadyInputSchema.parse(input))
   })
+  /** Before a device releases a Thread: on a cloud machine, what was sent ahead staged here, so the hand-over is short. */
+  methods.handle("mako:move-stage", (input: MoveStageInput) => {
+    const arrival = deps.arrival
+    if (!arrival) throw new Error("Only a cloud machine's host takes a Thread's move.")
+    return stageMove(arrival, MoveStageInputSchema.parse(input))
+  })
   /** A Thread arriving from a device: on a cloud machine, its checkout applied and its sessions' records written here. */
-  methods.handle("mako:move-arrive", (input: MoveArrivalInput) => {
+  methods.handle("mako:move-arrive", (input: MoveArrivalWire) => {
     const arrival = deps.arrival
     if (!arrival) throw new Error("Only a cloud machine's host takes a Thread's move.")
     return arriveMove(arrival, MoveArrivalInputSchema.parse(input))

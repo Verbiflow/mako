@@ -54,7 +54,8 @@ function setup(name: string) {
   sh(checkout, "add", ".")
   sh(checkout, "commit", "--quiet", "-m", "base")
   sh(checkout, "push", "--quiet", "origin", "main")
-  writeFileSync(join(checkout, "a.txt"), "one, changed in the cloud\n")
+  // Each case's own checkout: two made in the same second would otherwise hash alike, and its checkpoint be kept already.
+  writeFileSync(join(checkout, "a.txt"), `one, changed in the cloud (${name})\n`)
   const threads = new ThreadStore(join(folder, "threads.sqlite"), { now: () => clock++, realPath: (path) => path })
   const conversation = randomUUID()
   const facts: JournalFacts = { conversationId: conversation, createdAt: clock++, harness: "codex", bindings: [{ provider: "codex", nativeId: "n-1", path: "/codex/n-1.jsonl" }] }
@@ -67,7 +68,7 @@ function setup(name: string) {
     records: () => ({ id: "t-1", base: `http://127.0.0.1:${port}/v1/threads/t-1/records`, authorization: "Bearer test" }),
     workspace: () => checkout,
     workspaceProblem: () => undefined,
-    blockers: () => [...busy],
+    blockers: async () => [...busy],
     threads: () => threads,
     moves: {
       begin: (input) => threads.beginMove(input),

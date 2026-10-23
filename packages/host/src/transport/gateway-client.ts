@@ -20,6 +20,8 @@ export type GatewayHostCallsOptions = (
   ahead?: boolean
   /** A window's own look, polled: it never wakes a sleeping machine, nor counts as a person (`OperationEnvelope.passive`). */
   passive?: boolean
+  /** Refused at once if the Thread's machine can't start, never queued (`OperationEnvelope.whenUnstarted`). */
+  refuseUnstarted?: boolean
 }
 
 export type GatewayHostCalls = {
@@ -55,6 +57,7 @@ export function gatewayHostCalls(session: ClientSession, options: GatewayHostCal
         if (deferredWhenAsleep.has(channel)) operation.whenAsleep = "defer"
         if (options.ahead) operation.ahead = true
         if (options.passive) operation.passive = true
+        if (options.refuseUnstarted) operation.whenUnstarted = "refuse"
         let reply: Reply
         try {
           reply = await session.call(operation)

@@ -11,7 +11,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, type CloudRepository, type ThreadMoveOutcome, type ThreadMoveStep } from "../contracts/cloud-threads.js"
 import type { EncodedValue } from "../contracts/runtime-value.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
-import { HandoffSchema, MoveIdSchema, RuntimeIdSchema, type ClaimReceipt, type ExecutionOwner, type Handoff, type MoveId, type Refusal, type RuntimeId } from "../contracts/thread-execution.js"
+import { executionRefusal, HandoffSchema, MoveIdSchema, RuntimeIdSchema, type ClaimReceipt, type ExecutionOwner, type Handoff, type MoveId, type Refusal, type RuntimeId, type SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "../contracts/thread-identity.js"
 import type { CloudAccount } from "../usage/index.js"
 import { captureMoveCheckpoint } from "../workspaces/index.js"
@@ -102,6 +102,7 @@ export type CloudMovesOptions = {
   threads(): {
     journalPlacement(conversationId: string): { thread: ThreadId; session: SessionId } | undefined
     threadSessions(thread: ThreadId): Array<{ session: SessionId; journals: string[]; natives: Array<{ harness: string; nativeId: string }> }>
+    execution(session: SessionId): SessionExecution | undefined
     moveStatus(move: MoveId): { phase: string } | undefined
     person(): Actor
   } | undefined
@@ -124,7 +125,7 @@ export type CloudMovesOptions = {
   cloud: {
     adopt(conversation: { conversationId: string; threadId: string; harness: string; repository: CloudRepository }): Promise<void>
     started(conversationId: string, value: EncodedValue): void
-    callThread(threadId: string, channel: string, args: readonly unknown[], conversationId?: string): Promise<EncodedValue>
+    callThread(threadId: string, channel: string, args: readonly unknown[], conversationId?: string, options?: { refuseUnstarted?: boolean }): Promise<EncodedValue>
   }
   /** The settings and access a native session last ran with, as this Mac remembers them. */
   remembered(harness: string, nativeId: string): { modeId?: string; settings?: SessionSettings } | null | undefined
@@ -186,6 +187,13 @@ export class CloudMoves {
     if (!threads) throw new Error("Moves need the Thread store, which didn't open.")
     const placed = threads.journalPlacement(conversationId)
     if (!placed) throw new Error("This conversation isn't in a Thread yet.")
+    // A Thread that runs elsewhere, or is on its way, has nothing here to move: said as it is, before anything else.
+    for (const { session } of threads.threadSessions(placed.thread)) {
+      const execution = threads.execution(session)
+      if (execution && execution.state !== "here") throw new Error(execution.state === "elsewhere" && execution.owner.kind === "cloud"
+        ? "This Thread runs in the cloud already. Bring it back to this Mac first to move it again."
+        : executionRefusal(execution) ?? "This Thread is moving already.")
+    }
     // Asked before anything is made: a busy Thread starts no machine. The release asks again, with no wait before it commits.
     const busy = await this.#options.moves.settledBlockers(placed.thread)
     if (busy.length) throw new Error(`Moves happen between turns: ${busy.join("; ")}.`)
@@ -280,10 +288,22 @@ export class CloudMoves {
     await Promise.all([
       step("Its worktree couldn't be sent ahead", this.#sendCheckpoint(plan)),
       step("Its sessions' records couldn't be sent ahead", this.#sendRecords(plan)),
-      step("Its cloud machine didn't get ready", this.#options.cloud.callThread(plan.cloudThread, "mako:move-ready", [{ folder: plan.folder, harnesses: [...new Set(plan.sessions.map((session) => session.harness))] }]).then(() => {
+      // Never queued: a cloud that can't start the machine now says so now, and the Thread stays here.
+      step("Its cloud machine didn't get ready", this.#options.cloud.callThread(plan.cloudThread, "mako:move-ready", [{ folder: plan.folder, harnesses: [...new Set(plan.sessions.map((session) => session.harness))] }], undefined, { refuseUnstarted: true }).then(() => {
         plan.timings.ready = Date.now() - plan.began
       })),
     ])
+    // What the hand-over would do with what went ahead, done now on the machine while the Thread still runs here.
+    // Only time is at stake: one that fails leaves the hand-over to do it whole.
+    const checkpoint = plan.checkpoint
+    if (checkpoint) {
+      try {
+        await this.#options.cloud.callThread(plan.cloudThread, "mako:move-stage", [{ move: plan.move, folder: plan.folder, checkpoint, sessions: plan.sessions.map(({ harness, nativeId }) => ({ harness, nativeId })) }], undefined, { refuseUnstarted: true })
+        plan.timings.staged = Date.now() - plan.began
+      } catch (error) {
+        hostWarn("moves", "a move couldn't be staged ahead; its hand-over does it whole", { move: plan.move, error: errorMessage({ error }) })
+      }
+    }
     plan.timings.ahead = Date.now() - plan.began
     await this.#write(plan)
   }
@@ -340,7 +360,8 @@ export class CloudMoves {
       harness, nativeId, ...holdings && { holdings },
       open: { conversationId, ...modeId !== undefined && { modeId }, ...tuning !== undefined && { tuning } },
     }))
-    await this.#options.cloud.callThread(plan.cloudThread, "mako:move-arrive", [{ move: plan.move, folder: plan.folder, checkpoint, sessions }])
+    // With the handoff: the machine's store files the Thread under the same IDs as this Mac's.
+    await this.#options.cloud.callThread(plan.cloudThread, "mako:move-arrive", [{ move: plan.move, folder: plan.folder, checkpoint, sessions, ...plan.handoff && { handoff: plan.handoff } }])
     plan.timings.arrived = Date.now() - plan.began
   }
 

@@ -16,8 +16,9 @@ export const devinFork: RecordFork = {
   file: () => null,
   table(name, table, ids) {
     if (!/^devin-cli[^:]*:sessions\.db$/.test(name)) return null
-    if (table === "refinery_schema_history") return "shared"
+    if (devinFork.storeTable?.(name, table)) return "shared"
     if (table === "sessions") return ownedBy("id", ids, { title: (value) => mapText(value, (title) => `${title} (fork)`) })
     return ownedBy("session_id", ids)
   },
+  storeTable: (name, table) => /^devin-cli[^:]*:sessions\.db$/.test(name) && table === "refinery_schema_history",
 }

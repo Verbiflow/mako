@@ -85,6 +85,13 @@ export const OperationEnvelopeSchema = z
      * Like `ahead`, it's the gateway's to read.
      */
     passive: z.literal(true).optional(),
+    /**
+     * `refuse`: the caller waits for the Thread's runtime to start, never for a queue. If it can't start (the cloud has
+     * no room, it can't be made), the gateway refuses the operation at once as not applied, saying why, rather than
+     * keeping it until it can: for a step that decides something now, such as whether a device lets go of a Thread.
+     * Like `ahead`, it's the gateway's to read.
+     */
+    whenUnstarted: z.literal("refuse").optional(),
   })
   .strict()
 

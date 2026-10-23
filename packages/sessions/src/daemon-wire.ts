@@ -1,4 +1,4 @@
-import { ReceivedRecordsSchema, ReceivingSessionSchema, RecordsLinkSchema, SentRecordsSchema, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords } from "./record-sync.js"
+import { ReceivedRecordsSchema, ReceivingSessionSchema, RecordsLinkSchema, SentRecordsSchema, StagedRecordsSchema, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords } from "./record-sync.js"
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
 import {
@@ -129,6 +129,8 @@ export type DaemonRequestFrame =
   | { id: number; op: "send-records"; link: RecordsLink; paths: string[] }
   /** Takes sessions' records from a remote store into their harnesses' stores here (`SessionCatalog.receiveRecords`). */
   | { id: number; op: "receive-records"; link: RecordsLink; sessions: ReceivingSession[]; installed: Record<string, InstalledReading | null> }
+  /** Pulls sessions' records from a remote store into this one ahead of a move (`SessionCatalog.stageRecords`). */
+  | { id: number; op: "stage-records"; link: RecordsLink; sessions: ReceivingSession[] }
 
 export type DaemonResponseFrame =
   | {
@@ -145,6 +147,7 @@ export type DaemonResponseFrame =
         | KeptRestore
         | SentRecords[]
         | ReceivedRecords[]
+        | StagedRecords[]
         | boolean
         | null
     }
@@ -225,6 +228,11 @@ interface ReceiveRecordsPending extends PendingBase {
   resolve: (received: ReceivedRecords[]) => void
 }
 
+interface StageRecordsPending extends PendingBase {
+  kind: "stage-records"
+  resolve: (staged: StagedRecords[]) => void
+}
+
 interface AckPending extends PendingBase {
   kind: "ack"
   resolve: () => void
@@ -242,6 +250,7 @@ export type PendingRequest =
   | RestorePending
   | SendRecordsPending
   | ReceiveRecordsPending
+  | StageRecordsPending
   | AckPending
 
 export type ParsedDaemonResponse =
@@ -256,6 +265,7 @@ export type ParsedDaemonResponse =
   | { kind: "restore"; pending: RestorePending; result: KeptRestore }
   | { kind: "send-records"; pending: SendRecordsPending; result: SentRecords[] }
   | { kind: "receive-records"; pending: ReceiveRecordsPending; result: ReceivedRecords[] }
+  | { kind: "stage-records"; pending: StageRecordsPending; result: StagedRecords[] }
   | { kind: "ack"; pending: AckPending }
   | { kind: "error"; pending: PendingRequest; error: Error }
 
@@ -353,6 +363,10 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       }).safeParse(record)
       return parsed.success ? { id, op, ...parsed.data } : null
     }
+    case "stage-records": {
+      const parsed = z.object({ link: RecordsLinkSchema, sessions: z.array(ReceivingSessionSchema) }).safeParse(record)
+      return parsed.success ? { id, op, ...parsed.data } : null
+    }
     default:
       return null
   }
@@ -420,6 +434,10 @@ export function parseDaemonResponse(
     case "receive-records": {
       const result = z.array(ReceivedRecordsSchema).safeParse(record.result)
       return result.success ? { kind: "receive-records", pending, result: result.data } : null
+    }
+    case "stage-records": {
+      const result = z.array(StagedRecordsSchema).safeParse(record.result)
+      return result.success ? { kind: "stage-records", pending, result: result.data } : null
     }
     case "ack":
       return record.result === null ? { kind: "ack", pending } : null

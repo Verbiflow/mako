@@ -46,8 +46,11 @@ export type MoveDepartureDeps = {
   workspace(): string | undefined
   /** Why the agent couldn't make it, when it said. */
   workspaceProblem(): string | undefined
-  /** What keeps these conversations from leaving now; empty when they could. */
-  blockers(conversations: readonly string[]): string[]
+  /**
+   * What keeps the Thread from leaving, once what passes in a moment (a turn's checkpoint as it ends) has passed:
+   * `LiveMoves.settledBlockers`. Empty when it could.
+   */
+  blockers(thread: ThreadId): Promise<string[]>
   /** This machine's Thread store, where the conversations' Thread is released and taken back. */
   threads(): DepartureThreads | undefined
   moves: DepartureMoves
@@ -78,14 +81,21 @@ function departureOperation(move: string, step: "release" | "cancel" | "reclaim"
   return namedUuid(`mako return\0${move}\0${step}`)
 }
 
-/** The Thread released here toward the device, once its conversations are quiet; refuses, naming what works. */
-async function releaseHere(deps: MoveDepartureDeps, input: MoveDepartureInput): Promise<void> {
+/** The one Thread on this machine the departing conversations are in. */
+function departingThread(deps: MoveDepartureDeps, input: MoveDepartureInput): ThreadId {
   const threads = deps.threads()
   if (!threads) throw new Error("This machine's Thread store isn't open.")
-  const move = MoveIdSchema.parse(input.move)
   const placed = input.conversations.map((conversation) => threads.journalPlacement(conversation)?.thread)
   const thread = placed[0]
   if (!thread || placed.some((each) => each !== thread)) throw new Error("These conversations aren't one Thread on this machine.")
+  return thread
+}
+
+/** The Thread released here toward the device, once its conversations are quiet; refuses, naming what works. */
+async function releaseHere(deps: MoveDepartureDeps, input: MoveDepartureInput, thread: ThreadId): Promise<void> {
+  const threads = deps.threads()
+  if (!threads) throw new Error("This machine's Thread store isn't open.")
+  const move = MoveIdSchema.parse(input.move)
   const actor = threads.person()
   if (!threads.moveStatus(move)) deps.moves.begin({ move, thread, target: { kind: "device", device: DeviceIdSchema.parse(input.device) }, actor })
   try {
@@ -125,14 +135,16 @@ export async function departMove(deps: MoveDepartureDeps, input: MoveDepartureIn
   if (!link) throw new Error("This host isn't a cloud machine's: no Thread's records are linked here.")
   const workspace = deps.workspace()
   if (workspace !== input.folder) throw new Error(`This machine's folder is ${workspace ?? `not made${deps.workspaceProblem() ? ` (${deps.workspaceProblem()})` : ""}`}, not the return's ${input.folder}.`)
-  const busy = deps.blockers(input.conversations)
+  const thread = departingThread(deps, input)
+  // Asked as a turn ends, it waits out the turn's own bookkeeping rather than refusing for it; a turn is said at once.
+  const busy = await deps.blockers(thread)
   if (busy.length) throw new Error(`A Thread goes back between turns: ${busy.join("; ")}.`)
   const natives = input.conversations.map((conversation) => {
     const native = deps.native(conversation)
     if (!native) throw new Error(`The conversation ${conversation} hasn't started here, so it has no records to send back.`)
     return native
   })
-  await releaseHere(deps, input)
+  await releaseHere(deps, input, thread)
   try {
     return await packUp(deps, input, link, natives, began)
   } catch (error) {

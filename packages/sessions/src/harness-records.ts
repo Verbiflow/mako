@@ -109,6 +109,12 @@ export interface RecordFork {
    * row is the fork's, and a `"shared"` table's rows are copied as they are.
    */
   table(name: string, table: string, ids: ForkIds): ForkRow | "shared" | null
+  /**
+   * Whether a table of a database (`name` as the store names it) is the store's own rather than any session's: its
+   * rows describe the database (its migration list, OpenCode's project), so two stores that each captured them hold
+   * histories of their own, and a store taking another's keeps its own. A fork leaves them as the destination has them.
+   */
+  storeTable?(name: string, table: string): boolean
 }
 
 /** A file of the fork: where it goes, and how its bytes differ from the session's. */

@@ -194,6 +194,8 @@ const replays = [
   "mako:thread-return",
   /** Whether a machine has its folder for a move only reads. */
   "mako:move-ready",
+  /** A move staged again stages the same, or what the device sent since: nothing of it is the machine's own yet. */
+  "mako:move-stage",
   /** A move's arrival on a machine is marked by its id: a repeat answers what it did without doing it again. */
   "mako:move-arrive",
   /** A Thread's departure for its device: a repeat finds it released, sends the same checkpoint by its hash, and only what's new of the records. */

@@ -789,6 +789,49 @@ const inputs = {
               .optional(),
           })
         ),
+        handoff: z
+          .object({
+            move: z.string(),
+            source: z.union([
+              z.object({ kind: z.literal("device"), device: z.string() }),
+              z.object({ kind: z.literal("cloud"), runtime: z.string() }),
+            ]),
+            target: z.union([
+              z.object({ kind: z.literal("device"), device: z.string() }),
+              z.object({ kind: z.literal("cloud"), runtime: z.string() }),
+            ]),
+            releasedAt: z.number(),
+            thread: z.object({
+              id: z.string(),
+              owner: z.string(),
+              title: z.string().optional(),
+              titleSource: z
+                .union([
+                  z.literal("user"),
+                  z.literal("frozen"),
+                  z.literal("auto"),
+                ])
+                .optional(),
+              originalTitle: z.string().optional(),
+            }),
+            sessions: z.array(
+              z.object({
+                id: z.string(),
+                origin: z.union([
+                  z.literal("new"),
+                  z.literal("imported"),
+                  z.literal("started"),
+                  z.literal("captured"),
+                  z.literal("fork"),
+                ]),
+                position: z.number(),
+                generation: z.number(),
+                journals: z.array(z.string()),
+                parent: z.string().optional(),
+              })
+            ),
+          })
+          .optional(),
       }),
     ]),
   "mako:move-depart": () =>
@@ -805,6 +848,25 @@ const inputs = {
       z.object({
         folder: z.string(),
         harnesses: z.array(z.string()).optional(),
+      }),
+    ]),
+  "mako:move-stage": () =>
+    z.tuple([
+      z.object({
+        move: z.string(),
+        folder: z.string(),
+        checkpoint: z.object({
+          version: z.literal(1),
+          sha256: z.string(),
+          bytes: z.number(),
+          head: z.string(),
+          index: z.string(),
+          work: z.string(),
+          branch: z.string().optional(),
+        }),
+        sessions: z.array(
+          z.object({ harness: z.string(), nativeId: z.string() })
+        ),
       }),
     ]),
   "mako:move-stay": () =>
@@ -1338,7 +1400,8 @@ const inputs = {
         }),
       ]),
     ]),
-  "mako:thread-create-session": () => z.tuple([z.string(), z.string()]),
+  "mako:thread-create-session": () =>
+    z.tuple([z.string(), z.string(), z.string().optional()]),
   "mako:thread-entry": () => z.tuple([z.string(), z.string()]),
   "mako:thread-file": () => z.tuple([z.string(), z.string()]),
   "mako:thread-follow": () => z.tuple([z.string(), z.number()]),
@@ -1680,6 +1743,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:move-arrive", "conversations"],
   ["mako:move-depart", "conversations"],
   ["mako:move-ready", "conversations"],
+  ["mako:move-stage", "conversations"],
   ["mako:move-stay", "conversations"],
   ["mako:native-authoring-apply", "tools"],
   ["mako:native-authoring-catalog", "tools"],

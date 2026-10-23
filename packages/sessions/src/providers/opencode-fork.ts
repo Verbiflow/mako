@@ -13,6 +13,9 @@ import { base62, mapText, ownedBy, replaceQuoted } from "../record-fork.js"
  * event sequence follow it; the project, instruction blobs, a share link and
  * the migration lists stay the store's. Child sessions stay the source's.
  */
+/** The store's own tables, which no session owns: the project, instruction blobs, share links, the migration lists. */
+const OPENCODE_STORE_TABLES = new Set(["project", "instruction_blob", "session_share", "migration", "__drizzle_migrations"])
+
 export const openCodeFork: RecordFork = {
   id: (seed, from) => openCodeId(seed, from),
   file: () => null,
@@ -39,16 +42,11 @@ export const openCodeFork: RecordFork = {
         return ownedBy("aggregate_id", ids)
       case "event":
         return ownedBy("aggregate_id", ids, { id: (value) => derivedId(value, ids), data: (value) => mapText(value, (data) => replaceQuoted(Buffer.from(data), ids.from, ids.to).toString("utf8")) })
-      case "project":
-      case "instruction_blob":
-      case "session_share":
-      case "migration":
-      case "__drizzle_migrations":
-        return "shared"
       default:
-        return ownedBy("session_id", ids)
+        return OPENCODE_STORE_TABLES.has(table) ? "shared" : ownedBy("session_id", ids)
     }
   },
+  storeTable: (name, table) => /^opencode[^:]*:[^/]+\.db$/.test(name) && OPENCODE_STORE_TABLES.has(table),
 }
 
 /** OpenCode's own fork title: "X (fork #1)", or the next number for a fork of a fork. */

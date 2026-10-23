@@ -98,26 +98,48 @@ export type HeldUnit = { head: number; version(seq: number): { kind: RecordVersi
  * The one rule every store takes a bundle by. Versions at or below the unit's head must be the ones held (the same
  * kind and chunks); the first past it must be `head + 1`, and each after it the next. Returns what's new, in order,
  * and how many arrived already held; throws `RecordConflictError` on anything else, before a store writes anything.
+ *
+ * But for a unit that describes the store rather than any session (`describesStore`: a database's schema, by
+ * default; a harness adds the rows of its own store's tables, such as its migration list), which the store holds
+ * already: every session of that harness there shares it, so two stores that each captured it hold histories of their
+ * own (a cloud machine's OpenCode made its database before any session of this Mac's arrived). That's no session going
+ * on in two places, which each session's own records still catch: one that doesn't follow on from what's held is left
+ * out (`kept`), and the store keeps its own. One that follows on is taken.
  */
-export type RecordImportPlan = { taking: Array<{ unit: RecordUnit; version: RecordVersion }>; held: number }
-export function planRecordImport(bundle: RecordBundle, held: (key: string) => HeldUnit | undefined): RecordImportPlan {
+export type RecordImportPlan = { taking: Array<{ unit: RecordUnit; version: RecordVersion }>; held: number; kept: string[] }
+export function planRecordImport(bundle: RecordBundle, held: (key: string) => HeldUnit | undefined, describesStore: (unit: RecordUnit) => boolean = (unit) => unit.role === "schema"): RecordImportPlan {
   const taking: Array<{ unit: RecordUnit; version: RecordVersion }> = []
+  const kept: string[] = []
   let already = 0
   for (const unit of bundle.units) {
     const known = held(unit.key)
-    const head = known?.head ?? -1
-    let next = head + 1
-    for (const version of unit.versions) {
-      if (version.seq < next) {
-        const kept = known?.version(version.seq)
-        if (!kept || kept.kind !== version.kind || kept.chunks !== version.chunks) throw new RecordConflictError("diverged", unit.key, version.seq, head)
-        already += 1
-        continue
-      }
-      if (version.seq !== next) throw new RecordConflictError("gap", unit.key, version.seq, next - 1)
-      taking.push({ unit, version })
-      next += 1
+    try {
+      const planned = planUnit(unit, known)
+      taking.push(...planned.taking)
+      already += planned.held
+    } catch (error) {
+      if (!(error instanceof RecordConflictError) || !known || !describesStore(unit)) throw error
+      kept.push(unit.key)
     }
+  }
+  return { taking, held: already, kept }
+}
+
+function planUnit(unit: RecordUnit, known: HeldUnit | undefined): Omit<RecordImportPlan, "kept"> {
+  const taking: Array<{ unit: RecordUnit; version: RecordVersion }> = []
+  let already = 0
+  const head = known?.head ?? -1
+  let next = head + 1
+  for (const version of unit.versions) {
+    if (version.seq < next) {
+      const kept = known?.version(version.seq)
+      if (!kept || kept.kind !== version.kind || kept.chunks !== version.chunks) throw new RecordConflictError("diverged", unit.key, version.seq, head)
+      already += 1
+      continue
+    }
+    if (version.seq !== next) throw new RecordConflictError("gap", unit.key, version.seq, next - 1)
+    taking.push({ unit, version })
+    next += 1
   }
   return { taking, held: already }
 }

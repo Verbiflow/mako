@@ -68,7 +68,7 @@ export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
  */
 const SCHEMA_VERSION = 2
 /** Additive changes this build made to the format, each a name in `meta.additions`; a build that doesn't know one ignores what it added. */
-const ADDITIONS = ["writers", "children", "intents", "remotes"]
+const ADDITIONS = ["writers", "children", "intents", "remotes", "remote-sessions"]
 /** One batch of `RecordStore.exportFor`: at most `limit` versions, from the unit after `cursor`. */
 export type ExportPage = { limit?: number; cursor?: number }
 /** A unit as an export reads it, with what a remote is known to hold of it. */
@@ -1393,6 +1393,13 @@ export class RecordStore {
       CREATE TABLE IF NOT EXISTS remote_units (remote TEXT NOT NULL, unit INTEGER NOT NULL, head INTEGER NOT NULL, PRIMARY KEY (remote, unit)) WITHOUT ROWID;
       CREATE TABLE IF NOT EXISTS remote_sessions (remote TEXT NOT NULL, session INTEGER NOT NULL, pulled INTEGER NOT NULL, PRIMARY KEY (remote, session)) WITHOUT ROWID;
     `)
+    // Addition: what a remote holds of a unit, for each session, as a remote keeps them. A unit several sessions share (OpenCode's
+    // project row, a database's schema) is a unit of each session there, so what one session's push took says nothing of
+    // another's. `remote_units` stays for older builds; this one neither reads nor writes it, and a push it never noted
+    // sends again what the remote holds, which the remote takes as held.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS remote_session_units (remote TEXT NOT NULL, session INTEGER NOT NULL, unit INTEGER NOT NULL, head INTEGER NOT NULL, PRIMARY KEY (remote, session, unit)) WITHOUT ROWID;
+    `)
     if (!z.object({ name: z.string() }).array().parse(this.db.prepare("PRAGMA table_info(chunks)").all()).some((column) => column.name === "intent"))
       this.db.exec("ALTER TABLE chunks ADD COLUMN intent INTEGER")
     const additions = new Set((meta("additions") ?? "").split(" ").filter(Boolean))
@@ -1549,7 +1556,7 @@ export class RecordStore {
     if (!found?.layout) return null
     const limit = page.limit ?? Number.POSITIVE_INFINITY
     const units = this.prepared(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places, r.head AS held FROM session_units su JOIN units u ON u.id = su.unit
-      LEFT JOIN remote_units r ON r.remote = ? AND r.unit = u.id WHERE su.session = ? AND u.id > ? AND u.head > coalesce(r.head, -1) ORDER BY u.id`)
+      LEFT JOIN remote_session_units r ON r.remote = ? AND r.session = su.session AND r.unit = u.id WHERE su.session = ? AND u.id > ? AND u.head > coalesce(r.head, -1) ORDER BY u.id`)
     const bundled: RecordUnit[] = []
     let taken = 0
     let cursor: number | null = null
@@ -1578,7 +1585,7 @@ export class RecordStore {
     if (!found?.layout) return null
     const units = ExportUnitSchema.array()
       .parse(this.prepared(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places, r.head AS held FROM session_units su JOIN units u ON u.id = su.unit
-        LEFT JOIN remote_units r ON r.remote = ? AND r.unit = u.id WHERE su.session = ? ORDER BY u.id`).all(remote, found.id))
+        LEFT JOIN remote_session_units r ON r.remote = ? AND r.session = su.session AND r.unit = u.id WHERE su.session = ? ORDER BY u.id`).all(remote, found.id))
     const bundled = units.flatMap((unit) => {
       const past = after(unit)
       if (unit.head <= past) return []
@@ -1618,9 +1625,9 @@ export class RecordStore {
       this.db.exec("BEGIN IMMEDIATE")
       try {
         if ("holdings" in held) {
-          this.prepared("DELETE FROM remote_units WHERE remote = ? AND unit IN (SELECT unit FROM session_units WHERE session = ?)").run(remote, session)
-          for (const [key, head] of Object.entries(held.holdings)) this.noteRemoteHead(remote, harness, key, head)
-        } else for (const unit of held.units) this.noteRemoteHead(remote, harness, unit.key, unit.versions.at(-1)?.seq ?? -1)
+          this.prepared("DELETE FROM remote_session_units WHERE remote = ? AND session = ?").run(remote, session)
+          for (const [key, head] of Object.entries(held.holdings)) this.noteRemoteHead(remote, session, harness, key, head)
+        } else for (const unit of held.units) this.noteRemoteHead(remote, session, harness, unit.key, unit.versions.at(-1)?.seq ?? -1)
         this.db.exec("COMMIT")
       } catch (error) {
         if (this.db.isTransaction) this.db.exec("ROLLBACK")
@@ -1636,10 +1643,10 @@ export class RecordStore {
     return z.object({ pulled: z.number() }).optional().parse(this.prepared("SELECT pulled FROM remote_sessions WHERE remote = ? AND session = ?").get(remote, session))?.pulled ?? 0
   }
 
-  private noteRemoteHead(remote: string, harness: string, key: string, head: number): void {
+  private noteRemoteHead(remote: string, session: number, harness: string, key: string, head: number): void {
     const unit = this.unitByKey(harness, key)
     if (!unit || head < 0) return
-    this.prepared("INSERT INTO remote_units (remote, unit, head) VALUES (?, ?, ?) ON CONFLICT (remote, unit) DO UPDATE SET head = max(head, excluded.head)").run(remote, unit.id, head)
+    this.prepared("INSERT INTO remote_session_units (remote, session, unit, head) VALUES (?, ?, ?, ?) ON CONFLICT (remote, session, unit) DO UPDATE SET head = max(head, excluded.head)").run(remote, session, unit.id, head)
   }
 
   /** Of `hashes`, the chunks this store lacks. */
@@ -1676,11 +1683,11 @@ export class RecordStore {
    * harness reads it. `from`: the remote it came from, and its number for the bundle's last version, kept with the
    * versions in one commit, so the next pull asks only past it and the next push sends none of it back.
    */
-  importSession(bundle: RecordBundle, fetch: (hashes: string[]) => AsyncIterable<{ hash: string; chunk: StoredChunk }>, from?: { remote: string; through: number }): Promise<ImportReport> {
+  importSession(bundle: RecordBundle, fetch: (hashes: string[]) => AsyncIterable<{ hash: string; chunk: StoredChunk }>, from?: { remote: string; through: number }, describesStore?: (unit: RecordUnit) => boolean): Promise<ImportReport> {
     this.writable()
     const session = `${bundle.harness}\n${bundle.nativeId}`
     const before = this.capturing.get(session)
-    const run = (before ? before.catch(() => undefined) : Promise.resolve()).then(() => this.serially(() => this.importNow(bundle, fetch, from)))
+    const run = (before ? before.catch(() => undefined) : Promise.resolve()).then(() => this.serially(() => this.importNow(bundle, fetch, from, describesStore)))
     this.capturing.set(session, run)
     const settled = () => {
       if (this.capturing.get(session) === run) this.capturing.delete(session)
@@ -1703,13 +1710,13 @@ export class RecordStore {
     }
   }
 
-  private async importNow(bundle: RecordBundle, fetch: (hashes: string[]) => AsyncIterable<{ hash: string; chunk: StoredChunk }>, from: { remote: string; through: number } | undefined): Promise<ImportReport> {
+  private async importNow(bundle: RecordBundle, fetch: (hashes: string[]) => AsyncIterable<{ hash: string; chunk: StoredChunk }>, from: { remote: string; through: number } | undefined, describesStore: ((unit: RecordUnit) => boolean) | undefined): Promise<ImportReport> {
     const started = Date.now()
     const report: CaptureReport = { versions: [], taken: 0, unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0, waitedMs: 0, reads: 0, longestReadMs: 0, rowsRead: 0, rowsMatched: 0, writers: { record: [], observed: [] } }
     const imported: ImportReport = { versions: 0, held: 0, chunks: 0, bytes: 0, storedBytes: 0, ms: 0 }
     const held = (key: string) => this.heldUnit(bundle.harness, key)
     // Refused before anything is written or fetched.
-    const planned = planRecordImport(bundle, held)
+    const planned = planRecordImport(bundle, held, describesStore)
     await this.begin()
     this.generations.set(report, this.dropGeneration())
     const intent: CaptureIntent = { session: `${bundle.harness} ${bundle.nativeId}`, id: null }
@@ -1733,7 +1740,7 @@ export class RecordStore {
         }
       if (needed.size) throw new Error(`${needed.size} chunks of ${bundle.harness} session ${bundle.nativeId} didn't come`)
       // Then the versions, in the last commit, by the rule again: a slice may have let another session sharing a unit go first.
-      const { taking, held: already } = planRecordImport(bundle, held)
+      const { taking, held: already, kept } = planRecordImport(bundle, held, describesStore)
       if (this.missingChunks(versionChunks(taking.map(({ version }) => version))).length)
         throw new Error(`The records of ${bundle.harness} session ${bundle.nativeId} changed while they were imported; import them again`)
       imported.held = already
@@ -1755,7 +1762,8 @@ export class RecordStore {
       for (const [name, fingerprint] of Object.entries(bundle.marks))
         if (name !== HELD_STAMP && this.mark(session, name) === undefined) this.setMark(session, name, fingerprint)
       if (from) {
-        for (const unit of bundle.units) this.noteRemoteHead(from.remote, bundle.harness, unit.key, unit.versions.at(-1)?.seq ?? -1)
+        // A schema unit kept as this store's own numbers its versions apart from the remote's: nothing of it is noted.
+        for (const unit of bundle.units) if (!kept.includes(unit.key)) this.noteRemoteHead(from.remote, session, bundle.harness, unit.key, unit.versions.at(-1)?.seq ?? -1)
         this.prepared("INSERT INTO remote_sessions (remote, session, pulled) VALUES (?, ?, ?) ON CONFLICT (remote, session) DO UPDATE SET pulled = max(pulled, excluded.pulled)").run(from.remote, session, from.through)
       }
       if (intent.id !== null) this.prepared("DELETE FROM intents WHERE id = ?").run(intent.id)

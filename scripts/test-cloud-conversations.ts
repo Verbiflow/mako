@@ -25,9 +25,13 @@ import {
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { Git } from "@mako/git"
 import { CloudConversations, folderRepository } from "@mako/host/conversations/cloud-conversations"
+import { cloudRuntimeOf } from "@mako/host/conversations/cloud-moves"
+import { MoveIdSchema } from "@mako/host/contracts/thread-execution"
+import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
+import { ThreadStore } from "@mako/host/threads/store"
 import type { CloudPrepareLaunch, CloudRepository } from "@mako/host/contracts/cloud-threads"
 import { githubRepositoryUrl } from "@mako/host/contracts/cloud-threads"
-import { decodeRuntimeValue, encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
+import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { CloudAccount } from "@mako/host/usage/cloud-account-methods"
 import { z } from "zod"
@@ -70,6 +74,8 @@ async function cloudMachine(reach: Reach = {}) {
   const runtimeId = "m-0123456789abcdef.g1"
   const threads = new RuntimeThreads()
   const calls: Array<{ channel: string; args: unknown[] }> = []
+  /** By fork: the Session the machine's store put it in. */
+  const forkSessions = new Map<string, string>()
   const served = await serveHostThroughGateway(await gateway.connectRuntime(), {
     runtimeId,
     build: "test",
@@ -79,8 +85,16 @@ async function cloudMachine(reach: Reach = {}) {
       if (channel === "mako:boot") return JSON.stringify({ activeTabId: "tab-1", tabs: [{ id: "tab-1", session: { meta: { cwd: CLONE } } }] })
       if (channel === "mako:thread-app") return JSON.stringify({ kind: "ready", project: "Hello-World", phase: "running", address: { host: "t.thread.localhost", port: 20000 }, processes: [], checks: [] })
       if (channel === "mako:live-start") {
-        const [harness, cwd, options] = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string() }).loose()]).parse(args)
-        return JSON.stringify({ session: { id: options.conversationId, harness, cwd, status: "running" }, revision: 1, createdAt: 1, requests: [] })
+        const [harness, cwd, options] = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string(), session: z.string().optional() }).loose()]).parse(args)
+        return JSON.stringify({ session: { id: options.conversationId, harness, cwd, status: "running" }, revision: 1, createdAt: 1, requests: [], ...options.session && { sessionId: options.session } })
+      }
+      // The machine's store takes a `+` tab's Session under the device's ID, and puts a fork in one of its own.
+      if (channel === "mako:thread-create-session") return JSON.stringify({ thread: args[1], session: args[2] })
+      if (channel === "mako:live-fork") {
+        const input = z.object({ id: z.string(), provider: z.string() }).loose().parse(args[1])
+        const session = randomUUID()
+        forkSessions.set(input.id, session)
+        return JSON.stringify({ session: { id: input.id, harness: input.provider, cwd: CLONE, status: "ready" }, revision: 1, createdAt: 1, requests: [], sessionId: session })
       }
       return JSON.stringify({ channel })
     },
@@ -126,7 +140,7 @@ async function cloudMachine(reach: Reach = {}) {
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, asked, machineState, bases, batch, network, served }
+  return { account, calls, created, asked, machineState, bases, batch, network, served, forkSessions }
 }
 
 /**
@@ -681,4 +695,81 @@ test("a cloud app's view is asked passively, its address is this Mac's preview o
   assert.deepEqual(asleep, view)
   assert.ok(performance.now() - started < 1_000, "answered at once, never waited out")
   assert.deepEqual(passive, [true, true])
+})
+
+test("in a Thread that moved to the cloud, a new tab and a fork start on its machine under the same Session IDs in both stores, so the way back carries them", async () => {
+  const machine = await cloudMachine()
+  const folder = join(scratch, "moved")
+  await mkdir(folder, { recursive: true })
+  let clock = 1_000
+  const store = new ThreadStore(join(folder, "threads.sqlite"), { now: () => clock++, realPath: (path) => path })
+  after(() => store.close())
+  // A Thread of this Mac's, moved to a cloud Thread as `CloudMoves` leaves it: released here, the cloud's, followed.
+  const moved = randomUUID()
+  const placed = store.registerJournal({ conversationId: moved, createdAt: clock++, harness: "codex", bindings: [{ provider: "codex", nativeId: "n-0", path: "/codex/n-0.jsonl" }] }, store.person())
+  const cloudThread = "t-00000000000000aa"
+  await machine.account.createThread(cloudThread, REPOSITORY)
+  const runtime = cloudRuntimeOf(cloudThread)
+  const move = MoveIdSchema.parse(randomUUID())
+  store.beginMove({ move, thread: placed.thread, target: { kind: "cloud", runtime }, actor: store.person() })
+  const handoff = store.release({ operationId: randomUUID(), move, actor: store.person() })
+  store.confirm({ operationId: randomUUID(), receipt: { move, owner: { kind: "cloud", runtime }, sessions: handoff.sessions.map((session) => ({ id: session.id, generation: session.generation + 1 })) }, actor: store.person() })
+  let returning = false
+  const router = new CloudConversations({ account: () => machine.account, file: join(folder, "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY, threads: () => store, returning: () => returning })
+  after(() => router.dispose())
+  await router.adopt({ conversationId: moved, threadId: cloudThread, harness: "codex", repository: REPOSITORY })
+  router.started(moved, encodeRuntimeValue({ session: { id: moved, harness: "codex", cwd: CLONE, status: "ready", nativeId: "n-0" }, revision: 1, createdAt: 1 }))
+
+  // A `+` tab: the Session the window made here is the cloud's, as its Thread is; its first send starts on the machine.
+  const tab = store.createSession({ operationId: randomUUID(), thread: placed.thread, actor: store.person() })
+  const execution = store.execution(tab.session)
+  assert.deepEqual(execution?.state === "elsewhere" && execution.owner, { kind: "cloud", runtime })
+  const conversation = randomUUID()
+  const options = { conversationId: conversation, session: tab.session, worktree: true, threadPath: "/Users/me/x.jsonl", initialRequest: { id: "r-1", text: "hi", attachments: [] } }
+  const started = await router.route("mako:live-start", ["claude", "/Users/me/project", options])
+  assert.ok(started.handled, "a start in a Session of the cloud's goes to its machine")
+  assert.equal(z.object({ elsewhere: z.string() }).loose().parse(decodeRuntimeValue(started.value)).elsewhere, "a cloud machine")
+  const made = machine.calls.find((call) => call.channel === "mako:thread-create-session")
+  assert.deepEqual(made?.args.slice(1), [placed.thread, tab.session], "the machine's store takes the tab's Session under the same ID")
+  const start = machine.calls.findLast((call) => call.channel === "mako:live-start")
+  assert.equal(start?.args[1], CLONE, "in the Thread's checkout there")
+  const sent = z.object({ session: z.string() }).loose().parse(start?.args[2])
+  assert.equal(sent.session, tab.session)
+  for (const key of ["worktree", "threadPath", "cloud"]) assert.equal(key in sent, false, `${key} stays on this Mac`)
+  assert.deepEqual(store.journalPlacement(conversation), { thread: placed.thread, session: tab.session }, "recorded here in its tab's Session")
+  assert.ok(router.has(conversation))
+  await router.route("mako:live-start", ["claude", "/Users/me/project", options])
+  assert.deepEqual(store.journalPlacement(conversation), { thread: placed.thread, session: tab.session }, "a repeated start changes nothing")
+  assert.equal(router.threadConversations(cloudThread).length, 2)
+
+  // A fork: made on the machine, recorded here in the Session the machine's store gave it, beside its parent's.
+  const forkId = randomUUID()
+  const point = { kind: "run", requestId: randomUUID() }
+  const forked = await router.route("mako:live-fork", [moved, { id: forkId, provider: "codex", point }])
+  assert.ok(forked.handled)
+  const forkSession = machine.forkSessions.get(forkId)
+  assert.deepEqual(store.journalPlacement(forkId), { thread: placed.thread, session: forkSession }, "the same Session ID in both stores")
+  assert.equal(store.execution(SessionIdSchema.parse(forkSession))?.state, "elsewhere")
+  assert.ok(router.has(forkId), "followed with the Thread's other conversations")
+  await assert.rejects(router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point, thread: "new" }]), /forks within its Thread there/)
+  await assert.rejects(router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point, worktree: true }]), /works in its machine's checkout/)
+
+  // On its way back, the Thread begins nothing more there.
+  returning = true
+  const late = store.createSession({ operationId: randomUUID(), thread: placed.thread, actor: store.person() })
+  await assert.rejects(router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID(), session: late.session }]), /on its way back to this Mac/)
+  await assert.rejects(router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point }]), /on its way back/)
+
+  // A Session that runs here is this Mac's to start.
+  const local = store.registerJournal({ conversationId: randomUUID(), createdAt: clock++, harness: "codex", bindings: [] }, store.person())
+  assert.equal((await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID(), session: local.session }])).handled, false)
+  assert.deepEqual(await router.releaseThread(cloudThread), [moved, conversation, forkId], "coming back, each is answered here again")
+  assert.equal(router.has(conversation), false)
+
+  // A store takes a Session under the ID its Thread's other place gave it (as the machine's does), once.
+  const given = SessionIdSchema.parse(randomUUID())
+  const operationId = randomUUID()
+  assert.equal(store.createSession({ operationId, thread: placed.thread, actor: store.person(), session: given }).session, given)
+  assert.equal(store.createSession({ operationId, thread: placed.thread, actor: store.person(), session: given }).session, given, "asked again, the same")
+  assert.throws(() => store.createSession({ operationId: randomUUID(), thread: placed.thread, actor: store.person(), session: given }), /exists here already/)
 })
