@@ -63,7 +63,7 @@ import { EVIDENCE_RULES, type WriterEvidence } from "./record-writers.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore } from "./record-store.js"
-import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords } from "./record-sync.js"
+import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { GatewayHttpError } from "@mako/protocol/gateway-http"
 import type { RecordRemote } from "@mako/protocol/records"
@@ -1637,18 +1637,49 @@ export class SessionCatalog {
     if (!store || this.readOnly || !this.harnessStores) throw new Error("Mako keeps no records here to receive into.")
     const sync = new RecordSync(store, refusingLink(recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization })), { describesStore: (harness, key) => this.describesStore(harness, key) })
     const received: ReceivedRecords[] = []
-    for (const { harness, nativeId, holdings: sent } of sessions) {
-      const provider = this.providers.find((each) => each.harness === harness)
-      if (!provider) throw new Error(`No harness here reads ${harness}'s sessions.`)
-      const pulled = await sync.pull(harness, nativeId)
-      const held = store.holdings(harness, nativeId)
-      if (!Object.keys(held).length) throw new Error(`The cloud holds none of ${harness}'s session ${nativeId}.`)
-      // A unit that describes the store (a schema, a migration list) is this store's own where the sender's differed: numbered apart.
-      const short = Object.entries(sent ?? {}).filter(([key, head]) => (held[key] ?? -1) < head && !this.describesStore(harness, key))
-      if (short.length) {
-        const [key, head] = short[0]!
-        throw new Error(`The cloud holds ${harness}'s session ${nativeId} only in part: ${key} at version ${held[key] ?? "none"} of ${head}${short.length > 1 ? `, and ${short.length - 1} more` : ""}.`)
+    // Sessions this store held nothing of: what a receive that writes nothing pulled of them goes again, so no row of
+    // a session that runs elsewhere stays listed here.
+    const fresh = sessions.filter(({ harness, nativeId }) => !Object.keys(store.holdings(harness, nativeId)).length)
+    const pulls: Array<{ provider: SessionProvider; harness: string; nativeId: string; pulled: SyncReport }> = []
+    try {
+      for (const { harness, nativeId, holdings: sent } of sessions) {
+        const provider = this.providers.find((each) => each.harness === harness)
+        if (!provider) throw new Error(`No harness here reads ${harness}'s sessions.`)
+        const pulled = await sync.pull(harness, nativeId)
+        const held = store.holdings(harness, nativeId)
+        if (!Object.keys(held).length) throw new Error(`The cloud holds none of ${harness}'s session ${nativeId}.`)
+        // A unit that describes the store (a schema, a migration list) is this store's own where the sender's differed: numbered apart.
+        const short = Object.entries(sent ?? {}).filter(([key, head]) => (held[key] ?? -1) < head && !this.describesStore(harness, key))
+        if (short.length) {
+          const [key, head] = short[0]!
+          throw new Error(`The cloud holds ${harness}'s session ${nativeId} only in part: ${key} at version ${held[key] ?? "none"} of ${head}${short.length > 1 ? `, and ${short.length - 1} more` : ""}.`)
+        }
+        pulls.push({ provider, harness, nativeId, pulled })
       }
+      // All or nothing: every restore is asked first, writing nothing, so a refusal never leaves another of these sessions
+      // in its harness's store here, where it could run while its Thread runs elsewhere.
+      for (const each of pulls) {
+        const dry = await store.restore({ harness: each.harness, nativeId: each.nativeId, home: this.recordsHome, stores: this.harnessStores, dryRun: true, ...each.provider.fork && { fork: each.provider.fork }, ...installed[each.harness] !== undefined && { installed: installed[each.harness] } })
+        const refusal: KeptRestore | undefined = dry.outdated
+          ? { kind: "outdated", ...dry.outdated }
+          : dry.fork
+            ? { kind: "forked", nativeId: dry.fork.nativeId }
+            : dry.diverged.length
+              ? { kind: "refused", reason: `${each.provider.displayName} holds part of this session that Mako never saw (${dry.diverged[0]!.reason}), so nothing was restored.` }
+              : undefined
+        if (!refusal) continue
+        await this.forgetFresh(store, fresh)
+        const others = pulls.filter((other) => other !== each).map((other): ReceivedRecords => ({
+          harness: other.harness, nativeId: other.nativeId, pulled: other.pulled,
+          restored: { kind: "refused", reason: `Nothing was written here, since ${each.provider.displayName}'s session ${each.nativeId} couldn't be.` },
+        }))
+        return [{ harness: each.harness, nativeId: each.nativeId, pulled: each.pulled, restored: refusal }, ...others]
+      }
+    } catch (error) {
+      await this.forgetFresh(store, fresh)
+      throw error
+    }
+    for (const { provider, harness, nativeId, pulled } of pulls) {
       const started = performance.now()
       const report = await store.restore({ harness, nativeId, home: this.recordsHome, stores: this.harnessStores, ...provider.fork && { fork: provider.fork }, ...installed[harness] !== undefined && { installed: installed[harness] } })
       if (report.written || report.fork?.written) provider.storeWritten?.()
@@ -1829,6 +1860,15 @@ export class SessionCatalog {
     const [name = "", role, table = ""] = key.split("\t")
     if (role === "schema") return true
     return role === "row" && this.providers.some((provider) => provider.harness === harness && provider.fork?.storeTable?.(name, table) === true)
+  }
+
+  /** Forgets what a receive that wrote nothing pulled of sessions this store held nothing of before; the remote still has them. */
+  private async forgetFresh(store: RecordStore, fresh: readonly ReceivingSession[]): Promise<void> {
+    for (const { harness, nativeId } of fresh) await store.forget(harness, nativeId).catch(() => undefined)
+    if (fresh.length) {
+      this.recordRows = null
+      this.orderedRefs = null
+    }
   }
 
   /** Each of `harnesses` discovered again, as a write to its store would have it, and no other. */
