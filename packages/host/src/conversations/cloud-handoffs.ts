@@ -21,7 +21,7 @@ export type CloudHandOffsOptions = {
   /** This Mac's Threads whose agents are working, owned here: one conversation each. */
   working(): WorkingThread[]
   moves: {
-    move(conversationId: string, move: string, handOff?: ThreadHandOff, options?: { answer?: "released" }): Promise<ThreadMoveOutcome>
+    move(conversationId: string, move: string, handOff?: ThreadHandOff, options?: { answer?: "released" | "handed" }): Promise<ThreadMoveOutcome>
     refusal(conversationId: string): Promise<string | undefined>
     /** Whether a move of `thread` runs in this host now (`CloudMoves.leaving`). */
     leaving(thread: string): boolean
@@ -62,9 +62,10 @@ export class CloudHandOffs {
    * went:
    *
    * - On quit, each once this Mac let go of it (`released`): the host carries the rest after the window closes.
-   * - As the Mac sleeps (`releaseBy`), each once it started in the cloud, or left here untouched if it couldn't be
-   *   released by then; and, until `releaseBy`, every move already running here (a quit's, a person's) too, so the
-   *   Mac never sleeps with a Thread it let go of between here and the cloud. A Thread already moving isn't moved again.
+   * - As the Mac sleeps (`releaseBy`), each once the cloud carries it through (`handed`: this Mac sent what only it
+   *   has), or left here untouched if it couldn't be released by then; and, until `releaseBy`, every move already
+   *   running here (a quit's, a person's) to the same point, so the Mac never sleeps holding what a Thread it let go
+   *   of still needs. A Thread already moving isn't moved again.
    */
   async handOff(handOff: string, why: ThreadHandOff["why"], releaseBy?: number): Promise<HandOffResult[]> {
     const began = performance.now()
@@ -74,7 +75,7 @@ export class CloudHandOffs {
       if (unavailable) return { conversationId, outcome: { kind: "kept-here", reason: unavailable } }
       try {
         const move = namedUuid(`mako handoff\0${handOff}\0${thread}`)
-        const options = why === "quit" ? { answer: "released" as const } : {}
+        const options = { answer: why === "quit" ? "released" as const : "handed" as const }
         return { conversationId, outcome: await this.#options.moves.move(conversationId, move, { why, ...releaseBy !== undefined && { releaseBy } }, options) }
       } catch (error) {
         return { conversationId, outcome: { kind: "kept-here", reason: errorMessage({ error }) } }

@@ -6,7 +6,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { Git } from "@mako/git"
-import type { MoveAnswer, MoveCheckpoint, MoveClaimRequest } from "@mako/protocol/moves"
+import { decodeOperation } from "@mako/protocol"
+import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest } from "@mako/protocol/moves"
+import { fromHostOperation } from "@mako/host/contracts/host-operations"
 import { CloudMoves, cloudRuntimeOf, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import { MoveNotQuietError } from "@mako/host/conversations/live-moves"
 import type { ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
@@ -54,6 +56,10 @@ class Gateway {
   ready: Error | undefined
   /** Set to hold the claim until it settles: a cloud slow to answer after this Mac let go. */
   claiming: Promise<void> | undefined
+  /** Set to make handing a move over fail on the way, as a network down does. */
+  handOverDown: Error | undefined
+  /** Each move handed over, and the cloud carrying it through: its operations run in order, the arrival first. */
+  readonly handOvers = new Map<string, Promise<void>>()
   unreachable = 0
   answered(move: string, answer: MoveAnswer): MoveAnswer {
     const first = this.answers.get(move) ?? answer
@@ -114,15 +120,38 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
       gateway.checkpoints.set(checkpoint.sha256, checkpoint.bytes)
       return { sent }
     },
-    claimMove: async (_threadId, move, request: MoveClaimRequest) => {
-      await gateway.claiming
-      return gateway.answered(move, { kind: "claimed", move, at: clock++, sessions: request.sessions.map((session) => ({ id: session.id, generation: session.generation + 1 })) })
+    // As the Thread's object carries a move through: each operation to the machine in order, the arrival first; then
+    // the claim (or, if the machine couldn't take the Thread, the refusal); then the rest.
+    handOverMove: async (_threadId, move, request: MoveHandOverRequest) => {
+      if (gateway.handOverDown) throw gateway.handOverDown
+      if (!gateway.handOvers.has(move)) {
+        const calls = request.operations.map((text) => {
+          const call = fromHostOperation(decodeOperation(text))
+          assert.equal(call.kind, "call", JSON.stringify(call))
+          return call.kind === "call" ? { channel: call.channel, args: call.args } : { channel: "", args: [] }
+        })
+        gateway.handOvers.set(move, (async () => {
+          for (const [index, { channel, args }] of calls.entries()) {
+            gateway.calls.push({ channel, args })
+            if (index > 0) continue
+            if (gateway.arrival) {
+              gateway.answered(move, { kind: "refused", move, at: clock++, reason: gateway.arrival.message })
+              return
+            }
+            await gateway.claiming
+            gateway.answered(move, { kind: "claimed", move, at: clock++, sessions: request.claim.sessions.map((session) => ({ id: session.id, generation: session.generation + 1 })) })
+          }
+        })())
+      }
+      return { move, phase: "arriving" as const, step: 0, of: request.operations.length, since: clock, attempt: 1 }
     },
     refuseMove: async (_threadId, move, reason) => {
       gateway.reach()
       return gateway.answered(move, { kind: "refused", move, at: clock++, reason })
     },
-    moveAnswer: async (_threadId, move) => {
+    moveAnswer: async (_threadId, move, waitMs) => {
+      // Held open, as the cloud holds it, until the move it carries is answered.
+      if (waitMs) await gateway.handOvers.get(move)
       return gateway.answers.get(move)
     },
     threadRecords: async (threadId) => ({ id: threadId, base: `https://gateway.test/v1/threads/${threadId}/records`, authorization: "Bearer token" }),
@@ -164,7 +193,6 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
     },
     cloud: {
       adopt: async (conversation) => void started.push(`adopt ${conversation.conversationId} ${conversation.threadId}`),
-      started: (conversationId) => started.push(`started ${conversationId}`),
       callThread: async (_threadId, channel, args, _conversationId, options): Promise<EncodedValue> => {
         gateway.calls.push({ channel, args, ...options && { options } })
         if (channel === "mako:move-arrive" && gateway.arrival) throw gateway.arrival
@@ -234,7 +262,9 @@ try {
     assert.deepEqual(s.gateway.calls.find((call) => call.channel === "mako:move-ready")?.args, [{ folder: s.checkout, harnesses: ["codex"], launches: [{ harness: "codex", tuning: { model: "gpt-5.5" } }] }], "each session's launch settings read ahead, with the settings it runs with")
     assert.deepEqual(s.gateway.calls.find((call) => call.channel === "mako:move-ready")?.options, { refuseUnstarted: true }, "never queued: a cloud that can't start it says so at once")
     assert.deepEqual(s.gateway.readyWhile, ["here"], "its machine was ready before the release")
-    assert.deepEqual(s.started, [`adopt ${s.conversation} ${outcome.kind === "moved" ? outcome.cloudThread : ""}`, `started ${s.conversation}`])
+    assert.deepEqual(s.started, [`adopt ${s.conversation} ${outcome.kind === "moved" ? outcome.cloudThread : ""}`], "followed here as the cloud's, which started it")
+    const startedThere = s.gateway.calls.find((call) => call.channel === "mako:live-start")
+    assert.deepEqual(ArgsSchema.parse(startedThere?.args).slice(0, 2), ["codex", s.checkout], "the cloud started it on the machine, after the arrival")
     const execution = state(s)
     assert.equal(execution?.state, "elsewhere")
     assert.equal(execution?.state === "elsewhere" && execution.owner.kind === "cloud" && execution.owner.runtime, cloudRuntimeOf(outcome.kind === "moved" ? outcome.cloudThread : ""))
@@ -321,16 +351,16 @@ try {
   // An answer this Mac can't hear: the Thread runs nowhere, and the next host settles it as the cloud answered.
   {
     const s = setup("unsettled")
-    s.gateway.arrival = new Error("the gateway didn't answer")
+    s.gateway.handOverDown = new Error("the gateway didn't answer")
     s.gateway.unreachable = 1
     const id = move()
     const outcome = await s.moves.move(s.conversation, id)
     assert.equal(outcome.kind, "unsettled")
     assert.equal(state(s)?.state, "in-transit", "released and unanswered: it runs nowhere")
     assert.equal(s.steps.at(-1)?.kind, "unsettled")
-    s.gateway.arrival = undefined
+    s.gateway.handOverDown = undefined
     await s.moves.settle()
-    assert.equal(plan(s, id).phase, "started", "the next try finds no answer, arrives, and is claimed")
+    assert.equal(plan(s, id).phase, "started", "the next try finds no answer, hands it over, and the cloud claims it")
     assert.equal(state(s)?.state, "elsewhere")
   }
 
@@ -338,11 +368,11 @@ try {
   {
     const s = setup("restart")
     const id = move()
-    s.gateway.arrival = new Error("the host stopped")
+    s.gateway.handOverDown = new Error("the host stopped")
     s.gateway.unreachable = 1
     await s.moves.move(s.conversation, id)
     assert.equal(plan(s, id).phase, "released")
-    s.gateway.arrival = undefined
+    s.gateway.handOverDown = undefined
     // A new host: only the plan on disk and the stores it shares with the last one.
     await s.fresh().settle()
     assert.equal(plan(s, id).phase, "started")
@@ -390,7 +420,8 @@ try {
   }
 
   // A quit's handoff answers once this Mac let go (`released`), while the claim is still out; the move goes on in this
-  // host, and a sleep's wait for every move in flight (`settled`) sees it through to the start.
+  // host and the cloud. A sleep's wait for every move in flight (`settled`) needs this Mac only until the cloud has the
+  // move: handed over, the cloud claims and starts it while the Mac sleeps.
   {
     const s = setup("quit")
     const turn = randomUUID()
@@ -403,9 +434,12 @@ try {
     assert.equal(outcome.kind, "released", JSON.stringify(outcome))
     assert.ok(s.steps.some((step) => step.kind === "handing-over"), "answered once released")
     assert.ok(!s.steps.some((step) => step.kind === "moved"), "before the cloud claimed it")
-    assert.equal(await s.moves.settled(Date.now() + 50), 1, "still moving: a deadline that passes says so")
+    assert.equal(await s.moves.settled(Date.now() + 30_000), 0, "this Mac isn't needed once the cloud has it")
+    assert.equal(plan(s, id).phase, "handed", "handed over, the claim still out")
+    assert.ok(!s.steps.some((step) => step.kind === "moved"))
+    assert.equal(state(s)?.state, "in-transit", "nothing runs it until the cloud claims it")
     answer()
-    assert.equal(await s.moves.settled(Date.now() + 30_000), 0, "then settled: started in the cloud")
+    assert.equal((await s.moves.move(s.conversation, id, { why: "quit" })).kind, "moved", "the move, joined, ends once the cloud claimed it")
     assert.equal(s.steps.at(-1)?.kind, "moved")
     assert.equal(state(s)?.state, "elsewhere")
     assert.deepEqual(await s.moves.move(s.conversation, id, { why: "quit" }, { answer: "released" }), { kind: "moved", cloudThread: outcome.kind === "released" ? outcome.cloudThread : "" }, "asked again once done: moved")

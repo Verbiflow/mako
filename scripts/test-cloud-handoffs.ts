@@ -75,7 +75,7 @@ try {
   // can't go says why before anything moves; signed out, nothing goes.
   {
     const working: WorkingThread[] = [{ conversationId: "c-1", thread: "t-1", harness: "codex" }, { conversationId: "c-2", thread: "t-2", harness: "claude" }]
-    const moves: Array<[string, string, ThreadHandOff | undefined, { answer?: "released" } | undefined]> = []
+    const moves: Array<[string, string, ThreadHandOff | undefined, { answer?: "released" | "handed" } | undefined]> = []
     const leaving = new Set<string>()
     const settledBy: number[] = []
     let unavailable: string | undefined
@@ -106,7 +106,7 @@ try {
     assert.notEqual(moves[0]?.[1], moves[1]?.[1], "each Thread its own move")
     await handOffs.handOff(randomUUID(), "sleep", 12345)
     assert.deepEqual(moves.at(-1)?.[2], { why: "sleep", releaseBy: 12345 }, "a sleeping Mac's deadline goes with each move")
-    assert.deepEqual(moves.at(-1)?.[3], {}, "a sleep waits for each Thread to start in the cloud")
+    assert.deepEqual(moves.at(-1)?.[3], { answer: "handed" }, "a sleep waits for each Thread only until the cloud has it")
     assert.deepEqual(settledBy, [12345], "and for every move already running here, until its deadline")
     // A Thread a quit's move still carries isn't moved again as the Mac sleeps: the sleep waits for that move instead.
     leaving.add("t-1")
