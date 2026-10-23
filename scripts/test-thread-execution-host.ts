@@ -40,7 +40,7 @@ interface Fixture {
   prompts: string[]
   /** Leave the next turn running until `finish` is called. */
   holdTurn: boolean
-  finish?: () => void
+  finish?: (how?: "cancelled") => void
 }
 
 function fixture(harness: string, owner: () => LiveConversations): Fixture {
@@ -81,17 +81,22 @@ function fixture(harness: string, owner: () => LiveConversations): Fixture {
         sessions.set(options.conversationId, session)
         return session
       },
-      prompt: async (id, text) => {
+      prompt: async (id, text, _attachments, _settings, dispatch) => {
+        dispatch.report({ kind: "submitted", source: "transport-call" })
         state.prompts.push(text)
         const session = sessions.get(id)
         assert.ok(session, "a prompt goes to a started session")
         owner().observe({ type: "live-session", session: { ...session, status: "running" } })
-        const finish = () => owner().observe({ type: "live-session", session })
+        // A cancel ends the turn as its provider says one it cancelled ended.
+        const finish = (how?: "cancelled") => owner().observe({ type: "live-session", session: how ? { ...session, lastStop: how } : session })
         if (state.holdTurn) state.finish = finish
         else finish()
       },
       permission: async () => {},
-      cancel: async () => {},
+      cancel: async () => {
+        state.finish?.("cancelled")
+        state.finish = undefined
+      },
       setMode: async () => {},
       close: async () => { state.closes += 1 },
     },
@@ -233,6 +238,39 @@ async function roundTrip(owner: LiveConversations, threads: ThreadStore, runtime
 }
 
 /**
+ * A handoff's pause and continuation, here: the running turn stops as `handed-off` (not the person's Stop), the
+ * message waiting behind it is held, then carried (it runs where the Thread went, never here), and Mako's
+ * continuation runs once however often it's asked.
+ */
+async function handedOff(owner: LiveConversations, fx: Fixture, harness: string, id: string): Promise<void> {
+  fx.holdTurn = true
+  const running = randomUUID()
+  owner.submit(id, running, "a long turn to hand off", [])
+  await until(() => owner.snapshot(id)?.session.status === "running", `${harness}: the turn runs`)
+  const waiting = randomUUID()
+  owner.submit(id, waiting, "waiting behind it", [])
+  fx.holdTurn = false
+  assert.deepEqual(await owner.handOff(id), { requestId: running, stopped: [] }, `${harness}: the handoff pauses the running turn`)
+  await until(() => request(owner, id, running)?.status === "interrupted", `${harness}: it settles interrupted`)
+  assert.equal(request(owner, id, running)?.interruption?.reason, "handed-off", `${harness}: as handed off, not stopped`)
+  assert.equal(request(owner, id, running)?.interruption?.autoContinue, undefined, `${harness}: nothing continues it here on its own`)
+  assert.equal(request(owner, id, waiting)?.status, "held", `${harness}: the waiting message is held for the Thread`)
+  assert.deepEqual(owner.waitingPrompts(id).map((prompt) => prompt.id), [waiting])
+  owner.carried(id, [waiting], "cloud")
+  assert.deepEqual([request(owner, id, waiting)?.status, request(owner, id, waiting)?.carried?.to], ["canceled", "cloud"], `${harness}: carried, it never runs here`)
+  assert.deepEqual(owner.waitingPrompts(id), [])
+  const continuation = randomUUID()
+  owner.continueTurn(id, { requestId: continuation, reason: "handed-off", continues: running, actor: handoffActor })
+  owner.continueTurn(id, { requestId: continuation, reason: "handed-off", continues: running, actor: handoffActor })
+  await until(() => request(owner, id, continuation)?.status === "completed", `${harness}: Mako's continuation runs`)
+  const sent = request(owner, id, continuation)
+  assert.deepEqual(sent?.continues, { requestId: running, reason: "handed-off", auto: true })
+  assert.deepEqual(sent?.actor, handoffActor)
+  assert.equal(fx.prompts.filter((text) => text.startsWith("Continue where you left off. Mako stopped your work to hand this conversation")).length, 1, `${harness}: once`)
+  assert.ok(!fx.prompts.includes("waiting behind it"), `${harness}: the carried message never ran here`)
+}
+
+/**
  * Two hosts on one Mac: host B has the Session's native session live, so
  * host A cannot release the Thread; once B is quiet A can, and B then
  * neither sends nor wakes.
@@ -303,6 +341,7 @@ async function main(): Promise<void> {
     const placed = threads.journalPlacement(id)
     assert.ok(placed, `${harness}: the conversation has a Session`)
     await cancelled(owner, threads, fx, harness, id, placed)
+    await handedOff(owner, fx, harness, id)
     await roundTrip(owner, threads, runtime, fx, harness, id, placed)
     placements.set(id, placed)
   }

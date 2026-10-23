@@ -100,6 +100,7 @@ export const LiveRequestSchema = z.object({
     "interrupted",
   ]),
   error: z.string().optional(),
+  carried: z.object({ at: z.number(), to: z.literal("cloud") }).optional(),
   // What it waits for is read again whenever the wait is checked; one this build doesn't know is its current step.
   accountSwitch: z.object({ reason: z.enum(["selection", "credentials"]), waitingFor: z.enum(ACCOUNT_SWITCH_WAITS).catch("operation") }).optional(),
   signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),

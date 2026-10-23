@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { encodeRuntimeValue } from "./contracts/runtime-value.js"
-import { githubRepositoryUrl } from "./contracts/cloud-threads.js"
+import { githubRepositoryUrl, type ThreadHandOff } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -39,7 +39,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudMoves, CloudReturns, folderRepository, namedUuid, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -415,6 +415,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   late.conversations = opened
   const { live, runs, native } = opened
+  /** Filled once the handoffs exist: the cloud Thread each Thread at work keeps ready, which its move takes. */
+  let readinessOnce: CloudReadiness | undefined
   // A person's Mac moves its Threads to the cloud (`mako:thread-move`); a machine takes them (`mako:move-arrive`).
   const cloudMoves = cloudConversations && new CloudMoves({
     folder: join(environment.dataRoot, "cloud", "moves"),
@@ -428,8 +430,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     sendRecords: (link, paths) => catalog.sendRecords(link, paths),
     cloud: cloudConversations,
     remembered: (harness, nativeId) => threads.memory?.recall(harness, nativeId),
+    live: {
+      handOff: (conversationId) => live.handOff(conversationId),
+      continueTurn: (conversationId, input) => void live.continueTurn(conversationId, input),
+      waitingPrompts: (conversationId) => live.waitingPrompts(conversationId),
+      carried: (conversationId, requestIds, to) => live.carried(conversationId, requestIds, to),
+    },
     step: (conversationId, move, step) => emit({ type: "thread-move-step", conversationId, move, step }),
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
+    ready: { take: (thread, folder, repository) => readinessOnce?.take(thread, folder, repository) ?? Promise.resolve(undefined) },
   })
   void cloudMoves?.settle().catch((error: Error) => hostWarn("moves", "moves a stopped host left couldn't be settled", { error: error.message }))
   // And brings them back (`mako:thread-return`): a machine sends them (`mako:move-depart`).
@@ -445,12 +454,58 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       for (const { harness } of sessions) installed[harness] = installedReading(harnesses.updates.restoreRuntime(harness))
       return catalog.receiveRecords(link, sessions, installed)
     },
+    updateOffer: (harness) => harnesses.updates.restoreRuntime(harness).offer,
     cloud: cloudConversations,
     capture: async (conversationId, path) => void (await live.capture(conversationId, path)),
     step: (conversationId, move, step) => emit({ type: "thread-return-step", conversationId, move, step }),
   })
   late.cloudReturns = cloudReturns
   void cloudReturns?.settle().catch((error: Error) => hostWarn("returns", "returns a stopped host left couldn't be settled", { error: error.message }))
+  // Agents at work go to the cloud when the person quits and asks, and as this Mac sleeps when they let it.
+  const handOffUnavailable = async (): Promise<string | undefined> => {
+    const blocked = late.cloud ? await (late.cloud.cloudBlocked?.() ?? late.cloud.id().then((id) => (id ? undefined : "signed-out" as const))).catch(() => "signed-out" as const) : "signed-out"
+    if (blocked === "signed-out") return "Sign in to Mako Cloud to hand agents to the cloud."
+    if (blocked === "no-cloud") return "Your Mako account doesn't have the cloud yet."
+    return undefined
+  }
+  const cloudHandOffs = cloudMoves && new CloudHandOffs({
+    file: join(environment.dataRoot, "cloud", "handoff.json"),
+    working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }),
+    moves: cloudMoves,
+    unavailable: handOffUnavailable,
+    changed: (settings) => {
+      emit({ type: "handoff-settings", settings })
+      void sleepHandOff?.refresh()
+    },
+  })
+  const sleepHandOff = cloudHandOffs && onMac() ? new SleepHandOff({
+    helper: () => sleepWatchHelper(environment),
+    enabled: async () => (await cloudHandOffs.onSleep()) && !(await handOffUnavailable()),
+    handOff: async (handOff, releaseBy) => void (await cloudHandOffs.handOff(handOff, "sleep", releaseBy)),
+    woke: () => wake.notify("resume"),
+  }) : undefined
+  // Threads at work kept ready to move while handing off on sleep is on: a move then sends only the last seconds.
+  if (cloudHandOffs && cloudMoves) {
+    const readiness = new CloudReadiness({
+      file: join(environment.dataRoot, "cloud", "ready.json"),
+      git,
+      scratch: join(environment.dataRoot, "cloud", "ready"),
+      account: () => late.cloud,
+      enabled: async () => (await cloudHandOffs.onSleep()) && !(await handOffUnavailable()),
+      working: () => workingThreads({ live, threads: threads.store ?? undefined, cloud: (id) => cloudConversations?.has(id) ?? false }),
+      leaving: (thread) => cloudMoves.leaving(thread),
+      plan: (conversationId) => cloudMoves.readyPlan(conversationId),
+      sendRecords: (link, paths) => catalog.sendRecords(link, paths),
+      newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
+    })
+    readinessOnce = readiness
+    shell.jobs.every("keep Threads at work ready to move", READY_EVERY_MS, () => readiness.refresh())
+  }
+  // The person's choice and their sign-in can change it; a minute is soon enough to start or stop listening.
+  if (sleepHandOff) {
+    void sleepHandOff.refresh()
+    shell.jobs.every("watch whether to hand off on sleep", 60_000, () => sleepHandOff.refresh())
+  }
   const workspaceAutomations = new Automations({
     git,
     watch: watchBackend,
@@ -577,8 +632,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           if (!store) throw new Error("This machine's Thread store isn't open.")
           store.takeArrival({ operationId: namedUuid(`mako move\0${handoff.move}\0arrive`), handoff, actor: store.person() })
         },
-        warm: async (harness, folder) => {
-          await harnesses.profiles.resolveLaunch(harness, folder, undefined)
+        // The launch settings a session's start resolves (a harness's model catalog, which OpenCode reads by starting a
+        // whole server): read now, in the folder, with the session's own settings, so the hand-over's start finds them.
+        warm: async (harness, folder, tuning) => {
+          await harnesses.profiles.resolveLaunch(harness, folder, tuning)
         },
         signedIn: (harness) => machineSignIns?.some((install) => install.harness === harness && install.status === "installed"),
         label: (harness) => opened.harnessLabel(harness),
@@ -656,8 +713,22 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       }
       if (channel === "mako:thread-move" && cloudMoves) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-move`'s schema before routing it.
-        const [conversationId, move] = args as [string, string]
-        return { handled: true, value: encodeRuntimeValue(await cloudMoves.move(conversationId, move)) }
+        const [conversationId, move, handOff] = args as [string, string, ThreadHandOff | undefined]
+        return { handled: true, value: encodeRuntimeValue(await cloudMoves.move(conversationId, move, handOff)) }
+      }
+      if (cloudHandOffs) {
+        if (channel === "mako:handoff-candidates") return { handled: true, value: encodeRuntimeValue(await cloudHandOffs.candidates()) }
+        if (channel === "mako:handoff-settings") return { handled: true, value: encodeRuntimeValue(await cloudHandOffs.settings()) }
+        if (channel === "mako:handoff-settings-set") {
+          // SAFETY: the dispatcher parsed this call's arguments with `mako:handoff-settings-set`'s schema before routing it.
+          const [onSleep] = args as [boolean]
+          return { handled: true, value: encodeRuntimeValue(await cloudHandOffs.setOnSleep(onSleep)) }
+        }
+        if (channel === "mako:handoff") {
+          // SAFETY: the dispatcher parsed this call's arguments with `mako:handoff`'s schema before routing it.
+          const [handOff, why] = args as [string, "quit"]
+          return { handled: true, value: encodeRuntimeValue(await cloudHandOffs.handOff(handOff, why)) }
+        }
       }
       const cloud = await cloudConversations?.route(channel, args)
       return cloud?.handled ? cloud : opened.route(channel, args)
@@ -736,6 +807,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       application.dispose()
       shell.closeSocket()
       wake.stop()
+      sleepHandOff?.stop()
       late.cloud?.stop()
       shell.terminals.current()?.dispose()
       plugins?.close()

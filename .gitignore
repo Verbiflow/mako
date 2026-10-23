@@ -53,6 +53,7 @@ build/*.iconset
 /.claude/
 build/make-icns
 build/mako-notification-status
+build/mako-sleep-watch
 release/
 .env*
 

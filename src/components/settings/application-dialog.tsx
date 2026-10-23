@@ -1,17 +1,56 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import {
   ArrowUpRightIcon,
+  CheckIcon,
   Clock3Icon,
+  CloudIcon,
+  CloudUploadIcon,
   ShieldCheckIcon,
   SquareIcon,
   XIcon,
 } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
-import { Action, IconAction } from "@/components/ui/kit"
+import { Action, IconAction, Toggle } from "@/components/ui/kit"
 import { MakoTile } from "@/components/ui/mako-mark"
 import { Notice, NoticeAction } from "@/components/ui/notice"
 import { application, useApplication } from "@/state/application"
+import { useCloudMoves } from "@/state/cloud-moves"
+import { useHandOff } from "@/state/handoff"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
+import type { HandOffCandidate, HandOffResult, ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
+
+/** A Thread's handoff as its row says it, step by step. */
+function stepLabel(step: ThreadMoveStep): string | undefined {
+  switch (step.kind) {
+    case "packing":
+      return "Sending ahead"
+    case "pausing":
+      return "Pausing its turn"
+    case "handing-over":
+      return "Handing over"
+    case "resuming":
+      return "Starting in the cloud"
+    default:
+      return undefined
+  }
+}
+
+/** Where one working item stands in a handoff: on its way (the move's step), in the cloud, or here, saying why. */
+function handOffState(
+  item: LifecycleWork,
+  candidate: HandOffCandidate | undefined,
+  step: ThreadMoveStep | undefined,
+  result: HandOffResult | undefined
+): { label: string; done?: boolean; reason?: string } | undefined {
+  if (!candidate || candidate.refusal) return undefined
+  if (result) {
+    if (result.outcome.kind === "moved") return { label: "In the cloud", done: true }
+    return { label: "Stayed here", reason: result.outcome.reason }
+  }
+  const label = step && stepLabel(step)
+  if (label) return { label }
+  return item.status === "running" ? { label: "Waiting to go" } : undefined
+}
 
 const statusLabels = {
   running: "Working",
@@ -26,9 +65,19 @@ export function ApplicationDialog() {
   const busy = useApplication((state) => state.busy)
   const error = useApplication((state) => state.error)
   const safeAction = useRef<HTMLButtonElement>(null)
+  const candidates = useHandOff((state) => state.candidates)
+  const running = useHandOff((state) => state.running)
+  const moving = useCloudMoves((state) => state.moving)
+  const [remember, setRemember] = useState(false)
   const quitting = action === "quit"
   const installing = action === "install"
   const work = lifecycle?.work ?? []
+  const byConversation = new Map((candidates ?? []).map((candidate) => [candidate.conversationId, candidate]))
+  const results = new Map((running?.results ?? []).map((result) => [result.conversationId, result]))
+  // The cloud is on and at least one Thread at work can go: the sheet offers to hand them over.
+  const canHandOff = quitting && (candidates ?? []).some((candidate) => !candidate.refusal)
+  const handingOff = quitting && running !== null && !running.results
+  const stayed = [...results.values()].filter((result) => result.outcome.kind !== "moved")
   const locked =
     busy ||
     (!error &&
@@ -99,9 +148,13 @@ export function ApplicationDialog() {
           >
             {!lifecycle
               ? "Checking the agent host before making any changes."
-              : work.length
-                ? `${work.length} ${work.length === 1 ? "operation is" : "operations are"} still active. ${quitting ? "Close the window without stopping their work." : "Your update can wait. No need to interrupt their work."}`
-                : "No agents are working. Your saved conversations will be here when you return."}
+              : handingOff
+                ? "Each agent's turn is paused, its Thread moves to a cloud machine, and the turn goes on there."
+                : stayed.length
+                  ? `${results.size - stayed.length} went to the cloud. ${stayed.length === 1 ? "One stayed" : `${stayed.length} stayed`} on this Mac, still working: keep ${stayed.length === 1 ? "it" : "them"} running here, or stop ${stayed.length === 1 ? "it" : "them"}.`
+                  : work.length
+                    ? `${work.length} ${work.length === 1 ? "operation is" : "operations are"} still active. ${quitting ? (canHandOff ? "Keep them working on this Mac, or hand them to the cloud so they go on while it's off." : "Close the window without stopping their work.") : "Your update can wait. No need to interrupt their work."}`
+                    : "No agents are working. Your saved conversations will be here when you return."}
           </p>
         </div>
         {work.length > 0 && (
@@ -111,36 +164,50 @@ export function ApplicationDialog() {
               <span>{work.length} active</span>
             </div>
             <ul className="max-h-48 overflow-y-auto overscroll-contain px-3">
-              {work.slice(0, 100).map((item) => (
-                <li
-                  key={item.id}
-                  className="contain-turn flex items-center gap-3 border-b border-hairline py-3 last:border-0"
-                >
-                  <span
-                    className="size-1.5 shrink-0 rounded-full bg-foreground/45"
-                    aria-hidden
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-ui" title={item.title}>
-                      {item.title}
-                    </p>
-                    <p
-                      className="mt-0.5 truncate text-label text-faint"
-                      title={item.cwd}
-                    >
-                      {[
-                        item.provider,
-                        item.cwd.split("/").filter(Boolean).at(-1),
-                      ]
-                        .filter(Boolean)
-                        .join(" · ") || "Mako"}
-                    </p>
-                  </div>
-                  <span className="shrink-0 text-label text-muted-foreground">
-                    {statusLabels[item.status]}
-                  </span>
-                </li>
-              ))}
+              {work.slice(0, 100).map((item) => {
+                const candidate = byConversation.get(item.id)
+                const handing = running ? handOffState(item, candidate, moving[item.id]?.step, results.get(item.id)) : undefined
+                const refusal = quitting && candidate?.refusal
+                return (
+                  <li
+                    key={item.id}
+                    data-handoff={handing ? (handing.done ? "moved" : handing.reason ? "stayed" : "going") : candidate && !candidate.refusal ? "can" : undefined}
+                    className="contain-turn flex items-center gap-3 border-b border-hairline py-3 last:border-0"
+                  >
+                    {canHandOff && candidate && !candidate.refusal ? (
+                      <CloudIcon className="size-3.5 shrink-0 text-faint" aria-label="Can go to the cloud" />
+                    ) : (
+                      <span
+                        className="mx-1 size-1.5 shrink-0 rounded-full bg-foreground/45"
+                        aria-hidden
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-ui" title={item.title}>
+                        {item.title}
+                      </p>
+                      <p
+                        className="mt-0.5 truncate text-label text-faint"
+                        title={handing?.reason ?? (refusal || item.cwd)}
+                      >
+                        {handing?.reason ??
+                          (canHandOff && refusal
+                            ? `Stays here: ${refusal}`
+                            : [
+                                item.provider,
+                                item.cwd.split("/").filter(Boolean).at(-1),
+                              ]
+                                .filter(Boolean)
+                                .join(" · ") || "Mako")}
+                      </p>
+                    </div>
+                    <span className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
+                      {handing?.done ? <CheckIcon className="size-3.5" /> : null}
+                      {handing?.label ?? statusLabels[item.status]}
+                    </span>
+                  </li>
+                )
+              })}
               {work.length > 100 && (
                 <li className="py-2 text-label text-faint">
                   And {work.length - 100} more active operations. This choice
@@ -154,7 +221,9 @@ export function ApplicationDialog() {
           <ShieldCheckIcon className="mt-0.5 size-3.5 shrink-0" />
           <p>
             {quitting
-              ? "Agents kept running will need Mako's host and this computer to stay on. Reopen Mako to pick up where you left off."
+              ? canHandOff
+                ? "Agents kept running here need this computer to stay on. Handed to the cloud, they go on while it's off; bring a Thread back from its Cloud chip."
+                : "Agents kept running will need Mako's host and this computer to stay on. Reopen Mako to pick up where you left off."
               : "Installation closes all Mako windows and replaces the agent host. Conversations are kept; stopped work is not automatically resumed."}
           </p>
         </div>
@@ -174,13 +243,31 @@ export function ApplicationDialog() {
             className="h-10 w-full"
             disabled={locked || (!quitting && !lifecycle)}
             onClick={() => {
-              if (quitting) void application.keepRunning()
+              if (quitting) void application.keepRunning(remember)
               else if (action) void application.wait(action)
             }}
           >
             {quitting ? <ArrowUpRightIcon /> : <Clock3Icon />}
-            {locked ? "Preparing safely…" : primary}
+            {locked && !handingOff ? "Preparing safely…" : stayed.length ? `Quit and keep ${stayed.length === 1 ? "it" : "them"} running here` : primary}
           </Action>
+          {canHandOff && !stayed.length && (
+            <Action
+              size="md"
+              className="h-10 w-full"
+              data-handoff-action
+              disabled={locked}
+              onClick={() => void application.handOffAndQuit(remember)}
+            >
+              <CloudUploadIcon />
+              {handingOff ? "Handing off to the cloud…" : "Hand off to the cloud and quit"}
+            </Action>
+          )}
+          {quitting && !stayed.length && (
+            <label className="flex items-center justify-between gap-3 px-1 py-1 text-label text-muted-foreground">
+              <span>Do this every time I quit while agents work</span>
+              <Toggle label="Do this every time I quit while agents work" on={remember} disabled={locked} onChange={() => setRemember((value) => !value)} />
+            </label>
+          )}
           <div className="flex items-center justify-between gap-2">
             <Action size="md" disabled={locked} onClick={application.dismiss}>
               {quitting ? "Cancel" : "Not now"}

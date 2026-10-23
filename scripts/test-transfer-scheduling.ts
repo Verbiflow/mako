@@ -97,7 +97,8 @@ if (!process.argv.includes("--fixture")) {
           if (options.emit) emitters.set(state.id, options.emit)
           return state
         },
-        async prompt(bindingId, text) {
+        async prompt(bindingId, text, _attachments, _settings, dispatch) {
+          dispatch.report({ kind: "submitted", source: "transport-call" })
           sent.push(text)
           const state = sessions.get(bindingId)
           assert.ok(state)

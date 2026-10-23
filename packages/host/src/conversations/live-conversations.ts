@@ -15,6 +15,7 @@ import {
   requestsDelta,
   sessionDelta,
   sharedSession,
+  type InterruptionReason,
   type LiveDriverEvent,
   type LiveRequest,
   type LiveSnapshot,
@@ -27,6 +28,7 @@ import {
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyNativeAgent } from "../contracts/native-agents.js"
+import { activeWork } from "../contracts/background-work.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { ContextBreakdown, LivePermissionResponse, LiveSessionState, PromptAttachment } from "../contracts/providers-acp.js"
 import { signInPause } from "../contracts/sign-in-hold.js"
@@ -734,6 +736,59 @@ export class LiveConversations {
     return resident.snapshot
   }
 
+  /**
+   * Hands a conversation's work to another machine, here: its running turn stopped as `handed-off` (its waiting
+   * messages held, to go with it) and any background work it left stopped. Answers the turn to continue where it
+   * lands: the one it stopped, or, when only background work ran, the turn that left it running; with what of that
+   * work it stopped, as the harness listed it, so the continuation can name it. Undefined when nothing was at work.
+   * The Thread's move then waits for it to settle and continues it there (`continueTurn`).
+   */
+  async handOff(id: string): Promise<{ requestId: string; stopped: string[] } | undefined> {
+    const resident = this.records.get(id)
+    const active = this.activeRequest(id)
+    const stopped = resident ? stoppedWork(resident.snapshot, active !== undefined) : []
+    if (active) {
+      await this.stopRequest(id, active, "handed-off")
+      return { requestId: active, stopped }
+    }
+    if (!resident || !stopped.length) return undefined
+    // The turn that left it running: the newest that ran, which the continuation follows on from.
+    const left = [...resident.snapshot.requests].reverse().find((request) => request.status !== "canceled" && request.status !== "queued" && request.status !== "held")
+    await this.cancel(id)
+    return left ? { requestId: left.id, stopped } : undefined
+  }
+
+  /** Continues a turn cut short, as Mako, now; see `LiveAutoContinue.continueNow`. */
+  continueTurn(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; actor: Actor }): LiveSnapshot {
+    this.autoContinue.continueNow(id, input)
+    return this.records.require(id).snapshot
+  }
+
+  /** The messages waiting here, queued or held, in order: what goes with a Thread that moves. */
+  waitingPrompts(id: string): Array<Pick<LiveRequest, "id" | "text" | "attachments" | "tuning" | "displayText">> {
+    const resident = this.records.load(id)
+    return (resident?.snapshot.requests ?? [])
+      .filter((request) => (request.status === "queued" || request.status === "held") && !request.continues)
+      .map(({ id: requestId, text, attachments, tuning, displayText }) => ({ id: requestId, text, attachments, ...tuning && { tuning }, ...displayText !== undefined && { displayText } }))
+  }
+
+  /** Waiting messages sent on with their Thread, by id: they run there, never here. Asked again, it changes nothing. */
+  carried(id: string, requestIds: readonly string[], to: "cloud"): void {
+    const resident = this.records.load(id)
+    if (!resident) return
+    const ids = new Set(requestIds)
+    if (!resident.snapshot.requests.some((request) => ids.has(request.id) && (request.status === "queued" || request.status === "held"))) return
+    resident.snapshot = {
+      ...resident.snapshot,
+      requests: resident.snapshot.requests.map((request) =>
+        ids.has(request.id) && (request.status === "queued" || request.status === "held")
+          ? { ...request, status: "canceled", signIn: undefined, carried: { at: Date.now(), to } }
+          : request
+      ),
+    }
+    this.flush(resident)
+  }
+
   clearQueue(id: string): LiveSnapshot {
     const resident = this.records.require(id)
     resident.snapshot = {
@@ -778,7 +833,11 @@ export class LiveConversations {
     return resident.snapshot.requests.find((request) => request.status === "dispatching" || (resident.opening && request.status === "queued"))?.id ?? null
   }
 
-  stopRequest(id: string, requestId: string): Promise<boolean> {
+  /**
+   * Stops the running request. `handed-off`: Mako stops it to hand the Thread to another machine, which continues it
+   * (`continueTurn`); its queued messages are held, to go with it.
+   */
+  stopRequest(id: string, requestId: string, reason: "stopped" | "handed-off" = "stopped"): Promise<boolean> {
     const previous = this.stops.get(id)
     if (previous?.requestId === requestId) return previous.result
     if (this.activeRequest(id) !== requestId) return Promise.resolve(false)
@@ -788,6 +847,7 @@ export class LiveConversations {
     try { this.flush(resident) } catch (error) { resident.snapshot = snapshot; return Promise.reject(error) }
     const opening = resident.opening
     resident.stopping = requestId
+    resident.stoppingFor = reason
     const result = this.cancelRequest(id, requestId).then(async () => { if (opening) await this.close(id); return true }).catch((error) => { this.stops.delete(id); throw error })
     this.stops.set(id, { requestId, result })
     return result
@@ -1078,4 +1138,15 @@ export class LiveConversations {
       ?.cancel(conversationControl(resident).activeBindingId)
       .catch(() => {})
   }
+}
+
+/**
+ * The background work a handoff stops, in words the agent knows it by: each active entry of its roster
+ * (`activeWork`; while a turn runs, only what it sent to the background) by its command line or prompt, else its
+ * title; and, where the harness counts more than its roster lists, how many more.
+ */
+function stoppedWork(snapshot: Pick<LiveSnapshot, "session" | "nativeAgents">, turnRunning: boolean): string[] {
+  const listed = activeWork(snapshot.nativeAgents).filter((agent) => !turnRunning || agent.background === true).map((agent) => agent.detail ?? agent.title)
+  const counted = snapshot.session.backgroundTasks ?? 0
+  return counted > listed.length ? [...listed, `${counted - listed.length} more background task${counted - listed.length === 1 ? "" : "s"} the harness counted`] : listed
 }

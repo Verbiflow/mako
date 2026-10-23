@@ -13,6 +13,18 @@ import type { ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 import { encodeRuntimeValue, type EncodedValue } from "@mako/host/contracts/runtime-value"
 import { MoveIdSchema, type MoveId } from "@mako/host/contracts/thread-execution"
 import { ThreadStore, type JournalFacts } from "@mako/host/threads/store"
+import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
+
+/** A conversation's own work in these tests: a turn running (its request), messages waiting, and what a handoff did with them. */
+type Work = {
+  running?: string
+  /** Work the agent left running in the background after the turn `left`: what a handoff stops and names. */
+  background?: { left: string; stopped: string[] }
+  waiting: Array<{ id: string; text: string; attachments: PromptAttachment[] }>
+  paused: string[]
+  continuedHere: Array<{ conversationId: string; continues: string; requestId: string; stopped?: string[] }>
+  carried: string[]
+}
 
 /**
  * A Thread of this Mac's moving to the cloud (`CloudMoves`), against the real Thread store and a real checkout, with
@@ -54,7 +66,7 @@ class Gateway {
   }
 }
 
-type Setup = { moves: CloudMoves; fresh(): CloudMoves; gateway: Gateway; threads: ThreadStore; steps: ThreadMoveStep[]; conversation: string; session: string; checkout: string; busy: { reasons: string[]; late: string[] }; folder: string; started: string[] }
+type Setup = { moves: CloudMoves; fresh(): CloudMoves; gateway: Gateway; threads: ThreadStore; steps: ThreadMoveStep[]; conversation: string; thread: string; session: string; checkout: string; busy: { reasons: string[]; late: string[] }; folder: string; started: string[]; work: Work }
 
 function setup(name: string, options: { worktree?: boolean } = {}): Setup {
   const folder = join(root, name)
@@ -79,6 +91,8 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
   const late: string[] = []
   const busy = { reasons, late }
   const started: string[] = []
+  /** The conversation's own work: a turn running (its request), messages waiting, and what a handoff did with them. */
+  const work: Work = { waiting: [], paused: [], continuedHere: [], carried: [] }
   const repository = { url: "https://github.com/octocat/Hello-World" }
   const account: ReturnType<CloudMovesOptions["account"]> = {
     token: async () => "token",
@@ -159,14 +173,35 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
         return encodeRuntimeValue({ ok: true })
       },
     },
+    live: {
+      handOff: async (conversationId) => {
+        if (conversationId !== conversation) return undefined
+        const running = work.running
+        const background = work.background
+        work.running = undefined
+        work.background = undefined
+        if (running) work.paused.push(running)
+        // Paused, the turn settles: nothing keeps the Thread here now.
+        busy.reasons.splice(0)
+        const requestId = running ?? background?.left
+        return requestId ? { requestId, stopped: background?.stopped ?? [] } : undefined
+      },
+      continueTurn: (conversationId, input) => void work.continuedHere.push({ conversationId, continues: input.continues, requestId: input.requestId, ...input.stopped?.length && { stopped: [...input.stopped] } }),
+      waitingPrompts: () => [...work.waiting],
+      carried: (_conversationId, requestIds) => {
+        work.carried.push(...requestIds)
+        work.waiting = work.waiting.filter((prompt) => !requestIds.includes(prompt.id))
+      },
+    },
     remembered: () => ({ modeId: "access:full", settings: { model: "gpt-5.5" } }),
     step: (_conversationId, _move, step) => steps.push(step),
     newCloudThread: () => `t-${name.padEnd(16, "0").slice(0, 16).replace(/[^0-9a-f]/g, "a")}`,
   })
-  return { moves: make(), fresh: make, gateway, threads, steps, conversation, session: placed.session, checkout, busy, folder, started }
+  return { moves: make(), fresh: make, gateway, threads, steps, conversation, thread: placed.thread, session: placed.session, checkout, busy, folder, started, work }
 }
 
 const move = (): MoveId => MoveIdSchema.parse(randomUUID())
+const ArgsSchema = z.array(z.unknown())
 const state = (s: Setup) => s.threads.execution(s.threads.journalPlacement(s.conversation)!.session)
 const PlanSchema = z.object({ phase: z.string(), checkpoint: z.object({ sha256: z.string() }).loose().optional() }).loose()
 const plan = (s: Setup, id: string) => PlanSchema.parse(JSON.parse(readFileSync(join(s.folder, "moves", `${id}.json`), "utf8")))
@@ -176,7 +211,11 @@ try {
   {
     const s = setup("moved")
     const id = move()
-    const outcome = await s.moves.move(s.conversation, id)
+    const moving = s.moves.move(s.conversation, id)
+    while (!s.steps.length) await new Promise((resolve) => setTimeout(resolve, 2))
+    assert.ok(s.moves.leaving(s.thread), "while it moves, the Thread is leaving: nothing keeps it ready meanwhile")
+    const outcome = await moving
+    assert.ok(!s.moves.leaving(s.thread), "moved, it isn't leaving any more")
     assert.equal(outcome.kind, "moved", JSON.stringify(outcome))
     assert.deepEqual(s.steps.map((step) => step.kind), ["packing", "handing-over", "resuming", "moved"])
     assert.deepEqual(s.gateway.made.map((made) => made.folder), [s.checkout], "its machine clones at this Mac's own path")
@@ -189,7 +228,7 @@ try {
     const start = s.gateway.calls.find((call) => call.channel === "mako:live-start")
     assert.deepEqual(start?.args, ["codex", s.checkout, { conversationId: s.conversation, resume: "n-1", modeId: "access:full", tuning: { model: "gpt-5.5" } }], "resumed natively, with the settings it ran with")
     assert.ok(s.gateway.calls.findIndex((call) => call.channel === "mako:move-arrive") < s.gateway.calls.findIndex((call) => call.channel === "mako:live-start"), "nothing starts before the arrival")
-    assert.deepEqual(s.gateway.calls.find((call) => call.channel === "mako:move-ready")?.args, [{ folder: s.checkout, harnesses: ["codex"] }])
+    assert.deepEqual(s.gateway.calls.find((call) => call.channel === "mako:move-ready")?.args, [{ folder: s.checkout, harnesses: ["codex"], launches: [{ harness: "codex", tuning: { model: "gpt-5.5" } }] }], "each session's launch settings read ahead, with the settings it runs with")
     assert.deepEqual(s.gateway.calls.find((call) => call.channel === "mako:move-ready")?.options, { refuseUnstarted: true }, "never queued: a cloud that can't start it says so at once")
     assert.deepEqual(s.gateway.readyWhile, ["here"], "its machine was ready before the release")
     assert.deepEqual(s.started, [`adopt ${s.conversation} ${outcome.kind === "moved" ? outcome.cloudThread : ""}`, `started ${s.conversation}`])
@@ -315,7 +354,101 @@ try {
     assert.match(outcome.kind === "kept-here" ? outcome.reason : "", /its own worktree/)
     assert.equal(s.gateway.made.length, 0, "nothing made in the cloud")
   }
-  console.log("PASS: a Thread moves to the cloud natively with one owner throughout: ahead, released only when quiet, arrived with what was sent after, claimed, resumed under its own id; busy, a failed arrival, a lost claim, an unheard answer and a stopped host each settle with one owner")
+  // A handoff of a Thread at work (rule 2): everything ahead while the turn runs, then the turn paused, the Thread
+  // released and claimed, and in the cloud the turn continued as Mako's and the waiting message sent, carried from here.
+  {
+    const s = setup("handoff")
+    const turn = randomUUID()
+    s.work.running = turn
+    s.busy.reasons.push("a tab is running a turn")
+    const pasted = join(s.folder, "pasted.txt")
+    writeFileSync(pasted, "a file the waiting message names\n")
+    const waiting = { id: randomUUID(), text: "and then run the tests", attachments: [{ name: "pasted.txt", mimeType: "text/plain", path: pasted }] }
+    s.work.waiting.push(waiting)
+    const id = move()
+    const outcome = await s.moves.move(s.conversation, id, { why: "asked" })
+    assert.equal(outcome.kind, "moved", JSON.stringify(outcome))
+    assert.deepEqual(s.steps.map((step) => step.kind), ["packing", "pausing", "handing-over", "resuming", "moved"])
+    assert.deepEqual(s.work.paused, [turn], "the running turn paused")
+    const channels = s.gateway.calls.map((call) => call.channel)
+    assert.ok(channels.indexOf("mako:move-ready") < channels.indexOf("mako:move-arrive"), "the machine was ready before the pause")
+    const continued = s.gateway.calls.find((call) => call.channel === "mako:live-continue-turn")
+    assert.deepEqual(ArgsSchema.parse(continued?.args)[2], { reason: "handed-off", continues: turn }, "the turn continues in the cloud, as Mako's")
+    const sent = s.gateway.calls.find((call) => call.channel === "mako:live-prompt")
+    const [conversation, requestId, text, attachments] = ArgsSchema.parse(sent?.args)
+    assert.deepEqual([conversation, requestId, text], [s.conversation, waiting.id, waiting.text], "the waiting message goes under its own id")
+    assert.equal(z.array(z.object({ data: z.string() }).loose()).parse(attachments)[0]?.data, Buffer.from("a file the waiting message names\n").toString("base64"), "with the bytes of the file it names")
+    assert.ok(channels.indexOf("mako:live-continue-turn") < channels.indexOf("mako:live-prompt"), "the turn first, then what waited behind it")
+    assert.deepEqual(s.work.carried, [waiting.id], "marked here as gone with the Thread")
+    assert.equal(state(s)?.state, "elsewhere")
+    const again = await s.moves.move(s.conversation, id, { why: "asked" })
+    assert.deepEqual(again, outcome, "asked again, the same, nothing paused or sent twice")
+    assert.equal(s.gateway.calls.filter((call) => call.channel === "mako:live-continue-turn").length, 1)
+  }
+
+  // Only background work running, the turn that left it over: the handoff stops it, and the agent is told what stopped
+  // where the Thread lands, continuing from that turn.
+  {
+    const s = setup("background")
+    const left = randomUUID()
+    s.work.background = { left, stopped: ["npm run dev", "npm test -- --watch"] }
+    const outcome = await s.moves.move(s.conversation, move(), { why: "sleep", releaseBy: Date.now() + 60_000 })
+    assert.equal(outcome.kind, "moved", JSON.stringify(outcome))
+    const continued = s.gateway.calls.find((call) => call.channel === "mako:live-continue-turn")
+    assert.deepEqual(ArgsSchema.parse(continued?.args)[2], { reason: "handed-off", continues: left, stopped: ["npm run dev", "npm test -- --watch"] }, "continued there from the turn that left it, naming what stopped")
+    assert.deepEqual(s.steps.at(-1), { kind: "moved", conversations: [s.conversation], continued: true })
+  }
+
+  // Background work only, and the cloud refuses: it goes on here, named the same way.
+  {
+    const s = setup("background-refused")
+    const left = randomUUID()
+    s.work.background = { left, stopped: ["npm run dev"] }
+    s.gateway.arrival = new Error("the machine couldn't open the session")
+    const outcome = await s.moves.move(s.conversation, move(), { why: "quit" })
+    assert.equal(outcome.kind, "kept-here")
+    assert.deepEqual(s.work.continuedHere.map(({ continues, stopped }) => ({ continues, stopped })), [{ continues: left, stopped: ["npm run dev"] }])
+  }
+
+  // Without a handoff, a Thread at work stays, as ever.
+  {
+    const s = setup("busy-no-handoff")
+    s.work.running = randomUUID()
+    s.busy.reasons.push("a tab is running a turn")
+    const outcome = await s.moves.move(s.conversation, move())
+    assert.equal(outcome.kind, "kept-here")
+    assert.deepEqual(s.work.paused, [], "nothing paused")
+  }
+
+  // A sleeping Mac's deadline already gone: nothing is paused or released, and the turn runs on here when it wakes.
+  {
+    const s = setup("too-late")
+    const turn = randomUUID()
+    s.work.running = turn
+    s.busy.reasons.push("a tab is running a turn")
+    const outcome = await s.moves.move(s.conversation, move(), { why: "sleep", releaseBy: Date.now() })
+    assert.equal(outcome.kind, "kept-here")
+    assert.match(outcome.kind === "kept-here" ? outcome.reason : "", /There wasn't time/)
+    assert.deepEqual([s.work.paused, s.work.running], [[], turn], "the turn never paused")
+    assert.equal(state(s)?.state, "here")
+  }
+
+  // Paused, then the cloud refuses (its machine couldn't take the Thread): taken back, and the turn goes on here as Mako's.
+  {
+    const s = setup("paused-refused")
+    const turn = randomUUID()
+    s.work.running = turn
+    s.busy.reasons.push("a tab is running a turn")
+    s.gateway.arrival = new Error("the machine couldn't open the session")
+    const id = move()
+    const outcome = await s.moves.move(s.conversation, id, { why: "quit" })
+    assert.equal(outcome.kind, "kept-here")
+    assert.deepEqual(s.work.continuedHere.map((each) => each.continues), [turn], "the paused turn continues here")
+    assert.deepEqual(s.steps.at(-1), { kind: "kept-here", reason: outcome.kind === "kept-here" ? outcome.reason : "", continued: true })
+    assert.equal(state(s)?.state, "here")
+    assert.ok(!s.gateway.calls.some((call) => call.channel === "mako:live-continue-turn"), "nothing continued in the cloud")
+  }
+  console.log("PASS: a Thread moves to the cloud natively with one owner throughout: ahead, released only when quiet, arrived with what was sent after, claimed, resumed under its own id; busy, a failed arrival, a lost claim, an unheard answer and a stopped host each settle with one owner; a Thread at work is handed off by pausing its turn and continuing it, and what waited, in the cloud, or continuing it here when it can't go")
 } finally {
   git.close()
   rmSync(root, { recursive: true, force: true })

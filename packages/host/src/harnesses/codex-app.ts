@@ -6,7 +6,7 @@ import { applyThreadEnvironment } from "../workspaces/index.js"
 import { join } from "node:path"
 import { CodexPermissionObserver, codexApprovalEnvironment } from "./codex/permission-observer.js"
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
-import { preparePrompt, type PromptDispatch } from "./prompt-dispatch.js"
+import { preparePrompt, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
 import { ProviderStartupWatch } from "./provider-startup.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
 import { CodexAgents } from "./codex/agents.js"
@@ -414,7 +414,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         throw new Error("This Codex session is not running")
       const joining = live.state.status === "running" && turn.joinsGoal ? live.decoder.goalTurn() : null
       if (live.state.status === "running" && !joining)
-        throw new Error("Codex is already working")
+        throw new TurnInProgressError("Codex")
       turn.check()
       return { live, threadId: live.threadId, joining }
     })

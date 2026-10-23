@@ -66,6 +66,7 @@ import {
   ChevronRightIcon,
   CircleAlertIcon,
   CircleStopIcon,
+  CloudIcon,
   CopyIcon,
   FileTextIcon,
   GitBranchIcon,
@@ -234,6 +235,8 @@ function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): 
     case "host-crashed":
     case "stopped":
       return `${who} after Mako closed`
+    case "handed-off":
+      return sender === "mako" ? "Mako continued the turn it paused to move" : sender === "person" ? "You continued the turn Mako paused to move" : "The turn Mako paused to move continued"
   }
 }
 
@@ -252,7 +255,7 @@ function Continued({ continued, provider, said, timestamp, origin }: { continued
   return (
     <EventLine
       align="end"
-      icon={continued.reason === "provider-exited" ? RefreshCwIcon : PlayIcon}
+      icon={continued.reason === "provider-exited" ? RefreshCwIcon : continued.reason === "handed-off" ? CloudIcon : PlayIcon}
       time={timestamp}
       data-turn-continued={continued.reason}
       data-continued-by={continued.sender ?? "unknown"}

@@ -84,7 +84,8 @@ function world(name: string) {
       folders.set(options.conversationId, cwd)
       return state(provider, cwd, options.conversationId, nativeId)
     },
-    prompt: async (id) => {
+    prompt: async (id, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       const session = state(provider, folders.get(id)!, id, natives.get(id)!)
       owner!.observe({ type: "live-session", session: { ...session, status: "running" } })
       owner!.observe({ type: "live-session", session })

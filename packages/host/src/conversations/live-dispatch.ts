@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
-import { ExecutionAccountChanged, ExecutionIdentityMismatch, type PromptDispatch } from "../harnesses/index.js"
+import { ExecutionAccountChanged, ExecutionIdentityMismatch, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
 import { nativePromptReference } from "../contracts/native-prompt-identity.js"
 import { advancePromptDelivery, type PromptDelivery, type PromptDeliveryEvidence } from "../contracts/prompt-delivery.js"
@@ -15,6 +15,9 @@ import { contextPrompt } from "./live-context.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { LiveTransfers } from "./live-transfers.js"
 import { baseUnread } from "./base-source.js"
+
+/** How often in a row a message the harness refused for a turn of its own is sent again at once (`turnInProgress`). */
+const TURN_IN_PROGRESS_RETRIES = 3
 
 type DispatchAccess = Pick<LiveAccess,
   "dependencies" | "epoch" | "admission" | "control" | "flush" | "storageFailed" | "moves" | "switchAccount" |
@@ -311,7 +314,10 @@ export class LiveDispatch {
           if (this.access.canHibernate(resident, false, true)) await this.access.hibernate(resident, "account-change")
           return
         }
-        if (session.status === "running" && session.connection === "connected") {
+        // A turn the harness started itself can end before this runs (Claude Code's notice of background work it
+        // found stopped makes no model call): its refusal, not the status now, says the message only waits.
+        const waitsForTurn = refused && error instanceof TurnInProgressError
+        if ((session.status === "running" || waitsForTurn) && session.connection === "connected") {
           if (refused) {
             // The driver refused before sending because the provider was
             // still running a turn it had lost track of, and is showing that
@@ -332,6 +338,11 @@ export class LiveDispatch {
             }
             dependencies.workspaceSnapshots?.abandonRun(request.id)
             this.access.flush(resident)
+            // Its turn already over, nothing else drains: send again now, a few times at most, since the status
+            // read here can trail the harness's by a flush; past that, the end of its turn drains as usual.
+            const refusals = resident.turnInProgress?.request === request.id ? resident.turnInProgress.refusals + 1 : 1
+            resident.turnInProgress = { request: request.id, refusals }
+            if (resident.snapshot.session.status !== "running" && refusals <= TURN_IN_PROGRESS_RETRIES) this.drain(resident)
             return
           }
           // A send that threw without a receipt may still have started the

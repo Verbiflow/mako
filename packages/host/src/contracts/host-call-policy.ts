@@ -26,6 +26,9 @@ const reads = [
   "mako:machine-woke",
   /** Warms the MCP listing a launch in that folder reads; nothing else sees it. */
   "mako:launch-prewarm",
+  /** The Threads at work here a handoff would take, and the person's choice for sleep, as they stand. */
+  "mako:handoff-candidates",
+  "mako:handoff-settings",
   "mako:git-status",
   "mako:git-diff",
   "mako:git-diff-all",
@@ -216,6 +219,12 @@ const replays = [
   "mako:thread-remember-mode",
   /** `ThreadStore.createSession`: the operation id is receipted; a repeat returns the first Session. */
   "mako:thread-create-session",
+  /** Each Thread's move is named by the handoff's id: a repeat joins the moves it began, or answers how they went. */
+  "mako:handoff",
+  /** Setting the same choice again leaves the same choice. */
+  "mako:handoff-settings-set",
+  /** `LiveAutoContinue.continueNow`: the request id is the continuation's; a repeat finds it and changes nothing. */
+  "mako:live-continue-turn",
   /** `ThreadStore.renameThread` and `clearThreadTitle`: the operation id is receipted. */
   "mako:thread-rename",
   /** Importing names only fills Threads that have none, so a repeat changes nothing. */

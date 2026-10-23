@@ -1,5 +1,7 @@
 import { toast } from "sonner"
 import type { ThreadMoveOutcome, ThreadMoveStep, ThreadReturnOutcome, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
+import { providers } from "@/state/providers"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { updateAcpConversation } from "@/state/acp-state"
 import { hydrateLive } from "@/state/live-recovery"
@@ -12,24 +14,34 @@ import { createHook, createStore } from "@/state/store"
  * read again from its machine, its folder there.
  */
 interface CloudMovesState {
-  moving: Record<string, { move: string; step: ThreadMoveStep }>
+  /** `handOff`: a move that pauses the Thread's running turn and continues it in the cloud (asked so, or seen pausing). */
+  moving: Record<string, { move: string; step: ThreadMoveStep; handOff?: boolean }>
   /** A Thread coming back from the cloud, by the conversation it was asked from (`thread-return-step`). */
   returning: Record<string, { move: string; step: ThreadReturnStep }>
+  /**
+   * A way back that stayed because a harness here is older than the one that wrote its sessions in the cloud, by the
+   * conversation it was asked from: shown above the composer until the update brings it back, or the person dismisses it.
+   */
+  outdated: Record<string, { outdated: OutdatedRestore; updating?: boolean; failed?: string }>
 }
 
-export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, returning: {} })
+export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, returning: {}, outdated: {} })
 export const useCloudMoves = createHook(cloudMovesStore)
 
 /** Where a moved conversation's folder is, as the cloud router names a cloud Thread's (`CLOUD_FOLDER_WHERE`). */
 const CLOUD_WHERE = "a cloud machine"
 
-/** Asks the host to move the Thread of `conversationId` to the cloud; its steps arrive as events. */
-export async function moveToCloud(conversationId: string): Promise<ThreadMoveOutcome | undefined> {
+/**
+ * Asks the host to move the Thread of `conversationId` to the cloud; its steps arrive as events. `handOff`: its agents
+ * are working, so their turns are paused and go along, continuing in the cloud.
+ */
+export async function moveToCloud(conversationId: string, handOff = false): Promise<ThreadMoveOutcome | undefined> {
   if (!hasBridge() || cloudMovesStore.get().moving[conversationId]) return undefined
   const move = crypto.randomUUID()
-  threadMoveStepped(conversationId, move, { kind: "packing" })
+  if (handOff) cloudMovesStore.set((state) => ({ ...state, moving: { ...state.moving, [conversationId]: { move, step: { kind: "packing" }, handOff: true } } }))
+  else threadMoveStepped(conversationId, move, { kind: "packing" })
   try {
-    return await getMako().threadMove(conversationId, move)
+    return await getMako().threadMove(conversationId, move, handOff ? { why: "asked" } : undefined)
   } catch (error) {
     // The host said nothing it did: the window says what it heard, and shows the Thread as the host lists it.
     const reason = error instanceof Error ? error.message : String(error)
@@ -43,15 +55,19 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
   if (step.kind === "moved" || step.kind === "kept-here") {
     cloudMovesStore.set((state) => ({ ...state, moving: Object.fromEntries(Object.entries(state.moving).filter(([id]) => id !== conversationId)) }))
     if (step.kind === "moved") {
-      toast.success("Moved to the cloud", { id: `move:${move}`, description: "It goes on in a cloud machine, at the same folder. Its changes show here as it works." })
+      if (step.continued) toast.success("Handed off to the cloud", { id: `move:${move}`, description: "Its turn goes on in a cloud machine, at the same folder, where it left off." })
+      else toast.success("Moved to the cloud", { id: `move:${move}`, description: "It goes on in a cloud machine, at the same folder. Its changes show here as it works." })
       for (const id of step.conversations) {
         updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: CLOUD_WHERE } : conversation))
         void hydrateLive(id, true)
       }
-    } else toast.message("It stayed on this Mac", { id: `move:${move}`, description: step.reason })
+    } else toast.message("It stayed on this Mac", { id: `move:${move}`, description: step.continued ? `${step.reason} Its turn goes on here.` : step.reason })
     return
   }
-  cloudMovesStore.set((state) => ({ ...state, moving: { ...state.moving, [conversationId]: { move, step } } }))
+  cloudMovesStore.set((state) => {
+    const handOff = step.kind === "pausing" || state.moving[conversationId]?.handOff
+    return { ...state, moving: { ...state.moving, [conversationId]: { move, step, ...handOff && { handOff: true } } } }
+  })
 }
 
 /** Asks the host to bring the Thread of `conversationId` back from the cloud; its steps arrive as events. */
@@ -78,8 +94,43 @@ export function threadReturnStepped(conversationId: string, move: string, step: 
         updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: undefined } : conversation))
         void hydrateLive(id, true)
       }
+    } else if (step.outdated) {
+      // Said above the composer, where its Update is, not in a toast that goes.
+      const outdated = step.outdated
+      cloudMovesStore.set((state) => ({ ...state, outdated: { ...state.outdated, [conversationId]: { outdated } } }))
     } else toast.message("It stayed in the cloud", { id: `return:${move}`, description: step.reason })
     return
   }
   cloudMovesStore.set((state) => ({ ...state, returning: { ...state.returning, [conversationId]: { move, step } } }))
+}
+
+/**
+ * Updates the harness a way back was too old for, then brings the Thread back: one choice for the person. An update
+ * that fails says why and leaves the Thread in the cloud, where it goes on.
+ */
+export async function updateAndBringBack(conversationId: string): Promise<void> {
+  const entry = cloudMovesStore.get().outdated[conversationId]
+  if (!entry || entry.updating || entry.outdated.offer.kind !== "update") return
+  const runtimeId = entry.outdated.offer.runtimeId
+  const set = (next: CloudMovesState["outdated"][string] | undefined) =>
+    cloudMovesStore.set((state) => ({ ...state, outdated: next ? { ...state.outdated, [conversationId]: next } : Object.fromEntries(Object.entries(state.outdated).filter(([id]) => id !== conversationId)) }))
+  set({ outdated: entry.outdated, updating: true })
+  try {
+    const info = await providers.runRuntimeUpdate(runtimeId)
+    const outcome = info.result?.outcome
+    if (outcome !== "updated" && outcome !== "installed" && outcome !== "unchanged") {
+      set({ outdated: entry.outdated, failed: info.result?.message ?? "The update didn't finish." })
+      return
+    }
+  } catch (error) {
+    set({ outdated: entry.outdated, failed: error instanceof Error ? error.message : String(error) })
+    return
+  }
+  set(undefined)
+  await bringBack(conversationId)
+}
+
+/** The person put the notice away; the Thread stays in the cloud, and its Cloud chip still brings it back. */
+export function dismissOutdatedReturn(conversationId: string): void {
+  cloudMovesStore.set((state) => ({ ...state, outdated: Object.fromEntries(Object.entries(state.outdated).filter(([id]) => id !== conversationId)) }))
 }

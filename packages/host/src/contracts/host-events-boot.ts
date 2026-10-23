@@ -122,6 +122,8 @@ export type HostEventBody =
   | { type: "cloud-account"; account: CloudAccount }
   /** Whether this Mac shares its harnesses' sign-ins with Mako Cloud, and how each stands; window-wide. */
   | { type: "cloud-sign-ins"; signIns: CloudSignInsState }
+  /** The person's choice about handing agents to the cloud as this Mac sleeps changed. */
+  | { type: "handoff-settings"; settings: import("./cloud-threads.js").HandOffSettings }
   /** Something happened to the account's devices (`@mako/protocol/account-events`); `mine` when it's about this Mac. */
   | { type: "cloud-account-event"; seq: number; at: string; event: AccountEvent; mine: boolean }
   /** A runtime's installed or public version was read, or an update moved; window-wide. */

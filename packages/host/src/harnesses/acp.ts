@@ -1,7 +1,7 @@
 import { applyControlEnvironment } from "../control/index.js"
 import { applyThreadEnvironment } from "../workspaces/index.js"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "../contracts/approval-response.js"
-import { preparePrompt, preparePromptAsync, type PromptDispatch } from "./prompt-dispatch.js"
+import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
 import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type DriverSideQuestion, type ProviderSteerInput, type ProviderSteerResult } from "./live-driver.js"
@@ -907,7 +907,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       if (!live?.sessionId || !live.connection)
         throw new Error("This interactive session is not running")
       if (live.state.status === "running")
-        throw new Error("The agent is already working")
+        throw new TurnInProgressError("The agent")
       if (live.compaction)
         throw new Error("The agent has not confirmed compaction yet. Wait for it, or press Stop, before sending again.")
       return { live, connection: live.connection, sessionId: live.sessionId }

@@ -66,6 +66,11 @@ export interface Prefs {
    * then queues for after the turn. Off swaps the two.
    */
   steerOnEnter: boolean
+  /**
+   * What Quit does while agents work: ask each time, keep them running on this Mac, or hand them to the cloud. Never
+   * "stop": a remembered choice must not end work the person can't see.
+   */
+  quitWithAgents: "ask" | "keep" | "hand-off"
   collapsedGroups: string[]
   collapsedDirs: string[]
   /** Folders open in the project tree. Keys are folded paths, not path prefixes. */
@@ -162,6 +167,7 @@ const defaults: Prefs = {
   removeLandedOnArchive: false,
   providerModes: {},
   steerOnEnter: true,
+  quitWithAgents: "ask",
   collapsedGroups: [],
   collapsedDirs: [],
   openDirs: [],
@@ -418,6 +424,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     removeLandedOnArchive: readBoolean(value.removeLandedOnArchive, defaults.removeLandedOnArchive),
     providerModes: readStringRecord(value.providerModes),
     steerOnEnter: readBoolean(value.steerOnEnter, defaults.steerOnEnter),
+    quitWithAgents: readChoice(value.quitWithAgents, ["ask", "keep", "hand-off"], defaults.quitWithAgents),
     providerSettings: readProviderSettings(value.providerSettings),
     settingsOverrides: readSettingsOverrides(value.settingsOverrides),
     modelSettings: Object.fromEntries(Object.entries(readSettingsOverrides(value.modelSettings)).slice(-256)),
@@ -485,7 +492,7 @@ globalThis.window?.addEventListener?.("storage", (event) => {
     const next = parsePrefs(value)
     if (!next) return
     receiving = true
-    prefsStore.set({ providerModes: next.providerModes, providerSettings: next.providerSettings, settingsOverrides: next.settingsOverrides, modelSettings: next.modelSettings, dismissedRecoveryRequests: next.dismissedRecoveryRequests })
+    prefsStore.set({ providerModes: next.providerModes, providerSettings: next.providerSettings, settingsOverrides: next.settingsOverrides, modelSettings: next.modelSettings, dismissedRecoveryRequests: next.dismissedRecoveryRequests, quitWithAgents: next.quitWithAgents })
   } catch {
     return
   } finally {

@@ -1,6 +1,8 @@
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { assertDraftsSaved } from "@/lib/draft-persistence"
+import { handOff } from "@/state/handoff"
+import { prefsStore, setPref } from "@/state/prefs"
 import type { LifecycleAction, LifecycleCommand, LifecycleState, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
 
 export const applicationStore = createStore<{
@@ -17,6 +19,9 @@ export const applicationStore = createStore<{
   error: null,
 })
 export const useApplication = createHook(applicationStore)
+
+/** How long the quit sheet shows every Thread in the cloud before it closes. */
+const HANDED_OFF_PAUSE_MS = 700
 
 async function perform(run: () => Promise<void>): Promise<void> {
   if (applicationStore.get().busy) return
@@ -80,7 +85,19 @@ export const application = {
         lifecycle.operation.kind === "stopping" ||
         lifecycle.operation.kind === "applying"
       ) {
+        const remembered = action === "quit" && lifecycle.operation.kind === "idle" ? prefsStore.get().quitWithAgents : "ask"
+        if (remembered === "keep") {
+          assertDraftsSaved()
+          await getMako().quitClient()
+          return
+        }
         applicationStore.set({ dialog: action })
+        if (action === "quit") {
+          handOff.reset()
+          void handOff.loadCandidates().then(() => {
+            if (remembered === "hand-off") void application.handOffAndQuit()
+          })
+        }
         return
       }
       try {
@@ -99,11 +116,33 @@ export const application = {
     if (!applicationStore.get().busy)
       applicationStore.set({ dialog: null, error: null })
   },
-  keepRunning(): Promise<void> {
+  keepRunning(remember = false): Promise<void> {
+    if (remember) setPref("quitWithAgents", "keep")
     return perform(async () => {
       assertDraftsSaved()
       await getMako().quitClient()
       applicationStore.set({ dialog: null })
+    })
+  },
+  /**
+   * Hands every agent at work that can go to the cloud, then quits once each Thread has settled: every one in the
+   * cloud, it closes the window as Keep running does; any that stayed here keep the sheet open, saying why, with the
+   * other choices for what stayed. `remember`: quit this way from now on.
+   */
+  handOffAndQuit(remember = false): Promise<void> {
+    if (remember) setPref("quitWithAgents", "hand-off")
+    return perform(async () => {
+      const results = await handOff.all()
+      const stayed = results.filter((result) => result.outcome.kind !== "moved")
+      const lifecycle = await getMako().lifecycleState().catch(() => applicationStore.get().lifecycle)
+      applicationStore.set({ lifecycle })
+      if (stayed.length || (lifecycle?.work.length ?? 0) > 0) return
+      // Long enough to read that each went, short enough not to wait on it.
+      await new Promise((resolve) => setTimeout(resolve, HANDED_OFF_PAUSE_MS))
+      assertDraftsSaved()
+      await getMako().quitClient()
+      applicationStore.set({ dialog: null })
+      handOff.reset()
     })
   },
   wait(action: LifecycleAction): Promise<void> {

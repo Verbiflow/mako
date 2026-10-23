@@ -5,7 +5,7 @@ import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime
 import { NO_NATIVE_EXCLUSION } from "../../../contracts/execution-context.js"
 import { untilStopped } from "../../../contracts/live-side-questions.js"
 import { applyThreadEnvironment } from "../../../workspaces/index.js"
-import { preparePrompt, preparePromptAsync } from "../../prompt-dispatch.js"
+import { preparePrompt, preparePromptAsync, TurnInProgressError } from "../../prompt-dispatch.js"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { cursorLegacyIdentity, cursorSdkReportedSettings, cursorSdkSelection, cursorSdkStorePath, cursorStoreOrigin, normalizeCursorSdkModels, CURSOR_PLAN_OPTION } from "@mako/sessions"
@@ -850,7 +850,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     async prompt(id, text, attachments, settings, dispatch) {
       await preparePromptAsync(dispatch, async () => {
         const live = requireLive(id)
-        if (live.state.status === "running") throw new Error("Cursor is already working")
+        if (live.state.status === "running") throw new TurnInProgressError("Cursor")
         // The child runs one turn at a time. One it is still running here
         // was lost by this driver; it is shown, and this message is refused
         // before anything is sent so the host keeps it queued behind it.
@@ -866,7 +866,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
       })
       const { live, selection, plan } = preparePrompt(dispatch, () => {
         const live = requireLive(id)
-        if (live.state.status === "running") throw new Error("Cursor is already working")
+        if (live.state.status === "running") throw new TurnInProgressError("Cursor")
         const merged: SessionSettings = {
           ...live.state.settings,
           ...settings,

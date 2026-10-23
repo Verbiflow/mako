@@ -1,3 +1,4 @@
+import type { OutdatedRestore } from "./restore-plan.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { z } from "zod"
 
@@ -57,19 +58,51 @@ export function githubRepositoryUrl(remote: string): string | undefined {
 
 /**
  * A Thread's move to the cloud as its windows show it: `packing` while its checkout and sessions are sent ahead,
- * nothing here changed yet; `handing-over` once this Mac released it and its machine takes it, when nothing runs it
+ * nothing here changed yet; `pausing` while a handoff stops its running turn to take it along, the turn continuing
+ * where the Thread lands; `handing-over` once this Mac released it and its machine takes it, when nothing runs it
  * anywhere; `resuming` once the cloud claimed it and its sessions resume there; `moved`. `kept-here` says why it
  * didn't move, with everything as it was; `unsettled` says the cloud's answer isn't known yet, and that it's asked
  * again: the Thread runs nowhere until it is.
  */
 export type ThreadMoveStep =
   | { kind: "packing" }
+  | { kind: "pausing" }
   | { kind: "handing-over" }
   | { kind: "resuming" }
-  /** Every conversation of the Thread that moved, each the cloud's now under its own id. */
-  | { kind: "moved"; conversations: string[] }
-  | { kind: "kept-here"; reason: string }
+  /** Every conversation of the Thread that moved, each the cloud's now under its own id; `continued`: a turn the handoff paused goes on there. */
+  | { kind: "moved"; conversations: string[]; continued?: boolean }
+  /** `continued`: a turn the handoff had paused goes on here. */
+  | { kind: "kept-here"; reason: string; continued?: boolean }
   | { kind: "unsettled"; reason: string }
+
+/**
+ * A move of a Thread whose agents may be working (rule 2 of moves): each running turn is paused, the Thread moves,
+ * and the turn continues where it lands. `why` says who asked: the person (`asked`), a quit with agents running, or
+ * this Mac going to sleep, when it must be released by `releaseBy` (wall-clock ms) or stay here untouched.
+ */
+export type ThreadHandOff = { why: "asked" | "quit" | "sleep"; releaseBy?: number }
+
+/** A Thread of this Mac's whose agents are working, as a quit or a sleep would hand it to the cloud. */
+export type HandOffCandidate = {
+  /** The conversation at work, whose window shows the move's steps. */
+  conversationId: string
+  thread: string
+  title?: string
+  harness: string
+  /** Why it can't go to the cloud now (it isn't in its own worktree, say); absent when it can. */
+  refusal?: string
+}
+
+/** How a handoff went for one Thread. */
+export type HandOffResult = { conversationId: string; outcome: ThreadMoveOutcome }
+
+/** The person's choice about handing agents to the cloud when this Mac sleeps, and whether this Mac can. */
+export type HandOffSettings = {
+  /** Hand working agents to the cloud as this Mac goes to sleep (a closed lid, the Apple menu). */
+  onSleep: boolean
+  /** Why this Mac can't hand off on sleep, when it can't (signed out of the cloud, not a Mac); absent when it can. */
+  unavailable?: string
+}
 
 /** What `mako:thread-move` came to: the Thread runs on a cloud Thread now, or it stayed here, and why. */
 export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
@@ -82,8 +115,9 @@ export type ThreadReturnStep =
   | { kind: "bringing" }
   /** Every conversation of the Thread runs here again, under its own id. */
   | { kind: "back"; conversations: string[] }
-  | { kind: "stayed"; reason: string }
+  /** `outdated`: a harness here is older than the one that wrote its sessions in the cloud; updating it lets it come. */
+  | { kind: "stayed"; reason: string; outdated?: OutdatedRestore }
   | { kind: "unsettled"; reason: string }
 
 /** What `mako:thread-return` came to: the Thread runs here again, or it stayed in the cloud, and why. */
-export type ThreadReturnOutcome = { kind: "back" } | { kind: "stayed"; reason: string } | { kind: "unsettled"; reason: string }
+export type ThreadReturnOutcome = { kind: "back" } | { kind: "stayed"; reason: string; outdated?: OutdatedRestore } | { kind: "unsettled"; reason: string }

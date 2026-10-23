@@ -252,6 +252,10 @@ const inputs = {
   "mako:git-unstage": () => z.tuple([z.array(z.string())]),
   "mako:git-unstage-all": () => z.tuple([]),
   "mako:github-status": () => z.tuple([]),
+  "mako:handoff": () => z.tuple([z.string(), z.literal("quit")]),
+  "mako:handoff-candidates": () => z.tuple([]),
+  "mako:handoff-settings": () => z.tuple([]),
+  "mako:handoff-settings-set": () => z.tuple([z.boolean()]),
   "mako:harness-availability": () => z.tuple([]),
   "mako:harness-descriptors": () => z.tuple([]),
   "mako:harness-install": () => z.tuple([z.string()]),
@@ -389,6 +393,16 @@ const inputs = {
             .optional(),
         })
         .optional(),
+    ]),
+  "mako:live-continue-turn": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z.object({
+        reason: z.literal("handed-off"),
+        continues: z.string(),
+        stopped: z.array(z.string()).optional(),
+      }),
     ]),
   "mako:live-earlier": () => z.tuple([z.string()]),
   "mako:live-edit-queued": () =>
@@ -848,6 +862,21 @@ const inputs = {
       z.object({
         folder: z.string(),
         harnesses: z.array(z.string()).optional(),
+        launches: z
+          .array(
+            z.object({
+              harness: z.string(),
+              tuning: z
+                .object({
+                  model: z.string().optional(),
+                  options: z
+                    .record(z.string(), z.union([z.boolean(), z.string()]))
+                    .optional(),
+                })
+                .optional(),
+            })
+          )
+          .optional(),
       }),
     ]),
   "mako:move-stage": () =>
@@ -1406,7 +1435,21 @@ const inputs = {
   "mako:thread-file": () => z.tuple([z.string(), z.string()]),
   "mako:thread-follow": () => z.tuple([z.string(), z.number()]),
   "mako:thread-groups": () => z.tuple([]),
-  "mako:thread-move": () => z.tuple([z.string(), z.string()]),
+  "mako:thread-move": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z
+        .object({
+          why: z.union([
+            z.literal("quit"),
+            z.literal("asked"),
+            z.literal("sleep"),
+          ]),
+          releaseBy: z.number().optional(),
+        })
+        .optional(),
+    ]),
   "mako:thread-open": () => z.tuple([z.string()]),
   "mako:thread-original": () => z.tuple([z.string(), z.string()]),
   "mako:thread-owner-resolve": () => z.tuple([z.string()]),
@@ -1677,6 +1720,10 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:git-unstage", "git"],
   ["mako:git-unstage-all", "git"],
   ["mako:github-status", "git"],
+  ["mako:handoff", "conversations"],
+  ["mako:handoff-candidates", "conversations"],
+  ["mako:handoff-settings", "conversations"],
+  ["mako:handoff-settings-set", "conversations"],
   ["mako:harness-availability", "harnesses"],
   ["mako:harness-descriptors", "harnesses"],
   ["mako:harness-install", "harnesses"],
@@ -1708,6 +1755,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-close", "conversations"],
   ["mako:live-context-breakdown", "conversations"],
   ["mako:live-continue", "conversations"],
+  ["mako:live-continue-turn", "conversations"],
   ["mako:live-earlier", "conversations"],
   ["mako:live-edit-queued", "conversations"],
   ["mako:live-fork", "conversations"],

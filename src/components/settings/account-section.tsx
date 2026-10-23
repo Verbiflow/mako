@@ -13,10 +13,12 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
-import { Action, Chip, ConnectionChip, Eyebrow, ListCard, ListCardRow, Toggle } from "@/components/ui/kit"
+import { Action, Chip, ConnectionChip, Eyebrow, ListCard, ListCardRow, Segmented, Toggle } from "@/components/ui/kit"
 import { MakoTile } from "@/components/ui/mako-mark"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { cloudAccount, useCloudAccount } from "@/state/cloud-account"
+import { handOff, useHandOff } from "@/state/handoff"
+import { setPref, usePrefs } from "@/state/prefs"
 import { useThreads } from "@/state/thread-store"
 import { useDeskIdentity } from "@/components/identity/desk-identity"
 import { formatDay, formatRelative } from "@/lib/format"
@@ -224,6 +226,7 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
       </div>
 
       {invited ? <CloudSignIns /> : null}
+      {invited ? <HandOffSettings /> : null}
 
       <Devices current={state.device} connection={state.connection} />
       <Browsers connection={state.connection} />
@@ -286,6 +289,60 @@ function CloudSignIns() {
           Some keys last only hours, and this Mac sends fresh ones while it's awake.
         </p>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * When this Mac's agents at work go to the cloud by themselves: as it sleeps (a closed lid), held a few seconds while
+ * they're handed over, and when the person quits. A handoff pauses each turn, moves its Thread, and the turn goes on
+ * in the cloud from where it paused.
+ */
+function HandOffSettings() {
+  const settings = useHandOff((store) => store.settings)
+  const quitWithAgents = usePrefs((prefs) => prefs.quitWithAgents)
+  useEffect(() => {
+    void handOff.loadSettings()
+  }, [])
+  const onSleep = settings?.onSleep ?? false
+  return (
+    <div className="flex flex-col gap-2" data-handoff-settings>
+      <Eyebrow>Handing off</Eyebrow>
+      <ListCard>
+        <ListCardRow className="flex items-center justify-between gap-6">
+          <div className="min-w-0">
+            <div className="text-ui font-medium">Hand off when this Mac sleeps</div>
+            <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
+              {settings?.unavailable ??
+                "Close the lid while agents work and they go on in the cloud: each turn pauses, moves with its Thread, and continues there. To fit in the few seconds sleep allows, a Thread at work sends its changes ahead every half minute while this is on. Anything that can't go in time stays here and goes on when the Mac wakes."}
+            </p>
+          </div>
+          <Toggle
+            label="Hand off to the cloud when this Mac sleeps"
+            on={onSleep && !settings?.unavailable}
+            disabled={!settings || settings.unavailable !== undefined}
+            onChange={() => void handOff.setOnSleep(!onSleep)}
+          />
+        </ListCardRow>
+        <ListCardRow className="flex items-center justify-between gap-6">
+          <div className="min-w-0">
+            <div className="text-ui font-medium">When you quit while agents work</div>
+            <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
+              Ask each time, keep them working on this Mac, or hand them to the cloud. Stopping them is always asked.
+            </p>
+          </div>
+          <Segmented
+            label="When you quit while agents work"
+            value={quitWithAgents}
+            options={[
+              { value: "ask", label: "Ask" },
+              { value: "keep", label: "Keep here" },
+              { value: "hand-off", label: "Hand off" },
+            ]}
+            onChange={(value) => setPref("quitWithAgents", value)}
+          />
+        </ListCardRow>
+      </ListCard>
     </div>
   )
 }

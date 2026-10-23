@@ -4,7 +4,7 @@ import { applyLiveSnapshot, applyLiveBatch } from "../src/state/live-recovery"
 import { acpStore, activeLiveAcp } from "../src/state/acp-state"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
-import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
+import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
 import { autoContinueCandidate } from "@mako/host/contracts/turn-continuation"
 import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
@@ -179,6 +179,11 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(turnStopLabel("host-quit", "Cursor"), "Interrupted when Mako quit")
   assert.match(continueTurnPrompt("connection-lost", "mako"), /connection dropped.*Mako sent this on its own/)
   assert.match(continueTurnPrompt("host-quit", "person"), /Mako closed.*The person asked you to pick it up/)
+  // A handoff names the background work it stopped, and a saved conversation still knows the words as Mako's.
+  const stoppedWork = continueTurnPrompt("handed-off", "mako", ["npm run dev", `node -e "${"x".repeat(300)}"`, ...Array.from({ length: 8 }, (_, index) => `task ${index}`)])
+  assert.match(stoppedWork, /stopped your work to hand this conversation.*stopped what you had left running in the background: `npm run dev`; `node -e "x+…`; .*; and 2 more\. Start again whatever of it you still need\. Mako sent this on its own/)
+  assert.deepEqual(savedMakoPrompt(stoppedWork), { kind: "continued", reason: "handed-off", sender: "mako" })
+  assert.equal(savedMakoPrompt(stoppedWork.replace("Start again", "Do not start")), undefined, "words of anyone else's between Mako's aren't Mako's")
   assert.ok(!recoverableRequests({ requests: [dropped], blocks: [{ type: "user" as const, requestId: dropped.id, text: "", attachments: [] }] }).length, "a dropped turn on screen is the footer's, not the panel's")
   // While the host has scheduled its own continuation, the footer offers
   // nothing and the thread is still a working one; once Mako's continuation

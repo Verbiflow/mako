@@ -83,6 +83,13 @@ export const INTERRUPTION_REASONS = [
    * resumes after signing in, never on its own.
    */
   "signed-out",
+  /**
+   * Mako stopped the turn to hand its Thread to another machine (the person
+   * quit with agents running, or the Mac went to sleep). The turn so far
+   * stands in its session, and Mako continues it where the Thread runs next:
+   * in the cloud once it arrives, or here if the handoff couldn't finish.
+   */
+  "handed-off",
 ] as const
 export type InterruptionReason = (typeof INTERRUPTION_REASONS)[number]
 
@@ -225,6 +232,11 @@ export interface LiveRequest {
   spend?: import("./usage-ledger.js").TurnSpend
   /** Set when this request continues an interrupted turn; see `TurnContinuation`. */
   continues?: TurnContinuation
+  /**
+   * A message that waited here and went with its Thread to another machine (a move, a handoff), sent there under
+   * the same id. It's `canceled` here: it runs there, never here.
+   */
+  carried?: { at: number; to: "cloud" }
   /** A message that sets, pauses, resumes or clears the goal, or the `turn`th continuation Mako's goal loop sent. */
   goal?: { step: import("./live-goals.js").GoalCommand["kind"] | "continue"; turn?: number }
   /** A code review of the target, sent the way the harness starts its review. */

@@ -118,6 +118,13 @@ async function review() {
       ...point,
     })
   }
+  const clickSelector = async (selector) => {
+    await until(`Boolean(document.querySelector(${JSON.stringify(selector)}))`)
+    const point = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return {x: r.x + r.width / 2, y: r.y + r.height / 2} })()`)
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
+  }
+  const quits = (count) => until(`import('/src/dev/application-check.tsx').then(f => f.calls.quit === ${count})`)
   const key = async (key, code, modifiers = 0) => {
     await page.debugger.sendCommand("Input.dispatchKeyEvent", {
       type: "keyDown",
@@ -192,6 +199,48 @@ async function review() {
   assert.equal(await fixture("return f.calls.quit"), 1)
   assert.equal(await fixture("return f.calls.stopped"), 0)
   await until("!document.querySelector('.application-dialog')")
+
+  // Handing agents to the cloud at quit: each Thread at work that can go wears the cloud; Hand off pauses each turn,
+  // moves its Thread, shows each step, and quits once every one is in the cloud.
+  await fixture("f.handOffScene('all')")
+  await key("q", 81, 4)
+  await until("Boolean(document.querySelector('[data-handoff-action]'))")
+  await until("document.querySelectorAll('.application-dialog li[data-handoff=can]').length === 3")
+  await screenshot("quit-handoff-light.png")
+  await fixture("f.theme('dark')")
+  await screenshot("quit-handoff-dark.png")
+  await click("Hand off to the cloud and quit")
+  await until("document.querySelector('.application-dialog')?.textContent.includes('Pausing its turn')")
+  await screenshot("handing-off-dark.png")
+  await quits(2)
+  assert.equal(await fixture("return f.calls.handedOff"), 1)
+  await until("!document.querySelector('.application-dialog')")
+  // Remembered: Keep running, chosen with the toggle, quits without asking next time.
+  await fixture("f.handOffScene('all')")
+  await key("q", 81, 4)
+  await until("Boolean(document.querySelector('[data-handoff-action]'))")
+  await clickSelector('[role=switch][aria-label="Do this every time I quit while agents work"]')
+  await click("Quit and keep agents running")
+  await quits(3)
+  await until("!document.querySelector('.application-dialog')")
+  await fixture("f.handOffScene('all')")
+  await key("q", 81, 4)
+  await quits(4)
+  assert.equal(await evaluate("Boolean(document.querySelector('.application-dialog'))"), false, "remembered: no sheet")
+  await evaluate("import('/src/state/prefs.ts').then(({ setPref }) => setPref('quitWithAgents', 'ask'))")
+  // Mixed: one can't go and says why, one stays (the cloud is full); the sheet stays, naming each, with what's left.
+  await fixture("f.handOffScene('mixed')")
+  await key("q", 81, 4)
+  await until("document.querySelector('.application-dialog')?.textContent.includes('Stays here:')")
+  await screenshot("quit-handoff-mixed-dark.png")
+  await click("Hand off to the cloud and quit")
+  await until("document.querySelector('.application-dialog')?.textContent.includes('Quit and keep it running here')")
+  await screenshot("handoff-stayed-dark.png")
+  assert.equal(await fixture("return f.calls.quit"), 4, "with something still at work here, it doesn't quit on its own")
+  await key("Escape", 27)
+  await until("!document.querySelector('.application-dialog')")
+  await fixture("f.theme('light')")
+  await fixture("f.handOffScene('none')")
   await key("k", 75, 4)
   await until(
     "document.activeElement?.getAttribute('placeholder') === 'Search commands, models, sessions…'"
@@ -215,7 +264,7 @@ async function review() {
   await fixture("f.idle()")
   await key("q", 81, 4)
   await until(
-    "import('/src/dev/application-check.tsx').then(f => f.calls.quit === 2)"
+    "import('/src/dev/application-check.tsx').then(f => f.calls.quit === 5)"
   )
   assert.equal(
     await evaluate("Boolean(document.querySelector('.application-dialog'))"),

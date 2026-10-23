@@ -84,8 +84,10 @@ try {
 
   const objectsBefore = sh(mac, "count-objects", "-v")
   const refsBefore = sh(mac, "for-each-ref")
-  const indexBefore = await readFile(join(mac, ".git", "index"))
+  // Read first: its `git status` may refresh the index's stat data (files changed within the second it was written),
+  // which is Git's write, not capture's.
   const macReading = await reading(mac)
+  const indexBefore = await readFile(join(mac, ".git", "index"))
 
   const out = await mkdtemp(join(root, "out-"))
   const { checkpoint, file } = await captureMoveCheckpoint(git, mac, out)

@@ -82,3 +82,22 @@ export function carriedBecause(label: string, outdated: Versions): string {
   if (outdated.upTo) return `Mako can't tell if ${program} ${outdated.installed} here reads it`
   return `Mako can't tell which ${program} wrote it`
 }
+
+/**
+ * What the window says when a Thread couldn't come back because a harness here is older than the one that wrote its
+ * sessions in the cloud: which version wrote them and which is here, then how updating lets it come.
+ */
+export function returnNotice(label: string, outdated: OutdatedRestore): RestoreNotice {
+  const wrote = outdated.wrote ? `${label} ${outdated.wrote.version} wrote its latest turns in the cloud` : outdated.upTo ? `${label} up to ${outdated.upTo} wrote its latest turns in the cloud` : `A newer ${label} wrote its latest turns in the cloud`
+  const line = `${wrote}; ${outdated.installed === null ? `${label} isn't installed here` : `this Mac has ${outdated.installed}`}.`
+  const offer = outdated.offer
+  const detail =
+    offer.kind === "update"
+      ? `Update ${label} and it comes back, every session with it. Until then it goes on in the cloud.`
+      : offer.kind === "owner" && offer.owner === "Mako"
+        ? `A newer Mako brings a newer ${label}. Update Mako, then bring it back. Until then it goes on in the cloud.`
+        : offer.kind === "owner"
+          ? `Update ${label} through ${offer.owner}, then bring it back. Until then it goes on in the cloud.`
+          : `Update ${label} from a terminal, then bring it back. Until then it goes on in the cloud.`
+  return { line, detail }
+}

@@ -1,5 +1,5 @@
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
-import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
+import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
 import { ClaudeAgents } from "./sdk-agents.js"
 import { randomUUID } from "node:crypto"
 import { homedir } from "node:os"
@@ -851,15 +851,16 @@ export function createClaudeSdkDriver(
       const { live, content } = await preparePromptAsync(dispatch, async () => {
         const live = requireLive(id)
         if (live.state.status === "running")
-          throw new Error("Claude is already working")
+          throw new TurnInProgressError("Claude")
         const content = await claudeInputContent(text, attachments)
         await tune(live, settings)
         return { live, content }
       })
       preparePrompt(dispatch, () => {
         const current = requireLive(id)
-        if (current !== live || current.state.status === "running")
-          throw new Error("Claude changed while preparing the prompt")
+        if (current !== live) throw new Error("Claude changed while preparing the prompt")
+        // A turn Claude started itself while the message was prepared (a notice of background work it found ended).
+        if (current.state.status === "running") throw new TurnInProgressError("Claude")
       })
       const uuid = dispatch.attemptId
       live.promptReceipt = { id: uuid, dispatch }

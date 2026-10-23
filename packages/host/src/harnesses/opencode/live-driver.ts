@@ -24,7 +24,7 @@ import { createLiveEngine, type LiveEngineApi } from "../live-engine.js"
 import { deliverDecoded, type Decoded, type DecodedSink } from "../../contracts/native-decoding.js"
 import { nativeStream, streamRuntime, withFrame, type NativeStream } from "../native-stream.js"
 import { errorMessage } from "../../base/error-message.js"
-import { preparePrompt, preparePromptAsync, type PromptDispatch } from "../prompt-dispatch.js"
+import { preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "../prompt-dispatch.js"
 import { SHUTDOWN_GRACE_MS, conversationServers, type ProviderLiveDriver, type ProviderStartOptions } from "../live-driver.js"
 import { startOpenCodeApi } from "./native-api.js"
 import { discoverOpenCodeCatalog } from "./profile.js"
@@ -945,7 +945,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
     async prompt(id, text, attachments, settings, dispatch) {
       const live = preparePrompt(dispatch, () => {
         const live = requireLive(id)
-        if (live.state.status === "running" || live.turn) throw new Error("OpenCode is already working")
+        if (live.state.status === "running" || live.turn) throw new TurnInProgressError("OpenCode")
         return live
       })
       if (text.trim() === "/compact" && attachments.length === 0) {

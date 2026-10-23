@@ -177,6 +177,8 @@ export interface CloudThreadMaking {
   harness?: string
   /** For a Thread moving from this Mac: its folder here, where its machine clones the repository, so its sessions resume as they are. */
   folder?: string
+  /** Kept ready for a Thread of this Mac's that may move: records and checkpoints go to it, and its machine starts only with the move. */
+  standby?: boolean
 }
 
 export type CloudAccountOptions = {
@@ -429,7 +431,8 @@ export class CloudAccounts {
     if (options.prepare) body.prepare = true
     if (options.harness) body.harness = options.harness
     if (options.folder) body.folder = options.folder
-    const response = await this.#call(options.prepare ? "threads.prepare" : "threads.create", "POST", "/v1/threads", body)
+    if (options.standby) body.standby = true
+    const response = await this.#call(options.prepare ? "threads.prepare" : options.standby ? "threads.standby" : "threads.create", "POST", "/v1/threads", body)
     const answer = CreatedThreadSchema.safeParse(await response.json().catch(() => undefined))
     return { ready: answer.success && answer.data.ready === true }
   }

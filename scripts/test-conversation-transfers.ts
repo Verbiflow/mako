@@ -106,7 +106,8 @@ function driver(provider: string): ProviderLiveDriver {
       sessions.set(session.id, session)
       return session
     },
-    async prompt(id, text, attachments, settings) {
+    async prompt(id, text, attachments, settings, dispatch) {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       sent.push({ id, text, attachments, settings })
       const session = sessions.get(id)
       assert.ok(session)

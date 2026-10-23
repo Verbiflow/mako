@@ -81,7 +81,7 @@ export type MoveArrivalDeps = {
   /** This machine's store takes the Thread under the device's IDs (`ThreadStore.takeArrival`), once per move. */
   take(handoff: Handoff): void
   /** Reads ahead what a start of `harness` reads first (its catalog), so the sessions open quickly as the move arrives. */
-  warm(harness: string, folder: string): Promise<void>
+  warm(harness: string, folder: string, tuning?: SessionSettings): Promise<void>
   /** Whether the account gave this machine a sign-in for the harness; undefined before it gave any set. */
   signedIn(harness: string): boolean | undefined
   /** The harness's name, as people read it. */
@@ -94,6 +94,11 @@ export const MoveReadyInputSchema = z.object({
   folder: z.string().min(1),
   /** The harnesses the move's sessions run on: what each start reads first is read now, while the device still runs them. */
   harnesses: z.array(z.string().min(1).max(64)).max(32).optional(),
+  /**
+   * Each session's harness with the settings it runs with: the launch settings its start resolves (a harness's model
+   * catalog, read by starting it once) are read now, in the folder, so the hand-over's start finds them ready.
+   */
+  launches: z.array(z.object({ harness: z.string().min(1).max(64), tuning: SessionSettingsSchema.optional() }).strict()).max(256).optional(),
 }).strict()
 export type MoveReadyInput = z.infer<typeof MoveReadyInputSchema>
 
@@ -106,9 +111,15 @@ export async function readyForMove(deps: Pick<MoveArrivalDeps, "workspaceSettled
   if ("problem" in settled) throw new Error(`The cloud machine couldn't make this Thread's folder: ${settled.problem}`)
   if (settled.path !== input.folder) throw new Error(`This machine's folder is ${settled.path}, not the move's ${input.folder}.`)
   // Read ahead, not judged: a harness that can't start here says so when its session opens, as the move arrives.
-  await Promise.all([...new Set(input.harnesses ?? [])].map((harness) => deps.warm(harness, settled.path).catch((error: Error) => {
-    hostWarn("moves", "a harness's launch settings weren't read ahead of a move", { harness, error: error.message })
-  })))
+  // A session's own settings first, which is what its start reads; then each harness the move names without them.
+  // Not waited for: the device goes on sending ahead meanwhile (OpenCode's catalog took 9.4 s on a cold machine,
+  // 2026-10-23), and the arrival's session open joins a read still running rather than starting another.
+  const launches: Array<{ harness: string; tuning?: SessionSettings }> = [...input.launches ?? [], ...[...new Set(input.harnesses ?? [])].filter((harness) => !input.launches?.some((launch) => launch.harness === harness)).map((harness) => ({ harness }))]
+  const began = performance.now()
+  if (launches.length)
+    void Promise.all(launches.map((launch) => deps.warm(launch.harness, settled.path, launch.tuning).catch((error: Error) => {
+      hostWarn("moves", "a harness's launch settings weren't read ahead of a move", { harness: launch.harness, error: error.message })
+    }))).then(() => hostLog("moves", "launch settings read ahead of a move", { harnesses: launches.map((launch) => launch.harness).join(","), ms: Math.round(performance.now() - began) }))
   return { folder: settled.path }
 }
 

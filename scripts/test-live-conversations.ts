@@ -18,6 +18,7 @@ import type { LiveDriverEvent } from "@mako/host/contracts/live-conversations"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import { preparePrompt, TurnInProgressError } from "@mako/host/harnesses/prompt-dispatch"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { projectLive } from "../src/state/live-projection.js"
@@ -82,7 +83,9 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
     provider: "test-provider",
     available: () => true,
     start: () => started.promise,
-    prompt: async (_id, text, _attachments, tuning) => {
+    prompt: async (_id, text, _attachments, tuning, dispatch) => {
+      // Sent, as every driver reports it: a turn that ends from here on is this message's.
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       sent.push(text)
       settings.push(tuning)
       const pending = deferred<void>()
@@ -147,7 +150,8 @@ async function compactsAfterHibernation() {
       if (options.emit) emitters.push(options.emit)
       return session(options.conversationId)
     },
-    prompt: async (bindingId) => {
+    prompt: async (bindingId, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       emitters.at(-1)?.({ type: "live-session", session: session(bindingId, "running") })
       emitters.at(-1)?.({ type: "live-session", session: session(bindingId) })
     },
@@ -207,7 +211,8 @@ async function resumesAfterQuitInFirstTurn() {
       if (options.emit) emitters.push(options.emit)
       return session(options.conversationId, { currentMode: options.modeId ?? "full", nativePath: options.resume ? nativePath : undefined })
     },
-    prompt: async (bindingId, text) => {
+    prompt: async (bindingId, text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       prompts.push(text)
       emitters.at(-1)?.({ type: "live-session", session: session(bindingId, { status: "running", nativePath: starts.length > 1 ? nativePath : undefined }) })
       if (starts.length > 1) emitters.at(-1)?.({ type: "live-session", session: session(bindingId, { nativePath }) })
@@ -266,7 +271,9 @@ async function resumedHibernatesBeforeATurn() {
       id: options.conversationId, nativeId: options.resume ?? `fresh-${options.conversationId}`, nativePath: join(root, "native-session"),
       harness: "test-provider", cwd: root, status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [],
     }),
-    prompt: async () => {},
+    prompt: async (_id, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
+    },
     permission: async () => {},
     cancel: async () => {},
     close: async () => void closes++,
@@ -349,7 +356,8 @@ async function hibernatesAndWakesExactlyOnce(missingAssessment: boolean | "close
         options.emit?.({ type: "live-session", session: opened })
       return opened
     },
-    prompt: async (bindingId, text) => {
+    prompt: async (bindingId, text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       prompts.push(text)
       emitters.at(-1)?.({
         type: "live-session",
@@ -594,7 +602,8 @@ async function boundsWarmProviders() {
       currentMode: null,
       configOptions: [],
     }),
-    prompt: async (id) => {
+    prompt: async (id, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       const current = owner.snapshot(id)?.session
       assert.ok(current)
       owner.observe({
@@ -686,7 +695,8 @@ async function unloadsHibernatedConversations() {
         configOptions: [],
       }
     },
-    prompt: async (prompted) => {
+    prompt: async (prompted, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       const current = owner.snapshot(prompted)?.session
       assert.ok(current)
       owner.observe({ type: "live-update", id: prompted, update: { kind: "text", text: "kept" } })
@@ -753,7 +763,8 @@ async function prewarmOverlapsTyping() {
         configOptions: [],
       }
     },
-    prompt: async (prompted) => {
+    prompt: async (prompted, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       const current = owner.snapshot(prompted)?.session
       assert.ok(current)
       owner.observe({ type: "live-session", session: { ...current, status: "running" } })
@@ -833,7 +844,8 @@ async function backgroundWorkKeepsProviderResident() {
       currentMode: null,
       configOptions: [],
     }),
-    prompt: async (id) => {
+    prompt: async (id, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
       const current = owner.snapshot(id)?.session
       assert.ok(current)
       owner.observe({ type: "live-session", session: { ...current, status: "running" } })
@@ -918,7 +930,9 @@ async function failedCloseKeepsOwnership() {
       currentMode: null,
       configOptions: [],
     }),
-    prompt: async () => {},
+    prompt: async (_id, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
+    },
     permission: async () => {},
     cancel: async () => {},
     setMode: async () => {},
@@ -1075,6 +1089,59 @@ async function acceptanceAndRaces() {
     )
     f.owner.submit(f.id, second, "second")
     assert.equal(f.sent.length, 2)
+  } finally {
+    f.cleanup()
+  }
+}
+
+/**
+ * A harness that refuses a message for a turn of its own, one that can begin and end while the message is prepared
+ * (Claude Code's notice of background work it found stopped, as a handed-off session reopens): the message waits,
+ * never fails, and goes once that turn is over. A harness that keeps refusing is sent again at once only a few times;
+ * then the end of its turn sends it.
+ */
+async function turnOfItsOwn() {
+  const f = fixture()
+  try {
+    const driver = f.dependencies.driver()
+    const send = driver.prompt
+    let refuse = 1
+    let refusals = 0
+    driver.prompt = async (id, text, attachments, tuning, dispatch) => {
+      if (refusals >= refuse) return send(id, text, attachments, tuning, dispatch)
+      refusals++
+      // Its own turn began, and ended, while the message was prepared.
+      f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+      f.owner.observe({ type: "live-session", session: f.state })
+      return preparePrompt(dispatch, () => {
+        throw new TurnInProgressError("Test")
+      })
+    }
+    const first = randomUUID()
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "continue", attachments: [] } })
+    f.started.resolve(f.state)
+    for (let step = 0; step < 6; step++) await tick()
+    assert.equal(refusals, 1, "refused once")
+    assert.deepEqual(f.sent, ["continue"], "then sent, once its turn was over")
+    assert.equal(f.owner.snapshot(f.id)?.requests[0]?.status, "dispatching", "waiting, never failed")
+    f.prompts[0]!.resolve()
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({ type: "live-session", session: f.state })
+    for (let step = 0; step < 3; step++) await tick()
+    assert.equal(f.owner.snapshot(f.id)?.requests[0]?.status, "completed", "its own turn, once sent, settles it")
+
+    // Refusing every time: sent again at once three times, then left queued for its turn's end.
+    refuse = refusals + 10
+    const second = randomUUID()
+    f.owner.submit(f.id, second, "and then")
+    for (let step = 0; step < 20; step++) await tick()
+    assert.equal(refusals, 1 + 4, "the first refusal, then three at once, then it waits")
+    assert.equal(f.owner.snapshot(f.id)?.requests.find((request) => request.id === second)?.status, "queued", "queued, not failed")
+    refuse = refusals
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({ type: "live-session", session: f.state })
+    for (let step = 0; step < 6; step++) await tick()
+    assert.deepEqual(f.sent, ["continue", "and then"], "its turn's end sends it")
   } finally {
     f.cleanup()
   }
@@ -2032,6 +2099,7 @@ await failureIsolationAndAssets()
 
 await queuedSettings()
 await acceptanceAndRaces()
+await turnOfItsOwn()
 await startedAheadTakesFirstMessage()
 await closeDuringStartup()
 await closeBeforeNativeSpawn()

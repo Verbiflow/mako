@@ -158,6 +158,8 @@ function cause(reason: Interruption["reason"]): string {
       return "Mako quit"
     case "stopped":
       return "the user stopped it"
+    case "handed-off":
+      return "Mako paused it to move this conversation to another machine"
   }
 }
 

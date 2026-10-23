@@ -68,6 +68,7 @@ const inputs = [
   "build/Mako.icns",
   "build/entitlements.mac.plist",
   "build/mako-notification-status",
+  "build/mako-sleep-watch",
   "vendor/control-media/darwin-arm64",
 ]
 async function digest(path) {
@@ -108,6 +109,8 @@ try {
   // The notification authorization helper ships beside the executable; see
   // electron/notification-authorization.ts for why it must live there.
   execFileSync(process.execPath, [join(project, "scripts/build-notification-status.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
+  // The sleep watch, which holds the Mac's sleep while agents at work are handed to the cloud, ships beside it.
+  execFileSync(process.execPath, [join(project, "scripts/build-sleep-watch.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
   const mediaRoot = join(project, "vendor/control-media/darwin-arm64")
   const mediaRecipe = JSON.parse(await readFile(join(project, "vendor/control-media/sources.json"), "utf8"))
   const readProvenance = () => readFile(join(mediaRoot, "provenance.json"), "utf8").then((text) => JSON.parse(text), () => null)
@@ -224,7 +227,7 @@ try {
         }),
         { from: join(stage, "vendor/control-media"), to: "control-media" },
       ],
-      extraFiles: [...(buildConfig.extraFiles ?? []), { from: join(stage, "build/mako-notification-status"), to: "MacOS/mako-notification-status" }],
+      extraFiles: [...(buildConfig.extraFiles ?? []), { from: join(stage, "build/mako-notification-status"), to: "MacOS/mako-notification-status" }, { from: join(stage, "build/mako-sleep-watch"), to: "MacOS/mako-sleep-watch" }],
       mac: {
         ...buildConfig.mac,
         binaries: [
@@ -232,6 +235,7 @@ try {
           "Contents/Resources/control-media/darwin-arm64/ffmpeg",
           "Contents/Resources/control-media/darwin-arm64/ffprobe",
           "Contents/MacOS/mako-notification-status",
+          "Contents/MacOS/mako-sleep-watch",
         ],
         icon: join(stage, "build/Mako.icns"),
         entitlements: join(stage, "build/entitlements.mac.plist"),

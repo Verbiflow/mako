@@ -42,7 +42,8 @@ const driver: ProviderLiveDriver = {
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
   provider: "devin-fixture", available: () => true,
   start: async () => session,
-  prompt: async () => {
+  prompt: async (_id, _text, _attachments, _settings, dispatch) => {
+    dispatch.report({ kind: "submitted", source: "transport-call" })
     owner.observe({ type: "live-session", session: { ...session, status: "running" } })
     owner.observe({ type: "live-session", session })
   },

@@ -5,7 +5,7 @@ import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
-import type { ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import type { HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
@@ -117,6 +117,10 @@ const STAGED_TEXT = new Map<string, string>()
 const STAGED_MEDIA = new Map<string, string>()
 
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
+/** Whether a fixture hands agents to the cloud as the Mac sleeps. */
+const mockHandOffOnSleep = { value: true }
+/** `?return=outdated`: the first way back stays, Codex here being older than the one that wrote it in the cloud. */
+const mockReturnOutdated = { value: new URLSearchParams(globalThis.location?.search).get("return") === "outdated" }
 const MOCK_PROVIDERS: UtilityProviderInfo[] = [
   { id: "google", name: "Google", description: "Gemini with a Google AI Studio API key" },
   { id: "openai", name: "OpenAI", description: "GPT models with an OpenAI API key" },
@@ -2493,7 +2497,8 @@ export function installMockBridge() {
       const session: LiveSessionState = {
         ...snapshot.session,
         settings,
-        status: permission ? "running" : "ready",
+        // "Keep working" leaves the turn running, for what a Thread at work offers (a handoff to the cloud).
+        status: permission || /keep working/i.test(text) ? "running" : "ready",
       }
       if (/in the background/i.test(text)) session.backgroundTasks = 1
       const permissions = permission ? [permission] : []
@@ -2685,20 +2690,33 @@ export function installMockBridge() {
      * A fixture's move: its steps a moment apart, as a real one takes them; `?move=busy` stays here, as a Thread
      * with a turn running does.
      */
-    threadMove: async (conversationId: string, move: string) => {
+    threadMove: async (conversationId: string, move: string, handOff?: ThreadHandOff) => {
       const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
       const step = (next: ThreadMoveStep) => emit({ type: "thread-move-step", conversationId, move, step: next })
-      if (new URLSearchParams(globalThis.location?.search).get("move") === "busy") {
+      if (!handOff && new URLSearchParams(globalThis.location?.search).get("move") === "busy") {
         const reason = "Moves happen between turns: Codex is running a turn."
         step({ kind: "kept-here", reason })
         return { kind: "kept-here" as const, reason }
       }
-      for (const next of [{ kind: "packing" }, { kind: "handing-over" }, { kind: "resuming" }] as const) {
+      const steps: ThreadMoveStep[] = handOff ? [{ kind: "packing" }, { kind: "pausing" }, { kind: "handing-over" }, { kind: "resuming" }] : [{ kind: "packing" }, { kind: "handing-over" }, { kind: "resuming" }]
+      for (const next of steps) {
         step(next)
         await pause(900)
       }
-      step({ kind: "moved", conversations: [conversationId] })
+      step({ kind: "moved", conversations: [conversationId], ...handOff && { continued: true } })
       return { kind: "moved" as const, cloudThread: "t-0123456789abcdef" }
+    },
+    /** A fixture has no agents at work unless a review page says so (`application-review`). */
+    handOffCandidates: async (): Promise<HandOffCandidate[]> => [],
+    handOff: async (handOff: string): Promise<HandOffResult[]> => {
+      const candidates = (await window.mako!.handOffCandidates()).filter((candidate) => !candidate.refusal)
+      return Promise.all(candidates.map(async (candidate) => ({ conversationId: candidate.conversationId, outcome: await window.mako!.threadMove(candidate.conversationId, `${handOff}:${candidate.thread}`, { why: "quit" }) })))
+    },
+    handOffSettings: async (): Promise<HandOffSettings> => ({ onSleep: mockHandOffOnSleep.value }),
+    setHandOffOnSleep: async (onSleep: boolean): Promise<HandOffSettings> => {
+      mockHandOffOnSleep.value = onSleep
+      emit({ type: "handoff-settings", settings: { onSleep } })
+      return { onSleep }
     },
     /** A fixture's way back: its steps a moment apart, as a real one takes them. */
     threadReturn: async (conversationId: string, move: string) => {
@@ -2707,6 +2725,13 @@ export function installMockBridge() {
       for (const next of [{ kind: "packing" }, { kind: "bringing" }] as const) {
         step(next)
         await pause(900)
+      }
+      if (mockReturnOutdated.value) {
+        mockReturnOutdated.value = false
+        const reason = "Codex 0.163.0 wrote its sessions in the cloud, and this Mac has 0.159.3."
+        const outdated = { harness: "codex", wrote: { version: "0.163.0", source: "record" as const }, installed: "0.159.3", offer: { kind: "update" as const, runtimeId: "codex", label: "Update with npm" } }
+        step({ kind: "stayed", reason, outdated })
+        return { kind: "stayed" as const, reason, outdated }
       }
       step({ kind: "back", conversations: [conversationId] })
       return { kind: "back" as const }
