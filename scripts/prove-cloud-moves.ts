@@ -83,11 +83,22 @@ const { values } = parseArgs({
      * socket), or `sleep` (the person closes the lid; the run says when, and waits for the handoff the sleep makes).
      */
     "handoff-by": { type: "string", default: "asked" },
+    /**
+     * A Thread of its own, moved to the cloud with a tab begun there, whose tab is then forked this many times on its
+     * machine, each fork checked to be in a Session of its own (the Mac and the machine naming it alike). Left in the
+     * cloud, so turnless forks never ride a way back.
+     */
+    "fork-burst": { type: "string" },
+    /**
+     * This many Threads, each moved onto a machine of its own, whose agent runs a fresh process printing a random UUID
+     * and the kernel's view of the machine: no two machines cloned from one image may draw the same randomness.
+     */
+    entropy: { type: "string" },
     devtools: { type: "string" },
   },
 })
-// With `--handoff` alone, only the handoff runs.
-const HARNESSES = values.harness?.length ? values.harness : values.handoff ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
+// With `--handoff` or `--fork-burst` alone, only that runs.
+const HARNESSES = values.harness?.length ? values.harness : values.handoff || values["fork-burst"] || values.entropy ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
 const dataRoot = values["data-root"] ?? runtimeDataRoot(appDataFolder(), {})
 const { socket } = runtimeLocation(dataRoot)
 const client = randomUUID()
@@ -659,6 +670,98 @@ async function handOffProof(harness: string, project: string): Promise<Proved> {
 }
 
 /**
+ * Forks of a tab begun in the cloud, `count` of them on its machine, each without a turn: every one must be in a
+ * Session of its own, which the Mac files under the same ID as the machine. One in twelve was once filed into its
+ * parent's Session (2026-10-23); this looks for that.
+ */
+async function forkBurst(harness: string, project: string, count: number): Promise<Proved> {
+  const steps: Step[] = []
+  const id = randomUUID()
+  const answered: string[] = []
+  const timed = async (step: string, work: () => Promise<string>) => {
+    const started = performance.now()
+    const done: Step = await work().then(
+      (detail) => ({ step, ms: Math.round(performance.now() - started), ok: true, detail }),
+      (error: Error) => ({ step, ms: Math.round(performance.now() - started), ok: false, detail: error.message }),
+    )
+    steps.push(done)
+    console.log(`${"forks".padEnd(9)} ${step.padEnd(30)} ${done.ok ? "ok  " : "FAIL"} ${String(done.ms).padStart(7)} ms  ${done.detail ?? ""}`)
+    return done.ok
+  }
+  const first = randomUUID()
+  const mode = widestMode(harness)
+  let folder = ""
+  if (!(await timed("a Thread, moved", async () => {
+    await call("mako:live-start", [harness, project, { conversationId: id, worktree: true, ...mode && { modeId: mode }, initialRequest: { id: first, text: "Without running anything, reply with the word READY.", attachments: [] } }])
+    const shot = await until(id, (current) => settled(current, first), 300_000, answered)
+    folder = shot.session.cwd ?? ""
+    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, randomUUID()]))
+    if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    return outcome.cloudThread
+  }))) return { steps, conversation: id }
+  const tab = randomUUID()
+  const tabTurn = randomUUID()
+  let tabSession = ""
+  if (!(await timed("a tab in the cloud", async () => {
+    const threadId = (await snapshot(id)).threadId
+    if (!threadId) throw new Error("the moved conversation names no Thread")
+    tabSession = PlacementSchema.parse(await call("mako:thread-create-session", [randomUUID(), threadId])).session
+    await call("mako:live-start", [harness, folder, { conversationId: tab, session: tabSession, ...mode && { modeId: mode }, initialRequest: { id: tabTurn, text: "Without running anything, reply with the word TAB.", attachments: [] } }])
+    const shot = await until(tab, (current) => settled(current, tabTurn), 300_000, answered)
+    if (shot.sessionId !== tabSession) throw new Error(`the machine put it in Session ${shot.sessionId ?? "none"}, not the tab's`)
+    return tabSession
+  }))) return { steps, conversation: id }
+  await timed(`${count} forks of it`, async () => {
+    const sessions = new Set<string>([tabSession])
+    const wrong: string[] = []
+    for (let n = 0; n < count; n++) {
+      const fork = randomUUID()
+      const made = SnapshotSchema.parse(await call("mako:live-fork", [tab, { id: fork, provider: harness, point: { kind: "run", requestId: tabTurn } }]))
+      if (!made.elsewhere) throw new Error(`fork ${n + 1} was made on this Mac`)
+      const session = made.sessionId ?? (await snapshot(fork)).sessionId
+      if (!session || sessions.has(session)) wrong.push(`fork ${n + 1}: Session ${session ?? "none"}${session === tabSession ? " (the tab's)" : ""}`)
+      if (session) sessions.add(session)
+    }
+    if (wrong.length) throw new Error(`${wrong.length} of ${count} not in a Session of their own: ${wrong.join("; ")}`)
+    return `each in a Session of its own`
+  })
+  return { steps, conversation: id }
+}
+
+/**
+ * Machines cloned from one image, each asked for fresh randomness: a new process's random UUID, the kernel's boot id
+ * and whether the kernel has a VM generation counter (which reseeds it as a snapshot is restored). Two machines that
+ * print the same UUID draw the same randomness, and so mint the same IDs.
+ */
+async function entropy(harness: string, project: string, count: number): Promise<Proved> {
+  const steps: Step[] = []
+  const answered: string[] = []
+  const seen: Array<{ uuid: string; boot: string; vmgenid: string }> = []
+  const mode = widestMode(harness)
+  const started = performance.now()
+  for (let n = 0; n < count; n++) {
+    const id = randomUUID()
+    const first = randomUUID()
+    await call("mako:live-start", [harness, project, { conversationId: id, worktree: true, ...mode && { modeId: mode }, initialRequest: { id: first, text: "Without running anything, reply with the word READY.", attachments: [] } }])
+    await until(id, (current) => settled(current, first), 300_000, answered)
+    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, randomUUID()]))
+    if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    const turn = randomUUID()
+    const command = `node -e 'console.log("UUID " + require("crypto").randomUUID())'; echo "BOOT $(cat /proc/sys/kernel/random/boot_id)"; echo "VMGENID $(ls /sys/bus/acpi/devices 2>/dev/null | grep -ci -e vmgen -e qemuvgid)"`
+    await call("mako:live-prompt", [id, turn, `Run this exact shell command and reply with its output verbatim and nothing else: ${command}`, []])
+    const shot = await until(id, (current) => settled(current, turn), 300_000, answered)
+    const text = proseText(shot, 0) + JSON.stringify(shot.blocks)
+    const pick = (label: string) => new RegExp(`${label} ([0-9a-f-]+)`).exec(text)?.[1] ?? "?"
+    seen.push({ uuid: pick("UUID"), boot: pick("BOOT"), vmgenid: pick("VMGENID") })
+    console.log(`${"entropy".padEnd(9)} machine ${n + 1}: ${JSON.stringify(seen.at(-1))}`)
+  }
+  const uuids = new Set(seen.map((each) => each.uuid))
+  const ok = uuids.size === seen.length && !uuids.has("?")
+  steps.push({ step: `${count} machines' randomness`, ms: Math.round(performance.now() - started), ok, detail: JSON.stringify(seen) })
+  return { steps, conversation: "" }
+}
+
+/**
  * The move a quit or a sleep made of the Thread `asked` was in: its plan, once it has started where it lands or stopped.
  * The plans are this host's own record of every move (`<data root>/cloud/moves`).
  */
@@ -748,6 +851,8 @@ const places = values["full-cloud"] === undefined ? 0 : Number(values["full-clou
 const here = Object.values(report).find(({ steps }) => steps.some((step) => (step.step === "back to this Mac" || step.step === "runs here after the refusal") && step.ok))?.conversation
 if (ownHost && places > 0 && here) report["full cloud"] = await fullCloud(places, here)
 if (values.handoff) report["handoff"] = await handOffProof(values.handoff, project)
+if (values["fork-burst"]) report["fork burst"] = await forkBurst(values["tab-harness"] ?? "claude", project, Number(values["fork-burst"]))
+if (values.entropy) report["entropy"] = await entropy(values["tab-harness"] ?? "claude", project, Number(values.entropy))
 // A host this run started signs out as it ends: its device leaves the account, and its credential leaves the keychain.
 if (values["spawn-host"]) await call("mako:cloud-sign-out", [])
 if (values.report) await writeFile(values.report, `${JSON.stringify(report, null, 2)}\n`)
