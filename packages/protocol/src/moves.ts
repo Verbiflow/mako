@@ -33,6 +33,9 @@ export const MoveCheckpointSchema = z.object({
 }).strict()
 export type MoveCheckpoint = z.infer<typeof MoveCheckpointSchema>
 
+/** The most operations one hand-over carries: an arrival, and a start, a continued turn and a few waiting messages per Session. */
+export const MOVE_HANDOVER_OPERATIONS = 1_024
+
 /** How much of a device's own record of the move the gateway keeps for the way back: its handoff, as it wrote it. */
 export const MOVE_HANDOFF_BYTES = 64 * 1024
 
@@ -45,6 +48,46 @@ export const MoveClaimRequestSchema = z.object({
   handoff: z.json(),
 }).strict()
 export type MoveClaimRequest = z.infer<typeof MoveClaimRequestSchema>
+
+/**
+ * A device's move handed to the cloud once the device has sent everything only it has (the checkout, each Session's
+ * records) and released the Thread: from then the cloud carries the move through, as the Thread's one owner, and the
+ * device needn't stay awake for it. The Thread's object runs `operations` in order, each through the Thread's own
+ * queue to its machine: the first is the machine's arrival (`MOVE_ARRIVAL_OP`); once it's answered the object claims
+ * the move with `claim` (or, if the machine can't take the Thread, refuses it); then each of the rest, each retried
+ * until its machine answers. Every operation is the device's, encoded as it would have sent it (`encodeOperation`),
+ * under an id of the move's, so a repeat reaches the same end. Posted again, the first stands.
+ */
+export const MoveHandOverRequestSchema = z.object({
+  claim: MoveClaimRequestSchema,
+  operations: z.array(z.string().min(1)).min(1).max(MOVE_HANDOVER_OPERATIONS),
+}).strict()
+export type MoveHandOverRequest = z.infer<typeof MoveHandOverRequestSchema>
+
+/** What a hand-over's operations may be: the arrival first, then the starts, the turns continued and the messages that waited. */
+export const MOVE_ARRIVAL_OP = "host.move-arrive"
+export const MOVE_HANDOVER_OPS: readonly string[] = [MOVE_ARRIVAL_OP, "host.live-start", "host.live-continue-turn", "host.live-prompt"]
+
+/**
+ * How a hand-over stands in the cloud: `arriving` (its machine takes the checkout and the records; nothing's claimed),
+ * `running` (claimed: the rest of its operations go), `done`, `refused` (the machine couldn't take the Thread, so the
+ * move was refused and the device takes it back), or `failed` (claimed, but an operation after the arrival kept
+ * failing: the Thread is the cloud's, and the person's next call starts it again). `step` is the operation now.
+ */
+export const MoveHandOverStateSchema = z.object({
+  move: z.uuid(),
+  phase: z.enum(["arriving", "running", "done", "refused", "failed"]),
+  step: z.number().int().nonnegative(),
+  of: z.number().int().positive(),
+  since: z.number(),
+  attempt: z.number().int().nonnegative(),
+  lastError: z.string().optional(),
+  endedAt: z.number().optional(),
+}).strict()
+export type MoveHandOverState = z.infer<typeof MoveHandOverStateSchema>
+
+/** How long a device's ask for a move's answer is held open for it at most, in ms. */
+export const MOVE_ANSWER_WAIT_MS = 25_000
 
 /** The longest reason a refusal, a cancel or a give-back carries: a sentence, not a stack. */
 export const MOVE_REASON_MAX = 2_000
