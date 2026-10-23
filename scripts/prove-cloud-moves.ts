@@ -36,13 +36,12 @@ import { holdHostLease } from "@mako/host/base/host-idle"
  * is printed on a line of its own (`SIGN IN <url>`) for whoever plays the person; the run goes on once the account is
  * signed in with the cloud.
  *
- * A host of its own shares no sign-in with its cloud: it starts with sharing off, since a throwaway cloud that rotated a
- * harness's refresh token and went away would leave this Mac's own CLI signed out. Its machine's harnesses are then
- * signed out, so step 5 reads the machine's side from the conversation's history as the machine serves it (the
- * session's records arrived and its native session resumed there), and leaves an agent's recall to a run against this
- * Mac's own host, whose cloud keeps the sign-ins it's given. Then it opens a new tab in the cloud Thread and forks it,
- * each a turn on the machine (`--tab-harness`, a harness that runs there unsigned), brings the Thread back, and has
- * the moved conversation, the tab and the fork each recall here what it said, in the same native sessions.
+ * A host of its own shares each harness's sign-in with its cloud as access alone (`accessOnly`): its machines run the
+ * harnesses signed in as this Mac is, and the throwaway cloud is never given a refresh token, so nothing there can
+ * rotate the sign-in this Mac and Mako Cloud hold. Step 5 reads the machine's side from the conversation's history as
+ * the machine serves it (the session's records arrived and its native session resumed there). Then it opens a new tab
+ * in the cloud Thread and forks it, each a turn on the machine (`--tab-harness`), brings the Thread back, and has the
+ * moved conversation, the tab and the fork each recall here what it said, in the same native sessions.
  */
 const { values } = parseArgs({
   options: {
@@ -54,7 +53,7 @@ const { values } = parseArgs({
     cloud: { type: "string" },
     /**
      * On a host of its own: the harness of the new tab and the fork begun in the cloud, each running a turn on the
-     * machine. The Thread's own by default; one that runs unsigned there (OpenCode's free models) on a run sharing none.
+     * machine. The Thread's own by default.
      */
     "tab-harness": { type: "string" },
     /**
@@ -67,6 +66,11 @@ const { values } = parseArgs({
      * move pauses the turn, and the turn must go on and finish on the machine; then it comes back with what it wrote.
      */
     handoff: { type: "string" },
+    /**
+     * Seconds the handoff's Thread works before it's handed off, once kept ready: long enough (a machine's grace and its
+     * boot) and the cloud Thread standing by has started, warmed and paused, as it has by the time a lid closes.
+     */
+    "handoff-wait": { type: "string" },
   },
 })
 // With `--handoff` alone, only the handoff runs.
@@ -77,13 +81,13 @@ const client = randomUUID()
 const call = (channel: string, args: unknown[]) => invokeRuntime(socket, client, channel, args)
 const run = promisify(execFile)
 
-// A host of its own, when asked: screenless, so its sign-in opens nothing on this Mac, sharing no sign-in, held up by
-// this run's lease (a profile host stops once nothing holds it) and stopped when the run ends.
+// A host of its own, when asked: screenless, so its sign-in opens nothing on this Mac, sharing sign-ins as access alone,
+// held up by this run's lease (a profile host stops once nothing holds it) and stopped when the run ends.
 const ownHost = values["spawn-host"]
 if (ownHost) {
   if (!values["data-root"] || !values.cloud) throw new Error("--spawn-host needs --data-root and --cloud")
   await mkdir(join(dataRoot, "cloud"), { recursive: true, mode: 0o700 })
-  await writeFile(join(dataRoot, "cloud", "sign-ins.json"), JSON.stringify({ version: 2, sharing: false, inStep: {} }), { mode: 0o600 })
+  await writeFile(join(dataRoot, "cloud", "sign-ins.json"), JSON.stringify({ version: 2, sharing: true, accessOnly: true, inStep: {} }), { mode: 0o600 })
   // As `ensureRuntime` starts one: this checkout's build, under Electron's Helper in Node mode.
   // SAFETY: the electron package's main export is the path of its executable.
   const electron = createRequire(import.meta.url)("electron") as string
@@ -549,12 +553,12 @@ async function handOffProof(harness: string, project: string): Promise<Proved> {
   }
   const proved = (): Proved => ({ steps, conversation: id, ...timings && { timings } })
   const token = `handoff-proof-${randomUUID().slice(0, 8)}`
-  const command = `sleep 90 && echo ${token} > handoff-proof.txt`
+  const command = `sleep ${90 + Number(values["handoff-wait"] ?? 0)} && echo ${token} > handoff-proof.txt`
   const first = randomUUID()
   let folder = ""
 
   // The agent's own call of the command, not the prompt that names it.
-  const running = (shot: Snapshot) => shot.blocks.some((block) => block.type !== "user" && block.type !== "text" && JSON.stringify(block).includes("sleep 90"))
+  const running = (shot: Snapshot) => shot.blocks.some((block) => block.type !== "user" && block.type !== "text" && JSON.stringify(block).includes(command.split(" &&")[0]!))
 
   // 1. A turn at work in a Thread's worktree: the agent is inside a long command.
   if (!(await timed("a turn at work", async () => {
@@ -575,6 +579,8 @@ async function handOffProof(harness: string, project: string): Promise<Proved> {
     const kept = async () => Object.keys(z.object({ threads: z.record(z.string(), z.unknown()) }).loose().safeParse(JSON.parse(await readFile(ready, "utf8").catch(() => "null"))).data?.threads ?? {}).length > 0
     for (const deadline = Date.now() + 60_000; !(await kept()) && Date.now() < deadline; ) await new Promise((resolve) => setTimeout(resolve, 1_000))
     if (!(await kept())) throw new Error("no cloud Thread stood by for it within a minute")
+    const wait = Number(values["handoff-wait"] ?? 0)
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait * 1000))
     return `${harness}${model ? ` on ${model}` : ""} running \`${command.replace(token, "…")}\``
   }))) return proved()
 
@@ -601,11 +607,12 @@ async function handOffProof(harness: string, project: string): Promise<Proved> {
     const named = blockText(shot, 0).includes("The handoff stopped what you had left running in the background")
     if (paused && paused.interruption?.reason !== "handed-off" && !named) throw new Error(`the first turn reads ${ended(shot, first)}, and nothing stopped was named`)
     const how = paused?.interruption?.reason === "handed-off" ? "its turn paused here" : "its background command stopped and named"
-    // A machine with no sign-ins (a host of its own) can't let every harness answer: Mako's part is the continuation.
-    if (ownHost && (continued.status === "failed" || continued.interruption?.reason === "signed-out") && ["auth", "rate-limited", "provider-unavailable"].includes(continued.failure ?? ""))
-      return `${how}, continued on the machine as Mako's; the harness couldn't answer there (${continued.failure}), as a machine without sign-ins`
     if (continued.status !== "completed") throw new Error(`the continuation ended ${ended(shot, continued.id)}`)
-    if (!proseText(shot, 0).includes("FINISHED")) throw new Error(`it didn't say FINISHED: ${proseText(shot, 0).slice(-300)}`)
+    // An agent that starts the command again in the background ends that turn and answers when it's done, in a turn
+    // it starts on the command's notification: waited for, as long as the command runs and a minute or two more.
+    const done = await until(id, (current) => proseText(current, 0).includes("FINISHED") || current.session.status === "failed", (100 + Number(values["handoff-wait"] ?? 0) + 180) * 1000, answered)
+      .catch((error: Error) => { throw new Error(`it didn't say FINISHED: ${error.message}; said: ${proseText(shot, 0).slice(-300)}`) })
+    if (!proseText(done, 0).includes("FINISHED")) throw new Error(`it didn't say FINISHED: ${done.session.error ?? proseText(done, 0).slice(-300)}`)
     return `${how}, continued and finished on the machine`
   }))) return proved()
 

@@ -53,7 +53,7 @@ import { hostLog, hostWarn } from "../../base/host-log.js"
 import { CLAUDE_AUTH_LOG, claudeAuthDiagnostics } from "./auth-diagnostics.js"
 import { claudeConfigDir, type ClaudeCredentialState } from "./accounts.js"
 import { claudeStopReason } from "./sdk-notices.js"
-import { claudeAcknowledged } from "./sdk-message-kinds.js"
+import { claudeAcknowledged, claudeCommandLifecycle, claudeOwnTurnEnded } from "./sdk-message-kinds.js"
 import { fileResumeEvidence } from "../native-continuation.js"
 import { claudeSessionCheckpoint } from "./session-checkpoint.js"
 import { claudeProcessProbe } from "./process-probe.js"
@@ -109,6 +109,11 @@ interface Live {
   transcript: ClaudeTranscript
   emit: ProviderStartOptions["emit"]
   promptReceipt?: { id: string; dispatch: PromptDispatch }
+  /**
+   * Mako's message, sent, until its turn ends. A result of a turn Claude started on a notification (`origin`) that
+   * doesn't name it ends that turn, not this one (`claudeOwnTurnEnded`).
+   */
+  awaitingTurn?: string
   receipts: Map<string, Receipt>
   closed: boolean
   steered: boolean
@@ -186,6 +191,7 @@ function stop(live: Live): void {
   }
   live.receipts.clear()
   live.promptReceipt = undefined
+  live.awaitingTurn = undefined
 }
 
 function acknowledge(live: Live, message: SDKMessage): void {
@@ -402,6 +408,9 @@ async function pump(engine: Engine, live: Live): Promise<void> {
           conversation: live.state.id, event: message.subtype,
         })
       acknowledge(live, message)
+      // Cancelled, it never runs: the next result ends the turn on screen.
+      const lifecycle = claudeCommandLifecycle(message)
+      if (live.awaitingTurn && lifecycle?.state === "cancelled" && lifecycle.command_uuid === live.awaitingTurn) live.awaitingTurn = undefined
       live.authDiagnostics.observe(message)
       live.transcript.observe(message)
       live.approvals.observe(message)
@@ -445,6 +454,11 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       if (live.steered && (message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools"))
         continue
       if ((message.queued_turn_count ?? 0) > 0) continue
+      // A turn Claude started on a notification ended while Mako's message waited behind it (its notice of background
+      // work it found stopped, as a session reopens, makes no model call): Mako's turn is still to come, and its own
+      // result ends it.
+      if (live.awaitingTurn && claudeOwnTurnEnded(message, live.awaitingTurn)) continue
+      live.awaitingTurn = undefined
       live.steered = false
       live.finishing = true
       live.permissions.close()
@@ -864,6 +878,7 @@ export function createClaudeSdkDriver(
       })
       const uuid = dispatch.attemptId
       live.promptReceipt = { id: uuid, dispatch }
+      live.awaitingTurn = uuid
       // The input queue refuses before holding the message, so a refusal
       // means Claude never saw it; the turn is marked running only once it
       // is queued. Its consumer resumes after this synchronous section.
@@ -877,6 +892,7 @@ export function createClaudeSdkDriver(
         }))
       } catch (error) {
         live.promptReceipt = undefined
+        live.awaitingTurn = undefined
         throw error
       }
       live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
@@ -991,6 +1007,8 @@ export function createClaudeSdkDriver(
       // Stop interrupts and then closes the process, which exits non-zero; this
       // line is what tells that exit from a crash in the log.
       hostLog("claude-sdk", "stop requested", { conversation: id, approvalsOpen: live.permissions.open })
+      // Stopped, Mako's message waiting behind a turn of Claude's own won't run: the stop's result ends it.
+      live.awaitingTurn = undefined
       let timer: ReturnType<typeof setTimeout> | undefined
       try {
         await Promise.race([

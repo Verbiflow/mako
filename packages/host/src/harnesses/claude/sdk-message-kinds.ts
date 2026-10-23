@@ -88,6 +88,16 @@ export function claudeCommandLifecycle(message: SDKMessage): z.infer<typeof Comm
   return CommandLifecycleSchema.safeParse(message).data
 }
 
+/**
+ * Whether `message` ends a turn Claude Code started itself on a notification (its `origin`), one that didn't take
+ * Mako's message `id`: its result names neither it nor anything else (2.1.283: a notice of background work found
+ * stopped as a session reopened, `num_turns` 0, recorded 2026-10-23).
+ */
+export function claudeOwnTurnEnded(message: SDKMessage, id: string): boolean {
+  if (message.type !== "result") return false
+  return message.origin?.kind === "task-notification" && message.user_message_uuid !== id && !(message.user_message_uuids ?? []).includes(id)
+}
+
 /** The ids of the messages Mako sent that `message` shows Claude Code took: a queued command, a user message, or the ones a reply answers. */
 export function claudeAcknowledged(message: SDKMessage): Set<string> {
   const ids = new Set<string>()

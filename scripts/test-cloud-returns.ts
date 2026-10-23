@@ -101,13 +101,16 @@ function setup(name: string) {
   const captured: Array<[string, string]> = []
   /** The cloud Thread's conversations, as this Mac follows them: the one that moved, and any begun there. */
   const there: Array<{ conversationId: string; harness: string; nativeId: string | undefined }> = [{ conversationId: conversation, harness: "codex", nativeId: "n-1" }]
+  /** What the machine knows of each conversation it runs: the native session it started there. */
+  const nativeThere = new Map<string, string>([[conversation, "n-1"]])
   let restored: ReceivedRecords["restored"] | undefined
   cloud.depart = async () => {
     const scratch = mkdtempSync(join(folder, "pack-"))
     const { checkpoint, file } = await captureMoveCheckpoint(git, machine, scratch)
     cloud.checkpoints.set(checkpoint.sha256, file)
     const asked = DepartAskSchema.parse(cloud.calls.findLast((call) => call.channel === "mako:move-depart")?.args[0]).conversations
-    return { checkpoint, sessions: asked.map((id) => there.find((each) => each.conversationId === id)).map((each) => ({ harness: each?.harness ?? "", nativeId: each?.nativeId ?? "", holdings: { [`${each?.harness}:${each?.nativeId}.jsonl`]: 5 } })) }
+    // What the machine packs, by what it knows: each conversation's native session there.
+    return { checkpoint, sessions: asked.map((id) => ({ harness: there.find((each) => each.conversationId === id)?.harness ?? "", nativeId: nativeThere.get(id) ?? "" })).map((each) => ({ ...each, holdings: { [`${each.harness}:${each.nativeId}.jsonl`]: 5 } })) }
   }
   const unused = () => Promise.reject(new Error("not in this test"))
   const account: ReturnType<CloudReturnsOptions["account"]> = {
@@ -139,6 +142,8 @@ function setup(name: string) {
         cloud.calls.push({ channel, args })
         if (channel === "mako:move-depart") return encodeRuntimeValue(await cloud.depart())
         if (channel === "mako:move-stay") return encodeRuntimeValue({ stayed: true })
+        // The machine's own word on a conversation it runs: the native session it started, or none.
+        if (channel === "mako:live-snapshot") return encodeRuntimeValue({ session: { nativeId: nativeThere.get(String(args[0])) ?? null } })
         throw new Error(`no ${channel} in this test`)
       },
       releaseThread: async (threadId) => {
@@ -160,13 +165,18 @@ function setup(name: string) {
     const conversationId = randomUUID()
     threads.adoptElsewhere({ operationId: randomUUID(), conversationId, session: made.session, actor: threads.person() })
     there.push({ conversationId, harness, nativeId })
+    if (nativeId) nativeThere.set(conversationId, nativeId)
     return { session: made.session, conversationId }
   }
-  /** A fork in the cloud of the conversation that moved, into the Session the machine named. */
-  const fork = (harness: string, nativeId: string) => {
+  /**
+   * A fork in the cloud of the conversation that moved, into the Session the machine named. `heardHere`: whether this
+   * Mac heard its native session; a fork names it only once its first turn runs, which this Mac may not have heard.
+   */
+  const fork = (harness: string, nativeId: string, heardHere = true) => {
     const conversationId = randomUUID()
     const placedFork = threads.adoptElsewhere({ operationId: randomUUID(), conversationId, forkOf: conversation, forkSession: SessionIdSchema.parse(randomUUID()), actor: threads.person() })
-    there.push({ conversationId, harness, nativeId })
+    there.push({ conversationId, harness, nativeId: heardHere ? nativeId : undefined })
+    nativeThere.set(conversationId, nativeId)
     return { session: placedFork.session, conversationId }
   }
   return {
@@ -255,8 +265,10 @@ try {
   {
     const s = setup("begun")
     const tab = s.tab("claude", "n-2")
-    const forked = s.fork("codex", "n-3")
+    const forked = s.fork("codex", "n-3", false)
     const empty = s.tab()
+    // Adopted there, never started: nothing of it to bring, as the machine says too.
+    const unsent = s.tab("claude")
     for (const session of [tab.session, forked.session, empty.session]) {
       const execution = s.threads.execution(session)
       assert.deepEqual([execution?.state, execution?.state === "elsewhere" && execution.owner], ["elsewhere", { kind: "cloud", runtime: cloudRuntimeOf(s.cloudThread) }], "a Session begun in the cloud is the cloud's, as the Thread is")
@@ -266,9 +278,11 @@ try {
     const depart = s.cloud.calls.find((call) => call.channel === "mako:move-depart")
     assert.deepEqual(DepartAskSchema.parse(depart?.args[0]).conversations, [s.conversation, tab.conversationId, forked.conversationId], "the machine packs every conversation the Thread has there")
     assert.deepEqual(s.captured, [[tab.conversationId, "/claude/n-2.jsonl"], [forked.conversationId, "/codex/n-3.jsonl"]], "each begun there gets its journal here from its records")
-    for (const session of [s.session, tab.session, forked.session, empty.session]) assert.equal(s.threads.execution(session)?.state, "here", "no Session left owned by a machine that ends")
+    assert.ok(s.cloud.calls.some((call) => call.channel === "mako:live-snapshot" && call.args[0] === forked.conversationId), "a fork this Mac never heard name its session is asked of the machine, not left behind")
+    assert.ok(!s.captured.some(([id]) => id === unsent.conversationId), "one the machine never started brings nothing")
+    for (const session of [s.session, tab.session, forked.session, empty.session, unsent.session]) assert.equal(s.threads.execution(session)?.state, "here", "no Session left owned by a machine that ends")
     const group = s.threads.thread(s.thread)
-    assert.deepEqual(group?.sessions, [s.session, tab.session, forked.session, empty.session], "in the same Thread, in tab order")
+    assert.deepEqual(group?.sessions, [s.session, tab.session, forked.session, empty.session, unsent.session], "in the same Thread, in tab order")
     assert.deepEqual(s.steps.at(-1), { kind: "back", conversations: [s.conversation, tab.conversationId, forked.conversationId] })
   }
 
