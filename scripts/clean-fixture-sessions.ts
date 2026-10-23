@@ -5,7 +5,7 @@
  *   npx tsx scripts/clean-fixture-sessions.ts            # list only
  *   npx tsx scripts/clean-fixture-sessions.ts --delete   # remove them
  *   npx tsx scripts/clean-fixture-sessions.ts --root <finished-run> --delete
- *                                                       # remove that exact run now
+ *                                                       # remove that exact run now, wherever it ran
  *
  * A fixture session is one whose working directory is a disposable directory
  * that a Mako test or probe creates under the OS temporary directory: one
@@ -60,8 +60,10 @@ const scratch = await mkdtemp(join(tmpdir(), "mako-clean-fixtures-"))
 const catalog = defaultCatalog({ cachePath: join(scratch, "cache.json"), ...remove && { recordsPath: makoRecords() } })
 try {
   const refs = await catalog.scan()
+  // A run named by `--root` is the person's word that it's finished and disposable, wherever it ran: a scratch
+  // profile's worktrees, say, which no temporary prefix names.
   const fixtures = refs
-    .filter(fixtureRoot)
+    .filter((ref) => requestedRoot !== undefined || fixtureRoot(ref))
     .filter(
       (ref) => {
         if (requestedRoot === undefined) return true

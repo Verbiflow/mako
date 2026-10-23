@@ -1,11 +1,12 @@
 import { execFile, spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { parseArgs } from "node:util"
+import WebSocket from "ws"
 import { z } from "zod"
 import { invokeRuntime, runtimeInfo } from "@mako/host/transport/connection"
 import { appDataFolder, hostCommand, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
@@ -50,6 +51,11 @@ const { values } = parseArgs({
     report: { type: "string" },
     "data-root": { type: "string" },
     "spawn-host": { type: "boolean", default: false },
+    /**
+     * The host at `--data-root` is a scratch one already running (a packaged app's, started on a profile of its own):
+     * its own-host steps run, and it stays signed in when the run ends, for whoever drives it next.
+     */
+    "scratch-host": { type: "boolean", default: false },
     cloud: { type: "string" },
     /**
      * On a host of its own: the harness of the new tab and the fork begun in the cloud, each running a turn on the
@@ -71,6 +77,13 @@ const { values } = parseArgs({
      * boot) and the cloud Thread standing by has started, warmed and paused, as it has by the time a lid closes.
      */
     "handoff-wait": { type: "string" },
+    /**
+     * What hands the Thread off: `asked` (the move's own call, by default), `quit` (the person quits the app: Cmd+Q in
+     * its window, then "Hand off to the cloud and quit" in the sheet, through `--devtools`, the window's DevTools page
+     * socket), or `sleep` (the person closes the lid; the run says when, and waits for the handoff the sleep makes).
+     */
+    "handoff-by": { type: "string", default: "asked" },
+    devtools: { type: "string" },
   },
 })
 // With `--handoff` alone, only the handoff runs.
@@ -83,8 +96,9 @@ const run = promisify(execFile)
 
 // A host of its own, when asked: screenless, so its sign-in opens nothing on this Mac, sharing sign-ins as access alone,
 // held up by this run's lease (a profile host stops once nothing holds it) and stopped when the run ends.
-const ownHost = values["spawn-host"]
-if (ownHost) {
+const ownHost = values["spawn-host"] || values["scratch-host"]
+if (ownHost && !values["data-root"]) throw new Error("a host of its own needs --data-root")
+if (values["spawn-host"]) {
   if (!values["data-root"] || !values.cloud) throw new Error("--spawn-host needs --data-root and --cloud")
   await mkdir(join(dataRoot, "cloud"), { recursive: true, mode: 0o700 })
   await writeFile(join(dataRoot, "cloud", "sign-ins.json"), JSON.stringify({ version: 2, sharing: true, accessOnly: true, inStep: {} }), { mode: 0o600 })
@@ -585,15 +599,26 @@ async function handOffProof(harness: string, project: string): Promise<Proved> {
   }))) return proved()
 
   // 2. Handed off mid-turn: the turn pauses, the Thread moves, the turn is carried.
-  const move = randomUUID()
+  const by = values["handoff-by"]
   if (!(await timed("handed off mid-turn", async () => {
-    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, move, { why: "asked" }]))
-    if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    let move: string = randomUUID()
+    let how = ""
+    if (by === "asked") {
+      const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, move, { why: "asked" }]))
+      if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    } else if (by === "quit") {
+      how = await quitThroughWindow()
+      move = await handedOffBy(id, "quit", 120_000)
+    } else if (by === "sleep") {
+      console.log("CLOSE THE LID NOW: the Thread is at work and kept ready; keep it closed for a minute, then open it")
+      move = await handedOffBy(id, "sleep", 30 * 60_000)
+      how = "the lid closed"
+    } else throw new Error(`--handoff-by ${by}: asked, quit or sleep`)
     const plan = PlanTimingsSchema.parse(JSON.parse(await readFile(join(dataRoot, "cloud", "moves", `${move}.json`), "utf8")))
     timings = plan.timings
     if (plan.phase !== "started") throw new Error(`the plan reads ${plan.phase}`)
     const order = ["made", "ready", "ahead", "paused", "released", "sent", "arrived", "claimed", "started"]
-    return `${outcome.cloudThread}${"standby" in plan.timings ? ", the one kept ready" : ", a new one"}; ${order.filter((name) => name in plan.timings).map((name) => `${name} ${(plan.timings[name]! / 1000).toFixed(1)} s`).join(", ")}`
+    return `${by === "asked" ? "" : `by ${by}${how ? ` (${how})` : ""}: `}${plan.cloudThread}${"standby" in plan.timings ? ", the one kept ready" : ", a new one"}; ${order.filter((name) => name in plan.timings).map((name) => `${name} ${(plan.timings[name]! / 1000).toFixed(1)} s`).join(", ")}`
   }))) return proved()
 
   // 3. The turn goes on there: Mako's continuation of the paused turn finishes on the machine.
@@ -634,6 +659,73 @@ async function handOffProof(harness: string, project: string): Promise<Proved> {
 }
 
 /**
+ * The move a quit or a sleep made of the Thread `asked` was in: its plan, once it has started where it lands or stopped.
+ * The plans are this host's own record of every move (`<data root>/cloud/moves`).
+ */
+async function handedOffBy(asked: string, why: "quit" | "sleep", timeoutMs: number): Promise<string> {
+  const folder = join(dataRoot, "cloud", "moves")
+  const PlanSchema = z.object({ move: z.string(), asked: z.string(), phase: z.string(), reason: z.string().optional(), handingOff: z.object({ why: z.string() }).loose().optional() }).loose()
+  for (const deadline = Date.now() + timeoutMs; Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 500))) {
+    for (const name of await readdir(folder).catch(() => [])) {
+      if (!name.endsWith(".json")) continue
+      const plan = PlanSchema.safeParse(JSON.parse(await readFile(join(folder, name), "utf8").catch(() => "null"))).data
+      if (plan?.asked !== asked || plan.handingOff?.why !== why) continue
+      if (plan.phase === "started") return plan.move
+      if (plan.phase === "kept-here") throw new Error(`the ${why} handoff ended ${plan.phase}: ${plan.reason ?? ""}`)
+    }
+  }
+  throw new Error(`no ${why} handoff started within ${timeoutMs / 1000} s`)
+}
+
+/**
+ * Quits the app as a person does, in its window: Cmd+Q (the window's own keyboard layer runs the quit command the
+ * app menu's Quit sends it), then, once the sheet offers it, a click on "Hand off to the cloud and quit". Trusted input
+ * through the window's DevTools socket, so the person's own windows keep their focus. Answers when the window closed.
+ */
+async function quitThroughWindow(): Promise<string> {
+  if (!values.devtools) throw new Error("--handoff-by quit needs --devtools, the window's DevTools page socket")
+  const socket = new WebSocket(values.devtools)
+  await new Promise((resolve, reject) => { socket.once("open", resolve); socket.once("error", reject) })
+  const closed = new Promise<number>((resolve) => socket.once("close", () => resolve(performance.now())))
+  let next = 0
+  const ReplySchema = z.object({ id: z.number().optional(), result: z.unknown().optional(), error: z.unknown().optional() }).loose()
+  const pending = new Map<number, (message: z.infer<typeof ReplySchema>) => void>()
+  socket.on("message", (data: Buffer) => {
+    const message = ReplySchema.parse(JSON.parse(data.toString()))
+    if (message.id) pending.get(message.id)?.(message)
+  })
+  type Params = Record<string, string | number | boolean>
+  const command = (method: string, params: Params = {}) => new Promise<unknown>((resolve, reject) => {
+    const sent = ++next
+    pending.set(sent, (message) => (message.error ? reject(new Error(JSON.stringify(message.error))) : resolve(message.result)))
+    socket.send(JSON.stringify({ id: sent, method, params }))
+  })
+  const evaluate = async (expression: string) => z.object({ result: z.object({ value: z.unknown().optional() }).loose() }).loose().parse(await command("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true })).result.value
+  const shot = async (name: string) => {
+    const { data } = z.object({ data: z.string() }).parse(await command("Page.captureScreenshot", { format: "png" }))
+    const path = join(dirname(values.report ?? join(tmpdir(), "x")), `quit-${name}.png`)
+    await writeFile(path, Buffer.from(data, "base64"))
+    return path
+  }
+  for (const type of ["keyDown", "keyUp"]) await command("Input.dispatchKeyEvent", { type, modifiers: 4, key: "q", code: "KeyQ", windowsVirtualKeyCode: 81, nativeVirtualKeyCode: 81 })
+  const asked = performance.now()
+  // The sheet offers the handoff once it has asked which Threads at work can go.
+  let rect: { x: number; y: number } | undefined
+  for (const deadline = Date.now() + 30_000; !rect && Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 100)))
+    rect = z.object({ x: z.number(), y: z.number() }).optional().parse(await evaluate(`(() => { const b = document.querySelector("[data-handoff-action]"); if (!b || b.disabled) return undefined; const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } })()`))
+  if (!rect) throw new Error(`the quit sheet offered no handoff (${await shot("sheet")})`)
+  const offered = performance.now()
+  const sheet = await shot("sheet")
+  for (const type of ["mousePressed", "mouseReleased"]) await command("Input.dispatchMouseEvent", { type, x: rect.x, y: rect.y, button: "left", clickCount: 1 })
+  const clicked = performance.now()
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  const going = await shot("handing-off").catch(() => "the window had closed")
+  const gone = await Promise.race([closed, new Promise<undefined>((resolve) => setTimeout(resolve, 120_000))])
+  if (gone === undefined) throw new Error(`the window didn't close within two minutes of the click (${await shot("stuck")})`)
+  return `Cmd+Q to the sheet's offer ${((offered - asked) / 1000).toFixed(1)} s, click to the window closed ${((gone - clicked) / 1000).toFixed(1)} s; ${sheet}, ${going}`
+}
+
+/**
  * A model a turn handed to a machine with no sign-ins can go on with: for OpenCode, one of its free models
  * (`MAKO_OPENCODE_MODEL` choosing), its default first. Undefined for other harnesses: their own default.
  */
@@ -656,9 +748,11 @@ const places = values["full-cloud"] === undefined ? 0 : Number(values["full-clou
 const here = Object.values(report).find(({ steps }) => steps.some((step) => (step.step === "back to this Mac" || step.step === "runs here after the refusal") && step.ok))?.conversation
 if (ownHost && places > 0 && here) report["full cloud"] = await fullCloud(places, here)
 if (values.handoff) report["handoff"] = await handOffProof(values.handoff, project)
-// A host of its own signs out as it ends: its device leaves the account, and its credential leaves the keychain.
-if (ownHost) await call("mako:cloud-sign-out", [])
+// A host this run started signs out as it ends: its device leaves the account, and its credential leaves the keychain.
+if (values["spawn-host"]) await call("mako:cloud-sign-out", [])
 if (values.report) await writeFile(values.report, `${JSON.stringify(report, null, 2)}\n`)
+// A host of its own is throwaway, and so is the clone its Threads' worktrees were made from.
+if (ownHost) await rm(scratch, { recursive: true, force: true })
 
 const stepNames = [...new Set(Object.values(report).flatMap(({ steps }) => steps.map((step) => step.step)))]
 console.log(`\n${["harness", ...stepNames.map((name) => name.split(" ").slice(0, 3).join(" "))].map((name) => name.padEnd(16)).join(" ")}`)
