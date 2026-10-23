@@ -1719,7 +1719,12 @@ export class ThreadStore {
   /** `id`: the one the Thread's other place gave it, so the two stores name it alike; else a new one. */
   private mintSession(origin: SessionOrigin, parent: string | null, actor: Actor, owner: ExecutionOwner = this.self, id?: SessionId): string {
     const session = id ?? randomUUID()
-    if (id && this.sql("SELECT id FROM sessions WHERE id = ?").get(id)) throw new Error("A Session with that ID exists here already")
+    if (id && this.sql("SELECT id FROM sessions WHERE id = ?").get(id)) {
+      // Said with where it is, so a collision between two stores' IDs names both ends.
+      const row = z.object({ origin: z.string(), parent_session: z.string().nullable(), merged_into: z.string().nullable() }).partial().safeParse(this.sql("SELECT origin, parent_session, merged_into FROM sessions WHERE id = ?").get(id)).data
+      const member = this.sql("SELECT thread_id FROM memberships WHERE session_id = ?").get(id)
+      throw new Error(`A Session with that ID exists here already: ${id} (${row?.origin ?? "?"}${row?.parent_session ? `, a fork of ${row.parent_session}` : ""}${row?.merged_into ? `, merged into ${row.merged_into}` : ""}, ${member ? `in Thread ${MembershipRowSchema.parse(member).thread_id}` : "in no Thread"})`)
+    }
     this.sql("INSERT INTO sessions (id, origin, parent_session, created_at, created_by) VALUES (?, ?, ?, ?, ?)")
       .run(session, origin, parent, this.now(), JSON.stringify(actor))
     this.setExecution(session, owner, 1, null, actor)
