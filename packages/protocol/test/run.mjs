@@ -1313,6 +1313,32 @@ describe("records crossing between stores", () => {
     assert.throws(() => planRecordImport(bundle([version(0, [hash(1)], "replace")]), holding(held)), /went on in two places/, "a version held with another kind")
     assert.equal(RecordBundleSchema.safeParse({ ...arriving, units: [{ ...arriving.units[0], versions: [{ ...arriving.units[0].versions[0], chunks: "abc" }] }] }).success, false, "chunks are whole hashes")
   })
+
+  test("a database's schema two stores each captured is kept as each store's own; a session's own records still refuse", () => {
+    const held = [version(0, [hash(1)], "replace"), version(1, [hash(2)], "replace")]
+    const schema = (versions, rows = []) => RecordBundleSchema.parse({ harness: "opencode", nativeId: "s2", layout: { home: "/h", roots: {}, paths: {} }, marks: {}, units: [
+      { key: "opencode.db\tschema", role: "schema", path: null, places: null, versions },
+      ...rows,
+    ] })
+    const row = { key: "opencode.db\trow", role: "row", path: null, places: null, versions: [version(0, [hash(5)], "replace")] }
+    // The machine's OpenCode made its database before any session of this one's arrived: its own history of the schema.
+    const elsewhere = planRecordImport(schema([version(0, [hash(7)], "replace")], [row]), (key) => (key.endsWith("schema") ? holding(held)() : undefined))
+    assert.deepEqual(elsewhere.kept, ["opencode.db\tschema"], "the store keeps its own description of the database")
+    assert.deepEqual(elsewhere.taking.map(({ unit }) => unit.key), ["opencode.db\trow"], "the session's rows still come")
+    // One that follows on from what's held is taken, as any unit's is.
+    const following = planRecordImport(schema([...held, version(2, [hash(3)], "replace")]), holding(held))
+    assert.deepEqual([following.kept, following.taking.map(({ version }) => version.seq)], [[], [2]])
+    // A store that holds none takes it whole.
+    assert.equal(planRecordImport(schema([version(0, [hash(7)], "replace")]), () => undefined).taking.length, 1)
+    // A harness says which rows describe its store (its migration list): those are kept the same way; without it, refused.
+    const migration = { key: "opencode.db\trow\tmigration\t{}", role: "row", path: null, places: null, versions: [version(0, [hash(8)], "replace")] }
+    const heldMigration = (key) => (key.endsWith("{}") ? holding([version(0, [hash(9)], "replace")])() : undefined)
+    const describes = (unit) => unit.role === "schema" || unit.key.includes("\trow\tmigration\t")
+    assert.deepEqual(planRecordImport(schema([], [migration]), heldMigration, describes).kept, [migration.key])
+    assert.throws(() => planRecordImport(schema([], [migration]), heldMigration), /went on in two places/, "by default only a schema is the store's")
+    // A session's own rows that went on in two places are refused, as ever.
+    assert.throws(() => planRecordImport(schema([], [row]), (key) => (key.endsWith("row") ? holding([version(0, [hash(6)], "replace")])() : undefined)), /went on in two places/)
+  })
 })
 
 describe("a project's recipe authority over HTTP", () => {

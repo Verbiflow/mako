@@ -12,9 +12,10 @@ import { cloudRuntimeOf, type MovePlanSchema } from "@mako/host/conversations/cl
 import type { ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import { encodeRuntimeValue, type EncodedValue } from "@mako/host/contracts/runtime-value"
 import { MoveIdSchema, type MoveId } from "@mako/host/contracts/thread-execution"
+import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { ThreadStore, type JournalFacts } from "@mako/host/threads/store"
 import { captureMoveCheckpoint } from "@mako/host/workspaces/index"
-import type { z } from "zod"
+import { z } from "zod"
 
 /**
  * A Thread of this Mac's coming back from the cloud (`CloudReturns`), against the real Thread store and real
@@ -24,6 +25,8 @@ import type { z } from "zod"
  * can't take put the worktree back exactly and give the Thread back; an answer this Mac can't hear leaves it
  * unsettled until the next host settles it; and asked again, a return answers how it went.
  */
+/** What the machine is asked to pack: the conversations going back. */
+const DepartAskSchema = z.object({ conversations: z.array(z.string()) }).loose()
 const root = mkdtempSync(join(tmpdir(), "mako-cloud-returns-"))
 const git = new Git()
 const sh = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", ...args], { cwd, encoding: "utf8" }).trim()
@@ -95,12 +98,16 @@ function setup(name: string) {
   const device = randomUUID()
   const steps: ThreadReturnStep[] = []
   const released: string[] = []
-  let restored: ReceivedRecords["restored"] = { kind: "restored", path: "/codex/n-1.jsonl", files: 1, rows: 0, ms: 1 }
+  const captured: Array<[string, string]> = []
+  /** The cloud Thread's conversations, as this Mac follows them: the one that moved, and any begun there. */
+  const there: Array<{ conversationId: string; harness: string; nativeId: string | undefined }> = [{ conversationId: conversation, harness: "codex", nativeId: "n-1" }]
+  let restored: ReceivedRecords["restored"] | undefined
   cloud.depart = async () => {
     const scratch = mkdtempSync(join(folder, "pack-"))
     const { checkpoint, file } = await captureMoveCheckpoint(git, machine, scratch)
     cloud.checkpoints.set(checkpoint.sha256, file)
-    return { checkpoint, sessions: [{ harness: "codex", nativeId: "n-1", holdings: { "codex:n-1.jsonl": 5 } }] }
+    const asked = DepartAskSchema.parse(cloud.calls.findLast((call) => call.channel === "mako:move-depart")?.args[0]).conversations
+    return { checkpoint, sessions: asked.map((id) => there.find((each) => each.conversationId === id)).map((each) => ({ harness: each?.harness ?? "", nativeId: each?.nativeId ?? "", holdings: { [`${each?.harness}:${each?.nativeId}.jsonl`]: 5 } })) }
   }
   const unused = () => Promise.reject(new Error("not in this test"))
   const account: ReturnType<CloudReturnsOptions["account"]> = {
@@ -125,7 +132,7 @@ function setup(name: string) {
     account: () => account,
     threads: () => threads,
     claim: (input) => threads.claim(input),
-    receiveRecords: async (_link, sessions) => sessions.map((session) => ({ harness: session.harness, nativeId: session.nativeId, pulled: { versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1 }, restored })),
+    receiveRecords: async (_link, sessions) => sessions.map((session) => ({ harness: session.harness, nativeId: session.nativeId, pulled: { versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1 }, restored: restored ?? { kind: "restored", path: `/${session.harness}/${session.nativeId}.jsonl`, files: 1, rows: 0, ms: 1 } })),
     cloud: {
       callThread: async (_threadId, channel, args): Promise<EncodedValue> => {
         cloud.calls.push({ channel, args })
@@ -133,13 +140,38 @@ function setup(name: string) {
         if (channel === "mako:move-stay") return encodeRuntimeValue({ stayed: true })
         throw new Error(`no ${channel} in this test`)
       },
-      release: async (conversationId) => void released.push(conversationId),
+      releaseThread: async (threadId) => {
+        const ids = there.map((each) => each.conversationId)
+        released.push(threadId)
+        return ids
+      },
+      threadConversations: () => there,
     },
+    capture: async (conversationId, path) => void captured.push([conversationId, path]),
     step: (_conversationId, _move, step) => steps.push(step),
   })
   const state = () => threads.execution(placed.session)
   const files = () => [readFileSync(join(checkout, "a.txt"), "utf8"), sh(checkout, "status", "--short")]
-  return { returns: make(), fresh: make, cloud, conversation, checkout, steps, released, state, files, device, setRestored: (next: ReceivedRecords["restored"]) => (restored = next) }
+  /** A `+` tab of the Thread's, begun in the cloud as the router records it; without a harness, one never sent. */
+  const tab = (harness?: string, nativeId?: string) => {
+    const made = threads.createSession({ operationId: randomUUID(), thread: placed.thread, actor: threads.person() })
+    if (!harness) return { session: made.session, conversationId: undefined }
+    const conversationId = randomUUID()
+    threads.adoptElsewhere({ operationId: randomUUID(), conversationId, session: made.session, actor: threads.person() })
+    there.push({ conversationId, harness, nativeId })
+    return { session: made.session, conversationId }
+  }
+  /** A fork in the cloud of the conversation that moved, into the Session the machine named. */
+  const fork = (harness: string, nativeId: string) => {
+    const conversationId = randomUUID()
+    const placedFork = threads.adoptElsewhere({ operationId: randomUUID(), conversationId, forkOf: conversation, forkSession: SessionIdSchema.parse(randomUUID()), actor: threads.person() })
+    there.push({ conversationId, harness, nativeId })
+    return { session: placedFork.session, conversationId }
+  }
+  return {
+    returns: make(), fresh: make, cloud, conversation, checkout, steps, released, captured, state, files, device, cloudThread, threads, thread: placed.thread, session: placed.session, tab, fork,
+    setRestored: (next: ReceivedRecords["restored"]) => (restored = next),
+  }
 }
 
 const move = (): MoveId => MoveIdSchema.parse(randomUUID())
@@ -156,7 +188,8 @@ try {
     assert.deepEqual([s.state()?.state, s.state()?.generation], ["here", 5], "released (2), the cloud's (3), released there (4), claimed here (5)")
     assert.equal(s.files()[0], "one, changed in the cloud\n", "the machine's checkout, over this Mac's")
     assert.match(s.files()[1] ?? "", /b\.txt/, "with the file the agent left")
-    assert.deepEqual(s.released, [s.conversation], "no longer answered by the cloud")
+    assert.deepEqual(s.released, [s.cloudThread], "no longer answered by the cloud")
+    assert.deepEqual(s.captured, [], "the conversation that moved has its journal here already")
     assert.equal(s.cloud.records.get(id)?.phase, "returned", "the cloud ends the machine")
     const depart = s.cloud.calls.find((call) => call.channel === "mako:move-depart")
     assert.deepEqual(depart?.args, [{ move: id, folder: s.checkout, conversations: [s.conversation], device: s.device }], "released on the machine toward this Mac")
@@ -213,7 +246,48 @@ try {
     assert.deepEqual([s.state()?.state, s.state()?.generation], ["here", 5], "settled by the next host")
     assert.equal(s.cloud.records.get(id)?.phase, "returned")
   }
-  console.log("PASS: a Thread comes back from the cloud with one owner throughout: packed, released, laid over this Mac's worktree and claimed here; a machine that can't pack cancels it and keeps the Thread; records that can't be taken put the worktree back and give it back; an unheard release is settled by the next host")
+  // Conversations begun in the cloud (a `+` tab, a fork) come back with it, and an empty tab's Session too: every
+  // Session claimed here, each new conversation's journal made here from its records.
+  {
+    const s = setup("begun")
+    const tab = s.tab("claude", "n-2")
+    const forked = s.fork("codex", "n-3")
+    const empty = s.tab()
+    for (const session of [tab.session, forked.session, empty.session]) {
+      const execution = s.threads.execution(session)
+      assert.deepEqual([execution?.state, execution?.state === "elsewhere" && execution.owner], ["elsewhere", { kind: "cloud", runtime: cloudRuntimeOf(s.cloudThread) }], "a Session begun in the cloud is the cloud's, as the Thread is")
+    }
+    const id = move()
+    assert.deepEqual(await s.returns.bringBack(s.conversation, id), { kind: "back" })
+    const depart = s.cloud.calls.find((call) => call.channel === "mako:move-depart")
+    assert.deepEqual(DepartAskSchema.parse(depart?.args[0]).conversations, [s.conversation, tab.conversationId, forked.conversationId], "the machine packs every conversation the Thread has there")
+    assert.deepEqual(s.captured, [[tab.conversationId, "/claude/n-2.jsonl"], [forked.conversationId, "/codex/n-3.jsonl"]], "each begun there gets its journal here from its records")
+    for (const session of [s.session, tab.session, forked.session, empty.session]) assert.equal(s.threads.execution(session)?.state, "here", "no Session left owned by a machine that ends")
+    const group = s.threads.thread(s.thread)
+    assert.deepEqual(group?.sessions, [s.session, tab.session, forked.session, empty.session], "in the same Thread, in tab order")
+    assert.deepEqual(s.steps.at(-1), { kind: "back", conversations: [s.conversation, tab.conversationId, forked.conversationId] })
+  }
+
+  // A tab begun in the cloud just as the Thread set off back: it isn't left on a machine that ends; the Thread is
+  // given back, and every Session stays the cloud's, the new one with them.
+  {
+    const s = setup("race")
+    const original = s.cloud.depart
+    let late: { session: string; conversationId: string | undefined } | undefined
+    s.cloud.depart = async () => {
+      late = s.tab("claude", "n-9")
+      return original()
+    }
+    const id = move()
+    const outcome = await s.returns.bringBack(s.conversation, id)
+    assert.equal(outcome.kind, "stayed")
+    assert.match(outcome.kind === "stayed" ? outcome.reason : "", /began in the cloud as the Thread set off back/)
+    assert.equal(s.cloud.records.get(id)?.phase, "given-back")
+    assert.equal(s.state()?.state, "elsewhere")
+    assert.equal(late && s.threads.execution(SessionIdSchema.parse(late.session))?.state, "elsewhere")
+    assert.deepEqual(s.captured, [])
+  }
+  console.log("PASS: a Thread comes back from the cloud with one owner throughout: packed, released, laid over this Mac's worktree and claimed here; a machine that can't pack cancels it and keeps the Thread; records that can't be taken put the worktree back and give it back; an unheard release is settled by the next host; conversations begun in the cloud come back with it, and one begun as it set off gives it back rather than be left behind")
 } finally {
   git.close()
   rmSync(root, { recursive: true, force: true })

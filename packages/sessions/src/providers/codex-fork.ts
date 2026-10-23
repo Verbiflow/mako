@@ -26,13 +26,15 @@ export const codexFork: RecordFork = {
   },
   table(name, table, ids) {
     if (!/^codex:(?:state|goals|queue)_\d+\.sqlite$/.test(name)) return null
-    if (table === "_sqlx_migrations") return "shared"
+    if (codexFork.storeTable?.(name, table)) return "shared"
     if (table === "threads") return ownedBy("id", ids, { rollout_path: (value) => mapText(value, (path) => forkRolloutPath(path, ids)) })
     // A child names one parent, so the fork takes only the edge that makes the thread itself a child.
     if (table === "thread_spawn_edges") return ownedBy("child_thread_id", ids)
     if (table === "thread_attachments" || table === "queued_items") return ownedBy("thread_id", ids, { id: (value) => derivedId(value, ids) })
     return ownedBy("thread_id", ids)
   },
+  // The migration list is the database's, whichever store made it.
+  storeTable: (name, table) => /^codex:(?:state|goals|queue)_\d+\.sqlite$/.test(name) && table === "_sqlx_migrations",
 }
 
 /** A rollout's path, its name naming the fork's thread, and a revert's own rollout id one of the fork's. */

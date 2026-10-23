@@ -103,6 +103,10 @@ interface OperationContent {
   title?: string
   move?: MoveId
   target?: ExecutionOwner
+  /** A conversation adopted where its Thread runs elsewhere (`adoptElsewhere`), and its Session or the one it forks. */
+  conversation?: string
+  session?: SessionId
+  forkOf?: string
 }
 
 /** A store whose `reads` is newer than this build: it's left as it is, and the error names the Mako that reads it. */
@@ -1001,16 +1005,15 @@ export class ThreadStore {
    * anything is sent so its draft and chips have an identity; its first
    * journal registers into it by ID.
    */
-  createSession(input: { operationId: string; thread: ThreadId; actor: Actor }): ThreadPlacement {
-    return this.write(() => this.receipt(input.operationId, "create-session", { thread: input.thread }, input.actor, () => {
+  createSession(input: { operationId: string; thread: ThreadId; actor: Actor; session?: SessionId }): ThreadPlacement {
+    const content: OperationContent = input.session ? { thread: input.thread, session: input.session } : { thread: input.thread }
+    return this.write(() => this.receipt(input.operationId, "create-session", content, input.actor, () => {
       const thread = this.thread(input.thread)
       if (!thread) throw new Error("That Thread no longer exists")
-      for (const member of thread.sessions) {
-        const execution = this.executionState(member)
-        if (execution.state !== "here")
-          throw new Error(executionRefusal(execution) ?? "This Thread is moving; open a new tab once the move ends")
-      }
-      const session = this.mintSession("new", null, input.actor)
+      // A Thread that runs elsewhere (moved to the cloud) gains its new Session there, under the same owner; one that is
+      // moving gains none until the move ends.
+      const away = this.awayOwner(thread.sessions)
+      const session = this.mintSession("new", null, input.actor, away, input.session)
       this.addMember(thread.id, session, input.actor)
       this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(thread.id)
       return { thread: thread.id, session: SessionIdSchema.parse(session) }
@@ -1230,6 +1233,41 @@ export class ThreadStore {
     return { session: SessionIdSchema.parse(session), journals: this.journalsOf(session), natives }
   }
 
+  /**
+   * A Thread and its Sessions as a handoff names them, each at the generation it has here: what a Thread coming back
+   * from elsewhere is claimed as, with every Session it has now, those it gained there included.
+   */
+  threadHandoff(id: ThreadId): Pick<Handoff, "thread" | "sessions"> {
+    const thread = this.thread(id)
+    if (!thread) throw new Error("That Thread no longer exists")
+    return {
+      thread: this.handoffThread(thread),
+      sessions: thread.sessions.map((session) => this.handoffSession(session, this.executionState(session).generation)),
+    }
+  }
+
+  private handoffThread(thread: ThreadRecord): Handoff["thread"] {
+    const original = this.originalTitle(thread.id)
+    const named: Handoff["thread"] = { id: thread.id, owner: thread.owner, title: thread.title, titleSource: thread.titleSource }
+    if (original) named.originalTitle = original
+    return named
+  }
+
+  private handoffSession(session: string, generation: number): Handoff["sessions"][number] {
+    const row = this.sessionRow(session)
+    const position = z.object({ position: z.number() })
+      .parse(this.sql("SELECT position FROM memberships WHERE session_id = ?").get(session)).position
+    const entry: Handoff["sessions"][number] = {
+      id: SessionIdSchema.parse(session),
+      origin: SessionOriginSchema.parse(row.origin),
+      position,
+      generation,
+      journals: this.journalsOf(session),
+    }
+    if (row.parent_session) entry.parent = SessionIdSchema.parse(row.parent_session)
+    return entry
+  }
+
   /** Keep the Thread here: a move that was never released changes nothing. */
   cancelMove(input: { operationId: string; move: MoveId; actor: Actor }): void {
     this.write(() => this.receipt(input.operationId, "cancel-move", { move: input.move }, input.actor, () => {
@@ -1257,25 +1295,12 @@ export class ThreadStore {
       const moving = new Set(this.moveJournals(move.id).map((entry) => entry.session))
       if (thread.sessions.length !== moving.size || thread.sessions.some((session) => !moving.has(session)))
         throw new Error("This Thread's Sessions changed while it was moving; cancel the move and start again")
-      const sessions = thread.sessions.map((session): Handoff["sessions"][number] => {
-        const row = this.sessionRow(session)
+      const sessions = thread.sessions.map((session) => {
         const generation = this.executionState(session).generation + 1
         this.setExecution(session, null, generation, move.id, input.actor)
-        const position = z.object({ position: z.number() })
-          .parse(this.sql("SELECT position FROM memberships WHERE session_id = ?").get(session)).position
-        const entry: Handoff["sessions"][number] = {
-          id: session,
-          origin: SessionOriginSchema.parse(row.origin),
-          position,
-          generation,
-          journals: this.journalsOf(session),
-        }
-        if (row.parent_session) entry.parent = SessionIdSchema.parse(row.parent_session)
-        return entry
+        return this.handoffSession(session, generation)
       })
-      const original = this.originalTitle(thread.id)
-      const moved: Handoff["thread"] = { id: thread.id, owner: thread.owner, title: thread.title, titleSource: thread.titleSource }
-      if (original) moved.originalTitle = original
+      const moved = this.handoffThread(thread)
       const handoff = HandoffSchema.parse({
         move: move.id,
         source: this.self,
@@ -1297,11 +1322,29 @@ export class ThreadStore {
   claim(input: { operationId: string; handoff: Handoff; actor: Actor }): ClaimReceipt {
     const handoff = HandoffSchema.parse(input.handoff)
     if (!sameOwner(handoff.target, this.self)) throw new Error("This handoff is addressed to another environment")
+    return this.takeHandoff(input.operationId, handoff, input.actor)
+  }
+
+  /**
+   * A cloud machine's store taking the Thread that moved to it, under the handoff's identities: the Thread, its
+   * Sessions in their places and their journals, each Session run here one generation on, so a conversation opened
+   * as the move arrives is filed in its own Session, and a tab or fork begun here later sits beside it in the same
+   * Thread, under the same IDs the device's store has. The handoff names the cloud runtime the gateway made this
+   * machine for (only the Thread's device reaches the machine, through the gateway); the store, made before the
+   * machine knew its Thread, runs as itself. Taken once per move: asked again, the first answer.
+   */
+  takeArrival(input: { operationId: string; handoff: Handoff; actor: Actor }): ClaimReceipt {
+    const handoff = HandoffSchema.parse(input.handoff)
+    if (handoff.target.kind !== "cloud") throw new Error("This handoff is addressed to a device, not a cloud machine")
+    return this.takeHandoff(input.operationId, handoff, input.actor)
+  }
+
+  private takeHandoff(operationId: string, handoff: Handoff, actor: Actor): ClaimReceipt {
     return this.write(() => {
       const known = this.moveRow(handoff.move)
       if (known?.phase === "arrived" && known.outcome) return ClaimReceiptSchema.parse(JSON.parse(known.outcome))
       if (known) throw new Error(`This move was already ${known.phase} here`)
-      return this.receipt(input.operationId, "claim-move", { move: handoff.move, thread: handoff.thread.id }, input.actor, () => {
+      return this.receipt(operationId, "claim-move", { move: handoff.move, thread: handoff.thread.id }, actor, () => {
         for (const session of handoff.sessions) {
           const found = this.sql("SELECT id, origin, parent_session, created_at, merged_into FROM sessions WHERE id = ?").get(session.id)
           if (!found) continue
@@ -1312,14 +1355,14 @@ export class ThreadStore {
           if (execution.generation >= session.generation)
             throw new Error("This handoff is older than what this store knows about its Sessions")
         }
-        this.acceptThread(handoff, input.actor)
+        this.acceptThread(handoff, actor)
         const receipt = ClaimReceiptSchema.parse({
           move: handoff.move,
           owner: this.self,
           sessions: handoff.sessions.map((session) => ({ id: session.id, generation: session.generation + 1 })),
         })
-        for (const session of receipt.sessions) this.setExecution(session.id, this.self, session.generation, null, input.actor)
-        this.recordArrival(handoff, "arrived", JSON.stringify(receipt), input.actor)
+        for (const session of receipt.sessions) this.setExecution(session.id, this.self, session.generation, null, actor)
+        this.recordArrival(handoff, "arrived", JSON.stringify(receipt), actor)
         return receipt
       }, ClaimReceiptSchema)
     })
@@ -1672,12 +1715,61 @@ export class ThreadStore {
     return session
   }
 
-  private mintSession(origin: SessionOrigin, parent: string | null, actor: Actor): string {
-    const session = randomUUID()
+  /** `owner`: where it runs when that isn't here (a Session its Thread gains in the cloud). */
+  /** `id`: the one the Thread's other place gave it, so the two stores name it alike; else a new one. */
+  private mintSession(origin: SessionOrigin, parent: string | null, actor: Actor, owner: ExecutionOwner = this.self, id?: SessionId): string {
+    const session = id ?? randomUUID()
+    if (id && this.sql("SELECT id FROM sessions WHERE id = ?").get(id)) throw new Error("A Session with that ID exists here already")
     this.sql("INSERT INTO sessions (id, origin, parent_session, created_at, created_by) VALUES (?, ?, ?, ?, ?)")
       .run(session, origin, parent, this.now(), JSON.stringify(actor))
-    this.setExecution(session, this.self, 1, null, actor)
+    this.setExecution(session, owner, 1, null, actor)
     return session
+  }
+
+  /**
+   * Where a Thread's Sessions run, for a Session it gains: here, or the one owner they all have elsewhere. Refuses a
+   * Thread that's moving, or split between owners, naming why.
+   */
+  private awayOwner(sessions: readonly string[]): ExecutionOwner {
+    const executions = sessions.map((member) => this.executionState(member))
+    const moving = executions.find((execution) => execution.state !== "here" && execution.state !== "elsewhere")
+    if (moving) throw new Error(executionRefusal(moving) ?? "This Thread is moving; open a new tab once the move ends")
+    const away = executions.filter((execution) => execution.state === "elsewhere")
+    if (!away.length) return this.self
+    const [first] = away
+    if (!first || first.state !== "elsewhere" || away.length !== executions.length || away.some((execution) => execution.state !== "elsewhere" || !sameOwner(execution.owner, first.owner)))
+      throw new Error("This Thread's Sessions run in more than one place; open a new tab once they're together again")
+    return first.owner
+  }
+
+  /**
+   * A conversation that runs where its Thread does, elsewhere (on its cloud machine), recorded here: a `+` tab's into
+   * the Session the tab made, or a fork of one of the Thread's conversations into a new Session beside its parent's,
+   * under the ID the machine gave it (`forkSession`), so both stores name it alike. Its journal lives there until the
+   * Thread comes back; this store knows its Session, so the way back carries it.
+   */
+  adoptElsewhere(input: { operationId: string; conversationId: string; actor: Actor } & ({ session: SessionId } | { forkOf: string; forkSession: SessionId })): ThreadPlacement {
+    const content: OperationContent = "session" in input ? { conversation: input.conversationId, session: input.session } : { conversation: input.conversationId, forkOf: input.forkOf, session: input.forkSession }
+    return this.write(() => this.receipt(input.operationId, "adopt-elsewhere", content, input.actor, () => {
+      let placement: ThreadPlacement
+      if ("session" in input) {
+        const membership = this.sql("SELECT thread_id FROM memberships WHERE session_id = ?").get(input.session)
+        if (!membership) throw new Error("That Session isn't in a Thread")
+        placement = { thread: ThreadIdSchema.parse(MembershipRowSchema.parse(membership).thread_id), session: input.session }
+      } else {
+        const parent = this.journalPlacement(input.forkOf)
+        if (!parent) throw new Error("The conversation it forks isn't in a Thread")
+        const members = this.thread(parent.thread)?.sessions ?? []
+        const session = this.mintSession("fork", parent.session, input.actor, this.awayOwner(members), input.forkSession)
+        this.addMember(parent.thread, session, input.actor)
+        placement = { thread: parent.thread, session: SessionIdSchema.parse(session) }
+      }
+      const now = this.now()
+      this.sql("INSERT OR IGNORE INTO journals (conversation_id, session_id, created_at, registered_at) VALUES (?, ?, ?, ?)").run(input.conversationId, placement.session, now, now)
+      this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(placement.thread)
+      this.forgetPlacements()
+      return placement
+    }, PlacementSchema))
   }
 
   private addMember(thread: ThreadId, session: string, actor: Actor): void {

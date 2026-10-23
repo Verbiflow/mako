@@ -111,7 +111,7 @@
     "test:machine-runtime": "tsx scripts/test-machine-runtime.ts",
     "test:client": "npm run -s build --workspace @mako/client && node packages/client/test/client.mjs && tsx scripts/test-mako-client.ts",
     "test:cloud-conversations": "tsx scripts/test-cloud-conversations.ts && tsx scripts/test-cloud-previews.ts",
-    "test:moves": "tsx scripts/test-move-checkpoint.ts && tsx scripts/test-move-arrival.ts && tsx scripts/test-move-departure.ts && tsx scripts/test-cloud-moves.ts && tsx scripts/test-cloud-returns.ts",
+    "test:moves": "tsx scripts/test-move-checkpoint.ts && tsx scripts/test-move-arrival.ts && tsx scripts/test-move-stage.ts && tsx scripts/test-move-departure.ts && tsx scripts/test-cloud-moves.ts && tsx scripts/test-cloud-returns.ts",
     "test:moves-ui": "node scripts/test-thread-move-ui.mjs",
     "test:telemetry": "tsx scripts/test-telemetry.ts",
     "test:host": "tsx scripts/test-host.ts",

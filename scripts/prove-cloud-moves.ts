@@ -37,7 +37,9 @@ import { holdHostLease } from "@mako/host/base/host-idle"
  * harness's refresh token and went away would leave this Mac's own CLI signed out. Its machine's harnesses are then
  * signed out, so step 5 reads the machine's side from the conversation's history as the machine serves it (the
  * session's records arrived and its native session resumed there), and leaves an agent's recall to a run against this
- * Mac's own host, whose cloud keeps the sign-ins it's given.
+ * Mac's own host, whose cloud keeps the sign-ins it's given. Then it opens a new tab in the cloud Thread and forks it,
+ * each a turn on the machine (`--tab-harness`, a harness that runs there unsigned), brings the Thread back, and has
+ * the moved conversation, the tab and the fork each recall here what it said, in the same native sessions.
  */
 const { values } = parseArgs({
   options: {
@@ -47,6 +49,16 @@ const { values } = parseArgs({
     "data-root": { type: "string" },
     "spawn-host": { type: "boolean", default: false },
     cloud: { type: "string" },
+    /**
+     * On a host of its own: the harness of the new tab and the fork begun in the cloud, each running a turn on the
+     * machine. The Thread's own by default; one that runs unsigned there (OpenCode's free models) on a run sharing none.
+     */
+    "tab-harness": { type: "string" },
+    /**
+     * At the end, the cloud's machine places, filled: that many cloud conversations are started (OpenCode, which runs
+     * unsigned), then a move of a Thread back here must be refused at once, saying the cloud is full, never queued.
+     */
+    "full-cloud": { type: "string" },
   },
 })
 const HARNESSES = values.harness?.length ? values.harness : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
@@ -138,11 +150,20 @@ const widestMode = (harness: string) => {
   return undefined
 }
 
-const RequestSchema = z.object({ id: z.string(), status: z.string() }).loose()
+const RequestSchema = z.object({
+  id: z.string(),
+  status: z.string(),
+  error: z.string().optional(),
+  failure: z.string().optional(),
+  interruption: z.object({ reason: z.string() }).loose().optional(),
+}).loose()
 const OptionSchema = z.object({ optionId: z.string(), kind: z.string().optional(), name: z.string().optional() }).loose()
 const PermissionSchema = z.object({ id: z.string(), options: z.array(OptionSchema).default([]) }).loose()
 const SnapshotSchema = z.object({
-  session: z.object({ status: z.string(), cwd: z.string().nullish(), nativeId: z.string().nullish() }).loose(),
+  session: z.object({ status: z.string(), cwd: z.string().nullish(), nativeId: z.string().nullish(), error: z.string().nullish() }).loose(),
+  threadId: z.string().optional(),
+  sessionId: z.string().optional(),
+  elsewhere: z.string().optional(),
   permissions: z.array(PermissionSchema).default([]),
   requests: z.array(RequestSchema).default([]),
   blocks: z.array(z.object({ type: z.string() }).loose()).default([]),
@@ -158,10 +179,26 @@ const ReturnOutcomeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("stayed"), reason: z.string() }),
   z.object({ kind: z.literal("unsettled"), reason: z.string() }),
 ])
-const ReturnTimingsSchema = z.object({ phase: z.string(), timings: z.record(z.string(), z.number()) }).loose()
+const ReturnTimingsSchema = z.object({ phase: z.string(), timings: z.record(z.string(), z.number()), sessions: z.array(z.object({ conversationId: z.string(), begun: z.boolean().optional() }).loose()).default([]) }).loose()
+const PlacementSchema = z.object({ thread: z.string(), session: z.string() })
 const PlanTimingsSchema = z.object({ phase: z.string(), cloudThread: z.string(), folder: z.string(), timings: z.record(z.string(), z.number()), checkpoint: z.object({ bytes: z.number() }).loose().optional() }).loose()
 
 const snapshot = async (id: string): Promise<Snapshot> => SnapshotSchema.parse(await call("mako:live-snapshot", [id]))
+/**
+ * Why a request ended as it did, in Mako's own words: its error, failure kind and interruption, then the session's last
+ * error. A turn that fails before its harness says anything (a wake that couldn't restore its session) says why here.
+ */
+const ended = (shot: Snapshot, id: string): string => {
+  const request = shot.requests.find((candidate) => candidate.id === id)
+  const parts = [
+    request?.status ?? "missing",
+    request?.failure && `failure ${request.failure}`,
+    request?.interruption && `interrupted (${request.interruption.reason})`,
+    request?.error && `error: ${request.error.slice(0, 400)}`,
+    shot.session.error && `session: ${shot.session.error.slice(0, 300)}`,
+  ]
+  return parts.filter(Boolean).join("; ")
+}
 /** Every word the blocks after `from` hold, the agent's prose and its tools' output alike. */
 const blockText = (shot: Snapshot, from: number, only?: "text") =>
   shot.blocks
@@ -199,6 +236,8 @@ type Step = { step: string; ms: number; ok: boolean; detail?: string }
 /** What `mako:live-start` reads for a Thread in its own worktree, as the composer sends it. */
 type StartOptions = { conversationId: string; worktree: true; modeId?: string; initialRequest: { id: string; text: string; attachments: [] } }
 type Proved = { steps: Step[]; conversation: string; timings?: Record<string, number> }
+/** What `mako:live-start` reads for a `+` tab's first send, in the Session the tab made. */
+type TabOptions = { conversationId: string; session: string; modeId?: string; initialRequest: { id: string; text: string; attachments: [] } }
 
 async function prove(harness: string, project: string): Promise<Proved> {
   const steps: Step[] = []
@@ -270,7 +309,7 @@ async function prove(harness: string, project: string): Promise<Proved> {
     if (outcome.kind !== "kept-here") throw new Error(`a busy Thread moved: ${JSON.stringify(outcome)}`)
     const shot = await until(id, (current) => settled(current, busy), 240_000, answered)
     const status = shot.requests.find((request) => request.id === busy)?.status
-    if (status !== "completed") throw new Error(`the turn didn't finish here after the refused move: ${status}`)
+    if (status !== "completed") throw new Error(`the turn didn't finish here after the refused move: ${ended(shot, busy)}`)
     return outcome.reason
   })
 
@@ -302,7 +341,7 @@ async function prove(harness: string, project: string): Promise<Proved> {
       await call("mako:live-prompt", [id, back, "Reply with one short sentence that includes the word BACK.", []])
       const shot = await until(id, (current) => settled(current, back), 300_000, answered)
       const status = shot.requests.find((request) => request.id === back)?.status
-      if (status !== "completed") throw new Error(`the turn here ended ${status}`)
+      if (status !== "completed") throw new Error(`the turn here ended ${ended(shot, back)}`)
       return "the same answer again; a turn ran here"
     })
     return proved()
@@ -324,13 +363,50 @@ async function prove(harness: string, project: string): Promise<Proved> {
       if (!read.includes("BUSY-DONE")) throw new Error("the machine's history doesn't hold the turn that finished here before the move")
       return "both turns from before the move, read on the machine"
     })
-    // 6. The way back: the machine's checkout and the session come back here, and a turn here remembers the first.
+    // 6. Conversations begun in the cloud: a new tab of the Thread's and a fork of it, each a turn on the machine.
+    const tabHarness = values["tab-harness"] ?? harness
+    const tab = randomUUID()
+    const fork = randomUUID()
+    const tabToken = `tab-proof-${randomUUID().slice(0, 8)}`
+    const tabTurn = randomUUID()
+    let tabSession = ""
+    const recall = `Without running anything, reply with one line starting with MEMORY: followed by the exact line you replied with first in this conversation.`
+    const tabbed = await timed("a new tab in the cloud", async () => {
+      const threadId = (await snapshot(id)).threadId
+      if (!threadId) throw new Error("the moved conversation names no Thread")
+      tabSession = PlacementSchema.parse(await call("mako:thread-create-session", [randomUUID(), threadId])).session
+      const mode = widestMode(tabHarness)
+      const options: TabOptions = { conversationId: tab, session: tabSession, initialRequest: { id: tabTurn, text: `Without running anything, reply with exactly this line and nothing else: ${tabToken}`, attachments: [] }, ...mode && { modeId: mode } }
+      const started = SnapshotSchema.parse(await call("mako:live-start", [tabHarness, folder, options]))
+      if (!started.elsewhere) throw new Error("the new tab started on this Mac, not in the cloud with its Thread")
+      const shot = await until(tab, (current) => settled(current, tabTurn), 300_000, answered)
+      if (shot.requests.find((request) => request.id === tabTurn)?.status !== "completed") throw new Error(`its turn ended ${ended(shot, tabTurn)}`)
+      if (!proseText(shot, 0).includes(tabToken)) throw new Error(`it didn't say the line: ${proseText(shot, 0).slice(0, 200)}`)
+      if (shot.sessionId !== tabSession) throw new Error(`the machine put it in Session ${shot.sessionId ?? "none"}, not the tab's ${tabSession}`)
+      return `${tabHarness}, in the tab's Session on the machine`
+    })
+    const forked = tabbed && (await timed("a fork of it in the cloud", async () => {
+      const made = SnapshotSchema.parse(await call("mako:live-fork", [tab, { id: fork, provider: tabHarness, point: { kind: "run", requestId: tabTurn } }]))
+      if (!made.elsewhere) throw new Error("the fork was made on this Mac, not in the cloud")
+      const turn = randomUUID()
+      await call("mako:live-prompt", [fork, turn, recall, []])
+      const shot = await until(fork, (current) => settled(current, turn), 300_000, answered)
+      if (shot.requests.find((request) => request.id === turn)?.status !== "completed") throw new Error(`its turn ended ${ended(shot, turn)}`)
+      if (!proseText(shot, 0).includes(tabToken)) throw new Error(`it didn't remember the line: ${proseText(shot, 0).slice(0, 200)}`)
+      if (!shot.sessionId || shot.sessionId === tabSession) throw new Error(`it isn't in a Session of its own: ${shot.sessionId ?? "none"}`)
+      return "remembered the tab's line, in a Session of its own"
+    }))
+
+    // 7. The way back: the machine's checkout and every session come back here, and a turn here remembers the first.
     const back = randomUUID()
     if (!(await timed("back to this Mac", async () => {
       const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, back]))
       if (outcome.kind !== "back") throw new Error(`${outcome.kind}: ${outcome.reason}`)
       const plan = ReturnTimingsSchema.parse(JSON.parse(await readFile(join(dataRoot, "cloud", "returns", `${back}.json`), "utf8")))
       if (plan.phase !== "done") throw new Error(`the return's plan reads ${plan.phase}`)
+      const carried = plan.sessions.filter((session) => session.begun).map((session) => session.conversationId)
+      const expected = [...tabbed ? [tab] : [], ...forked ? [fork] : []]
+      if (expected.some((each) => !carried.includes(each))) throw new Error(`the return carried ${carried.length} begun in the cloud, not the tab and fork`)
       const files = [(await readFile(join(folder, "move-proof.txt"), "utf8")).trim(), (await readFile(join(folder, "staged.txt"), "utf8")).trim(), await git(folder, "log", "-1", "--format=%s")]
       if (files[0] !== token || files[1] !== staged || files[2] !== `move proof ${committed}`) throw new Error(`the worktree came back as ${JSON.stringify(files)}`)
       const order = ["packed", "released", "applied", "claimed", "done"]
@@ -347,10 +423,25 @@ async function prove(harness: string, project: string): Promise<Proved> {
       await call("mako:live-prompt", [id, here, "Without running anything, write one line starting with MEMORY: followed by the exact line you wrote into move-proof.txt earlier in this conversation, from memory.", []])
       const shot = await until(id, (current) => settled(current, here), 300_000, answered)
       const status = shot.requests.find((request) => request.id === here)?.status
-      if (status !== "completed") throw new Error(`the turn ended ${status}: ${proseText(shot, before).slice(0, 200)}`)
+      if (status !== "completed") throw new Error(`the turn ended ${ended(shot, here)}; said: ${proseText(shot, before).slice(0, 200)}`)
       if (!proseText(shot, before).includes(token)) throw new Error(`it didn't remember the token: ${proseText(shot, before).slice(0, 300)}`)
       return "the same session: remembered the token"
     })
+    // Each begun in the cloud goes on here, in its own native session: it remembers what it said there.
+    for (const [step, conversation] of [["the new tab here", tabbed && tab], ["the fork here", forked && fork]] as const) {
+      if (!conversation) continue
+      await timed(step, async () => {
+        const turn = randomUUID()
+        const shot0 = await snapshot(conversation)
+        if (shot0.elsewhere) throw new Error("this Mac still reads it as the cloud's")
+        const before = shot0.blocks.length
+        await call("mako:live-prompt", [conversation, turn, recall, []])
+        const shot = await until(conversation, (current) => settled(current, turn), 300_000, answered)
+        if (shot.requests.find((request) => request.id === turn)?.status !== "completed") throw new Error(`the turn ended ${ended(shot, turn)}; said: ${proseText(shot, before).slice(0, 200)}`)
+        if (!proseText(shot, before).includes(tabToken)) throw new Error(`it didn't remember the line: ${proseText(shot, before).slice(0, 300)}`)
+        return "the same session: remembered its line from the cloud"
+      })
+    }
     return proved()
   }
 
@@ -361,7 +452,7 @@ async function prove(harness: string, project: string): Promise<Proved> {
     await call("mako:live-prompt", [id, there, "Before running anything, write one line starting with MEMORY: followed by the exact line you wrote into move-proof.txt earlier in this conversation, from memory. Then run this shell command and show its output: `pwd; cat move-proof.txt committed.txt staged.txt; git log -1 --format=%s; git status --short`", []])
     const shot = await until(id, (current) => settled(current, there), 420_000, answered)
     const status = shot.requests.find((request) => request.id === there)?.status
-    if (status !== "completed") throw new Error(`the turn ended ${status}: ${proseText(shot, before).slice(0, 200)}`)
+    if (status !== "completed") throw new Error(`the turn ended ${ended(shot, there)}; said: ${proseText(shot, before).slice(0, 200)}`)
     const prose = proseText(shot, before)
     const everything = blockText(shot, before)
     const missing = [
@@ -377,12 +468,52 @@ async function prove(harness: string, project: string): Promise<Proved> {
   return proved()
 }
 
+/**
+ * The cloud full: `places` cloud conversations take every machine place, then a move of `conversation`'s Thread, back
+ * here from an earlier step, is asked. It must be refused before anything is released, at once, saying the cloud is
+ * full, rather than wait in the cloud's queue for a place.
+ */
+async function fullCloud(places: number, conversation: string): Promise<Proved> {
+  const steps: Step[] = []
+  const timed = async (step: string, work: () => Promise<string>) => {
+    const started = performance.now()
+    const done: Step = await work().then(
+      (detail) => ({ step, ms: Math.round(performance.now() - started), ok: true, detail }),
+      (error: Error) => ({ step, ms: Math.round(performance.now() - started), ok: false, detail: error.message }),
+    )
+    steps.push(done)
+    console.log(`${"full".padEnd(9)} ${step.padEnd(30)} ${done.ok ? "ok  " : "FAIL"} ${String(done.ms).padStart(7)} ms  ${done.detail ?? ""}`)
+    return done.ok
+  }
+  const filled = await timed("the cloud's places taken", async () => {
+    for (let place = 0; place < places; place++)
+      await call("mako:live-start", ["opencode", project, { conversationId: randomUUID(), cloud: { repository: { url: values.repository } } }])
+    return `${places} cloud conversations running`
+  })
+  if (filled) await timed("a move into a full cloud", async () => {
+    const began = performance.now()
+    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [conversation, randomUUID()]))
+    const ms = performance.now() - began
+    if (outcome.kind !== "kept-here") throw new Error(`it ${outcome.kind === "moved" ? "moved" : `was ${outcome.kind}: ${outcome.reason}`}`)
+    if (!/full/i.test(outcome.reason)) throw new Error(`refused, but not for a full cloud: ${outcome.reason}`)
+    if (ms > 20_000) throw new Error(`refused only after ${(ms / 1000).toFixed(1)} s: ${outcome.reason}`)
+    const shot = await snapshot(conversation)
+    if (shot.elsewhere) throw new Error("the conversation reads as the cloud's after the refusal")
+    return outcome.reason
+  })
+  return { steps, conversation }
+}
+
 // A clone of the repository as a person's project: the Threads take worktrees of it.
 const scratch = await mkdtemp(join(tmpdir(), "mako-move-proof-"))
 const project = join(scratch, "project")
 await run("git", ["clone", "-q", values.repository, project])
 const report: Record<string, Awaited<ReturnType<typeof prove>>> = {}
 for (const harness of HARNESSES) report[harness] = await prove(harness, project)
+const places = values["full-cloud"] === undefined ? 0 : Number(values["full-cloud"])
+// Any Thread that's here again (back from the cloud, or kept here) moves no differently.
+const here = Object.values(report).find(({ steps }) => steps.some((step) => (step.step === "back to this Mac" || step.step === "runs here after the refusal") && step.ok))?.conversation
+if (ownHost && places > 0 && here) report["full cloud"] = await fullCloud(places, here)
 // A host of its own signs out as it ends: its device leaves the account, and its credential leaves the keychain.
 if (ownHost) await call("mako:cloud-sign-out", [])
 if (values.report) await writeFile(values.report, `${JSON.stringify(report, null, 2)}\n`)

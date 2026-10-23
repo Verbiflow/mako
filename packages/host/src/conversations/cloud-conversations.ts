@@ -9,11 +9,15 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
 import { hostCallReplay } from "../contracts/host-call-policy.js"
 import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "../contracts/host-connection.js"
+import { ForkInputSchema } from "../contracts/conversation-control.js"
 import { sessionAfter, type LiveBatch, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
 import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
+import type { SessionExecution } from "../contracts/thread-execution.js"
+import { SessionIdSchema, type Actor as StoreActor, type SessionId, type ThreadPlacement } from "../contracts/thread-identity.js"
 import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/index.js"
 import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
 import { CloudControlPreviews } from "./cloud-control-previews.js"
+import { cloudRuntimeOf, namedUuid } from "./cloud-moves.js"
 import { CloudPreviews } from "./cloud-previews.js"
 import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
 
@@ -120,7 +124,26 @@ export type CloudConversationsOptions = {
   repositoryOf(cwd: string): Promise<CloudRepository>
   /** A conversation's folder on its machine may have changed: its agent worked. At most once a `CHANGED_MS`. */
   changed?(conversationId: string): void
+  /**
+   * This Mac's Thread store, where a conversation begun in a Thread that moved to the cloud (a `+` tab, a fork) is
+   * recorded: its Session runs where the Thread does, and the way back brings it here with the rest.
+   */
+  threads?(): AwayThreads | undefined
+  /** Whether a cloud Thread is on its way back to this Mac: it begins no conversation meanwhile. */
+  returning?(cloudThread: string): boolean
 }
+
+/** What a conversation begun in a moved Thread reads and records of this Mac's Thread store. */
+export type AwayThreads = {
+  execution(session: SessionId): SessionExecution | undefined
+  sessionPlacement(session: SessionId): ThreadPlacement | undefined
+  journalPlacement(conversationId: string): ThreadPlacement | undefined
+  adoptElsewhere(input: { operationId: string; conversationId: string; actor: StoreActor } & ({ session: SessionId } | { forkOf: string; forkSession: SessionId })): ThreadPlacement
+  person(): StoreActor
+}
+
+/** What a fork's answer names: the conversation it made, and the Session its host put it in. */
+const ForkAnswerSchema = z.object({ session: z.object({ id: z.string(), harness: z.string() }).loose(), sessionId: z.string().optional() }).loose()
 
 /** A cloud conversation's folder on its machine, as a window reads it: calls answered there, through its Thread. */
 export type ElsewhereFolderRoute = {
@@ -239,8 +262,10 @@ export class CloudConversations {
     if (channel === "mako:live-start") {
       // SAFETY: the dispatcher parsed this call's arguments with `mako:live-start`'s schema before routing it.
       const [harness, cwd, options] = args as [string, string, LiveStartOptions]
-      if (!options.cloud) return { handled: false }
-      return { handled: true, value: await this.#start(harness, cwd, options) }
+      if (options.cloud) return { handled: true, value: await this.#start(harness, cwd, options) }
+      const away = options.session === undefined ? undefined : await this.#awayThread(SessionIdSchema.parse(options.session))
+      if (!away) return { handled: false }
+      return { handled: true, value: await this.#startAway(away, harness, cwd, options) }
     }
     if (channel === "mako:control-preview") {
       // SAFETY: the dispatcher parsed this call's arguments with `mako:control-preview`'s schema before routing it.
@@ -254,7 +279,89 @@ export class CloudConversations {
     await this.start()
     const entry = this.#entries.get(id)
     if (!entry) return { handled: false }
+    if (channel === "mako:live-fork") return { handled: true, value: await this.#fork(entry, args) }
     return { handled: true, value: await this.#call(entry, channel, args) }
+  }
+
+  /**
+   * The cloud Thread a Session of this Mac's store runs on, when it runs on one this Mac follows: a `+` tab made in a
+   * Thread that moved there. Undefined for a Session that runs here, or in transit (refused where it would start).
+   */
+  async #awayThread(session: SessionId): Promise<{ threads: AwayThreads; sibling: Entry; session: SessionId } | undefined> {
+    const threads = this.#options.threads?.()
+    const execution = threads?.execution(session)
+    if (!threads || execution?.state !== "elsewhere" || execution.owner.kind !== "cloud") return undefined
+    await this.start()
+    const runtime = execution.owner.runtime
+    const sibling = [...this.#entries.values()].find((entry) => cloudRuntimeOf(entry.threadId) === runtime)
+    if (!sibling) throw new Error("This Thread runs in the cloud, but this Mac no longer follows it there, so it can't start a conversation in it.")
+    return { threads, sibling, session }
+  }
+
+  /**
+   * A `+` tab's first send in a Thread that moved to the cloud: the conversation starts on the Thread's machine, in
+   * the Session the tab made here, which the machine's store takes under the same ID, so the two stores name it alike
+   * and the way back brings it here. Each step is kept by its ID, so a start repeated after a lost answer or a host
+   * that stopped finds what the first did: followed here first, then the Session made there, the conversation
+   * started there, and recorded in this Mac's store last.
+   */
+  async #startAway(away: { threads: AwayThreads; sibling: Entry; session: SessionId }, harness: string, cwd: string, options: LiveStartOptions): Promise<EncodedValue> {
+    const { threads, sibling, session } = away
+    const placed = threads.sessionPlacement(session)
+    if (!placed) throw new Error("That tab's Session isn't in a Thread any more.")
+    let entry = this.#entries.get(options.conversationId)
+    if (!entry) {
+      if (this.#options.returning?.(sibling.threadId)) throw new Error("This Thread is on its way back to this Mac; open a new tab once it's here.")
+      entry = { conversationId: options.conversationId, threadId: sibling.threadId, harness, repository: sibling.repository, createdAt: Date.now(), created: true, seq: sibling.seq }
+      this.#entries.set(entry.conversationId, entry)
+      await this.#save()
+    }
+    this.#follow(entry)
+    await this.#call(entry, "mako:thread-create-session", [namedUuid(`mako cloud tab\0${session}`), placed.thread, session])
+    // In the Thread's checkout there, where its other conversations work.
+    const folder = sibling.summary?.session.cwd || cwd
+    const start: LiveStartOptions = { ...options, session }
+    for (const key of ["cloud", "worktree", "worktreeStart", "threadPath"] as const) delete start[key]
+    const value = await this.#call(entry, "mako:live-start", [harness, folder, start])
+    const started = LiveSummarySchema.parse(decodeRuntimeValue(value))
+    entry.summary = summaryOf(started)
+    this.#saveSoon()
+    threads.adoptElsewhere({ operationId: namedUuid(`mako cloud tab\0${session}\0${entry.conversationId}`), conversationId: entry.conversationId, session, actor: threads.person() })
+    hostLog("cloud-conversations", "a new tab of a Thread in the cloud started on its machine", { conversationId: entry.conversationId, threadId: entry.threadId, session, harness })
+    return encodeRuntimeValue({ ...started, elsewhere: CLOUD_FOLDER_WHERE })
+  }
+
+  /**
+   * A fork of a cloud conversation, made on its machine. In a Thread that moved there from this Mac, it goes into a
+   * new Session beside its parent's, under the ID the machine's store gave it, recorded here too, so the way back
+   * brings it home; a fork that would leave the Thread or its checkout waits until the Thread is back.
+   */
+  async #fork(entry: Entry, args: unknown[]): Promise<EncodedValue> {
+    const input = ForkInputSchema.parse(args[1])
+    const threads = this.#options.threads?.()
+    const placed = threads?.journalPlacement(entry.conversationId)
+    if (placed) {
+      if (input.thread === "new") throw new Error("A conversation in the cloud forks within its Thread there. Fork it into a new Thread once it's back on this Mac.")
+      if (input.worktree || input.move) throw new Error("A conversation in the cloud works in its machine's checkout. Fork it into a worktree once it's back on this Mac.")
+      if (!this.#entries.has(input.id) && this.#options.returning?.(entry.threadId)) throw new Error("This Thread is on its way back to this Mac; fork it once it's here.")
+    }
+    const value = await this.#call(entry, "mako:live-fork", args)
+    const decoded = decodeRuntimeValue(value)
+    const fork = ForkAnswerSchema.parse(decoded)
+    if (fork.session.id !== input.id || fork.session.harness !== input.provider) throw new Error("The cloud machine returned a different fork")
+    if (!this.#entries.has(input.id)) {
+      const forked: Entry = { conversationId: input.id, threadId: entry.threadId, harness: input.provider, repository: entry.repository, createdAt: Date.now(), created: true, seq: entry.seq }
+      const summary = LiveSummarySchema.safeParse(decoded)
+      if (summary.success) forked.summary = summaryOf(summary.data)
+      this.#entries.set(forked.conversationId, forked)
+      await this.#save()
+    }
+    if (placed && threads) {
+      if (!fork.sessionId) throw new Error("The cloud machine didn't say which Session the fork went into")
+      threads.adoptElsewhere({ operationId: namedUuid(`mako cloud fork\0${input.id}`), conversationId: input.id, forkOf: entry.conversationId, forkSession: SessionIdSchema.parse(fork.sessionId), actor: threads.person() })
+      hostLog("cloud-conversations", "a conversation in the cloud forked on its machine", { conversationId: input.id, parent: entry.conversationId, threadId: entry.threadId, session: fork.sessionId })
+    }
+    return encodeRuntimeValue({ ...z.object({}).loose().parse(decoded), elsewhere: CLOUD_FOLDER_WHERE })
   }
 
   /**
@@ -529,6 +636,23 @@ export class CloudConversations {
     hostLog("cloud-conversations", "a conversation came back from its cloud Thread", { conversationId, threadId: entry.threadId })
   }
 
+  /**
+   * Every conversation of a cloud Thread that came back to this Mac: those it began there too, and any start the
+   * return cut short. Each is answered here from now; forgotten before anything starts here, as `release`.
+   */
+  async releaseThread(threadId: string): Promise<string[]> {
+    await this.start()
+    const released = [...this.#entries.values()].filter((entry) => entry.threadId === threadId).map((entry) => entry.conversationId)
+    for (const conversationId of released) await this.release(conversationId)
+    return released
+  }
+
+  /** The cloud conversations of a cloud Thread: their harness and native session, as their machine last said. */
+  threadConversations(threadId: string): Array<{ conversationId: string; harness: string; nativeId: string | undefined }> {
+    return [...this.#entries.values()].filter((entry) => entry.threadId === threadId)
+      .map((entry) => ({ conversationId: entry.conversationId, harness: entry.harness, nativeId: entry.summary?.session.nativeId || undefined }))
+  }
+
   /** An adopted conversation's start on its machine, as the machine answered it: what windows list from now on. */
   started(conversationId: string, value: EncodedValue): LiveSummary {
     const entry = this.#entries.get(conversationId)
@@ -543,9 +667,12 @@ export class CloudConversations {
     return this.#entries.has(conversationId)
   }
 
-  /** One call to a cloud Thread's machine, for a conversation when it has one: `#callThread`, for a move's steps. */
-  callThread(threadId: string, channel: string, args: readonly unknown[], conversationId?: string): Promise<EncodedValue> {
-    return this.#callThread(threadId, channel, args, conversationId ? { conversationId } : {})
+  /**
+   * One call to a cloud Thread's machine, for a conversation when it has one: `#callThread`, for a move's steps.
+   * `refuseUnstarted`: answered at once if the machine can't start, never queued until it can.
+   */
+  callThread(threadId: string, channel: string, args: readonly unknown[], conversationId?: string, options: { refuseUnstarted?: boolean } = {}): Promise<EncodedValue> {
+    return this.#callThread(threadId, channel, args, { ...conversationId && { conversationId }, ...options })
   }
 
   /**
@@ -592,12 +719,13 @@ export class CloudConversations {
   }
 
   /** `#call` to a Thread by its ID, for its conversation when it has one, or made ahead of a person's message. */
-  async #callThread(threadId: string, channel: string, args: readonly unknown[], how: { conversationId?: string; ahead?: boolean; passive?: boolean }): Promise<EncodedValue> {
+  async #callThread(threadId: string, channel: string, args: readonly unknown[], how: { conversationId?: string; ahead?: boolean; passive?: boolean; refuseUnstarted?: boolean }): Promise<EncodedValue> {
     const { session, deviceId } = await this.#connected()
     const actor: Actor = { kind: "client", client: "desktop", deviceId }
     const calls: GatewayHostCallsOptions = { threadId, actor, history: hostHistoryPaging() }
     if (how.ahead) calls.ahead = true
     if (how.passive) calls.passive = true
+    if (how.refuseUnstarted) calls.refuseUnstarted = true
     const send = gatewayHostCalls(session, calls).call(channel, args)
     // A passive look is answered at once, asleep or not; it's never waited out.
     const repeatable = !how.passive && hostCallReplay(channel) !== "never"
@@ -776,6 +904,9 @@ export class CloudConversations {
 /** A snapshot's summary fields, which are all a window needs to list the conversation before it opens it. */
 function summaryOf(snapshot: LiveSummary): LiveSummary {
   const summary: LiveSummary = { session: snapshot.session, revision: snapshot.revision, createdAt: snapshot.createdAt, elsewhere: CLOUD_FOLDER_WHERE }
+  // A Thread moved from this Mac has the same IDs in both stores: a window places its tabs by them.
+  if (snapshot.threadId) summary.threadId = snapshot.threadId
+  if (snapshot.sessionId) summary.sessionId = snapshot.sessionId
   if (snapshot.epoch) summary.epoch = snapshot.epoch
   if (snapshot.threadPath) summary.threadPath = snapshot.threadPath
   if (snapshot.nativePaths) summary.nativePaths = snapshot.nativePaths

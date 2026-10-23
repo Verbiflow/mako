@@ -43,8 +43,11 @@ const ReturnSessionSchema = z.object({
   conversationId: z.string(),
   harness: z.string(),
   nativeId: z.string(),
-  /** Its generation in this Mac's store as the return began: the handoff back is one past it. */
+  /** Its generation in this Mac's store as the return began. */
   generation: z.number().int().positive(),
+  /** Begun in the cloud (a `+` tab, a fork): no journal here until the return makes one from its records, at `path`. */
+  begun: z.boolean().optional(),
+  path: z.string().optional(),
 })
 
 /** `staying`: the cloud has the Thread again, and its machine is still to be told to take it back. */
@@ -59,6 +62,8 @@ const ReturnPlanSchema = z.object({
   /** The forward move's handoff: the Thread and its Sessions as this Mac released them, which the way back mirrors. */
   forward: HandoffSchema,
   sessions: z.array(ReturnSessionSchema).min(1),
+  /** Conversations begun in the cloud whose harness never started there: nothing of theirs to bring. */
+  left: z.array(z.string()).default([]),
   phase: PhaseSchema,
   /** This Mac's device, the owner the machine releases the Thread toward. */
   device: z.uuid(),
@@ -85,6 +90,8 @@ export type CloudReturnsOptions = {
     journalPlacement(conversationId: string): { thread: ThreadId; session: SessionId } | undefined
     threadSessions(thread: ThreadId): Array<{ session: SessionId; journals: string[] }>
     execution(session: SessionId): SessionExecution | undefined
+    /** The Thread and its Sessions as they stand here, for the claim: those it gained in the cloud too. */
+    threadHandoff(thread: ThreadId): Pick<Handoff, "thread" | "sessions">
     readonly self: ExecutionOwner
     person(): Actor
   } | undefined
@@ -93,14 +100,19 @@ export type CloudReturnsOptions = {
   receiveRecords(link: RecordsLink, sessions: ReceivingSession[]): Promise<ReceivedRecords[]>
   cloud: {
     callThread(threadId: string, channel: string, args: readonly unknown[], conversationId?: string): Promise<EncodedValue>
-    release(conversationId: string): Promise<void>
+    releaseThread(threadId: string): Promise<string[]>
+    threadConversations(threadId: string): Array<{ conversationId: string; harness: string; nativeId: string | undefined }>
   }
+  /** A journal here for a conversation begun in the cloud, from its records written back at `path`. */
+  capture(conversationId: string, path: string): Promise<void>
   step(conversationId: string, move: string, step: ThreadReturnStep): void
 }
 
 export class CloudReturns {
   readonly #options: CloudReturnsOptions
   readonly #running = new Map<string, Promise<ThreadReturnOutcome>>()
+  /** The cloud Threads a return of this host's is bringing back now: none begins a conversation meanwhile. */
+  readonly #returning = new Map<string, number>()
 
   constructor(options: CloudReturnsOptions) {
     this.#options = options
@@ -113,6 +125,11 @@ export class CloudReturns {
     const work = this.#bringBack(conversationId, MoveIdSchema.parse(move)).finally(() => this.#running.delete(move))
     this.#running.set(move, work)
     return work
+  }
+
+  /** Whether a return of this host's is bringing the cloud Thread `cloudThread` back now. */
+  returning(cloudThread: string): boolean {
+    return (this.#returning.get(cloudThread) ?? 0) > 0
   }
 
   /** Settles every return a stopped host left unsettled, as its plan stands. */
@@ -162,28 +179,38 @@ export class CloudReturns {
     const placed = threads.journalPlacement(conversationId)
     if (!placed) throw new Error("This conversation isn't in a Thread.")
     const owners = new Set<string>()
-    const sessions: z.infer<typeof ReturnSessionSchema>[] = []
-    for (const { session, journals } of threads.threadSessions(placed.thread)) {
+    const members = threads.threadSessions(placed.thread)
+    for (const { session } of members) {
       const execution = threads.execution(session)
       if (execution?.state !== "elsewhere" || execution.owner.kind !== "cloud") throw new Error("This Thread runs on this Mac already.")
       owners.add(execution.owner.runtime)
-      sessions.push({ session, conversationId: journals.includes(conversationId) ? conversationId : (journals.at(-1) ?? conversationId), harness: "", nativeId: "", generation: execution.generation })
     }
     if (owners.size !== 1) throw new Error("This Thread's Sessions run in more than one place, so it can't come back as one.")
     const [runtime] = owners
     const forward = await this.#forward(placed.thread, RuntimeIdSchema.parse(runtime))
     if (!forward.handoff) throw new Error("The move that took this Thread to the cloud kept no record of what it released.")
-    for (const session of sessions) {
-      const moved = forward.sessions.find((each) => each.session === session.session)
-      if (!moved) throw new Error("A Session of this Thread wasn't part of the move that took it to the cloud.")
-      session.harness = moved.harness
-      session.nativeId = moved.nativeId
-      session.conversationId = moved.conversationId
+    // Each Session's conversation in the cloud: the one that moved there, or one begun there (a `+` tab, a fork),
+    // whose records come back to make its journal here. A tab that never sent there brings nothing but its Session.
+    const begunThere = this.#options.cloud.threadConversations(forward.cloudThread)
+    const sessions: z.infer<typeof ReturnSessionSchema>[] = []
+    const left: string[] = []
+    for (const { session, journals } of members) {
+      const generation = threads.execution(session)?.generation ?? 1
+      const moved = forward.sessions.find((each) => each.session === session)
+      if (moved) {
+        sessions.push({ session, conversationId: moved.conversationId, harness: moved.harness, nativeId: moved.nativeId, generation })
+        continue
+      }
+      for (const begun of begunThere.filter((each) => journals.includes(each.conversationId))) {
+        if (begun.nativeId) sessions.push({ session, conversationId: begun.conversationId, harness: begun.harness, nativeId: begun.nativeId, generation, begun: true })
+        else left.push(begun.conversationId)
+      }
     }
+    if (left.length) hostLog("returns", "conversations begun in the cloud whose harness never started there bring nothing back", { move, conversations: left.join(", ") })
     if (!existsSync(forward.folder)) throw new Error(`Its worktree on this Mac, ${forward.folder}, is gone; it has nowhere to come back to.`)
     const device = await account.deviceId()
     if (!device) throw new Error("This Mac isn't one of the account's devices, so nothing can be sent back to it.")
-    return { move, thread: placed.thread, asked: conversationId, cloudThread: forward.cloudThread, folder: forward.folder, forward: forward.handoff, sessions, phase: "preparing", device, began: Date.now(), timings: {} }
+    return { move, thread: placed.thread, asked: conversationId, cloudThread: forward.cloudThread, folder: forward.folder, forward: forward.handoff, sessions, left, phase: "preparing", device, began: Date.now(), timings: {} }
   }
 
   /** The move that took the Thread to the cloud runtime `runtime`, as its plan stands done. */
@@ -197,6 +224,17 @@ export class CloudReturns {
   }
 
   async #resume(plan: ReturnPlan): Promise<ThreadReturnOutcome> {
+    this.#returning.set(plan.cloudThread, (this.#returning.get(plan.cloudThread) ?? 0) + 1)
+    try {
+      return await this.#carry(plan)
+    } finally {
+      const left = (this.#returning.get(plan.cloudThread) ?? 1) - 1
+      if (left > 0) this.#returning.set(plan.cloudThread, left)
+      else this.#returning.delete(plan.cloudThread)
+    }
+  }
+
+  async #carry(plan: ReturnPlan): Promise<ThreadReturnOutcome> {
     const step = (next: ThreadReturnStep) => this.#options.step(plan.asked, plan.move, next)
     try {
       if (plan.phase === "preparing") {
@@ -216,7 +254,14 @@ export class CloudReturns {
         await this.#write(plan)
       }
       if (plan.phase === "claimed") {
-        for (const session of plan.sessions) await this.#options.cloud.release(session.conversationId)
+        // Every conversation of the cloud Thread is answered here from now, then each begun there gets its journal
+        // here from its records, under its own id: the window's tab of it goes on here.
+        await this.#options.cloud.releaseThread(plan.cloudThread)
+        for (const session of plan.sessions) {
+          if (!session.begun) continue
+          if (!session.path) throw new Error(`the records of ${session.harness}'s session ${session.nativeId} came back with no path`)
+          await this.#options.capture(session.conversationId, session.path)
+        }
         await this.#account().finishReturn(plan.cloudThread, plan.move)
         if (plan.kept) await rm(plan.kept.file, { force: true })
         plan.phase = "done"
@@ -325,7 +370,9 @@ export class CloudReturns {
         if (restored.kind === "outdated") throw new Error(`${each.harness} here is older than the version that wrote this session in the cloud; update it, then bring the Thread back.`)
         if (restored.kind === "forked") throw new Error(`${each.harness} here holds a copy of this session that went on without the cloud's turns.`)
         if (restored.kind === "refused") throw new Error(restored.reason)
+        for (const session of plan.sessions) if (session.begun && session.harness === each.harness && session.nativeId === each.nativeId) session.path = restored.path
       }
+      this.#everyConversationCarried(plan)
     } catch (error) {
       const reason = errorMessage({ error })
       hostWarn("returns", "a return couldn't be taken here; the worktree is put back and the Thread given back", { move: plan.move, reason })
@@ -340,20 +387,38 @@ export class CloudReturns {
     return undefined
   }
 
-  /** Step 5's claim: the handoff back mirrors the forward one, each Session one past its generation here. */
+  /**
+   * Before anything is claimed: every conversation the cloud Thread has, that this Mac's store places in it, comes back
+   * with this return. One begun there after the return was planned (a tab opened as it began) would be left on a
+   * machine that ends, so the Thread is given back instead, and the person brings it back again.
+   */
+  #everyConversationCarried(plan: ReturnPlan): void {
+    const threads = this.#options.threads()
+    if (!threads) throw new Error("The Thread store closed.")
+    const carried = new Set([...plan.sessions.map((session) => session.conversationId), ...plan.left])
+    const there = new Set(this.#options.cloud.threadConversations(plan.cloudThread).map((each) => each.conversationId))
+    const missed = threads.threadSessions(plan.thread).flatMap((session) => session.journals).filter((journal) => there.has(journal) && !carried.has(journal))
+    if (missed.length) throw new Error("A conversation began in the cloud as the Thread set off back; bring it back again to bring that one too.")
+    const sessions = plan.sessions.filter((session) => session.begun)
+    const pathless = sessions.find((session) => !session.path)
+    if (pathless) throw new Error(`${pathless.harness}'s session ${pathless.nativeId}, begun in the cloud, didn't come back.`)
+  }
+
+  /**
+   * Step 5's claim: the Thread and every Session it has as this Mac's store records them now, each one past its
+   * generation here, those it gained in the cloud included, so none is left owned by a machine that ends.
+   */
   #claim(plan: ReturnPlan): void {
     const threads = this.#options.threads()
     if (!threads) throw new Error("The Thread store closed.")
+    const here = threads.threadHandoff(plan.thread)
     const handoff = HandoffSchema.parse({
       move: plan.move,
       source: { kind: "cloud", runtime: cloudRuntimeOf(plan.cloudThread) },
       target: threads.self,
       releasedAt: plan.timings.released === undefined ? Date.now() : plan.began + plan.timings.released,
-      thread: plan.forward.thread,
-      sessions: plan.forward.sessions.map((session) => {
-        const back = plan.sessions.find((each) => each.session === session.id)
-        return { ...session, generation: (back?.generation ?? session.generation) + 1 }
-      }),
+      thread: here.thread,
+      sessions: here.sessions.map((session) => ({ ...session, generation: session.generation + 1 })),
     })
     this.#options.claim({ operationId: namedUuid(`mako return\0${plan.move}\0claim`), handoff, actor: threads.person() })
   }

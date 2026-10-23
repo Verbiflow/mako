@@ -47,6 +47,13 @@ export type SentRecords = z.infer<typeof SentRecordsSchema>
 export const ReceivingSessionSchema = z.object({ harness: z.string().min(1), nativeId: z.string().min(1), holdings: RecordHoldingsSchema.optional() })
 export type ReceivingSession = z.infer<typeof ReceivingSessionSchema>
 
+/**
+ * One session's records pulled from a remote store into this one ahead of time, not written into its harness's store
+ * (`SessionCatalog.stageRecords`): a move's machine stages what was sent ahead, so the hand-over pulls only what's new.
+ */
+export const StagedRecordsSchema = SyncReportSchema.extend({ harness: z.string(), nativeId: z.string() })
+export type StagedRecords = z.infer<typeof StagedRecordsSchema>
+
 /** One session taken from a remote store and written into its harness's store here (`SessionCatalog.receiveRecords`). */
 export const ReceivedRecordsSchema = z.object({ harness: z.string(), nativeId: z.string(), pulled: SyncReportSchema, restored: KeptRestoreSchema })
 export type ReceivedRecords = z.infer<typeof ReceivedRecordsSchema>
@@ -61,10 +68,16 @@ export class RecordSync {
   readonly #store: RecordStore
   readonly #remote: RecordRemote
   readonly #turns = new Map<string, Promise<unknown>>()
+  readonly #describesStore: ((harness: string, key: string) => boolean) | undefined
 
-  constructor(store: RecordStore, remote: RecordRemote) {
+  /**
+   * `describesStore`: whether a unit of a harness's records describes its store rather than any session (a database's
+   * schema, its migration list), which a pull keeps as this store's own where another store's history of it differs.
+   */
+  constructor(store: RecordStore, remote: RecordRemote, options: { describesStore?: (harness: string, key: string) => boolean } = {}) {
     this.#store = store
     this.#remote = remote
+    this.#describesStore = options.describesStore
   }
 
   /** Sends what the remote lacks of the session; one push of a session at a time, a later one waiting for the last. */
@@ -223,7 +236,8 @@ export class RecordSync {
       if (pulled.bundle.units.length) {
         const fetch = (hashes: string[]) => this.#fetch(hashes, report)
         try {
-          const taken = await this.#store.importSession(pulled.bundle, fetch, { remote: this.#remote.id, through: pulled.through })
+          const describes = this.#describesStore
+          const taken = await this.#store.importSession(pulled.bundle, fetch, { remote: this.#remote.id, through: pulled.through }, describes && ((unit) => describes(harness, unit.key)))
           report.versions += taken.versions
           report.held += taken.held
         } catch (error) {

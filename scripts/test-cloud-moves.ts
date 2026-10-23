@@ -34,7 +34,7 @@ class Gateway {
   readonly checkpoints = new Map<string, number>()
   readonly sentRecords: string[][] = []
   readonly answers = new Map<string, MoveAnswer>()
-  readonly calls: Array<{ channel: string; args: readonly unknown[] }> = []
+  readonly calls: Array<{ channel: string; args: readonly unknown[]; options?: { refuseUnstarted?: boolean } }> = []
   /** The Thread's state here each time the machine was asked whether it's ready. */
   readonly readyWhile: string[] = []
   /** Set to make the machine's arrival fail, or its readiness (a cloud too full to start it), or the next refusals unreachable. */
@@ -148,8 +148,8 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
     cloud: {
       adopt: async (conversation) => void started.push(`adopt ${conversation.conversationId} ${conversation.threadId}`),
       started: (conversationId) => started.push(`started ${conversationId}`),
-      callThread: async (_threadId, channel, args): Promise<EncodedValue> => {
-        gateway.calls.push({ channel, args })
+      callThread: async (_threadId, channel, args, _conversationId, options): Promise<EncodedValue> => {
+        gateway.calls.push({ channel, args, ...options && { options } })
         if (channel === "mako:move-arrive" && gateway.arrival) throw gateway.arrival
         if (channel === "mako:move-ready") {
           if (gateway.ready) throw gateway.ready
@@ -184,11 +184,13 @@ try {
     const arrive = s.gateway.calls.find((call) => call.channel === "mako:move-arrive")
     const sent = plan(s, id)
     assert.equal(sent.phase, "started")
-    assert.deepEqual(arrive?.args, [{ move: id, folder: s.checkout, checkpoint: plan(s, id).checkpoint, sessions: [{ harness: "codex", nativeId: "n-1", holdings: { "codex:sessions/n-1.jsonl": 2 }, open: { conversationId: s.conversation, modeId: "access:full", tuning: { model: "gpt-5.5" } } }] }], "the machine is told what the last send held, to hold at least that, and to open the session as it ran here before the claim")
+    // As the wire carries it: JSON, where an unset field is absent.
+    assert.deepEqual(z.json().parse(JSON.parse(JSON.stringify(arrive?.args))), z.json().parse(JSON.parse(JSON.stringify([{ move: id, folder: s.checkout, checkpoint: plan(s, id).checkpoint, sessions: [{ harness: "codex", nativeId: "n-1", holdings: { "codex:sessions/n-1.jsonl": 2 }, open: { conversationId: s.conversation, modeId: "access:full", tuning: { model: "gpt-5.5" } } }], handoff: plan(s, id).handoff }]))), "the machine is told what the last send held, to hold at least that, to file the Thread under this Mac's IDs, and to open the session as it ran here before the claim")
     const start = s.gateway.calls.find((call) => call.channel === "mako:live-start")
     assert.deepEqual(start?.args, ["codex", s.checkout, { conversationId: s.conversation, resume: "n-1", modeId: "access:full", tuning: { model: "gpt-5.5" } }], "resumed natively, with the settings it ran with")
     assert.ok(s.gateway.calls.findIndex((call) => call.channel === "mako:move-arrive") < s.gateway.calls.findIndex((call) => call.channel === "mako:live-start"), "nothing starts before the arrival")
     assert.deepEqual(s.gateway.calls.find((call) => call.channel === "mako:move-ready")?.args, [{ folder: s.checkout, harnesses: ["codex"] }])
+    assert.deepEqual(s.gateway.calls.find((call) => call.channel === "mako:move-ready")?.options, { refuseUnstarted: true }, "never queued: a cloud that can't start it says so at once")
     assert.deepEqual(s.gateway.readyWhile, ["here"], "its machine was ready before the release")
     assert.deepEqual(s.started, [`adopt ${s.conversation} ${outcome.kind === "moved" ? outcome.cloudThread : ""}`, `started ${s.conversation}`])
     const execution = state(s)
@@ -196,6 +198,9 @@ try {
     assert.equal(execution?.state === "elsewhere" && execution.owner.kind === "cloud" && execution.owner.runtime, cloudRuntimeOf(outcome.kind === "moved" ? outcome.cloudThread : ""))
     assert.equal(execution?.generation, 3, "released (2), claimed (3)")
     assert.deepEqual(await s.moves.move(s.conversation, id), outcome, "asked again, the same answer, nothing done twice")
+    const made = s.gateway.made.length
+    assert.deepEqual(await s.moves.move(s.conversation, move()), { kind: "kept-here", reason: "This Thread runs in the cloud already. Bring it back to this Mac first to move it again." }, "a new move of a Thread in the cloud says where it is")
+    assert.equal(s.gateway.made.length, made, "and makes nothing")
     assert.equal(s.gateway.calls.filter((call) => call.channel === "mako:live-start").length, 1)
   }
 

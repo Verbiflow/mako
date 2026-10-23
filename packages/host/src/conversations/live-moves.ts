@@ -234,21 +234,6 @@ export class LiveMoves {
   }
 
   /**
-   * What keeps these conversations from leaving now, as `blockers` says it
-   * for a Thread: a cloud machine asks it of the conversations a device takes
-   * back, which its own store places in Threads of their own.
-   */
-  conversationBlockers(journals: readonly string[]): string[] {
-    try {
-      this.residentsQuiet([{ journals, natives: [] }])
-      return []
-    } catch (error) {
-      if (error instanceof MoveNotQuietError) return error.reasons
-      throw error
-    }
-  }
-
-  /**
    * Pauses these conversations' providers, as a release does, once none of
    * them works: their journals and bindings stay, and nothing of them runs
    * until something wakes them. Refuses, naming what still works, rather than
@@ -310,8 +295,13 @@ export class LiveMoves {
     if (resident.autoContinue) return "is about to continue a dropped turn"
     if (snapshot.session.backgroundTasks) return "has background tasks running"
     if ((snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)) return "has subagents running"
-    if (resident.driver && !resident.hibernating && !this.access.canHibernate(resident))
+    if (resident.driver && !resident.hibernating && !this.access.canHibernate(resident)) {
+      // A session opens again from its record: one that never finished a turn (its first failed) has none yet.
+      const binding = snapshot.control?.bindings.find((each) => each.id === snapshot.control?.activeBindingId)
+      if (!binding?.resumed && !snapshot.requests.some((request) => request.status === "completed" || request.status === "interrupted"))
+        return "hasn't finished a turn yet, so nothing of it can be carried: send it a message, or close it"
       return "can't pause its provider safely yet"
+    }
     return undefined
   }
 

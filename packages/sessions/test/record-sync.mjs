@@ -228,7 +228,25 @@ try {
   assert.deepEqual(parts.map((part) => part.units[0].versions.map((version) => version.seq).filter((_, at, all) => at === 0 || at === all.length - 1)), [[0, 9999], [10000, 19999], [20000, 24999]])
 
   for (const store of [a, laptopStore]) store.close()
-  console.log("PASS: a store keeps in step with a remote: only what's new each way, a lost remote caught up, a cut push sent again, two lines of one session refused both ways")
+  // A unit two sessions share (OpenCode's project row, a database's schema), pushed with each: the remote keeps units
+  // per session, so the second session's push carries the shared unit too, rather than counting on the first's.
+  {
+    const home = join(root, "sharing")
+    const shared = join(home, "sessions", "project.json")
+    const own = (name) => join(home, "sessions", `${name}.jsonl`)
+    await mkdir(join(home, "sessions"), { recursive: true })
+    await writeFile(shared, "{\"project\":1}\n")
+    for (const name of ["s1", "s2"]) await writeFile(own(name), line(name === "s1" ? 1 : 2, 4))
+    const store = new RecordStore(join(root, "sharing-store"), stores)
+    const recordsOf = (name) => ({ roots: [{ name: "synthetic", path: home }], files: [own(name), shared], databases: [] })
+    for (const name of ["s1", "s2"]) await store.capture({ harness: "synthetic", nativeId: name, home, records: recordsOf(name) })
+    const perSession = new MemoryRemote("gateway/t-shared")
+    const sync = new RecordSync(store, perSession)
+    for (const name of ["s1", "s2"]) await sync.push("synthetic", name)
+    for (const name of ["s1", "s2"])
+      assert.deepEqual((await perSession.holdings("synthetic", name)).holdings, store.holdings("synthetic", name), `${name}: the remote holds every unit of it, the shared one too`)
+  }
+  console.log("PASS: a store keeps in step with a remote: only what's new each way, a lost remote caught up, a cut push sent again, two lines of one session refused both ways, a unit two sessions share sent with each")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

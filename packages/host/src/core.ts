@@ -39,7 +39,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudMoves, CloudReturns, folderRepository, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudMoves, CloudReturns, folderRepository, namedUuid, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -125,6 +125,7 @@ interface LateParts {
   controlService?: ControlService
   cloud?: CloudAccount
   cloudConversations?: CloudConversations
+  cloudReturns?: CloudReturns
   automations?: Automations
   updates?: Updates
   attribution?: Attribution
@@ -372,6 +373,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         changed: (conversationId) => {
           for (const tab of workspaceClients.everyTab()) tab.elsewhereChanged(conversationId)
         },
+        threads: () => threads.store ?? undefined,
+        returning: (cloudThread) => late.cloudReturns?.returning(cloudThread) ?? false,
       })
   late.cloudConversations = cloudConversations
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
@@ -443,8 +446,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return catalog.receiveRecords(link, sessions, installed)
     },
     cloud: cloudConversations,
+    capture: async (conversationId, path) => void (await live.capture(conversationId, path)),
     step: (conversationId, move, step) => emit({ type: "thread-return-step", conversationId, move, step }),
   })
+  late.cloudReturns = cloudReturns
   void cloudReturns?.settle().catch((error: Error) => hostWarn("returns", "returns a stopped host left couldn't be settled", { error: error.message }))
   const workspaceAutomations = new Automations({
     git,
@@ -555,6 +560,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         workspaceProblem: () => machineWorkspaceProblem,
         workspaceSettled: () => machineWorkspace,
         receive: (link, sessions, installed) => catalog.receiveRecords(link, sessions, installed),
+        stage: (link, sessions) => catalog.stageRecords(link, sessions),
         installed: (harness) => installedReading(harnesses.updates.restoreRuntime(harness)),
         open: async (session) => {
           // Settled as every start's are: the harness's catalog fills what the device's settings leave out.
@@ -565,6 +571,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
             ...tuning !== undefined && { tuning },
           })
           await live.opened(session.conversationId)
+        },
+        take: (handoff) => {
+          const store = threads.store
+          if (!store) throw new Error("This machine's Thread store isn't open.")
+          store.takeArrival({ operationId: namedUuid(`mako move\0${handoff.move}\0arrive`), handoff, actor: store.person() })
         },
         warm: async (harness, folder) => {
           await harnesses.profiles.resolveLaunch(harness, folder, undefined)
@@ -578,7 +589,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         records: () => machineRecords(machineLink),
         workspace: () => workspaceClients.homePath(),
         workspaceProblem: () => machineWorkspaceProblem,
-        blockers: (conversations) => live.moves.conversationBlockers(conversations),
+        blockers: (thread) => live.moves.settledBlockers(thread),
         threads: () => threads.store ?? undefined,
         moves: live.moves,
         native: (conversationId) => {

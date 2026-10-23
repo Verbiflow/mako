@@ -16,7 +16,7 @@ import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE, type KeptRest
 import { makoRecords } from "@mako/sessions/record-streams"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import type { InstalledReading, SessionWriters } from "@mako/sessions/record-writers"
-import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords } from "@mako/sessions/record-sync"
+import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "@mako/sessions/record-sync"
 import { isReplyEntry } from "@mako/sessions/entries"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { existsSync } from "node:fs"
@@ -287,6 +287,8 @@ export interface ThreadCatalog {
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   /** Takes sessions from a remote store into their harnesses' own stores here, as a move's destination does (`SessionCatalog.receiveRecords`). */
   receiveRecords(link: RecordsLink, sessions: ReceivingSession[], installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]>
+  /** Pulls sessions' records into the record store ahead of a move, writing nothing into the harnesses' stores (`SessionCatalog.stageRecords`). */
+  stageRecords(link: RecordsLink, sessions: ReceivingSession[]): Promise<StagedRecords[]>
   /** Every harness version that wrote the session at `path`, as the record store keeps them, read without writing; null when it holds none. */
   recordWriters(path: string): SessionWriters | null
   /** A page for the viewer; a tool row fetches its whole output (`block`) when it opens. */
@@ -473,7 +475,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let recordsLink: RecordsLink | null = null
 
   async function awaitCatalogReady(): Promise<{
-    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept" | "syncRecords" | "sendRecords" | "receiveRecords">
+    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept" | "syncRecords" | "sendRecords" | "receiveRecords" | "stageRecords">
     signal: AbortSignal
   }> {
     const signal = catalogLifetime?.signal
@@ -1270,6 +1272,12 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return source.receiveRecords(link, sessions, installed)
   }
 
+  async function stageRecords(link: RecordsLink, sessions: ReceivingSession[]): Promise<StagedRecords[]> {
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    return source.stageRecords(link, sessions)
+  }
+
   async function restoreKept(path: string, installed?: InstalledReading | null): Promise<KeptRestore> {
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
@@ -1559,6 +1567,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     syncRecords,
     sendRecords,
     receiveRecords,
+    stageRecords,
     recordWriters,
     viewPage: viewThreadPage,
     viewPreview: viewThreadPreview,
