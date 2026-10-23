@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
@@ -751,6 +751,8 @@ if (values.handoff) report["handoff"] = await handOffProof(values.handoff, proje
 // A host this run started signs out as it ends: its device leaves the account, and its credential leaves the keychain.
 if (values["spawn-host"]) await call("mako:cloud-sign-out", [])
 if (values.report) await writeFile(values.report, `${JSON.stringify(report, null, 2)}\n`)
+// A host of its own is throwaway, and so is the clone its Threads' worktrees were made from.
+if (ownHost) await rm(scratch, { recursive: true, force: true })
 
 const stepNames = [...new Set(Object.values(report).flatMap(({ steps }) => steps.map((step) => step.step)))]
 console.log(`\n${["harness", ...stepNames.map((name) => name.split(" ").slice(0, 3).join(" "))].map((name) => name.padEnd(16)).join(" ")}`)
