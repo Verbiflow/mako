@@ -473,6 +473,9 @@ async function prove(harness: string, project: string): Promise<Proved> {
  * here from an earlier step, is asked. It must be refused before anything is released, at once, saying the cloud is
  * full, rather than wait in the cloud's queue for a place.
  */
+/** How long a cloud start may take before it reads as waiting for a place: a machine's boot and clone, with room. */
+const FULL_START_MS = 90_000
+
 async function fullCloud(places: number, conversation: string): Promise<Proved> {
   const steps: Step[] = []
   const timed = async (step: string, work: () => Promise<string>) => {
@@ -486,9 +489,19 @@ async function fullCloud(places: number, conversation: string): Promise<Proved> 
     return done.ok
   }
   const filled = await timed("the cloud's places taken", async () => {
-    for (let place = 0; place < places; place++)
-      await call("mako:live-start", ["opencode", project, { conversationId: randomUUID(), cloud: { repository: { url: values.repository } } }])
-    return `${places} cloud conversations running`
+    // A Thread an earlier step left in the cloud may hold a place already: a start that waits for one means it's full.
+    let started = 0
+    for (let place = 0; place < places; place++) {
+      const start = call("mako:live-start", ["opencode", project, { conversationId: randomUUID(), cloud: { repository: { url: values.repository } } }])
+      const waiting = new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), FULL_START_MS).unref())
+      if ((await Promise.race([start.then(() => "started" as const), waiting])) === "waiting") {
+        // Left to wait in the cloud's queue; the run's end takes it with the cloud.
+        start.catch(() => undefined)
+        return `${started} started; the next waited for a place, so the cloud is full`
+      }
+      started += 1
+    }
+    return `${started} cloud conversations running`
   })
   if (filled) await timed("a move into a full cloud", async () => {
     const began = performance.now()
