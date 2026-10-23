@@ -158,6 +158,24 @@ export async function departMove(deps: MoveDepartureDeps, input: MoveDepartureIn
 
 /** The checkout and the records, sent up once the Thread is released here. */
 async function packUp(deps: MoveDepartureDeps, input: MoveDepartureInput, link: RecordsLink, natives: Array<{ harness: string; nativeId: string; path: string }>, began: number): Promise<ReturnDeparture> {
+  // The checkout and the records go up at once: neither waits on the other, and the device takes both only once the
+  // cloud has the departure, which names both.
+  const [checkpoint, sent] = await Promise.all([
+    sendCheckout(deps, input, link),
+    withFreshLink(() => deps.records() ?? link, (current) => deps.send(current, natives.map((native) => native.path))),
+  ])
+  const sessions = natives.map((native) => {
+    const went = sent.find((each) => each.harness === native.harness && each.nativeId === native.nativeId)
+    if (!went) throw new Error(`${native.harness}'s session ${native.nativeId} wasn't sent.`)
+    return { harness: native.harness, nativeId: native.nativeId, holdings: went.holdings }
+  })
+  const departure = ReturnDepartureSchema.parse({ checkpoint, sessions })
+  hostLog("moves", "a Thread left for its device", { move: input.move, folder: input.folder, sessions: sessions.length, checkpointBytes: checkpoint.bytes, ms: Math.round(performance.now() - began) })
+  return departure
+}
+
+/** The machine's checkout, captured and sent up unless the cloud has it. */
+async function sendCheckout(deps: MoveDepartureDeps, input: MoveDepartureInput, link: RecordsLink): Promise<ReturnDeparture["checkpoint"]> {
   await mkdir(deps.scratch, { recursive: true })
   const scratch = await mkdtemp(join(deps.scratch, "depart-"))
   let checkpoint: ReturnDeparture["checkpoint"]
@@ -179,13 +197,5 @@ async function packUp(deps: MoveDepartureDeps, input: MoveDepartureInput, link: 
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
-  const sent = await withFreshLink(() => deps.records() ?? link, (current) => deps.send(current, natives.map((native) => native.path)))
-  const sessions = natives.map((native) => {
-    const went = sent.find((each) => each.harness === native.harness && each.nativeId === native.nativeId)
-    if (!went) throw new Error(`${native.harness}'s session ${native.nativeId} wasn't sent.`)
-    return { harness: native.harness, nativeId: native.nativeId, holdings: went.holdings }
-  })
-  const departure = ReturnDepartureSchema.parse({ checkpoint, sessions })
-  hostLog("moves", "a Thread left for its device", { move: input.move, folder: input.folder, sessions: sessions.length, checkpointBytes: checkpoint.bytes, ms: Math.round(performance.now() - began) })
-  return departure
+  return checkpoint
 }

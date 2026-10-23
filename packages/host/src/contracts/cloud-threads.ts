@@ -104,8 +104,12 @@ export type HandOffSettings = {
   unavailable?: string
 }
 
-/** What `mako:thread-move` came to: the Thread runs on a cloud Thread now, or it stayed here, and why. */
-export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
+/**
+ * What `mako:thread-move` came to: the Thread runs on a cloud Thread now, or it stayed here, and why. `released`, only
+ * for a quit's handoff: this Mac let go of the Thread and its host carries the rest (the last changes sent, the claim,
+ * the start), so the window can close; the move's steps say how it ends.
+ */
+export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string } | { kind: "released"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
 
 /** A Thread coming back from the cloud, step by step, as the window it was asked from shows it. */
 export type ThreadReturnStep =

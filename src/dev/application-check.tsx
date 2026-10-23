@@ -144,10 +144,11 @@ window.mako = {
         threadMoveStepped(candidate.conversationId, move, { kind: "kept-here", reason })
         return { conversationId: candidate.conversationId, outcome: { kind: "kept-here", reason } }
       }
-      threadMoveStepped(candidate.conversationId, move, { kind: "moved", conversations: [candidate.conversationId], continued: true })
-      return { conversationId: candidate.conversationId, outcome: { kind: "moved", cloudThread: `t-${candidate.thread}` } }
+      // As the host answers a quit's handoff: once this Mac let go, the rest carried by the host.
+      threadMoveStepped(candidate.conversationId, move, { kind: "handing-over" })
+      return { conversationId: candidate.conversationId, outcome: { kind: "released", cloudThread: `t-${candidate.thread}` } }
     }))
-    const moved = new Set(results.filter((result) => result.outcome.kind === "moved").map((result) => result.conversationId))
+    const moved = new Set(results.filter((result) => result.outcome.kind === "released").map((result) => result.conversationId))
     lifecycle = { ...lifecycle, work: lifecycle.work.filter((item) => !moved.has(item.id)) }
     return results
   },

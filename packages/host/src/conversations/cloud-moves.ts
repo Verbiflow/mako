@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
 import { MoveCheckpointSchema, type MoveAnswer, type MoveCheckpoint } from "@mako/protocol/moves"
-import { RecordHoldingsSchema, withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
+import { RecordHoldingsSchema, describeSync, withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -179,6 +179,8 @@ export class CloudMoves {
   readonly #running = new Map<string, Promise<ThreadMoveOutcome>>()
   /** By move running in this host: the Thread it moves, which nothing keeps ready meanwhile (`leaving`). */
   readonly #leaving = new Map<string, string>()
+  /** By move running in this host: settled with its cloud Thread once this Mac let go of the Thread (`answer: "released"`). */
+  readonly #released = new Map<string, { promise: Promise<string>; resolve(cloudThread: string): void }>()
 
   constructor(options: CloudMovesOptions) {
     this.#options = options
@@ -189,15 +191,42 @@ export class CloudMoves {
    * running turns are paused and go along, continuing in the cloud (`ThreadHandOff`); without it, a Thread at work
    * stays here.
    */
-  move(conversationId: string, move: string, handOff?: ThreadHandOff): Promise<ThreadMoveOutcome> {
-    const running = this.#running.get(move)
-    if (running) return running
-    const work = this.#move(conversationId, MoveIdSchema.parse(move), handOff).finally(() => {
-      this.#running.delete(move)
-      this.#leaving.delete(move)
-    })
-    this.#running.set(move, work)
-    return work
+  move(conversationId: string, move: string, handOff?: ThreadHandOff, options: { answer?: "released" } = {}): Promise<ThreadMoveOutcome> {
+    let work = this.#running.get(move)
+    if (!work) {
+      let resolve: (cloudThread: string) => void = () => undefined
+      const promise = new Promise<string>((settle) => { resolve = settle })
+      this.#released.set(move, { promise, resolve })
+      work = this.#move(conversationId, MoveIdSchema.parse(move), handOff).finally(() => {
+        this.#running.delete(move)
+        this.#leaving.delete(move)
+        this.#released.delete(move)
+      })
+      this.#running.set(move, work)
+    }
+    // Answered once this Mac let go: what's left (the last changes sent, the claim, the start) goes on in this host,
+    // which outlives a window, and is reported by the move's steps as it goes.
+    const released = options.answer === "released" ? this.#released.get(move)?.promise : undefined
+    if (!released) return work
+    return Promise.race([work, released.then((cloudThread): ThreadMoveOutcome => ({ kind: "released", cloudThread }))])
+  }
+
+  /**
+   * Waits, until `deadline` at most, for every move running in this host to settle (started where it goes, or kept
+   * here): what a Mac about to sleep waits for, so no Thread it let go of is left between here and the cloud. Answers
+   * how many still run.
+   */
+  async settled(deadline: number): Promise<number> {
+    const running = [...this.#running.values()]
+    if (running.length) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      await Promise.race([
+        Promise.allSettled(running),
+        new Promise((resolve) => { timer = setTimeout(resolve, Math.max(0, deadline - Date.now())) }),
+      ])
+      clearTimeout(timer)
+    }
+    return this.#running.size
   }
 
   /** Whether a move of `thread` runs in this host now: from its plan until it moved or stayed. */
@@ -326,6 +355,8 @@ export class CloudMoves {
         return this.#keep(plan, errorMessage({ error }), false)
       }
     }
+    // Let go of here: a caller that waits only for that hears it now, whether this host released it or a stopped one did.
+    if (plan.phase !== "preparing") this.#released.get(plan.move)?.resolve(plan.cloudThread)
     if (plan.phase === "released") {
       step({ kind: "handing-over" })
       let answer: MoveAnswer | undefined
@@ -483,7 +514,7 @@ export class CloudMoves {
     const sent = await withFreshLink(() => this.#account().threadRecords(plan.cloudThread), (link) => this.#options.sendRecords(link, plan.sessions.map((session) => session.path)))
     hostLog("moves", "a move's records were sent", {
       move: plan.move, phase: plan.phase,
-      sessions: sent.map((each) => `${each.harness}: ${each.versions} versions, ${each.chunks} chunks, ${each.bytes} bytes in ${each.requests} requests, ${each.ms} ms`).join("; "),
+      sessions: sent.map((each) => `${each.harness}: ${each.chunks} chunks, ${describeSync(each)}`).join("; "),
     })
     for (const session of plan.sessions) {
       const went = sent.find((each) => each.harness === session.harness && each.nativeId === session.nativeId)

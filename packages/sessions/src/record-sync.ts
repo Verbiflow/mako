@@ -30,8 +30,39 @@ export class RecordSyncConflictError extends Error {
   }
 }
 
-export const SyncReportSchema = z.object({ versions: z.number(), held: z.number(), chunks: z.number(), bytes: z.number(), requests: z.number(), ms: z.number() })
+/** The calls of one kind an exchange made (`pull`, `read`, `push`…): how many, and the time spent waiting on them. */
+export const SyncCallsSchema = z.object({ count: z.number(), ms: z.number() })
+export const SyncReportSchema = z.object({
+  versions: z.number(), held: z.number(), chunks: z.number(), bytes: z.number(), requests: z.number(), ms: z.number(),
+  /** Each kind of call to the remote, with its time; with `queuedMs`, what says where an exchange's time went. */
+  calls: z.record(z.string(), SyncCallsSchema).optional(),
+  /** Time a pull waited for this store's turn before importing (`RecordStore.importSession`). */
+  queuedMs: z.number().optional(),
+})
 export type SyncReport = z.infer<typeof SyncReportSchema>
+
+/**
+ * Where an exchange's time went, for a log line: "6 versions, 30316 bytes in 2225 ms: pull 2× 310 ms, read 3× 1620 ms,
+ * queued 0 ms".
+ */
+export function describeSync(report: SyncReport): string {
+  const calls = Object.entries(report.calls ?? {}).map(([kind, { count, ms }]) => `${kind} ${count}× ${Math.round(ms)} ms`)
+  if (report.queuedMs !== undefined) calls.push(`queued ${Math.round(report.queuedMs)} ms`)
+  return `${report.versions} versions, ${report.bytes} bytes in ${Math.round(report.ms)} ms${calls.length ? `: ${calls.join(", ")}` : ""}`
+}
+
+/** Times one call to the remote into `report.calls[kind]`, whether it answers or throws. */
+async function timed<Value>(report: SyncReport, kind: string, call: () => Promise<Value>): Promise<Value> {
+  const started = performance.now()
+  try {
+    return await call()
+  } finally {
+    const calls = (report.calls ??= {})
+    const tally = (calls[kind] ??= { count: 0, ms: 0 })
+    tally.count += 1
+    tally.ms += performance.now() - started
+  }
+}
 
 /** Each unit of a session by its key, at its head version: what a store holds of it (`RecordStore.holdings`). */
 export const RecordHoldingsSchema = z.record(z.string(), z.number().int())
@@ -125,12 +156,12 @@ export class RecordSync {
     const hashes = recordChunks(part.units.flatMap((unit) => unit.versions))
     const small = await this.#small(hashes)
     if (small) {
-      const sent = await this.#remote.pushWith(part, small.chunks)
+      const sent = await timed(report, "push", () => this.#remote.pushWith(part, small.chunks))
       report.requests += 1
       report.chunks += small.chunks.length
       report.bytes += small.bytes
       if ("ok" in sent) return sent
-      const resent = await this.#upload(sent.missing)
+      const resent = await this.#upload(sent.missing, report)
       report.chunks += resent.chunks
       report.bytes += resent.bytes
       report.requests += resent.requests
@@ -156,21 +187,21 @@ export class RecordSync {
   async #pushAsking(part: RecordBundle, hashes: string[], report: SyncReport): Promise<RecordPushAnswer> {
     const lacking: string[] = []
     for (let at = 0; at < hashes.length; at += RECORD_ASK_HASHES) {
-      lacking.push(...(await this.#remote.missing(hashes.slice(at, at + RECORD_ASK_HASHES))))
+      lacking.push(...(await timed(report, "missing", () => this.#remote.missing(hashes.slice(at, at + RECORD_ASK_HASHES)))))
       report.requests += 1
     }
-    const sent = await this.#upload(lacking)
+    const sent = await this.#upload(lacking, report)
     report.chunks += sent.chunks
     report.bytes += sent.bytes
     report.requests += sent.requests + 1
-    return this.#remote.push(part)
+    return timed(report, "push", () => this.#remote.push(part))
   }
 
   async #holdings(harness: string, nativeId: string, report: SyncReport): Promise<RecordHoldings> {
     const holdings: RecordHoldings = {}
     let after = ""
     for (;;) {
-      const page = await this.#remote.holdings(harness, nativeId, after)
+      const page = await timed(report, "holdings", () => this.#remote.holdings(harness, nativeId, after))
       report.requests += 1
       Object.assign(holdings, page.holdings)
       if (page.next === null) return holdings
@@ -179,12 +210,12 @@ export class RecordSync {
   }
 
   /** The chunks named, read from this store and sent in packs, a few at once; the first failure stops it and is thrown. */
-  async #upload(hashes: string[]): Promise<{ chunks: number; bytes: number; requests: number }> {
+  async #upload(hashes: string[], report: SyncReport): Promise<{ chunks: number; bytes: number; requests: number }> {
     const sent = { chunks: 0, bytes: 0, requests: 0 }
     const flights = new Set<Promise<void>>()
     let failed: Error | undefined
     const send = (chunks: PackedChunk[]) => {
-      const flight: Promise<void> = this.#put(chunks).then((error) => {
+      const flight: Promise<void> = timed(report, "upload", () => this.#put(chunks)).then((error) => {
         flights.delete(flight)
         if (error) failed ??= error
         else sent.requests += 1
@@ -230,16 +261,22 @@ export class RecordSync {
     const report: SyncReport = { versions: 0, held: 0, chunks: 0, bytes: 0, requests: 0, ms: 0 }
     let after = this.#store.pulledThrough(this.#remote.id, harness, nativeId)
     for (;;) {
-      const pulled = await this.#remote.pull(harness, nativeId, after)
+      const pulled = await timed(report, "pull", () => this.#remote.pull(harness, nativeId, after))
       report.requests += 1
       if (!pulled) break
       if (pulled.bundle.units.length) {
-        const fetch = (hashes: string[]) => this.#fetch(hashes, report)
+        // The chunks this store lacks, read before the import takes the store's turn, so pulls of several sessions
+        // overlap on the network and the store is held only to write. The import still writes each under its own
+        // intent, and asks the remote for any it lacks then (a chunk a repack dropped meanwhile).
+        const ahead = new Map<string, StoredChunk>()
+        for await (const { hash, chunk } of this.#fetch(this.#store.missingChunks(recordChunks(pulled.bundle.units.flatMap((unit) => unit.versions))), report)) ahead.set(hash, chunk)
+        const fetch = (hashes: string[]) => this.#fetchAhead(ahead, hashes, report)
         try {
           const describes = this.#describesStore
           const taken = await this.#store.importSession(pulled.bundle, fetch, { remote: this.#remote.id, through: pulled.through }, describes && ((unit) => describes(harness, unit.key)))
           report.versions += taken.versions
           report.held += taken.held
+          report.queuedMs = (report.queuedMs ?? 0) + (taken.queuedMs ?? 0)
         } catch (error) {
           if (error instanceof RecordConflictError) throw new RecordSyncConflictError(harness, nativeId, error.key, error.seq, error.message)
           throw error
@@ -251,12 +288,23 @@ export class RecordSync {
     return { ...report, ms: performance.now() - started }
   }
 
+  /** The chunks an import asks for: those read ahead, then the rest from the remote. */
+  async *#fetchAhead(ahead: ReadonlyMap<string, StoredChunk>, hashes: string[], report: SyncReport): AsyncGenerator<{ hash: string; chunk: StoredChunk }> {
+    const rest: string[] = []
+    for (const hash of hashes) {
+      const chunk = ahead.get(hash)
+      if (chunk) yield { hash, chunk }
+      else rest.push(hash)
+    }
+    if (rest.length) yield* this.#fetch(rest, report)
+  }
+
   /** The chunks a pull needs, asked for in packs until each came; one the remote never sends ends the import short. */
   async *#fetch(hashes: string[], report: SyncReport): AsyncGenerator<{ hash: string; chunk: StoredChunk }> {
     for (let at = 0; at < hashes.length; at += RECORD_ASK_HASHES) {
       let asking = hashes.slice(at, at + RECORD_ASK_HASHES)
       while (asking.length) {
-        const came = await this.#remote.readChunks(asking)
+        const came = await timed(report, "read", () => this.#remote.readChunks(asking))
         report.requests += 1
         if (!came.length) return
         const got = new Set<string>()
@@ -325,7 +373,18 @@ function sumReports(first: SyncReport, second: SyncReport, started: number): Syn
     bytes: first.bytes + second.bytes,
     requests: first.requests + second.requests,
     ms: performance.now() - started,
+    ...(first.calls || second.calls) && { calls: sumCalls(first.calls ?? {}, second.calls ?? {}) },
   }
+}
+
+function sumCalls(first: NonNullable<SyncReport["calls"]>, second: NonNullable<SyncReport["calls"]>): NonNullable<SyncReport["calls"]> {
+  const sum = structuredClone(first)
+  for (const [kind, { count, ms }] of Object.entries(second)) {
+    const tally = (sum[kind] ??= { count: 0, ms: 0 })
+    tally.count += count
+    tally.ms += ms
+  }
+  return sum
 }
 
 /** Where a store's records go: a remote's routes and the header its calls carry. */

@@ -68,6 +68,9 @@ interface Ask {
   harness?: string
 }
 
+/** Where the stand-in machine's store files the next forks: a Session of its own unless one is named. */
+type ForkFiling = { into: string | undefined }
+
 /** A cloud machine's host behind the fake gateway: what it was asked, and its Thread's event outbox. */
 async function cloudMachine(reach: Reach = {}) {
   const gateway = createFakeGateway()
@@ -76,6 +79,8 @@ async function cloudMachine(reach: Reach = {}) {
   const calls: Array<{ channel: string; args: unknown[] }> = []
   /** By fork: the Session the machine's store put it in. */
   const forkSessions = new Map<string, string>()
+  /** Set to make the machine's store file the next forks into this Session, as one was seen to (its parent's). */
+  const filing: ForkFiling = { into: undefined }
   const served = await serveHostThroughGateway(await gateway.connectRuntime(), {
     runtimeId,
     build: "test",
@@ -92,7 +97,7 @@ async function cloudMachine(reach: Reach = {}) {
       if (channel === "mako:thread-create-session") return JSON.stringify({ thread: args[1], session: args[2] })
       if (channel === "mako:live-fork") {
         const input = z.object({ id: z.string(), provider: z.string() }).loose().parse(args[1])
-        const session = randomUUID()
+        const session = filing.into ?? randomUUID()
         forkSessions.set(input.id, session)
         return JSON.stringify({ session: { id: input.id, harness: input.provider, cwd: CLONE, status: "ready" }, revision: 1, createdAt: 1, requests: [], sessionId: session })
       }
@@ -140,7 +145,7 @@ async function cloudMachine(reach: Reach = {}) {
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, asked, machineState, bases, batch, network, served, forkSessions }
+  return { account, calls, created, asked, machineState, bases, batch, network, served, forkSessions, filing }
 }
 
 /**
@@ -751,6 +756,14 @@ test("in a Thread that moved to the cloud, a new tab and a fork start on its mac
   assert.deepEqual(store.journalPlacement(forkId), { thread: placed.thread, session: forkSession }, "the same Session ID in both stores")
   assert.equal(store.execution(SessionIdSchema.parse(forkSession))?.state, "elsewhere")
   assert.ok(router.has(forkId), "followed with the Thread's other conversations")
+  // A fork the machine filed into a Session the Thread already has (its parent tab's): filed the same here, so the two
+  // stores agree and it comes back with the Thread, rather than refused here and left in the cloud.
+  machine.filing.into = tab.session
+  const intoParent = randomUUID()
+  assert.ok((await router.route("mako:live-fork", [conversation, { id: intoParent, provider: "claude", point }])).handled)
+  assert.deepEqual(store.journalPlacement(intoParent), { thread: placed.thread, session: tab.session }, "in the Session the machine gave it")
+  assert.ok(router.has(intoParent), "followed with the Thread's other conversations")
+  machine.filing.into = undefined
   await assert.rejects(router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point, thread: "new" }]), /forks within its Thread there/)
   await assert.rejects(router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point, worktree: true }]), /works in its machine's checkout/)
 
@@ -763,7 +776,7 @@ test("in a Thread that moved to the cloud, a new tab and a fork start on its mac
   // A Session that runs here is this Mac's to start.
   const local = store.registerJournal({ conversationId: randomUUID(), createdAt: clock++, harness: "codex", bindings: [] }, store.person())
   assert.equal((await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID(), session: local.session }])).handled, false)
-  assert.deepEqual(await router.releaseThread(cloudThread), [moved, conversation, forkId], "coming back, each is answered here again")
+  assert.deepEqual(await router.releaseThread(cloudThread), [moved, conversation, forkId, intoParent], "coming back, each is answered here again")
   assert.equal(router.has(conversation), false)
 
   // A store takes a Session under the ID its Thread's other place gave it (as the machine's does), once.

@@ -1596,15 +1596,14 @@ export class SessionCatalog {
     const store = this.recordWriter
     if (!store || this.readOnly) throw new Error("Mako keeps no records here to send.")
     const sync = new RecordSync(store, refusingLink(recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization })), { describesStore: (harness, key) => this.describesStore(harness, key) })
-    const sent: SentRecords[] = []
-    for (const path of paths) {
+    // Side by side: captures take the store's turn one at a time, and the pushes overlap on the network.
+    return settledAll(paths.map(async (path): Promise<SentRecords> => {
       const ref = this.byPath.get(path)?.ref ?? (await this.open(path, false))?.ref
       if (!ref) throw new Error(`No session is listed at ${path}.`)
       if (!(await this.hold(path))) throw new Error(`Mako couldn't take ${ref.harness}'s session ${ref.nativeId} into its records whole, so it can't be sent.`)
       const report = await sync.push(ref.harness, ref.nativeId)
-      sent.push({ harness: ref.harness, nativeId: ref.nativeId, ...report, holdings: store.holdings(ref.harness, ref.nativeId) })
-    }
-    return sent
+      return { harness: ref.harness, nativeId: ref.nativeId, ...report, holdings: store.holdings(ref.harness, ref.nativeId) }
+    }))
   }
 
   /**
@@ -1616,9 +1615,8 @@ export class SessionCatalog {
     const store = this.recordWriter
     if (!store || this.readOnly) throw new Error("Mako keeps no records here to stage into.")
     const sync = new RecordSync(store, refusingLink(recordsOverHttp({ id: link.id, base: link.base, authorization: () => link.authorization })), { describesStore: (harness, key) => this.describesStore(harness, key) })
-    const staged: StagedRecords[] = []
-    for (const { harness, nativeId } of sessions) staged.push({ harness, nativeId, ...await sync.pull(harness, nativeId) })
-    return staged
+    // Side by side: each reads its chunks before it takes the store's turn (`RecordSync.pull`).
+    return settledAll(sessions.map(async ({ harness, nativeId }): Promise<StagedRecords> => ({ harness, nativeId, ...await sync.pull(harness, nativeId) })))
   }
 
   /**
@@ -1642,10 +1640,13 @@ export class SessionCatalog {
     const fresh = sessions.filter(({ harness, nativeId }) => !Object.keys(store.holdings(harness, nativeId)).length)
     const pulls: Array<{ provider: SessionProvider; harness: string; nativeId: string; pulled: SyncReport }> = []
     try {
-      for (const { harness, nativeId, holdings: sent } of sessions) {
+      for (const { harness } of sessions) if (!this.providers.some((each) => each.harness === harness)) throw new Error(`No harness here reads ${harness}'s sessions.`)
+      // Pulled side by side (each reads its chunks before it takes the store's turn), then checked in order.
+      const pulledAll = await settledAll(sessions.map(({ harness, nativeId }) => sync.pull(harness, nativeId)))
+      for (const [at, { harness, nativeId, holdings: sent }] of sessions.entries()) {
         const provider = this.providers.find((each) => each.harness === harness)
         if (!provider) throw new Error(`No harness here reads ${harness}'s sessions.`)
-        const pulled = await sync.pull(harness, nativeId)
+        const pulled = pulledAll[at]!
         const held = store.holdings(harness, nativeId)
         if (!Object.keys(held).length) throw new Error(`The cloud holds none of ${harness}'s session ${nativeId}.`)
         // A unit that describes the store (a schema, a migration list) is this store's own where the sender's differed: numbered apart.
@@ -2395,4 +2396,17 @@ function refusingLink(remote: RecordRemote): RecordRemote {
     pull: (harness, nativeId, after) => said(remote.pull(harness, nativeId, after)),
     sessions: () => said(remote.sessions()),
   }
+}
+
+/**
+ * Every promise's value, in order, once all have settled: the first failure is thrown only then, so nothing that
+ * cleans up after a failure runs while another of them still writes.
+ */
+async function settledAll<Value>(work: ReadonlyArray<Promise<Value>>): Promise<Value[]> {
+  const values: Value[] = []
+  for (const each of await Promise.allSettled(work)) {
+    if (each.status === "rejected") throw each.reason
+    values.push(each.value)
+  }
+  return values
 }

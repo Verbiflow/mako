@@ -21,8 +21,12 @@ export type CloudHandOffsOptions = {
   /** This Mac's Threads whose agents are working, owned here: one conversation each. */
   working(): WorkingThread[]
   moves: {
-    move(conversationId: string, move: string, handOff?: ThreadHandOff): Promise<ThreadMoveOutcome>
+    move(conversationId: string, move: string, handOff?: ThreadHandOff, options?: { answer?: "released" }): Promise<ThreadMoveOutcome>
     refusal(conversationId: string): Promise<string | undefined>
+    /** Whether a move of `thread` runs in this host now (`CloudMoves.leaving`). */
+    leaving(thread: string): boolean
+    /** Waits until `deadline` at most for every move running here to settle; answers how many still run (`CloudMoves.settled`). */
+    settled(deadline: number): Promise<number>
   }
   /** Why this Mac can't hand off now (signed out of the cloud); undefined when it can. */
   unavailable(): Promise<string | undefined>
@@ -54,27 +58,35 @@ export class CloudHandOffs {
   }
 
   /**
-   * Hands every Thread at work here to the cloud, each as one move named by `handOff` and the Thread. A sleeping Mac
-   * passes `releaseBy`: a Thread that can't be released by then stays here untouched. Answers how each went.
+   * Hands every Thread at work here to the cloud, each as one move named by `handOff` and the Thread. Answers how each
+   * went:
+   *
+   * - On quit, each once this Mac let go of it (`released`): the host carries the rest after the window closes.
+   * - As the Mac sleeps (`releaseBy`), each once it started in the cloud, or left here untouched if it couldn't be
+   *   released by then; and, until `releaseBy`, every move already running here (a quit's, a person's) too, so the
+   *   Mac never sleeps with a Thread it let go of between here and the cloud. A Thread already moving isn't moved again.
    */
   async handOff(handOff: string, why: ThreadHandOff["why"], releaseBy?: number): Promise<HandOffResult[]> {
     const began = performance.now()
     const unavailable = await this.#options.unavailable()
-    const working = this.#options.working()
+    const working = this.#options.working().filter(({ thread }) => !this.#options.moves.leaving(thread))
     const results = await Promise.all(working.map(async ({ conversationId, thread }): Promise<HandOffResult> => {
       if (unavailable) return { conversationId, outcome: { kind: "kept-here", reason: unavailable } }
       try {
         const move = namedUuid(`mako handoff\0${handOff}\0${thread}`)
-        return { conversationId, outcome: await this.#options.moves.move(conversationId, move, { why, ...releaseBy !== undefined && { releaseBy } }) }
+        const options = why === "quit" ? { answer: "released" as const } : {}
+        return { conversationId, outcome: await this.#options.moves.move(conversationId, move, { why, ...releaseBy !== undefined && { releaseBy } }, options) }
       } catch (error) {
         return { conversationId, outcome: { kind: "kept-here", reason: errorMessage({ error }) } }
       }
     }))
-    const moved = results.filter((result) => result.outcome.kind === "moved").length
-    const log = moved === results.length ? hostLog : hostWarn
+    const inFlight = why === "sleep" && releaseBy !== undefined ? await this.#options.moves.settled(releaseBy) : 0
+    const gone = results.filter((result) => goneFromHere(result.outcome)).length
+    const log = gone === results.length && !inFlight ? hostLog : hostWarn
     log("handoff", "agents at work handed to the cloud", {
-      why, threads: results.length, moved, ms: Math.round(performance.now() - began),
-      stayed: results.filter((result) => result.outcome.kind !== "moved").map((result) => `${result.conversationId}: ${"reason" in result.outcome ? result.outcome.reason : ""}`).join("; "),
+      why, threads: results.length, moved: gone, ms: Math.round(performance.now() - began),
+      stayed: results.filter((result) => !goneFromHere(result.outcome)).map((result) => `${result.conversationId}: ${"reason" in result.outcome ? result.outcome.reason : ""}`).join("; "),
+      ...inFlight && { stillMoving: inFlight },
     })
     return results
   }
@@ -145,4 +157,9 @@ export function workingThreads(sources: WorkingSources): WorkingThread[] {
     byThread.set(placed.thread, { conversationId: id, thread: placed.thread, harness: snapshot.session.harness, running, ...snapshot.session.title && { title: snapshot.session.title } })
   }
   return [...byThread.values()].map(({ conversationId, thread, harness, title }) => ({ conversationId, thread, harness, ...title !== undefined && { title } }))
+}
+
+/** Whether a handoff's Thread left here: started in the cloud, or released with the rest carried by this host. */
+export function goneFromHere(outcome: ThreadMoveOutcome): boolean {
+  return outcome.kind === "moved" || outcome.kind === "released"
 }

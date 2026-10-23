@@ -453,6 +453,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       for (const { harness } of sessions) installed[harness] = installedReading(harnesses.updates.restoreRuntime(harness))
       return catalog.receiveRecords(link, sessions, installed)
     },
+    stageRecords: (link, sessions) => catalog.stageRecords(link, sessions),
     updateOffer: (harness) => harnesses.updates.restoreRuntime(harness).offer,
     cloud: cloudConversations,
     capture: async (conversationId, path) => void (await live.capture(conversationId, path)),

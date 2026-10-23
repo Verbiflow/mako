@@ -6,9 +6,10 @@ import { pipeline } from "node:stream/promises"
 import { fetch as fetchWith } from "undici"
 import { z } from "zod"
 import type { Git } from "@mako/git"
+import { describeGatewayFailure } from "@mako/protocol/gateway-http"
 import { MoveCheckpointSchema } from "@mako/protocol/moves"
 import type { InstalledReading } from "@mako/sessions/record-writers"
-import { RecordHoldingsSchema, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink, type StagedRecords } from "@mako/sessions/record-sync"
+import { RecordHoldingsSchema, describeSync, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink, type StagedRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { HandoffSchema, type Handoff } from "../contracts/thread-execution.js"
@@ -141,8 +142,23 @@ export type MoveStage = { checkpointMs: number; recordsMs: number; staged: Array
 /** Reads the move's checkpoint from the cloud into `file`. */
 async function readCheckpoint(link: RecordsLink, sha256: string, file: string): Promise<void> {
   const response = await fetchWith(`${link.base}/checkpoints/${sha256}`, { headers: { authorization: link.authorization }, signal: AbortSignal.timeout(10 * 60_000) })
-  if (!response.ok || !response.body) throw new Error(`The move's checkout couldn't be read from the cloud: ${response.status}`)
+  if (!response.ok || !response.body) {
+    // The gateway's own words and correlation ID, so a refusal leads to its log line.
+    const problem = z.object({ title: z.string(), correlationId: z.string() }).partial().safeParse(await response.json().catch(() => undefined)).data
+    const correlationId = problem?.correlationId ?? response.headers.get("x-mako-correlation-id")
+    throw new Error(`The move's checkout couldn't be read from the cloud: ${problem?.title ?? "no checkout"} (GET /checkpoints answered ${response.status}${correlationId ? `, correlation ${correlationId}` : ""})`)
+  }
   await pipeline(Readable.fromWeb(response.body), createWriteStream(file))
+}
+
+/** Runs one part of a move on this machine, its failure saying which part and, for a gateway's refusal, which call. */
+async function part<Value>(what: string, work: () => Promise<Value>): Promise<Value> {
+  try {
+    return await work()
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error))
+    throw new Error(`${what}: ${describeGatewayFailure(failure)}`, { cause: error })
+  }
 }
 
 /**
@@ -165,8 +181,10 @@ export async function stageMove(deps: MoveArrivalDeps, input: MoveStageInput): P
     const scratch = await mkdtemp(join(deps.scratch, "stage-"))
     try {
       const file = join(scratch, "checkpoint.bundle")
-      await readCheckpoint(link, input.checkpoint.sha256, file)
-      await applyMoveCheckpoint(deps.git, input.folder, file, input.checkpoint, { replace: true })
+      await part("Its checkout couldn't be staged", async () => {
+        await readCheckpoint(link, input.checkpoint.sha256, file)
+        await applyMoveCheckpoint(deps.git, input.folder, file, input.checkpoint, { replace: true })
+      })
     } finally {
       await rm(scratch, { recursive: true, force: true })
     }
@@ -174,7 +192,7 @@ export async function stageMove(deps: MoveArrivalDeps, input: MoveStageInput): P
     return since()
   }
   const records = async (): Promise<{ ms: number; pulled: StagedRecords[] }> => {
-    const pulled = await withFreshLink(() => deps.records() ?? link, (current) => deps.stage(current, input.sessions))
+    const pulled = await part("Its sessions' records couldn't be staged", () => withFreshLink(() => deps.records() ?? link, (current) => deps.stage(current, input.sessions)))
     return { ms: since(), pulled }
   }
   const [checkpointMs, staged] = await Promise.all([checkout(), records()])
@@ -183,7 +201,7 @@ export async function stageMove(deps: MoveArrivalDeps, input: MoveStageInput): P
     recordsMs: staged.ms,
     staged: staged.pulled.map((each) => ({ harness: each.harness, nativeId: each.nativeId, versions: each.versions, bytes: each.bytes })),
   }
-  hostLog("moves", "a move was staged ahead of its hand-over", { move: input.move, checkpointMs, recordsMs: staged.ms, sessions: stage.staged.map((each) => `${each.harness}: ${each.versions} versions, ${each.bytes} bytes`).join("; ") })
+  hostLog("moves", "a move was staged ahead of its hand-over", { move: input.move, checkpointMs, recordsMs: staged.ms, sessions: staged.pulled.map((each) => `${each.harness}: ${describeSync(each)}`).join("; ") })
   return stage
 }
 
@@ -230,7 +248,7 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
   const installed: Record<string, InstalledReading | null> = {}
   for (const session of input.sessions) installed[session.harness] = deps.installed(session.harness)
   // Under the machine's newest credential if the last one lapsed on the way.
-  const received = await timed("records", () => withFreshLink(() => deps.records() ?? link, (current) => deps.receive(current, input.sessions, installed)))
+  const received = await timed("records", () => part("Its sessions' records couldn't be pulled here", () => withFreshLink(() => deps.records() ?? link, (current) => deps.receive(current, input.sessions, installed))))
   const sessions: MoveArrival["sessions"] = []
   for (const each of received) {
     const restored = each.restored
@@ -261,7 +279,7 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
   hostLog("moves", "a Thread arrived from a device", {
     move: input.move, folder: input.folder, checkout, sessions: sessions.length, ms, ...parts,
     openMs: sessions.map((session) => session.opened?.ms ?? "none").join(","),
-    received: received.map((each) => `${each.harness}: pulled ${each.pulled.versions} versions, ${each.pulled.bytes} bytes in ${Math.round(each.pulled.ms)} ms; ${each.restored.kind}${"ms" in each.restored ? ` in ${each.restored.ms} ms` : ""}`).join("; "),
+    received: received.map((each) => `${each.harness}: pulled ${describeSync(each.pulled)}; ${each.restored.kind}${"ms" in each.restored ? ` in ${each.restored.ms} ms` : ""}`).join("; "),
   })
   return { checkout, sessions, ms, parts }
 }

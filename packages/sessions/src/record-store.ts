@@ -178,6 +178,8 @@ export interface ImportReport {
   bytes: number
   storedBytes: number
   ms: number
+  /** Time waiting for the store's turn before the import began. */
+  queuedMs?: number
 }
 
 export interface RestoreInput {
@@ -1687,7 +1689,11 @@ export class RecordStore {
     this.writable()
     const session = `${bundle.harness}\n${bundle.nativeId}`
     const before = this.capturing.get(session)
-    const run = (before ? before.catch(() => undefined) : Promise.resolve()).then(() => this.serially(() => this.importNow(bundle, fetch, from, describesStore)))
+    const asked = Date.now()
+    const run = (before ? before.catch(() => undefined) : Promise.resolve()).then(() => this.serially(async () => {
+      const queuedMs = Date.now() - asked
+      return { ...await this.importNow(bundle, fetch, from, describesStore), queuedMs }
+    }))
     this.capturing.set(session, run)
     const settled = () => {
       if (this.capturing.get(session) === run) this.capturing.delete(session)
@@ -1729,6 +1735,9 @@ export class RecordStore {
           if (!needed.delete(hash)) continue
           const key = Buffer.from(hash, "hex")
           checkStoredChunk(key, chunk)
+          // Another import or capture may have stored it since this one asked what it lacked (the store's turn passes
+          // between them at each slice): named again, as a capture names one it finds held, never stored twice.
+          if (await this.namedAgain(key, report)) continue
           const stored = await this.intentOf(report)
           const place = await this.packs.writeStored(key, chunk)
           this.prepared("INSERT INTO chunks (hash, pack, offset, stored, size, codec, intent) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -2265,15 +2274,7 @@ export class RecordStore {
   private async storeChunk(chunk: Buffer, hashes: Buffer[], report: CaptureReport, sliced: boolean): Promise<void> {
     const hash = chunkHash(chunk)
     hashes.push(hash)
-    const held = HeldChunkSchema.optional().parse(this.prepared(`
-      SELECT c.intent, EXISTS (SELECT 1 FROM intents i WHERE i.id = c.intent) AS stored, EXISTS (SELECT 1 FROM unnamed u WHERE u.hash = c.hash) AS unnamed
-      FROM chunks c WHERE c.hash = ?`).get(hash))
-    if (held) {
-      // Held, and about to be named again: no longer a candidate for the repack to drop.
-      this.prepared("DELETE FROM orphans WHERE hash = ?").run(hash)
-      if ((held.stored && held.intent !== this.intents.get(report)?.id) || held.unnamed) await this.claim(hash, held.stored ? held.intent : null, report)
-      return
-    }
+    if (await this.namedAgain(hash, report)) return
     const intent = await this.intentOf(report)
     const place = await this.packs.write(hash, chunk)
     this.prepared("INSERT INTO chunks (hash, pack, offset, stored, size, codec, intent) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -2284,6 +2285,20 @@ export class RecordStore {
     if (this.step) await this.step("written")
     // Committed before the version naming it, it carries this capture's intent: the repack drops it only once the capture failed or its process is gone.
     if (sliced) await this.slice(report)
+  }
+
+  /**
+   * Whether a chunk about to be named is held already, and if so names it again for this capture or import: no longer
+   * a candidate for the repack to drop, and claimed if another one's intent stored it or a sweep found it unnamed.
+   */
+  private async namedAgain(hash: Buffer, report: CaptureReport): Promise<boolean> {
+    const held = HeldChunkSchema.optional().parse(this.prepared(`
+      SELECT c.intent, EXISTS (SELECT 1 FROM intents i WHERE i.id = c.intent) AS stored, EXISTS (SELECT 1 FROM unnamed u WHERE u.hash = c.hash) AS unnamed
+      FROM chunks c WHERE c.hash = ?`).get(hash))
+    if (!held) return false
+    this.prepared("DELETE FROM orphans WHERE hash = ?").run(hash)
+    if ((held.stored && held.intent !== this.intents.get(report)?.id) || held.unnamed) await this.claim(hash, held.stored ? held.intent : null, report)
+    return true
   }
 
   /**

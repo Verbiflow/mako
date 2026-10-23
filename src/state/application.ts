@@ -133,7 +133,8 @@ export const application = {
     if (remember) setPref("quitWithAgents", "hand-off")
     return perform(async () => {
       const results = await handOff.all()
-      const stayed = results.filter((result) => result.outcome.kind !== "moved")
+      // Gone from here once this Mac let go (`released`): its host starts each in the cloud after the window closes.
+      const stayed = results.filter((result) => result.outcome.kind !== "moved" && result.outcome.kind !== "released")
       const lifecycle = await getMako().lifecycleState().catch(() => applicationStore.get().lifecycle)
       applicationStore.set({ lifecycle })
       if (stayed.length || (lifecycle?.work.length ?? 0) > 0) return

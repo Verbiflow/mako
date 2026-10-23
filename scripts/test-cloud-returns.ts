@@ -37,6 +37,10 @@ class Cloud {
   readonly records = new Map<string, ReturnState>()
   readonly calls: Array<{ channel: string; args: readonly unknown[] }> = []
   readonly checkpoints = new Map<string, string>()
+  /** The sessions pulled ahead into Mako's record store as the checkout came down, by each return. */
+  readonly ahead: string[][] = []
+  /** Set to make pulling ahead fail: the restore pulls it all instead. */
+  aheadFails = false
   /** The machine's departure: what it packs, or why it can't. */
   depart: () => Promise<ReturnDeparture> = async () => { throw new Error("no departure set") }
   unreachable = 0
@@ -136,6 +140,11 @@ function setup(name: string) {
     threads: () => threads,
     claim: (input) => threads.claim(input),
     updateOffer: (harness) => ({ kind: "update", runtimeId: harness, label: harness }),
+    stageRecords: async (_link, sessions) => {
+      if (cloud.aheadFails) throw new Error("the network dropped")
+      cloud.ahead.push(sessions.map((session) => session.nativeId))
+      return sessions.map((session) => ({ harness: session.harness, nativeId: session.nativeId, versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1 }))
+    },
     receiveRecords: async (_link, sessions) => sessions.map((session) => ({ harness: session.harness, nativeId: session.nativeId, pulled: { versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1 }, restored: restored ?? { kind: "restored", path: `/${session.harness}/${session.nativeId}.jsonl`, files: 1, rows: 0, ms: 1 } })),
     cloud: {
       callThread: async (_threadId, channel, args): Promise<EncodedValue> => {
@@ -206,6 +215,15 @@ try {
     assert.deepEqual(depart?.args, [{ move: id, folder: s.checkout, conversations: [s.conversation], device: s.device }], "released on the machine toward this Mac")
     assert.ok(!s.cloud.calls.some((call) => call.channel === "mako:move-stay"))
     assert.deepEqual(await s.returns.bringBack(s.conversation, id), { kind: "back" }, "asked again, the same")
+    assert.deepEqual(s.cloud.ahead, [["n-1"]], "its records came down beside the checkout, once")
+  }
+
+  // Records that can't come down ahead: the restore pulls them all, and the Thread comes back the same.
+  {
+    const s = setup("ahead-fails")
+    s.cloud.aheadFails = true
+    assert.deepEqual(await s.returns.bringBack(s.conversation, move()), { kind: "back" })
+    assert.deepEqual([s.state()?.state, s.state()?.generation], ["here", 5])
   }
 
   // The machine can't pack (a turn runs there): cancelled, the Thread runs in the cloud, and the machine keeps it.
