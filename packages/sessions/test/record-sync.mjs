@@ -245,6 +245,34 @@ try {
     for (const name of ["s1", "s2"]) await sync.push("synthetic", name)
     for (const name of ["s1", "s2"])
       assert.deepEqual((await perSession.holdings("synthetic", name)).holdings, store.holdings("synthetic", name), `${name}: the remote holds every unit of it, the shared one too`)
+
+    // Two sessions pulled at once: each reads its chunks before it takes the store's turn, so neither waits on the
+    // other's network. With the reads inside the turn, the second never asked until the first's read came back, and a
+    // way back pulled its sessions one after another (three in 1.4 s on production, 2026-10-23).
+    let release
+    const gate = new Promise((resolve) => { release = resolve })
+    let bothReading
+    const reading = new Promise((resolve) => { bothReading = resolve })
+    const asked = new Set()
+    const read = perSession.readChunks.bind(perSession)
+    perSession.readChunks = async (hashes) => {
+      asked.add(hashes.join(""))
+      if (asked.size >= 2) bothReading()
+      await gate
+      return read(hashes)
+    }
+    const fresh = new RecordStore(join(root, "fresh-store"), stores)
+    const pulls = Promise.all(["s1", "s2"].map((name) => new RecordSync(fresh, perSession).pull("synthetic", name)))
+    let timer
+    await Promise.race([reading, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("the second pull waited for the first's turn of the store to read")), 5_000) })])
+    clearTimeout(timer)
+    release()
+    const reports = await pulls
+    for (const [at, name] of ["s1", "s2"].entries()) {
+      assert.deepEqual(fresh.holdings("synthetic", name), store.holdings("synthetic", name), `${name}: pulled whole`)
+      assert.ok(reports[at].calls?.read?.count >= 1 && reports[at].calls?.pull?.count >= 1, `${name}: its calls are timed: ${JSON.stringify(reports[at].calls)}`)
+    }
+    fresh.close()
   }
   console.log("PASS: a store keeps in step with a remote: only what's new each way, a lost remote caught up, a cut push sent again, two lines of one session refused both ways, a unit two sessions share sent with each")
 } finally {

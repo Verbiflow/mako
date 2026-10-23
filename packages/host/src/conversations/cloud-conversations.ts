@@ -349,17 +349,29 @@ export class CloudConversations {
     const decoded = decodeRuntimeValue(value)
     const fork = ForkAnswerSchema.parse(decoded)
     if (fork.session.id !== input.id || fork.session.harness !== input.provider) throw new Error("The cloud machine returned a different fork")
+    // Filed here first, as the machine filed it, and only then followed as one of the Thread's: a fork this Mac
+    // follows but whose Session it doesn't have would be left in the cloud when the Thread comes back.
+    if (placed && threads) {
+      if (!fork.sessionId) throw new Error("The cloud machine didn't say which Session the fork went into")
+      const session = SessionIdSchema.parse(fork.sessionId)
+      const known = threads.sessionPlacement(session)
+      if (known && known.thread === placed.thread) {
+        // The machine filed the fork into a Session of the Thread's that this Mac has (its parent's, by what was seen
+        // on 2026-10-23): filed the same here, so both stores agree and it comes back with the Thread, and said, since
+        // a fork belongs in a Session of its own.
+        hostWarn("cloud-conversations", "a fork in the cloud went into a Session its Thread already had; filed the same here", { conversationId: input.id, parent: entry.conversationId, parentSession: placed.session, session, threadId: entry.threadId })
+        threads.adoptElsewhere({ operationId: namedUuid(`mako cloud fork\0${input.id}`), conversationId: input.id, session, actor: threads.person() })
+      } else {
+        threads.adoptElsewhere({ operationId: namedUuid(`mako cloud fork\0${input.id}`), conversationId: input.id, forkOf: entry.conversationId, forkSession: session, actor: threads.person() })
+        hostLog("cloud-conversations", "a conversation in the cloud forked on its machine", { conversationId: input.id, parent: entry.conversationId, threadId: entry.threadId, session })
+      }
+    }
     if (!this.#entries.has(input.id)) {
       const forked: Entry = { conversationId: input.id, threadId: entry.threadId, harness: input.provider, repository: entry.repository, createdAt: Date.now(), created: true, seq: entry.seq }
       const summary = LiveSummarySchema.safeParse(decoded)
       if (summary.success) forked.summary = summaryOf(summary.data)
       this.#entries.set(forked.conversationId, forked)
       await this.#save()
-    }
-    if (placed && threads) {
-      if (!fork.sessionId) throw new Error("The cloud machine didn't say which Session the fork went into")
-      threads.adoptElsewhere({ operationId: namedUuid(`mako cloud fork\0${input.id}`), conversationId: input.id, forkOf: entry.conversationId, forkSession: SessionIdSchema.parse(fork.sessionId), actor: threads.person() })
-      hostLog("cloud-conversations", "a conversation in the cloud forked on its machine", { conversationId: input.id, parent: entry.conversationId, threadId: entry.threadId, session: fork.sessionId })
     }
     return encodeRuntimeValue({ ...z.object({}).loose().parse(decoded), elsewhere: CLOUD_FOLDER_WHERE })
   }

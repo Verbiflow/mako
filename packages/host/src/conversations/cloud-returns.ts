@@ -4,7 +4,8 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
 import { MoveCheckpointSchema, ReturnDepartureSchema, type ReturnState } from "@mako/protocol/moves"
-import { withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink } from "@mako/sessions/record-sync"
+import { describeGatewayFailure } from "@mako/protocol/gateway-http"
+import { describeSync, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink, type StagedRecords } from "@mako/sessions/record-sync"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ThreadReturnOutcome, ThreadReturnStep } from "../contracts/cloud-threads.js"
@@ -101,6 +102,8 @@ export type CloudReturnsOptions = {
   /** The Thread store's claim, through the live conversations so their residents follow (`LiveMoves.claim`). */
   claim(input: { operationId: string; handoff: Handoff; actor: Actor }): ClaimReceipt
   receiveRecords(link: RecordsLink, sessions: ReceivingSession[]): Promise<ReceivedRecords[]>
+  /** Pulls each session's records into this Mac's record store, writing none into its harness (`SessionCatalog.stageRecords`). */
+  stageRecords(link: RecordsLink, sessions: ReceivingSession[]): Promise<StagedRecords[]>
   /** How a harness here gets to a newer version (`RuntimeUpdates.restoreRuntime`), for a return it's too old to take. */
   updateOffer(harness: string): RuntimeUpdateOffer
   cloud: {
@@ -367,9 +370,17 @@ export class CloudReturns {
         }
       }
       const scratch = await mkdtemp(join(this.#options.folder, `${plan.move}-back-`))
+      let ahead: StagedRecords[] = []
       try {
         const file = join(scratch, "checkpoint.bundle")
-        await timed("checkpointRead", () => account.readCheckpoint(plan.cloudThread, departure.checkpoint.sha256, file))
+        // The checkout and the records come down at once. The records go only into Mako's record store here, so the
+        // checkout is still laid down before any session is written into its harness; the restore after pulls only
+        // what this missed, all of it if this failed.
+        await Promise.all([
+          timed("checkpointRead", () => account.readCheckpoint(plan.cloudThread, departure.checkpoint.sha256, file)),
+          timed("recordsAhead", () => withFreshLink(() => account.threadRecords(plan.cloudThread), (link) => this.#options.stageRecords(link, departure.sessions)))
+            .then((staged) => { ahead = staged }, (error: Error) => hostWarn("returns", "a return's records couldn't come down ahead; the restore pulls them", { move: plan.move, error: describeGatewayFailure(error) })),
+        ])
         await timed("checkpointApplied", () => applyMoveCheckpoint(this.#options.git, plan.folder, file, departure.checkpoint, { replace: true }))
       } finally {
         await rm(scratch, { recursive: true, force: true })
@@ -377,7 +388,8 @@ export class CloudReturns {
       const received = await timed("records", () => withFreshLink(() => account.threadRecords(plan.cloudThread), (link) => this.#options.receiveRecords(link, departure.sessions)))
       hostLog("returns", "a return's checkout and records were taken here", {
         move: plan.move, ...parts,
-        sessions: received.map((each) => `${each.harness}: pulled ${each.pulled.versions} versions, ${each.pulled.bytes} bytes in ${each.pulled.ms} ms; ${each.restored.kind}${"ms" in each.restored ? ` in ${each.restored.ms} ms` : ""}`).join("; "),
+        ahead: ahead.map((each) => `${each.harness}: ${describeSync(each)}`).join("; "),
+        sessions: received.map((each) => `${each.harness}: pulled ${describeSync(each.pulled)}; ${each.restored.kind}${"ms" in each.restored ? ` in ${each.restored.ms} ms` : ""}`).join("; "),
       })
       for (const each of received) {
         const restored = each.restored

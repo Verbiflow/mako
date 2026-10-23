@@ -52,6 +52,8 @@ class Gateway {
   /** Set to make the machine's arrival fail, or its readiness (a cloud too full to start it), or the next refusals unreachable. */
   arrival: Error | undefined
   ready: Error | undefined
+  /** Set to hold the claim until it settles: a cloud slow to answer after this Mac let go. */
+  claiming: Promise<void> | undefined
   unreachable = 0
   answered(move: string, answer: MoveAnswer): MoveAnswer {
     const first = this.answers.get(move) ?? answer
@@ -113,6 +115,7 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
       return { sent }
     },
     claimMove: async (_threadId, move, request: MoveClaimRequest) => {
+      await gateway.claiming
       return gateway.answered(move, { kind: "claimed", move, at: clock++, sessions: request.sessions.map((session) => ({ id: session.id, generation: session.generation + 1 })) })
     },
     refuseMove: async (_threadId, move, reason) => {
@@ -384,6 +387,28 @@ try {
     const again = await s.moves.move(s.conversation, id, { why: "asked" })
     assert.deepEqual(again, outcome, "asked again, the same, nothing paused or sent twice")
     assert.equal(s.gateway.calls.filter((call) => call.channel === "mako:live-continue-turn").length, 1)
+  }
+
+  // A quit's handoff answers once this Mac let go (`released`), while the claim is still out; the move goes on in this
+  // host, and a sleep's wait for every move in flight (`settled`) sees it through to the start.
+  {
+    const s = setup("quit")
+    const turn = randomUUID()
+    s.work.running = turn
+    s.busy.reasons.push("a tab is running a turn")
+    let answer: () => void = () => undefined
+    s.gateway.claiming = new Promise((resolve) => { answer = resolve })
+    const id = move()
+    const outcome = await s.moves.move(s.conversation, id, { why: "quit" }, { answer: "released" })
+    assert.equal(outcome.kind, "released", JSON.stringify(outcome))
+    assert.ok(s.steps.some((step) => step.kind === "handing-over"), "answered once released")
+    assert.ok(!s.steps.some((step) => step.kind === "moved"), "before the cloud claimed it")
+    assert.equal(await s.moves.settled(Date.now() + 50), 1, "still moving: a deadline that passes says so")
+    answer()
+    assert.equal(await s.moves.settled(Date.now() + 30_000), 0, "then settled: started in the cloud")
+    assert.equal(s.steps.at(-1)?.kind, "moved")
+    assert.equal(state(s)?.state, "elsewhere")
+    assert.deepEqual(await s.moves.move(s.conversation, id, { why: "quit" }, { answer: "released" }), { kind: "moved", cloudThread: outcome.kind === "released" ? outcome.cloudThread : "" }, "asked again once done: moved")
   }
 
   // Only background work running, the turn that left it over: the handoff stops it, and the agent is told what stopped

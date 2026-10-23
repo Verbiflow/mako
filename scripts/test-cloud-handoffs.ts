@@ -75,18 +75,23 @@ try {
   // can't go says why before anything moves; signed out, nothing goes.
   {
     const working: WorkingThread[] = [{ conversationId: "c-1", thread: "t-1", harness: "codex" }, { conversationId: "c-2", thread: "t-2", harness: "claude" }]
-    const moves: Array<[string, string, ThreadHandOff | undefined]> = []
+    const moves: Array<[string, string, ThreadHandOff | undefined, { answer?: "released" } | undefined]> = []
+    const leaving = new Set<string>()
+    const settledBy: number[] = []
     let unavailable: string | undefined
     const changed: unknown[] = []
     const handOffs = new CloudHandOffs({
       file: join(root, "handoff.json"),
       working: () => working,
       moves: {
-        move: async (conversationId, move, handOff): Promise<ThreadMoveOutcome> => {
-          moves.push([conversationId, move, handOff])
-          return conversationId === "c-2" ? { kind: "kept-here", reason: "It works in the project folder." } : { kind: "moved", cloudThread: "t-cloud" }
+        move: async (conversationId, move, handOff, options): Promise<ThreadMoveOutcome> => {
+          moves.push([conversationId, move, handOff, options])
+          if (conversationId === "c-2") return { kind: "kept-here", reason: "It works in the project folder." }
+          return options?.answer === "released" ? { kind: "released", cloudThread: "t-cloud" } : { kind: "moved", cloudThread: "t-cloud" }
         },
         refusal: async (conversationId) => (conversationId === "c-2" ? "It works in the project folder." : undefined),
+        leaving: (thread) => leaving.has(thread),
+        settled: async (deadline) => (settledBy.push(deadline), 0),
       },
       unavailable: async () => unavailable,
       changed: (settings) => void changed.push(settings),
@@ -94,13 +99,22 @@ try {
     assert.deepEqual((await handOffs.candidates()).map((each) => [each.conversationId, each.refusal]), [["c-1", undefined], ["c-2", "It works in the project folder."]])
     const handOff = randomUUID()
     const results = await handOffs.handOff(handOff, "quit")
-    assert.deepEqual(results.map((each) => [each.conversationId, each.outcome.kind]), [["c-1", "moved"], ["c-2", "kept-here"]])
-    assert.deepEqual(moves.map(([, , how]) => how), [{ why: "quit" }, { why: "quit" }])
+    assert.deepEqual(results.map((each) => [each.conversationId, each.outcome.kind]), [["c-1", "released"], ["c-2", "kept-here"]], "a quit hears each Thread once this Mac let go of it")
+    assert.deepEqual(moves.map(([, , how, options]) => [how, options]), [[{ why: "quit" }, { answer: "released" }], [{ why: "quit" }, { answer: "released" }]])
     await handOffs.handOff(handOff, "quit")
     assert.equal(moves[2]?.[1], moves[0]?.[1], "asked again, the same move for the same Thread")
     assert.notEqual(moves[0]?.[1], moves[1]?.[1], "each Thread its own move")
     await handOffs.handOff(randomUUID(), "sleep", 12345)
     assert.deepEqual(moves.at(-1)?.[2], { why: "sleep", releaseBy: 12345 }, "a sleeping Mac's deadline goes with each move")
+    assert.deepEqual(moves.at(-1)?.[3], {}, "a sleep waits for each Thread to start in the cloud")
+    assert.deepEqual(settledBy, [12345], "and for every move already running here, until its deadline")
+    // A Thread a quit's move still carries isn't moved again as the Mac sleeps: the sleep waits for that move instead.
+    leaving.add("t-1")
+    const counted = moves.length
+    await handOffs.handOff(randomUUID(), "sleep", 23456)
+    assert.deepEqual(moves.slice(counted).map(([conversationId]) => conversationId), ["c-2"], "the moving Thread isn't moved twice")
+    assert.deepEqual(settledBy, [12345, 23456])
+    leaving.clear()
     unavailable = "Sign in to Mako Cloud to hand agents to the cloud."
     const before = moves.length
     assert.deepEqual((await handOffs.handOff(randomUUID(), "quit")).map((each) => each.outcome), [{ kind: "kept-here", reason: unavailable }, { kind: "kept-here", reason: unavailable }])
@@ -111,7 +125,7 @@ try {
     assert.deepEqual(await handOffs.settings(), { onSleep: true })
     await handOffs.setOnSleep(false)
     assert.deepEqual(changed, [{ onSleep: false }], "windows hear the change")
-    const again = new CloudHandOffs({ file: join(root, "handoff.json"), working: () => [], moves: { move: async () => ({ kind: "moved", cloudThread: "" }), refusal: async () => undefined }, unavailable: async () => undefined, changed: () => {} })
+    const again = new CloudHandOffs({ file: join(root, "handoff.json"), working: () => [], moves: { move: async () => ({ kind: "moved", cloudThread: "" }), refusal: async () => undefined, leaving: () => false, settled: async () => 0 }, unavailable: async () => undefined, changed: () => {} })
     assert.equal(await again.onSleep(), false, "kept across a restart")
   }
 

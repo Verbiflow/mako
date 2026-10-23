@@ -45,6 +45,8 @@ function handOffState(
   if (!candidate || candidate.refusal) return undefined
   if (result) {
     if (result.outcome.kind === "moved") return { label: "In the cloud", done: true }
+    // This Mac let go of it; its host starts it in the cloud after the window closes.
+    if (result.outcome.kind === "released") return { label: "Handed to the cloud", done: true }
     return { label: "Stayed here", reason: result.outcome.reason }
   }
   const label = step && stepLabel(step)
@@ -77,7 +79,7 @@ export function ApplicationDialog() {
   // The cloud is on and at least one Thread at work can go: the sheet offers to hand them over.
   const canHandOff = quitting && (candidates ?? []).some((candidate) => !candidate.refusal)
   const handingOff = quitting && running !== null && !running.results
-  const stayed = [...results.values()].filter((result) => result.outcome.kind !== "moved")
+  const stayed = [...results.values()].filter((result) => result.outcome.kind !== "moved" && result.outcome.kind !== "released")
   const locked =
     busy ||
     (!error &&
