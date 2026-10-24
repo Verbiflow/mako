@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { createReadStream, existsSync, mkdirSync } from "node:fs"
 import { mkdir, open, rename, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
-import type { DatabaseSync, StatementSync } from "node:sqlite"
+import { DatabaseSync as DatabaseSyncConstructor, type DatabaseSync, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { checkStoredChunk, Chunker, chunkHash, HASH_BYTES, Packs, type StoredChunk } from "./record-chunks.js"
 import { planRecordImport, recordChunks as versionChunks, type HeldUnit, type RecordBundle, type RecordHoldings, type RecordUnit, type RecordVersion } from "@mako/protocol/records"
@@ -11,7 +11,7 @@ import type { ForkFile, ForkIds, ForkRow, RecordDatabase, RecordFork, RecordLine
 import { forkIds, forkLines } from "./record-fork.js"
 import { checkRoots, placeIn, qualify, RootPlaces, rootFolders } from "./record-roots.js"
 import {
-  decodeRow, encodeRow, forkIdentity, KEY_DIGESTS, type KeyDigests, KeyDigestsSchema, keyColumns, keyLiteralSql, lookupSql, lookupStatement, positionColumns, type RowKey, quoted, registerKeyDigests, rowKeyOf, rowUnitKey,
+  decodeRow, encodeRow, forkIdentity, type ForkIdentity, rowIdentity, KEY_DIGESTS, type KeyDigests, KeyDigestsSchema, keyColumns, keyLiteralSql, lookupSql, lookupStatement, positionColumns, type RowKey, quoted, registerKeyDigests, rowKeyOf, rowUnitKey,
   SqlValueSchema, tagged,
 } from "./record-rows.js"
 import { openReadOnly, type NativeStores } from "./read-only-sqlite.js"
@@ -483,6 +483,8 @@ type UnitRow = z.infer<typeof UnitRowSchema>
 const PinnedUnitSchema = UnitRowSchema.extend({ kind: VersionKindSchema, size: z.number() })
 
 /** A unit's newest version, as far as capture and restore compare it. */
+const UnitKeySchema = z.object({ id: z.number(), key: z.string() })
+const CapturedAtSchema = z.object({ captured_at: z.number() })
 const UnitHeadSchema = z.object({ id: z.number(), key: z.string(), role: UnitRoleSchema, head: z.number(), kind: VersionKindSchema, size: z.number(), digest: Blob.nullable() })
 const HeadRowSchema = z.object({ kind: VersionKindSchema, size: z.number(), digest: Blob.nullable(), tail: Blob.nullable() })
 const VersionRowSchema = z.object({
@@ -920,7 +922,7 @@ export class RecordStore {
           report.diverged.push({ unit: name, reason: "Mako's first capture of this database never finished, so it holds only part of the session's rows" })
           continue
         }
-        const plan = databases.get(name) ?? { schema: null, rows: [], moves: layout.paths[name] ?? {}, bytes: 0 }
+        const plan = databases.get(name) ?? { schema: null, rows: [], moves: layout.paths[name] ?? {}, resolved: new Set<string>(), bytes: 0 }
         databases.set(name, plan)
         if (unit.role === "schema") plan.schema = { id: unit.id, head: unit.head }
         else {
@@ -2033,6 +2035,10 @@ export class RecordStore {
    */
   private async captureTable(harness: string, session: number, name: string, source: SourceRead, table: RecordTable, settled: boolean, report: CaptureReport, writerOf?: RecordWriterRule["row"]): Promise<void> {
     const keys = keyColumns(source.db, table.table)
+    // An earlier build named this table's rows by its rowid alias, which names no row (`keyColumns`): the session lets
+    // go of those units, and this capture takes the rows again under their identity, with bytes the store holds already.
+    const alias = rowIdentity(source.db, table.table).alias
+    if (alias) this.retireAliasKeys(harness, session, `${name}\trow\t${table.table}\t`, alias)
     const located = positionColumns(source.db, table.table, keys)
     const positions = located?.columns
     const immutable = Boolean(table.immutable && keys.length && settled)
@@ -2210,6 +2216,29 @@ export class RecordStore {
       return
     }
     await this.captureValue(harness, session, row.key, "row", row.bytes, row.digest, report, row.writer)
+  }
+
+  /**
+   * Lets go of `session`'s units of a table that an earlier build named by its rowid alias `alias` alone, and drops
+   * each no other session names, with what the store noted a remote holds of it. Their chunks are left unnamed, for a
+   * sweep to take once nothing names them.
+   */
+  private retireAliasKeys(harness: string, session: number, prefix: string, alias: string): void {
+    const from = `${prefix}{${JSON.stringify(alias)}:`
+    const units = UnitKeySchema.array().parse(this.prepared(`
+      SELECT u.id, u.key FROM session_units su JOIN units u ON u.id = su.unit
+      WHERE su.session = ? AND u.harness = ? AND u.key >= ? AND u.key < ?`).all(session, harness, from, `${from}\uffff`))
+    for (const unit of units) {
+      const key = rowKeyOf(unit.key)
+      if (key.columns.length !== 1 || key.columns[0] !== alias) continue
+      this.prepared("DELETE FROM session_units WHERE session = ? AND unit = ?").run(session, unit.id)
+      this.prepared("DELETE FROM remote_session_units WHERE session = ? AND unit = ?").run(session, unit.id)
+      if (this.prepared("SELECT 1 FROM session_units WHERE unit = ?").get(unit.id)) continue
+      this.prepared("DELETE FROM remote_session_units WHERE unit = ?").run(unit.id)
+      this.prepared("DELETE FROM remote_units WHERE unit = ?").run(unit.id)
+      this.prepared("DELETE FROM versions WHERE unit = ?").run(unit.id)
+      this.prepared("DELETE FROM units WHERE id = ?").run(unit.id)
+    }
   }
 
   /** The newest version of each of a session's units with keys in [from, to), in one read. */
@@ -2543,7 +2572,11 @@ export class RecordStore {
       }
       if (forkRows && (forkRows.plan.rows.length || forkRows.plan.tallies.length || forkRows.plan.diverged.length)) plan.own.rows.push(forkRows.plan)
     }
-    if (input.destination && !own) this.checkDestination(input.destination, new Set([...plan.files.map((unit) => unit.key), ...this.sessionKeys(session)]), report, input.fork ? plan.destinationRows : null)
+    if (input.destination && !own) {
+      const known = new Set([...plan.files.map((unit) => unit.key), ...this.sessionKeys(session)])
+      for (const rows of plan.rowPlans.values()) for (const key of rows.resolved) known.add(key)
+      this.checkDestination(input.destination, known, report, input.fork ? plan.destinationRows : null)
+    }
     return plan
   }
 
@@ -2749,13 +2782,14 @@ export class RecordStore {
    * order they're written, as the harness numbered them. `aliases` is filled
    * with each table's alias as the destination declares it.
    */
-  private inRowidOrder(db: DatabaseSync, rows: ForkDatabasePlan["rows"], aliases: Map<string, string | null>): ForkDatabasePlan["rows"] {
+  private async inRowidOrder(db: DatabaseSync, rows: ForkDatabasePlan["rows"], aliases: Map<string, string | null>): Promise<ForkDatabasePlan["rows"]> {
     const order = new Map<number, bigint>()
     for (const row of rows) {
       if (!aliases.has(row.table)) aliases.set(row.table, forkIdentity(db, row.table).alias)
-      if (!aliases.get(row.table)) continue
-      const [value] = rowKeyOf(KeySchema.parse(this.prepared("SELECT key FROM units WHERE id = ?").get(row.id)).key).values
-      order.set(row.id, BigIntSchema.catch(0n).parse(value))
+      const alias = aliases.get(row.table)
+      if (!alias) continue
+      // The session's number is the row's own, not its unit's key, which names the row by its identity (`keyColumns`).
+      order.set(row.id, BigIntSchema.catch(0n).parse(decodeRow(await this.versionBytes(row.id, row.head))[alias]))
     }
     if (!order.size) return rows
     // Table by table, as they came; within a numbered table, by the session's numbers.
@@ -2878,7 +2912,7 @@ export class RecordStore {
       if (plan.schema) applySchema(db, SchemaSnapshotSchema.parse(JSON.parse((await this.versionBytes(plan.schema.id, plan.schema.head)).toString("utf8"))))
       const aliases = new Map<string, string | null>()
       const statements = new Map<string, StatementSync>()
-      for (const row of this.inRowidOrder(db, plan.rows, aliases)) {
+      for (const row of await this.inRowidOrder(db, plan.rows, aliases)) {
         const alias = aliases.get(row.table) ?? null
         const values = moveRow(places, await this.forkRow(owners, plan.name, row.table, row.id, row.head), plan.moves[row.table] ?? [])
         if (alias) delete values[alias]
@@ -3106,34 +3140,30 @@ export class RecordStore {
     const path = places.place(name)
     const db = existsSync(path) ? openReadOnly(path, { timeout: 5_000 }).database : null
     const moving = places.moving && Object.keys(paths).length > 0
-    const plan: DatabasePlan = { schema: null, rows: [], moves: moving ? paths : {} }
+    const plan: DatabasePlan = { schema: null, rows: [], moves: moving ? paths : {}, resolved: new Set() }
     const lookups = new Map<string, StatementSync>()
     const tallies = new Map<string, RestoreRows>()
+    let closeIdentities = () => {}
     try {
       const tables = new Set(db ? TableNameSchema.array().parse(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map((row) => row.name) : [])
-      for (const row of this.prepared(`
-        SELECT u.id, u.key, u.role, u.head, v.kind, v.size, v.digest FROM session_units su JOIN units u ON u.id = su.unit JOIN versions v ON v.unit = u.id AND v.seq = u.head
-        WHERE su.session = ? AND u.harness = ? AND u.key >= ? AND u.key < ? ORDER BY u.key`).iterate(session, harness, `${name}\t`, `${name}\n`)) {
-        const unit = UnitHeadSchema.parse(row)
-        if (unit.role === "schema") {
-          plan.schema = { id: unit.id, head: unit.head }
-          continue
-        }
-        const key = rowKeyOf(unit.key)
+      const identity = await this.rowIdentities(name, db, tables)
+      closeIdentities = identity.close
+      /** A row unit, found at the destination by `found`: as `key` names it, or as its content does. */
+      const consider = async (unit: z.infer<typeof UnitHeadSchema>, key: RowKey, found: RowKey): Promise<void> => {
         if (forking) {
           // A fork's own rows go to the fork; a shared row is only ever added or brought up to date, never deleted.
           const owner = await forking.owns(unit, key.table)
           if (owner === "unknown") report.diverged.push({ unit: unit.key, reason: UNKNOWN_TO_FORK })
-          if (owner !== "shared" || unit.kind === "delete") continue
+          if (owner !== "shared" || unit.kind === "delete") return
         }
         const moves = movesOf(plan, key.table)
         let present: RecordRow | undefined
         if (db && tables.has(key.table)) {
-          const sql = `${key.table}\n${key.columns.join("\n")}`
+          const sql = `${found.table}\n${found.columns.join("\n")}`
           let lookup = lookups.get(sql)
-          if (!lookup) lookups.set(sql, lookup = lookupStatement(db, key.table, key.columns))
-          const found = lookup.get(...movedKey(places, key, moves))
-          present = found && { ...found }
+          if (!lookup) lookups.set(sql, lookup = lookupStatement(db, found.table, found.columns))
+          const row = lookup.get(...movedKey(places, found, moves))
+          present = row && { ...row }
         }
         // The newest version as the destination would hold it, read only when a value in it may move.
         const newest = moves && unit.kind !== "delete" ? decodeRow(await this.versionBytes(unit.id, unit.head)) : null
@@ -3153,16 +3183,82 @@ export class RecordStore {
           rows[action] += 1
           if (action === "insert" || action === "replace") rows.bytes += unit.size
           if (action !== "skip") {
-            plan.rows.push({ id: unit.id, head: unit.head, delete: action === "delete" })
+            plan.rows.push({ id: unit.id, head: unit.head, delete: action === "delete", replace: action === "replace" })
             if (newest && moved) report.movedPaths += Object.keys(newest).filter((column) => newest[column] !== moved[column]).length
           }
         }
       }
+      // A table with a rowid alias may hold units an earlier build named by the alias: each is found by its content,
+      // and where two units name one row, the newest capture of it stands.
+      const numbered: { unit: z.infer<typeof UnitHeadSchema>; key: RowKey; capturedAt: number }[] = []
+      for (const row of this.prepared(`
+        SELECT u.id, u.key, u.role, u.head, v.kind, v.size, v.digest, v.captured_at FROM session_units su JOIN units u ON u.id = su.unit JOIN versions v ON v.unit = u.id AND v.seq = u.head
+        WHERE su.session = ? AND u.harness = ? AND u.key >= ? AND u.key < ? ORDER BY u.key`).iterate(session, harness, `${name}\t`, `${name}\n`)) {
+        const unit = UnitHeadSchema.parse(row)
+        if (unit.role === "schema") {
+          plan.schema = { id: unit.id, head: unit.head }
+          continue
+        }
+        const key = rowKeyOf(unit.key)
+        if (identity.of(key.table)?.alias) numbered.push({ unit, key, capturedAt: CapturedAtSchema.parse(row).captured_at })
+        else await consider(unit, key, key)
+      }
+      const standing = new Map<string, { unit: z.infer<typeof UnitHeadSchema>; key: RowKey; found: RowKey; capturedAt: number }>()
+      for (const { unit, key, capturedAt } of numbered) {
+        const spec = identity.of(key.table)!
+        let found = key
+        if (!sameColumns(key.columns, spec.columns)) {
+          const seq = unit.kind === "delete" ? this.lastContentSeq(unit.id) : unit.head
+          if (seq < 0) continue
+          const content = decodeRow(await this.versionBytes(unit.id, seq))
+          found = { table: key.table, columns: spec.columns, values: spec.columns.map((column) => content[column] ?? null) }
+        }
+        const named = rowUnitKey(name, key.table, found.columns, Object.fromEntries(found.columns.map((column, index) => [column, found.values[index] ?? null])))
+        const held = standing.get(named)
+        if (!held || held.capturedAt < capturedAt) standing.set(named, { unit, key, found, capturedAt })
+      }
+      for (const [named, { unit, key, found }] of standing) {
+        plan.resolved.add(named)
+        await consider(unit, key, found)
+      }
     } finally {
       db?.close()
+      closeIdentities()
     }
     report.rows.push(...tallies.values())
     return plan
+  }
+
+  /**
+   * How a row of each table is found and written (`rowIdentity`): as the destination's table declares it, else, for a
+   * table it lacks, as the schema the rows were captured under does, read into a database of its own.
+   */
+  private async rowIdentities(name: string, db: DatabaseSync | null, tables: ReadonlySet<string>): Promise<{ of: (table: string) => ForkIdentity | null; close: () => void }> {
+    const schema = this.schemaUnit(name)
+    let captured: DatabaseSync | null = null
+    let capturedTables = new Set<string>()
+    if (schema) {
+      captured = new DatabaseSyncConstructor(":memory:")
+      applySchema(captured, SchemaSnapshotSchema.parse(JSON.parse((await this.versionBytes(schema.id, schema.head)).toString("utf8"))))
+      capturedTables = new Set(TableNameSchema.array().parse(captured.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map((row) => row.name))
+    }
+    const found = new Map<string, ForkIdentity | null>()
+    return {
+      of: (table) => {
+        if (!found.has(table))
+          found.set(table, db && tables.has(table) ? rowIdentity(db, table) : captured && capturedTables.has(table) ? rowIdentity(captured, table) : null)
+        return found.get(table) ?? null
+      },
+      close: () => captured?.close(),
+    }
+  }
+
+  /** A row unit's identity as its last content gives it: for one an earlier build named by the alias. */
+  private async contentKey(unit: number, table: string, columns: readonly string[]): Promise<RowKey | null> {
+    const seq = this.lastContentSeq(unit)
+    if (seq < 0) return null
+    const content = decodeRow(await this.versionBytes(unit, seq))
+    return { table, columns: [...columns], values: columns.map((column) => content[column] ?? null) }
   }
 
   /** Whether `digest` is the digest of a version Mako captured, as the destination would hold it. */
@@ -3192,18 +3288,56 @@ export class RecordStore {
         if (!prepared) statements.set(sql, prepared = db.prepare(sql))
         return prepared
       }
+      // A table whose rowid alias isn't its rows' name (`keyColumns`) has them found by their name, a row there updated in
+      // place, and new rows added in the order the session numbered them: under the same number where it's free, so the
+      // row reads as it did; under one SQLite gives it where another session's row has it.
+      const identities = new Map<string, ForkIdentity>()
+      const identityOf = (table: string) => {
+        let found = identities.get(table)
+        if (!found) identities.set(table, found = rowIdentity(db, table))
+        return found
+      }
+      const where = (columns: readonly string[]) => columns.map((column) => `${quoted(column)} IS ?`).join(" AND ")
+      const numbered = new Map<string, { values: RecordRow; at: bigint }[]>()
       for (const row of plan.rows) {
         const key = rowKeyOf(KeySchema.parse(this.prepared("SELECT key FROM units WHERE id = ?").get(row.id)).key)
         const moves = movesOf(plan, key.table)
+        const { columns, alias } = identityOf(key.table)
         if (row.delete) {
-          statement(`DELETE FROM ${quoted(key.table)} WHERE ${key.columns.map((column) => `${quoted(column)} IS ?`).join(" AND ")}`).run(...movedKey(places, key, moves))
+          // A unit an earlier build named by the alias is found by what its last content says.
+          const found = !alias || sameColumns(key.columns, columns) ? key : await this.contentKey(row.id, key.table, columns)
+          if (found) statement(`DELETE FROM ${quoted(key.table)} WHERE ${where(found.columns)}`).run(...movedKey(places, found, moves))
           continue
         }
         const decoded = decodeRow(await this.versionBytes(row.id, row.head))
         const values = moves ? moveRow(places, decoded, moves) : decoded
-        const names = Object.keys(values)
-        statement(`INSERT OR REPLACE INTO ${quoted(key.table)} (${names.map(quoted).join(", ")}) VALUES (${names.map(() => "?").join(", ")})`)
-          .run(...names.map((column) => values[column] ?? null))
+        if (!alias) {
+          const names = Object.keys(values)
+          statement(`INSERT OR REPLACE INTO ${quoted(key.table)} (${names.map(quoted).join(", ")}) VALUES (${names.map(() => "?").join(", ")})`)
+            .run(...names.map((column) => values[column] ?? null))
+          continue
+        }
+        const { [alias]: at, ...rest } = values
+        const names = Object.keys(rest)
+        if (row.replace) {
+          statement(`UPDATE ${quoted(key.table)} SET ${names.map((column) => `${quoted(column)} = ?`).join(", ")} WHERE ${where(columns)}`)
+            .run(...names.map((column) => rest[column] ?? null), ...columns.map((column) => rest[column] ?? null))
+          continue
+        }
+        const list = numbered.get(key.table) ?? []
+        list.push({ values: rest, at: BigIntSchema.catch(0n).parse(at) })
+        numbered.set(key.table, list)
+      }
+      for (const [table, rows] of numbered) {
+        const { alias } = identityOf(table)
+        rows.sort((left, right) => (left.at < right.at ? -1 : left.at > right.at ? 1 : 0))
+        for (const { values, at } of rows) {
+          const taken = statement(`SELECT 1 FROM ${quoted(table)} WHERE ${quoted(alias!)} = ?`).get(at)
+          const row = taken ? values : { [alias!]: at, ...values }
+          const names = Object.keys(row)
+          statement(`INSERT OR REPLACE INTO ${quoted(table)} (${names.map(quoted).join(", ")}) VALUES (${names.map(() => "?").join(", ")})`)
+            .run(...names.map((column) => row[column] ?? null))
+        }
       }
       db.exec("COMMIT")
     } catch (error) {
@@ -3264,7 +3398,9 @@ interface LinesPlan {
 interface DatabasePlan {
   schema: { id: number; head: number } | null
   /** Each row to write or delete by its unit and newest version, its key read again when it's written: a session can own millions. */
-  rows: { id: number; head: number; delete: boolean }[]
+  rows: { id: number; head: number; delete: boolean; replace?: boolean }[]
+  /** The unit keys, by identity, of the rows of tables with a rowid alias, for what the destination holds that Mako saw. */
+  resolved: Set<string>
   /** Path columns by table, moved as the plan compared them. */
   moves: Record<string, string[]>
 }
@@ -3393,6 +3529,10 @@ function layoutOf(home: string, records: SessionRecords): SessionLayout {
 function movedValue(places: RootPlaces, value: RecordValue): RecordValue {
   const text = z.string().safeParse(value)
   return text.success ? places.moved(text.data) : value
+}
+
+function sameColumns(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((column, index) => column === right[index])
 }
 
 function movesOf(plan: DatabasePlan, table: string): string[] | null {
