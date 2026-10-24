@@ -8,6 +8,7 @@ import { z } from "zod"
 import type { Git } from "@mako/git"
 import { describeGatewayFailure } from "@mako/protocol/gateway-http"
 import { MoveCheckpointSchema } from "@mako/protocol/moves"
+import { RecordSessionSchema } from "@mako/protocol/records"
 import type { InstalledReading } from "@mako/sessions/record-writers"
 import { RecordHoldingsSchema, describeSync, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink, type StagedRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
@@ -94,6 +95,11 @@ export type MoveArrivalDeps = {
   label(harness: string): string
   /** A folder of this host's own for the checkpoint while it's applied. */
   scratch: string
+  /**
+   * By folder, the records pulled ahead as the machine got ready for a move (`readyForMove`), which its stage and
+   * arrival wait for rather than read again.
+   */
+  ahead?: Map<string, Promise<void>>
 }
 
 export const MoveReadyInputSchema = z.object({
@@ -112,7 +118,10 @@ export type MoveReadyInput = z.infer<typeof MoveReadyInputSchema>
  * Whether this machine can take a Thread at `folder`, asked before the device releases it: once its agent cloned the
  * folder, answered; one it couldn't clone refuses with why. Waits for the clone, which the machine makes as it boots.
  */
-export async function readyForMove(deps: Pick<MoveArrivalDeps, "workspaceSettled" | "warm">, input: MoveReadyInput): Promise<{ folder: string }> {
+export async function readyForMove(
+  deps: Pick<MoveArrivalDeps, "workspaceSettled" | "warm"> & Partial<Pick<MoveArrivalDeps, "records" | "stage" | "ahead">>,
+  input: MoveReadyInput
+): Promise<{ folder: string }> {
   const settled = await deps.workspaceSettled()
   if ("problem" in settled) throw new Error(`The cloud machine couldn't make this Thread's folder: ${settled.problem}`)
   if (settled.path !== input.folder) throw new Error(`This machine's folder is ${settled.path}, not the move's ${input.folder}.`)
@@ -126,7 +135,44 @@ export async function readyForMove(deps: Pick<MoveArrivalDeps, "workspaceSettled
     void Promise.all(launches.map((launch) => deps.warm(launch.harness, settled.path, launch.tuning).catch((error: Error) => {
       hostWarn("moves", "a harness's launch settings weren't read ahead of a move", { harness: launch.harness, error: error.message })
     }))).then(() => hostLog("moves", "launch settings read ahead of a move", { harnesses: launches.map((launch) => launch.harness).join(","), ms: Math.round(performance.now() - began) }))
+  pullAhead(deps, settled.path)
   return { folder: settled.path }
+}
+
+/**
+ * The records the Thread holds so far pulled into this machine's record store as it gets ready, not waited for: the
+ * device sends the newest meanwhile, and the stage after pulls only what came since. The first read of the Thread's
+ * records in minutes may find the cloud's copy cold (1.7 s once, 2026-10-23); it's paid here, beside the machine's
+ * own readying, rather than in the stage the release waits on.
+ */
+function pullAhead(deps: Partial<Pick<MoveArrivalDeps, "records" | "stage" | "ahead">>, folder: string): void {
+  const link = deps.records?.()
+  const { stage, ahead } = deps
+  if (!link || !stage || !ahead || ahead.has(folder)) return
+  const began = performance.now()
+  ahead.set(folder, (async () => {
+    const sessions = await remoteSessions(link)
+    if (!sessions.length) return
+    const pulled = await withFreshLink(() => deps.records?.() ?? link, (current) => stage(current, sessions))
+    hostLog("moves", "records pulled ahead as the machine got ready", { ms: Math.round(performance.now() - began), sessions: pulled.map((each) => `${each.harness}: ${describeSync(each)}`).join("; ") })
+  })().catch((error: Error) => {
+    hostWarn("moves", "records weren't pulled ahead as the machine got ready; the stage pulls them", { error: describeGatewayFailure(error) })
+  }))
+}
+
+/** The sessions the Thread's records hold in the cloud. */
+async function remoteSessions(link: RecordsLink): Promise<ReceivingSession[]> {
+  const response = await fetchWith(`${link.base}/sessions`, { headers: { authorization: link.authorization }, signal: AbortSignal.timeout(30_000) })
+  if (!response.ok) throw new Error(`The Thread's sessions couldn't be listed (GET /sessions answered ${response.status})`)
+  return z.object({ sessions: RecordSessionSchema.array() }).parse(await response.json()).sessions.map(({ harness, nativeId }) => ({ harness, nativeId }))
+}
+
+/** Once what was pulled ahead for `folder` has landed: what's read now is only what came since. */
+async function pulledAhead(deps: Pick<MoveArrivalDeps, "ahead">, folder: string): Promise<void> {
+  const pulling = deps.ahead?.get(folder)
+  if (!pulling) return
+  await pulling
+  deps.ahead?.delete(folder)
 }
 
 const ArrivedMarkSchema = z.object({ move: z.uuid(), sha256: z.string(), at: z.number() })
@@ -197,6 +243,7 @@ export async function stageMove(deps: MoveArrivalDeps, input: MoveStageInput): P
     return since()
   }
   const records = async (): Promise<{ ms: number; pulled: StagedRecords[] }> => {
+    await pulledAhead(deps, input.folder)
     const pulled = await part("Its sessions' records couldn't be staged", () => withFreshLink(() => deps.records() ?? link, (current) => deps.stage(current, input.sessions)))
     return { ms: since(), pulled }
   }
@@ -253,6 +300,7 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
   const installed: Record<string, InstalledReading | null> = {}
   for (const session of input.sessions) installed[session.harness] = deps.installed(session.harness)
   // Under the machine's newest credential if the last one lapsed on the way.
+  await pulledAhead(deps, input.folder)
   const received = await timed("records", () => part("Its sessions' records couldn't be pulled here", () => withFreshLink(() => deps.records() ?? link, (current) => deps.receive(current, input.sessions, installed))))
   const sessions: MoveArrival["sessions"] = []
   for (const each of received) {

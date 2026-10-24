@@ -640,6 +640,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         signedIn: (harness) => machineSignIns?.some((install) => install.harness === harness && install.status === "installed"),
         label: (harness) => opened.harnessLabel(harness),
         scratch: join(environment.dataRoot, "moves"),
+        ahead: new Map(),
       },
       departure: {
         git,
