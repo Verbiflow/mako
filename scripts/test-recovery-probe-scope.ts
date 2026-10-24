@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { once } from "node:events"
@@ -28,6 +28,13 @@ try {
   await writeFile(join(profile, "sessions", "active.json"), JSON.stringify({ pid: process.pid }))
   assert.equal((await resumeVerdict(binding, probe)).kind, "unavailable", "an unidentifiable live record is incomplete evidence, not an empty registry")
   await writeFile(join(profile, "sessions", "active.json"), JSON.stringify({ sessionId: id, pid: process.pid, state: "working" }))
+  // A record listed and then removed, as Claude Code removes its own as it exits, is a process that ended.
+  await symlink(join(profile, "sessions", "removed-since-listing"), join(profile, "sessions", "ended.json"))
+  assert.equal((await resumeVerdict(binding, probe)).kind, "held", "a record gone since the listing doesn't hide the live one")
+  await rm(join(profile, "sessions", "ended.json"))
+  await writeFile(join(profile, "sessions", "exited.json"), JSON.stringify({ sessionId: "another-session", pid: 2 ** 22 - 3, state: "working", startedAt: Date.now() }))
+  assert.equal((await resumeVerdict(binding, probe)).kind, "held", "a record of a process that's gone is skipped")
+  await rm(join(profile, "sessions", "exited.json"))
   await Promise.all(Array.from({ length: 1000 }, (_, index) => writeFile(join(profile, "sessions", `extra-${index}`), "")))
   assert.equal((await resumeVerdict(binding, probe)).kind, "unavailable", "a truncated registry cannot establish an empty ownership inventory")
 
