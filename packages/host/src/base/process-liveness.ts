@@ -116,12 +116,28 @@ export async function processIdentityMatches({
   if (startedAt === undefined) return true
   if (onWindows())
     throw new Error("Process start identity is unavailable on this platform")
-  const actual = await processStartedAt(pid, signal)
+  let actual: number
+  try {
+    actual = await processStartedAt(pid, signal)
+  } catch (error) {
+    // A process that exited after the signal check has no start time to read: it isn't the recorded one.
+    if (!processExists(pid)) return false
+    throw error
+  }
   return processStartMatches(
     startedAt,
     actual,
     toleranceMs ?? (exact ? 0 : START_TOLERANCE_MS)
   )
+}
+
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return !(error instanceof Error && "code" in error && error.code === "ESRCH")
+  }
 }
 
 function executableMatches(expected: string, actual: string): boolean {

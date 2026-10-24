@@ -53,6 +53,19 @@ export function parseClaudeActiveSessions<Value>(
   )
 }
 
+/** A registry record's text, or nothing when it was removed since the folder was listed. */
+async function registryEntry(path: string, signal: AbortSignal): Promise<string | undefined> {
+  try {
+    const info = await stat(path)
+    if (info.size > MAX_REGISTRY_ENTRY_BYTES)
+      throw new Error("Claude activity record exceeds the read limit")
+    return await readFile(path, { encoding: "utf8", signal })
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined
+    throw error
+  }
+}
+
 async function registrySessionsRoot(
   configRoot: string,
   signal: AbortSignal
@@ -71,13 +84,10 @@ async function registrySessionsRoot(
   for (const file of files) {
     signal.throwIfAborted()
     if (!file.endsWith(".json")) continue
-    const path = join(root, file)
-    const info = await stat(path)
-    if (info.size > MAX_REGISTRY_ENTRY_BYTES)
-      throw new Error("Claude activity record exceeds the read limit")
-    const agent = ClaudeAgentSchema.parse(
-      JSON.parse(await readFile(path, { encoding: "utf8", signal }))
-    )
+    const text = await registryEntry(join(root, file), signal)
+    // Claude Code removes its record as it exits: one gone since the listing is a process that ended.
+    if (text === undefined) continue
+    const agent = ClaudeAgentSchema.parse(JSON.parse(text))
     if (!agent.pid || !agent.sessionId)
       throw new Error("Claude activity record has no ownership identity")
     if (
