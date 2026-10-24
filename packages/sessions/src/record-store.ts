@@ -15,7 +15,7 @@ import {
   SqlValueSchema, tagged,
 } from "./record-rows.js"
 import { openReadOnly, type NativeStores } from "./read-only-sqlite.js"
-import { declareStoreFormat, inspectStoreFormat, NewerStoreError, readStoreFormat, storeAccess, writeStoreFormat, type StoreStanding } from "./store-format.js"
+import { declareStoreFormat, guardStoreWrites, inspectStoreFormat, NewerStoreError, readStoreFormat, storeAccess, writeStoreFormat, type StoreStanding } from "./store-format.js"
 import { STREAMS_ROOT } from "./record-streams.js"
 import { DROPPED, repackStore, type RepackOptions, type RepackReport } from "./record-repack.js"
 import { IntentOwner } from "./record-intents.js"
@@ -66,7 +66,17 @@ export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
  * captures nothing, so it never writes what it doesn't know. One older than
  * `reads` leaves the store as it is and serves without it.
  */
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
+/**
+ * The oldest format whose builds can read the store. Format 3 names a row's unit by what its table says names it
+ * (`keyColumns`: Devin's `(session_id, node_id)`), where format 2 named some by their rowid; a format-2 build reads
+ * either, and writes only its own names, which is why it may read but not write.
+ */
+const READS_VERSION = 2
+/** The first format Mako released: a store from before it is moved aside. */
+const RELEASED_SCHEMA = 2
+/** Every table of the store, each guarded against an older build's writes once the format is raised (`guardStoreWrites`). */
+const RECORD_TABLES = ["chunks", "units", "versions", "sessions", "session_units", "session_paths", "child_paths", "marks", "captures", "orphans", "intents", "intent_claims", "unnamed", "remote_units", "remote_sessions", "remote_session_units", "meta"] as const
 /** Additive changes this build made to the format, each a name in `meta.additions`; a build that doesn't know one ignores what it added. */
 const ADDITIONS = ["writers", "children", "intents", "remotes", "remote-sessions"]
 /** One batch of `RecordStore.exportFor`: at most `limit` versions, from the unit after `cursor`. */
@@ -1379,7 +1389,7 @@ export class RecordStore {
     const access = storeAccess(format, SCHEMA_VERSION)
     if (access === "read") return "read"
     if (format && access === "refused") throw new NewerStoreError(`the record store at ${this.folder}`, format, SCHEMA_VERSION)
-    if (version !== undefined && Number(version) < SCHEMA_VERSION)
+    if (version !== undefined && Number(version) < RELEASED_SCHEMA)
       throw new Error(`The record store at ${this.folder} has schema ${version}, from before Mako's first release of it; this build reads ${SCHEMA_VERSION}. Move the folder aside to start a new store.`)
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS chunks (
@@ -1445,8 +1455,26 @@ export class RecordStore {
     const additions = new Set((meta("additions") ?? "").split(" ").filter(Boolean))
     if (ADDITIONS.some((name) => !additions.has(name)))
       this.db.prepare("INSERT INTO meta (key, value) VALUES ('additions', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run([...new Set([...additions, ...ADDITIONS])].join(" "))
-    if (version === undefined) writeStoreFormat(this.db, "meta", { writableBy: SCHEMA_VERSION, readableBy: SCHEMA_VERSION }, this.formatWriter)
+    if (version === undefined) writeStoreFormat(this.db, "meta", { writableBy: SCHEMA_VERSION, readableBy: READS_VERSION }, this.formatWriter)
+    else if (format && format.writableBy < SCHEMA_VERSION) this.raise()
     return "write"
+  }
+
+  /**
+   * Raises a store an older build wrote to this build's format, so an older build reads it and writes nothing: it would
+   * name rows by their rowid beside this build's names for them, and the two would split one row's history. One that has
+   * it open now is stopped inside SQLite (`guardStoreWrites`), and turns read-only at its next look at the format.
+   */
+  private raise(): void {
+    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      writeStoreFormat(this.db, "meta", { writableBy: SCHEMA_VERSION, readableBy: READS_VERSION }, this.formatWriter)
+      guardStoreWrites(this.db, RECORD_TABLES, SCHEMA_VERSION)
+      this.db.exec("COMMIT")
+    } catch (error) {
+      if (this.db.isTransaction) this.db.exec("ROLLBACK")
+      throw error
+    }
   }
 
   private prepared(sql: string): StatementSync {
