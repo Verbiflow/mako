@@ -34,7 +34,7 @@ import { createHash } from "node:crypto"
 import { readFile, stat } from "node:fs/promises"
 import { removeSessionRows } from "../sqlite-removal.js"
 import type { NativeStores } from "../read-only-sqlite.js"
-import { ownedRows, type SessionRecords } from "../harness-records.js"
+import { ownedRows, type RecordRoot, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { DevinChildLinks, devinChildPath } from "./devin-cli-children.js"
 import { homedir } from "node:os"
@@ -327,6 +327,11 @@ export class DevinCliProvider implements SessionProvider {
     }
   }
 
+  /** `devin-cli`: Devin CLI's data folder, where its `sessions.db` is. */
+  recordRoots(): RecordRoot[] {
+    return [{ name: "devin-cli", path: this.dir }]
+  }
+
   async records(path: string): Promise<SessionRecords | null> {
     const id = idOf(path)
     if (!id || path.slice(0, path.lastIndexOf("#")) !== this.dbPath()) return null
@@ -334,7 +339,7 @@ export class DevinCliProvider implements SessionProvider {
     // Its subagents are chains in its own rows: the paths they're read at come with them.
     const children = ((await this.children(path).catch(() => null)) ?? []).flatMap((child) => (child.path ? [child.path] : []))
     // Devin's rows state no CLI version (only its schema's, in `refinery_schema_history`): what wrote them is the CLI installed as a write lands.
-    return database && { roots: [{ name: "devin-cli", path: this.dir }], files: [], databases: [database], writer: { installed: true }, children }
+    return database && { roots: this.recordRoots(), files: [], databases: [database], writer: { installed: true }, children }
   }
 
   async remove(path: string): Promise<boolean> {

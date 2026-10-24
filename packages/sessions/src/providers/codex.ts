@@ -18,7 +18,7 @@ import type { SessionSettings } from "../settings.js"
 
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
-import { ownedRows, type RecordPlace, type SessionRecords } from "../harness-records.js"
+import { ownedRows, type RecordPlace, type RecordRoot, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { CodexChildren } from "./codex-children.js"
 import { stat, rm } from "node:fs/promises"
@@ -455,6 +455,11 @@ export class CodexProvider implements SessionProvider {
    * come with it, their rollouts and rows alike: a child is never a row of
    * its own, so nothing else would keep it.
    */
+  /** `codex`: Codex's home, where its sessions, state and logs are. */
+  recordRoots(): RecordRoot[] {
+    return [{ name: "codex", path: dirname(this.metadataPath) }]
+  }
+
   async records(path: string): Promise<SessionRecords | null> {
     if (!this.rolloutFiles.holds(path)) return null
     if (!(await stat(path).catch(() => null))?.isFile()) return null
@@ -483,7 +488,7 @@ export class CodexProvider implements SessionProvider {
     ]
     const files = new Set([path, ...own, ...lineage.spans.map((span) => span.path), ...spawned.files])
     return {
-      roots: [{ name: "codex", path: codexHome }],
+      roots: this.recordRoots(),
       files: [...files],
       databases: databases.filter((database) => database !== null),
       lines: ids.map((value) => ({ path: this.nameLog, field: "id", value })),

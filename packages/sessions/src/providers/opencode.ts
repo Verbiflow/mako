@@ -7,7 +7,7 @@ import { OPENCODE_ASSISTANT_CONTENT, OPENCODE_LEGACY_PARTS, OPENCODE_MESSAGES, O
 import { tokenSum } from "../harnesses/tokens.js"
 import { removeSessionRows } from "../sqlite-removal.js"
 import { openReadOnly, type NativeStores } from "../read-only-sqlite.js"
-import { ownedRows, placeholders, type SessionRecords } from "../harness-records.js"
+import { ownedRows, placeholders, type RecordRoot, type SessionRecords } from "../harness-records.js"
 import { statedVersion, type RecordWriterRule } from "../record-writers.js"
 import type { ChildTranscript } from "../children.js"
 import { openCodeChildren, openCodeParent } from "./opencode-children.js"
@@ -409,6 +409,11 @@ export class OpenCodeProvider implements SessionProvider {
    * and event log rows; the instruction blobs its instruction state names;
    * and the migration list OpenCode checks before it opens the database.
    */
+  /** `opencode`: OpenCode's data folder, where its databases are. */
+  recordRoots(): RecordRoot[] {
+    return [{ name: "opencode", path: dirname(this.databases[0]!) }]
+  }
+
   async records(path: string): Promise<SessionRecords | null> {
     const target = parseSessionPath(path, this.databasePaths())
     if (!target) return null

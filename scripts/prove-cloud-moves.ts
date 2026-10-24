@@ -399,7 +399,7 @@ async function prove(harness: string, project: string): Promise<Proved> {
       // What the machine showed, so a failure says where it stopped: its base unread, empty, or read without the turn.
       const showed = `base ${seen.base === null ? "unread" : `${seen.base.entries?.length ?? 0} entries`}, ${seen.blocks.length} live blocks, session ${seen.session.status} at ${seen.session.nativePath ?? "no path"}${seen.session.lastError ? `, last error: ${seen.session.lastError.slice(0, 200)}` : ""}`
       if (!read.includes(token)) throw new Error(`the machine's history of the conversation doesn't hold its first turn (${showed})`)
-      if (!read.includes("BUSY-DONE")) throw new Error("the machine's history doesn't hold the turn that finished here before the move")
+      if (!read.includes("BUSY-DONE")) throw new Error(`the machine's history doesn't hold the turn that finished here before the move (${showed})`)
       return "both turns from before the move, read on the machine"
     })
     // 6. Conversations begun in the cloud: a new tab of the Thread's and a fork of it, each a turn on the machine.

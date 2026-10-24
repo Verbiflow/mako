@@ -79,7 +79,7 @@ import { CURSOR_RUN_LOST, CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
 import type { NativeStores } from "../read-only-sqlite.js"
 import { KeptOutputs, keptOutputsPath } from "../kept-outputs.js"
-import { filesUnder, tableColumns, type RecordDatabase, type SessionRecords } from "../harness-records.js"
+import { filesUnder, tableColumns, type RecordDatabase, type RecordRoot, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { CursorChildren, CursorTranscriptTranslator } from "./cursor-children.js"
 import { createJsonlFollower, decodeFrom, decodeRecord, type FollowStart, type ResumePoint } from "../jsonl.js"
@@ -823,6 +823,15 @@ export class CursorProvider implements SessionProvider {
     return decode && { ref, ...decode }
   }
 
+  /**
+   * `cursor` (the CLI's chats and ACP sessions), `cursor-sdk` (Mako's SDK
+   * agents, wherever `cursorSdkStateRoot` puts them) and `cursor-desktop`
+   * (the editor's database, in each platform's own folder).
+   */
+  recordRoots(): RecordRoot[] {
+    return [{ name: "cursor", path: dirname(this.chatRoot) }, { name: "cursor-sdk", path: this.sdkStateRoot }, { name: "cursor-desktop", path: this.desktop.root }]
+  }
+
   async records(path: string): Promise<SessionRecords | null> {
     if (this.desktop.owns(path)) return this.desktop.records(path)
     const directory = dirname(path)
@@ -856,7 +865,7 @@ export class CursorProvider implements SessionProvider {
       files.push(...kept.files)
       children.push(...kept.transcripts)
     }
-    return { roots: [{ name: "cursor", path: dirname(this.chatRoot) }, { name: "cursor-sdk", path: this.sdkStateRoot }], files, databases, children }
+    return { roots: this.recordRoots().filter((root) => root.name !== "cursor-desktop"), files, databases, children }
   }
 
   /**

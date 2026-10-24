@@ -61,7 +61,7 @@ import {
 import { UNNAMED_TURN, type ProviderTurnCause } from "../provider-turn.js"
 import type { SessionSettings } from "../settings.js"
 import type { NativeFile, SessionProvider } from "./types.js"
-import { filesUnder, type SessionRecords } from "../harness-records.js"
+import { filesUnder, type RecordRoot, type SessionRecords } from "../harness-records.js"
 import { extraRoot } from "../record-roots.js"
 import { fieldScan, type RecordWriterRule } from "../record-writers.js"
 import type { ChildTranscript } from "../children.js"
@@ -590,6 +590,16 @@ export class ClaudeProvider implements SessionProvider {
    * in its config folder: the file snapshots its rewind restores, and todo
    * lists.
    */
+  /**
+   * `claude`: the first of Claude Code's account roots, its config folder. A session captured under another account's
+   * root (`claude@…`) is read back into this one: the account a machine signs in as is its own.
+   */
+  recordRoots(): RecordRoot[] {
+    const root = this.roots()[0]
+    if (!root) return []
+    return [{ name: "claude", path: basename(root) === "projects" ? dirname(root) : root }]
+  }
+
   async records(path: string): Promise<SessionRecords | null> {
     const root = this.roots().find((candidate) => path.startsWith(`${candidate}/`))
     if (!root || !path.endsWith(".jsonl") || !(await stat(path).catch(() => null))?.isFile()) return null

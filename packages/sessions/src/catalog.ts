@@ -62,7 +62,8 @@ import { readReleaseTimelines } from "./record-releases.js"
 import { EVIDENCE_RULES, type WriterEvidence } from "./record-writers.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
-import { RecordStore } from "./record-store.js"
+import { RecordStore, type RestoreInput } from "./record-store.js"
+import type { RecordRoot } from "./harness-records.js"
 import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { GatewayHttpError } from "@mako/protocol/gateway-http"
@@ -236,6 +237,26 @@ function withLeadingModel(entries: Entry[], model: string | undefined): Entry[] 
     const opens = isReplyEntry(entry) && !entry.model && !(index > 0 && isReplyEntry(entries[index - 1]!))
     return index < until && opens ? { ...entry, model } : entry
   })
+}
+
+/**
+ * Where the harness here keeps each root a session was captured under, for a restore of it from another home: written
+ * there, it's where the reader lists it, whatever the source's home or its roots' places in it were. A root the reader
+ * keeps under another name of the same kind (another account's, `claude@…`) goes to its own (`claude`).
+ */
+function ownRoots(provider: SessionProvider, names: readonly string[]): Pick<RestoreInput, "roots"> {
+  const own = provider.recordRoots?.()
+  if (!own) return {}
+  const roots = names.flatMap((name): RecordRoot[] => {
+    const path = (own.find((root) => root.name === name) ?? own.find((root) => root.name === baseRoot(name)))?.path
+    return path ? [{ name, path }] : []
+  })
+  return { roots }
+}
+
+/** A root's kind: an extra root's name (`claude@1a2b3c4d`) without its suffix. */
+function baseRoot(name: string): string {
+  return name.split("@")[0] ?? name
 }
 
 /** Whether a write at `path` re-runs this provider's discovery or refreshes the one file. */
@@ -1644,9 +1665,9 @@ export class SessionCatalog {
       // Pulled side by side (each reads its chunks before it takes the store's turn), then checked in order.
       const pulledAll = await settledAll(sessions.map(({ harness, nativeId }) => sync.pull(harness, nativeId)))
       for (const [at, { harness, nativeId, holdings: sent }] of sessions.entries()) {
-        const provider = this.providers.find((each) => each.harness === harness)
-        if (!provider) throw new Error(`No harness here reads ${harness}'s sessions.`)
         const pulled = pulledAll[at]!
+        const provider = this.readerOf(store, harness, nativeId)
+        if (!provider) throw new Error(`No harness here reads ${harness}'s sessions.`)
         const held = store.holdings(harness, nativeId)
         if (!Object.keys(held).length) throw new Error(`The cloud holds none of ${harness}'s session ${nativeId}.`)
         // A unit that describes the store (a schema, a migration list) is this store's own where the sender's differed: numbered apart.
@@ -1660,7 +1681,7 @@ export class SessionCatalog {
       // All or nothing: every restore is asked first, writing nothing, so a refusal never leaves another of these sessions
       // in its harness's store here, where it could run while its Thread runs elsewhere.
       for (const each of pulls) {
-        const dry = await store.restore({ harness: each.harness, nativeId: each.nativeId, home: this.recordsHome, stores: this.harnessStores, dryRun: true, ...each.provider.fork && { fork: each.provider.fork }, ...installed[each.harness] !== undefined && { installed: installed[each.harness] } })
+        const dry = await store.restore({ harness: each.harness, nativeId: each.nativeId, home: this.recordsHome, ...ownRoots(each.provider, store.rootNames(each.harness, each.nativeId)), stores: this.harnessStores, dryRun: true, ...each.provider.fork && { fork: each.provider.fork }, ...installed[each.harness] !== undefined && { installed: installed[each.harness] } })
         const refusal: KeptRestore | undefined = dry.outdated
           ? { kind: "outdated", ...dry.outdated }
           : dry.fork
@@ -1682,7 +1703,7 @@ export class SessionCatalog {
     }
     for (const { provider, harness, nativeId, pulled } of pulls) {
       const started = performance.now()
-      const report = await store.restore({ harness, nativeId, home: this.recordsHome, stores: this.harnessStores, ...provider.fork && { fork: provider.fork }, ...installed[harness] !== undefined && { installed: installed[harness] } })
+      const report = await store.restore({ harness, nativeId, home: this.recordsHome, ...ownRoots(provider, store.rootNames(harness, nativeId)), stores: this.harnessStores, ...provider.fork && { fork: provider.fork }, ...installed[harness] !== undefined && { installed: installed[harness] } })
       if (report.written || report.fork?.written) provider.storeWritten?.()
       const restored: KeptRestore = report.outdated
         ? { kind: "outdated", ...report.outdated }
@@ -1861,6 +1882,17 @@ export class SessionCatalog {
     const [name = "", role, table = ""] = key.split("\t")
     if (role === "schema") return true
     return role === "row" && this.providers.some((provider) => provider.harness === harness && provider.fork?.storeTable?.(name, table) === true)
+  }
+
+  /**
+   * The reader of `harness` whose store a received session's records are from, by the names of the roots they were
+   * captured under: a harness can have several readers (Devin CLI's `devin-cli` and Devin.app's `devin-app`), and only
+   * the right one's fork rule knows its store's own tables. The harness's first reader when none names them.
+   */
+  private readerOf(store: RecordStore, harness: string, nativeId: string): SessionProvider | undefined {
+    const readers = this.providers.filter((each) => each.harness === harness)
+    const names = new Set(store.rootNames(harness, nativeId).map(baseRoot))
+    return readers.find((each) => each.recordRoots?.().some((root) => names.has(root.name))) ?? readers[0]
   }
 
   /** Forgets what a receive that wrote nothing pulled of sessions this store held nothing of before; the remote still has them. */

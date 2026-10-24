@@ -21,7 +21,7 @@ import type { DatabaseSync, SQLOutputValue, StatementSync } from "node:sqlite"
 import { openReadOnly, type NativeStores } from "../read-only-sqlite.js"
 import type { WriterEvidenceLookups } from "../record-evidence.js"
 import type { WriterEvidence } from "../record-writers.js"
-import { placeholders, tableColumns, type RecordDatabase, type SessionRecords } from "../harness-records.js"
+import { placeholders, tableColumns, type RecordDatabase, type RecordRoot, type SessionRecords } from "../harness-records.js"
 import { agentTitleFrom, titleFrom, type NativeRecordSample, type Thread, type ThreadRef, type ThreadTail, type UnreadRecord } from "../format.js"
 import type { TurnState } from "../entry-sink.js"
 import {
@@ -218,6 +218,11 @@ export class DevinLocalProvider implements SessionProvider {
    * 3.10) and the two keys Devin.app keeps for it in its state database: the
    * message store entry naming the journal and the session's info.
    */
+  /** `devin-app`: Devin.app's user folder. */
+  recordRoots(): RecordRoot[] {
+    return [{ name: "devin-app", path: this.userDir }]
+  }
+
   async records(path: string): Promise<SessionRecords | null> {
     if (!this.roots().includes(dirname(path)) || !(await stat(path).catch(() => null))?.isFile()) return null
     const databases: RecordDatabase[] = []
@@ -228,7 +233,7 @@ export class DevinLocalProvider implements SessionProvider {
     if (keys.length) databases.push({ path: state, tables: [{ table: "ItemTable", where: `key IN (${placeholders(keys)})`, params: keys }] })
     // Its subagents' messages are in the journal: the paths they're read at come with it.
     const children = ((await this.children(path).catch(() => null)) ?? []).flatMap((child) => (child.path ? [child.path] : []))
-    return { roots: [{ name: "devin-app", path: this.userDir }], files: path.endsWith(".ndjson") ? [path] : [], databases, children }
+    return { roots: this.recordRoots(), files: path.endsWith(".ndjson") ? [path] : [], databases, children }
   }
 
   async peek(file: NativeFile): Promise<ThreadRef | null> {

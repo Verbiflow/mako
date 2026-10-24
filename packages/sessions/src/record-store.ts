@@ -1061,6 +1061,13 @@ export class RecordStore {
     return PathRowSchema.array().parse(this.prepared("SELECT path FROM session_paths WHERE session = ? ORDER BY path").all(session)).map((row) => row.path)
   }
 
+  /** The names of the roots a session's records were captured under, as its layout keeps them: whose store they're from. */
+  rootNames(harness: string, nativeId: string): string[] {
+    const found = SessionRowSchema.optional().parse(this.prepared("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
+    if (!found?.layout) return []
+    return Object.keys(SessionLayoutSchema.parse(JSON.parse(found.layout)).roots)
+  }
+
   /** The keys of `harness`'s units matching a GLOB `pattern`: a stream's file by its launch, once the session's id took it. */
   unitKeys(harness: string, pattern: string): string[] {
     return KeySchema.array().parse(this.prepared("SELECT key FROM units WHERE harness = ? AND key GLOB ? ORDER BY key").all(harness, pattern)).map((row) => row.key)
@@ -2554,7 +2561,9 @@ export class RecordStore {
     }
     return {
       fork, ids, database, rowOf,
-      file: (path) => fork.file(plainRecordPath(path), ids),
+      // A launch's stream is Mako's record of what its driver received, a file of its own per launch, not the harness's:
+      // no fork rule names it, and the fork never takes it. It's written where the destination lacks it, as any shared unit.
+      file: (path) => (path.startsWith(`${STREAMS_ROOT}:`) ? "shared" : fork.file(plainRecordPath(path), ids)),
       linesOwn: (key) => {
         const [, , encoded = "{}"] = key.split("\t")
         return Object.values(LinesKeySchema.parse(JSON.parse(encoded))).includes(nativeId)
@@ -2900,13 +2909,19 @@ export class RecordStore {
       record("write", size)
       return { action: "write", target, from: 0 }
     }
-    if (info.bytes > size) {
-      report.diverged.push({ unit: unit.key, reason: `The destination holds ${info.bytes} bytes; Mako's newest version has ${size}` })
-      return null
-    }
-    if (!(await this.prefixMatches(unit.id, existing, info.bytes))) {
-      report.diverged.push({ unit: unit.key, reason: `The destination's ${info.bytes} bytes differ from Mako's version` })
-      return null
+    if (info.bytes > size || !(await this.prefixMatches(unit.id, existing, info.bytes))) {
+      // A file its harness writes whole again (Grok's summary.json, prompt_context.json and system prompt on every load)
+      // holding a version Mako captured is behind the newest, not gone on without Mako: the newest replaces it.
+      if (!(await this.capturedWhole(unit.id, existing, info.bytes))) {
+        report.diverged.push({ unit: unit.key, reason: info.bytes > size ? `The destination holds ${info.bytes} bytes; Mako's newest version has ${size}` : `The destination's ${info.bytes} bytes differ from Mako's version` })
+        return null
+      }
+      if (dropped) {
+        record("delete", 0)
+        return { action: "delete", target: existing, from: 0 }
+      }
+      record("write", size)
+      return { action: "write", target, from: 0, ...existing !== target && { existing } }
     }
     if (dropped) {
       record("delete", 0)
@@ -2939,6 +2954,18 @@ export class RecordStore {
     const line = head.indexOf(0x0a)
     await mkdir(dirname(target), { recursive: true })
     await writeFile(target, line === -1 ? Buffer.alloc(0) : head.subarray(0, line + 1))
+  }
+
+  /**
+   * Whether the destination's file is, whole, a version Mako captured of the unit: an earlier state of the session,
+   * which the newest descends from (a unit's versions are one line, `planRecordImport`). Only a version taken whole
+   * (`replace`) has its digest; a file that only appends is compared by its prefix instead.
+   */
+  private async capturedWhole(unit: number, path: string, length: number): Promise<boolean> {
+    if (!this.prepared("SELECT 1 FROM versions WHERE unit = ? AND kind = 'replace' AND size = ? LIMIT 1").get(unit, length)) return false
+    const digest = createHash("sha256")
+    for await (const { bytes } of recordChunks(path, 0, length)) digest.update(bytes)
+    return Boolean(this.prepared("SELECT 1 FROM versions WHERE unit = ? AND kind = 'replace' AND size = ? AND digest = ? LIMIT 1").get(unit, length, digest.digest()))
   }
 
   /** Whether the destination's first `length` bytes are the store's. */
