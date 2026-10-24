@@ -165,7 +165,7 @@ try {
   assert.equal(look.access, "write")
   // A newer Mako raises the store while this build's catalog runs: from its next look on, capture stops, said once.
   const recordsFile = join(recordsPath, "records.sqlite")
-  raise(recordsFile, "meta", { writableBy: 3, readableBy: 2, column: { table: "sessions", name: "labels", value: "newer" }, guarded: ["sessions", "units", "versions", "chunks"] })
+  raise(recordsFile, "meta", { writableBy: 4, readableBy: 3, column: { table: "sessions", name: "labels", value: "newer" }, guarded: ["sessions", "units", "versions", "chunks"] })
   const before = dump(recordsFile)
   assert.equal(look.access, "read", "an open store turns read-only once another build raised it")
   const warned = []
@@ -200,10 +200,10 @@ try {
     assert.equal(sha(await readFile(back[0])), sha(atCapture), "whole")
     assert.throws(() => store.capture({ harness: "codex", nativeId: id }), /newer Mako's format/, "and it captures nothing")
     await store.close()
-    assert.deepEqual(recordStoreStanding(recordsPath), { access: "read", build: 2, format: { writableBy: 3, readableBy: 2, writtenBy: "0.163.0", readableFrom: "0.161.2" } }, "the catalog stamped the store it made with its build")
+    assert.deepEqual(recordStoreStanding(recordsPath), { access: "read", build: 3, format: { writableBy: 4, readableBy: 3, writtenBy: "0.163.0", readableFrom: "0.163.0" } }, "each number stamped with the build that set it")
   }
   assert.equal(dump(recordsFile), before, "nothing in the store changed: its column, table and rows are as the newer build left them")
-  raise(recordsFile, "meta", { writableBy: 4, readableBy: 3, writer: "0.170.0" })
+  raise(recordsFile, "meta", { writableBy: 5, readableBy: 4, writer: "0.170.0" })
   const refused = dump(recordsFile)
   assert.throws(() => new RecordStore(recordsPath, nativeStores), (error) => error instanceof NewerStoreError && /needs Mako 0\.170\.0 or later to read/.test(error.message), "past reads, it's refused with the Mako that reads it named")
   assert.equal(recordStoreStanding(recordsPath).access, "refused")

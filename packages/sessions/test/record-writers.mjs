@@ -178,10 +178,10 @@ try {
     await store.close()
     const db = new DatabaseSync(join(folder, "records.sqlite"))
     const meta = (key) => db.prepare("SELECT value FROM meta WHERE key = ?").get(key)?.value
-    assert.equal(meta("schema"), "2")
-    assert.equal(meta("reads"), "2")
+    assert.equal(meta("schema"), "3")
+    assert.equal(meta("reads"), "2", "a format-2 build still reads it")
     assert.match(meta("additions"), /\bwriters\b/)
-    db.prepare("UPDATE meta SET value = '3' WHERE key = 'schema'").run()
+    db.prepare("UPDATE meta SET value = '4' WHERE key = 'schema'").run()
     db.close()
     const reader = new RecordStore(folder, stores)
     assert.equal(reader.access, "read", "a newer format that says this build may read it")
@@ -190,10 +190,24 @@ try {
     await assert.rejects(reader.forget("grok", "a"), /newer Mako's format/)
     await reader.close()
     const again = new DatabaseSync(join(folder, "records.sqlite"))
-    assert.equal(again.prepare("SELECT value FROM meta WHERE key = 'schema'").get().value, "3", "an older build writes nothing to it")
-    again.prepare("UPDATE meta SET value = '3' WHERE key = 'reads'").run()
+    assert.equal(again.prepare("SELECT value FROM meta WHERE key = 'schema'").get().value, "4", "an older build writes nothing to it")
+    again.prepare("UPDATE meta SET value = '4' WHERE key = 'reads'").run()
     again.close()
     assert.throws(() => new RecordStore(folder, stores), /kept as it is/)
+
+    // A store a format-2 build wrote, which named some rows by their rowid: raised as it opens, and a format-2 build that
+    // had it open is stopped inside SQLite, rather than naming rows beside this build's names for them.
+    const second = join(root, "second-format")
+    await new RecordStore(second, stores).close()
+    const lowered = new DatabaseSync(join(second, "records.sqlite"))
+    lowered.prepare("UPDATE meta SET value = '2' WHERE key = 'schema'").run()
+    lowered.close()
+    await new RecordStore(second, stores).close()
+    const raised = new DatabaseSync(join(second, "records.sqlite"))
+    assert.deepEqual(["schema", "reads"].map((key) => raised.prepare("SELECT value FROM meta WHERE key = ?").get(key).value), ["3", "2"], "raised to this build's format, still read by format 2")
+    raised.function("mako_store_format", { deterministic: true }, () => 2)
+    assert.throws(() => raised.prepare("INSERT INTO sessions (harness, native_id) VALUES ('devin', 'x')").run(), /newer Mako/, "a format-2 build's write is refused")
+    raised.close()
 
     // A store from before the writers keeps working, and gains the columns.
     const old = join(root, "old-format")
