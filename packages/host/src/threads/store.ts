@@ -196,7 +196,7 @@ export interface JournalFacts {
   threadPath?: string
   bindings: ReadonlyArray<{ provider: string; nativeId?: string; path?: string }>
   /** The conversation this one forked from. `parent-thread` puts its new Session in the parent's Thread; without it the fork has its own Thread. */
-  ancestry?: { parentId: string; placement?: "parent-thread" }
+  ancestry?: { parentId: string; placement?: "parent-thread"; session?: SessionId }
   /** A journal started inside a Session that already exists (a `+` tab). */
   session?: SessionId
 }
@@ -1688,8 +1688,8 @@ export class ThreadStore {
     const found = this.sql("SELECT session_id FROM journals WHERE conversation_id = ?").get(ancestry.parentId)
     const parent = found ? this.canonical(SessionRowSchema.parse(found).session_id) ?? null : null
     const home = parent && ancestry.placement === "parent-thread" ? this.forkHome(parent) : undefined
-    if (!home) return this.mintSingleton("fork", parent, actor)
-    const session = this.mintSession("fork", parent, actor)
+    if (!home) return this.mintSingleton("fork", parent, actor, ancestry.session)
+    const session = this.mintSession("fork", parent, actor, this.self, ancestry.session)
     this.addMember(home, session, actor)
     this.sql("UPDATE threads SET revision = revision + 1 WHERE id = ?").run(home)
     return session
@@ -1706,8 +1706,8 @@ export class ThreadStore {
     return thread.sessions.every((member) => this.executionState(member).state === "here") ? thread.id : undefined
   }
 
-  private mintSingleton(origin: SessionOrigin, parent: string | null, actor: Actor): string {
-    const session = this.mintSession(origin, parent, actor)
+  private mintSingleton(origin: SessionOrigin, parent: string | null, actor: Actor, id?: SessionId): string {
+    const session = this.mintSession(origin, parent, actor, this.self, id)
     const thread = randomUUID()
     this.sql("INSERT INTO threads (id, owner_id, created_at, created_by) VALUES (?, ?, ?, ?)")
       .run(thread, this.localPrincipal, this.now(), JSON.stringify(actor))

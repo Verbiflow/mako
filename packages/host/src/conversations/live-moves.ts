@@ -58,7 +58,10 @@ export function snapshotFacts(snapshot: LiveSnapshot): JournalFacts {
     threadPath: snapshot.threadPath,
     bindings: snapshot.control?.bindings ?? [{ provider: snapshot.session.harness, nativeId: snapshot.session.nativeId, path: snapshot.threadPath }],
     ancestry: snapshot.control?.ancestry
-      ? { parentId: snapshot.control.ancestry.parentId, placement: snapshot.control.ancestry.placement }
+      ? {
+          parentId: snapshot.control.ancestry.parentId, placement: snapshot.control.ancestry.placement,
+          ...snapshot.control.ancestry.session && { session: SessionIdSchema.parse(snapshot.control.ancestry.session) },
+        }
       : undefined,
     session: snapshot.control?.session ? SessionIdSchema.parse(snapshot.control.session) : undefined,
   }

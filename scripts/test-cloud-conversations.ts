@@ -25,7 +25,7 @@ import {
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { Git } from "@mako/git"
 import { CloudConversations, folderRepository } from "@mako/host/conversations/cloud-conversations"
-import { cloudRuntimeOf } from "@mako/host/conversations/cloud-moves"
+import { cloudRuntimeOf, namedUuid } from "@mako/host/conversations/cloud-moves"
 import { MoveIdSchema } from "@mako/host/contracts/thread-execution"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { ThreadStore } from "@mako/host/threads/store"
@@ -68,8 +68,11 @@ interface Ask {
   harness?: string
 }
 
-/** Where the stand-in machine's store files the next forks: a Session of its own unless one is named. */
-type ForkFiling = { into: string | undefined }
+/**
+ * Where the stand-in machine's store files the next forks: in the Session the device named, as a current host does;
+ * or, as a host on an older image did, ignoring it, in `into` or a Session of its own.
+ */
+type ForkFiling = { into: string | undefined; older: boolean }
 
 /** A cloud machine's host behind the fake gateway: what it was asked, and its Thread's event outbox. */
 async function cloudMachine(reach: Reach = {}) {
@@ -80,7 +83,7 @@ async function cloudMachine(reach: Reach = {}) {
   /** By fork: the Session the machine's store put it in. */
   const forkSessions = new Map<string, string>()
   /** Set to make the machine's store file the next forks into this Session, as one was seen to (its parent's). */
-  const filing: ForkFiling = { into: undefined }
+  const filing: ForkFiling = { into: undefined, older: false }
   const served = await serveHostThroughGateway(await gateway.connectRuntime(), {
     runtimeId,
     build: "test",
@@ -96,8 +99,8 @@ async function cloudMachine(reach: Reach = {}) {
       // The machine's store takes a `+` tab's Session under the device's ID, and puts a fork in one of its own.
       if (channel === "mako:thread-create-session") return JSON.stringify({ thread: args[1], session: args[2] })
       if (channel === "mako:live-fork") {
-        const input = z.object({ id: z.string(), provider: z.string() }).loose().parse(args[1])
-        const session = filing.into ?? randomUUID()
+        const input = z.object({ id: z.string(), provider: z.string(), session: z.string().optional() }).loose().parse(args[1])
+        const session = (!filing.older && input.session) || (filing.into ?? randomUUID())
         forkSessions.set(input.id, session)
         return JSON.stringify({ session: { id: input.id, harness: input.provider, cwd: CLONE, status: "ready" }, revision: 1, createdAt: 1, requests: [], sessionId: session })
       }
@@ -753,17 +756,23 @@ test("in a Thread that moved to the cloud, a new tab and a fork start on its mac
   const forked = await router.route("mako:live-fork", [moved, { id: forkId, provider: "codex", point }])
   assert.ok(forked.handled)
   const forkSession = machine.forkSessions.get(forkId)
+  assert.equal(forkSession, namedUuid(`mako cloud fork session\0${forkId}`), "the fork goes into a Session this Mac named, from the fork's ID")
   assert.deepEqual(store.journalPlacement(forkId), { thread: placed.thread, session: forkSession }, "the same Session ID in both stores")
   assert.equal(store.execution(SessionIdSchema.parse(forkSession))?.state, "elsewhere")
   assert.ok(router.has(forkId), "followed with the Thread's other conversations")
-  // A fork the machine filed into a Session the Thread already has (its parent tab's): filed the same here, so the two
-  // stores agree and it comes back with the Thread, rather than refused here and left in the cloud.
+  // A machine on an older image names the Session itself: one of its own is filed as it says, and one the Thread already
+  // has (its parent tab's, as was seen) is filed the same here, so the two stores agree and it comes back with the Thread.
+  machine.filing.older = true
+  const ownSession = randomUUID()
+  assert.ok((await router.route("mako:live-fork", [moved, { id: ownSession, provider: "codex", point }])).handled)
+  assert.deepEqual(store.journalPlacement(ownSession), { thread: placed.thread, session: machine.forkSessions.get(ownSession) }, "an older machine's own Session is filed as it says")
   machine.filing.into = tab.session
   const intoParent = randomUUID()
   assert.ok((await router.route("mako:live-fork", [conversation, { id: intoParent, provider: "claude", point }])).handled)
   assert.deepEqual(store.journalPlacement(intoParent), { thread: placed.thread, session: tab.session }, "in the Session the machine gave it")
   assert.ok(router.has(intoParent), "followed with the Thread's other conversations")
   machine.filing.into = undefined
+  machine.filing.older = false
   await assert.rejects(router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point, thread: "new" }]), /forks within its Thread there/)
   await assert.rejects(router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point, worktree: true }]), /works in its machine's checkout/)
 
@@ -776,7 +785,7 @@ test("in a Thread that moved to the cloud, a new tab and a fork start on its mac
   // A Session that runs here is this Mac's to start.
   const local = store.registerJournal({ conversationId: randomUUID(), createdAt: clock++, harness: "codex", bindings: [] }, store.person())
   assert.equal((await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID(), session: local.session }])).handled, false)
-  assert.deepEqual(await router.releaseThread(cloudThread), [moved, conversation, forkId, intoParent], "coming back, each is answered here again")
+  assert.deepEqual(await router.releaseThread(cloudThread), [moved, conversation, forkId, ownSession, intoParent], "coming back, each is answered here again")
   assert.equal(router.has(conversation), false)
 
   // A store takes a Session under the ID its Thread's other place gave it (as the machine's does), once.

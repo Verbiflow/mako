@@ -14,6 +14,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import { ThreadStore } from "@mako/host/threads/store"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 
 /**
  * A Thread with several Sessions in the conversation host, for all six
@@ -155,6 +156,18 @@ async function main(): Promise<void> {
     assert.deepEqual(placementOf(owner, tabId), { thread: home.thread, session: tab.session })
     assert.deepEqual(threads.group(home.thread)?.sessions.map((session) => [session.id, session.started]), [[home.session, true], [forked.session, true], [tab.session, true]])
     expected.set(tabId, tab)
+
+    // A fork into the Session its asker named, as a device forking its Thread on a cloud machine does: filed under
+    // that ID, the same ID again a replay, another Session for the same fork refused, a Session the store has refused.
+    const named = SessionIdSchema.parse(randomUUID())
+    const namedFork = randomUUID()
+    const asked = { id: namedFork, provider: harness, point: { kind: "run" as const, requestId: seed }, session: named }
+    const into = owner.fork(id, asked)
+    assert.deepEqual({ thread: into.threadId, session: into.sessionId }, { thread: home.thread, session: named }, `${harness}: a fork goes into the Session it was given`)
+    assert.equal(owner.fork(id, asked).sessionId, named, `${harness}: a repeat answers the same`)
+    assert.throws(() => owner.fork(id, { ...asked, session: randomUUID() }), /another Session/, `${harness}: a fork ID is not reused for another Session`)
+    assert.throws(() => owner.fork(id, { ...asked, id: randomUUID() }), /has already/, `${harness}: a Session the store has isn't taken`)
+    expected.set(namedFork, { thread: home.thread, session: named })
 
     await assert.rejects(owner.start(other, CWD, { conversationId: randomUUID(), session: randomUUID() }), /no longer exists/,
       `${other}: a tab whose Session is gone starts nothing`)

@@ -195,6 +195,8 @@ export const ConversationControlSchema = z.object({
       point: z.string(),
       /** A fork made with this set joins its parent's Thread as a tab. Older forks have their own Thread. */
       placement: z.literal("parent-thread").optional(),
+      /** The Session it was asked to go into (`ForkInput.session`). */
+      session: z.string().uuid().optional(),
     })
     .optional(),
   /** The Thread-store Session this journal was started in (a `+` tab), recorded before the first commit. */
@@ -232,5 +234,10 @@ export const ForkInputSchema = z.object({
   worktree: z.boolean().optional(),
   /** The Session moves rather than branches off, so the fork keeps its parent's title. */
   move: z.boolean().optional(),
+  /**
+   * The Thread-store Session the fork goes into, minted by whoever asked: a device forking its Thread on a cloud
+   * machine names it, so both stores file the fork alike and no machine's own randomness decides it.
+   */
+  session: z.string().uuid().optional(),
 })
 export type ForkInput = z.infer<typeof ForkInputSchema>
