@@ -57,8 +57,13 @@ export type MoveArrival = {
   parts?: Record<string, number>
 }
 
-/** A Session to open here, resumed from the records just written. */
-export type ArrivingSession = { harness: string; nativeId: string; folder: string; conversationId: string; modeId?: string; tuning?: SessionSettings }
+/**
+ * A Session to open here, resumed from the records just written. `path` is where its harness lists the session here:
+ * the start reads its history from there first, as a desktop's resume does, so the conversation's history is the
+ * session's records, and what a harness replays as it loads one (ACP's `session/load`) is drawn over them, not in
+ * their place.
+ */
+export type ArrivingSession = { harness: string; nativeId: string; path: string; folder: string; conversationId: string; modeId?: string; tuning?: SessionSettings }
 
 export type MoveArrivalDeps = {
   git: Git
@@ -266,7 +271,7 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
     if (!at) throw new Error(`${session.harness}'s session ${session.nativeId} wasn't written here.`)
     const opening = performance.now()
     try {
-      await deps.open({ harness: session.harness, nativeId: session.nativeId, folder: input.folder, ...session.open })
+      await deps.open({ harness: session.harness, nativeId: session.nativeId, path: at.path, folder: input.folder, ...session.open })
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error)
       const name = deps.label(session.harness)

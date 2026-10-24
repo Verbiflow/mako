@@ -98,6 +98,8 @@ export class RootPlaces {
       if (to !== from) this.moves.push({ from, to })
       if (underHome && below !== "") this.homed.push({ below, to })
     }
+    // A root the destination names has its place there, whether or not the session's layout kept it.
+    for (const [name, to] of named) if (!this.folders.has(name)) this.folders.set(name, to)
     this.moves.sort((left, right) => right.from.length - left.from.length)
     this.homed.sort((left, right) => right.below.length - left.below.length)
   }

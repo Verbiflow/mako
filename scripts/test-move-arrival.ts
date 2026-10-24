@@ -74,7 +74,8 @@ try {
     const asked = input(move)
     const arrival = await arriveMove(deps, asked)
     assert.deepEqual(order, ["receive", "open codex", "open cursor"], "a device before handoffs: nothing taken")
-    assert.deepEqual(opened[0], { harness: "codex", nativeId: "n-1", folder, ...asked.sessions[0]!.open })
+    // Opened at the path its harness lists it here, so its start reads the session's history first, as a desktop's resume does.
+    assert.deepEqual(opened[0], { harness: "codex", nativeId: "n-1", path: "/home/node/codex/n-1", folder, ...asked.sessions[0]!.open })
     assert.equal(arrival.checkout, "arrived")
     assert.ok(arrival.sessions.every((session) => session.opened && session.opened.ms >= 0), "each says how long its start took")
   }

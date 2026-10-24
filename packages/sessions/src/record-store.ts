@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { createReadStream, existsSync, mkdirSync } from "node:fs"
 import { mkdir, open, rename, rm, stat, writeFile } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import type { DatabaseSync, StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { checkStoredChunk, Chunker, chunkHash, HASH_BYTES, Packs, type StoredChunk } from "./record-chunks.js"
@@ -1061,11 +1061,40 @@ export class RecordStore {
     return PathRowSchema.array().parse(this.prepared("SELECT path FROM session_paths WHERE session = ? ORDER BY path").all(session)).map((row) => row.path)
   }
 
-  /** The names of the roots a session's records were captured under, as its layout keeps them: whose store they're from. */
+  /**
+   * The names of the roots a session's records lie under: those its layout keeps (whose store they're from), and any
+   * its units name besides.
+   */
   rootNames(harness: string, nativeId: string): string[] {
     const found = SessionRowSchema.optional().parse(this.prepared("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
     if (!found?.layout) return []
-    return Object.keys(SessionLayoutSchema.parse(JSON.parse(found.layout)).roots)
+    return [...new Set([...Object.keys(SessionLayoutSchema.parse(JSON.parse(found.layout)).roots), ...this.unitRoots(found.id)])]
+  }
+
+  /** The roots a session's units are named under (`codex:sessions/…` is under `codex`). */
+  private unitRoots(session: number): string[] {
+    const rows = z.object({ root: z.string() }).array().parse(this.prepared("SELECT DISTINCT substr(u.key, 1, instr(u.key, ':') - 1) AS root FROM session_units s JOIN units u ON u.id = s.unit WHERE s.session = ? AND instr(u.key, ':') > 1").all(session))
+    return rows.map((row) => row.root)
+  }
+
+  /**
+   * A capture's layout: its records' roots, and every root it doesn't name that the session's units still lie under,
+   * where the layout before had it (a pruned stream's, a folder gone since), so each unit has a place to be restored
+   * to. One the layout before kept under its home is put under this one's.
+   */
+  private layoutKept(session: number, home: string, records: SessionRecords): SessionLayout {
+    const layout = layoutOf(home, records)
+    const found = z.object({ layout: z.string().nullable() }).optional().parse(this.prepared("SELECT layout FROM sessions WHERE id = ?").get(session))
+    if (!found?.layout) return layout
+    const before = SessionLayoutSchema.parse(JSON.parse(found.layout))
+    const named = new Set(this.unitRoots(session))
+    for (const [name, path] of Object.entries(before.roots)) {
+      if (name in layout.roots || !named.has(name)) continue
+      const below = relative(before.home, path)
+      const underHome = below !== "" && below !== ".." && !below.startsWith(`..${sep}`) && !isAbsolute(below)
+      layout.roots[name] = underHome ? join(home, below) : path
+    }
+    return layout
   }
 
   /** The keys of `harness`'s units matching a GLOB `pattern`: a stream's file by its launch, once the session's id took it. */
@@ -1808,7 +1837,7 @@ export class RecordStore {
     try {
       // SAFETY: created just above when it didn't exist.
       const session = this.sessionId(harness, nativeId, true)!
-      this.prepared("UPDATE sessions SET layout = ? WHERE id = ?").run(JSON.stringify(layoutOf(home, records)), session)
+      this.prepared("UPDATE sessions SET layout = ? WHERE id = ?").run(JSON.stringify(this.layoutKept(session, home, records)), session)
       if (read) this.prepared("INSERT INTO session_paths (path, session) VALUES (?, ?) ON CONFLICT (path) DO UPDATE SET session = excluded.session").run(read, session)
       // Its child agents' paths, read through it once its harness deletes it; a child the harness drops later keeps its path, and its records' last version.
       for (const child of records.children ?? [])

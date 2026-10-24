@@ -621,7 +621,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           // Settled as every start's are: the harness's catalog fills what the device's settings leave out.
           const tuning = await harnesses.profiles.resolveLaunch(session.harness, session.folder, session.tuning)
           await live.start(session.harness, session.folder, {
-            conversationId: session.conversationId, resume: session.nativeId,
+            conversationId: session.conversationId, resume: session.nativeId, threadPath: session.path,
             ...session.modeId !== undefined && { modeId: session.modeId },
             ...tuning !== undefined && { tuning },
           })
