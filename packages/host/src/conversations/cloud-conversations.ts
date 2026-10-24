@@ -345,7 +345,10 @@ export class CloudConversations {
       if (input.worktree || input.move) throw new Error("A conversation in the cloud works in its machine's checkout. Fork it into a worktree once it's back on this Mac.")
       if (!this.#entries.has(input.id) && this.#options.returning?.(entry.threadId)) throw new Error("This Thread is on its way back to this Mac; fork it once it's here.")
     }
-    const value = await this.#call(entry, "mako:live-fork", args)
+    // A fork of a Thread from this Mac goes into a Session named here, from the fork's own ID: a repeat names the same,
+    // and no machine's randomness decides it (copies of one snapshot once drew the same IDs).
+    const named = placed ? SessionIdSchema.parse(input.session ?? namedUuid(`mako cloud fork session\0${input.id}`)) : undefined
+    const value = await this.#call(entry, "mako:live-fork", named ? [args[0], { ...input, session: named }] : args)
     const decoded = decodeRuntimeValue(value)
     const fork = ForkAnswerSchema.parse(decoded)
     if (fork.session.id !== input.id || fork.session.harness !== input.provider) throw new Error("The cloud machine returned a different fork")
@@ -354,14 +357,14 @@ export class CloudConversations {
     if (placed && threads) {
       if (!fork.sessionId) throw new Error("The cloud machine didn't say which Session the fork went into")
       const session = SessionIdSchema.parse(fork.sessionId)
-      const known = threads.sessionPlacement(session)
+      const known = session === named ? undefined : threads.sessionPlacement(session)
       if (known && known.thread === placed.thread) {
-        // The machine filed the fork into a Session of the Thread's that this Mac has (its parent's, by what was seen
-        // on 2026-10-23): filed the same here, so both stores agree and it comes back with the Thread, and said, since
-        // a fork belongs in a Session of its own.
+        // A machine on an older image names the fork's Session itself, and once named one of the Thread's own (its
+        // parent's, 2026-10-23): filed the same here, so both stores agree and it comes back with the Thread, and said.
         hostWarn("cloud-conversations", "a fork in the cloud went into a Session its Thread already had; filed the same here", { conversationId: input.id, parent: entry.conversationId, parentSession: placed.session, session, sameAsParent: session === placed.session, machineThread: z.object({ threadId: z.string() }).partial().safeParse(decoded).data?.threadId, threadId: entry.threadId })
         threads.adoptElsewhere({ operationId: namedUuid(`mako cloud fork\0${input.id}`), conversationId: input.id, session, actor: threads.person() })
       } else {
+        if (session !== named) hostWarn("cloud-conversations", "the cloud machine named a fork's Session itself, as an older host does", { conversationId: input.id, named, session })
         threads.adoptElsewhere({ operationId: namedUuid(`mako cloud fork\0${input.id}`), conversationId: input.id, forkOf: entry.conversationId, forkSession: session, actor: threads.person() })
         hostLog("cloud-conversations", "a conversation in the cloud forked on its machine", { conversationId: input.id, parent: entry.conversationId, threadId: entry.threadId, session })
       }

@@ -444,6 +444,7 @@ const inputs = {
         thread: z.union([z.literal("new"), z.literal("parent")]).optional(),
         worktree: z.boolean().optional(),
         move: z.boolean().optional(),
+        session: z.string().optional(),
       }),
     ]),
   "mako:live-goal": () =>

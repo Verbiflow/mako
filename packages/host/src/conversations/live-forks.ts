@@ -10,6 +10,7 @@ import { liveEntries, prepareLiveContext } from "./live-context.js"
 import { LiveJournal } from "./live-journal.js"
 import { conversationControl, residentOf, type LiveAccess } from "./live-runtime.js"
 import { baseUnread } from "./base-source.js"
+import { SessionIdSchema } from "../contracts/thread-identity.js"
 
 type ForkAccess = Pick<LiveAccess, "dependencies" | "bundles" | "require" | "load" | "flush" | "stamp" | "add" | "register" | "actor" | "announceGroup">
 
@@ -114,7 +115,16 @@ export class LiveForks {
         throw new Error("This fork ID belongs to another source point")
       if (existing.snapshot.control.ancestry.placement !== placement)
         throw new Error("This fork ID was used for a fork into another Thread")
+      if (existing.snapshot.control.ancestry.session !== command.session)
+        throw new Error("This fork ID was used for a fork into another Session")
       return this.access.stamp(existing.snapshot)
+    }
+    // A Session the caller named is minted under that ID; one this store has already is refused before anything is made.
+    const named = command.session === undefined ? undefined : SessionIdSchema.parse(command.session)
+    if (named) {
+      const threads = this.access.dependencies.threads
+      if (!threads?.writable) throw new Error("This host's Thread store isn't open, so the fork can't go into the Session it was given.")
+      if (threads.sessionPlacement(named)) throw new Error(`The Session ${named} the fork was given is one this host has already.`)
     }
     if (baseUnread(source)) throw new Error("This conversation's history is still being read. Try the fork again in a moment.")
     let nativeFork: NonNullable<ConversationControl["ancestry"]>["nativeFork"]
@@ -189,6 +199,7 @@ export class LiveForks {
           sourceRevision: source.revision,
           point,
           placement,
+          ...named && { session: named },
         },
         activeBindingId: command.id,
         bindings: [],
@@ -206,6 +217,8 @@ export class LiveForks {
     this.access.add(residentOf(snapshot, journal))
     this.access.register(snapshot, this.access.actor())
     const stamped = this.access.stamp(snapshot)
+    if (named && stamped.sessionId !== named)
+      throw new Error(`The fork was made, but this host's Thread store didn't file it into the Session it was given (${named}).`)
     if (placement && stamped.threadId) this.access.announceGroup(stamped.threadId)
     return stamped
   }
