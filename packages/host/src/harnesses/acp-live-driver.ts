@@ -71,7 +71,12 @@ export function createAcpLiveDriver(
     fork: fork.kind === "native" ? { kind: fork.kind, point: fork.point, via: fork.via } : fork,
     contextBreakdown: { kind: "unavailable", reason: "ACP's `usage_update` carries the context used and its size, nothing itemized." },
     resume: resume.kind === "native"
-      ? { ...resume, locate: async (binding, cwd, env) => binding.nativeId ? resume.locate({ nativeId: binding.nativeId, cwd, env }) : undefined }
+      ? {
+          ...resume,
+          locate: async (binding, cwd, env) => binding.nativeId ? resume.locate({ nativeId: binding.nativeId, cwd, env }) : undefined,
+          // Told this host's own agents, each with its session: one holding another session isn't another app's.
+          inspect: async (binding) => resume.inspect(binding, loading ? (await loading).processes() : new Map()),
+        }
       : resume,
     startPrefetch: {
       via: "The ACP agent, launched as a start launches it, through `initialize`, with its binary read alongside.",

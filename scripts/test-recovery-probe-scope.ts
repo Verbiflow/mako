@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
+import { promisify } from "node:util"
 import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -8,9 +9,16 @@ import { claudeProcessProbeFor } from "@mako/host/harnesses/claude/process-probe
 import { grokProcessProbe } from "@mako/host/harnesses/grok/process-probe"
 import { createCodexProcessProbe } from "@mako/host/harnesses/codex/process-probe"
 import { cursorProcessProbe } from "@mako/host/harnesses/cursor/process-probe"
-import { resumeVerdict } from "@mako/host/harnesses/native-continuation"
+import { fileResumeEvidence, resumeVerdict } from "@mako/host/harnesses/native-continuation"
 
 const codexProcessProbe = createCodexProcessProbe()
+const run = promisify(execFile)
+
+/** `/bin/sleep` under another name. macOS kills a copy whose signature no longer matches within a second, so it's signed again here. */
+async function standIn(path: string): Promise<void> {
+  await copyFile("/bin/sleep", path)
+  if (process.platform === "darwin") await run("codesign", ["--sign", "-", "--force", path])
+}
 
 const root = await mkdtemp(join(tmpdir(), "mako-probe-scope-"))
 const id = "recovery-scope-fixture"
@@ -66,21 +74,27 @@ try {
     await once(child, "exit")
     await writeFile(join(grok, "active_sessions.json"), "[]")
     const unrelated = join(root, "Grok Bot")
-    await copyFile("/bin/sleep", unrelated)
+    await standIn(unrelated)
     child = spawn(unrelated, ["300"], { stdio: "ignore" })
     await once(child, "spawn")
     assert.equal((await resumeVerdict({ ...binding, provider: "grok", path: grokPath }, grokProcessProbe)).kind, "resumable", "an unrelated Grok Bot prefix match is not a CLI owner")
     child.kill("SIGTERM")
     await once(child, "exit")
     const grokExecutable = join(root, "grok-native")
-    await copyFile("/bin/sleep", grokExecutable)
+    await standIn(grokExecutable)
     child = spawn(grokExecutable, ["300"], { stdio: "ignore" })
     await once(child, "spawn")
     assert.equal((await resumeVerdict({ ...binding, provider: "grok", path: grokPath }, grokProcessProbe)).kind, "unavailable", "an unregistered live Grok process cannot be cleared by an empty registry")
+    // This host's own agent, which names its session: another session's isn't an unknown owner, the target's holds it.
+    const grokBinding = { ...binding, provider: "grok", path: grokPath }
+    const inspect = (own: Map<number, string | null>) => fileResumeEvidence(grokProcessProbe).inspect(grokBinding, own)
+    assert.equal((await inspect(new Map([[child.pid!, "another-session"]]))).kind, "available", "this host's own agent on another session doesn't hide whether the target is free")
+    assert.equal((await inspect(new Map([[child.pid!, id]]))).kind, "held", "this host's own agent on the target holds it")
+    assert.equal((await inspect(new Map([[child.pid! + 1, "another-session"]]))).kind, "unavailable", "an agent this host didn't start is still unknown")
   }
   console.log("Recovery probe scope: custom Claude/Grok/Codex/Cursor sources and incomplete inventory refusal verified; process stand-in only, no native model prompt")
 } finally {
-  if (child && child.exitCode === null) {
+  if (child && child.exitCode === null && child.signalCode === null) {
     child.kill("SIGTERM")
     await once(child, "exit")
   }

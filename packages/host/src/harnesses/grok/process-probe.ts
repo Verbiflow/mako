@@ -80,6 +80,10 @@ export const grokProcessProbe: ProviderProcessProbe = {
         ) : { sessions: [], pids: new Set<number>() }
       if (!target || registered.sessions.some(session => session.nativeId === target.nativeId))
         return { kind: "available", sessions: registered.sessions }
+      // This host's own agents name their sessions: one holding the target holds it, one holding another doesn't.
+      const own = target.own ?? new Map<number, string | null>()
+      const ownHolder = [...own].some(([, nativeId]) => nativeId === target.nativeId)
+      const sessions = ownHolder ? [...registered.sessions, { nativeId: target.nativeId, status: "open" as const, detail: "this Mako" }] : registered.sessions
       // Grok 1.0.44 ACP does not enter active_sessions.json. An absent or
       // empty registry cannot clear a live, unregistered native process.
       // lsof's plain -c is a prefix match: Grok also selects Grok Bot.app.
@@ -87,9 +91,9 @@ export const grokProcessProbe: ProviderProcessProbe = {
       // Grok 1.0.44 reports grok in ps but grok-native in lsof's command field.
       const running = await probeOpenFiles({ processNames: ["/^grok$/", "/^grok-native$/", "/^Grok$/"], signal, accept: () => false })
       if (running.kind === "unavailable") return running
-      if (running.pids.some(pid => !registered.pids.has(pid)))
+      if (running.pids.some(pid => !registered.pids.has(pid) && !own.has(pid)))
         return { kind: "unavailable", reason: "incomplete" }
-      return { kind: "available", sessions: registered.sessions }
+      return { kind: "available", sessions }
     } catch {
       return { kind: "unavailable", reason: "failed" }
     }

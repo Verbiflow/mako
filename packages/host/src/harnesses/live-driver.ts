@@ -98,7 +98,8 @@ export type NativeResume =
       via: string
       wake: string
       checkpoint(path: string): Promise<string | undefined>
-      inspect(binding: ProviderBinding): Promise<NativeResumeEvidence>
+      /** `own`: the harness's processes this host started, each with the session it holds (`ProviderProbeTarget.own`). */
+      inspect(binding: ProviderBinding, own?: ReadonlyMap<number, string | null>): Promise<NativeResumeEvidence>
       locate?(binding: ProviderBinding, cwd: string, env: NodeJS.ProcessEnv): Promise<string | undefined>
       elsewhere?: ResumeElsewhere
     }
