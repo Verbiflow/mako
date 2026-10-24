@@ -6,6 +6,7 @@ import { processIdentityMatches } from "../../base/process-liveness.js"
 import { probeOpenFiles } from "../open-files-probe.js"
 import type {
   ProviderActivitySession,
+  ProviderProbeTarget,
   ProviderProcessProbe,
 } from "../../threads/index.js"
 
@@ -55,6 +56,36 @@ async function validatedSessions<Value>(
   return { sessions: active, pids }
 }
 
+/**
+ * The sessions `pids` hold as Mako's hosts recorded them (`ProviderProbeTarget.mako`), the target's holders among
+ * them; undefined when one isn't recorded, or its pid now runs something that started otherwise. A pid is placed by
+ * its own record or its process group's leader's: Mako starts every agent leading a group of its own.
+ */
+async function placedByMako(
+  pids: readonly number[],
+  groups: ReadonlyMap<number, number>,
+  target: ProviderProbeTarget,
+  signal: AbortSignal
+): Promise<ProviderActivitySession[] | undefined> {
+  if (!target.mako) return undefined
+  const mako = target.mako()
+  const holders: ProviderActivitySession[] = []
+  for (const pid of pids) {
+    const group = groups.get(pid)
+    const leader = mako.has(pid) ? pid : group !== undefined && mako.has(group) ? group : undefined
+    const recorded = leader === undefined ? undefined : mako.get(leader)
+    if (leader === undefined || !recorded) return undefined
+    const same = await processIdentityMatches({
+      pid: leader, startedAt: recorded.startedAt, signal,
+      exact: recorded.observed, toleranceMs: recorded.observed ? undefined : 1_500,
+    }).catch(() => false)
+    if (!same) return undefined
+    if (recorded.session === target.nativeId)
+      holders.push({ nativeId: target.nativeId, status: "open", detail: `Mako's host (pid ${recorded.host})` })
+  }
+  return holders
+}
+
 export const grokProcessProbe: ProviderProcessProbe = {
   provider: "grok",
   pollIntervalMs: 3_000,
@@ -80,10 +111,6 @@ export const grokProcessProbe: ProviderProcessProbe = {
         ) : { sessions: [], pids: new Set<number>() }
       if (!target || registered.sessions.some(session => session.nativeId === target.nativeId))
         return { kind: "available", sessions: registered.sessions }
-      // This host's own agents name their sessions: one holding the target holds it, one holding another doesn't.
-      const own = target.own ?? new Map<number, string | null>()
-      const ownHolder = [...own].some(([, nativeId]) => nativeId === target.nativeId)
-      const sessions = ownHolder ? [...registered.sessions, { nativeId: target.nativeId, status: "open" as const, detail: "this Mako" }] : registered.sessions
       // Grok 1.0.44 ACP does not enter active_sessions.json. An absent or
       // empty registry cannot clear a live, unregistered native process.
       // lsof's plain -c is a prefix match: Grok also selects Grok Bot.app.
@@ -91,9 +118,12 @@ export const grokProcessProbe: ProviderProcessProbe = {
       // Grok 1.0.44 reports grok in ps but grok-native in lsof's command field.
       const running = await probeOpenFiles({ processNames: ["/^grok$/", "/^grok-native$/", "/^Grok$/"], signal, accept: () => false })
       if (running.kind === "unavailable") return running
-      if (running.pids.some(pid => !registered.pids.has(pid) && !own.has(pid)))
-        return { kind: "unavailable", reason: "incomplete" }
-      return { kind: "available", sessions }
+      const unplaced = running.pids.filter(pid => !registered.pids.has(pid))
+      if (!unplaced.length) return { kind: "available", sessions: registered.sessions }
+      // Mako's hosts record which session each agent they start holds (none for a discovery or a start ahead): a
+      // process one recorded is placed by that, any other stays unknown.
+      const placed = await placedByMako(unplaced, running.groups, target, signal)
+      return placed ? { kind: "available", sessions: [...registered.sessions, ...placed] } : { kind: "unavailable", reason: "incomplete" }
     } catch {
       return { kind: "unavailable", reason: "failed" }
     }

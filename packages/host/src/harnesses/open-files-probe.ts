@@ -3,7 +3,14 @@ import type { ProviderActivityResult } from "../threads/index.js"
 import { onMac, onWindows } from "../base/platform.js"
 
 export type OpenFilesResult =
-  | { kind: "available"; paths: string[]; processFound: boolean; pids: number[] }
+  | {
+      kind: "available"
+      paths: string[]
+      processFound: boolean
+      pids: number[]
+      /** Each pid's process group, where lsof named it: a provider Mako spawns leads its group, so a native binary under its wrapper shares the wrapper's. */
+      groups: Map<number, number>
+    }
   | Extract<ProviderActivityResult, { kind: "unavailable" }>
 
 export async function probeOpenFiles({
@@ -24,7 +31,7 @@ export async function probeOpenFiles({
   return new Promise((resolve) => {
     const child = spawn(
       command,
-      sourcePath ? ["-Fpn", "--", sourcePath] : ["-Fpn", ...processNames.flatMap((name) => ["-c", name])],
+      sourcePath ? ["-Fpgn", "--", sourcePath] : ["-Fpgn", ...processNames.flatMap((name) => ["-c", name])],
       { signal, stdio: ["ignore", "pipe", "pipe"] }
     )
     let diagnostic = ""
@@ -34,6 +41,14 @@ export async function probeOpenFiles({
     })
     const paths = new Set<string>()
     const pids = new Set<number>()
+    const groups = new Map<number, number>()
+    let pid: number | undefined
+    const field = (line: string) => {
+      if (/^p\d+$/.test(line)) {
+        pid = Number(line.slice(1))
+        pids.add(pid)
+      } else if (/^g\d+$/.test(line) && pid !== undefined) groups.set(pid, Number(line.slice(1)))
+    }
     let carry = ""
     let incomplete = false
     let bytes = 0
@@ -53,7 +68,7 @@ export async function probeOpenFiles({
         carry = ""
       }
       for (const line of lines) {
-        if (/^p\d+$/.test(line)) pids.add(Number(line.slice(1)))
+        field(line)
         if (!line.startsWith("n")) continue
         const path = line.slice(1)
         if (accept(path)) paths.add(path)
@@ -66,7 +81,7 @@ export async function probeOpenFiles({
       })
     )
     child.once("close", (code) => {
-      if (/^p\d+$/.test(carry)) pids.add(Number(carry.slice(1)))
+      field(carry)
       if (carry.startsWith("n")) {
         const path = carry.slice(1)
         if (accept(path)) paths.add(path)
@@ -77,6 +92,7 @@ export async function probeOpenFiles({
           paths: [...paths],
           processFound: code === 0,
           pids: [...pids],
+          groups,
         })
       else
         resolve({

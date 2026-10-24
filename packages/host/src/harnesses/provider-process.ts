@@ -38,7 +38,7 @@ export function spawnProviderProcess(
   command: string,
   args: readonly string[],
   options: ProviderSpawnOptions,
-  tracked?: { kind: string; owner: string }
+  tracked?: { kind: string; owner: string; session?: string | null }
 ): ChildProcessWithoutNullStreams {
   if (options.cwd !== undefined && !workingDirectoryExists(options.cwd))
     throw new MissingWorkingDirectoryError(options.cwd)
