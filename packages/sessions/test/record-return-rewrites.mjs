@@ -86,4 +86,41 @@ for (const wentOnHere of [false, true]) {
     await rm(root, { recursive: true, force: true })
   }
 }
-console.log("PASS: a Grok session Grok rewrote on the machine comes back as itself; one that went on here too forks")
+
+// A device that captured the session again once its own stream was pruned (the store holds it whole, the file goes):
+// that capture's layout has no streams root, yet the machine's stream comes back with the session. It's written into
+// this host's streams folder, named by the restore as a receive names the harness's own roots (local, 2026-10-24:
+// "No folder is known for the record root mako-streams", and the Thread stayed in the cloud).
+{
+  const root = await mkdtemp(join(tmpdir(), "mako-record-return-pruned-"))
+  const device = join(root, "device"), machineHome = join(root, "machine")
+  const [laptop, cloud, machine] = ["laptop", "cloud", "machine"].map((name) => new RecordStore(join(root, `${name}-records`), stores))
+  try {
+    await mkdir(folder(device), { recursive: true })
+    await writeFile(join(folder(device), "updates.jsonl"), `${update(1, { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Run the busy command" } })}\n`)
+    await stream(device, "device-launch")
+    await capture(laptop, device, ["device-launch"])
+    await cross(laptop, cloud)
+    await cross(cloud, machine)
+    assert.equal((await machine.restore({ harness: "grok", nativeId: ID, home: machineHome })).written, true, "the machine takes the session")
+    await rm(join(streams(device), "grok", `${ID}@device-launch.jsonl`))
+    await capture(laptop, device, [])
+    assert.deepEqual(laptop.rootNames("grok", ID).sort(), ["grok", "mako-streams"], "a root its units still name stays among the session's roots")
+
+    await appendFile(join(folder(machineHome), "updates.jsonl"), `${update(2, { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "BUSY-DONE" } })}\n`)
+    await stream(machineHome, "machine-launch")
+    await capture(machine, machineHome, ["device-launch", "machine-launch"])
+    await cross(machine, cloud)
+    await cross(cloud, laptop)
+    // As a receive names them: the harness's roots here, and this host's streams folder.
+    const roots = [{ name: "grok", path: join(device, ".grok") }, { name: "mako-streams", path: streams(device) }]
+    const report = await laptop.restore({ harness: "grok", nativeId: ID, home: device, fork: grokFork, roots })
+    assert.equal(report.written, true, JSON.stringify(report.diverged))
+    assert.match(await readFile(join(folder(device), "updates.jsonl"), "utf8"), /BUSY-DONE/, "the machine's turn comes back")
+    assert.ok((await readFile(join(streams(device), "grok", `${ID}@machine-launch.jsonl`), "utf8")).includes("ended"), "the machine's stream comes into this host's streams folder")
+  } finally {
+    await Promise.all([laptop.close(), cloud.close(), machine.close()])
+    await rm(root, { recursive: true, force: true })
+  }
+}
+console.log("PASS: a Grok session Grok rewrote on the machine comes back as itself; one that went on here too forks; one whose stream was pruned here still takes the machine's")

@@ -69,7 +69,7 @@ import { recordsOverHttp } from "@mako/protocol/records-http"
 import { GatewayHttpError } from "@mako/protocol/gateway-http"
 import type { RecordRemote } from "@mako/protocol/records"
 import { readOriginal, type EntryOriginal } from "./record-original.js"
-import { streamOwner, streamsRoot } from "./record-streams.js"
+import { STREAMS_ROOT, streamOwner, streamsRoot } from "./record-streams.js"
 import { FolderWatches, type RootWatch } from "./root-watch.js"
 
 export type CatalogEvent =
@@ -244,10 +244,12 @@ function withLeadingModel(entries: Entry[], model: string | undefined): Entry[] 
  * there, it's where the reader lists it, whatever the source's home or its roots' places in it were. A root the reader
  * keeps under another name of the same kind (another account's, `claude@…`) goes to its own (`claude`).
  */
-function ownRoots(provider: SessionProvider, names: readonly string[]): Pick<RestoreInput, "roots"> {
+function ownRoots(provider: SessionProvider, names: readonly string[], streams: string | null): Pick<RestoreInput, "roots"> {
   const own = provider.recordRoots?.()
   if (!own) return {}
   const roots = names.flatMap((name): RecordRoot[] => {
+    // Mako's own streams of the session's launches go where this host keeps them.
+    if (name === STREAMS_ROOT) return streams ? [{ name, path: streams }] : []
     const path = (own.find((root) => root.name === name) ?? own.find((root) => root.name === baseRoot(name)))?.path
     return path ? [{ name, path }] : []
   })
@@ -1681,7 +1683,7 @@ export class SessionCatalog {
       // All or nothing: every restore is asked first, writing nothing, so a refusal never leaves another of these sessions
       // in its harness's store here, where it could run while its Thread runs elsewhere.
       for (const each of pulls) {
-        const dry = await store.restore({ harness: each.harness, nativeId: each.nativeId, home: this.recordsHome, ...ownRoots(each.provider, store.rootNames(each.harness, each.nativeId)), stores: this.harnessStores, dryRun: true, ...each.provider.fork && { fork: each.provider.fork }, ...installed[each.harness] !== undefined && { installed: installed[each.harness] } })
+        const dry = await store.restore({ harness: each.harness, nativeId: each.nativeId, home: this.recordsHome, ...ownRoots(each.provider, store.rootNames(each.harness, each.nativeId), this.streams), stores: this.harnessStores, dryRun: true, ...each.provider.fork && { fork: each.provider.fork }, ...installed[each.harness] !== undefined && { installed: installed[each.harness] } })
         const refusal: KeptRestore | undefined = dry.outdated
           ? { kind: "outdated", ...dry.outdated }
           : dry.fork
@@ -1703,7 +1705,7 @@ export class SessionCatalog {
     }
     for (const { provider, harness, nativeId, pulled } of pulls) {
       const started = performance.now()
-      const report = await store.restore({ harness, nativeId, home: this.recordsHome, ...ownRoots(provider, store.rootNames(harness, nativeId)), stores: this.harnessStores, ...provider.fork && { fork: provider.fork }, ...installed[harness] !== undefined && { installed: installed[harness] } })
+      const report = await store.restore({ harness, nativeId, home: this.recordsHome, ...ownRoots(provider, store.rootNames(harness, nativeId), this.streams), stores: this.harnessStores, ...provider.fork && { fork: provider.fork }, ...installed[harness] !== undefined && { installed: installed[harness] } })
       if (report.written || report.fork?.written) provider.storeWritten?.()
       const restored: KeptRestore = report.outdated
         ? { kind: "outdated", ...report.outdated }
