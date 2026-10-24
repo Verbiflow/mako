@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -22,6 +22,7 @@ if (!process.versions.electron) {
   const deadline = setTimeout(() => child.kill("SIGTERM"), 30_000)
   const [code] = await once(child, "exit")
   clearTimeout(deadline)
+  await rm(root, { recursive: true, force: true })
   process.exitCode = code ?? 1
 } else {
   const { app } = await import("electron")
@@ -46,7 +47,7 @@ async function check() {
   const { advancePromptDelivery } = await import(join(repo, "packages/host/dist/contracts/prompt-delivery.js"))
   const { installHostLog } = await import(join(repo, "packages/host/dist/base/host-log.js"))
   const hostLogFile = join(root, "host.log")
-  installHostLog(hostLogFile)
+  const hostLog = installHostLog(hostLogFile)
   const { NativeUnknown } = await import(join(repo, "packages/host/dist/base/native-unknown.js"))
   const unknown = new NativeUnknown(root)
   unknown.follow()
@@ -151,6 +152,8 @@ async function check() {
   assert.deepEqual(await steer("Use the other parser"), { kind: "accepted" })
   await steered.until("the steered turn to end", () => steered.session()?.status === "ready")
   assert.ok(steered.updates().some((update) => update.kind === "text" && update.text.includes("Steered: Use the other parser")), "the running turn reads the steered message")
+  // Lines reach the file in their own queue: read it once every line so far is there.
+  await hostLog.flush()
   assert.doesNotMatch(await readFile(hostLogFile, "utf8"), /native event not handled.*interjection/, "Grok's echo of the message is known")
   assert.equal((await steer("too late")).kind, "not-accepted", "a finished turn takes no steering")
   await steered.close()
@@ -245,6 +248,7 @@ async function check() {
   assert.deepEqual(since(beforeRefused).flatMap((event) => event.type === "live-update" && event.update.kind === "event" ? [event.update] : []),
     [{ kind: "event", id: "fixture-2", source: { harness: "provider-turn-grok", record: "fixture-2" }, label: "Context compacted", detail: "Automatic · 1k → 200 tokens · took 4s" }],
     "the replayed completion, named by Grok's event id, is drawn once")
+  await hostLog.flush()
   const logged = await readFile(hostLogFile, "utf8")
   assert.match(logged, /native event not handled.*kind=session\/update\/mystery_update/, "an undeclared kind is on record")
   assert.match(logged, /native event unreadable.*kind=session\/update\/tool_call\/invalid/, "a malformed known kind is on record under its own name")
