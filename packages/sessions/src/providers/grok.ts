@@ -51,7 +51,7 @@ import {
 } from "../jsonl.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import type { NativeFile, SessionProvider } from "./types.js"
-import { filesUnder, type SessionRecords } from "../harness-records.js"
+import { filesUnder, type RecordRoot, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { GrokChildren } from "./grok-children.js"
 import type { Entry } from "../entries.js"
@@ -606,13 +606,18 @@ export class GrokProvider implements SessionProvider {
   }
 
   /** The session's folder, every file in it: the transcripts and what Grok keeps beside them. */
+  /** `grok`: Grok's home, the folder its sessions are under. */
+  recordRoots(): RecordRoot[] {
+    return [{ name: "grok", path: dirname(this.root) }]
+  }
+
   async records(path: string): Promise<SessionRecords | null> {
     const directory = dirname(path)
     if (dirname(dirname(directory)) !== this.root || !(await stat(path).catch(() => null))?.isFile()) return null
     // Its subagents' sessions sit elsewhere in the tree and are never rows: they come with it.
     // Grok's records state no version of the CLI that wrote them (`summary.json` has only its chat format's): what wrote them is the CLI installed as a write lands.
     const subagents = await this.childLinks.recordsOf(path)
-    return { roots: [{ name: "grok", path: dirname(this.root) }], files: [...await filesUnder(directory), ...subagents.files], databases: [], writer: { installed: true }, children: subagents.children }
+    return { roots: this.recordRoots(), files: [...await filesUnder(directory), ...subagents.files], databases: [], writer: { installed: true }, children: subagents.children }
   }
 
   /** Its subagents, from `subagents/` beside it and its own updates. */

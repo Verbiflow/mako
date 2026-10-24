@@ -13,7 +13,7 @@ import type { RecordWriterRule, WriterEvidence } from "../record-writers.js"
 import type { WriterEvidenceLookups } from "../record-evidence.js"
 import type { Entry, Harness, Thread, ThreadRef, ThreadTail } from "../format.js"
 import type { FollowStart, ResumePoint } from "../jsonl.js"
-import type { RecordFork, SessionRecords } from "../harness-records.js"
+import type { RecordFork, RecordRoot, SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 
 /**
@@ -185,6 +185,16 @@ export interface SessionProvider {
    * no session of this store.
    */
   records(path: string): Promise<SessionRecords | null>
+
+  /**
+   * Where this reader keeps each root its `records` name, by that name,
+   * whether or not any session is there yet: what a restore of a session
+   * captured in another home writes into (`RestoreInput.roots`). Without it a
+   * root goes to the place under this home it had under the source's, which
+   * is where this reader looks only while neither side moved the root
+   * (`MAKO_CURSOR_SDK_ROOT`, `CODEX_HOME`, an editor's per-platform folder).
+   */
+  recordRoots?(): RecordRoot[]
 
   /**
    * Where this store's records state the build that wrote them, the rule
