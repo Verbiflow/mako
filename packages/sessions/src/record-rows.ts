@@ -97,13 +97,52 @@ const IndexSchema = z.object({ name: z.string() })
 const IndexPartSchema = z.object({ name: z.string().nullable() })
 const TableListSchema = z.object({ wr: z.number() })
 
-/** The columns that name one row of `table`: its primary key, else its first plain unique index (Cursor's `cursorDiskKV` declares only `key UNIQUE`), else none. */
+/**
+ * The columns that name one row of `table`: its primary key, else its first
+ * plain unique index (Cursor's `cursorDiskKV` declares only `key UNIQUE`),
+ * else none. A rowid alias (`INTEGER PRIMARY KEY`) beside a plain unique
+ * index without it names no row: the table says what does (Devin's
+ * `message_nodes` declares `UNIQUE(session_id, node_id)`), and the alias is
+ * the database's own counter, which another home runs on its own and gives
+ * to another session's row (`row_id`). An alias with no such index stays
+ * the row's name: it may be what the row says (Devin.app's
+ * `messages.position`).
+ */
 export function keyColumns(db: DatabaseSync, table: string): string[] {
-  const primary = TableColumnSchema.array().parse(db.prepare(`SELECT name, pk FROM pragma_table_info(?)`).all(table))
-    .filter((column) => column.pk > 0)
-    .sort((left, right) => left.pk - right.pk)
+  const info = TableInfoSchema.array().parse(db.prepare(`SELECT name, type, pk FROM pragma_table_info(?)`).all(table))
+  const counted = countedAlias(db, table, info)
+  if (counted) return counted.columns
+  const primary = info.filter((column) => column.pk > 0).sort((left, right) => left.pk - right.pk)
   if (primary.length) return primary.map((column) => column.name)
   return uniqueColumns(db, table)[0] ?? []
+}
+
+/**
+ * A row as a restore finds and writes it: by its name (`keyColumns`), else by
+ * all its columns, and, where a counted alias isn't its name, without it, for
+ * SQLite to number.
+ */
+export function rowIdentity(db: DatabaseSync, table: string): ForkIdentity {
+  const info = TableInfoSchema.array().parse(db.prepare(`SELECT name, type, pk FROM pragma_table_info(?)`).all(table))
+  const counted = countedAlias(db, table, info)
+  if (counted) return { columns: counted.columns, alias: counted.alias }
+  const keys = keyColumns(db, table)
+  return { columns: keys.length ? keys : info.map((column) => column.name), alias: null }
+}
+
+/** `table`'s rowid alias where a plain unique index without it names its rows, with that index's columns. */
+function countedAlias(db: DatabaseSync, table: string, info: readonly z.infer<typeof TableInfoSchema>[]): { alias: string; columns: string[] } | null {
+  const alias = aliasOf(db, table, info)
+  if (!alias) return null
+  const unique = uniqueColumns(db, table).filter((columns) => !columns.includes(alias))[0]
+  return unique ? { alias, columns: unique } : null
+}
+
+function aliasOf(db: DatabaseSync, table: string, info: readonly z.infer<typeof TableInfoSchema>[]): string | null {
+  const primary = info.filter((column) => column.pk > 0)
+  if (primary.length !== 1 || primary[0]!.type.toUpperCase() !== "INTEGER") return null
+  const listed = TableListSchema.optional().parse(db.prepare("SELECT wr FROM pragma_table_list WHERE name = ? AND schema = 'main'").get(table))
+  return listed?.wr === 1 ? null : primary[0]!.name
 }
 
 /** The columns of each plain unique index of `table` on columns alone, in SQLite's order. */
@@ -134,9 +173,7 @@ export interface ForkIdentity {
 
 export function forkIdentity(db: DatabaseSync, table: string): ForkIdentity {
   const info = TableInfoSchema.array().parse(db.prepare(`SELECT name, type, pk FROM pragma_table_info(?)`).all(table))
-  const primary = info.filter((column) => column.pk > 0)
-  const listed = TableListSchema.optional().parse(db.prepare("SELECT wr FROM pragma_table_list WHERE name = ? AND schema = 'main'").get(table))
-  const alias = primary.length === 1 && primary[0]!.type.toUpperCase() === "INTEGER" && listed?.wr !== 1 ? primary[0]!.name : null
+  const alias = aliasOf(db, table, info)
   if (!alias) {
     const keys = keyColumns(db, table)
     return { columns: keys.length ? keys : info.map((column) => column.name), alias: null }
