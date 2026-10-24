@@ -1,3 +1,4 @@
+import type { MakoProcesses } from "../threads/index.js"
 import type { StartPrefetch } from "./start-prefetch.js"
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
 import type { GoalCommand, GoalStatus } from "../contracts/live-goals.js"
@@ -98,8 +99,8 @@ export type NativeResume =
       via: string
       wake: string
       checkpoint(path: string): Promise<string | undefined>
-      /** `own`: the harness's processes this host started, each with the session it holds (`ProviderProbeTarget.own`). */
-      inspect(binding: ProviderBinding, own?: ReadonlyMap<number, string | null>): Promise<NativeResumeEvidence>
+      /** `mako`: the harness processes Mako's hosts recorded, each with the session it holds (`ProviderProbeTarget.mako`). */
+      inspect(binding: ProviderBinding, mako?: MakoProcesses): Promise<NativeResumeEvidence>
       locate?(binding: ProviderBinding, cwd: string, env: NodeJS.ProcessEnv): Promise<string | undefined>
       elsewhere?: ResumeElsewhere
     }

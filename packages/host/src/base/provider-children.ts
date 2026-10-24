@@ -34,7 +34,12 @@ const RecordSchema = z.object({
   kind: z.string(),
   owner: z.string(),
   host: z.number().int().positive(),
-})
+  /**
+   * The native session the process holds: its id, or null when it holds none of a harness's existing sessions (a
+   * discovery probe, a start ahead, a session not yet made). Absent where unknown, as in an older build's records.
+   */
+  session: z.string().nullable().optional(),
+}).loose()
 const RegistrySchema = z.object({ children: z.array(RecordSchema) })
 export type ProviderChildRecord = z.infer<typeof RecordSchema>
 
@@ -93,6 +98,7 @@ export class ProviderChildren {
     return events.subscribe((event) => {
       if ("spawned" in event) this.trackPid(event.spawned)
       else if ("owned" in event) this.reown(event.owned)
+      else if ("bound" in event) this.bind(event.bound)
       else this.untrackPid(event.exited)
     })
   }
@@ -101,6 +107,14 @@ export class ProviderChildren {
   reown(info: { pid: number; owner: string }): void {
     if (!this.records.some((entry) => entry.pid === info.pid && entry.owner !== info.owner)) return
     this.records = this.records.map((entry) => (entry.pid === info.pid ? { ...entry, owner: info.owner } : entry))
+    this.write()
+  }
+
+  /** The session a recorded process holds from now on: a session it opened, or none. */
+  bind(info: { pid: number; session: string | null }): void {
+    if (!this.records.some((entry) => entry.pid === info.pid && entry.session !== info.session)) return
+    // Mutated in place: an identity observation in flight holds the record by reference.
+    for (const entry of this.records) if (entry.pid === info.pid) entry.session = info.session
     this.write()
   }
 
@@ -122,6 +136,7 @@ export class ProviderChildren {
     executable: string
     kind: string
     owner: string
+    session?: string | null
   }): void {
     const record: ProviderChildRecord = {
       pid: info.pid,
@@ -130,6 +145,7 @@ export class ProviderChildren {
       kind: info.kind,
       owner: info.owner,
       host: this.hostPid,
+      ...info.session !== undefined && { session: info.session },
     }
     this.records = [
       ...this.records.filter((entry) => entry.pid !== info.pid),
@@ -312,8 +328,9 @@ async function legacyShebangExecutable(
 }
 
 type ProviderChildEvent =
-  | { spawned: { pid: number; executable: string; kind: string; owner: string } }
+  | { spawned: { pid: number; executable: string; kind: string; owner: string; session?: string | null } }
   | { owned: { pid: number; owner: string } }
+  | { bound: { pid: number; session: string | null } }
   | { exited: number }
 
 /** Spawns and exits, published by whoever starts a provider process and kept by the host's registry. */
@@ -331,8 +348,13 @@ export function trackProviderChild(
 }
 
 /** For a spawner that reports the exit from its own exit handler, with `untrackProviderPid`. */
-export function trackProviderPid(info: { pid: number; executable: string; kind: string; owner: string }): void {
+export function trackProviderPid(info: { pid: number; executable: string; kind: string; owner: string; session?: string | null }): void {
   events.publish({ spawned: info })
+}
+
+/** The native session a recorded process holds from now on (`ProviderChildRecord.session`). */
+export function bindProviderPid(pid: number, session: string | null): void {
+  events.publish({ bound: { pid, session } })
 }
 
 /** For a process another owner takes over, keeping the birth its record was made with. */
@@ -342,4 +364,44 @@ export function reownProviderPid(pid: number, owner: string): void {
 
 export function untrackProviderPid(pid: number): void {
   events.publish({ exited: pid })
+}
+
+/** A harness process a Mako host on this Mac recorded, with the session it says it holds. */
+export interface MakoProcess {
+  /** The native session it holds, or null for none of a harness's existing sessions. */
+  session: string | null
+  /** When it started: its observed start, or the host's clock as it spawned it. */
+  startedAt: number
+  /** Whether `startedAt` is the observed start, to be matched exactly, rather than the spawn's clock. */
+  observed: boolean
+  /** Which host started it, for what a refusal says. */
+  host: number
+}
+
+/**
+ * Every harness process the Mako hosts with data roots `roots` recorded and say what they hold (`session` set),
+ * by pid, from each root's `runtime/provider-children.json`. A record whose host is gone is left out; one that names
+ * no session (an older build's) isn't known and is left out too, so it stays unaccounted for. Reading says nothing of
+ * whether the pid still runs the recorded process: whoever relies on a record checks its start (`startedAt`).
+ */
+export function readMakoProcesses(roots: Iterable<string>): Map<number, MakoProcess> {
+  const processes = new Map<number, MakoProcess>()
+  for (const root of new Set(roots)) {
+    let children: ProviderChildRecord[]
+    try {
+      children = RegistrySchema.parse(JSON.parse(readFileSync(join(root, "runtime", "provider-children.json"), "utf8"))).children
+    } catch {
+      continue
+    }
+    for (const entry of children) {
+      if (entry.session === undefined || hostIsGone(entry.host)) continue
+      processes.set(entry.pid, {
+        session: entry.session,
+        startedAt: entry.processStartedAt ?? entry.startedAt,
+        observed: entry.processStartedAt !== undefined,
+        host: entry.host,
+      })
+    }
+  }
+  return processes
 }

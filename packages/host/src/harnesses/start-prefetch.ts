@@ -139,7 +139,7 @@ export function prefetchProcess(launch: PrefetchLaunch | undefined, cwd: string,
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawnProviderProcess>
     try {
-      child = spawnProviderProcess(launch.command, launch.args, { cwd, env: environmentForExecutable(launch.command, launch.env) }, { kind: "prefetch", owner })
+      child = spawnProviderProcess(launch.command, launch.args, { cwd, env: environmentForExecutable(launch.command, launch.env) }, { kind: "prefetch", owner, session: null })
     } catch {
       return resolve(false)
     }

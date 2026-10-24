@@ -64,6 +64,7 @@ import { readRuntimeVersion } from "./runtime-updates.js"
 import { parseVersion } from "../contracts/runtime-version.js"
 import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { bindProviderPid } from "../base/provider-children.js"
 import { errorMessage } from "../base/error-message.js"
 import { basename } from "node:path"
 import { applyAcpSettings } from "./acp-config.js"
@@ -375,7 +376,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const child = trace.sync("spawn", () => spawnProviderProcess(executable, spec.args, {
       cwd: workingDir,
       env: environmentForExecutable(executable, env),
-    }, { kind: `acp:${harness}`, owner: id }))
+    }, { kind: `acp:${harness}`, owner: id, session: options.resume ?? null }))
 
     child.once("close", () => {
       void approvals?.dispose().catch(() => hostWarn("acp", "Approval observation cleanup failed", { harness, conversation: id }))
@@ -765,6 +766,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         },
       })
       live.sessionId = session.sessionId
+      if (live.child.pid) bindProviderPid(live.child.pid, session.sessionId)
       open(session.sessionId)
       observeUsage(live.models.opened(session.reply))
       for (const { decoded, line } of opening.splice(0))
@@ -1210,16 +1212,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     if (live.state.status !== "running") for (const settle of live.settling.splice(0)) settle()
   }
 
-  /** Each agent process this engine started and still runs, with the session it holds. */
-  function processes(): Map<number, string | null> {
-    const running = new Map<number, string | null>()
-    for (const live of sessions.values())
-      if (live.child.pid !== undefined && live.child.exitCode === null && live.child.signalCode === null) running.set(live.child.pid, live.sessionId)
-    return running
-  }
-
   return {
-    processes,
     start: startAcp,
     prompt: livePrompt,
     compact: liveCompact,

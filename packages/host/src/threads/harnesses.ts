@@ -1,3 +1,7 @@
+import type { MakoProcess } from "../base/provider-children.js"
+
+/** Mako's recorded harness processes by pid, read when asked. */
+export type MakoProcesses = () => ReadonlyMap<number, MakoProcess>
 
 export type ProviderActivityStatus = "active" | "needs-input" | "open"
 
@@ -13,10 +17,10 @@ export interface ProviderProbeTarget {
   nativeId: string
   path: string
   /**
-   * The harness's processes this host started, by pid, each with the native session it holds (null before it has
-   * one): its own, so a probe that can't tell which session a process holds doesn't take them for another app's.
+   * The harness processes Mako's hosts on this Mac recorded, each with the session it holds (`readMakoProcesses`):
+   * read only by a probe that finds a process it can't place otherwise, so it isn't taken for another app's.
    */
-  own?: ReadonlyMap<number, string | null>
+  mako?: MakoProcesses
 }
 
 export type ProviderActivityResult =

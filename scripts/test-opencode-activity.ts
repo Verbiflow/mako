@@ -75,7 +75,7 @@ try {
       // Only it runs here, whatever else OpenCode runs on this Mac.
       const pid = unregistered.pid!
       const own = servers.add(pid)
-      const alone = openCodeProcessProbeFor(servers, { stateRoot: root, processes: async () => ({ kind: "available", paths: [], processFound: true, pids: [pid] }) })
+      const alone = openCodeProcessProbeFor(servers, { stateRoot: root, processes: async () => ({ kind: "available", paths: [], processFound: true, pids: [pid], groups: new Map() }) })
       const target = { nativeId: "ses_fixture", path: "/fixture/native.db#ses_fixture" }
       assert.deepEqual(await alone.probe(AbortSignal.timeout(2000), target), { kind: "available", sessions: [] },
         "an own server whose API isn't up yet has opened no session")

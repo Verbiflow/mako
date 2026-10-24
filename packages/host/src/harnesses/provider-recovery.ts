@@ -1,3 +1,4 @@
+import type { MakoProcesses } from "../threads/index.js"
 import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
 import { assessResumeEvidence } from "./native-continuation.js"
 import type { AdmittedLiveDriver, ProviderLiveDriver } from "./live-driver.js"
@@ -47,7 +48,7 @@ export async function verifyRecoveredSession(binding: ProviderBinding, session: 
 }
 
 /** The admission boundary used by catalog, reconnect and wake. Never launches. */
-export async function assessProviderResume(binding: ProviderBinding, driver: ProviderLiveDriver | undefined): Promise<ResumeVerdict> {
+export async function assessProviderResume(binding: ProviderBinding, driver: ProviderLiveDriver | undefined, mako?: MakoProcesses): Promise<ResumeVerdict> {
   if (!driver || driver.provider !== binding.provider)
     return { kind: "unavailable", reason: "The saved session's provider is not available." }
   const resume = driver.resume
@@ -60,7 +61,7 @@ export async function assessProviderResume(binding: ProviderBinding, driver: Pro
     const store = binding.executionContext?.store
     if (store?.kind === "located" && !await sameNativeSource(driver, binding.path, store.path, binding.nativeId))
       return { kind: "unavailable", reason: "The saved native source disagrees with its execution context." }
-    const evidence = await resume.inspect(binding)
+    const evidence = await resume.inspect(binding, mako)
     const verdict = assessResumeEvidence(binding, evidence)
     hostLog("recovery", "native session assessed", {
       harness: binding.provider, binding: binding.id, nativeId: binding.nativeId,

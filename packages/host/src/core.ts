@@ -23,7 +23,7 @@ import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
 import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
-import { ProviderChildren } from "./base/provider-children.js"
+import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
 import { makoViews } from "@mako/sessions"
@@ -259,7 +259,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
   })
   late.updates = appUpdates
-  const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed })
+  // Every host's record of the agents it starts, found through the session ledger, this host's own root always.
+  const makoProcesses = () => readMakoProcesses([environment.dataRoot, ...threads.memory?.hostDataRoots() ?? []])
+  const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed, makoProcesses })
   const tools = openTools(harnesses.tools, environment.dataRoot, () => shell.foreground.idle())
   const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.summaries() ?? [])
     .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))

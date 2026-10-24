@@ -158,7 +158,7 @@ export async function grokFork(input: AcpForkInput): Promise<string> {
   const sourceCwd = source && basename(dirname(source)) === input.nativeId ? grokWorkspaceCwd(dirname(dirname(source))) : undefined
   if (!sourceCwd) throw new Error("Grok could not fork the session: its saved copy isn't in Grok's sessions folder")
   const { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } = await heavy.acpSdk.load("grok fork")
-  const child = spawnProviderProcess(input.executable, input.args, { cwd: input.cwd, env: input.env }, { kind: "acp:grok-fork", owner: input.owner })
+  const child = spawnProviderProcess(input.executable, input.args, { cwd: input.cwd, env: input.env }, { kind: "acp:grok-fork", owner: input.owner, session: null })
   const exited = new Promise<void>((resolve) => {
     child.once("exit", () => resolve())
     child.once("error", () => resolve())

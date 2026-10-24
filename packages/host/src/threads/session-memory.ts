@@ -658,6 +658,21 @@ export class SessionMemory {
 
   isLocal(socket: string): boolean { return socket === this.host.socket }
 
+  /** The data root of every host the ledger lists, this one's included: where each records the agents it starts. */
+  hostDataRoots(): string[] {
+    const rows = z.array(z.object({ launch: z.string() })).parse(this.db.prepare("SELECT launch FROM runtime_hosts").all())
+    const roots = new Set<string>()
+    for (const { launch } of rows) {
+      try {
+        const parsed = z.object({ dataRoot: z.string().min(1) }).safeParse(JSON.parse(launch))
+        if (parsed.success) roots.add(parsed.data.dataRoot)
+      } catch {
+        continue
+      }
+    }
+    return [...roots]
+  }
+
   hostSockets(): string[] {
     return z.array(z.object({ socket: z.string() })).parse(
       this.db.prepare("SELECT socket FROM runtime_hosts WHERE socket <> ?").all(this.host.socket ?? ""))

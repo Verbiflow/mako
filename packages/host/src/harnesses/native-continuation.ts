@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { createReadStream } from "node:fs"
 import { open, stat } from "node:fs/promises"
 import { compareNativeCheckpoint, resumable, type ProviderBinding, type ResumeVerdict } from "../contracts/conversation-control.js"
-import type { ProviderProcessProbe } from "../threads/index.js"
+import type { MakoProcesses, ProviderProcessProbe } from "../threads/index.js"
 
 const TAIL_BYTES = 64 * 1024
 const LEGACY_DIGEST = /^[0-9a-f]{64}$/
@@ -98,7 +98,7 @@ export function fileResumeEvidence(probe: ProviderProcessProbe, checkpoint: Nati
   const read = checkpoint === nativeCheckpoint ? readNativeFile : fileReader(checkpoint)
   return {
     checkpoint,
-    inspect: (binding: ProviderBinding, own?: ReadonlyMap<number, string | null>) => inspectNativeSession(binding, probe, read, own),
+    inspect: (binding: ProviderBinding, mako?: MakoProcesses) => inspectNativeSession(binding, probe, read, mako),
   }
 }
 
@@ -116,7 +116,7 @@ export async function inspectNativeSession(
   binding: ProviderBinding,
   probe: ProviderProcessProbe | undefined,
   readRecord: NativeResumeReader,
-  own?: ReadonlyMap<number, string | null>
+  mako?: MakoProcesses
 ): Promise<NativeResumeEvidence> {
   if (!binding.nativeId)
     return { kind: "unavailable", reason: "The saved binding has no native session ID." }
@@ -125,7 +125,7 @@ export async function inspectNativeSession(
   if (!probe)
     return { kind: "unavailable", reason: "Whether another process has this session open cannot be checked for this provider." }
   const activity = await probe
-    .probe(AbortSignal.timeout(probe.timeoutMs ?? 6_000), { nativeId: binding.nativeId, path: binding.path, ...own && { own } })
+    .probe(AbortSignal.timeout(probe.timeoutMs ?? 6_000), { nativeId: binding.nativeId, path: binding.path, ...mako && { mako } })
     .catch(() => ({ kind: "unavailable" as const }))
   if (activity.kind !== "available")
     return { kind: "unavailable", reason: "reason" in activity && activity.reason === "incomplete"

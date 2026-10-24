@@ -78,6 +78,21 @@ function upgradeLegacyRoutes(): void {
   }
 }
 
+/** Every host's data root, this one's included, from the launches the ledger lists: where each records its agents. */
+function hostDataRoots(): void {
+  const path = join(root, "roots.sqlite")
+  const launch = (dataRoot: string) => ({ dataRoot, executable: "/Applications/Mako.app", args: [], cwd: "/", profile: "default" })
+  const installed = new SessionMemory(path, { pid: 400, startedAt: 4, label: "the installed Mako app", socket: "/installed.sock", launch: launch("/data/installed") })
+  const dev = new SessionMemory(path, { pid: 401, startedAt: 5, label: "dev", socket: "/dev.sock", launch: launch("/data/dev") })
+  try {
+    assert.deepEqual(dev.hostDataRoots().sort(), ["/data/dev", "/data/installed"])
+    assert.deepEqual(installed.hostDataRoots().sort(), ["/data/dev", "/data/installed"], "each host reads the others' roots and its own")
+  } finally {
+    installed.close()
+    dev.close()
+  }
+}
+
 function retireLegacyRoutes(): void {
   const path = join(root, "retiring.sqlite")
   const host = { pid: 301, startedAt: 3, label: "retiring host", socket: "/new.sock" }
@@ -433,6 +448,7 @@ const dev = new SessionMemory(ledger, { pid: 200, startedAt: 2, label: "Mako's d
 
 try {
   upgradeLegacyRoutes()
+hostDataRoots()
   retireLegacyRoutes()
   installed.hold("codex", "route-race", "first-owner")
   const firstHold = dev.heldBy("codex", "route-race")!

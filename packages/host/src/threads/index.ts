@@ -33,6 +33,7 @@ export type { JournalFacts, MoveBegan, SourceRef, ThreadStore } from "./store.js
 export { discardChatFolder, ensureChatsRoot, newChatFolder, standsForNoProject } from "./chat-folders.js"
 export { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 export type {
+  MakoProcesses,
   ProviderActivityResult,
   ProviderActivitySession,
   ProviderActivityStatus,

@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { ProviderChildren } from "@mako/host/base/provider-children"
+import { ProviderChildren, readMakoProcesses } from "@mako/host/base/provider-children"
 
 const dir = await mkdtemp(join(tmpdir(), "mako-provider-children-"))
 const alive = (pid: number) => {
@@ -243,6 +243,30 @@ try {
   await settle()
   assert.equal(alive(activeChild.pid!), false, "verified orphan is reaped after its host exits")
   process.kill(reused.pid!, "SIGTERM")
+
+  // What each agent holds, read across every host's data root (`readMakoProcesses`): a session named at spawn, one
+  // bound once it opens, none for a discovery; a record that names nothing (an older build's) isn't known.
+  const roots = [join(dir, "host-a"), join(dir, "host-b")]
+  const [hostA, hostB] = roots.map((root) => new ProviderChildren(root))
+  hostA!.trackPid({ pid: 70001, executable: "grok", kind: "acp:grok", owner: "c-1", session: null })
+  hostA!.bind({ pid: 70001, session: "native-1" })
+  hostA!.trackPid({ pid: 70002, executable: "grok", kind: "discovery", owner: "grok", session: null })
+  hostB!.trackPid({ pid: 70003, executable: "grok", kind: "acp:grok", owner: "c-2", session: "native-2" })
+  hostB!.trackPid({ pid: 70004, executable: "codex", kind: "app-server", owner: "c-3" })
+  const read = readMakoProcesses([...roots, join(dir, "no-host-here")])
+  assert.deepEqual([...read].map(([pid, entry]) => [pid, entry.session]).sort(), [[70001, "native-1"], [70002, null], [70003, "native-2"]])
+  const rewritten = JSON.parse(await readFile(hostA!.path, "utf8"))
+  rewritten.children[0].unknownField = "kept"
+  await writeFile(hostA!.path, JSON.stringify(rewritten))
+  hostA!.untrackPid(70002)
+  assert.equal(JSON.parse(await readFile(hostA!.path, "utf8")).children[0].unknownField, undefined, "a host rewrites its own records as it holds them")
+  const foreignField = JSON.parse(await readFile(hostB!.path, "utf8"))
+  foreignField.children.push({ ...foreignField.children[0], pid: 70005, host: 2 ** 22 + 1, later: "kept" })
+  await writeFile(hostB!.path, JSON.stringify(foreignField))
+  hostB!.untrackPid(70004)
+  assert.equal(JSON.parse(await readFile(hostB!.path, "utf8")).children.find((entry: { pid: number }) => entry.pid === 70005)?.later, "kept", "another build's fields in a foreign record survive this host's rewrite")
+  // No platform gives out a pid above 2^22.
+  assert.equal(readMakoProcesses(roots).has(70005), false, "a record whose host is gone isn't Mako's now")
   process.kill(mine.pid!, "SIGTERM")
 } finally {
   await Promise.all(

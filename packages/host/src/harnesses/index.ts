@@ -20,7 +20,7 @@ import { accountRemovalSessions, type AccountSessions } from "./account-removal-
 import { AccountLogins } from "./account-login.js"
 import type { ProviderConnectionAction } from "../contracts/provider-connection.js"
 import type { ProviderBinding, ResumeVerdict } from "../contracts/conversation-control.js"
-import type { ThreadCatalog } from "../threads/index.js"
+import type { MakoProcesses, ThreadCatalog } from "../threads/index.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 
 export type { PrefetchOutcome } from "./start-prefetch.js"
@@ -81,9 +81,11 @@ export interface HarnessesDeps {
   jobs: HostJobs
   /** On while a window listens; limits spent elsewhere are read only then. */
   subscribed: JobDemand
+  /** The harness processes Mako's hosts on this Mac recorded, with the session each holds, for a resume's check. */
+  makoProcesses?: MakoProcesses
 }
 
-export function openHarnesses({ host, appRoot, catalog, live, emit, jobs, subscribed }: HarnessesDeps): Harnesses {
+export function openHarnesses({ host, appRoot, catalog, live, emit, jobs, subscribed, makoProcesses }: HarnessesDeps): Harnesses {
   const profiles = new HarnessProfiles(host, new ProviderProfileCache())
   const updates = new RuntimeUpdates({
     sources: () => host.updateSources.list(),
@@ -119,7 +121,7 @@ export function openHarnesses({ host, appRoot, catalog, live, emit, jobs, subscr
         .map((path) => path ? catalog.ref(path) : undefined)
         .find((ref) => ref?.harness === binding.provider && ref.resumeUnavailable)
       if (closed?.resumeUnavailable) return { kind: "closed", reason: closed.resumeUnavailable }
-      return assessProviderResume(binding, host.liveDrivers.get(binding.provider))
+      return assessProviderResume(binding, host.liveDrivers.get(binding.provider), makoProcesses)
     },
     installed: () => [
       ...new Set([

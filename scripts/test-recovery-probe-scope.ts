@@ -82,15 +82,30 @@ try {
     await once(child, "exit")
     const grokExecutable = join(root, "grok-native")
     await standIn(grokExecutable)
-    child = spawn(grokExecutable, ["300"], { stdio: "ignore" })
+    child = spawn(grokExecutable, ["300"], { stdio: "ignore", detached: true })
+    const spawnedAt = Date.now()
     await once(child, "spawn")
     assert.equal((await resumeVerdict({ ...binding, provider: "grok", path: grokPath }, grokProcessProbe)).kind, "unavailable", "an unregistered live Grok process cannot be cleared by an empty registry")
-    // This host's own agent, which names its session: another session's isn't an unknown owner, the target's holds it.
+    // An agent a Mako host recorded with the session it holds (`readMakoProcesses`), as another host's discovery is:
+    // another session's or none isn't an unknown owner, the target's holds it, and a pid now running something else isn't it.
     const grokBinding = { ...binding, provider: "grok", path: grokPath }
-    const inspect = (own: Map<number, string | null>) => fileResumeEvidence(grokProcessProbe).inspect(grokBinding, own)
-    assert.equal((await inspect(new Map([[child.pid!, "another-session"]]))).kind, "available", "this host's own agent on another session doesn't hide whether the target is free")
-    assert.equal((await inspect(new Map([[child.pid!, id]]))).kind, "held", "this host's own agent on the target holds it")
-    assert.equal((await inspect(new Map([[child.pid! + 1, "another-session"]]))).kind, "unavailable", "an agent this host didn't start is still unknown")
+    const recorded = (pid: number, session: string | null, startedAt = spawnedAt) => () => new Map([[pid, { session, startedAt, observed: false, host: process.pid }]])
+    const inspect = (mako: ReturnType<typeof recorded>) => fileResumeEvidence(grokProcessProbe).inspect(grokBinding, mako)
+    assert.equal((await inspect(recorded(child.pid!, "another-session"))).kind, "available", "a Mako host's agent on another session doesn't hide whether the target is free")
+    assert.equal((await inspect(recorded(child.pid!, null))).kind, "available", "a Mako host's discovery holds no session")
+    assert.equal((await inspect(recorded(child.pid!, id))).kind, "held", "a Mako host's agent on the target holds it")
+    assert.equal((await inspect(recorded(child.pid!, null, spawnedAt - 3_600_000))).kind, "unavailable", "a recorded pid that now runs a process born otherwise isn't the recorded one")
+    assert.equal((await inspect(recorded(child.pid! + 1, null))).kind, "unavailable", "a Grok process no Mako host recorded is still unknown")
+    child.kill("SIGTERM")
+    await once(child, "exit")
+    // A native binary under its wrapper: placed by the wrapper's record, which leads the process group Mako started.
+    child = spawn("/bin/sh", ["-c", '"$0" 300; :', grokExecutable], { stdio: "ignore", detached: true })
+    const wrapperAt = Date.now()
+    await once(child, "spawn")
+    const wrapper = child.pid!
+    assert.equal((await inspect(recorded(wrapper, "another-session", wrapperAt))).kind, "available", "the native binary is placed by its wrapper's record")
+    process.kill(-wrapper, "SIGTERM")
+    await once(child, "exit")
   }
   console.log("Recovery probe scope: custom Claude/Grok/Codex/Cursor sources and incomplete inventory refusal verified; process stand-in only, no native model prompt")
 } finally {

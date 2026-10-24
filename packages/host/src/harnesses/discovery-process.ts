@@ -111,12 +111,13 @@ export class DiscoveryProcesses {
       if (waited >= timeout)
         throw new Error(`${label} discovery timed out in the queue after ${timeout} ms`)
       const grouped = !onWindows()
+      // Recorded as holding no session, so a harness that can't tell which session a process holds counts it as Mako's.
       const child = spawnProviderProcess(executable, options.args, {
         cwd: options.cwd,
         env: environmentForExecutable(executable, options.env),
         detached: grouped,
         windowsHide: true,
-      })
+      }, { kind: "discovery", owner: label, session: null })
       return await new Promise<T>((resolve, reject) => {
         let phase = "startup"
         let bytes = 0
