@@ -98,7 +98,7 @@ export function fileResumeEvidence(probe: ProviderProcessProbe, checkpoint: Nati
   const read = checkpoint === nativeCheckpoint ? readNativeFile : fileReader(checkpoint)
   return {
     checkpoint,
-    inspect: (binding: ProviderBinding) => inspectNativeSession(binding, probe, read),
+    inspect: (binding: ProviderBinding, own?: ReadonlyMap<number, string | null>) => inspectNativeSession(binding, probe, read, own),
   }
 }
 
@@ -115,7 +115,8 @@ export async function resumeVerdict(
 export async function inspectNativeSession(
   binding: ProviderBinding,
   probe: ProviderProcessProbe | undefined,
-  readRecord: NativeResumeReader
+  readRecord: NativeResumeReader,
+  own?: ReadonlyMap<number, string | null>
 ): Promise<NativeResumeEvidence> {
   if (!binding.nativeId)
     return { kind: "unavailable", reason: "The saved binding has no native session ID." }
@@ -124,7 +125,7 @@ export async function inspectNativeSession(
   if (!probe)
     return { kind: "unavailable", reason: "Whether another process has this session open cannot be checked for this provider." }
   const activity = await probe
-    .probe(AbortSignal.timeout(probe.timeoutMs ?? 6_000), { nativeId: binding.nativeId, path: binding.path })
+    .probe(AbortSignal.timeout(probe.timeoutMs ?? 6_000), { nativeId: binding.nativeId, path: binding.path, ...own && { own } })
     .catch(() => ({ kind: "unavailable" as const }))
   if (activity.kind !== "available")
     return { kind: "unavailable", reason: "reason" in activity && activity.reason === "incomplete"

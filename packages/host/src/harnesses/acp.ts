@@ -1210,7 +1210,16 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     if (live.state.status !== "running") for (const settle of live.settling.splice(0)) settle()
   }
 
+  /** Each agent process this engine started and still runs, with the session it holds. */
+  function processes(): Map<number, string | null> {
+    const running = new Map<number, string | null>()
+    for (const live of sessions.values())
+      if (live.child.pid !== undefined && live.child.exitCode === null && live.child.signalCode === null) running.set(live.child.pid, live.sessionId)
+    return running
+  }
+
   return {
+    processes,
     start: startAcp,
     prompt: livePrompt,
     compact: liveCompact,

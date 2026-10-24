@@ -12,6 +12,11 @@ export interface ProviderActivitySession {
 export interface ProviderProbeTarget {
   nativeId: string
   path: string
+  /**
+   * The harness's processes this host started, by pid, each with the native session it holds (null before it has
+   * one): its own, so a probe that can't tell which session a process holds doesn't take them for another app's.
+   */
+  own?: ReadonlyMap<number, string | null>
 }
 
 export type ProviderActivityResult =
