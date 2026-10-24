@@ -9,7 +9,7 @@ import { z } from "zod"
 import { Git } from "@mako/git"
 import type { MoveCheckpoint } from "@mako/protocol/moves"
 import type { ReceivedRecords, StagedRecords } from "@mako/sessions/record-sync"
-import { arriveMove, stageMove, type MoveArrivalDeps } from "@mako/host/conversations/move-arrival"
+import { arriveMove, readyForMove, stageMove, type MoveArrivalDeps } from "@mako/host/conversations/move-arrival"
 import { captureMoveCheckpoint } from "@mako/host/workspaces/index"
 
 /**
@@ -27,6 +27,9 @@ const sh = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.
 const bundles = new Map<string, string>()
 const reads: string[] = []
 const server = createServer((request, response) => {
+  // The Thread's sessions, as the cloud lists them for a machine getting ready.
+  if (request.url?.endsWith("/records/sessions"))
+    return void response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ sessions: [{ harness: "codex", nativeId: "n-1", units: 3, versions: 29, through: 29 }] }))
   const sha = request.url?.split("/").at(-1) ?? ""
   const file = bundles.get(sha)
   if (!file) return void response.writeHead(404).end()
@@ -136,7 +139,31 @@ try {
     assert.equal(arrival.checkout, "applied", "a clone that doesn't read as the checkpoint is never taken as it")
     assert.equal(s.files()[0], "one, staged\n")
   }
-  console.log("PASS: a move staged ahead arrives by proving its checkout unchanged and reading nothing more, lays the newest over what was staged, applies whole when never staged, and never trusts a clone that changed")
+  // Getting ready, the machine pulls what the Thread's records hold so far, and the stage after waits for that pull
+  // rather than reading beside it: the cold first read of the cloud's copy is paid while the machine gets ready.
+  {
+    const s = setup("ahead")
+    let land = () => {}
+    const landed = new Promise<void>((resolve) => { land = resolve })
+    const calls: string[] = []
+    const stage = s.deps.stage
+    const deps: MoveArrivalDeps = { ...s.deps, ahead: new Map(), stage: async (link, asked) => {
+      calls.push(calls.length ? "stage" : "ahead")
+      if (calls.length === 1) await landed
+      return stage(link, asked)
+    } }
+    assert.deepEqual(await readyForMove(deps, { folder: s.machine }), { folder: s.machine }, "ready at once, not after the pull")
+    const checkpoint = await s.capture("one, sent ahead\n")
+    const staging = stageMove(deps, { move: randomUUID(), folder: s.machine, checkpoint, sessions })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.deepEqual(calls, ["ahead"], "the stage waits for what's being pulled ahead")
+    land()
+    await staging
+    assert.deepEqual(calls, ["ahead", "stage"], "then pulls only what came since")
+    assert.deepEqual(s.staged, ["n-1", "n-1"])
+    assert.equal(deps.ahead?.size, 0, "a later move pulls ahead again")
+  }
+  console.log("PASS: a move staged ahead arrives by proving its checkout unchanged and reading nothing more, lays the newest over what was staged, applies whole when never staged, and never trusts a clone that changed; a machine getting ready pulls the Thread's records, and the stage waits for that pull")
 } finally {
   server.close()
   git.close()
