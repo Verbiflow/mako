@@ -112,7 +112,6 @@ const APART = new Map<string, Apart>([
   ["claude/resumed", { apart: "stored", because: "the resumed session compacts first, and Claude Code saves no record of the call that wrote the summary" }],
   ["claude/monitor-event", { apart: "stored", because: "Monitor needs Claude Code's nonessential traffic, with which Claude Code 2.1.283 makes one model call outside the conversation as the session starts; its result's totals count that call, and no record of the session keeps it" }],
   ["grok/subagent-wake@1.0.46", { apart: "stored", because: "recorded before a pair kept a subagent's own session: the woken subagent's turns, which the parent's store doesn't count, have no session here to be read from" }],
-  ["devin/subagent", { apart: "saved", because: "Devin 3000.11.205 reports a subagent's model calls on its parent's wire, and the store's scan counts them in the session; the saved reader draws the subagent as a child of its own, so the parent's history counts only the parent's turns" }],
   ["devin/compaction", { apart: "scanned", because: "Devin reports no usage for the `compactor` call that wrote the summary, and keeps its row off the conversation; only the store holds what it spent" }],
   ["devin/resumed", { apart: "scanned", because: "the resumed session compacts first, and Devin reports no usage for the `compactor` call that wrote the summary; only the store holds what it spent" }],
   ["devin/rewound-turn", { apart: "saved", because: "a rewound turn leaves the conversation, but what it spent stays spent" }],
