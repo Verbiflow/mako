@@ -69,8 +69,11 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build:control-runtime
+      # The harness definitions, their versions and the pages generated from them (adding-a-harness.md, the descriptors).
+      - run: npx tsx --tsconfig tsconfig.app.json scripts/test-harness-definitions.ts
       - run: npm run test:decoders
       - run: npm run test:usage
+<<<<<<< origin/codex-sandbox-ci
 
   # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
   # writes the workspace and nothing else, read-only writes nothing, and neither reaches the network.
@@ -91,3 +94,7 @@ jobs:
           version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
           npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" scripts/check-codex-sandbox.sh
+=======
+      # The native-store layer's own suite: every harness's readers, the record store, catalogs and followers.
+      - run: npm test -w @mako/sessions
+>>>>>>> origin/main

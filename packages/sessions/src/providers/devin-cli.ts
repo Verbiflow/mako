@@ -322,7 +322,14 @@ export class DevinCliProvider implements SessionProvider {
    */
   private subagentSpend(db: DatabaseSync, id: string, path: string): ChildSpend[] {
     const spend: ChildSpend[] = []
-    for (const child of this.childLinks.children(db, id, path)) {
+    // What the subagents spent adds to the conversation; a store whose subagents can't be found still reads without it.
+    let children: ChildTranscript[]
+    try {
+      children = this.childLinks.children(db, id, path)
+    } catch {
+      return spend
+    }
+    for (const child of children) {
       if (!child.path) continue
       for (const row of mainChainRows(db, id, this.childLinks.leaf(db, id, child.nativeId))) {
         const message = row.chatMessage ? parseChatMessage(row.chatMessage) : null

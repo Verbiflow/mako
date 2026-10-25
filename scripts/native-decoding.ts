@@ -218,6 +218,12 @@ export interface Opening {
 }
 
 /** A turn Mako opened, or a message it steered into the running one, before the message at `at`. */
+/** What a decoder is told of a turn Mako opened (`RecordedDecoder.prompted`): a compaction, or the prompt it sent. */
+export function promptedTurn(prompt: Prompt): { compaction?: true; text?: string; attachments?: number } | undefined {
+  if (prompt.compaction) return { compaction: true }
+  return prompt.text === undefined ? undefined : { text: prompt.text, attachments: prompt.attachments?.length ?? 0 }
+}
+
 export interface Prompt {
   at: number
   /** What Mako drew for it; a turn the harness opened itself has none. */
@@ -251,7 +257,7 @@ export function* replayed(decoder: RecordedDecoder, recording: Recording): Gener
   const openings = recording.openings ?? []
   let next = 0
   for (const [index, message] of recording.messages.entries()) {
-    for (; prompts[next]?.at === index; next++) if (!prompts[next]!.steered) decoder.prompted?.(prompts[next]!.compaction && { compaction: true })
+    for (; prompts[next]?.at === index; next++) if (!prompts[next]!.steered) decoder.prompted?.(promptedTurn(prompts[next]!))
     for (const opening of openings) {
       if (opening.at === index) decoder.opening?.()
       if (opening.opened === index) decoder.opened?.()

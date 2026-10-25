@@ -179,7 +179,9 @@ export class DevinChildLinks {
    * holding `run_subagent` or `agent_id=` come back from the database.
    */
   private launchMessages(db: DatabaseSync, session: string, forest: Forest): string[] {
-    // Segments newest first; a compaction's summary row names the node the earlier one ends at.
+    // Segments newest first; a compaction's summary row names the node the earlier one ends at. A store from before
+    // `message_nodes.metadata` has no compaction summaries to name one; the chain reader reads it the same way.
+    const summaries = db.prepare("PRAGMA table_info(message_nodes)").all().some((row) => TableRow.safeParse(row).data?.name === "metadata")
     // Each row is read once, for both what it says and whether it is a summary.
     const messages: Array<{ at: number; text: string }> = []
     const seen = new Set<number>()
@@ -200,7 +202,7 @@ export class DevinChildLinks {
         const rows = db.prepare(
           `SELECT node_id,
              CASE WHEN instr(chat_message, 'run_subagent') > 0 OR instr(chat_message, 'agent_id=') > 0 THEN chat_message END AS message,
-             CASE WHEN instr(metadata, 'summarized_from') > 0 THEN metadata END AS summary
+             ${summaries ? "CASE WHEN instr(metadata, 'summarized_from') > 0 THEN metadata END" : "NULL"} AS summary
            FROM message_nodes WHERE session_id = ? AND node_id IN (${chunk.map(() => "?").join(", ")})`
         ).all(session, ...chunk)
         for (const raw of rows) {
