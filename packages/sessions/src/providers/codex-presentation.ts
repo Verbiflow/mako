@@ -222,9 +222,9 @@ export function codexPromptImages(text: string): AttachmentContent[] {
   return [...appendix.matchAll(/path="([^"\n]+)"/g)].map((match) => codexImageFile(match[1]!))
 }
 
-const GeneratedImageSchema = z.object({ savedPath: z.string().min(1).nullish(), result: z.string().nullish() })
+const GeneratedImageSchema = z.object({ savedPath: z.string().min(1).nullish(), result: z.string().nullish(), fileId: z.string().min(1).nullish() })
 
-/** An image Codex generated: the file it saved, else the PNG it returned. */
+/** An image Codex generated: the file it saved, else the PNG it returned; since 0.164.0 it may return only the id of a file its model provider keeps. */
 export function codexGeneratedImage(item: CodexJson | undefined): AttachmentContent {
   const image = GeneratedImageSchema.safeParse(item).data
   if (image?.savedPath) return codexImageFile(image.savedPath)
@@ -232,7 +232,8 @@ export function codexGeneratedImage(item: CodexJson | undefined): AttachmentCont
     type: "attachment",
     name: "Generated image",
     mimeType: "image/png",
-    source: image?.result ? { kind: "inline", data: image.result } : { kind: "unavailable", reason: "Codex kept no image from this generation" },
+    source: image?.result ? { kind: "inline", data: image.result }
+      : { kind: "unavailable", reason: image?.fileId ? `Codex's model provider keeps this image (file ${image.fileId}); Codex saved no copy here` : "Codex kept no image from this generation" },
   }
 }
 

@@ -429,7 +429,7 @@ const CODEX_MODEL = "gpt-5.5"
 
 const CODEX_TOOLS: ToolVocabulary = {
   subagent: { absent: SCRIPTED_SUBAGENT },
-  monitor: { absent: "Codex 0.159.3 defines no tool that watches a command and reports what it prints (native-tools/codex-0.159.3.json)" },
+  monitor: { absent: "Codex 0.164.0 defines no tool that watches a command and reports what it prints (native-tools/codex-0.164.0.json)" },
   read: (path, lines) => ({
     name: "exec_command",
     arguments: { cmd: lines ? `sed -n '${lines.offset},${lines.offset + lines.limit - 1}p' ${path}` : `cat ${path}` },
@@ -437,8 +437,8 @@ const CODEX_TOOLS: ToolVocabulary = {
   shell: (command) => ({ name: "exec_command", arguments: { cmd: command } }),
   viewImage: (path) => ({ name: "view_image", arguments: { path } }),
   edit: (path, from, to) => ({ name: "apply_patch", input: `*** Begin Patch\n*** Update File: ${path}\n@@\n-${patchLine(path, from)}\n+${patchLine(path, from).replace(from, to)}\n*** End Patch\n` }),
-  todos: { absent: `Codex 0.159.3 defines no plan tool (update_plan) for ${CODEX_MODEL} or any listed model (native-tools/codex-0.159.3.json)` },
-  search: { absent: "Codex 0.159.3 defines no file search tool; its model searches through the shell (native-tools/codex-0.159.3.json)" },
+  todos: { absent: `Codex 0.164.0 defines no plan tool (update_plan) for ${CODEX_MODEL} or any listed model (native-tools/codex-0.164.0.json)` },
+  search: { absent: "Codex 0.164.0 defines no file search tool; its model searches through the shell (native-tools/codex-0.164.0.json)" },
   codeMode: { model: "gpt-6-sol", cell: (source) => ({ name: "exec", input: source }) },
   ask: (question) => ({ name: "request_user_input", arguments: { questions: [{ id: "release_day", ...question }] } }),
   // Codex takes a plan-mode answer's `<proposed_plan>` block as the turn's plan; no tool proposes it.

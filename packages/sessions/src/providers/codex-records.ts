@@ -394,7 +394,8 @@ const CommandItem = z.object({
   command: z.union([z.array(z.string()), z.string()]),
   status: z.string(),
   aggregated_output: z.string().nullish(),
-  exit_code: z.number().nullish(),
+  // A process stopped before it exited has no exit code: the app-server says null, and since 0.164.0 the rollout -1.
+  exit_code: z.number().nullish().transform((code) => code === null || code === undefined || code < 0 ? null : code),
   cwd: z.string().nullish().catch(undefined),
   parsed_cmd: ParsedCommand.nullish(),
 })

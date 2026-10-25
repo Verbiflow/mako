@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.159.3"
+    "version": "0.164.0"
   },
   "about": "Read notes.md, then tell me in one sentence what its second line says, citing the file and that line. An answer that cites a file and a line of it, which Devin 3000.10.23's model marks up for its client to link.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/12/rollout-2026-10-12T22-58-21-01a133d7-2b37-7e40-87ae-9f32e1902cce.jsonl",
+      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T02-53-24-01a1727a-ab10-71b2-8a02-1816fe553161.jsonl",
       "known": []
     }
   ]

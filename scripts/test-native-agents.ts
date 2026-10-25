@@ -240,6 +240,14 @@ assert.equal(
   ).length,
   0
 )
+// Codex 0.164.0 names the model a sub-agent started on; an activity from an older record names none and keeps what was known.
+const startedOn = new CodexAgents().project(
+  { type: "subAgentActivity", id: "start", kind: "started", agentThreadId: "worker", agentPath: "worker", model: "gpt-6-luna" },
+  false,
+  "worker-row"
+)[0]
+assert.equal(startedOn?.model, "gpt-6-luna", "a started sub-agent shows the model it runs")
+assert.equal(startedOn?.state.kind, "working")
 // Codex 0.159's collab tools: a message, a follow-up and an interrupt report their agents' states.
 for (const tool of ["sendMessage", "followupTask", "listAgents"] as const)
   assert.equal(CodexAgentItemSchema.safeParse({ ...spawn, tool }).success, true, `${tool} decodes`)

@@ -64,13 +64,17 @@ const ACTIVITY_KINDS = {
   interrupted: "interrupted",
   completed: "completed",
 } as const satisfies { [Kind in SubAgentActivityKind]: Kind }
+/** The model a sub-agent started on (Codex 0.164.0; older records and other activities leave it out). */
 export const CodexAgentActivitySchema = z.object({
   type: z.literal("subAgentActivity"),
+  model: z.string().nullable().optional(),
   id: z.string(),
   kind: z.enum(ACTIVITY_KINDS),
   agentThreadId: z.string(),
   agentPath: z.string(),
-}) satisfies z.ZodType<Extract<ThreadItem, { type: "subAgentActivity" }>>
+}) satisfies z.ZodType<
+  Omit<Extract<ThreadItem, { type: "subAgentActivity" }>, "model" | "reasoningEffort"> & { model?: string | null }
+>
 export type CodexAgentItem =
   | z.infer<typeof CodexAgentItemSchema>
   | z.infer<typeof CodexAgentActivitySchema>
@@ -166,6 +170,7 @@ export class CodexAgents {
         ...previous,
         nativeId: item.agentThreadId,
         title: previous?.title ?? item.agentPath.slice(0, 512),
+        model: item.model?.slice(0, 256) ?? previous?.model,
         toolId: previous?.toolId ?? toolId,
         nativeRunId: item.kind === "started" ? undefined : previous?.nativeRunId,
         state: item.kind === "started" ? { kind: "working" }
