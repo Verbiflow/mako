@@ -6,7 +6,7 @@ import type { AddressInfo } from "node:net"
 import { join } from "node:path"
 import type { Duplex } from "node:stream"
 import { promisify } from "node:util"
-import { gunzipSync } from "node:zlib"
+import { brotliDecompressSync, gunzipSync, inflateSync, zstdDecompressSync } from "node:zlib"
 import { z } from "zod"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { resolveExecutable } from "@mako/host/base/executable"
@@ -450,10 +450,11 @@ function protoFields(bytes: Buffer): ProtoField[] {
  * json_schema_string 3, is_custom_tool 9), restated as chat-completions tools.
  * The field numbers are the ones Devin.app's bundled protobuf types give.
  */
-function windsurfTools(frame: Buffer): unknown[] {
+function windsurfTools(frame: Buffer, encoding: string | undefined): unknown[] {
   if (frame.length < 5) throw new Error("Devin's model request has no Connect frame")
-  if (frame[0]! & 1) throw new Error("Devin compressed its model request, which this capture doesn't read")
-  const message = frame.subarray(5, 5 + frame.readUInt32BE(1))
+  const payload = frame.subarray(5, 5 + frame.readUInt32BE(1))
+  // Devin 3000.11 compresses it, and names how in the request's encoding header.
+  const message = frame[0]! & 1 ? decompressed(payload, encoding) : payload
   return protoFields(message).flatMap((tool) => {
     if (tool.no !== 10 || tool.wire !== "bytes") return []
     const fields = protoFields(tool.bytes)
@@ -466,6 +467,19 @@ function windsurfTools(frame: Buffer): unknown[] {
     const schema = text(3)
     return [{ type: "function", function: { name: text(1) ?? "", description: text(2), parameters: schema ? JSON.parse(schema) : undefined } }]
   })
+}
+
+const HeaderValue = z.string().optional().catch(undefined)
+
+/** A compressed Connect message, by the encoding its request names. */
+function decompressed(payload: Buffer, encoding: string | undefined): Buffer {
+  switch (encoding) {
+    case "gzip": return gunzipSync(payload)
+    case "br": return brotliDecompressSync(payload)
+    case "zstd": return zstdDecompressSync(payload)
+    case "deflate": return inflateSync(payload)
+    default: throw new Error(`Devin compressed its model request${encoding ? ` with ${encoding}` : ""}, which this capture doesn't read`)
+  }
 }
 
 /**
@@ -490,7 +504,8 @@ async function windsurfEndpoint(): Promise<ModelEndpoint> {
       }
       const body = Buffer.concat(chunks)
       if (keepDir) void mkdir(keepDir, { recursive: true }).then(() => writeFile(join(keepDir, `${String(++kept).padStart(3, "0")}-${method}.bin`), body))
-      requests.push({ path, tools: method === "GetChatMessage" ? windsurfTools(body) : [] })
+      const encoding = HeaderValue.parse(request.headers["connect-content-encoding"]) ?? HeaderValue.parse(request.headers["grpc-encoding"])
+      requests.push({ path, tools: method === "GetChatMessage" ? windsurfTools(body, encoding) : [] })
       for (const listener of listeners) listener()
       response.writeHead(401, { "content-type": "application/json" })
       response.end(JSON.stringify({ code: "unauthenticated", message: REFUSAL }))
