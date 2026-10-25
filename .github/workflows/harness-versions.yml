@@ -104,7 +104,9 @@ jobs:
           git switch -c "$BRANCH"
           git add -A packages scripts package.json package-lock.json
           git commit -m "Move ${{ matrix.harness }} to ${{ matrix.version }}"
-          git push origin "$BRANCH"
+          # The branch is this job's alone. One left by a run that couldn't open its
+          # pull request (none exists, or the step above would have skipped) is replaced.
+          git push --force origin "$BRANCH"
           title="Move ${{ matrix.harness }} to ${{ matrix.version }}"
           if [ "$OUTCOME" != "success" ]; then title="$title (drift found)"; fi
           gh pr create --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/summary.md"

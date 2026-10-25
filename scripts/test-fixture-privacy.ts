@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { describeLeaks, FIXTURE_FOLDERS, leaksIn, machineIdentity, rewriteBlob, scrubIdentity, scrubJsonLines, scrubTree, STAND_INS, treeLeaks, type Identity } from "./fixture-privacy.ts"
+import { describeLeaks, FIXTURE_FOLDERS, identifyingUser, leaksIn, machineIdentity, rewriteBlob, scrubIdentity, scrubJsonLines, scrubTree, STAND_INS, treeLeaks, type Identity } from "./fixture-privacy.ts"
 
 const ana: Identity[] = [
   { kind: "home", pattern: /\/Users\/ana/g, standIn: STAND_INS.home },
@@ -19,6 +19,10 @@ assert.equal(
 )
 assert.equal(scrubIdentity("a banana for Anabel", ana), "a banana for Anabel", "a user name is replaced only as a word")
 assert.deepEqual(leaksIn("ls shows Ana as owner", ana), ["machine user"], "a user name in another case still leaks")
+assert.equal(identifyingUser("runner", { RUNNER_ENVIRONMENT: "github-hosted" }), undefined, "a GitHub-hosted runner's shared account names nobody")
+assert.equal(identifyingUser("runner", { RUNNER_ENVIRONMENT: "self-hosted" }), "runner", "a self-hosted runner's account may be a person's")
+assert.equal(identifyingUser("ana", {}), "ana")
+assert.equal(identifyingUser("al", {}), undefined, "too short to tell from ordinary words")
 
 assert.deepEqual(leaksIn("Co-Authored-By: Claude <noreply@anthropic.com>, docs@example.com, mako@example.invalid", ana), [], "a harness's no-reply sender and documentation domains are fine")
 assert.deepEqual(leaksIn("mail someone@gmail.com", ana), ["email"])

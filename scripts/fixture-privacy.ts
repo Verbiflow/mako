@@ -61,9 +61,20 @@ export function machineIdentity(): Identity[] {
   if (email) identity.push({ kind: "email", pattern: new RegExp(escape(email), "gi"), standIn: STAND_INS.email })
   const host = hostname().split(".")[0] ?? ""
   if (host.length >= 4) identity.push({ kind: "host", pattern: new RegExp(escape(host), "gi"), standIn: STAND_INS.host })
-  const user = userInfo().username
-  if (user.length >= 3) identity.push({ kind: "user", pattern: new RegExp(`\\b${escape(user)}\\b`, "gi"), standIn: STAND_INS.user })
+  const user = identifyingUser(userInfo().username)
+  if (user) identity.push({ kind: "user", pattern: new RegExp(`\\b${escape(user)}\\b`, "gi"), standIn: STAND_INS.user })
   return identity
+}
+
+/**
+ * The machine's user, when it can name someone. GitHub's hosted runners all run as `runner`, which names nobody and is
+ * a word fixtures hold ("native-runner"): taken as a person's, every bump's check flagged fixtures that had it, and the
+ * scrub would have rewritten the word. A self-hosted runner's account may be a person's, so it counts.
+ */
+export function identifyingUser(user: string, env: Record<string, string | undefined> = process.env): string | undefined {
+  if (user.length < 3) return undefined
+  if (env.RUNNER_ENVIRONMENT === "github-hosted" && user === "runner") return undefined
+  return user
 }
 
 function gitEmail(): string | undefined {
