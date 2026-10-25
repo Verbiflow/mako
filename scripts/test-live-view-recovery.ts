@@ -1,5 +1,6 @@
 // A window keeps reading a conversation's history through views the host lets go, while the conversation streams:
-// one refused read renews the view and is read again, never a "history view expired" for the person.
+// one refused read renews the view and is read again, never a "history view expired" for the person; and a host that
+// keeps answering behind the window is asked again less and less often, never in a loop.
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -80,4 +81,20 @@ const window = (id: string) => {
   console.log("PASS: a streaming conversation's history reads renew a view the host let go, once, without a refusal reaching the reader")
 }
 
+{
+  // A host answering behind what the window holds, with a batch past it waiting: asked again less and less often.
+  const behind = conversation(2, 20)
+  let reads = 0
+  mock.method(getMako(), "liveRead", async () => {
+    reads++
+    await sleep(20)
+    const data = JSON.stringify({ ...behind, revision: 3, history: { token: "behind", ranges: true, blockStart: 0, blockEnd: behind.blocks.length, turnStart: 0, earlierRequests: [], before: null } })
+    return { record: crypto.randomUUID(), offset: 0, total: data.length, data, next: null }
+  })
+  applyLiveSnapshot({ ...behind, revision: 5, history: { token: "held", ranges: true, blockStart: 0, blockEnd: behind.blocks.length, turnStart: 0, earlierRequests: [], before: null } })
+  applyLiveBatch({ id: behind.session.id, revision: 7, epoch: "recovery", updates: [] })
+  await sleep(3000)
+  assert.ok(reads <= 5, `a host answering behind is asked again with backoff, not in a loop (${reads} reads in 3 s)`)
+  console.log(`PASS: a host answering behind is read ${reads} times in 3 s, backing off`)
+}
 process.exit(0)

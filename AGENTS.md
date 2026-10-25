@@ -1961,6 +1961,22 @@ across epochs it buffers and takes a snapshot, and a snapshot from another
 epoch replaces the state outright. An unstamped batch (an older host) still
 applies by revision. `test-prompt-delivery.tsx` covers both.
 
+A window reads a conversation's earlier history, released turns and full
+outputs through a view the host captured (`LiveHistoryReader`). A
+conversation keeps its newest four views; its newest stays while memory holds
+the conversation, since it shares what memory holds, and the rest stay while
+what they keep alive beyond memory fits 128 MB, so one conversation's stream
+never pushes out the view of another being read. A read naming a view the host
+doesn't hold is refused, and host.log says why under `history`. The window then
+takes a current view and reads once more (`withLiveView` in
+`live-recovery.ts`); a snapshot its stream overtook still gives its view when
+every batch since merged in order (`takeView`), and rereads that bring nothing
+newer back off to 8 s. A client making the same call about the same thing 40
+times in 10 s is named in host.log under `rpc` (`RepeatedCalls`), and a
+window's console warnings and errors land in desktop.log under `renderer`.
+`test-live-view-recovery.ts`, `test-live-history-paging.ts` and
+`test-repeated-calls.ts` cover them.
+
 A health probe has three answers, not two. `probeRuntime` returns `absent`
 (nothing listens; a host may start), `ready`, or `closing`: a host that still
 owns the socket answered a reused keep-alive connection with a reset or a

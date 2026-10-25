@@ -28,6 +28,11 @@ const failed = new Map<string, { description: string; reconnecting: boolean }>()
  * history below the window as the window does: a batch that touched that history was buffered for a snapshot instead.
  */
 const mergedSince = new Map<string, number>()
+/**
+ * The batch a reread left waiting, and how many rereads in a row left that same batch waiting: the host answered
+ * without it, so each next ask waits longer and nothing a host never answers can spin. New batches read at once.
+ */
+const stuck = new Map<string, { batch: LiveBatch; tries: number }>()
 
 function restoredLive(id: string): void {
   if (failed.delete(id)) toast.dismiss(`live-restore:${id}`)
@@ -235,10 +240,17 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
     })
     .finally(() => {
       fetching.delete(id)
-      if (rereads.delete(id) || (restored && pending.get(id)?.length))
-        queueMicrotask(() => {
-          void hydrateLive(id)
-        })
+      const waiting = restored ? pending.get(id)?.[0] : undefined
+      if (!rereads.delete(id) && !waiting) stuck.delete(id)
+      else {
+        const held = stuck.get(id)
+        const tries = waiting && held?.batch === waiting ? held.tries + 1 : 0
+        if (waiting) stuck.set(id, { batch: waiting, tries })
+        if (tries === 5) console.warn(`Conversation ${id} keeps waiting on batch ${waiting?.revision} (epoch ${waiting?.epoch ?? "none"}), which the host's snapshots never reach`)
+        const again = () => void hydrateLive(id)
+        if (tries === 0) queueMicrotask(again)
+        else setTimeout(again, Math.min(8_000, 125 * 2 ** tries))
+      }
     })
   fetching.set(id, fetch)
   return fetch
@@ -255,6 +267,7 @@ export function unloadLive(id: string): boolean {
   if (current?.kind !== "live" || !current.hydrated || fetching.has(id)) return false
   pending.delete(id)
   mergedSince.delete(id)
+  stuck.delete(id)
   replaceAcpConversation(id, {
     ...current,
     hydrated: false,
@@ -466,6 +479,7 @@ export function unlistLive(ids: readonly string[]): void {
   for (const id of ids) {
     pending.delete(id)
     mergedSince.delete(id)
+    stuck.delete(id)
     removeAcpConversation(id)
   }
   if (active && ids.includes(active))
