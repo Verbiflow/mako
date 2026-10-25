@@ -118,6 +118,8 @@ interface MessageRow {
 
 interface MessageTranslator {
   push(row: MessageRow): void
+  /** A subagent's model call, spent in the turn running, or in the next when none runs. */
+  spend(usage: TurnUsage): void
   snapshot(): Entry[]
   /** The rows it couldn't draw, by kind. */
   unread(): UnreadRecord[] | undefined
@@ -312,6 +314,25 @@ export class DevinCliProvider implements SessionProvider {
 
   /** Remove a session and every row that names it; the read connection is reset so it cannot serve the ghost. */
   /** The session's row, its rows in every table keyed by `session_id`, and the migration history the CLI checks on open. */
+  /**
+   * What each of a session's subagents spent, call by call. Devin reports a
+   * subagent's model calls on its parent's wire as they're made, so live they
+   * count in the parent's turn; its subagent's chain is where the store keeps
+   * them (3000.11.205), and its own history counts them there too.
+   */
+  private subagentSpend(db: DatabaseSync, id: string, path: string): ChildSpend[] {
+    const spend: ChildSpend[] = []
+    for (const child of this.childLinks.children(db, id, path)) {
+      if (!child.path) continue
+      for (const row of mainChainRows(db, id, this.childLinks.leaf(db, id, child.nativeId))) {
+        const message = row.chatMessage ? parseChatMessage(row.chatMessage) : null
+        const usage = message?.role === "assistant" ? message.usage ?? row.usage : undefined
+        if (usage) spend.push({ createdAt: row.createdAt ?? 0, usage })
+      }
+    }
+    return spend.sort((left, right) => left.createdAt - right.createdAt)
+  }
+
   /** Its subagents: chains in the session's own forest, named by its `run_subagent` calls. */
   async children(path: string): Promise<ChildTranscript[] | null> {
     const id = idOf(path)
@@ -416,7 +437,7 @@ export class DevinCliProvider implements SessionProvider {
         Object.assign(ref, { nativeId: child.agentId, title: undefined, childOf: { nativeId: id, path: child.parentPath } })
       }
       ref.bytes = cursor
-      const { entries, unread } = translatedMainChain(db, id, cursor)
+      const { entries, unread } = translatedMainChain(db, id, cursor, child ? [] : this.subagentSpend(db, id, path))
       const thread: Thread = { ref, entries }
       if (unread) thread.unread = unread
       return thread
@@ -444,10 +465,11 @@ export class DevinCliProvider implements SessionProvider {
           const nextCursor = child ? this.childLinks.leaf(db, id, child.agentId) : mainChainId(db, id)
           if (nextCursor === cursor) return unchangedUpdate(cursor)
           if (wholeLimit !== undefined && ((await this.recordBytes(path)) ?? 0) >= wholeLimit) return { entries: [], nextByte: cursor, replace: false, reload: true }
+          const spend = child ? [] : this.subagentSpend(db, id, path)
           if (previous === null) {
-            previous = translatedMainChain(db, id, cursor).entries.map(entryDigest)
+            previous = translatedMainChain(db, id, cursor, spend).entries.map(entryDigest)
           }
-          const current = translatedMainChain(db, id, nextCursor).entries
+          const current = translatedMainChain(db, id, nextCursor, spend).entries
           const signatures = current.map(entryDigest)
           let shared = 0
           while (
@@ -552,10 +574,28 @@ interface TranslatedChain {
   unread: UnreadRecord[] | undefined
 }
 
-function translatedMainChain(db: DatabaseSync, sessionId: string, leafId: number): TranslatedChain {
+/** A subagent's model call: when it was made and what it spent. */
+interface ChildSpend {
+  createdAt: number
+  usage: TurnUsage
+}
+
+/**
+ * A session's main chain, drawn, with each of its subagents' calls spent in
+ * the turn running when it was made. One a background subagent made while
+ * the session was idle counts in the turn that follows (the one its report
+ * opens), as Grok's own ledger counts a subagent that wakes its parent
+ * (`GrokWokenSpend`), or with none after it, in the last.
+ */
+function translatedMainChain(db: DatabaseSync, sessionId: string, leafId: number, spend: readonly ChildSpend[] = []): TranslatedChain {
   const cwd = sqliteText(db.prepare("SELECT working_directory AS cwd FROM sessions WHERE id = ?").get(sessionId)?.cwd)
   const into = translator(sessionId, storedAcpCalls(db, sessionId), cwd)
-  for (const row of mainChainRows(db, sessionId, leafId)) into.push(row)
+  let next = 0
+  for (const row of mainChainRows(db, sessionId, leafId)) {
+    for (; next < spend.length && spend[next]!.createdAt < (row.createdAt ?? 0); next++) into.spend(spend[next]!.usage)
+    into.push(row)
+  }
+  for (; next < spend.length; next++) into.spend(spend[next]!.usage)
   return { entries: into.snapshot(), unread: into.unread() }
 }
 
@@ -807,9 +847,12 @@ function translator(
   const calls = new Map<string, MadeCall>()
   /** What the open turn's model calls spent. */
   let spent: TurnUsage | undefined
+  /** What subagents spent while no turn ran, which the next turn counts. */
+  let idle: TurnUsage | undefined
   const commit = (): void => {
     turns.commit(spent)
-    spent = undefined
+    spent = idle
+    idle = undefined
   }
   /** A turn ends with an assistant message that calls no tool, or a stop. */
   let running = false
@@ -963,7 +1006,13 @@ function translator(
       }
       turns.unread(`message ${message.role ?? "(no role)"}`, "unknown", JSON.parse(row.chatMessage))
     },
+    spend(usage) {
+      if (running) spent = addUsage(spent, usage)
+      else idle = addUsage(idle, usage)
+    },
     snapshot() {
+      if (idle) spent = addUsage(spent, idle)
+      idle = undefined
       commit()
       return turns.done()
     },
