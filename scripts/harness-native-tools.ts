@@ -23,6 +23,7 @@ import { openCodeAgentForMode, openCodeLaunchAccess } from "@mako/host/harnesses
 import { resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
 import { OpenCodeMessageIds } from "@mako/host/harnesses/opencode/live-driver"
 import { startOpenCodeApi } from "@mako/host/harnesses/opencode/native-api"
+import { openCodeCatalogChange } from "@mako/host/harnesses/opencode/decoder"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/permissions"
 import {
@@ -568,6 +569,30 @@ async function devinDefinitions(): Promise<Captures> {
   return { version, source: `the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode${unoffered}`, configurations }
 }
 
+type OpenCodeApi = Awaited<ReturnType<typeof startOpenCodeApi>>
+
+/**
+ * OpenCode's models once its catalog holds any. A new home has none until OpenCode refreshes it after it starts
+ * (2.1.4 lists nothing before that), which it reports as a catalog change; the stream is open before the first list,
+ * so a change in between is still heard.
+ */
+async function openCodeModels(api: OpenCodeApi, location: { directory: string }) {
+  const stream = new AbortController()
+  const events = api.client.event.subscribe({ signal: AbortSignal.any([stream.signal, api.signal]) })[Symbol.asyncIterator]()
+  try {
+    const hello = await events.next()
+    if (hello.done || hello.value.type !== "server.connected") throw new Error("OpenCode's event stream did not open")
+    for (;;) {
+      const models = await api.client.model.list({ location })
+      if (models.data.length) return models.data
+      for (let next = await events.next(); !openCodeCatalogChange(next.value, location.directory); next = await events.next())
+        if (next.done) throw new Error("OpenCode's event stream ended before its catalog held a model")
+    }
+  } finally {
+    stream.abort()
+  }
+}
+
 /** The model families OpenCode gives different tools: Anthropic's Messages API and OpenAI's Responses API. */
 const OPENCODE_PROVIDERS = [{ providerID: "anthropic", wire: "anthropic" }, { providerID: "openai", wire: "responses" }] as const satisfies readonly { providerID: string; wire: Wire }[]
 
@@ -594,8 +619,8 @@ async function openCodeDefinitions(): Promise<Captures> {
         try {
           version = api.info.version
           const location = { directory: sandbox.project }
-          const models = await api.client.model.list({ location })
-          const model = models.data.find((entry) => entry.providerID === providerID && entry.enabled && entry.status !== "deprecated")
+          const models = await api.watch.step("catalog", openCodeModels(api, location))
+          const model = models.find((entry) => entry.providerID === providerID && entry.enabled && entry.status !== "deprecated")
           if (!model) throw new Error(`OpenCode offers no ${providerID} model with the capture key`)
           const session = await api.client.session.create({ location, agent, model: { id: model.id, providerID } })
           if (session.model?.providerID !== providerID) throw new Error(`OpenCode opened the session on ${session.model?.providerID ?? "no provider"}, not ${providerID}`)

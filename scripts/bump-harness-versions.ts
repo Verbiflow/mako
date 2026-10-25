@@ -316,6 +316,8 @@ if (options.write || options.verify || options.install) {
     }
     moveDeclaration(reading, tested, today)
     steps.push({ name: `declaration moved to ${tested}`, ok: true })
+    // The package Mako speaks it with is published with each release, and moves with it.
+    if (reading.versions.client) moveBundled(reading.versions.client.package, tested, steps)
     // The declaration this process loaded is the old one: install through a fresh process that reads the new one.
     run(`install ${provider} ${tested}`, "npx", ["tsx", "scripts/bump-harness-versions.ts", provider, "--install"], steps)
     driftTools(provider, steps)

@@ -131,6 +131,6 @@ List what no other harness has in the definition's `unique`: its name, what carr
 - Claude Code, versions: tested 2.1.310, no oldest proven, bundled @anthropic-ai/claude-agent-sdk
 - Codex, versions: tested 0.159.3, oldest 0.146.0
 - Cursor, versions: tested 1.0.40, no oldest proven, bundled @cursor/sdk
-- OpenCode, versions: tested 2.0.27, oldest 2.0.0
+- OpenCode, versions: tested 2.1.4, oldest 2.0.0
 - Grok, versions: tested 1.0.46, oldest 1.0.25
 - Devin, versions: tested 3000.11.205, no oldest proven
