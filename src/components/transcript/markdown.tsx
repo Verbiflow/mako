@@ -20,6 +20,7 @@ import {
 import type { PromptReference, SentProse } from "@/lib/prompt-markdown"
 import { isSkillName } from "@/lib/skill-references"
 import { ProseStreamingContext } from "./prose-layout-context"
+import { fenceSegments, streamingMarkdown } from "@/lib/streaming-markdown"
 import { ChangingLabel } from "@/components/ui/changing-label"
 import { useCopy } from "@/components/ui/use-copy"
 import {
@@ -61,11 +62,20 @@ import { ReviewFence } from "./review-card"
  * items would parse as several separate lists, and a setext heading would lose
  * its underline. Correctness has to come first here.
  *
- * So the parse stays whole and is instead *rate-limited* while streaming. The
- * text is re-parsed at most every ~90ms rather than on every token, which caps
- * the cost at a fixed rate regardless of answer length, and settles
- * immediately the moment the message finishes. Nobody reads faster than the
- * refresh, so the throttle is invisible.
+ * A closed code fence at the left edge is a boundary where it is: the fence
+ * ends any list or quote above it and its lines are never Markdown, so what
+ * comes after it parses the same alone (`fenceSegments`, which keeps a
+ * document with definitions or HTML blocks whole). While an answer streams,
+ * each piece before its last such fence is parsed once and kept; only the
+ * piece being written is parsed again.
+ *
+ * That piece is rate-limited rather than parsed per token: at most every
+ * ~90ms, which caps the cost at a fixed rate regardless of answer length, and
+ * the whole answer settles in one parse the moment the message finishes.
+ * Nobody reads faster than the refresh, so the throttle is invisible. What it
+ * draws stops short of half-built structure (`streamingMarkdown`): a table
+ * arrives a row at a time and a fence once its opening line is whole, so
+ * neither flashes as a paragraph of pipes or backticks first.
  */
 const STREAM_FRAME_MS = 90
 const EMPTY_REFERENCES = new Map<string, PromptReference>()
@@ -133,8 +143,18 @@ export const Prose = memo(function Prose({
     return entries.length > 0 ? new Map(entries.map((entry) => [entry.name, entry])) : EMPTY_SKILLS
   }, [sent])
   const throttled = useThrottled(text, Boolean(streaming))
-  const parsed = useParsedProse(throttled, Boolean(streaming) && !sent)
-  const source = parsed?.text ?? throttled
+  // A streaming answer draws only whole structure, and keeps the pieces
+  // before its last closed fence as parsed; the last piece is the one that grows.
+  const pieced = Boolean(streaming) && !sent && !urlTransform
+  const pieces = useMemo(
+    () => (pieced ? fenceSegments(streamingMarkdown(throttled)) : [throttled]),
+    [pieced, throttled]
+  )
+  const growing = pieces.at(-1) ?? ""
+  const kept = pieces.slice(0, -1)
+  const keptChars = kept.reduce((total, piece) => total + piece.length, 0)
+  const parsed = useParsedProse(growing, Boolean(streaming) && !sent)
+  const source = parsed?.text ?? growing
   const tree = parsed?.tree
   const hasTree = Boolean(tree)
   const referenceInput = useMemo(
@@ -151,13 +171,14 @@ export const Prose = memo(function Prose({
   // Sections are rebuilt on every streamed batch, so the list arrives as a new
   // array each time; keyed by its contents, unchanged prose is not reparsed.
   const previewKey = previewedFiles?.join("\0") ?? ""
-  const rehypePlugins = useMemo<
-    Parameters<typeof Markdown>[0]["rehypePlugins"]
-  >(() => {
-    const files = previewKey ? previewKey.split("\0") : undefined
-    const assets: [typeof rehypeAssetGroups, { previewedFiles?: readonly string[] }] = [rehypeAssetGroups, { previewedFiles: files }]
-    return tree ? [[reuseParsedProse, tree], assets] : [assets]
-  }, [tree, previewKey])
+  const assets = useMemo<AssetPlugin>(
+    () => [rehypeAssetGroups, { previewedFiles: previewKey ? previewKey.split("\0") : undefined }],
+    [previewKey]
+  )
+  const rehypePlugins = useMemo<RehypePlugins>(
+    () => (tree ? [[reuseParsedProse, tree], assets] : [assets]),
+    [tree, assets]
+  )
 
   const settled = !streaming && !referenceInput && !urlTransform && !hasTree && !previewedFiles?.length
   const rendered = useMemo(() => {
@@ -172,10 +193,7 @@ export const Prose = memo(function Prose({
       rehypePlugins,
       components,
       urlTransform: (url) =>
-        referenceMap.has(url) ||
-        decodeFileCitation(url) ||
-        markdownFileTarget(url) ||
-        previewableMediaUrl(url)
+        referenceMap.has(url) || keptUrl(url)
           ? url
           : (urlTransform?.(url) ?? defaultUrlTransform(url)),
       children: source,
@@ -188,15 +206,49 @@ export const Prose = memo(function Prose({
     <div
       className={cn("mako-prose", className)}
       data-answer={answerId}
-      data-rendered-chars={source.length}
+      data-rendered-chars={keptChars + source.length}
       data-prose-worker={hasTree || undefined}
     >
       <ProseStreamingContext value={Boolean(streaming)}>
         <PromptReferencesContext value={referenceMap}>
-          <PromptSkillsContext value={skillMap}>{rendered}</PromptSkillsContext>
+          <PromptSkillsContext value={skillMap}>
+            {kept.map((piece, index) => (
+              <KeptPiece key={index} text={piece} assets={assets} />
+            ))}
+            {rendered}
+          </PromptSkillsContext>
         </PromptReferencesContext>
       </ProseStreamingContext>
     </div>
+  )
+})
+
+type RehypePlugins = NonNullable<Parameters<typeof Markdown>[0]["rehypePlugins"]>
+type AssetPlugin = [typeof rehypeAssetGroups, { previewedFiles?: readonly string[] }]
+
+/** A link the transcript draws itself (a file citation, a path, a previewable medium) keeps its address. */
+function keptUrl(url: string): boolean {
+  return Boolean(decodeFileCitation(url) || markdownFileTarget(url) || previewableMediaUrl(url))
+}
+
+const ANSWER_PLUGINS = prosePlugins()
+
+/**
+ * A piece of a streaming answer before its last closed fence. Its text no
+ * longer changes, so it is parsed once and React skips it on every later
+ * frame of the stream.
+ */
+const KeptPiece = memo(function KeptPiece({ text, assets }: { text: string; assets: AssetPlugin }) {
+  return useMemo(
+    () =>
+      Markdown({
+        remarkPlugins: ANSWER_PLUGINS,
+        rehypePlugins: [assets],
+        components,
+        urlTransform: (url) => (keptUrl(url) ? url : defaultUrlTransform(url)),
+        children: text,
+      }),
+    [text, assets]
   )
 })
 

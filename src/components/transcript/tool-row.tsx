@@ -1,12 +1,15 @@
 import { useCopy } from "@/components/ui/use-copy"
 import { ActivityMark } from "@/components/ui/activity-mark"
-import { toolKindActivity, type ToolIdentity, type ToolKind } from "@mako/sessions/tool-identity"
+import { toolKindActivity, type ToolIdentity } from "@mako/sessions/tool-identity"
 import { memo, useEffect, useState, type ComponentType } from "react"
 import { useToolView, type ToolCall } from "@/extend/slots"
 import {
+  CODE_KINDS,
   formatToolArguments,
   hasToolArguments,
   normalizeToolOutput,
+  toolLabel,
+  toolTarget,
 } from "@/lib/tools"
 import { cn } from "@/lib/utils"
 import { usePrefs } from "@/state/prefs"
@@ -135,28 +138,8 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   )
 })
 
-/** Kinds whose target is something you could paste into a terminal or editor. */
-const CODE_KINDS: ReadonlySet<ToolKind> = new Set<ToolKind>([
-  "shell", "shell-input", "read", "edit", "write", "delete", "move",
-  "list", "search", "find", "code", "web-fetch",
-])
-
-/** An MCP tool's label without the server, which sits at the row's far end. */
-function toolLabel(tool: ToolIdentity): string {
-  const prefix = tool.server ? `${tool.server}: ` : ""
-  if (!prefix || !tool.label.startsWith(prefix)) return tool.label
-  const name = tool.label.slice(prefix.length)
-  return name.charAt(0).toUpperCase() + name.slice(1)
-}
-
 function toolServer(tool: ToolIdentity): string | undefined {
   return tool.kind === "mcp" || tool.kind === "computer" ? tool.server : undefined
-}
-
-/** The target, unless it only repeats the tool's own name. */
-function toolTarget(tool: ToolIdentity): string {
-  const target = tool.target ?? ""
-  return tool.server && tool.tool && target === `${tool.server}: ${tool.tool}` ? "" : target
 }
 
 /**

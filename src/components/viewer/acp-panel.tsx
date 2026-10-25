@@ -257,6 +257,7 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
             running={running}
             starting={starting || session?.status === "starting"}
             preparing={preparing && session?.status !== "running"}
+            hosted={exchanges.length > 0}
           />
           {running ? null : <BackgroundWorkLine />}
         </>
@@ -265,14 +266,22 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
   )
 }
 
+/**
+ * What a conversation is doing before its turn can say it: starting the
+ * harness, making its worktree, sending. Once a turn is on screen
+ * (`hosted`), its own live row says what it is doing (`live-step.tsx`), so
+ * this row speaks only for those waits; with no turn yet it says it all.
+ */
 function AcpActivity({
   running,
   starting = false,
   preparing = false,
+  hosted = false,
 }: {
   running: boolean
   starting?: boolean
   preparing?: boolean
+  hosted?: boolean
 }) {
   const scope = useConversationScope()
   const activityAt = useAcp((state) => scopedLiveAcp(state, scope)?.activityAt)
@@ -308,7 +317,7 @@ function AcpActivity({
   useEffect(() => {
     if (!waiting && conversationKey) waitsBegan.delete(conversationKey)
   }, [waiting, conversationKey])
-  return running && activity.kind !== "responding" && activity.kind !== "idle" ? (
+  return running && activity.kind !== "responding" && activity.kind !== "idle" && (!hosted || activity.kind === "connecting") ? (
     <div role="status" data-agent-activity={activity.kind} className="flex min-h-8 min-w-0 items-center gap-2 py-1 text-ui text-muted-foreground">
       <ActivityMark state={activity.kind} size={20} />
       {activity.since === undefined ? (

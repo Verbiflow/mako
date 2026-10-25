@@ -17,6 +17,17 @@ export function formatTime(value?: string | number) {
   return date ? time.format(date) : ""
 }
 
+/** How long something took, as a person rounds it: "8s", "3m 12s", "4m", "1h 20m". */
+export function formatDuration(milliseconds: number): string {
+  const seconds = Math.max(1, Math.round(milliseconds / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remaining = seconds % 60
+  if (minutes < 60) return remaining ? `${minutes}m ${remaining}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  return `${hours}h ${minutes % 60}m`
+}
+
 export function formatDay(value?: string | number) {
   const date = toDate(value)
   if (!date) return ""

@@ -119,6 +119,12 @@ export interface Interruption {
    * Mako's.
    */
   closed?: string[]
+  /**
+   * The background work stopping this turn also stopped, as the harness
+   * listed it (`stoppedWork`): what a continuation names to the agent, and
+   * what the turn's footer names to the person.
+   */
+  stopped?: string[]
 }
 
 export const MAX_INTERRUPTED_CALLS = 12

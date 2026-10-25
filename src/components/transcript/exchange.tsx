@@ -13,11 +13,15 @@ import { acpStore } from "@/state/acp-state"
 import { PlanSummary } from "./tool-details"
 import { ReviewFindings, ReviewRequest } from "./review-card"
 import { TranscriptAttachments } from "./attachment-collection"
-import { memo, useMemo, useState } from "react"
+import { memo, useMemo, useState, type ReactNode } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { ToolRow } from "@/components/transcript/tool-row"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { ActivityMark } from "@/components/ui/activity-mark"
+import { AgentGroup } from "./agent-group"
+import { groupAgentCalls } from "@/lib/agent-groups"
+import { FollowingList, LiveRow, TurnClock, type LiveStepData } from "./live-step"
+import { TurnChanges } from "./turn-changes"
 import type { ToolKind } from "@mako/sessions/tool-identity"
 import { ContextItemChip } from "@/components/composer/reference-chip"
 import { Slot } from "@/extend/slot"
@@ -27,7 +31,9 @@ import {
   summarizeToolWork,
   type ToolWorkSummary,
 } from "@/lib/tools"
-import { formatTime, textOf } from "@/lib/format"
+import { formatDuration, formatTime, textOf } from "@/lib/format"
+import { turnFolds, type TurnFold } from "@/lib/turn-fold"
+import { setTurnFoldOpen, turnFoldKey, useTurnFolds } from "@/state/turn-folds"
 import { readSent } from "@/lib/context/sent"
 import { sentDraft } from "@/lib/context/draft"
 import { MARKER } from "@/lib/context/wire"
@@ -47,7 +53,7 @@ import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
-import { AUTO_CONTINUE_NOTE, savedMakoPrompt, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
+import { AUTO_CONTINUE_NOTE, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { viewer } from "@/state/viewer"
 import { carriedBecause } from "@/lib/restore-plan"
 import { AnswerTimeContext, useTranscriptSource } from "./source-context"
@@ -61,6 +67,7 @@ import {
 import { usePrefs } from "@/state/prefs"
 import { cn } from "@/lib/utils"
 import type { ChatMessage, MessageOrigin } from "@/lib/types"
+import type { ToolCall } from "@/extend/slots"
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -133,6 +140,73 @@ export const Exchange = memo(function Exchange({
     (message) => message.provider && harnessLabels()[message.provider]
   )?.provider
   const finishedAt = streaming ? undefined : (exchange.response.at(-1) ?? exchange.prompt ?? exchange.opener)?.timestamp
+  const began = (exchange.prompt ?? exchange.opener)?.timestamp
+  const source = useTranscriptSource()
+  const sourceKey = source.liveId ?? source.threadPath
+  // A settled turn folds what it did behind one row and keeps its answer in
+  // view; a failed one keeps everything, since its failure is the answer.
+  const foldable = !streaming && !failed && Boolean(exchange.prompt || exchange.opener) && !exchange.response.some((message) => message.error)
+  const folds = useMemo(() => (foldable ? turnFolds(sections, began) : []), [foldable, sections, began])
+  const lastSection = sections.at(-1)
+  // The newest step of a running turn: the trailing work section's own row,
+  // or a row of its own under prose or a note, or under the prompt alone.
+  const liveTail = streaming && lastSection?.kind !== "work"
+  const steers = sections.filter((section) => section.kind === "steer").length
+  const renderSection = (section: ResponseSection, index: number, whole = false): ReactNode =>
+    section.kind === "note" ? (
+      sections[index - 1]?.kind === "note" ? null : (
+        <SystemNotes key={section.id} messages={noteRun(sections, index)} refused={exchange.refused} inline />
+      )
+    ) : section.kind === "steer" ? (
+      <div key={section.id} className="mt-1">
+        <p className="mb-1 text-right text-label text-faint">
+          Steered mid-turn
+        </p>
+        <Prompt message={section.message} />
+      </div>
+    ) : section.kind === "prose" ? (
+      <Response key={section.id} message={section.message} previewedFiles={section.previewedFiles} showWork />
+    ) : (
+      <WorkSection
+        key={section.id}
+        messages={section.messages}
+        startedAt={index === 0 ? began : undefined}
+        live={Boolean(streaming && index === sections.length - 1)}
+        whole={whole}
+        interrupted={Boolean(interrupted) && index === lastWork}
+        failed={Boolean(failed && index === lastWork)}
+        // Opening the steps of a running turn keeps them open once it settles.
+        onOpenSteps={() => setTurnFoldOpen(turnFoldKey(sourceKey, exchange.id, steers), true)}
+      />
+    )
+  const body: ReactNode[] = []
+  for (let index = 0; index < sections.length; ) {
+    const fold = folds.find((each) => each.start === index)
+    if (!fold) {
+      body.push(renderSection(sections[index]!, index))
+      index += 1
+      continue
+    }
+    body.push(
+      <TurnFoldRow
+        key={`fold-${fold.part}`}
+        fold={fold}
+        foldKey={turnFoldKey(sourceKey, exchange.id, fold.part)}
+        // The turn's last stretch is where a stop cut it.
+        stop={fold.part === steers ? interrupted : undefined}
+        kept={fold.kept.map((at) => {
+          const note = sections[at]!
+          return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline /> : null
+        })}
+      >
+        {sections.slice(fold.start, fold.end).map((section, offset, hidden) =>
+          // A fold over one stretch of work already says what it did: opened, it shows the steps themselves.
+          renderSection(section, fold.start + offset, hidden.filter((each) => each.kind === "work").length === 1)
+        )}
+      </TurnFoldRow>
+    )
+    index = fold.end
+  }
   return (
     <AnswerTimeContext.Provider value={finishedAt}>
       <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
@@ -156,34 +230,11 @@ export const Exchange = memo(function Exchange({
         ) : null}
         <SystemNotes messages={notes.flatMap((note) => (note.after === 0 ? [note.message] : []))} refused={exchange.refused} />
 
-        {sections.length > 0 ? (
+        {sections.length > 0 || streaming ? (
           <div className={cn("flex flex-col gap-4", (exchange.prompt || exchange.opener) && "mt-4")}>
-            {provider ? <AgentByline provider={provider} /> : null}
-            {sections.map((section, index) =>
-              section.kind === "note" ? (
-                sections[index - 1]?.kind === "note" ? null : (
-                  <SystemNotes key={section.id} messages={noteRun(sections, index)} refused={exchange.refused} inline />
-                )
-              ) : section.kind === "steer" ? (
-                <div key={section.id} className="mt-1">
-                  <p className="mb-1 text-right text-label text-faint">
-                    Steered mid-turn
-                  </p>
-                  <Prompt message={section.message} />
-                </div>
-              ) : section.kind === "prose" ? (
-                <Response key={section.id} message={section.message} previewedFiles={section.previewedFiles} showWork />
-              ) : (
-                <WorkSection
-                  key={section.id}
-                  messages={section.messages}
-                  startedAt={index === 0 ? (exchange.prompt ?? exchange.opener)?.timestamp : undefined}
-                  live={Boolean(streaming && index === lastWork)}
-                  interrupted={Boolean(interrupted) && index === lastWork}
-                  failed={Boolean(failed && index === lastWork)}
-                />
-              )
-            )}
+            {provider || (streaming && began !== undefined) ? <AgentByline provider={provider} workingSince={streaming ? began : undefined} /> : null}
+            {body}
+            {liveTail ? <LiveRow step={NOTHING_RUNNING} answering={lastSection?.kind === "prose"} /> : null}
           </div>
         ) : null}
 
@@ -197,6 +248,7 @@ export const Exchange = memo(function Exchange({
             <ReviewFindings report={review} />
           </div>
         ) : null}
+        {streaming ? null : <TurnChanges requestId={exchange.prompt?.requestId} />}
         {exchange.response.length > 0 || interrupted ? (
           <Footer exchange={exchange} streaming={streaming} interrupted={interrupted} />
         ) : null}
@@ -205,12 +257,17 @@ export const Exchange = memo(function Exchange({
   )
 })
 
-function AgentByline({ provider }: { provider: string }) {
+/** NOTHING running yet: the live row under a prompt, prose or a note says what the turn does without a step of its own. */
+const NOTHING_RUNNING: LiveStepData = { running: 0, thinking: false }
+
+/** Who is answering, and while the turn runs, for how long: "Claude · Working for 1m 12s". */
+function AgentByline({ provider, workingSince }: { provider?: string; workingSince?: number }) {
   useHarnessIdentity()
   return (
-    <div className="flex items-center gap-1.5 text-label text-faint">
-      <HarnessIcon harness={provider} className="size-3.5" />
-      <span>{harnessLabels()[provider] ?? provider}</span>
+    <div className="flex min-h-3.5 items-center gap-1.5 text-label text-faint">
+      {provider ? <HarnessIcon harness={provider} className="size-3.5" /> : null}
+      {provider ? <span>{harnessLabels()[provider] ?? provider}</span> : null}
+      {workingSince !== undefined ? <TurnClock since={workingSince} bare={!provider} /> : null}
     </div>
   )
 }
@@ -268,7 +325,7 @@ function Continued({ continued, provider, said, timestamp, origin }: { continued
 }
 
 /**
- * Where a session began from another one's history: a quiet line above the
+ * Where a session began from another one's history: a divider above the
  * person's words, never a message of its own, since what the agent was told
  * is Mako's framing and not what the person typed. Its action opens the
  * transcript the agent was given, the file it reads.
@@ -278,11 +335,13 @@ function CarriedLine({ carried, time }: { carried: CarriedHistory; time?: number
   const turns = carried.turns === undefined ? undefined : `${carried.turns} turn${carried.turns === 1 ? "" : "s"}`
   // Why the harness didn't resume its own session: the version here is older than the one that wrote it.
   const because = carried.outdated ? carriedBecause(harnessLabel(carried.outdated.harness), carried.outdated) : undefined
+  // A handoff is a boundary in the conversation: drawn as a divider, as a compaction is.
   return (
     <EventLine
-      align="end"
+      variant="divider"
       icon={HistoryIcon}
       time={time}
+      className="mb-3"
       data-carried-history=""
       data-carried-outdated={carried.outdated ? "" : undefined}
       words={{ title: from ? `Continued from ${from}` : "Continued with the conversation so far", detail: [turns, because].filter(Boolean).join(" · ") || undefined }}
@@ -495,11 +554,15 @@ interface WorkSummaryData extends ToolWorkSummary {
   duration?: number
 }
 
+/** `settled`: count only calls that have finished, and none of a running step's (`true`, or the step's own calls). */
 function summarizeWork(
-  messages: ChatMessage[],
-  started?: number
+  messages: readonly ChatMessage[],
+  started?: number,
+  settled?: true | readonly ToolCall[]
 ): WorkSummaryData {
-  const calls = messages.flatMap((message) => pairTools(message.blocks))
+  const paired = messages.flatMap((message) => pairTools(message.blocks))
+  const running = new Set(settled === true || !settled ? [] : settled.map((call) => call.id))
+  const calls = settled ? paired.filter((call) => !call.pending && !running.has(call.id)) : paired
   const summary = summarizeToolWork(calls)
   const agents = Math.max(summary.agents, ...calls.map(reportedSubagentCount))
   const completed = messages.at(-1)?.timestamp
@@ -513,52 +576,178 @@ function summarizeWork(
   }
 }
 
+/**
+ * A stretch of work between two pieces of prose. Settled, it is its rows,
+ * folded under a summary from three steps on. While it is the running end of
+ * a turn (`live`), it is what it has done so far as that summary, then the
+ * one row of the step running now; either opens the whole list, capped and
+ * following its newest row. One tree in every state, so a stretch that
+ * settles keeps what it had mounted.
+ */
 function WorkSection({
   messages,
   startedAt,
   live,
+  whole = false,
   interrupted,
   failed,
+  onOpenSteps,
 }: {
   messages: ChatMessage[]
   startedAt?: number
   live: boolean
+  /** Drawn as its steps, never folded under a summary of its own: the turn's fold already is one. */
+  whole?: boolean
   interrupted: boolean
   failed: boolean
+  onOpenSteps?: () => void
 }) {
   const [open, setOpen] = useState(false)
   const work = useMemo(
     () => summarizeWork(messages, startedAt),
     [messages, startedAt]
   )
-  const folded = work.tools >= 3
-  // One tree whether or not the log folds, so a turn crossing the fold
-  // threshold mid-stream keeps its rows mounted.
-  const summarized = folded && !live
+  const step = useMemo(() => (live ? liveStep(messages) : undefined), [live, messages])
+  // While it runs, the summary says only what has finished; the running step is its own row.
+  const done = useMemo(() => (step ? summarizeWork(messages, undefined, step.group ?? true) : undefined), [step, messages])
+  const folded = work.tools >= 3 && !whole
+  const summarized = live ? (done?.tools ?? 0) > 0 : folded
+  const toggle = () =>
+    setOpen((value) => {
+      if (!value && live) onOpenSteps?.()
+      return !value
+    })
   return (
     <div className="flex flex-col">
       {summarized ? (
         <WorkSummary
-          work={work}
-          interrupted={interrupted}
-          failed={failed}
+          work={live ? done! : work}
+          interrupted={!live && interrupted}
+          failed={!live && failed}
           open={open}
-          onToggle={() => setOpen((value) => !value)}
+          onToggle={toggle}
         />
       ) : null}
-      <Collapse open={!summarized || open}>
-        <div
-          data-work-log
+      <Collapse open={live ? open : !summarized || open}>
+        <FollowingList capped={live}>
+          <div
+            data-work-log
+            className={cn(
+              "flex flex-col",
+              (summarized || live) && "mt-1.5 ml-[6.5px] border-l border-hairline pb-1 pl-4"
+            )}
+          >
+            {messages.map((message) => (
+              <Response key={message.id} message={message} showWork />
+            ))}
+          </div>
+        </FollowingList>
+      </Collapse>
+      {step ? <LiveRow step={step} open={open} onToggle={step.call || step.thinking || summarized ? toggle : undefined} /> : null}
+    </div>
+  )
+}
+
+/**
+ * The newest step of a running stretch, from its messages: the newest call
+ * still running and how many run beside it, or the thought the model is in
+ * the middle of. A thought shows above a call only when it led to it, in
+ * the same response.
+ */
+function liveStep(messages: readonly ChatMessage[]): LiveStepData {
+  let call: ToolCall | undefined
+  let group: ToolCall[] | undefined
+  let provider: string | undefined
+  let running = 0
+  let thought: string | undefined
+  for (const message of messages) {
+    const calls = pairTools(message.blocks)
+    for (const each of calls) {
+      if (!each.pending) continue
+      running += 1
+      call = each
+    }
+    if (call && calls.includes(call)) {
+      // Agents started together run as one step: the group is the live row.
+      const item = groupAgentCalls(calls).find((each) => each.kind === "agents" && each.calls.includes(call!))
+      group = item?.kind === "agents" ? item.calls : undefined
+      provider = message.provider
+    }
+    const thinking = message.blocks.findLast((block) => block.type === "thinking" && block.thinking)
+    if (thinking?.type === "thinking" && (calls.some((each) => each === call) || message === messages.at(-1)))
+      thought = thoughtLine(thinking.thinking)
+  }
+  const lastBlock = messages.at(-1)?.blocks.at(-1)
+  const thinking = lastBlock?.type === "thinking" && Boolean(lastBlock.thinking)
+  if (thinking) return { running: 0, thought, thinking }
+  return { call, group, provider, running, thought: call ? thought : undefined, thinking }
+}
+
+/** A thought's newest line, without list marks or emphasis, cut from the front past 120 characters. */
+function thoughtLine(text: string): string {
+  const trimmed = text.trim()
+  const lastLine = trimmed
+    .slice(trimmed.lastIndexOf("\n") + 1)
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "")
+    .replace(/[*_`#>]+/g, "")
+    .trim()
+  return lastLine.length > 120 ? `…${lastLine.slice(-119)}` : lastLine
+}
+
+/**
+ * A settled turn's work behind one row: "Worked for 3m 12s", then what it
+ * did in the transcript's words, the kinds of step as glyphs in front. Its
+ * answer stays below it. A stretch after a steer "Continued for"; a turn
+ * that was stopped says so ("Stopped after 2m", "Interrupted after 2m"). A
+ * note that wants attention or marks a boundary stays in view while the
+ * fold is closed. Whether it is open is kept per turn (`turn-folds.ts`).
+ */
+function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; foldKey: string; stop?: boolean | TurnStop; kept: ReactNode[]; children: ReactNode }) {
+  const open = useTurnFolds((state) => state.open.has(foldKey))
+  const work = useMemo(() => summarizeWork(fold.messages), [fold.messages])
+  const { glyphs, text } = describeWork(work)
+  const duration = fold.from !== undefined && fold.to !== undefined && fold.to >= fold.from ? formatDuration(fold.to - fold.from) : undefined
+  const yours = stop === true || (stop !== undefined && stop !== false && stop.reason === "stopped")
+  const cut = Boolean(stop) && !yours
+  const verb = stop ? (yours ? "Stopped" : "Interrupted") : fold.continued ? "Continued" : "Worked"
+  const said = work.tools > 0 ? text : undefined
+  const title = duration ? `${verb} ${stop ? "after" : "for"} ${duration}` : stop ? verb : said ? said.charAt(0).toUpperCase() + said.slice(1) : "Show the steps"
+  const detail = duration || stop ? said : undefined
+  return (
+    <div data-turn-fold={open ? "open" : "closed"} className="flex flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setTurnFoldOpen(foldKey, !open)}
+        className={cn(
+          "pressable group/fold -mx-1.5 flex h-7 max-w-full items-center gap-2 self-start rounded-md px-1.5 text-ui transition-colors duration-100 hover:bg-fill-hover",
+          cut ? "text-caution" : "text-muted-foreground hover:text-foreground aria-expanded:text-foreground"
+        )}
+      >
+        {glyphs.length ? (
+          <span aria-hidden className="flex shrink-0 items-center gap-1 text-faint transition-colors duration-100 group-hover/fold:text-muted-foreground">
+            {glyphs.map((glyph) => (
+              <ToolGlyph key={glyph} kind={glyph} className="size-3.5" />
+            ))}
+          </span>
+        ) : null}
+        <span className="shrink-0">{title}</span>
+        {detail ? <span className="min-w-0 truncate text-faint">{detail}</span> : null}
+        {work.failed > 0 ? <span className="shrink-0 text-negative">{work.failed} failed</span> : null}
+        <ChevronRightIcon
+          aria-hidden
           className={cn(
-            "flex flex-col",
-            summarized && "mt-1.5 ml-[6.5px] border-l border-hairline pb-1 pl-4"
+            "size-3 shrink-0 transition-[transform,opacity] duration-200 ease-[var(--ease-out)]",
+            open ? "rotate-90 opacity-80" : "opacity-40 group-hover/fold:opacity-80"
           )}
-        >
-          {messages.map((message) => (
-            <Response key={message.id} message={message} showWork />
-          ))}
+        />
+      </button>
+      <Collapse open={open}>
+        <div data-turn-fold-body className="mt-1.5 ml-[6.5px] flex flex-col gap-4 border-l border-hairline pt-1 pb-1 pl-4">
+          {children}
         </div>
       </Collapse>
+      {!open && kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
     </div>
   )
 }
@@ -680,17 +869,6 @@ function WorkSummary({
   )
 }
 
-function formatDuration(milliseconds: number): string {
-  const seconds = Math.max(1, Math.round(milliseconds / 1000))
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  const remaining = seconds % 60
-  if (minutes < 60)
-    return remaining ? `${minutes}m ${remaining}s` : `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  return `${hours}h ${minutes % 60}m`
-}
-
 function Response({
   message,
   showWork,
@@ -739,9 +917,13 @@ function Response({
           {thinking && showThinking ? (
             <Thinking text={thinking} live={Boolean(message.streaming && !text && !tools.length)} />
           ) : null}
-          {tools.map((call) => (
-            <ToolRow key={call.id} call={call} />
-          ))}
+          {groupAgentCalls(tools).map((item) =>
+            item.kind === "agents" ? (
+              <AgentGroup key={item.id} calls={item.calls} provider={message.provider} />
+            ) : (
+              <ToolRow key={item.call.id} call={item.call} />
+            )
+          )}
         </div>
       ) : null}
 
@@ -770,13 +952,7 @@ function Response({
 
 function Thinking({ text, live }: { text: string; live: boolean }) {
   const [open, setOpen] = useState(false)
-  const trimmed = text.trim()
-  const lastLine = trimmed
-    .slice(trimmed.lastIndexOf("\n") + 1)
-    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, "")
-    .replace(/[*_`#>]+/g, "")
-    .trim()
-  const summary = lastLine.length > 120 ? `…${lastLine.slice(-119)}` : lastLine
+  const summary = thoughtLine(text)
   const layer = "absolute inset-0 m-auto size-3.5 [transition:opacity_150ms_var(--ease-out),transform_150ms_var(--ease-out)]"
   return (
     <div>
@@ -918,11 +1094,18 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
   const detail = stop === true ? undefined : stop
   const reason = detail?.reason ?? "stopped"
   const yours = reason === "stopped"
+  // What else the stop ended, in the words the agent is told of it when the turn goes on.
+  const alsoStopped = detail?.stopped ? stoppedWorkWords(detail.stopped) : undefined
   return (
     <>
-      <span data-turn-stopped={reason} className={cn("flex items-center gap-1.5", !yours && "text-foreground")}>
-        {yours ? <CircleStopIcon aria-hidden className="size-3" /> : <TriangleAlertIcon aria-hidden className="size-3 text-caution" />}
-        {turnStopLabel(reason, harness ? harnessLabel(harness) : "the provider")}
+      <span data-turn-stopped={reason} className={cn("flex min-w-0 items-center gap-1.5", !yours && "text-foreground")}>
+        {yours ? <CircleStopIcon aria-hidden className="size-3 shrink-0" /> : <TriangleAlertIcon aria-hidden className="size-3 shrink-0 text-caution" />}
+        <span className="shrink-0">{turnStopLabel(reason, harness ? harnessLabel(harness) : "the provider")}</span>
+        {alsoStopped ? (
+          <span data-turn-stopped-work={detail?.stopped?.length} title={alsoStopped.all} className="min-w-0 truncate text-muted-foreground">
+            {alsoStopped.text}
+          </span>
+        ) : null}
       </span>
       {detail?.automatic ? (
         // Mako is about to send the continuation itself: the live mark says

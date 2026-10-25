@@ -25,6 +25,7 @@ import { continueTurnPrompt, makoPrompts, savedMakoPrompt, type MakoPrompt, type
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
 import { setPref } from "@/state/prefs"
+import { setTurnFoldOpen, turnFoldKey } from "@/state/turn-folds"
 
 threadsStore.set({ descriptors: fixtureHarnesses })
 const LIVE = "21111111-1111-4111-8111-111111111111"
@@ -441,6 +442,8 @@ console.log("Mako's lines, stops, errors and system lines: one line where a prom
   try {
     assert.doesNotMatch(draw(toExchanges(messages)), /data-show-original/, "a debugging aid: nothing offers Original until Settings › Diagnostics turns it on")
     setPref("showOriginals", true)
+    // The record is a step of a settled turn, so it is drawn inside the turn's fold: opened, as a reader would.
+    setTurnFoldOpen(turnFoldKey(LIVE, "native-user-u1", 0), true)
     const html = draw(toExchanges(messages))
     assert.equal(html.match(/data-show-original/g)?.length, 2, "the prompt's and the answer's footers offer Original; the unread line's opens with its record")
     assert.match(html, /data-event="Unread record: response_item\/telepathy"[^]*?aria-expanded="false"/, "the unread record starts collapsed")

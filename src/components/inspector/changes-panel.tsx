@@ -21,6 +21,7 @@ import { GitLoading } from "@/components/inspector/git-loading"
 import { GitDiffPreviewView } from "@/components/inspector/git-diff-preview"
 import { ChangeList } from "@/components/inspector/change-list"
 import { ReviewStream } from "@/components/inspector/review-stream"
+import { requestedTurn, useReviewScope } from "@/state/review-scope"
 import { DIFF_THEME } from "@/lib/diff-theme"
 import { buildFileTree, type TreeRow } from "@/lib/file-tree"
 import { cn } from "@/lib/utils"
@@ -167,6 +168,9 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
     return request === undefined ? file : { ...file, staged: request }
   }), [git, stageOverrides])
 
+  // A turn the transcript asked to review is read in the Review layout, whichever
+  // layout the person keeps and even on a clean tree, until they pick another scope.
+  const reviewingTurn = useReviewScope((state) => requestedTurn(state.requested, workspace) !== null)
   const layout = usePrefs((prefs) => prefs.changesLayout)
   const autoOpenDiff = usePrefs((prefs) => prefs.autoOpenDiff)
   const diffStyle = usePrefs((prefs) => prefs.diffStyle)
@@ -181,7 +185,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   // With the diff pane closed the list is the whole panel, so nothing is
   // "selected" and no file contents are fetched at all.
   const selectedFile = files.find((file) => file.path === selected)
-  const active = layout === "files" && autoOpenDiff ? selectedFile : undefined
+  const active = layout === "files" && !reviewingTurn && autoOpenDiff ? selectedFile : undefined
   const showDiff = Boolean(active)
   const path = active?.path
   const ready = diff !== undefined && diff.path === path
@@ -378,7 +382,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
     void discardFiles(files.filter((file) => chosen.has(file.path) && file.status !== "conflicted"))
   }, [files])
 
-  if (files.length === 0) {
+  if (files.length === 0 && !reviewingTurn) {
     return (
       <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
         <WorktreeReview />
@@ -403,7 +407,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
     )
   }
 
-  if (layout === "review") {
+  if (layout === "review" || reviewingTurn) {
     return (
       <div className={cn("flex min-h-0 flex-col", inline ? "flex-1" : "h-full")}>
         <WorktreeReview />
