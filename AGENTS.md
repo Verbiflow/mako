@@ -1958,7 +1958,10 @@ restarted host continues from the journal, but a recovering host rewrites
 what it reopens at the same revision and two hosts never share a counter, so
 `live-recovery.ts` merges a batch onto held state only within the epoch;
 across epochs it buffers and takes a snapshot, and a snapshot from another
-epoch replaces the state outright. An unstamped batch (an older host) still
+epoch replaces the state outright and drops any batch still buffered from
+another epoch: it came from a host that no longer answers, and replayed it
+would ask the new host for a snapshot in its numbering forever (a window once
+reread one conversation every 280 ms for an hour after a restart). An unstamped batch (an older host) still
 applies by revision. `test-prompt-delivery.tsx` covers both.
 
 A window reads a conversation's earlier history, released turns and full

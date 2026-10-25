@@ -157,7 +157,9 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
       observedChange ? undefined : "hydrate"
     )
   mergedSince.set(id, snapshot.revision)
-  const buffered = pending.get(id) ?? []
+  // A batch from another epoch came from a host that no longer answers: replayed, it would ask this host for a
+  // snapshot in its numbering, which never comes, and again after every answer.
+  const buffered = (pending.get(id) ?? []).filter((batch) => sameEpoch(snapshot, batch))
   pending.delete(id)
   for (const batch of buffered) applyLiveBatch(batch)
 }
@@ -178,9 +180,12 @@ function takeView(existing: Extract<AcpConversation, { kind: "live" }>, snapshot
     ? { ...current, history: { ...current.history, token: view.token } } : current)
 }
 
-/** Buffered batches the window already holds wait for nothing; only one past it asks for a newer snapshot. */
+/**
+ * Buffered batches the window already holds, and any from a host that no longer answers (another epoch), wait for
+ * nothing; only one past what it holds asks for a newer snapshot.
+ */
 function dropHeld(existing: Extract<AcpConversation, { kind: "live" }>): void {
-  const waiting = pending.get(existing.key)?.filter((batch) => !sameEpoch(existing, batch) || batch.revision > (existing.revision ?? 0))
+  const waiting = pending.get(existing.key)?.filter((batch) => sameEpoch(existing, batch) && batch.revision > (existing.revision ?? 0))
   if (waiting?.length) pending.set(existing.key, waiting)
   else pending.delete(existing.key)
 }

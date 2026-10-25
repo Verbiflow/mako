@@ -11,6 +11,7 @@ import type { LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { auditId, auditSnapshot } from "./performance-audit-fixtures"
 
 Object.defineProperty(globalThis, "window", { value: {}, configurable: true })
+Object.assign(globalThis, { requestAnimationFrame: (run: () => void) => setTimeout(run, 16), cancelAnimationFrame: clearTimeout })
 const { installMockBridge } = await import("../src/dev/mock-bridge")
 const { getMako } = await import("../src/lib/bridge")
 const { acpStore } = await import("../src/state/acp-state")
@@ -96,5 +97,53 @@ const window = (id: string) => {
   await sleep(3000)
   assert.ok(reads <= 5, `a host answering behind is asked again with backoff, not in a loop (${reads} reads in 3 s)`)
   console.log(`PASS: a host answering behind is read ${reads} times in 3 s, backing off`)
+}
+{
+  // A batch the host that quit sent last, buffered as its reread failed, from another epoch than the host that started:
+  // dropped once that host's snapshot lands, not replayed against it forever (one reread every 280 ms for hours).
+  const quitting = conversation(3, 5)
+  const id = quitting.session.id
+  let epoch = "host-1", up = true, reads = 0
+  mock.method(getMako(), "liveRead", async (asked: string) => {
+    if (asked === id) reads++
+    await sleep(50)
+    if (!up) throw new Error("The connection to Mako's shared host was interrupted.")
+    const data = JSON.stringify({ ...quitting, epoch, history: { token: `t-${epoch}`, ranges: true, blockStart: 0, blockEnd: quitting.blocks.length, turnStart: 0, earlierRequests: [], before: null } })
+    return { record: crypto.randomUUID(), offset: 0, total: data.length, data, next: null }
+  })
+  await hydrateLive(id)
+  up = false
+  applyLiveBatch({ id, revision: 9, epoch: "host-1", historyChanged: true, updates: [] })
+  await sleep(150)
+  epoch = "host-2"
+  up = true
+  reads = 0
+  assert.ok(await hydrateLive(id))
+  await sleep(2000)
+  assert.equal(window(id).epoch, "host-2")
+  assert.equal(reads, 1, `the gone host's batch asks nothing more of the new one (${reads} reads)`)
+  console.log("PASS: a batch from a host that quit is dropped once the host that started answers")
+}
+
+{
+  // A stream whose every batch needs a snapshot keeps up: new batches read at once, never behind a backoff.
+  const busy = conversation(4, 5)
+  const id = busy.session.id
+  let revision = busy.revision, reads = 0
+  mock.method(getMako(), "liveRead", async (asked: string) => {
+    if (asked === id) reads++
+    await sleep(20)
+    const data = JSON.stringify({ ...busy, revision, epoch: "busy", history: { token: `t-${revision}`, ranges: true, blockStart: 0, blockEnd: busy.blocks.length, turnStart: 0, earlierRequests: [], before: null } })
+    return { record: crypto.randomUUID(), offset: 0, total: data.length, data, next: null }
+  })
+  await hydrateLive(id)
+  for (let n = 0; n < 40; n++) {
+    revision++
+    applyLiveBatch({ id, revision, epoch: "busy", historyChanged: true, updates: [] })
+    await sleep(15)
+  }
+  await sleep(150)
+  assert.equal(window(id).revision, revision, `the window caught up with the stream (${window(id).revision} of ${revision}, ${reads} reads)`)
+  console.log(`PASS: a stream needing snapshots keeps up (${reads} reads for 40 batches)`)
 }
 process.exit(0)
