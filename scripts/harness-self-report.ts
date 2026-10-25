@@ -14,6 +14,7 @@ import { VOCABULARIES, type HarnessConcepts } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { resolveExecutable } from "@mako/host/base/executable"
+import { resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
 import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { claudeSdkBinary, codexBinary } from "./harness-binaries.ts"
@@ -75,7 +76,8 @@ const builds = new Map<string, () => Promise<Build>>([
   ["claude", () => executableBuild(claudeSdkBinary())],
   ["codex", async () => executableBuild(await codexBinary())],
   ["cursor", cursorSdk],
-  ["opencode", () => executableBuild(resolveExecutable("opencode", process.env))],
+  // The OpenCode Mako runs (`OPENCODE_BIN_PATH`, else its candidates), which a PATH lookup can miss.
+  ["opencode", async () => executableBuild((await resolveOpenCodeInstallation(process.env)).command)],
   ["grok", () => executableBuild(resolveExecutable("grok", process.env))],
   ["devin", () => executableBuild(devinExecutable())],
 ])
@@ -341,7 +343,7 @@ const listings = new Map<string, Listings>([
   ["claude", { executable: async () => claudeSdkBinary(), mcpConfig: cliListing(["mcp", "list"]) }],
   ["cursor", { executable: async () => process.execPath, skills: cursorRequestContext, mcpConfig: cursorRequestContext }],
   ["codex", { executable: () => resolveCodexExecutable(), skills: codexSkillList }],
-  ["opencode", { executable: async () => resolveExecutable("opencode", process.env), skills: openCodeListing("/api/skill"), mcpConfig: openCodeListing("/api/mcp"), mcpFormat: "opencode" }],
+  ["opencode", { executable: async () => (await resolveOpenCodeInstallation(process.env)).command, skills: openCodeListing("/api/skill"), mcpConfig: openCodeListing("/api/mcp"), mcpFormat: "opencode" }],
   ["grok", { executable: async () => resolveExecutable("grok", process.env), skills: grokSkillListing, mcpConfig: cliListing(["mcp", "doctor"]) }],
   ["devin", { executable: async () => devinExecutable(), skills: cliListing(["skills", "list"]), mcpConfig: cliListing(["mcp", "list"]) }],
 ])

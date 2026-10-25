@@ -53,6 +53,11 @@ export interface HarnessVersions {
     imports?: string
   }
   /**
+   * The package Mako speaks the harness with, published with each of its releases under the same version
+   * (`@opencode/client`): it moves with `tested`, in every package that pins it.
+   */
+  client?: { package: string }
+  /**
    * Where the dates the vendor published each release are read, for sessions
    * whose records name no writer and whose harness left no log or install
    * that does (`ReleaseTimelines`, `@mako/sessions/record-releases`).

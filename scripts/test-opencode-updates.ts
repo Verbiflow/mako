@@ -11,6 +11,9 @@ import {
 import hostPackage from "../packages/host/package.json" with { type: "json" }
 import { isOpenCodeV2, openCodeServesLegacyApi, openCodeVersionProblem } from "@mako/host/harnesses/opencode/version"
 import { compareVersions } from "@mako/host/contracts/runtime-version"
+
+/** A release `steps` patches past the one Mako is verified against. */
+const later = (steps: number): string => OPENCODE_RELEASE.replace(/\d+$/, (patch) => String(Number(patch) + steps))
 import { runtimeRowView } from "../src/lib/runtime-updates.ts"
 import { tooOld } from "../src/lib/runtime-versions.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
@@ -84,14 +87,14 @@ try {
   assert.deepEqual(first.opencode.update?.args, ["upgrade", OPENCODE_RELEASE])
   await runtime.update("opencode")
   assert.deepEqual(ran, [{ command: stable, args: ["upgrade", OPENCODE_RELEASE] }])
-  published = "2.0.28"
+  published = later(1)
   const ahead = await runtime.check("opencode", { latest: true })
   assert.equal(ahead.update, undefined, "a stable install goes to the release Mako is verified against, never another")
   assert.match(ahead.latestError ?? "", /different release channel/)
   published = OPENCODE_RELEASE
-  versions[stable] = "2.0.30"
+  versions[stable] = later(3)
   const newer = await runtime.check("opencode", { force: true, latest: true })
-  assert.equal(newer.installed, "2.0.30")
+  assert.equal(newer.installed, later(3))
   assert.equal(newer.update, undefined, "a newer release someone runs is kept: an update never moves back")
   assert.equal(newer.versions?.standing, "newer")
   assert.equal(runtimeRowView(newer).detail, "Newer than Mako has tested", "a fast upgrader gets a quiet line and nothing else")

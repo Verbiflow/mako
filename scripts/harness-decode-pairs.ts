@@ -242,8 +242,8 @@ const CLAUDE_TOOLS: ToolVocabulary = {
   edit: (path, from, to) => ({ name: "Edit", arguments: { file_path: path, old_string: from, new_string: to } }),
   viewImage: (path) => ({ name: "Read", arguments: { file_path: path } }),
   todos: { absent: "Claude Code defines its todo tools only with CLAUDE_CODE_ENABLE_TODO_TOOLS set, which Mako doesn't set (CLAUDE_VOCABULARY)" },
-  search: { absent: "Claude Code 2.1.283 defines no file search tool as Mako launches it; its model searches through Bash (native-tools/claude-2.1.283.json)" },
-  codeMode: { absent: "Claude Code 2.1.283 defines no tool that runs code calling its other tools (native-tools/claude-2.1.283.json)" },
+  search: { absent: "Claude Code 2.1.310 defines no file search tool as Mako launches it; its model searches through Bash (native-tools/claude-2.1.310.json)" },
+  codeMode: { absent: "Claude Code 2.1.310 defines no tool that runs code calling its other tools (native-tools/claude-2.1.310.json)" },
   ask: (question) => ({ name: "AskUserQuestion", arguments: { questions: [{ ...question, multiSelect: false }] } }),
   plan: (plan) => [
     { call: (_tools, _project, heard) => ({ name: "Write", arguments: { file_path: planFile("Claude Code", heard), content: plan } }) },
@@ -257,7 +257,7 @@ const claude: Recorder = {
   model: { kind: "scripted", tools: CLAUDE_TOOLS },
   controls: {
     steer: "driven",
-    rewind: { absent: "Claude Code 2.1.283's SDK rewinds files only (`rewindFiles`); its conversation rewind is the TUI's /rewind" },
+    rewind: { absent: "Claude Code 2.1.310's SDK rewinds files only (`rewindFiles`); its conversation rewind is the TUI's /rewind" },
     compact: "driven",
     resume: "driven",
     "still-running": { absent: NO_OTHER_CLIENT },
@@ -596,14 +596,14 @@ const codex: Recorder = {
 
 const OPENCODE_TOOLS: ToolVocabulary = {
   subagent: { absent: SCRIPTED_SUBAGENT },
-  monitor: { absent: "OpenCode 2.0.27 defines no tool that watches a command and reports what it prints (native-tools/opencode-2.0.27.json)" },
+  monitor: { absent: "OpenCode 2.1.4 defines no tool that watches a command and reports what it prints (native-tools/opencode-2.1.4.json)" },
   read: (path, lines) => ({ name: "read", arguments: { path, ...lines } }),
   shell: (command) => ({ name: "shell", arguments: { command } }),
   edit: (path, from, to) => ({ name: "edit", arguments: { path, oldString: from, newString: to } }),
   viewImage: (path) => ({ name: "read", arguments: { path } }),
-  todos: { absent: "OpenCode 2.0.27 defines no todo tool for its agents (native-tools/opencode-2.0.27.json)" },
+  todos: { absent: "OpenCode 2.1.4 defines no todo tool for its agents (native-tools/opencode-2.1.4.json)" },
   search: (pattern) => ({ name: "grep", arguments: { pattern } }),
-  codeMode: { absent: "OpenCode 2.0.27 defines no tool that runs code calling its other tools (native-tools/opencode-2.0.27.json)" },
+  codeMode: { absent: "OpenCode 2.1.4 defines no tool that runs code calling its other tools (native-tools/opencode-2.1.4.json)" },
   ask: (question) => ({ name: "question", arguments: { questions: [question] } }),
   // The plan agent's closing answer is its plan (`openCodePlan`); no tool proposes it.
   plan: (plan) => [{ text: plan }],

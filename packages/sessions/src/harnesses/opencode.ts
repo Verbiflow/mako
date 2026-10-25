@@ -7,9 +7,9 @@ import { SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 export const OPENCODE_VOCABULARY = defineVocabulary({
   harness: "opencode",
   checked: {
-    version: "2.0.27",
-    on: "2026-10-12",
-    against: "the model request of 2.0.27's native API per agent on an Anthropic and an OpenAI model (scripts/fixtures/native-tools), opencode.db and opencode-next.db through audit:tools, and the permission names Mako launches with",
+    version: "2.1.4",
+    on: "2026-10-25",
+    against: "the model request of 2.1.4's native API per agent on an Anthropic and an OpenAI model (scripts/fixtures/native-tools; unchanged since 2.0.27), opencode.db and opencode-next.db through audit:tools as of 2026-10-12, and the permission names Mako launches with",
   },
   mcp: [],
   tools: {
@@ -32,9 +32,9 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "2.0.27",
-      on: "2026-10-12",
-      against: "@opencode/schema and @opencode/protocol 2.0.27 types, the 2.0.27 binary's bundled loaders through harness:self-report (opencode.ai/docs still describe 1.x)",
+      version: "2.1.4",
+      on: "2026-10-25",
+      against: "the 2.1.4 binary's bundled loaders through harness:self-report (every declared name, and every skill and MCP place listed), and @opencode/schema and @opencode/protocol 2.0.27 types as read on 2026-10-12 (opencode.ai/docs still describe 1.x)",
     },
     instructions: {
       files: ["AGENTS.md"],
