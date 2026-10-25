@@ -13,6 +13,7 @@ import type { Foreground } from "./base/foreground.js"
 import { heavy } from "./base/heavy-packages.js"
 import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
+import { readPower } from "./base/power.js"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { cloudUrl } from "./base/build-identity.js"
@@ -39,7 +40,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -345,6 +346,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // The rail's rows, read again only once the catalog says its list changed: a sweep finds nothing new otherwise, and a
   // session being written (a terminal's at work) changes its own row in place rather than the whole rail being read.
   let railRows: ThreadRef[] | undefined
+  /** The rail's rows by native session, read again with the rail: where the reading copies read each Session. */
+  let railPaths: Map<string, string> | undefined
   const sessions = new SessionPublisher({
     rows: () => {
       const live = late.conversations?.live
@@ -370,12 +373,37 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (event.type === "thread-ref") {
       const at = railRows?.findIndex((row) => row.path === event.ref.path) ?? -1
       if (railRows && at >= 0) railRows[at] = event.ref
-      else railRows = undefined
-    } else if (event.type === "threads" || event.type === "thread-removed") railRows = undefined
+      else {
+        railRows = undefined
+        railPaths = undefined
+      }
+    } else if (event.type === "threads" || event.type === "thread-removed") {
+      railRows = undefined
+      railPaths = undefined
+    }
     else if (event.type !== "thread-activity") return
     sessions.changed()
   })
   shell.jobs.every("tell the account this host's Sessions", 1_000, () => late.cloud?.reportSessions?.())
+  // This Mac's listed Sessions' history, kept in step in the account's copy, the ones at work first, so another device
+  // reads one with this Mac off. A cloud machine keeps its Thread's records instead; a fixture desk sends nothing.
+  if (!fixtureDesk && config.machineAgentFd === undefined) {
+    const uploads = new SessionUploads({
+      rows: () => sessions.listed(),
+      path: (harness, nativeId) => (railPaths ??= new Map((railRows ??= catalog.rail()).map((ref) => [`${ref.harness}\n${ref.nativeId}`, ref.path]))).get(`${harness}\n${nativeId}`),
+      link: async () => {
+        const cloud = late.cloud
+        if (!cloud?.cloudBlocked || (await cloud.cloudBlocked()) !== undefined) return undefined
+        const device = await cloud.deviceId()
+        return device ? cloud.deviceRecords(device) : undefined
+      },
+      power: readPower,
+      scope: (scope) => catalog.scopeCopies(scope),
+      sync: (link) => catalog.syncCopies(link),
+      now: Date.now,
+    })
+    shell.jobs.every("keep this Mac's Sessions' history in the account", 5_000, () => uploads.tick())
+  }
   late.cloud = declareCloudAccountMethods(methods, {
     sessions,
     environment,

@@ -227,6 +227,41 @@ try {
   const parts = splitBundle({ harness: "x", nativeId: "y", layout: { home: "/", roots: {}, paths: {} }, marks: {}, units: [{ key: "k", role: "file", path: null, places: null, versions: Array.from({ length: 25_000 }, (_, seq) => ({ seq, kind: "append", at: 0, size: 1, digest: null, tail: null, chunks: "", detail: null, writer: null, writerSource: null })) }] })
   assert.deepEqual(parts.map((part) => part.units[0].versions.map((version) => version.seq).filter((_, at, all) => at === 0 || at === all.length - 1)), [[0, 9999], [10000, 19999], [20000, 24999]])
 
+  // A device keeps only what its account lists in step, the most wanted first; catching up waits on a low battery,
+  // while a session in scope being written still goes up as it's captured, and one out of scope never does.
+  {
+    const home = join(root, "scoped")
+    const own = (name) => join(home, "sessions", `${name}.jsonl`)
+    await mkdir(join(home, "sessions"), { recursive: true })
+    for (const name of ["s3", "s4"]) await writeFile(own(name), line(name === "s3" ? 3 : 4, 4))
+    const store = new RecordStore(join(root, "scoped-store"), stores)
+    const recordsOf = (name) => ({ roots: [{ name: "synthetic", path: home }], files: [own(name)], databases: [] })
+    for (const name of ["s3", "s4"]) await store.capture({ harness: "synthetic", nativeId: name, home, records: recordsOf(name) })
+    const scoped = new MemoryRemote("gateway/d-1")
+    const order = []
+    const pushWith = scoped.pushWith.bind(scoped)
+    scoped.pushWith = async (bundle, pack) => (order.push(bundle.nativeId), pushWith(bundle, pack))
+    const pushes = new RecordPushes(store, scoped, () => {})
+    pushes.scoped({ sessions: [{ harness: "synthetic", nativeId: "s4" }, { harness: "synthetic", nativeId: "s3" }], paused: true })
+    await pushes.settled()
+    assert.deepEqual(order, [], "waiting: nothing caught up")
+    assert.deepEqual([pushes.status().behind, pushes.status().paused], [2, true])
+    await appendFile(own("s3"), line(3, 1))
+    await store.capture({ harness: "synthetic", nativeId: "s3", home, records: recordsOf("s3") })
+    pushes.captured("synthetic", "s3")
+    await pushes.settled()
+    assert.deepEqual(order, ["s3"], "a session in scope being written goes up all the same")
+    pushes.scoped({ sessions: [{ harness: "synthetic", nativeId: "s4" }], paused: false })
+    await pushes.settled()
+    assert.deepEqual(order, ["s3", "s4"], "caught up once it may, on what's still in scope")
+    pushes.captured("synthetic", "s3")
+    await pushes.settled()
+    assert.deepEqual(order, ["s3", "s4"], "out of scope: not pushed")
+    assert.equal(pushes.status().behind, 0)
+    pushes.stop()
+    store.close()
+  }
+
   for (const store of [a, laptopStore]) store.close()
   // A unit two sessions share (OpenCode's project row, a database's schema), pushed with each: the remote keeps units
   // per session, so the second session's push carries the shared unit too, rather than counting on the first's.
@@ -245,6 +280,7 @@ try {
     for (const name of ["s1", "s2"]) await sync.push("synthetic", name)
     for (const name of ["s1", "s2"])
       assert.deepEqual((await perSession.holdings("synthetic", name)).holdings, store.holdings("synthetic", name), `${name}: the remote holds every unit of it, the shared one too`)
+
 
     // Two sessions pulled at once: each reads its chunks before it takes the store's turn, so neither waits on the
     // other's network. With the reads inside the turn, the second never asked until the first's read came back, and a
