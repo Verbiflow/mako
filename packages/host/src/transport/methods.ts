@@ -6,6 +6,7 @@ import { FixtureDeskRefusedError, fixtureDeskRefusal } from "../contracts/fixtur
 import { CLIENT_CALL_ON_SOCKET, isClientCall } from "../contracts/client-calls.js"
 import { EncodedAnswer, decodeRuntimeValue, encodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { HostCallLifetime } from "./call-lifetime.js"
+import { RepeatedCalls } from "./repeated-calls.js"
 import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 
@@ -38,6 +39,7 @@ export class HostMethods implements MethodTable {
   private preview: ((args: unknown[]) => Promise<ControlPreview | null>) | undefined
   private video: ((args: unknown[]) => Promise<Uint8Array>) | undefined
   private readonly lifetime = new HostCallLifetime()
+  private readonly repeated = new RepeatedCalls()
   private readonly options: HostMethodsOptions
 
   constructor(options: HostMethodsOptions) {
@@ -90,6 +92,7 @@ export class HostMethods implements MethodTable {
     if (channel === "mako:control-preview" || channel === "mako:control-video") throw new Error("Preview delivery requires a matching binary-capable client. Update the Mako client and host.")
     if (!isHostChannel(channel)) throw new Error("Unknown Mako host method")
     const call = await this.declared(channel)
+    this.repeated.note(client, channel, args, correlationId)
     return withHostClient(client, () => call(args), history, correlationId)
   }
 
