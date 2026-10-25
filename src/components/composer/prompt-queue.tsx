@@ -5,6 +5,7 @@ import {
   ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
+  ClockIcon,
   PencilIcon,
   XIcon,
   CornerDownRightIcon,
@@ -46,6 +47,11 @@ export function PromptQueue() {
       )
   )
   const id = useAcp((state) => activeAcp(state)?.key)
+  // Another device's conversation read from its copy: what's queued waits in the account for that device.
+  const waitsFor = useAcp((state) => {
+    const active = activeAcp(state)
+    return active?.kind === "live" && active.copy ? (active.elsewhere ?? "its computer") : undefined
+  })
   const livePath = useAcp((state) => activeAcp(state)?.threadPath)
   const viewingPath = useThreads(
     (state) => state.opening?.ref.path ?? state.viewing?.ref.path
@@ -106,17 +112,19 @@ export function PromptQueue() {
       className="flex max-h-[min(240px,20dvh)] shrink-0 flex-col overflow-hidden rounded-none border-b border-hairline bg-raised/40"
     >
       <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-label text-faint">
-        <CornerDownRightIcon className="size-3.5" />
-        <span className="font-medium text-muted-foreground">Up next</span>
+        {waitsFor ? <ClockIcon className="size-3.5" /> : <CornerDownRightIcon className="size-3.5" />}
+        <span className="font-medium text-muted-foreground">{waitsFor ? `Waiting for ${waitsFor}` : "Up next"}</span>
         <span>
           {delivery.length} {delivery.length === 1 ? "message" : "messages"}
         </span>
-        <span className="ml-auto truncate">
-          {delivery[0] && "signIn" in delivery[0] && delivery[0].signIn
-            ? "Sends after Resume"
-            : delivery[0]?.status === "held"
-              ? "Paused"
-              : "After this turn"}
+        <span className="ml-auto truncate" data-queue-when>
+          {waitsFor
+            ? `Runs there once ${waitsFor} is back`
+            : delivery[0] && "signIn" in delivery[0] && delivery[0].signIn
+              ? "Sends after Resume"
+              : delivery[0]?.status === "held"
+                ? "Paused"
+                : "After this turn"}
         </span>
       </div>
       <div className="min-h-0 overflow-y-auto">

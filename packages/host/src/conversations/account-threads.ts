@@ -1,4 +1,5 @@
 import type { ListedSession, SessionListings } from "@mako/protocol/thread-listing"
+import type { WaitingMessage } from "@mako/protocol/waiting"
 import type { ThreadListHeard } from "../usage/index.js"
 
 /**
@@ -10,6 +11,8 @@ import type { ThreadListHeard } from "../usage/index.js"
  */
 export class AccountSessions {
   readonly #sessions = new Map<string, ListedSession>()
+  /** Each Session's messages waiting for its owner, as the list and the stream said them last. */
+  readonly #waiting = new Map<string, WaitingMessage[]>()
   /** The stream's number the list stands at; undefined until it's been read. */
   #seq: number | undefined
   readonly #early: ThreadListHeard[] = []
@@ -24,11 +27,23 @@ export class AccountSessions {
     return this.#sessions
   }
 
+  /** A Session's messages waiting for its owner, oldest first; none when nothing waits. */
+  waiting(session: string): readonly WaitingMessage[] {
+    return this.#waiting.get(session) ?? []
+  }
+
+  /** Every Session with messages waiting, and them. */
+  allWaiting(): ReadonlyMap<string, readonly WaitingMessage[]> {
+    return this.#waiting
+  }
+
   /** The whole list, as read: replaces what was held, then applies what the stream said after it. Whether anything changed. */
   listed(listings: SessionListings): boolean {
     const before = this.#snapshot()
     this.#sessions.clear()
     for (const session of listings.sessions) this.#sessions.set(session.session, session)
+    this.#waiting.clear()
+    for (const message of listings.waiting ?? []) this.#waiting.set(message.session, [...(this.#waiting.get(message.session) ?? []), message])
     this.#seq = listings.seq
     const early = this.#early.splice(0).sort((left, right) => left.seq - right.seq)
     for (const heard of early) this.#apply(heard)
@@ -47,6 +62,7 @@ export class AccountSessions {
   /** Forgets the list: signed out, or another account. */
   clear(): void {
     this.#sessions.clear()
+    this.#waiting.clear()
     this.#seq = undefined
     this.#early.length = 0
   }
@@ -58,12 +74,18 @@ export class AccountSessions {
       for (const session of event.sessions) this.#sessions.set(session.session, session)
       return true
     }
+    if (event.type === "messages-waiting") {
+      if (event.messages.length) this.#waiting.set(event.session, event.messages)
+      else this.#waiting.delete(event.session)
+      return true
+    }
     let changed = false
     for (const session of event.sessions) changed = this.#sessions.delete(session) || changed
     return changed
   }
 
   #snapshot(): string {
-    return JSON.stringify([...this.#sessions.values()].sort((left, right) => (left.session < right.session ? -1 : 1)))
+    const waiting = [...this.#waiting].sort(([left], [right]) => (left < right ? -1 : 1))
+    return JSON.stringify([[...this.#sessions.values()].sort((left, right) => (left.session < right.session ? -1 : 1)), waiting])
   }
 }

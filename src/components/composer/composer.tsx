@@ -1054,7 +1054,7 @@ export function Composer() {
         : `Draft a reply — moves this conversation to ${harnessTitle(newHarness)} once it loads`
     : liveOwnsComposer && liveHarness
       ? copyOn
-        ? `Draft a message — it can go once ${copyOn} is back`
+        ? `Message — waits for ${copyOn} to come back`
         : liveStarting
         ? `Queue a message for ${harnessTitle(liveHarness)}`
         : liveRunning

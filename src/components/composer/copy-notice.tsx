@@ -4,8 +4,8 @@ import { activeAcp, useAcp } from "@/state/acp"
 
 /**
  * Above the composer, while the conversation on screen is another device's, read from the copy that device keeps in
- * the account because it's off: what this is, how old it is, and that a message waits for that device. Gone once the
- * device answers again, since its next snapshot carries no copy.
+ * the account because it's off: what this is, how old it is, and that a message sent now waits in the account and runs
+ * there once it's back. Gone once the device answers again, since its next snapshot carries no copy.
  */
 export function CopyNotice() {
   const at = useAcp((state) => {
@@ -21,7 +21,7 @@ export function CopyNotice() {
       data-copy-notice
       className="mb-1.5"
       title={`${device} is off`}
-      description={`You're reading the copy it keeps in your account, from ${copyAge(at)}. Messages and answers go once ${device} is back.`}
+      description={`You're reading the copy it keeps in your account, from ${copyAge(at)}. A message you send waits in your account and runs on ${device} once it's back.`}
     />
   )
 }

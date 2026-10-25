@@ -11,7 +11,10 @@ import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, ty
 import { hostCallReplay } from "../contracts/host-call-policy.js"
 import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, OwnerUnavailableError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { ForkInputSchema } from "../contracts/conversation-control.js"
-import { sessionAfter, type LiveBatch, type LiveSnapshot, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
+import { sessionAfter, type LiveBatch, type LiveRequest, type LiveSnapshot, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
+import type { PromptAttachment } from "../contracts/providers-acp.js"
+import type { QueuedPromptEdit } from "../contracts/live-queue.js"
+import type { WaitingMessage } from "@mako/protocol/waiting"
 import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, type Actor as StoreActor, type SessionId, type ThreadPlacement } from "../contracts/thread-identity.js"
@@ -34,8 +37,10 @@ const KEPT = 50
 const ASLEEP_MS = 15_000
 /** Entries a copy's snapshot holds; a reader asks for earlier ones by the page. */
 const COPY_PAGE = 100
-/** The calls a copy answers: reading the conversation. Anything else needs its device. */
+/** The calls a copy answers: reading the conversation. Anything else needs its device, or waits for it. */
 const COPY_READS = new Set(["mako:live-snapshot", "mako:live-read"])
+/** A message for this Mac's own Session that couldn't be taken yet (the host still starting) is tried again after this. */
+const TAKE_AGAIN_MS = 30_000
 const RETRY_MS = 1_000
 const RETRY_MAX_MS = 30_000
 /** For this long after a wake, a follow tries again this often: the network comes back within a second or two. */
@@ -196,6 +201,12 @@ export type CloudConversationsOptions = {
   copies?: CloudCopies
   /** How long a device found off is read from its copy before it's asked again (`ASLEEP_MS`); a test's is short. */
   asleepMs?: number
+  /**
+   * Takes a message that waited in the account for one of this Mac's own Sessions: admits it here, under its own ID,
+   * as a message the person sent (`mako:live-prompt`). `not-mine` when this Mac doesn't own the Session (it moved; its
+   * owner takes it), `later` when the host can't take one yet.
+   */
+  takeWaiting?(message: WaitingMessage): Promise<"taken" | "not-mine" | "later">
 }
 
 /** Copies another device keeps of its Sessions in the account (`ReadingCopies`), by that device, read here (`HostCatalog.copyPage`). */
@@ -318,6 +329,14 @@ export class CloudConversations {
   readonly #asleep = new Map<string, number>()
   /** The next look at whether a device found off is back, while a window has one of its conversations open. */
   #waking: ReturnType<typeof setTimeout> | undefined
+  /**
+   * How many times each Session's waiting messages changed here: a copy's revision moves with them, so a window, and
+   * the history reader's views, take its snapshot anew rather than one from before.
+   */
+  readonly #waitingChanges = new Map<string, number>()
+  /** Waiting messages being taken here now, by ID: a list heard twice meanwhile takes each once. */
+  readonly #taking = new Set<string>()
+  #takeAgain: ReturnType<typeof setTimeout> | undefined
   /** The windows' reads of copies, paged as a conversation's history is (`LiveHistoryReader`), by `copy:<conversation>`. */
   readonly #copyHistory = new LiveHistoryReader(
     (path, before) => this.#copyThreadPage(path, before),
@@ -440,12 +459,96 @@ export class CloudConversations {
   /** A call for a conversation whose device is off: a read is answered from its copy in the account; anything else is refused, saying why. */
   async #offCall(entry: Entry, channel: string, args: unknown[]): Promise<EncodedValue> {
     const where = entry.summary?.elsewhere ?? "Its computer"
+    if (channel === "mako:live-prompt" || channel === "mako:live-edit-queued") return this.#wait(entry, channel, args, where)
     if (!COPY_READS.has(channel) || !this.#options.copies || !entry.nativeId)
       throw new Error(`${where} is off, so this conversation can't be changed from here until it's back.`)
     if (channel === "mako:live-snapshot") return encodeRuntimeValue(this.#copyHistory.present(await this.#copySnapshot(entry)))
     // SAFETY: the dispatcher parsed this call's arguments with `mako:live-read`'s schema before routing it.
     const [, input] = args as [string, LiveHistoryRead]
     return encodeRuntimeValue(await this.#copyHistory.read(entry.conversationId, input, () => this.#copySnapshot(entry)))
+  }
+
+  /**
+   * A message for a conversation whose device is off: kept by the account until that device takes it, under the
+   * request's own ID, so the device runs it once whichever way it hears of it. Text only: a file attached stays where
+   * it was sent from. Editing or removing a queued one acts on the account's, while it still waits. Windows read the
+   * conversation again, so every one shows it waiting.
+   */
+  async #wait(entry: Entry, channel: string, args: unknown[], where: string): Promise<EncodedValue> {
+    const account = this.#account()
+    const session = entry.summary?.sessionId
+    if (!session || !account.waitMessage || !account.editWaiting || !account.unwaitMessage) throw new Error(`${where} is off, so this conversation can't be changed from here until it's back.`)
+    if (channel === "mako:live-prompt") {
+      // SAFETY: the dispatcher parsed this call's arguments with `mako:live-prompt`'s schema before routing it.
+      const [, requestId, text, attachments] = args as [string, string, string, PromptAttachment[] | undefined]
+      if (attachments?.length) throw new Error(`${where} is off. A message with files can't wait for it: send it once ${where} is back, or without them.`)
+      await account.waitMessage(session, requestId, { conversation: entry.conversationId, text })
+      hostLog("cloud-conversations", "a message waits in the account for another device that's off", { conversationId: entry.conversationId, session, requestId })
+      this.#retold(entry)
+      const request: LiveRequest = { id: requestId, text, attachments: [], status: "queued" }
+      return encodeRuntimeValue(request)
+    }
+    // SAFETY: the dispatcher parsed this call's arguments with `mako:live-edit-queued`'s schema before routing it.
+    const [, edit] = args as [string, QueuedPromptEdit]
+    if (edit.change.kind === "remove") await account.unwaitMessage(session, edit.requestId)
+    else if (edit.change.kind === "edit") await account.editWaiting(session, edit.requestId, edit.expectedText, edit.change.text)
+    // Pausing and resuming a waiting message changes nothing: it waits for its device either way.
+    this.#retold(entry)
+    return encodeRuntimeValue(await this.#copySnapshot(entry))
+  }
+
+  /** Another device changed a Session's waiting messages: a window reading one of its conversations from its copy reads it again. */
+  #retoldWaiting(session: string): void {
+    this.#waitingChanges.set(session, (this.#waitingChanges.get(session) ?? 0) + 1)
+    for (const entry of this.#entries.values())
+      if (entry.summary?.sessionId === session && entry.runtime && (this.#asleep.get(entry.runtime) ?? 0) > Date.now()) this.#retold(entry)
+  }
+
+  /** Windows read a conversation of a device that's off again: its waiting messages changed. */
+  #retold(entry: Entry): void {
+    const session = entry.summary?.sessionId
+    if (session) this.#waitingChanges.set(session, (this.#waitingChanges.get(session) ?? 0) + 1)
+    if (entry.summary) this.#options.emit(encodeRuntimeEvent({ type: "live-listed", summaries: [entry.summary] }))
+  }
+
+  /**
+   * Takes the messages waiting for this Mac's own Sessions: each admitted here under its own ID, which settles a
+   * message taken twice as one, then the account told it was taken. Heard on the account's list, read whole when this
+   * Mac comes back and changed on its stream while it's on. One this Mac no longer owns is its new owner's to take.
+   */
+  #takeWaiting(): void {
+    const take = this.#options.takeWaiting
+    const account = this.#options.account()
+    if (!take || !account?.tookWaiting || !this.#device || this.#closed) return
+    for (const [session, messages] of this.#list.allWaiting()) {
+      const row = this.#list.sessions().get(session)
+      if (row?.runsOn.kind !== "device" || row.runsOn.deviceId !== this.#device) continue
+      for (const message of messages) {
+        if (this.#taking.has(message.id)) continue
+        this.#taking.add(message.id)
+        void (async () => {
+          const outcome = await take(message)
+          if (outcome === "taken") {
+            await account.tookWaiting?.(message.session, message.id)
+            hostLog("cloud-conversations", "a message that waited for this Mac was taken", { session, requestId: message.id, from: message.from })
+          } else if (outcome === "later") this.#takeLater()
+        })()
+          .catch((error: Error) => {
+            hostWarn("cloud-conversations", "a message that waited for this Mac couldn't be taken yet", { session, requestId: message.id, error: error.message })
+            this.#takeLater()
+          })
+          .finally(() => this.#taking.delete(message.id))
+      }
+    }
+  }
+
+  #takeLater(): void {
+    if (this.#takeAgain || this.#closed) return
+    this.#takeAgain = setTimeout(() => {
+      this.#takeAgain = undefined
+      this.#takeWaiting()
+    }, TAKE_AGAIN_MS)
+    this.#takeAgain.unref?.()
   }
 
   /** Where a copy read names a conversation's copy: by the conversation, which says its device and native session. */
@@ -481,14 +584,19 @@ export class CloudConversations {
         status: "ready",
         connection: "hibernated",
       },
-      revision: at,
+      revision: at + (listed?.sessionId ? (this.#waitingChanges.get(listed.sessionId) ?? 0) : 0),
       epoch: `copy-${at}`,
       createdAt: listed?.createdAt ?? entry.createdAt,
       copy: { at },
       base,
       blocks: [],
       permissions: [],
-      requests: [],
+      // What waits in the account for its device, as messages queued for it.
+      requests: (listed?.sessionId ? this.#list.waiting(listed.sessionId) : []).map((message): LiveRequest => {
+        const request: LiveRequest = { id: message.id, text: message.text, attachments: [], status: "queued" }
+        if (message.displayText) request.displayText = message.displayText
+        return request
+      }),
     }
     if (listed?.elsewhere) snapshot.elsewhere = listed.elsewhere
     if (listed?.threadId) snapshot.threadId = listed.threadId
@@ -632,6 +740,7 @@ export class CloudConversations {
   dispose(): void {
     this.#closed = true
     clearTimeout(this.#waking)
+    clearTimeout(this.#takeAgain)
     this.#unlisten?.()
     for (const resume of this.#pauses) resume()
     clearTimeout(this.#saving)
@@ -1140,8 +1249,11 @@ export class CloudConversations {
         this.#list.clear()
         this.#reconcile()
         void this.#readList()
-      } else if (this.#list.heard(heard)) this.#reconcile()
-      else if (!this.#list.known) void this.#readList()
+      } else if (this.#list.heard(heard)) {
+        this.#reconcile()
+        this.#takeWaiting()
+        if (heard.event.type === "messages-waiting") this.#retoldWaiting(heard.event.session)
+      } else if (!this.#list.known) void this.#readList()
     })
     void this.#readList()
   }
@@ -1156,6 +1268,7 @@ export class CloudConversations {
         const [listings, devices] = await Promise.all([account.sessionListings(), account.devices?.().catch(() => undefined)])
         for (const device of devices?.devices ?? []) this.#deviceNames.set(device.id, device.name)
         if (this.#list.listed(listings)) this.#reconcile()
+        this.#takeWaiting()
       } catch (error) {
         hostLog("cloud-conversations", "the account's Threads couldn't be listed; listed again when the account or the network changes", { error: error instanceof Error ? error.message : String(error) })
       }

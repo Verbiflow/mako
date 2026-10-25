@@ -25,6 +25,7 @@ import {
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { Git } from "@mako/git"
 import { CloudConversations, folderRepository, type CloudConversationsOptions, type CloudCopies } from "@mako/host/conversations/cloud-conversations"
+import type { WaitingMessage } from "@mako/protocol/waiting"
 import { cloudRuntimeOf, namedUuid } from "@mako/host/conversations/cloud-moves"
 import { MoveIdSchema } from "@mako/host/contracts/thread-execution"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
@@ -945,7 +946,8 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
   }
   machine.account.sessionListings = async () => ({ sessions: [listed], seq: 1 })
   machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
-  machine.account.onThreadListings = () => () => {}
+  let tell: ((heard: ThreadListHeard | "account-changed") => void) | undefined
+  machine.account.onThreadListings = (listener) => ((tell = listener), () => {})
   // The Studio's copy: 250 entries, written at 21:10.
   const at = Date.parse("2026-10-24T21:10:00.000Z")
   const entries = Array.from({ length: 250 }, (_, n) => ({ id: `e-${n}`, type: "text" as const, text: `answer ${n}` }))
@@ -992,10 +994,36 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
   const page = z.object({ base: z.object({ start: z.number(), entries: z.array(z.object({ id: z.string() }).loose()) }).loose() }).loose().parse(JSON.parse(chunk.data))
   assert.equal(page.base.entries.at(-1)?.id, `e-${snapshot.base!.start - 1}`, "the page before what it holds")
 
-  // A message needs the Studio: refused, saying so, and the Studio isn't asked again for a while.
+  // A message for it waits in the account under its own ID, at once (a Mac isn't woken by being called), and windows
+  // read the conversation again, its message queued for the Studio.
+  const waited: unknown[][] = []
+  let held: WaitingMessage[] = []
+  machine.account.waitMessage = async (session, id, input) => {
+    waited.push(["wait", session, id, input])
+    held = [...held.filter((each) => each.id !== id), { ...input, id, session, from: myDevice!, at: new Date().toISOString() }]
+    return held
+  }
+  machine.account.editWaiting = async (session, id, expectedText, text) => (waited.push(["edit", session, id, expectedText, text]), held)
+  machine.account.unwaitMessage = async (session, id) => (waited.push(["unwait", session, id]), (held = held.filter((each) => each.id !== id)))
+  const requestId = randomUUID()
   const asking = performance.now()
-  await assert.rejects(router.route("mako:live-prompt", [conversation, randomUUID(), "go on", [], undefined]), /Studio is off, so this conversation can't be changed from here until it's back/)
+  const listedBeforeWait = events.filter((event) => event.type === "live-listed").length
+  const sent = await router.route("mako:live-prompt", [conversation, requestId, "Merge it once CI is green", [], undefined])
+  assert.ok(sent.handled)
   assert.ok(performance.now() - asking < 1_000, "at once: a Mac isn't woken by being called")
+  assert.deepEqual(z.object({ id: z.string(), status: z.string() }).loose().parse(decodeRuntimeValue(sent.value)), { id: requestId, text: "Merge it once CI is green", attachments: [], status: "queued" })
+  assert.deepEqual(waited, [["wait", listed.session, requestId, { conversation, text: "Merge it once CI is green" }]], "kept by the account, for the Session, by the conversation the list named")
+  assert.ok(events.filter((event) => event.type === "live-listed").length > listedBeforeWait, "windows read it again")
+  await assert.rejects(router.route("mako:live-prompt", [conversation, randomUUID(), "look", [{ name: "shot.png", mimeType: "image/png", data: "AA==" }], undefined]), /A message with files can't wait for it/)
+  // The account's stream says it waits: the copy's snapshot has it queued. Then it's edited and taken back on the account's.
+  tell?.({ seq: 2, event: { type: "messages-waiting", session: listed.session, messages: held } })
+  const queued = await router.route("mako:live-snapshot", [conversation])
+  assert.ok(queued.handled)
+  const withWaiting = z.object({ requests: z.array(z.object({ id: z.string(), status: z.string() }).loose()) }).loose().parse(decodeRuntimeValue(queued.value))
+  assert.deepEqual(withWaiting.requests.map((each) => [each.id, each.status]), [[requestId, "queued"]])
+  await router.route("mako:live-edit-queued", [conversation, { requestId, expectedText: "Merge it once CI is green", change: { kind: "edit", text: "Merge it once CI is green, then tag it" } }])
+  await router.route("mako:live-edit-queued", [conversation, { requestId, expectedText: "Merge it once CI is green, then tag it", change: { kind: "remove" } }])
+  assert.deepEqual(waited.slice(1), [["edit", listed.session, requestId, "Merge it once CI is green", "Merge it once CI is green, then tag it"], ["unwait", listed.session, requestId]])
 
   // The Studio comes back: a window with its conversation open is told, and reads it there again, live.
   const studioCalls: string[] = []
@@ -1011,6 +1039,50 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
   studioCalls.length = 0
   await router.route("mako:live-snapshot", [conversation])
   assert.deepEqual(studioCalls, ["mako:live-snapshot"], "and read on the Studio, not from its copy")
+})
+
+test("a message that waited in the account for this Mac's own Session is taken here once, under its own ID, and the account told; one for a Session this Mac no longer owns is left for its owner", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const mine = randomUUID()
+  const moved = randomUUID()
+  const row = (session: string, conversation: string): ListedSession => ({
+    session, thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", conversation, harness: "claude", title: "Retry the webhooks", state: "idle",
+    createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:00:00.000Z", generation: 1, runsOn: { kind: "device", deviceId: myDevice! }, listedAt: "2026-10-24T20:00:01.000Z",
+  })
+  const message = (session: string, conversation: string, text: string): WaitingMessage => ({ id: randomUUID(), session, conversation, text, from: "3d0f6c2a-8b1e-4f7a-9c5d-2e1b0a9f8d7c", at: "2026-10-25T09:00:00.000Z" })
+  const first = message(mine, "c-mine", "Merge it once CI is green")
+  const elsewhere = message(moved, "c-moved", "Tag the release")
+  let tell: ((heard: ThreadListHeard | "account-changed") => void) | undefined
+  machine.account.sessionListings = async () => ({ sessions: [row(mine, "c-mine"), row(moved, "c-moved")], seq: 1, waiting: [first, elsewhere] })
+  machine.account.devices = async () => ({ devices: [], current: myDevice! })
+  machine.account.onThreadListings = (listener) => ((tell = listener), () => {})
+  const acked: string[] = []
+  machine.account.tookWaiting = async (_session, id) => void acked.push(id)
+  const taken: string[] = []
+  let release: (() => void) | undefined
+  const held = new Promise<void>((resolve) => (release = resolve))
+  const options: CloudConversationsOptions = {
+    account: () => machine.account, file: join(scratch, "taking", "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY,
+    takeWaiting: async (waiting) => {
+      if (waiting.session === moved) return "not-mine"
+      taken.push(waiting.id)
+      await held
+      return "taken"
+    },
+  }
+  const router = new CloudConversations(options)
+  after(() => router.dispose())
+  await router.start()
+  await until("taken here", () => taken.length === 1)
+  // Heard again while it's being taken (the stream said it too): taken once.
+  tell?.({ seq: 2, event: { type: "messages-waiting", session: mine, messages: [first] } })
+  release?.()
+  await until("the account told", () => acked.length === 1)
+  assert.deepEqual([taken, acked], [[first.id], [first.id]], "taken once, under its own ID, then said")
+  assert.ok(!acked.includes(elsewhere.id), "a Session this Mac no longer owns: its owner takes it")
+  tell?.({ seq: 3, event: { type: "messages-waiting", session: mine, messages: [] } })
+  assert.equal(taken.length, 1)
 })
 
 /** A Session ID for a conversation, the same each time it's asked. */
