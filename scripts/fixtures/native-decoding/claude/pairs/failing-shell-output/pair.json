@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.283"
+    "version": "2.1.310"
   },
   "about": "Run exactly this shell command once, with nothing added before or after it: `cat notes.md missing.md`. Then tell me what it printed and how it exited. A shell command that prints output and an error, then exits non-zero.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/ff723d94-0bf1-4a5e-b14e-1a5c98818854.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/90db8cf0-d5f3-47b6-ad8a-b1de99f8005d.jsonl",
       "known": []
     }
   ]

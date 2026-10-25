@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.283"
+    "version": "2.1.310"
   },
   "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/87867566-d696-4ae3-b3c6-33bf7e397e98.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/8246c0cb-9b57-46f6-89ee-e5f61bff00e6.jsonl",
       "known": []
     }
   ]
