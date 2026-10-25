@@ -151,9 +151,20 @@ function run(name: string, command: string, args: string[], steps: Step[], env: 
   process.stderr.write(result.stderr ?? "")
   const ok = result.status === 0
   const step: Step = { name, ok }
-  if (!ok) step.detail = (result.stderr ?? "").trim().split("\n").slice(-3).join(" ").slice(-400) || `exited with ${result.status ?? result.signal}`
+  if (!ok) step.detail = failureOf(result.stderr ?? "") || `exited with ${result.status ?? result.signal}`
   steps.push(step)
   return ok
+}
+
+/**
+ * What a failed step says went wrong, for its row: every line that names a failure (an assertion's or error's
+ * message, a `✗` line), each once and in order, never the stack under it; the last line only when none names one.
+ */
+export function failureOf(stderr: string): string {
+  const lines = stderr.split("\n").map((line) => line.trim()).filter(Boolean)
+  const named = lines.filter((line) => /^(?:\w*Error\b.*?:|AssertionError|✗ )/.test(line) && !/^\s*at /.test(line))
+  const said = [...new Set(named.map((line) => line.replace(/^AssertionError \[ERR_ASSERTION\]: /, "").replace(/^Error: /, "")))]
+  return (said.length ? said.slice(0, 4).join(" · ") : (lines.at(-1) ?? "")).slice(0, 600)
 }
 
 /** Moves one declaration: tested, and the bundled package's version for a bundled runtime. */

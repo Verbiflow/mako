@@ -183,6 +183,8 @@ interface DeliveryInput {
   history?: Pick<LiveHistoryWindow, "earlierRequests">
   requests?: LiveRequest[]
   pendingPrompts?: PendingPrompt[]
+  /** Read from its device's copy, that device being off: nothing starts here, so every message waits in the queue. */
+  copy?: { at: number }
 }
 interface PromptDelivery {
   starting: PendingPrompt | null
@@ -232,7 +234,7 @@ export function promptDelivery(input: DeliveryInput): PromptDelivery {
     (request) => request.status === "dispatching"
   )
   const canStart =
-    input.session.status === "ready" || input.session.status === "starting"
+    !input.copy && (input.session.status === "ready" || input.session.status === "starting")
   const first = delivering
     ? undefined
     : canStart

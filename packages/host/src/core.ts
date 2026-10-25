@@ -14,6 +14,7 @@ import { heavy } from "./base/heavy-packages.js"
 import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
 import { readPower } from "./base/power.js"
+import { SessionIdSchema } from "./contracts/thread-identity.js"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { cloudUrl } from "./base/build-identity.js"
@@ -442,6 +443,25 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         },
         threads: () => threads.store ?? undefined,
         returning: (cloudThread) => late.cloudReturns?.returning(cloudThread) ?? false,
+        // A message that waited in the account for one of this Mac's Sessions while it was off: sent here now, under
+        // its own ID, through the same call a window's send makes, so it runs once however often it's heard.
+        takeWaiting: async (message) => {
+          const store = threads.store
+          const live = late.conversations?.live
+          if (!store || !live || !catalog.ready()) return "later"
+          const session = SessionIdSchema.safeParse(message.session)
+          if (!session.success) return "not-mine"
+          const execution = store.execution(session.data)
+          if (execution && execution.state !== "here") return "not-mine"
+          if (!live.summaries().some((summary) => summary.session.id === message.conversation)) {
+            // A session a terminal ran, which Mako here hasn't opened: opened as the conversation the list named.
+            const ref = (railRows ??= catalog.rail()).find((row) => row.sessionId === message.session)
+            if (!ref) return "not-mine"
+            await methods.invoke("mako:live-capture", [message.conversation, ref.path])
+          }
+          await methods.invoke("mako:live-prompt", [message.conversation, message.id, message.text, [], undefined])
+          return "taken"
+        },
         // Another device's Session while that device is off: read from the copy it keeps in the account.
         copies: {
           page: async (device, harness, nativeId, before, limit) => {
