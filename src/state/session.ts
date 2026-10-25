@@ -28,7 +28,7 @@ import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
 import { cloudAccountStore, heardAccountEvent } from "@/state/cloud-account"
 import { offerCloudProjects } from "@/state/cloud-projects"
-import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
+import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
 import { createHook, createStore, shallowEqual } from "@/state/store"
@@ -335,7 +335,7 @@ function apply(event: HostEvent) {
     return
   }
   if (event.type === "live-listed") {
-    hydrateLiveSummaries(event.summaries)
+    listLive(event.summaries)
     return
   }
   if (event.type === "live-unlisted") {

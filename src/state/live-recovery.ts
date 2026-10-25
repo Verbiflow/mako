@@ -433,10 +433,53 @@ export function unlistLive(ids: readonly string[]): void {
     toast.info("That conversation left the cloud", { description: "It went back to the computer it came from, or it ended.", duration: ACTION_TOAST_MS })
 }
 
+/**
+ * Conversations the account lists that this window hadn't (another device's in the cloud), or listed again as they
+ * changed: in the rail, unopened. Never selected: one arriving while the person reads something else stays a row.
+ */
+export function listLive(summaries: LiveSummary[]): void {
+  admitLiveSummaries(summaries, false)
+}
+
 export function hydrateLiveSummaries(
   summaries: LiveSummary[],
   reconnect = false
 ): void {
+  admitLiveSummaries(summaries, reconnect)
+  const active = acpStore.get().activeKey
+  if (active && summaries.some((summary) => summary.session.id === active))
+    void hydrateLive(active)
+  if (reconnect) return
+  const requested = globalThis.sessionStorage?.getItem(
+    "mako:reload-conversation"
+  )
+  if (requested && requested !== "new" && !summaries.some((summary) => summary.session.id === requested) && !acpStore.get().activeKey) {
+    // The selected conversation may belong to another host and therefore be
+    // absent from this host's boot list. Its persisted route can restore it.
+    acpStore.set({ activeKey: requested })
+    void hydrateLive(requested).then(() => {
+      if (acpStore.get().activeKey !== requested) return
+      const restored = acpStore.get().conversations[requested]
+      if (restored) threadsStore.set({ composerHarness: restored.harness })
+      else acpStore.set({ activeKey: null })
+    })
+    return
+  }
+  const selected =
+    summaries.find((summary) => summary.session.id === requested) ??
+    summaries.toSorted((a, b) => b.createdAt - a.createdAt)[0]
+  if (selected && requested !== "new" && !acpStore.get().activeKey) {
+    acpStore.set({ activeKey: selected.session.id })
+    threadsStore.set({ composerHarness: selected.session.harness })
+    void hydrateLive(selected.session.id)
+  }
+}
+
+/**
+ * The host's summaries, each listed as a conversation this window holds: new ones unopened, ones it held updated, a
+ * reconnect's read again. Boot and a reconnect select and open after; a listing selects nothing.
+ */
+function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void {
   for (const summary of summaries) {
     const previous = acpStore.get().conversations[summary.session.id]
     if (previous?.hydrated && !reconnect) continue
@@ -495,33 +538,6 @@ export function hydrateLiveSummaries(
     const restored = acpStore.get().conversations[summary.session.id]
     if (restored?.kind === "live")
       syncThreadStatus(restored, "starting", undefined, "hydrate")
-  }
-  const active = acpStore.get().activeKey
-  if (active && summaries.some((summary) => summary.session.id === active))
-    void hydrateLive(active)
-  if (reconnect) return
-  const requested = globalThis.sessionStorage?.getItem(
-    "mako:reload-conversation"
-  )
-  if (requested && requested !== "new" && !summaries.some((summary) => summary.session.id === requested) && !acpStore.get().activeKey) {
-    // The selected conversation may belong to another host and therefore be
-    // absent from this host's boot list. Its persisted route can restore it.
-    acpStore.set({ activeKey: requested })
-    void hydrateLive(requested).then(() => {
-      if (acpStore.get().activeKey !== requested) return
-      const restored = acpStore.get().conversations[requested]
-      if (restored) threadsStore.set({ composerHarness: restored.harness })
-      else acpStore.set({ activeKey: null })
-    })
-    return
-  }
-  const selected =
-    summaries.find((summary) => summary.session.id === requested) ??
-    summaries.toSorted((a, b) => b.createdAt - a.createdAt)[0]
-  if (selected && requested !== "new" && !acpStore.get().activeKey) {
-    acpStore.set({ activeKey: selected.session.id })
-    threadsStore.set({ composerHarness: selected.session.harness })
-    void hydrateLive(selected.session.id)
   }
 }
 
