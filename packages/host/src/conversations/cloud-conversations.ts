@@ -194,6 +194,8 @@ export type CloudConversationsOptions = {
   returning?(cloudThread: string): boolean
   /** The copies other devices keep of their Sessions in the account, read while a device is off. */
   copies?: CloudCopies
+  /** How long a device found off is read from its copy before it's asked again (`ASLEEP_MS`); a test's is short. */
+  asleepMs?: number
 }
 
 /** Copies another device keeps of its Sessions in the account (`ReadingCopies`), by that device, read here (`HostCatalog.copyPage`). */
@@ -314,6 +316,8 @@ export class CloudConversations {
   readonly #capturing = new Map<string, Promise<void>>()
   /** Devices found off (`owner-unavailable`), by runtime, until when their conversations are read from their copies. */
   readonly #asleep = new Map<string, number>()
+  /** The next look at whether a device found off is back, while a window has one of its conversations open. */
+  #waking: ReturnType<typeof setTimeout> | undefined
   /** The windows' reads of copies, paged as a conversation's history is (`LiveHistoryReader`), by `copy:<conversation>`. */
   readonly #copyHistory = new LiveHistoryReader(
     (path, before) => this.#copyThreadPage(path, before),
@@ -387,9 +391,49 @@ export class CloudConversations {
     } catch (error) {
       // Its device is off (the cloud refused the call unapplied): read from its copy for a while, and say so.
       if (!(error instanceof OwnerUnavailableError) || !entry.runtime) throw error
-      this.#asleep.set(entry.runtime, Date.now() + ASLEEP_MS)
+      this.#asleep.set(entry.runtime, Date.now() + (this.#options.asleepMs ?? ASLEEP_MS))
       hostLog("cloud-conversations", "another device is off; its conversation is read from its copy", { conversationId: entry.conversationId, runtime: entry.runtime })
+      this.#watchForWaking()
       return { handled: true, value: await this.#offCall(entry, channel, args) }
+    }
+  }
+
+  /**
+   * While a window has open a conversation of a device found off, asks that device every `ASLEEP_MS` whether it's back,
+   * with the smallest read there is (`mako:live-state`). Once it answers, its conversations are listed again, so a
+   * window reads the one on screen anew, live, and leaves its copy; until then it stays off. Nothing is asked of a
+   * device whose conversations nobody has open.
+   */
+  #watchForWaking(): void {
+    if (this.#waking || this.#closed) return
+    this.#waking = setTimeout(() => {
+      this.#waking = undefined
+      void this.#lookForWaking().finally(() => {
+        if (this.#asleep.size) this.#watchForWaking()
+      })
+    }, this.#options.asleepMs ?? ASLEEP_MS)
+    this.#waking.unref?.()
+  }
+
+  async #lookForWaking(): Promise<void> {
+    for (const runtime of [...this.#asleep.keys()]) {
+      const open = [...this.#entries.values()].filter((entry) => entry.runtime === runtime && this.#following.has(entry.threadId))
+      const asked = open[0]
+      if (!asked) {
+        this.#asleep.delete(runtime)
+        continue
+      }
+      try {
+        await this.#call(asked, "mako:live-state", [asked.conversationId])
+      } catch (error) {
+        if (error instanceof OwnerUnavailableError) this.#asleep.set(runtime, Date.now() + (this.#options.asleepMs ?? ASLEEP_MS))
+        else hostWarn("cloud-conversations", "couldn't ask whether another device is back", { runtime, error: error instanceof Error ? error.message : String(error) })
+        continue
+      }
+      this.#asleep.delete(runtime)
+      const summaries = open.flatMap((entry) => (entry.summary ? [entry.summary] : []))
+      hostLog("cloud-conversations", "another device is back; its conversations are read there again", { runtime, open: open.length })
+      if (summaries.length) this.#options.emit(encodeRuntimeEvent({ type: "live-listed", summaries }))
     }
   }
 
@@ -587,6 +631,7 @@ export class CloudConversations {
 
   dispose(): void {
     this.#closed = true
+    clearTimeout(this.#waking)
     this.#unlisten?.()
     for (const resume of this.#pauses) resume()
     clearTimeout(this.#saving)

@@ -179,11 +179,22 @@ async function checkWindow() {
     assert.match(notice, /once Studio is back/, "and that a message waits for it")
     await until(`document.body.innerText.includes('Waiting on CI.')`, "the copy's history on screen")
     assert.equal(await evaluate(`document.querySelector('textarea')?.getAttribute('placeholder')`), "Draft a message — it can go once Studio is back", "the composer says when a message can go")
+    // Its panels ask nothing of the Studio: each says it's off, once, instead of waiting on it.
+    await until(`Boolean(document.querySelector('[data-device-off]'))`, "the panel saying the Studio is off")
+    assert.match(await evaluate(`document.querySelector('[data-device-off]').innerText`), /Studio is off[\s\S]*once Studio is back/)
     // The pointer off the rail, so no row's tip covers the pictures.
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 40 })
     await settle()
     await both("read-from-copy", ["[data-copy-notice]", "[data-thread-row]"])
+    await both("read-from-copy-panel", ["[data-device-off]"])
     await capture("read-from-copy-window")
+
+    // The Studio is back: the conversation is read there again, live, and the notice and the panels' line go.
+    await evaluate(`import('/src/state/live-recovery.ts').then(({ applyLiveSnapshot }) => (applyLiveSnapshot(${JSON.stringify({ ...copySnapshot, copy: undefined, epoch: "studio-live", revision: 1 })}), true))`)
+    await until(`!document.querySelector('[data-copy-notice]') && !document.querySelector('[data-device-off]')`, "the copy's notice and panel gone")
+    assert.notEqual(await evaluate(`document.querySelector('textarea')?.getAttribute('placeholder')`), "Draft a message — it can go once Studio is back")
+    await settle()
+    await capture("studio-back-window")
 
     // 2. It finished there: the row says so as the list changes.
     await hostEvent({ type: "live-listed", summaries: [listed("ready")] })
