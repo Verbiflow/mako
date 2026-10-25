@@ -1,4 +1,4 @@
-import { HarnessIcon } from "@/components/ui/provider-icon"
+import { recoveryGlyph } from "@/components/transcript/recovery-glyph"
 import type { ComposerNotice, ComposerNoticeAction } from "@/extend/notices"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { activeLiveAcp, useAcp } from "@/state/acp"
@@ -46,13 +46,20 @@ export function useFailureNotice(): ComposerNotice | null {
     const at = recovery.primary.at
     actions.push({ label: recovery.primary.label, primary: true, onClick: () => void holdUntil(live.key, latest.id, at) })
   }
-  actions.push({ label: "Show", onClick: () => revealFailure(key) })
+  const glyph = recoveryGlyph(recovery)
+  const Glyph = glyph.icon
+  // Which message: its words, since an earlier one may say the same thing on screen.
+  const words = (latest.displayText ?? latest.text).replace(/\s+/g, " ").trim()
+  const quoted = words ? `“${words.length > 48 ? `${words.slice(0, 47).trimEnd()}…` : words}”` : "Your last message"
+  actions.push({ label: "Show", title: `Show ${quoted} in the conversation`, onClick: () => revealFailure(key) })
   return {
     id: `failure:${key}`,
     tone: recovery.tone,
-    icon: <HarnessIcon harness={live.harness} />,
-    title: recovery.description || latest.status !== "failed" ? recovery.title : "Message failed",
-    description: recovery.description ?? (latest.status === "failed" ? recovery.title : undefined),
+    icon: <Glyph className={glyph.className} />,
+    title: recovery.title,
+    // The reset is on the button; the line names the message.
+    description: quoted,
+    detail: recovery.guidance || recovery.description ? <p>{[recovery.description && `The limit ${recovery.description}.`, recovery.guidance].filter(Boolean).join(" ")}</p> : undefined,
     actions,
     onDismiss: () => setPref("dismissedRecoveryRequests", { ...prefsStore.get().dismissedRecoveryRequests, [key]: latest.status }),
     dismissLabel: "Dismiss",

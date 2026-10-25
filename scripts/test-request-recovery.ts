@@ -35,7 +35,9 @@ for (const kind of PROVIDER_FAILURE_KINDS) {
   assert.ok(recovery.title.length > 0 && recovery.title.length <= 42, `${kind}: a headline, not a paragraph`)
 }
 assert.deepEqual(requestRecovery(failed("network", "not-accepted"), context).primary, { kind: "resend", label: "Send again" })
-assert.deepEqual(requestRecovery(failed("network", "accepted"), context).primary, { kind: "resend", label: "Send another copy" }, "the agent got it: a repeat is another copy")
+assert.deepEqual(requestRecovery(failed("network", "accepted"), context).primary, { kind: "continue", reason: "connection-lost" }, "the agent got it and only the connection dropped: its work stands, so it goes on")
+assert.ok(requestRecovery(failed("network", "accepted"), context).more.some((action) => action.kind === "resend" && action.label === "Send another copy"), "a copy stays one click away")
+assert.deepEqual(requestRecovery(failed("provider-unavailable", "accepted"), context).primary, { kind: "resend", label: "Send another copy" }, "the agent got it: a repeat is another copy")
 assert.deepEqual(requestRecovery(failed("network"), context).primary, { kind: "resend", label: "Send another copy" }, "no receipt: a repeat is another copy")
 assert.match(requestRecovery(failed("network", "accepted"), context).delivery, /received this message/)
 assert.equal(requestRecovery(failed("auth"), context).primary?.kind, "sign-in")
@@ -52,6 +54,27 @@ const uncertain = requestRecovery({ ...failed(undefined), status: "uncertain" },
 assert.equal(uncertain.primary?.kind, "restore", "an unconfirmed message is restored, never repeated by Mako")
 assert.ok(![uncertain.primary, ...uncertain.more].some((action) => action?.kind === "resend"))
 assert.equal(recoveryLabel({ kind: "compact" }), "Compact and retry")
+
+// One sentence under the title: what happened to the message and what's safe, by what the evidence settles.
+const say = (request: LiveRequest, extra = {}) => requestRecovery(request, { ...context, ...extra }).guidance ?? ""
+assert.equal(say(failed("network", "not-accepted")), "It never reached Claude Code, so sending it again is safe.")
+assert.equal(say(failed("network", "accepted")), "Claude Code got it before the connection dropped; continue the turn rather than sending a copy.")
+assert.equal(say(failed("network")), "Mako can't tell whether Claude Code got it; check the conversation before sending a copy.")
+assert.equal(say(failed("provider-unavailable", "accepted")), "Claude Code got it before its service failed; check what it did before sending a copy.")
+assert.match(say({ ...failed(undefined), status: "uncertain" }), /^Mako can't tell whether Claude Code got it/)
+assert.match(say(failed("context-exhausted"), { canCompact: true }), /^Compacting the conversation makes room for Claude Code/)
+assert.match(say(failed("context-exhausted")), /^A new thread with this message gives Claude Code room/)
+assert.match(say(failed("context-exhausted"), { compacted: true }), /compacted now/)
+assert.match(say(failed("transcript-rejected")), /sending again won't help/)
+for (const kind of PROVIDER_FAILURE_KINDS) {
+  for (const evidence of ["accepted", "not-accepted", undefined] as const) {
+    const words = say(failed(kind, evidence))
+    assert.ok(words, `${kind}: says what to do`)
+    assert.doesNotMatch(words, /[Rr]eview .* before|another attempt/, `${kind}: no review-before boilerplate`)
+    assert.equal(words.split(/(?<=[.!?])\s/).length, 1, `${kind}: one sentence`)
+    assert.ok(/Claude Code|Mako|You|It never|This thread|The conversation/.test(words), `${kind}: names who has it`)
+  }
+}
 
 // A usage limit with a known reset: a wait in the warning tone, and a send held until then.
 const reset = Date.UTC(2026, 9, 25, 15, 40)

@@ -69,7 +69,7 @@ export function describeTransferRecovery(
       if (failure?.kind === "missing-folder") return { title: failure.title, guidance: failure.guidance, retryLabel: undefined }
       return {
         title: state.kind === "uncertain" ? `Switch to ${provider} is unconfirmed` : `Could not switch to ${provider}`,
-        guidance: `${failure ? failure.guidance + " " : ""}Review the conversation before trying again. A new switch attempt can repeat work.`,
+        guidance: `${failure ? failure.guidance + " " : ""}Trying the switch again can repeat work ${provider} already did.`,
         retryLabel: (failure?.retriable ?? true) ? "Try switch again" : undefined,
       }
     }

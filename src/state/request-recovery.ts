@@ -9,6 +9,8 @@ import { turnStopLabel, type TurnStop } from "@/state/prompt-delivery"
 export type RecoveryAction =
   /** Send the same words and attachments again: "Send again" when the agent never got them, "Send another copy" otherwise. */
   | { kind: "resend"; label: string }
+  /** Ask the agent to go on from where it was: it got the message and its work so far stands. */
+  | { kind: "continue"; reason: InterruptionReason }
   /** Send them again, held until the usage limit resets (`LiveRequest.wake`). */
   | { kind: "resume-at"; at: number; label: string }
   /** Tell the person when the limit resets, without sending anything. */
@@ -79,7 +81,6 @@ export function requestRecovery(
 ): RequestRecovery {
   const now = context.now ?? Date.now()
   const recovery = describePromptRecovery(request, context.provider, context.compacted)
-  const failure = recovery.failure
   const failed = request.status === "failed"
   const reset = usageLimitReset(request, context.resetAt, now)
   const resend: RecoveryAction | undefined = recovery.resendLabel ? { kind: "resend", label: recovery.resendLabel } : undefined
@@ -90,8 +91,13 @@ export function requestRecovery(
         ? { kind: "settings", section: "agents" }
         : undefined
 
+  const evidence = deliveryKnown(request)
+  // The agent got it and the connection only dropped: its work stands, so it goes on rather than starting over.
+  const carryOn: RecoveryAction | undefined = failed && request.failure === "network" && evidence === "received" ? { kind: "continue", reason: "connection-lost" } : undefined
+
   let primary: RecoveryAction | undefined
-  if (reset !== undefined) primary = { kind: "resume-at", at: reset, label: `${request.nativeDelivery?.evidence.kind === "not-accepted" ? "Resume" : "Send a copy"} at ${clockText(reset, now)}` }
+  if (reset !== undefined) primary = { kind: "resume-at", at: reset, label: `${evidence === "never" ? "Resume" : "Send a copy"} at ${clockText(reset, now)}` }
+  else if (carryOn) primary = carryOn
   else if (failed && request.failure === "auth") primary = { kind: "sign-in" }
   else if (failed && request.failure === "context-exhausted") primary = resend ?? (context.canCompact ? { kind: "compact" } : fresh)
   else if (failed && request.failure === "transcript-rejected") primary = fresh
@@ -110,19 +116,103 @@ export function requestRecovery(
   ]
   const more = candidates.filter((action): action is RecoveryAction => action !== undefined && !sameAction(action, primary))
 
-  const stopped = request.interruption?.reason
   return {
     title: reset !== undefined ? "Usage limit reached" : recovery.title,
     description: reset !== undefined ? `resets ${clockText(reset, now)}` : undefined,
-    guidance: reset !== undefined
-      ? "Mako can send it again when the limit resets."
-      : failure?.guidance
-        ?? (request.status === "uncertain" ? "Check the conversation before sending it again."
-          : stopped ? `${turnStopLabel(stopped, context.provider)}.` : undefined),
+    guidance: recoveryGuidance(request, evidence, { ...context, compacted: context.compacted, reset: reset !== undefined }),
     tone: reset !== undefined || request.failure === "rate-limited" || request.status !== "failed" ? "caution" : "danger",
     delivery: recovery.delivery,
     primary,
     more,
+  }
+}
+
+/** What the delivery evidence settles: the agent never got it, got it, or Mako can't tell. */
+type Delivered = "never" | "received" | "unknown"
+
+function deliveryKnown(request: Pick<LiveRequest, "nativeDelivery">): Delivered {
+  const kind = request.nativeDelivery?.evidence.kind
+  return kind === "not-accepted" ? "never" : kind === "accepted" ? "received" : "unknown"
+}
+
+/** What cut a turn the agent had begun short, as the end of "… got it before". */
+function cause(failure: LiveRequest["failure"]): string {
+  switch (failure) {
+    case "network":
+      return "the connection dropped"
+    case "provider-unavailable":
+      return "its service failed"
+    case "rate-limited":
+      return "it ran out of capacity"
+    default:
+      return "the turn ended"
+  }
+}
+
+/**
+ * The row's one sentence under its title: what happened to the message and
+ * what is safe to do next, from the failure kind and what the delivery
+ * evidence settles. The full delivery sentence and the provider's words stay
+ * in Details.
+ */
+function recoveryGuidance(
+  request: Pick<LiveRequest, "status" | "failure" | "interruption">,
+  delivered: Delivered,
+  context: RecoveryContext & { reset: boolean }
+): string | undefined {
+  const agent = context.provider
+  const safe = delivered === "never"
+    ? `It never reached ${agent}, so sending it again is safe.`
+    : delivered === "received"
+      ? `${agent} got it before ${cause(request.failure)}; check what it did before sending a copy.`
+      : `Mako can't tell whether ${agent} got it; check the conversation before sending a copy.`
+  if (request.status === "uncertain")
+    return delivered === "received"
+      ? `${agent} got it, but Mako can't tell whether it finished; check the conversation before sending a copy.`
+      : `Mako can't tell whether ${agent} got it; check the conversation before sending a copy.`
+  if (request.status === "interrupted") {
+    const reason = request.interruption?.reason ?? "stopped"
+    return reason === "stopped"
+      ? "You stopped it before it was sent, so sending it again is safe."
+      : `${turnStopLabel(reason, agent)} before it was sent, so sending it again is safe.`
+  }
+  if (context.reset)
+    return delivered === "never" ? `It never reached ${agent}; Mako can send it when the limit resets.` : `${agent} stopped on its usage limit; Mako can send a copy when the limit resets.`
+  switch (request.failure) {
+    case "network":
+      return delivered === "received" ? `${agent} got it before the connection dropped; continue the turn rather than sending a copy.` : safe
+    case "rate-limited":
+      return delivered === "never" ? `${agent} is over capacity and never got it, so sending it again in a little while is safe.` : safe
+    case "provider-unavailable":
+      return delivered === "never" ? `${agent}'s service failed before it got this, so sending it again is safe.` : safe
+    case "launch-stalled":
+      return `${agent} went quiet while starting, often on a slow MCP server; it never got the message, so sending it again is safe.`
+    case "auth":
+      return delivered === "received" ? `${agent} signed out after it got this; sign in again, then continue the turn.` : `${agent} is signed out; sign in again, then send it.`
+    case "context-exhausted":
+      return context.compacted
+        ? "The conversation is compacted now, so the message may fit."
+        : context.canCompact
+          ? `Compacting the conversation makes room for ${agent} to take it again.`
+          : `A new thread with this message gives ${agent} room to start over.`
+    case "transcript-rejected":
+      return `${agent}'s model refuses this session's history, so sending again won't help; a new thread starts clean and this one stays readable.`
+    case "plan":
+      return `Pick a model the plan covers, or another ${agent} account, in Settings › Agents.`
+    case "wrong-account":
+      return `${agent} is signed in as another account than this session's, so nothing was sent; fix it in Settings › Agents.`
+    case "launch-failed":
+      return `${agent} wouldn't start, so nothing was sent; what it said is under Details.`
+    case "missing-folder":
+      return `This thread's folder is gone, so ${agent} can't start here; restore it, or copy the message to a thread in a folder that exists.`
+    case "transport-limit":
+      return `Mako couldn't read a response this large from ${agent}; the message is kept, and an updated Mako can reopen the session.`
+    case "resume-failed":
+      return `Mako couldn't reopen this ${agent} session; the transcript and your message are kept, and a new thread can carry on.`
+    case "rejected-input":
+      return `${agent} refused the message as sent; change its text, attachments or model, then send it again.`
+    default:
+      return safe
   }
 }
 
@@ -136,6 +226,8 @@ export function recoveryLabel(action: RecoveryAction): string {
     case "resend":
     case "resume-at":
       return action.label
+    case "continue":
+      return "Continue turn"
     case "remind-at":
       return "Notify me at reset"
     case "sign-in":
@@ -173,7 +265,9 @@ export function composerResume(
   if (!newest) return null
   const stop = stops.get(newest.id)
   if (stop?.continuable) return { kind: "continue", reason: stop.reason, label: "Continue turn" }
-  if (newest.status !== "failed" || usageLimitReset(newest, context.resetAt, context.now) !== undefined) return null
-  const label = describePromptRecovery(newest, context.provider, context.compacted).resendLabel
-  return label ? { kind: "resend", request: newest, label } : null
+  if (newest.status !== "failed") return null
+  // The same choice the failed row makes its button: one way to pick the turn up, said in two places.
+  const primary = requestRecovery(newest, context).primary
+  if (primary?.kind === "continue") return { kind: "continue", reason: primary.reason, label: "Continue turn" }
+  return primary?.kind === "resend" ? { kind: "resend", request: newest, label: primary.label } : null
 }

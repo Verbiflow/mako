@@ -1,6 +1,7 @@
 import { useContext, useEffect, useRef, useState } from "react"
 import { FailedRequestsContext } from "./failed-requests"
-import { ChevronRightIcon, CircleAlertIcon, ClockIcon, MoreHorizontalIcon, TriangleAlertIcon } from "lucide-react"
+import { ChevronRightIcon, CircleAlertIcon, MoreHorizontalIcon } from "lucide-react"
+import { recoveryGlyph } from "./recovery-glyph"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
 import { Collapse } from "@/components/ui/collapse"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
@@ -9,7 +10,7 @@ import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import type { LiveRequest } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { acp, acpStore, useAcp } from "@/state/acp"
-import { holdUntil, sendTo } from "@/state/acp-queue"
+import { continueTurn, holdUntil, sendTo } from "@/state/acp-queue"
 import { failureKey, noteFailureVisible } from "@/state/failure-visibility"
 import { remindAtReset, useLimitReset } from "@/state/limit-reset"
 import { recoveryLabel, requestRecovery, type RecoveryAction } from "@/state/request-recovery"
@@ -150,7 +151,8 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
     }
     setBusy(action.kind)
     const settled =
-      action.kind === "resend" ? await sendTo(conversationId, request.text, request.attachments)
+      action.kind === "continue" ? await continueTurn(conversationId, action.reason)
+        : action.kind === "resend" ? await sendTo(conversationId, request.text, request.attachments)
         : action.kind === "resume-at" ? await holdUntil(conversationId, request.id, action.at)
           : action.kind === "fresh" ? await acp.recoverFresh(conversationId, request.id)
             : await compactAndRetry(conversationId, request)
@@ -164,7 +166,8 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
         : recoveryLabel(action)
   // A row whose message went again says so instead of offering it twice.
   const primary = followed?.kind === "waiting" || (followed?.kind === "answered" && recovery.primary?.kind !== "restore") ? undefined : recovery.primary
-  const Glyph = recovery.description ? ClockIcon : recovery.tone === "danger" ? CircleAlertIcon : TriangleAlertIcon
+  const glyph = recoveryGlyph(recovery)
+  const Glyph = glyph.icon
   const evidence = request.nativeDelivery?.evidence.kind ?? "unknown"
 
   return (
@@ -179,7 +182,7 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
       data-failure-tone={recovery.tone}
       className={cn("flex items-start gap-2 text-ui", !compact && "animate-enter")}
     >
-      <Glyph aria-hidden className={cn("mt-[3px] size-3.5 shrink-0", recovery.tone === "danger" ? "text-negative" : "text-caution")} />
+      <Glyph aria-hidden className={cn("mt-[3px] size-3.5 shrink-0", glyph.className)} />
       <div className="min-w-0 flex-1">
         <p className="min-w-0 text-foreground">
           {recovery.title}
@@ -198,7 +201,7 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
             <button
               type="button"
               data-recovery-primary={primary.kind}
-              disabled={busy !== null || ((primary.kind === "resend" || primary.kind === "compact") && !idle) || done === primary.kind}
+              disabled={busy !== null || ((primary.kind === "resend" || primary.kind === "compact" || primary.kind === "continue") && !idle) || done === primary.kind}
               onClick={() => void run(primary)}
               className="pressable h-6 rounded-md bg-fill-selected px-2 text-label font-medium text-foreground transition-colors duration-100 hover:bg-foreground/15 disabled:opacity-45"
             >
@@ -250,6 +253,8 @@ function busyLabel(action: RecoveryAction): string {
   switch (action.kind) {
     case "resend":
       return "Sending…"
+    case "continue":
+      return "Continuing…"
     case "compact":
       return "Compacting…"
     case "fresh":
@@ -263,6 +268,8 @@ function doneLabel(action: RecoveryAction): string {
   switch (action.kind) {
     case "resend":
       return "Sent again"
+    case "continue":
+      return "Continued"
     case "resume-at":
       return "Waiting for reset"
     case "remind-at":

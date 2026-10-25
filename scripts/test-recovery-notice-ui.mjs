@@ -417,13 +417,13 @@ async function checkWindow() {
       return
     }
     if (process.env.MAKO_RECOVERY_DELIVERY) {
-      const update = async (kind, connected = false, status = 'failed', sessionStatus = 'failed') => evaluate(`(async()=>{
+      const update = async (kind, connected = false, status = 'failed', sessionStatus = 'failed', failure = 'network') => evaluate(`(async()=>{
         const {acpStore}=await import('/src/state/acp-state.ts');
         const s=acpStore.get(),live=s.conversations[s.activeKey];
         const evidence=${JSON.stringify(kind)};
         acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...live,
           session:{...live.session,status:${JSON.stringify(sessionStatus)},connection:${JSON.stringify(connected ? 'connected' : 'disconnected')}},
-          requests:live.requests.map((request,index)=> index===live.requests.length-1 ? {...request,status:${JSON.stringify(status)},failure:'network',error:'Connection ended.',
+          requests:live.requests.map((request,index)=> index===live.requests.length-1 ? {...request,status:${JSON.stringify(status)},failure:${JSON.stringify(failure)},error:'Connection ended.',
             nativeDelivery:evidence ? {attemptId:'11111111-1111-4111-8111-111111111111',bindingId:'fixture',ownerEpoch:'fixture',evidence:evidence==='accepted'?{kind:evidence,source:'native-response'}:evidence==='not-accepted'?{kind:evidence,source:'preflight',reason:'Not connected'}:{kind:evidence,reason:'Lost response'}} : undefined} : request)
         }}});return true})()`)
       const button = "document.querySelector('[data-failure-row=\"newest\"] [data-recovery-primary]')"
@@ -442,9 +442,11 @@ async function checkWindow() {
         await update('accepted')
         await until("Boolean(document.querySelector('[data-delivery-evidence=accepted]'))")
         assert.ok(await evaluate("document.querySelector('[data-delivery-evidence]').textContent.includes('agent received')"))
-        assert.equal(await evaluate(`${button}.textContent`),'Send another copy')
+        // It got the message and only the connection dropped: the row goes on with the turn, a copy waits in its menu.
+        await until(`${button}.textContent==='Continue turn'`)
         await capture(harness+'-accepted.png')
-        await update('accepted',true,'failed','running')
+        await update('accepted',true,'failed','running','provider-unavailable')
+        await until(`${button}.textContent==='Send another copy'`)
         assert.equal(await evaluate(`${button}.disabled`),true,'Active session cannot resend')
         await update('not-accepted')
         await until("Boolean(document.querySelector('[data-delivery-evidence=not-accepted]'))")
@@ -457,7 +459,7 @@ async function checkWindow() {
         await until(`${row}.textContent.includes('Message outcome is unconfirmed')`)
       }
       await seed('codex','explicit-copy')
-      await update('accepted',true,'failed','ready')
+      await update('accepted',true,'failed','ready','provider-unavailable')
       const copy = "document.querySelector('[data-failure-row=\"explicit-copy\"] [data-recovery-primary]')"
       await until(`${copy}?.disabled===false`)
       await evaluate("window.__recoverySends=[];window.mako.livePrompt=async(...args)=>{window.__recoverySends.push(args)};true")
