@@ -602,6 +602,123 @@ export function grokCost(spend: GrokSpend): number | undefined {
   return spend.costUsdTicks === null || spend.costUsdTicks === undefined ? undefined : spend.costUsdTicks / GROK_TICKS_PER_USD
 }
 
+/**
+ * The spend of a parent's subagents that Grok's count of the parent's turns
+ * leaves out, checked against its own ledger (`usage.json`) on grok 1.0.46 and
+ * 1.0.70. A subagent's model calls made while its parent's turn runs are in
+ * that turn's `turn_completed`. One that finishes while the parent is idle
+ * says it will wake it (`subagent_finished` with `will_wake`), and its turns
+ * since the parent's last turn ended are in none of the parent's: Grok's
+ * ledger counts them in the parent's next turn, the one the report wakes. So
+ * does every reader of Mako's, live, replayed, saved and scanned. A session
+ * closed before that turn counts them nowhere, as Grok's ledger doesn't.
+ * `T` is one subagent turn's spend as the reader counts it.
+ */
+export class GrokWokenSpend<T> {
+  /** Each subagent's turns heard since the parent's last turn ended. */
+  private readonly held = new Map<string, T[]>()
+  private woken: T[]
+
+  constructor(woken: readonly T[] = []) {
+    this.woken = [...woken]
+  }
+
+  /** A subagent's turn ended, heard on its parent's wire. */
+  childTurn(child: string, spend: T): void {
+    this.held.set(child, [...this.held.get(child) ?? [], spend])
+  }
+
+  /** A subagent finished; one that wakes its parent counts the turns held for it, or `turns`, read from its own session. */
+  finished(child: string, wakes: boolean, turns?: readonly T[]): void {
+    const held = this.held.get(child) ?? []
+    this.held.delete(child)
+    if (wakes) this.woken.push(...turns ?? held)
+  }
+
+  /** The parent's own turn ended: the subagent turns it ran beside are in its count, and those that woke it count with it. */
+  parentTurn(): T[] {
+    this.held.clear()
+    const woken = this.woken
+    this.woken = []
+    return woken
+  }
+
+  /** What waits for the parent's next turn. */
+  get pending(): readonly T[] {
+    return this.woken
+  }
+}
+
+/** The subagent whose finish wakes its parent: `subagent_finished` with `will_wake`, by its session's id. */
+export function grokWakingChild(update: z.core.util.JSONType | undefined): string | undefined {
+  const finished = GrokWakingFinish.safeParse(update).data
+  return finished?.will_wake ? finished.child_session_id ?? finished.subagent_id : undefined
+}
+
+const GrokWakingFinish = z.object({ sessionUpdate: z.literal("subagent_finished"), subagent_id: z.string(), child_session_id: z.string().nullish(), will_wake: z.boolean().nullish() })
+
+/**
+ * The `turn_completed` records in a Grok session's `updates.jsonl` text that
+ * ended after `after` and by `until` (epoch ms; either open), with when each
+ * ended. A resumed subagent's file repeats its earlier turns, stamped when it
+ * resumed; the parent's turns since then hold those.
+ */
+export function grokTurnsBetween(text: string, session: string, after: number | undefined, until: number | undefined): GrokTurnRecord[] {
+  const turns: GrokTurnRecord[] = []
+  for (const line of text.split("\n")) {
+    if (!line.includes('"turn_completed"')) continue
+    const record = GrokTurnLine.safeParse(line).data
+    if (!record || record.params.sessionId !== session) continue
+    const at = lineMillis(record.timestamp, record.params._meta?.agentTimestampMs ?? undefined)
+    if (at === undefined || (after !== undefined && at <= after) || (until !== undefined && at > until)) continue
+    turns.push({ usage: record.params.update.usage, at, ...record.params.update.prompt_id && { prompt: record.params.update.prompt_id } })
+  }
+  return turns
+}
+
+/** A turn of a Grok session as `grokTurnsBetween` reads it: its spend, when it ended (epoch ms), and its prompt's id. */
+export interface GrokTurnRecord {
+  usage: GrokTurnUsage
+  at: number
+  prompt?: string
+}
+
+/** When a line of a Grok session's `updates.jsonl` was written, in epoch ms: its `_meta.agentTimestampMs`, else its `timestamp` in seconds. */
+function lineMillis(timestamp: number | undefined, agentTimestampMs: number | undefined): number | undefined {
+  if (agentTimestampMs !== undefined) return agentTimestampMs
+  return timestamp === undefined ? undefined : timestamp < 10_000_000_000 ? timestamp * 1000 : timestamp
+}
+
+const LineSeconds = z.number().positive().optional().catch(undefined)
+const LineMeta = z.object({ agentTimestampMs: z.number().optional().catch(undefined) }).loose().nullish().catch(undefined)
+const GrokLineTime = z.object({ timestamp: LineSeconds, params: z.object({ _meta: LineMeta }).loose().optional().catch(undefined) }).loose()
+
+/** When a line of a Grok session's `updates.jsonl` was written (`lineMillis`), from the line as JSON. */
+export function grokLineMillis(line: z.core.util.JSONType | undefined): number | undefined {
+  const time = GrokLineTime.safeParse(line).data
+  return time && lineMillis(time.timestamp, time.params?._meta?.agentTimestampMs ?? undefined)
+}
+
+/** A line's text as JSON; text that isn't JSON fails the parse. */
+const JsonLine = z.string().transform((text, context) => {
+  try {
+    const value: unknown = JSON.parse(text)
+    return value
+  } catch {
+    context.addIssue({ code: "custom", message: "not JSON" })
+    return z.NEVER
+  }
+})
+
+const GrokTurnLine = JsonLine.pipe(z.object({
+  timestamp: LineSeconds,
+  params: z.object({
+    sessionId: z.string(),
+    update: z.object({ sessionUpdate: z.literal("turn_completed"), usage: GrokTurnUsage, prompt_id: z.string().optional() }),
+    _meta: LineMeta,
+  }),
+}))
+
 /** One model call, from `response_completed`'s `usage`, Anthropic-style: `input_tokens` leaves out what the cache supplied. */
 export const GrokCallUsage = z.object({
   input_tokens: tokenCount,

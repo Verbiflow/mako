@@ -745,10 +745,15 @@ same session wrote, and each known difference with its reason;
 --write` records them from the real CLI, sealed against
 `scripts/scripted-model.ts`, so no account is used. What only the harness's
 own model drives (a turn it starts after its background work settles) is
-recorded from a real session (`scripts/probe-provider-turn.mjs`) and kept
-with `--capture <capture> --store <store> --project <folder> --version
-<cli>`, which keeps only that session's records and leaves out the
-person's setup (MCP servers, hooks, commands). A difference is fixed on
+recorded from a real session (`scripts/probe-provider-turn.mjs`, with
+`--scratch <dir>` in a scratch home holding the harness's sign-in without
+what renews it, the build to record first on `PATH`) and kept with
+`--capture <capture> --store <store> --project <folder> --home <dir>/home
+--version <cli>`, which keeps only that session's records, and its child
+agents' sessions where the harness keeps them beside it, and leaves out the
+person's setup (MCP servers, hooks, commands). A scenario that needs the
+harness's model and leaves nothing behind (Grok's `subagent`) runs with the
+probe's `--prompt`, `--files` and `--foreground`. A difference is fixed on
 whichever side is wrong; one is listed only when the harness itself stores
 something other than what it streamed. ACP captures mark where Mako sent a
 prompt (`prompted`), because the wire doesn't echo it and the reducer scopes

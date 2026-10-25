@@ -2,13 +2,18 @@
 // live driver, and the turn the harness starts on its own when that work
 // settles. Spends real model usage. Usage:
 //   npm run build:electron && node scripts/probe-provider-turn.mjs <grok | devin | claude> [--model id] [--start-only] [--out dir]
-// Runs in the real HOME, as Mako does; the stream of the wire it heard is
+// `--prompt <text>` asks something else, in a folder holding a copy of `--files <dir>`, and
+// `--foreground` waits only for that turn: a decode pair's scenario that needs the harness's own
+// model, such as `subagent`, recorded the same way.
+// Runs in the real HOME, as Mako does, or with `--scratch <dir>` in a scratch home made there
+// (`scratchHarnessHome`: the harness's sign-in without what renews it, so the person's own stays
+// theirs), running the harness build first on PATH. The stream of the wire it heard is
 // kept beside report.json for `npm run decode -- <stream> --compare <store>`. Prints what each provider-started turn and marker said
 // and how long it took to come, never a credential.
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -25,23 +30,35 @@ const PROMPTS = {
   claude: "Use the Monitor tool to watch this command: `sleep 4; echo tick-one; sleep 2; echo tick-two`. While it runs, run `sleep 9` in the shell in the foreground. Then reply with one short sentence about what the watch reported.",
 }
 
+/** A scratch home's environment, with npm's own variables left out and this PATH first, so its build runs. */
+async function scratchEnvironment(root) {
+  const { assertScratchEnvironment, scratchHarnessHome } = await import("./scratch-harness-home.ts")
+  const { env } = await scratchHarnessHome(root, [])
+  const scratch = Object.fromEntries(Object.entries({ ...env, PATH: `${process.env.PATH}:${env.PATH}` }).filter(([name]) => !/^npm_/i.test(name)))
+  assertScratchEnvironment(scratch, "probe-provider-turn")
+  return scratch
+}
+
 if (!process.versions.electron) {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
-    options: { model: { type: "string" }, "start-only": { type: "boolean" }, out: { type: "string" } },
+    options: { model: { type: "string" }, "start-only": { type: "boolean" }, out: { type: "string" }, prompt: { type: "string" }, files: { type: "string" }, foreground: { type: "boolean" }, scratch: { type: "string" } },
   })
   const harness = positionals[0]
   if (!harness || !(harness in PROMPTS)) throw new Error(`Name a harness: ${Object.keys(PROMPTS).join(", ")}`)
   const root = mkdtempSync(join(tmpdir(), `mako-live-test-turn-${harness}-`))
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "probe-provider-turn", main: fileURLToPath(import.meta.url) }))
   const env = {
-    ...process.env,
+    ...values.scratch ? await scratchEnvironment(resolve(values.scratch)) : process.env,
     PROBE_HARNESS: harness,
     PROBE_ROOT: root,
     PROBE_OUT: resolve(values.out ?? join(tmpdir(), "probe-provider-turns", harness)),
   }
   if (values.model) env.PROBE_MODEL = values.model
   if (values["start-only"]) env.PROBE_START_ONLY = "1"
+  if (values.prompt) env.PROBE_PROMPT = values.prompt
+  if (values.files) env.PROBE_FILES = resolve(values.files)
+  if (values.foreground) env.PROBE_FOREGROUND = "1"
   const child = spawn(join(repo, "node_modules/.bin/electron"), [root], { stdio: "inherit", env })
   const deadline = setTimeout(() => child.kill("SIGKILL"), 420_000)
   const [code] = await once(child, "exit")
@@ -69,6 +86,7 @@ async function probe() {
   const driver = providerHost.liveDrivers.get(harness)
   const id = randomUUID()
   const cwd = mkdtempSync(join(tmpdir(), `mako-live-test-${harness}-cwd-`))
+  if (process.env.PROBE_FILES) cpSync(process.env.PROBE_FILES, cwd, { recursive: true })
   const t0 = Date.now()
   const timeline = []
   const note = (entry) => {
@@ -113,7 +131,7 @@ async function probe() {
   session = started
   const report = { harness, cwd, started: { model: started.settings?.model ?? null, mode: started.currentMode } }
   if (!process.env.PROBE_START_ONLY) {
-    await driver.prompt(id, PROMPTS[harness], [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
+    await driver.prompt(id, process.env.PROBE_PROMPT ?? PROMPTS[harness], [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
     // Mako's own turn, then the one the harness starts when its background work settles.
     const settled = async (label, ready, limit) => {
       for (let waited = 0; !ready(); waited += 200) {
@@ -124,7 +142,7 @@ async function probe() {
     }
     await delay(1500)
     await settled("ownTurn", () => ["ready", "failed", "closed"].includes(session?.status), 180_000)
-    if (harness !== "claude") {
+    if (harness !== "claude" && !process.env.PROBE_FOREGROUND) {
       await settled("providerTurn", () => turns > 0, 180_000)
       await delay(1500)
       await settled("providerTurnEnd", () => ["ready", "failed", "closed"].includes(session?.status), 180_000)

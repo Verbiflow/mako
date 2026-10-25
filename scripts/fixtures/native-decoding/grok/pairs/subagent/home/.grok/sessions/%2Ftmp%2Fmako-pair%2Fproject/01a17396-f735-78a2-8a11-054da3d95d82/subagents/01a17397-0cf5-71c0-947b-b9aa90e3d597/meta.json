@@ -1,0 +1,18 @@
+{
+  "subagent_id": "01a17397-0cf5-71c0-947b-b9aa90e3d597",
+  "attempt_id": "at1.c277a50134d4081af327ea3742672c4",
+  "parent_session_id": "01a17396-f735-78a2-8a11-054da3d95d82",
+  "child_session_id": "01a17397-0cf5-71c0-947b-b9aa90e3d597",
+  "subagent_type": "general-purpose",
+  "description": "Read release notes and plan",
+  "prompt": "Read these two files in the workspace and report only the facts they contain about the release ship day and the branch freeze:\n\n1. notes.md\n2. docs/plan.md\n\nWorkspace path: /tmp/mako-pair/project\n\nDo not modify anything. Read both files completely. Then report:\n- Which day the release ships\n- When the branch freezes\n\nQuote the relevant lines. If the files disagree, say so and include both statements. Be specific (dates, times, days of week).",
+  "status": "completed",
+  "started_at": "2026-10-25T15:04:01.534885Z",
+  "completed_at": "2026-10-25T15:04:07.201136Z",
+  "duration_ms": 5666,
+  "tool_calls": 2,
+  "turns": 1,
+  "effective_context_source": "new",
+  "child_cwd": "/tmp/mako-pair/project",
+  "effective_model_id": "grok-4.7"
+}

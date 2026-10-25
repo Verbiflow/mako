@@ -1,7 +1,48 @@
-import { GrokCallUsage, grokCallTokens, grokCost, grokTokens, GrokTurnUsage, grokUnrecorded } from "@mako/sessions/harnesses"
+import { GrokCallUsage, grokCallTokens, grokCost, grokTokens, GrokTurnUsage, grokUnrecorded, grokWakingChild, GrokWokenSpend } from "@mako/sessions/harnesses"
 import { z } from "zod"
+import { objectValue, stringValue } from "../../base/json-values.js"
 import type { JsonObject } from "../../contracts/json.js"
+import type { AcpChildSpend } from "../acp-source.js"
 import type { UsageObservation } from "../session-usage.js"
+
+/**
+ * What of each notification's spend a Grok session counts, for one launch
+ * (`GrokWokenSpend`). Grok sends a subagent's `turn_completed` on its
+ * parent's connection under the subagent's own session, which it names as it
+ * spawns it (`subagent_spawned`): that turn is held, the parent's own turn
+ * ending drops what it ran beside (its count holds them), and a
+ * `subagent_finished` that will wake the parent counts what was held with the
+ * parent's next turn.
+ */
+export function grokChildSpend(): AcpChildSpend {
+  const children = new Set<string>()
+  const spend = new GrokWokenSpend<UsageObservation[]>()
+  return {
+    screen(params, usage) {
+      const update = objectValue(params["update"])
+      const child = stringValue(update?.["child_session_id"]) ?? stringValue(update?.["subagent_id"])
+      switch (stringValue(update?.["sessionUpdate"])) {
+        case "subagent_spawned":
+          if (child) children.add(child)
+          return usage
+        case "subagent_finished":
+          if (child) spend.finished(child, grokWakingChild(update) !== undefined)
+          return usage
+        case "turn_completed": {
+          const session = stringValue(params["sessionId"])
+          if (session && children.has(session)) {
+            if (usage?.length) spend.childTurn(session, usage)
+            return undefined
+          }
+          const woken = spend.parentTurn().flat()
+          return woken.length ? [...usage ?? [], ...woken] : usage
+        }
+        default:
+          return usage
+      }
+    },
+  }
+}
 
 const count = z.number().nonnegative()
 const ResponseCompleted = z.object({ usage: GrokCallUsage })

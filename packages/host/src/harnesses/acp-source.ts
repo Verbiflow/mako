@@ -211,6 +211,14 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
   /** Whose reading a `usage_update` is, and what its `_meta` adds to ACP's own used, size and cost. Pure. */
   usageUpdate?(meta: JsonObject | undefined): AcpUsageReading
   /**
+   * For an agent that reports a child's spend on the child's own session,
+   * which its parent's count holds only in part (Grok's `GrokWokenSpend`):
+   * what of each vendor notification's spend the session counts. Opened once
+   * per launch, live and replayed, and shown every vendor notification before
+   * it's screened by session. Without it a notification's spend counts as it is.
+   */
+  childSpend?(): AcpChildSpend
+  /**
    * The window of the current model in ACP's model list (`models` in the
    * reply that opens the session, or a list the agent sends later), for an
    * agent that names its windows there and not in `usage_update`. Pure.
@@ -304,6 +312,11 @@ export interface AcpNotificationDecoding {
   connectionWide?: true
   /** The native event's own id, when the provider gives one; it names the notification's markers. */
   id?: string
+}
+
+/** What of a vendor notification's spend a session counts (`ProviderAcpSource.childSpend`), notification by notification. */
+export interface AcpChildSpend {
+  screen(params: JsonObject, usage: UsageObservation[] | undefined): UsageObservation[] | undefined
 }
 
 export interface AcpMcpStartupDecoder {

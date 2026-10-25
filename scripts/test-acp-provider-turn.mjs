@@ -62,6 +62,7 @@ async function check() {
     available: () => true,
     providerTurns: source.providerTurns,
     decodeNotification: source.decodeNotification,
+    childSpend: source.childSpend,
     mcpStartup: source.mcpStartup,
     agents: source.agents,
     compaction: source.compaction,
@@ -115,6 +116,19 @@ async function check() {
       compact: (actionId) => acp.compact(id, actionId),
     }
   }
+
+  // A subagent's spend counts once, as Grok's own ledger counts it: inside its parent's turn when the parent waited on it,
+  // and with the turn it wakes when it finished while the parent was idle.
+  const foreground = await conversation("provider-turn-grok")
+  await foreground.prompt("grok-subagent-foreground")
+  assert.deepEqual(foreground.session()?.usage?.tokens, { input: 24194, cacheRead: 18432, cacheWrite: 0, output: 220 }, "a subagent its parent waited on is counted in the parent's turn alone")
+  await foreground.close()
+  const woken = await conversation("provider-turn-grok")
+  await woken.prompt("grok-subagent-wakes")
+  await woken.until("the woken turn's spend", () => woken.session()?.usage?.tokens?.output === 610)
+  assert.deepEqual(woken.session()?.usage?.tokens, { input: 24523, cacheRead: 33152, cacheWrite: 0, output: 610 }, "a subagent that woke its parent is counted with the turn it woke")
+  await woken.close()
+  console.log("PASS: Grok subagent spend counted once, in its parent's turn or the turn it woke")
 
   await assert.rejects(engines.get("provider-turn-modes").setMode("missing-session", "plan"), /no longer connected/)
   const modes = await conversation("provider-turn-modes")

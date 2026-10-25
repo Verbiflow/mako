@@ -188,7 +188,8 @@ const GROK_PAIR_WINDOW = 256_000
 const grok: Recorder = {
   model: { kind: "scripted", tools: GROK_TOOLS },
   controls: { steer: "driven", rewind: "driven", compact: "driven", resume: "driven", "still-running": { absent: NO_OTHER_CLIENT } },
-  keeps: (file) => /\/sessions\/[^/]+\/[^/]+\/(updates\.jsonl|summary\.json)$/.test(file),
+  // A session's `subagents/` records name its children, whose sessions sit beside it.
+  keeps: (file) => /\/sessions\/[^/]+\/[^/]+\/(updates\.jsonl|summary\.json|subagents\/[^/]+(\/meta)?\.json)$/.test(file),
   takesBuild: true,
   async record(sandbox, scenario, build) {
     const version = await versionOf(build ?? "grok")
@@ -1417,7 +1418,11 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
   const lines = [header, ...body].map((line) => JSON.stringify(line))
   await writeFile(join(folder, "capture.jsonl"), linesRootedAt(replacements)(`${lines.join("\n")}\n`))
   const stores = [{ reader: harness, path: pair.store }, ...pair.others ?? []]
-  for (const store of stores) await copyScrubbed(recorder.storeFolder?.(store.path) ?? dirname(store.path), join(folder, "home"), sandbox.home, replacements, recorder.keeps)
+  for (const store of stores) {
+    const own = recorder.storeFolder?.(store.path) ?? dirname(store.path)
+    for (const kept of [own, ...await childFolders(store.reader, sandbox.home, store.path, own)])
+      await copyScrubbed(kept, join(folder, "home"), sandbox.home, replacements, recorder.keeps)
+  }
   const reasons = (known: Known | undefined) => new Map(known?.map((difference) => [`${difference.side}${difference.line}`, difference.reason]))
   const explained = (differences: readonly Difference[], known: Known | undefined): Known => {
     const kept = reasons(known)
@@ -1448,6 +1453,25 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
     throw new Error(`The ${harness} ${scenario.name} pair still identified someone after scrubbing, so it wasn't kept (values not printed):\n${describeLeaks(leaks)}`)
   }
   return folder
+}
+
+/**
+ * The folders of a session's child agents that its store keeps apart from the
+ * session's own `folder`, each named for its child (a Grok subagent's session
+ * beside its parent's), so a pair reads its children as the store does. A
+ * child kept inside the session's folder comes with it.
+ */
+async function childFolders(reader: string, home: string, store: string, folder: string): Promise<string[]> {
+  const read = storeReader(reader, home)
+  try {
+    const children = (await read.children?.(store).catch(() => null)) ?? []
+    return children.flatMap((child) => {
+      const own = child.path ? dirname(child.path.replace(/#.*$/, "")) : undefined
+      return own && basename(own) === child.nativeId && relative(folder, own).startsWith("..") ? [own] : []
+    })
+  } finally {
+    read.close?.()
+  }
 }
 
 async function copyScrubbed(from: string, into: string, home: string, replacements: readonly Replacement[], keeps: (file: string) => boolean): Promise<void> {
@@ -1494,8 +1518,13 @@ async function copyDatabase(from: string, target: string, replacements: readonly
  * A pair from a real session Mako ran, for what the scripted model can't
  * drive (a harness's own turn after its background work settles):
  *
- *   node scripts/probe-provider-turn.mjs grok
- *   npm run harness:decode-pairs -- grok subagent-wake --capture <capture.jsonl> --store <store file> --project <the folder it ran in> --version <cli version> --write
+ *   PATH=<grok build>:$PATH node scripts/probe-provider-turn.mjs grok --scratch <dir>
+ *   npm run harness:decode-pairs -- grok subagent-wake --capture <capture.jsonl> --store <store file> --project <the folder it ran in> --home <dir>/home --version <cli version> --write
+ *
+ * `--home` is the home the session ran in (the probe's `--scratch` folder's
+ * `home`), the person's own when left out. A scenario the scripted model
+ * can't drive that leaves no work behind runs with the probe's `--prompt`,
+ * `--files` and `--foreground`: `subagent` with its prompt and its files.
  *
  * The capture is the stream Mako's live driver kept (`native-stream.ts`),
  * host-drawn openers and markers included. Only the session's own store is
@@ -1505,7 +1534,7 @@ async function copyDatabase(from: string, target: string, replacements: readonly
  * is held to the same privacy check as a recorded one.
  */
 async function keepCapture(path: string): Promise<void> {
-  const [harness, name] = args.filter((arg) => !arg.startsWith("--") && ![path, option("--store"), option("--project"), option("--version")].includes(arg))
+  const [harness, name] = args.filter((arg) => !arg.startsWith("--") && ![path, option("--store"), option("--project"), option("--version"), option("--home")].includes(arg))
   const recorder = harness ? RECORDERS.get(harness) : undefined
   const scenario = SCENARIOS.find((candidate) => candidate.name === name)
   const store = option("--store")
@@ -1517,19 +1546,23 @@ async function keepCapture(path: string): Promise<void> {
   if (!version) throw new Error(`${path} names no ${harness} version; pass --version`)
   recording.native = { ...recording.native, version, origin: "captured" }
   await sandboxed(SANDBOX, harness, async (sandbox) => {
-    // The session's store, staged under the sandbox's home where the real home kept it.
-    const home = homedir()
+    // The session's store, staged under the sandbox's home where the home it ran in kept it.
+    const home = option("--home") ?? homedir()
     const file = store.replace(/#.*$/, "")
     const staged = join(sandbox.home, relative(home, file))
     await mkdir(dirname(staged), { recursive: true })
     if (file.endsWith(".db")) sessionRows(file, staged, store.slice(file.length + 1))
     else {
-      await cp(recorder.storeFolder?.(file) ?? dirname(file), recorder.storeFolder?.(staged) ?? dirname(staged), { recursive: true })
-      for (const kept of await readdir(dirname(staged)))
-        if (kept.endsWith(".jsonl")) {
-          const text = await readFile(join(dirname(staged), kept), "utf8")
-          await writeFile(join(dirname(staged), kept), text.split("\n").filter((line) => !SETUP_RECORD.test(line)).join("\n"))
-        }
+      const own = recorder.storeFolder?.(file) ?? dirname(file)
+      for (const folder of [own, ...await childFolders(harness, home, file, own)]) {
+        const into = join(sandbox.home, relative(home, folder))
+        await cp(folder, into, { recursive: true })
+        for (const kept of await readdir(into))
+          if (kept.endsWith(".jsonl")) {
+            const text = await readFile(join(into, kept), "utf8")
+            await writeFile(join(into, kept), text.split("\n").filter((line) => !SETUP_RECORD.test(line)).join("\n"))
+          }
+      }
     }
     const stagedStore = staged + store.slice(file.length)
     const outside: Replacement[] = [...pathReplacements(project, join(PAIR_ROOT, "project")), ...pathReplacements(home, join(PAIR_ROOT, "home"))]

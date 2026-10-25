@@ -19,7 +19,7 @@ export {
 export {
   backgroundReminderTurn, GROK_ACP_HOOKS, GROK_TICKS_PER_USD, GrokCallUsage, grokCallTokens, grokCommandFailed, grokCost, grokPlanId, grokProposedPlan,
   GrokSpend, GrokSubagentFinished, GrokSubagentSpawned, grokSubagentTurn, GrokTaskSnapshot, grokTaskTurn, GrokToolMeta, grokTokens, grokToolName,
-  GrokTurnUsage, grokUnrecorded, GROK_UPDATES, grokUpdateReading,
+  GrokTurnUsage, grokUnrecorded, GROK_UPDATES, grokUpdateReading, grokLineMillis, grokTurnsBetween, type GrokTurnRecord, grokWakingChild, GrokWokenSpend,
 } from "./grok.js"
 export { CURSOR_MESSAGE_PARTS } from "./cursor.js"
 export { OPENCODE_ASSISTANT_CONTENT, OPENCODE_LEGACY_PARTS, OPENCODE_MESSAGES, OpenCodeSavedTokens, openCodeTokens, OpenCodeTokens } from "./opencode.js"
