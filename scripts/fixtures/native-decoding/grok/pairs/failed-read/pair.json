@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.46"
+    "version": "1.0.70"
   },
   "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11b83-8306-7f22-b4e4-8026195b4243/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1722f-9403-7ba2-bfa8-90088f351d90/updates.jsonl",
       "known": []
     }
   ]
