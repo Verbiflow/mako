@@ -213,9 +213,9 @@ try {
     "PASS: The engine measures compaction across retries and late summaries, and draws a replayed native event once"
   )
 
-  // A provider's retries end in one marker, drawn before what ended them:
-  // the model's answer (recovered, quiet) or the failure it gave up on (in
-  // the error's tone, with the provider's own words for what failed).
+  // A provider's retries end in one quiet marker, drawn before what ended
+  // them: the model's answer (recovered) or the failure it gave up on, which
+  // says the failure itself, so the provider's words appear once.
   const updates = (events: LiveDriverEvent[]) => events.flatMap((event) => event.type === "live-update" ? [event.update] : event.type === "live-updates" ? event.updates : [])
   const recovered = session()
   at(10_000)
@@ -250,11 +250,19 @@ try {
   assert.deepEqual(
     gaveUp.markers().map((marker) => [marker.label, marker.detail, marker.tone, marker.retries]),
     [
-      ["Gave up after 1 retry", "Server error", "error", { count: 1, outcome: "gave-up", durationMs: 62_000 }],
+      ["Retried once", undefined, undefined, { count: 1, outcome: "gave-up", durationMs: 62_000 }],
       ["Turn failed", "Server error", "error", undefined],
     ],
-    "the provider's failure ends the retries as given up, its own words beside the count"
+    "the provider's failure ends the retries quietly; its words are the failure's, said once"
   )
+  const otherWords = session()
+  engine.activity(otherWords.live, { kind: "retrying", attempt: 1, reason: "Overloaded (529)" })
+  engine.activity(otherWords.live, { kind: "retrying", attempt: 2 })
+  engine.event(otherWords.live, { label: "API error", detail: "Claude's servers didn't answer", tone: "error" })
+  assert.deepEqual(otherWords.markers().map((marker) => [marker.label, marker.detail, marker.tone]), [
+    ["Retried 2 times", "Overloaded (529)", undefined],
+    ["API error", "Claude's servers didn't answer", "error"],
+  ], "what it retried on stays beside the count when the failure says something else")
 
   // Codex says it gave up in the session's error, before the failure marker; its retries name no reason.
   const errored = session()
@@ -267,10 +275,10 @@ try {
   assert.deepEqual(
     errored.markers().map((marker) => [marker.label, marker.detail, marker.retries?.durationMs]),
     [
-      ["Gave up after 2 retries", "We're currently experiencing high demand.", 9_000],
+      ["Retried 2 times", undefined, 9_000],
       ["Turn failed", "Server error", undefined],
     ],
-    "an error in the session's state gives up; the failure's first line stands for the reason the retries never gave"
+    "an error in the session's state gives up; the error is the failure's to say"
   )
 
   // A turn that ends another way (a Stop, a process gone) ends its retries unsaid, and the next turn's answer is no recovery.
@@ -280,7 +288,7 @@ try {
   engine.patch(stopped.live, { status: "running" })
   engine.emitUpdate(stopped.live, { kind: "text", text: "A new turn." })
   assert.deepEqual(stopped.markers(), [], "nothing is said of retries a Stop cut short")
-  console.log("PASS: a provider's retries end in one marker: recovered when the model answers, given up on the failure, unsaid when the turn ends otherwise")
+  console.log("PASS: a provider's retries end in one quiet marker: recovered when the model answers, retried before the failure without repeating its words, unsaid when the turn ends otherwise")
 } finally {
   clock.mock.restore()
 }

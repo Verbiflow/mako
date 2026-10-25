@@ -309,21 +309,22 @@ export function turnFailedEvent(
 }
 
 /**
- * The marker for a provider's retries once they end: "Recovered after 3
- * retries", quiet, or "Gave up after 5 retries" in the error's tone. `reason`
- * is the provider's own words for what failed, as it gave them while it
- * retried; the label says the outcome on every harness alike.
+ * The marker for a provider's retries once they end, a quiet line either way:
+ * "Recovered after 3 retries", or "Retried 5 times" before the failure the
+ * provider gave up on, which says the failure itself. `reason` is the
+ * provider's own words for what failed, as it gave them while it retried; the
+ * label says the outcome on every harness alike.
  */
 export function retriesEvent(retries: Retries, reason?: string): TranscriptEvent {
   const marker = event(retriesLabel(retries), reason)
   marker.retries = retries
-  if (retries.outcome === "gave-up") marker.tone = "error"
   return marker
 }
 
-/** "Recovered after 3 retries", "Gave up after 1 retry". */
+/** "Recovered after 3 retries", or, before a failure, "Retried 5 times", "Retried once". */
 export function retriesLabel({ count, outcome }: Pick<Retries, "count" | "outcome">): string {
-  return `${outcome === "recovered" ? "Recovered" : "Gave up"} after ${count} ${count === 1 ? "retry" : "retries"}`
+  if (outcome === "gave-up") return `Retried ${count === 1 ? "once" : `${count} times`}`
+  return `Recovered after ${count} ${count === 1 ? "retry" : "retries"}`
 }
 
 /** A marker whose empty detail and body are left out, so saved entries stay small. */

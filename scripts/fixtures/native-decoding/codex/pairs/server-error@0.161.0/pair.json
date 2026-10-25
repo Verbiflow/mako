@@ -16,7 +16,7 @@
         },
         {
           "side": "-",
-          "line": "note: Gave up after 9 retries — We’re currently experiencing high demand, which may cause temporary errors.",
+          "line": "note: Retried 9 times",
           "reason": "Mako sums up the retries it watched on the wire (Codex's `error` notifications with willRetry) in one marker; Codex keeps none of those notifications in its rollout, so only the live drawing has the measure (RETRY_MARKERS, declared stream-only)."
         }
       ]

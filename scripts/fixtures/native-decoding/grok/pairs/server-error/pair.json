@@ -11,7 +11,7 @@
       "known": [
         {
           "side": "-",
-          "line": "note: Gave up after 3 retries — Server error",
+          "line": "note: Retried 3 times",
           "reason": "Mako sums up the retries it watched on the wire (Grok's `retry_state` updates) in one marker, measured by the frames' clock; the store keeps each retry's update, never Mako's measure, so only the live drawing has it (RETRY_MARKERS, declared stream-only)."
         }
       ]

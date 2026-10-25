@@ -281,17 +281,16 @@ const failure = draw(streamed([go, marker({ label: "Turn failed", detail: "strea
 assert.match(failure, /lucide-circle-alert[^"]*text-negative/)
 assert.match(failure, /class="[^"]*text-negative">Turn failed</)
 
-// A provider's retries: quiet once the model answered, an error when it gave up, the count, its words and how long.
+// A provider's retries, quiet either way: the count, its words and how long; the failure after them says itself.
 const recoveredWords = eventWords(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)"))
 assert.deepEqual(recoveredWords, { glyph: "retry", title: "Recovered after 3 retries", detail: "Overloaded (529)", aside: "41s" })
-assert.deepEqual(eventWords(retriesEvent({ count: 1, outcome: "gave-up", durationMs: 62_000 }, "Server error")),
-  { glyph: "retry", title: "Gave up after 1 retry", detail: "Server error", aside: "1m 02s", tone: "error" })
+assert.deepEqual(eventWords(retriesEvent({ count: 1, outcome: "gave-up", durationMs: 62_000 }, "Overloaded (529)")),
+  { glyph: "retry", title: "Retried once", detail: "Overloaded (529)", aside: "1m 02s" })
 const retries = draw(streamed([go, marker(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)")), { kind: "text", id: "a3", text: "Here it is." },
-  marker(retriesEvent({ count: 5, outcome: "gave-up", durationMs: 62_000 }, "Server error"))]))
+  marker(retriesEvent({ count: 5, outcome: "gave-up", durationMs: 62_000 }))]))
 assert.match(text(retries), /Recovered after 3 retries Overloaded \(529\) 41s/)
-assert.match(retries, /lucide-rotate-ccw[^"]*text-faint/, "a recovery is ambient")
-assert.match(retries, /lucide-rotate-ccw[^"]*text-negative/, "giving up is an error")
-assert.match(retries, /class="[^"]*text-negative">Gave up after 5 retries</)
+assert.match(text(retries), /Retried 5 times 1m 02s/)
+assert.doesNotMatch(retries, /text-negative|text-caution/, "retries are ambient whichever way they ended: the failure after them owns the attention")
 assert.deepEqual(entriesToMessages(reduceLiveUpdates([], [{ kind: "event", ...retriesEvent({ count: 2, outcome: "recovered", durationMs: 3_000 }) }]), { kind: "live", running: false, provider: "claude" }).messages[0]?.note?.retries,
   { count: 2, outcome: "recovered", durationMs: 3_000 }, "the measure reaches the window from the blocks the journal keeps")
 

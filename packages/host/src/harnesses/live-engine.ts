@@ -263,10 +263,10 @@ function answers(update: LiveUpdate): boolean {
   }
 }
 
-/** The first line of a provider's failure, as the words of a marker's detail. */
-function firstLine(text: string | undefined): string | undefined {
-  const line = text?.trim().split("\n", 1)[0]?.trim()
-  return line ? (line.length > 160 ? `${line.slice(0, 159)}…` : line) : undefined
+/** Whether the failure's own words already say `reason`, so the retries' line leaves it to them. */
+function said(reason: string, failure: readonly (string | undefined)[]): boolean {
+  const words = reason.trim().toLowerCase()
+  return failure.some((text) => text?.toLowerCase().includes(words))
 }
 
 export function createLiveEngine<
@@ -300,9 +300,10 @@ export function createLiveEngine<
   }
   const compacting = new WeakMap<Live, Compacting>()
   /**
-   * The provider's retries in progress. They end in one marker: recovered,
-   * when the model answers; given up, when the provider reports the failure
-   * (an error marker, or an error in its state). A turn that ends any other
+   * The provider's retries in progress. They end in one quiet marker:
+   * recovered, when the model answers; given up, when the provider reports
+   * the failure (an error marker, or an error in its state), which says the
+   * failure itself, so the marker keeps only words the failure doesn't. A turn that ends any other
    * way (a Stop, a process gone) ends them unsaid, its own ending says why.
    * Every end but the turn's is decoded from the harness's own messages and
    * measured by the frames' clock, so a replay of the stream draws what the
@@ -318,13 +319,14 @@ export function createLiveEngine<
     if (reason) next.reason = reason
     retrying.set(live, next)
   }
-  const endRetries = (live: Live, outcome: Retries["outcome"] | undefined, failure?: string): void => {
+  /** `failure`: the words of what the provider gave up on, which say the failure once; the retries' line doesn't repeat them. */
+  const endRetries = (live: Live, outcome: Retries["outcome"] | undefined, failure: readonly (string | undefined)[] = []): void => {
     const held = retrying.get(live)
     if (!held) return
     retrying.delete(live)
     if (!outcome) return
     const retries: Retries = { count: held.count, outcome, durationMs: Math.max(0, Math.round(clock() - held.since)) }
-    drawEvent(live, retriesEvent(retries, held.reason ?? firstLine(failure)))
+    drawEvent(live, retriesEvent(retries, held.reason && !said(held.reason, failure) ? held.reason : undefined))
   }
   /** Compacting stops when the provider reports something else, or its turn ends; a retry is part of it. */
   const stopCompacting = (live: Live): void => {
@@ -360,7 +362,7 @@ export function createLiveEngine<
   const event = (live: Live, marker: TranscriptEvent, id?: string): void => {
     if (id && repeated(live, id)) return
     // The failure a provider retried and gave up on: its retries are summed up before it.
-    if (marker.tone === "error" || marker.limit) endRetries(live, "gave-up", marker.detail ?? marker.label)
+    if (marker.tone === "error" || marker.limit) endRetries(live, "gave-up", [marker.label, marker.detail, marker.body])
     drawEvent(live, marker, id)
   }
   const drawEvent = (live: Live, marker: TranscriptEvent, id?: string, completes = false): void => {
@@ -425,7 +427,7 @@ export function createLiveEngine<
   const patch = (live: Live, change: Partial<LiveSessionState>): void => {
     if (change.status !== undefined && change.status !== "running")
       stopCompacting(live)
-    if (change.error) endRetries(live, "gave-up", change.error)
+    if (change.error) endRetries(live, "gave-up", [change.error])
     else if (change.status !== undefined && change.status !== "running") endRetries(live, undefined)
     const next: Partial<LiveSessionState> = { ...change }
     // SAFETY: `next` is a copy of a Partial<LiveSessionState>, so its own keys are LiveSessionState's.

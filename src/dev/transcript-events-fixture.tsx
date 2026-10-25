@@ -475,8 +475,8 @@ const CASES: EventCase[] = [
   },
   {
     id: "marker-retries-gave-up",
-    title: "The provider retried and gave up",
-    exchanges: live([go, marker(retriesEvent({ count: 5, outcome: "gave-up", durationMs: 62_000 }, "We're currently experiencing high demand, which may cause temporary errors.")), marker({ label: "Turn failed", detail: "Server error", body: "We're currently experiencing high demand, which may cause temporary errors.", tone: "error" })], "codex"),
+    title: "The provider retried and gave up: the retries quiet, the failure said once",
+    exchanges: live([go, marker(retriesEvent({ count: 5, outcome: "gave-up", durationMs: 62_000 })), marker({ label: "Turn failed", detail: "Server error", body: "We're currently experiencing high demand, which may cause temporary errors.", tone: "error" })], "codex"),
     failed: "acp-request-",
   },
   {
