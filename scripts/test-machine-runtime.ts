@@ -24,7 +24,8 @@ import { MachineRuntime } from "@mako/host/usage/machine-runtime"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
 import type { AgentMessage, HostMessage, MachineRuntimeState } from "@mako/host/contracts/machine-agent"
 import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "@mako/host/contracts/host-operations"
-import type { RuntimeListing } from "@mako/protocol/thread-listing"
+import type { ReportedSession } from "@mako/protocol/thread-listing"
+import { SessionPublisher } from "@mako/host/conversations/session-report"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type { RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import { cpuBetween, type CpuSample } from "@mako/host/usage/process-cpu"
@@ -107,7 +108,7 @@ async function machineGateway() {
 }
 
 /** The machine's agent: its end of the host's channel, and every message the host sent on it. */
-function machineAgent(options: { dataRoot: string; now?: () => number; work?: () => LifecycleWork[]; listing?: () => RuntimeListing | undefined; media?: () => MediaHandler | undefined; sampleCpu?: () => Promise<CpuSample | undefined> }) {
+function machineAgent(options: { dataRoot: string; now?: () => number; work?: () => LifecycleWork[]; sessions?: SessionPublisher; media?: () => MediaHandler | undefined; sampleCpu?: () => Promise<CpuSample | undefined> }) {
   const [agentEnd, hostEnd] = duplexPair()
   const messages: HostMessage[] = []
   // SAFETY: the host under test writes only HostMessage lines on its channel; the assertions read what it said.
@@ -146,7 +147,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     build: "test",
     dataRoot: options.dataRoot,
     work: options.work ?? (() => []),
-    listing: options.listing ?? (() => undefined),
+    sessions: options.sessions,
     media: options.media ?? (() => undefined),
     sampleCpu: options.sampleCpu ?? (async () => undefined),
     profileHost: false,
@@ -281,29 +282,32 @@ test("the machine tells its Thread when it works and when it stops, a silent tur
   await agent.until("one event counted, the readings not", () => agent.state()?.events.emitted === 1)
 })
 
-test("the machine tells its Thread what its conversations are when that changes, and once on each link, never as a heartbeat", async () => {
+test("the machine reports the Sessions it owns on its link: everything at first, then what changed, never as a heartbeat, and everything again on a new link", async () => {
   const cloud = await machineGateway()
-  const conversation = (state: RuntimeListing["conversations"][number]["state"]) => ({ id: "c-1", harness: "claude", title: "Retry the webhooks", state, createdAt: "2026-10-24T20:00:00.000Z" })
-  let listing: RuntimeListing | undefined
-  const agent = machineAgent({ dataRoot: join(scratch, "listing"), listing: () => listing })
+  const row = (state: ReportedSession["state"]): ReportedSession => ({ session: "0b8f3e1a-7c2d-4f6a-9e5b-1d3c8a7f2e60", thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", conversation: "c-1", harness: "claude", title: "Retry the webhooks", state, createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:00:00.000Z", generation: 1 })
+  let rows: ReportedSession[] | undefined
+  const sessions = new SessionPublisher({ rows: () => rows })
+  const agent = machineAgent({ dataRoot: join(scratch, "sessions"), sessions })
   await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
   agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
   await agent.until("enrolled", () => agent.state()?.link === "connected")
-  await cloud.gateway.assign("th-1", RUNTIME)
   // Before the host's core has loaded there's nothing to say.
   await new Promise((resolve) => setTimeout(resolve, 1_200))
-  assert.equal(cloud.gateway.listingsHeard("th-1"), 0)
-  listing = { conversations: [conversation("working")] }
-  await agent.until("the listing said", () => cloud.gateway.listing("th-1")?.conversations[0]?.state === "working", 3_000)
-  // Unchanged across ticks: said once.
+  assert.equal(cloud.gateway.reports(RUNTIME).length, 0)
+  rows = [row("working")]
+  await agent.until("everything said", () => cloud.gateway.reports(RUNTIME).length === 1, 3_000)
+  assert.deepEqual(cloud.gateway.reports(RUNTIME)[0]?.owned, [{ session: row("working").session, generation: 1 }])
+  // Unchanged across ticks and the second's throttle: nothing more.
   await new Promise((resolve) => setTimeout(resolve, 2_200))
-  assert.equal(cloud.gateway.listingsHeard("th-1"), 1, "nothing again while nothing changed")
-  listing = { conversations: [conversation("idle")] }
-  await agent.until("the change said", () => cloud.gateway.listing("th-1")?.conversations[0]?.state === "idle", 3_000)
-  assert.equal(cloud.gateway.listingsHeard("th-1"), 2)
-  // A new link: said again, unchanged, since the gateway it reaches may not have heard it.
+  assert.equal(cloud.gateway.reports(RUNTIME).length, 1, "nothing again while nothing changed")
+  rows = [row("idle")]
+  sessions.changed()
+  await agent.until("the change said", () => cloud.gateway.reports(RUNTIME).length === 2, 3_000)
+  assert.equal(cloud.gateway.reports(RUNTIME)[1]?.listed[0]?.state, "idle")
+  assert.equal(cloud.gateway.reports(RUNTIME)[1]?.owned, undefined, "a change, not everything")
+  // A new link: everything again, since the gateway it reaches may not have heard it.
   cloud.drop()
-  await agent.until("linked again and the listing said again", () => cloud.gateway.listingsHeard("th-1") === 3, 6_000)
+  await agent.until("linked again and everything said again", () => cloud.gateway.reports(RUNTIME).at(-1)?.owned !== undefined && cloud.gateway.reports(RUNTIME).length === 3, 6_000)
 })
 
 test("a machine that woke keeps a connection that survived its pause, and replaces one that didn't, within a second and a half", async () => {

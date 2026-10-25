@@ -6,7 +6,7 @@ import { PROTOCOL_VERSION } from "./version.js"
 /** A Thread's events, or an account's (its Threads list, its connections), each numbered by its one object. */
 export const StreamIdSchema = z
   .string()
-  .regex(/^(?:thread|account):[A-Za-z0-9._:-]{1,160}$/)
+  .regex(/^(?:thread|account|session):[A-Za-z0-9._:-]{1,160}$/)
 
 /** What every hop reads of a stream's event; the event crosses after it, as its runtime encoded it (`wire.ts`). */
 export const EventFrameEnvelopeSchema = z

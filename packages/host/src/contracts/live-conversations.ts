@@ -268,6 +268,11 @@ export interface LiveSummary {
    * Git as that host reads them, naming the conversation, since a path there can be another conversation's too.
    */
   elsewhere?: string
+  /**
+   * What a conversation listed from another device waits on, in a line ("Approve: npm test"), while it waits on a
+   * person there: the row asks for them as a local one would.
+   */
+  waitingOn?: string
   createdAt: number
   /** The Thread and Session this conversation belongs to, the same IDs a catalog row carries. */
   threadId?: string

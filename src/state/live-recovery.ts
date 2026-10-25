@@ -438,7 +438,10 @@ export function unlistLive(ids: readonly string[]): void {
  * changed: in the rail, unopened. Never selected: one arriving while the person reads something else stays a row.
  */
 export function listLive(summaries: LiveSummary[]): void {
-  admitLiveSummaries(summaries, false)
+  // Read as a reconnect: a conversation already here takes where it runs now and is read again there when it's opened.
+  admitLiveSummaries(summaries, true)
+  const active = acpStore.get().activeKey
+  if (active && summaries.some((summary) => summary.session.id === active)) void hydrateLive(active)
 }
 
 export function hydrateLiveSummaries(
@@ -491,6 +494,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
         hydrated: false,
         nativePaths: summary.nativePaths,
         elsewhere: summary.elsewhere ?? previous.elsewhere,
+        waitingOn: summary.waitingOn,
         threadId: summary.threadId ?? previous.threadId,
         sessionId: summary.sessionId ?? previous.sessionId,
         permission: null,
@@ -522,6 +526,7 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
       nativePaths: summary.nativePaths,
       threadPath: summary.threadPath,
       elsewhere: summary.elsewhere,
+      waitingOn: summary.waitingOn,
       threadId: summary.threadId,
       sessionId: summary.sessionId,
       revision: summary.revision,

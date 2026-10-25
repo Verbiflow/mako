@@ -13,6 +13,7 @@ import {
   SubscribeSchema,
   threadStream,
 } from "./events.js"
+import { sessionStream, streamConversation } from "./socket.js"
 import {
   type ClientSession,
   type GatewayUnderTest,
@@ -31,8 +32,8 @@ import {
 } from "./media.js"
 import { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
-import type { RuntimeListing } from "./thread-listing.js"
-import { MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
+import type { SessionsReport } from "./thread-listing.js"
+import { MEDIA_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
 import {
   WireError,
   decodeEventFrame,
@@ -119,9 +120,8 @@ type Running = {
 /** The fake, plus what its tests read of it: each Thread's runtime's last word on whether it's working, and on its conversations. */
 export type FakeGateway = GatewayUnderTest & {
   activity(threadId: string): { busy: boolean; work: string[]; at: Date } | undefined
-  listing(threadId: string): RuntimeListing | undefined
-  /** How many listings the Thread's runtime has sent it, for a test that it says one only when it changes. */
-  listingsHeard(threadId: string): number
+  /** Each report of its Sessions a runtime sent, in order, for a test of what it says and when. */
+  reports(runtimeId: string): SessionsReport[]
   /** The operations waiting for the Thread's runtime (`whenAsleep: "defer"`). */
   deferred(threadId: string): string[]
 }
@@ -139,8 +139,21 @@ export function createFakeGateway(
   const running = new Map<string, Running>()
   const admissions = new Map<string, number>()
   const activity = new Map<string, { busy: boolean; work: string[]; at: Date }>()
-  const listings = new Map<string, RuntimeListing>()
-  const listingsHeard = new Map<string, number>()
+  const reports = new Map<string, SessionsReport[]>()
+  /** By session stream: who watches it, and the next number to give its updates. Relayed, never kept. */
+  const sessionWatchers = new Map<string, Set<Inbox<EventFrame>>>()
+  let liveSeq = 1
+  /** Tells a runtime every one of its conversations someone watches now; on a new link, only if any is. */
+  const watchFrame = (runtimeId: string, enrolling = false) => {
+    const runtime = runtimes.get(runtimeId)
+    if (!runtime || (runtime.version ?? 0) < SESSIONS_VERSION) return
+    const conversations = [...sessionWatchers.keys()].flatMap((stream) => {
+      const target = streamConversation(stream)
+      return target?.runtimeId === runtimeId ? [target.conversation] : []
+    })
+    if (enrolling && !conversations.length) return
+    runtime.deliver({ type: "watch", conversations })
+  }
   /** Streams being watched, each by one client, served by the runtime that ran its Thread when it was asked. */
   const watches = new Map<MediaStreamId, { threadId: string; runtime: Connection; inbox: Inbox<MediaDelivery> }>()
 
@@ -291,6 +304,8 @@ export function createFakeGateway(
       correlationId: connection.correlationId,
     })
     connection.deliver({ type: "enrolled", version, heartbeatMs })
+    // Whatever is watched of this runtime's conversations, said again on its new link: a new link starts with none.
+    watchFrame(frame.runtimeId, true)
     const current = new Set<string>()
     for (const claim of frame.threads) {
       const known = threads.get(claim.threadId)
@@ -426,11 +441,17 @@ export function createFakeGateway(
       activity.set(frame.threadId, { busy: frame.busy, work: frame.work, at: now() })
       return
     }
-    if (frame.type === "listing") {
-      const target = threads.get(frame.threadId)
-      if (target?.owner !== connection.runtimeId || target.generation !== frame.generation) return
-      listings.set(frame.threadId, frame.listing)
-      listingsHeard.set(frame.threadId, (listingsHeard.get(frame.threadId) ?? 0) + 1)
+    // Link version 4's listing, keyed by cloud Thread: taken and dropped, as a gateway does.
+    if (frame.type === "listing") return
+    if (frame.type === "sessions") {
+      reports.set(connection.runtimeId, [...(reports.get(connection.runtimeId) ?? []), frame.report])
+      return
+    }
+    if (frame.type === "live") {
+      const stream = sessionStream(connection.runtimeId, frame.conversation)
+      const at = now().toISOString()
+      for (const reader of sessionWatchers.get(stream) ?? []) reader.push({ v: PROTOCOL_VERSION, stream, seq: liveSeq, at, event: frame.event })
+      liveSeq += 1
       return
     }
     if (frame.type === "reply") {
@@ -626,6 +647,14 @@ export function createFakeGateway(
             : undefined
           for (const frame of target?.log.slice(after) ?? []) reader.push(frame)
           target?.readers.add(reader)
+          // A conversation's live updates: its runtime is told it's watched by the first watcher, and not by the last.
+          const watched = streamConversation(stream) ? stream : undefined
+          if (watched) {
+            const watchers = sessionWatchers.get(watched) ?? new Set()
+            watchers.add(reader)
+            sessionWatchers.set(watched, watchers)
+            if (watchers.size === 1) watchFrame(streamConversation(watched)!.runtimeId)
+          }
           const next = async (timeoutMs?: number) =>
             decodeEventFrame(encodeEventFrame(await reader.next(timeoutMs)))
           return {
@@ -633,6 +662,11 @@ export function createFakeGateway(
             close: () => {
               target?.readers.delete(reader)
               reader.close()
+              const watchers = watched ? sessionWatchers.get(watched) : undefined
+              if (watched && watchers?.delete(reader) && !watchers.size) {
+                sessionWatchers.delete(watched)
+                watchFrame(streamConversation(watched)!.runtimeId)
+              }
             },
           }
         },
@@ -701,8 +735,7 @@ export function createFakeGateway(
     },
 
     activity: (threadId) => activity.get(threadId),
-    listing: (threadId) => listings.get(threadId),
-    listingsHeard: (threadId) => listingsHeard.get(threadId) ?? 0,
+    reports: (runtimeId) => reports.get(runtimeId) ?? [],
     deferred: (threadId) => thread(threadId).deferred.map((operation) => operation.id),
   }
 }

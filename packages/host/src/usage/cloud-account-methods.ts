@@ -5,7 +5,8 @@ import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking } from "./cloud-account.js"
 import type { AccountEvent } from "@mako/protocol/account-events"
-import type { ThreadListings } from "@mako/protocol/thread-listing"
+import type { SessionListings } from "@mako/protocol/thread-listing"
+import type { SessionPublishing } from "./machine-runtime.js"
 import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState, ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
@@ -16,7 +17,7 @@ import { hostLog } from "../base/host-log.js"
 import type { DomainSecrets } from "../base/host-secrets.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { MethodTable } from "../base/methods.js"
-import { type HostMethods, serveHostThroughGateway } from "../transport/index.js"
+import { type GatewayHostOptions, type HostMethods, serveHostThroughGateway } from "../transport/index.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac, systemName, systemVersion } from "../base/platform.js"
 
@@ -67,10 +68,14 @@ export interface CloudAccount {
   giveBackReturn(threadId: string, move: string, reason: string): Promise<ReturnState>
   finishReturn(threadId: string, move: string): Promise<ReturnState>
   returnState(threadId: string, move: string): Promise<ReturnState | undefined>
-  /** The account's Threads as every device lists them (`GET /v1/threads`), and the account stream's number then. */
-  threadListings?(): Promise<ThreadListings>
+  /** The account's Sessions as every device lists them (`GET /v1/sessions`), and the account stream's number then. */
+  sessionListings?(): Promise<SessionListings>
+  /** Tells the account's list what changed of this host's Sessions (`SessionPublisher`); called on a tick. */
+  reportSessions?(): void
+  /** The account's devices, by ID and name, and which is this one. */
+  devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
   /**
-   * Hears each change to the account's list of Threads, in the stream's order, as it comes, and `account-changed` when
+   * Hears each change to the account's list of Sessions, in the stream's order, as it comes, and `account-changed` when
    * this Mac signs in, out or to another account, after which the list is another's; returns how to stop.
    */
   onThreadListings?(listener: (heard: ThreadListHeard | "account-changed") => void): () => void
@@ -79,8 +84,8 @@ export interface CloudAccount {
   stop(): void
 }
 
-/** A change to the account's list of Threads, as its stream said it. */
-export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: "thread-listed" | "thread-unlisted" }> }
+/** A change to the account's list of Sessions, as its stream said it. */
+export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: "sessions-listed" | "sessions-unlisted" }> }
 
 /** The account's store of shared sign-ins in Mako Cloud, through this Mac's device sign-in. */
 export interface HarnessSignInStore {
@@ -119,6 +124,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   signedIn,
   request,
   harnessSignIns,
+  sessions,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
@@ -129,6 +135,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   request?: (call: DiagnosticEvents["cloud.request"]) => void
   /** Shares this Mac's harness sign-ins with the account's cloud machines; a fixture desk shares none. */
   harnessSignIns?: (options: { dataRoot: string; store: HarnessSignInStore; onChange: (signIns: CloudSignInsState) => void }) => HarnessSignInSharing
+  /** What tells the account's list of this Mac's Sessions over its runtime's link (`SessionPublisher`). */
+  sessions?: SessionPublishing
 }): CloudAccount {
   let status: string | undefined
   /** What the sign-ins depend on in the account: who it is and whether it has the cloud. */
@@ -182,7 +190,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     // to the account's Threads goes to what lists them, which tells windows of the conversations it changes.
     onAccountEvent: (heard) => {
       const { event } = heard
-      if (event.type === "thread-listed" || event.type === "thread-unlisted") {
+      if (event.type === "sessions-listed" || event.type === "sessions-unlisted") {
         for (const listener of threadListeners) listener({ seq: heard.seq, event })
         return
       }
@@ -190,17 +198,21 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       emit({ type: "cloud-account-event", seq: heard.seq, at: heard.at, event, mine: heard.mine })
     },
     onRequest: request,
+    sessions,
     // With the cloud entitlement, this Mac answers its account's other devices and the cloud through the same
     // dispatcher as its own windows: the same schemas, the same refusals, the same logs.
     runtime: {
-      serve: (link, { runtimeId, credential, threads }) =>
-        serveHostThroughGateway(link, {
+      serve: (link, { runtimeId, credential, threads, watch }) => {
+        const options: GatewayHostOptions = {
           runtimeId,
           build: runtimeBuild(environment),
           credential,
           threads,
           invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
-        }),
+        }
+        if (watch) options.watch = watch
+        return serveHostThroughGateway(link, options)
+      },
     },
   })
 
@@ -242,7 +254,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     giveBackReturn: (threadId, move, reason) => cloud.giveBackReturn(threadId, move, reason),
     finishReturn: (threadId, move) => cloud.finishReturn(threadId, move),
     returnState: (threadId, move) => cloud.returnState(threadId, move),
-    threadListings: () => cloud.threadListings(),
+    sessionListings: () => cloud.sessionListings(),
+    reportSessions: () => cloud.reportSessions(),
+    devices: () => cloud.devices(),
     onThreadListings: (listener) => {
       threadListeners.add(listener)
       return () => threadListeners.delete(listener)

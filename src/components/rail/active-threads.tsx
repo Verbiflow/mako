@@ -65,7 +65,7 @@ export function LiveAgentRow({
   const lit = draftOpen || (viewedMember ?? liveOnScreen)
   const label =
     presence.status === "needs-permission"
-      ? "Needs your approval"
+      ? (presence.waitingOn ?? "Needs your approval")
       : presence.status === "running"
         ? "Working"
         : presence.status === "starting"
@@ -121,12 +121,14 @@ export function LiveAgentRow({
         onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open() } }}
         aria-label={[
           title,
+          presence.elsewhere ? `on ${presence.elsewhere}` : undefined,
           setup ? "setup Thread" : undefined,
           foldState
             ? `${foldState.sessions.length} sessions: ${foldState.sessions.map((session) => `${harnessLabel(session.harness)} ${sessionStateText(session.status)}`).join(", ")}`
             : label,
         ].filter(Boolean).join(", ")}
         data-thread-row
+        data-tip={presence.elsewhere ? `${title} · on ${presence.elsewhere}${presence.waitingOn ? ` · ${presence.waitingOn}` : ""}` : undefined}
         data-flip-key={presence.key}
         data-conversation-id={presence.key}
         data-thread-indent={indent || undefined}

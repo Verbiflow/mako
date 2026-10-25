@@ -140,6 +140,19 @@ async function checkWindow() {
     assert.equal(await evaluate(`import('/src/state/acp-state.ts').then(({ acpStore }) => acpStore.get().activeKey)`), null, "nor opens anything")
     await both("listed-working", ["[data-thread-row]"])
 
+    // 1b. Another Mac's Session, waiting on an approval there: the row needs the person here too, says for what, and where.
+    const STUDIO = "7e3a9d14-2b6c-4f8e-9a1d-5c0b3e2f4a61"
+    const studioTitle = "Bump the harness versions"
+    const studioRow = `[...document.querySelectorAll('[data-thread-row]')].find(row => row.innerText.includes(${JSON.stringify(studioTitle)}))`
+    await hostEvent({ type: "live-listed", summaries: [{ ...listed("running"), session: { ...listed("running").session, id: STUDIO, harness: "claude", title: studioTitle }, elsewhere: "Studio", waitingOn: "Approve: npm test" }] })
+    await until(`Boolean(${studioRow})`, "the Studio's Session in the rail")
+    const studioLabel = await evaluate(`${studioRow}.getAttribute('aria-label')`)
+    assert.match(studioLabel, /on Studio/, "it says where it runs")
+    assert.match(studioLabel, /Approve: npm test/, "and what it waits on, as a local approval is said")
+    assert.equal(await evaluate(`${studioRow}.getAttribute('data-tip')`), `${studioTitle} · on Studio · Approve: npm test`)
+    await settle()
+    await both("listed-waiting", ["[data-thread-row]"])
+
     // 2. It finished there: the row says so as the list changes.
     await hostEvent({ type: "live-listed", summaries: [listed("ready")] })
     await settle()

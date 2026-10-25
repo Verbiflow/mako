@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { statSync } from "node:fs"
 import { join } from "node:path"
 import { Admission } from "../base/admission.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
@@ -26,7 +27,7 @@ import {
   type TurnContinuation,
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
-import { retireQuestionsForInput } from "../contracts/live-questions.js"
+import { latestPendingQuestion, retireQuestionsForInput } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyNativeAgent } from "../contracts/native-agents.js"
 import { activeWork } from "../contracts/background-work.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -72,6 +73,8 @@ const SETTLE_EVERY_MS = 15 * 60_000
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
   private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
+  /** Each conversation's last write as `lastMoved` read it, at the revision it read it. */
+  private readonly moved = new Map<string, { revision: number; at: number | undefined }>()
   private settleTimer?: ReturnType<typeof setTimeout>
   private readonly dependencies: Dependencies
   private readonly admission: Admission
@@ -313,6 +316,39 @@ export class LiveConversations {
   /** Whether the conversation is in memory; one only on disk runs nothing, and `snapshot` would read it in. */
   loaded(id: string): boolean {
     return this.records.has(id)
+  }
+
+  /**
+   * What a conversation waits on, in a line: its first approval, else its latest open question. Memory keeps whatever
+   * waits, so one only on disk waits on nothing, and isn't read back in to find out.
+   */
+  waitingOn(id: string): string | undefined {
+    const resident = this.records.has(id) ? this.records.load(id) : undefined
+    if (!resident) return undefined
+    const permission = resident.snapshot.permissions[0]
+    if (permission) return `Approve: ${permission.title}`
+    const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
+    const asked = question?.native.questions.find((item) => !question.answered?.includes(item.id))
+    return asked ? `A question: ${asked.question}` : undefined
+  }
+
+  /**
+   * When a conversation last moved: the last write to its journal, read from the disk's times without opening it, and
+   * read again only once its revision moved, so a list of hundreds costs a stat for each that changed.
+   */
+  lastMoved(id: string, revision: number): number | undefined {
+    const known = this.moved.get(id)
+    if (known?.revision === revision) return known.at
+    const times = [`${id}.sqlite`, `${id}.sqlite-wal`].flatMap((name) => {
+      try {
+        return [statSync(join(this.dependencies.root, name)).mtimeMs]
+      } catch {
+        return []
+      }
+    })
+    const at = times.length ? Math.max(...times) : undefined
+    this.moved.set(id, { revision, at })
+    return at
   }
 
   snapshot(id: string): LiveSnapshot | null {

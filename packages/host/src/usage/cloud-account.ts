@@ -6,7 +6,8 @@ import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
-import { ThreadListingsSchema, type ThreadListings } from "@mako/protocol/thread-listing"
+import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thread-listing"
+import type { SessionPublishing } from "./machine-runtime.js"
 import { MOVE_ANSWER_WAIT_MS, MOVE_REASON_MAX, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
@@ -170,7 +171,7 @@ export type RuntimeClaim = { threadId: string; generation: number }
 
 /** How this Mac serves the host to the cloud as a runtime: the host's own dispatcher, behind the protocol. */
 export type CloudRuntime = {
-  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[] }): Promise<ServedRuntime>
+  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: (conversations: readonly string[]) => void }): Promise<ServedRuntime>
 }
 
 /** How a cloud Thread is made: ahead of its first message (`prepare`), and the harness that message is for. */
@@ -200,6 +201,8 @@ export type CloudAccountOptions = {
   onRequest?: (call: DiagnosticEvents["cloud.request"]) => void
   /** With the cloud entitlement, this Mac is reachable from the cloud as a runtime, `d-<device>`. */
   runtime?: CloudRuntime
+  /** What tells the account's list of this Mac's Sessions over that runtime's link, and relays what's watched. */
+  sessions?: SessionPublishing | undefined
   /** A connection down this long shows as offline; a shorter blip isn't shown. For tests. */
   offlineAfterMs?: number
   /**
@@ -257,6 +260,8 @@ export class CloudAccounts {
   #runtimeLink: CloudLink | undefined
   /** The Threads this Mac's runtime ran when its link last ended, claimed again when it comes back. */
   #claims: RuntimeClaim[] = []
+  /** The runtime link this Mac serves on now, and what serves there: where its Sessions are reported. */
+  #served: { link: RuntimeLink; served: ServedRuntime } | undefined
   readonly #sessions = new Set<ClientSessionOverSockets>()
   /**
    * Calls to the cloud go through a pool of this Mac's own, replaced at every wake: Node's timers stop while the Mac
@@ -373,11 +378,16 @@ export class CloudAccounts {
   }
 
   /**
-   * The account's Threads as every device lists them, and the account stream's number they were read at: this Mac
+   * The account's Sessions as every device lists them, and the account stream's number they were read at: this Mac
    * follows the stream after it, and misses nothing between.
    */
-  async threadListings(): Promise<ThreadListings> {
-    return ThreadListingsSchema.parse(await (await this.#call("threads.list", "GET", "/v1/threads")).json())
+  async sessionListings(): Promise<SessionListings> {
+    return SessionListingsSchema.parse(await (await this.#call("sessions.list", "GET", "/v1/sessions")).json())
+  }
+
+  /** Tells the account's list what changed of this Mac's Sessions, on the runtime link it serves now (none while signed out). */
+  reportSessions(): void {
+    this.#options.sessions?.report(this.#served)
   }
 
   async devices(): Promise<{ devices: CloudDevice[]; current: string }> {
@@ -1020,13 +1030,15 @@ export class CloudAccounts {
     let served: ServedRuntime | undefined
     let closed = false
     if (runtime)
-      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims }).then(
+      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations) => this.#options.sessions?.watch(link, conversations) }).then(
         (started) => {
           served = started
           if (closed) return started.close()
+          this.#served = { link, served: started }
           this.#options.log?.("cloud runtime enrolled", { runtimeId, claims: this.#claims.length })
           void started.ended.then((problem) => {
             this.#claims = started.claims()
+            if (this.#served?.served === started) this.#served = undefined
             end(endingOf(problem))
           })
         },
@@ -1036,6 +1048,7 @@ export class CloudAccounts {
       close: () => {
         closed = true
         if (served) this.#claims = served.claims()
+        if (served && this.#served?.served === served) this.#served = undefined
         link.close()
       },
     }

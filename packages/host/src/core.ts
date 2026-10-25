@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto"
-import type { RuntimeListing } from "@mako/protocol/thread-listing"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { encodeRuntimeValue } from "./contracts/runtime-value.js"
@@ -40,7 +39,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, runtimeListing, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import type { TerminalClients } from "./terminals/index.js"
@@ -105,8 +104,8 @@ export interface Core {
   activeWork(): boolean
   /** That work, item by item, as the lifecycle lists it: what keeps a cloud machine running. */
   work(): LifecycleWork[]
-  /** On a cloud machine: its conversations, as the account's list shows them on every device. */
-  listing(): RuntimeListing
+  /** What tells the account's list of this host's Sessions, and relays a watched conversation to another device. */
+  sessions: SessionPublisher
   lifecycleBlocked(): boolean
   /** Everything the core holds, released in order, with the socket and the terminals. */
   stop(): Promise<void>
@@ -342,7 +341,27 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }),
   })
   declareUnreadRecordMethods(methods, { views: makoViews(), records: makoRecords(), live: () => unknown.kinds(), since: Date.now(), streams })
+  // This host's Sessions on the account's list, and a watched conversation's live updates to another device.
+  const sessions = new SessionPublisher({
+    rows: () => {
+      const live = late.conversations?.live
+      const store = threads.store
+      if (!live || !store) return undefined
+      return ownedSessions({
+        summaries: () => live.summaries(),
+        work: () => application.lifecycle.snapshot().work,
+        waitingOn: (id) => live.waitingOn(id),
+        lastMoved: (id, revision) => live.lastMoved(id, revision),
+        placement: (id) => store.journalPlacement(id),
+        execution: (session) => store.execution(session),
+        thread: (id) => store.thread(id),
+        now: Date.now,
+      })
+    },
+  })
+  shell.jobs.every("tell the account this host's Sessions", 1_000, () => late.cloud?.reportSessions?.())
   late.cloud = declareCloudAccountMethods(methods, {
+    sessions,
     environment,
     secrets: fixtureDesk ? detachedSecrets() : secrets,
     machine,
@@ -683,6 +702,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     logPath: owner.logPath,
   })
   opened.share((event) => {
+    sessions.event("event", event)
     if (!shell.closing()) web()?.conversationEvent(event)
   })
 
@@ -797,7 +817,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     media: controlVideoMedia(control.previews),
     activeWork: () => application.lifecycle.snapshot().work.length > 0,
     work: () => application.lifecycle.snapshot().work,
-    listing: () => runtimeListing(late.conversations?.live.summaries() ?? [], application.lifecycle.snapshot().work),
+    sessions,
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {
       jobs.stop()

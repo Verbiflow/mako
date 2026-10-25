@@ -16,6 +16,7 @@ import {
   type LocalSeqStore,
   type MediaHandler,
   type Problem,
+  type RuntimeLink,
   type ServedRuntime,
 } from "@mako/protocol"
 import { z } from "zod"
@@ -29,7 +30,6 @@ import { runtimeEventRouting } from "../contracts/runtime.js"
 import { type HostInvoke, serveHostThroughGateway } from "../transport/index.js"
 import { CloudLink, type CloudLinkEnding, type CloudLinkState } from "./cloud-link.js"
 import { ACTIVITY_HEARTBEAT_MS } from "@mako/protocol"
-import type { RuntimeListing } from "@mako/protocol/thread-listing"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 /** The gateway a machine works through: where, as which machine, with which credential. */
 export type MachineGatewayLink = { gatewayUrl: string; machine: string; credential: string }
@@ -59,8 +59,11 @@ export type MachineRuntimeOptions = {
   prefetchSignedIn(harness: string): Promise<{ ms: number } | undefined>
   /** What the host is working on, as its lifecycle lists it: what the machine reports, so its Thread keeps it running. */
   work(): LifecycleWork[]
-  /** Its conversations, as the account's list shows them on every device; undefined until the host's core has loaded. */
-  listing?(): RuntimeListing | undefined
+  /**
+   * What tells the account's list of its Sessions, and relays a watched conversation's live updates
+   * (`SessionPublisher`, which composition makes): reported on its link at each tick, and told what's watched there.
+   */
+  sessions?: SessionPublishing | undefined
   /** The live streams its Threads' clients watch, such as a preview's video, once the host's core has loaded. */
   media(): MediaHandler | undefined
   /** The gateway the machine works through, as its agent linked it: what keeps its records and recipes in step. Null once silenced. */
@@ -70,6 +73,12 @@ export type MachineRuntimeOptions = {
   /** Whether to profile the host's own JavaScript while a launch runs (`MAKO_LAUNCH_PROFILE=1`); off unless asked. */
   profileHost?: boolean
   now?: () => number
+}
+
+/** What the machine asks of the publisher of its Sessions (`SessionPublisher`). */
+export type SessionPublishing = {
+  report(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> } | undefined): void
+  watch(link: RuntimeLink, conversations: readonly string[]): void
 }
 
 /** A stream's frames come as often as its acks; they change nothing the agent hears about. */
@@ -142,8 +151,8 @@ export class MachineRuntime {
   #heldLink: Link | undefined
   /** What this machine last told its Thread of its work, on which link and for which Threads, and when. */
   #activity: { served: ServedRuntime; claims: string; busy: boolean; at: number } | undefined
-  /** The listing last said, on which link and for which Threads: said again only when one of them changes. */
-  #listed: { served: ServedRuntime; claims: string; text: string } | undefined
+  /** The link the served runtime runs on: what's watched belongs to it. */
+  #servedLink: RuntimeLink | undefined
   /** A watch that comes before the core has loaded ends; its viewer asks again when the agent next acts. */
   readonly #media: MediaHandler = {
     watch: (stream, threadId, request, sender) => {
@@ -451,10 +460,11 @@ export class MachineRuntime {
         queueMicrotask(() => this.#publish())
       } else if (frame.type !== "operation" && !MEDIA_FRAMES.has(frame.type)) this.#changed()
     }
-    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, onFrame }).then(
+    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, onFrame, watch: (conversations) => this.#options.sessions?.watch(runtimeLink, conversations) }).then(
       (served) => {
         if (closed) return served.close()
         this.#served = served
+        this.#servedLink = runtimeLink
         this.#state.enrolls += 1
         this.#state.lastEnrolledAt = this.#iso()
         hostLog("machine", "enrolled", { runtimeId: link.runtimeId, claims: threads.claims().length, enrolls: this.#state.enrolls })
@@ -515,29 +525,11 @@ export class MachineRuntime {
     this.#activity = { served, claims, busy, at: now }
   }
 
-  /**
-   * Tells the Thread what its conversations are, as the account's list shows them: when that changes, and once on each
-   * link. Never as a heartbeat: the Thread keeps the last, so a paused machine's Thread is listed as it was.
-   */
-  #reportListing(): void {
-    const served = this.#served
-    const listing = served && this.#options.listing?.()
-    if (!served || !listing) return
-    const claims = served.claims()
-    const key = claims.map((claim) => `${claim.threadId}:${claim.generation}`).join(",")
-    if (!key) return
-    const text = JSON.stringify(listing)
-    const last = this.#listed
-    if (last && last.served === served && last.claims === key && last.text === text) return
-    // A gateway older than the frame never hears it; nothing is remembered, so a newer one on the next link does.
-    if (!claims.every((claim) => served.listing(claim.threadId, listing))) return
-    this.#listed = { served, claims: key, text }
-  }
-
   #watchClock(): void {
     const now = this.#now()
     this.#reportActivity(now)
-    this.#reportListing()
+    const served = this.#served
+    this.#options.sessions?.report(served && this.#servedLink ? { link: this.#servedLink, served } : undefined)
     const gapMs = now - this.#lastTick - TICK_MS
     this.#lastTick = now
     if (gapMs < RESUMED_GAP_MS) return

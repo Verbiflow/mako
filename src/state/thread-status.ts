@@ -110,6 +110,9 @@ export function threadStatus(
     return attention?.kind === "review" ? attention : IDLE_STATUS
   }
   if (attention?.kind === "needs-permission") return attention
+  // Another device's conversation waiting on a person there: it needs them here too, saying what for.
+  if (owned?.kind === "live" && owned.waitingOn)
+    return { kind: "needs-permission", since: owned.updatedAt, detail: owned.waitingOn }
   const working = state.working[ref.path]
   if (working) return working
   const external = state.externalActivity[ref.path]

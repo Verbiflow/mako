@@ -75,9 +75,25 @@ export function endpointOfTarget(target: Operation["target"]): ClientEndpoint {
 export function endpointOfStream(stream: StreamId): ClientEndpoint {
   const [kind, ...rest] = stream.split(":")
   const id = rest.join(":")
-  return kind === "thread"
-    ? { kind: "thread", threadId: id }
-    : { kind: "account", accountId: id }
+  if (kind === "thread") return { kind: "thread", threadId: id }
+  // `session:<runtime>:<conversation>`: one conversation's live updates, on its runtime's connection.
+  if (kind === "session") return { kind: "runtime", runtimeId: rest[0] ?? "" }
+  return { kind: "account", accountId: id }
+}
+
+/**
+ * The live updates of one conversation a runtime runs, while someone watches it (link version 5 on): the runtime sends
+ * them only then, and its object relays them and keeps none. A watcher that misses one sees the gap and asks the
+ * runtime for a snapshot.
+ */
+export function sessionStream(runtimeId: string, conversation: string): StreamId {
+  return `session:${runtimeId}:${conversation}`
+}
+
+/** The conversation a session stream carries, or undefined for another stream. */
+export function streamConversation(stream: StreamId): { runtimeId: string; conversation: string } | undefined {
+  const [kind, runtimeId, ...rest] = stream.split(":")
+  return kind === "session" && runtimeId && rest.length ? { runtimeId, conversation: rest.join(":") } : undefined
 }
 
 const endpointKey = (endpoint: ClientEndpoint) =>
