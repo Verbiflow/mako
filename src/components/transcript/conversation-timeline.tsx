@@ -62,6 +62,13 @@ const LOAD_AHEAD = 720
 const INITIAL_TURNS = 30
 const MORE_TURNS = 30
 
+/**
+ * Past either, only the turns near the viewport mount. A session of few prompts can hold thousands of tool calls,
+ * so the turn count alone would mount every one of them.
+ */
+const WINDOWED_TURNS = 200
+const WINDOWED_ITEMS = 400
+
 const NO_KEYS: ReadonlyMap<string, string> = new Map()
 const NO_RENAMES: ReadonlyMap<string, string> = new Map()
 
@@ -420,7 +427,14 @@ export function ConversationTimeline({
   const viewport = useRef<HTMLDivElement>(null)
   const topFade = useRef<HTMLSpanElement>(null)
   const edgeRow = useRef<HTMLDivElement>(null)
-  const windowed = exchanges.length > 200
+  // Once windowed, a conversation stays windowed while it's shown: releasing a turn's body never remounts the rest.
+  const sized = useRef({ identity, windowed: false })
+  if (sized.current.identity !== identity) sized.current = { identity, windowed: false }
+  if (!sized.current.windowed && (exchanges.length > WINDOWED_TURNS ||
+      exchanges.reduce((items, exchange) => items + exchange.system.length +
+        exchange.response.reduce((blocks, message) => blocks + message.blocks.length, 0), 0) > WINDOWED_ITEMS))
+    sized.current.windowed = true
+  const windowed = sized.current.windowed
   const pinned = useRef(true)
   const userScrolling = useRef(false)
   // Pointer/key release ends input ownership, but scroll motion can continue.
