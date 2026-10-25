@@ -246,6 +246,15 @@ function watchEnded(turn: ProviderTurnCause): ProviderTurnCause {
   return { ...turn, cause: { kind: "monitor", outcome: "ended", ...name && { name } } }
 }
 
+/** A reminder's `Description: <what> | Duration: 2.0s` line: what ran. */
+function reminderDescription(body: string): string | undefined {
+  const line = body.split("\n").find((entry) => entry.startsWith("Description:"))
+  if (line === undefined) return undefined
+  const text = line.slice("Description:".length)
+  const end = text.search(/\|\s*Duration:/)
+  return (end < 0 ? text : text.slice(0, end)).trim()
+}
+
 /** Seconds as Grok prints them in its reminders, `8.2s` or `65.95s`. */
 function reminderSeconds(text: string | undefined): number | undefined {
   const seconds = text === undefined ? undefined : Number(text)
@@ -268,7 +277,7 @@ export function backgroundReminderTurn(text: string, snapshots?: ReadonlyMap<str
     if (snapshot) return grokTaskTurn({ ...snapshot, kind: "monitor" })
     const exitCode = /code (-?\d+)/.exec(watch[2] ?? "")?.[1]
     return watchEnded(backgroundCommandTurn({
-      description: /^Description:\s*(.*?)(?:\s*\|\s*Duration:.*)?$/m.exec(body)?.[1],
+      description: reminderDescription(body),
       exitCode: exitCode === undefined ? undefined : Number(exitCode),
       stopped: /kill|stop|cancel/i.test(watch[2] ?? ""),
       durationMs: reminderSeconds(/\|\s*Duration:\s*([\d.]+)s/.exec(body)?.[1]),
@@ -280,7 +289,7 @@ export function backgroundReminderTurn(text: string, snapshots?: ReadonlyMap<str
   const exitCode = /exit code:\s*(-?\d+)/.exec(body)?.[1]
   const snapshot = task?.[1] ? snapshots?.get(task[1]) : undefined
   return backgroundCommandTurn({
-    description: /^Description:\s*(.*?)(?:\s*\|\s*Duration:.*)?$/m.exec(body)?.[1],
+    description: reminderDescription(body),
     exitCode: exitCode === undefined ? undefined : Number(exitCode),
     stopped: /kill|stop|cancel/i.test(status),
     durationMs: reminderSeconds(/\|\s*Duration:\s*([\d.]+)s/.exec(body)?.[1]) ?? (snapshot && snapshotDuration(snapshot)),
