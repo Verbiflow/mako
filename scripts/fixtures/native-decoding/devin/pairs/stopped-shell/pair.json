@@ -3,20 +3,53 @@
   "native": {
     "version": "3000.10.23"
   },
-  "about": "Run `sleep 30` in the shell. A long shell command the person stops while it runs.",
+  "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#crimson-laugh",
-      "known": []
+      "path": ".local/share/devin/cli/sessions.db#tricolor-crystal",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"shell_id\":\"tail-notes\",\"timeout\":5000} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
+          "reason": "Devin 3000.10.23 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
+        },
+        {
+          "side": "+",
+          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"shell_id\":\"tail-notes\",\"timeout\":5000} canceled -> Canceled due to user interrupt",
+          "reason": "Devin 3000.10.23 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
+        }
+      ]
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/0cc57462-3f89-49e2-9447-db9c681ebbd3.db",
-      "known": []
+      "path": "Library/Application Support/Devin/User/acp-messages/b9095120-719c-440d-9cd8-0b6223c0b6be.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"shell_id\":\"tail-notes\",\"timeout\":5000} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
+          "reason": "Devin 3000.10.23 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
+        },
+        {
+          "side": "+",
+          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"shell_id\":\"tail-notes\",\"timeout\":5000} canceled -> Canceled due to user interrupt",
+          "reason": "Devin 3000.10.23 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
+        }
+      ]
     }
   ],
   "replay": {
-    "known": []
+    "known": [
+      {
+        "side": "-",
+        "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"shell_id\":\"tail-notes\",\"timeout\":5000} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
+        "reason": "Devin 3000.10.23 replays a call the person stopped, when the session loads again, with the result it recorded, \"Canceled due to user interrupt\", not the output it had streamed live (the file's two lines)."
+      },
+      {
+        "side": "+",
+        "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"shell_id\":\"tail-notes\",\"timeout\":5000} canceled -> Canceled due to user interrupt",
+        "reason": "Devin 3000.10.23 replays a call the person stopped, when the session loads again, with the result it recorded, \"Canceled due to user interrupt\", not the output it had streamed live (the file's two lines)."
+      }
+    ]
   }
 }

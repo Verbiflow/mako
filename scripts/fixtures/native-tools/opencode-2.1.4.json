@@ -127,8 +127,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 533,
-            "sha": "bfffd5c105ef"
+            "chars": 532,
+            "sha": "4e87032485a0"
           },
           "parameters": {
             "command": {
@@ -384,8 +384,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 533,
-            "sha": "bfffd5c105ef"
+            "chars": 532,
+            "sha": "4e87032485a0"
           },
           "parameters": {
             "command": {
@@ -629,8 +629,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 533,
-            "sha": "bfffd5c105ef"
+            "chars": 532,
+            "sha": "4e87032485a0"
           },
           "parameters": {
             "command": {
@@ -857,8 +857,8 @@
         "shell": {
           "form": "function",
           "description": {
-            "chars": 533,
-            "sha": "bfffd5c105ef"
+            "chars": 532,
+            "sha": "4e87032485a0"
           },
           "parameters": {
             "command": {

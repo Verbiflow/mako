@@ -14,9 +14,10 @@ import { VOCABULARIES, type HarnessConcepts } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { resolveExecutable } from "@mako/host/base/executable"
+import { resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
 import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
-import { codexBinary } from "./harness-binaries.ts"
+import { claudeSdkBinary, codexBinary } from "./harness-binaries.ts"
 
 /**
  * Records what a harness says about itself, names only, as the fixtures its
@@ -71,10 +72,12 @@ async function cursorSdk(): Promise<Build> {
 }
 
 const builds = new Map<string, () => Promise<Build>>([
-  ["claude", () => executableBuild(resolveExecutable("claude", process.env))],
+  // The build the Agent SDK bundles, which Mako runs, not a terminal `claude` that may be another build or none.
+  ["claude", () => executableBuild(claudeSdkBinary())],
   ["codex", async () => executableBuild(await codexBinary())],
   ["cursor", cursorSdk],
-  ["opencode", () => executableBuild(resolveExecutable("opencode", process.env))],
+  // The OpenCode Mako runs (`OPENCODE_BIN_PATH`, else its candidates), which a PATH lookup can miss.
+  ["opencode", async () => executableBuild((await resolveOpenCodeInstallation(process.env)).command)],
   ["grok", () => executableBuild(resolveExecutable("grok", process.env))],
   ["devin", () => executableBuild(devinExecutable())],
 ])
@@ -337,10 +340,10 @@ async function cursorRequestContext(executable: string, { project, env, home }: 
  * without an account or a model call, else the table in the code it runs.
  */
 const listings = new Map<string, Listings>([
-  ["claude", { executable: async () => resolveExecutable("claude", process.env), mcpConfig: cliListing(["mcp", "list"]) }],
+  ["claude", { executable: async () => claudeSdkBinary(), mcpConfig: cliListing(["mcp", "list"]) }],
   ["cursor", { executable: async () => process.execPath, skills: cursorRequestContext, mcpConfig: cursorRequestContext }],
   ["codex", { executable: () => resolveCodexExecutable(), skills: codexSkillList }],
-  ["opencode", { executable: async () => resolveExecutable("opencode", process.env), skills: openCodeListing("/api/skill"), mcpConfig: openCodeListing("/api/mcp"), mcpFormat: "opencode" }],
+  ["opencode", { executable: async () => (await resolveOpenCodeInstallation(process.env)).command, skills: openCodeListing("/api/skill"), mcpConfig: openCodeListing("/api/mcp"), mcpFormat: "opencode" }],
   ["grok", { executable: async () => resolveExecutable("grok", process.env), skills: grokSkillListing, mcpConfig: cliListing(["mcp", "doctor"]) }],
   ["devin", { executable: async () => devinExecutable(), skills: cliListing(["skills", "list"]), mcpConfig: cliListing(["mcp", "list"]) }],
 ])
@@ -425,7 +428,7 @@ async function claudeInit(): Promise<void> {
     agents: z.array(z.string()).optional(),
     capabilities: z.array(z.string()).optional(),
   }).loose()
-  const child = spawn("claude", ["-p", "--output-format", "stream-json", "--verbose", "--model", "haiku", "Reply with the single word ok."], {
+  const child = spawn(claudeSdkBinary(), ["-p", "--output-format", "stream-json", "--verbose", "--model", "haiku", "Reply with the single word ok."], {
     stdio: ["ignore", "pipe", "ignore"],
   })
   let init: z.infer<typeof Init> | undefined
@@ -448,7 +451,7 @@ async function claudeInit(): Promise<void> {
     harness,
     version: init.claude_code_version,
     on: new Date().toISOString().slice(0, 10),
-    via: "claude -p --output-format stream-json, stopped at system/init",
+    via: "the Agent SDK's claude -p --output-format stream-json, stopped at system/init",
     tools: init.tools.filter((tool) => !tool.startsWith("mcp__")).sort(),
     agents: init.agents ?? [],
     capabilities: init.capabilities ?? [],

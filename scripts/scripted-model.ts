@@ -184,11 +184,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
       const body = SocketRequest.safeParse(safeJson(text)).data
       if (!body) return void send(JSON.stringify({ type: "error", status: 400, error: { type: "invalid_request_error", message: "The scripted model answers response.create only" } }))
       tools = offeredTools(body) ?? (body.previous_response_id ? tools : undefined)
-      if (body.generate === false) {
-        const id = Math.random().toString(36).slice(2)
-        for (const event of [{ type: "response.created", response: responseObject(id, "in_progress", []) }, { type: "response.completed", response: responseObject(id, "completed", []) }]) send(JSON.stringify(event))
-        return
-      }
+      if (body.generate === false) return void warmUpAnswer().forEach(send)
       const reply = compacting(body.input, answer(`WS ${path}`, { tools, tool_choice: body.tool_choice }, text))
       if (reply.fail) return void send(JSON.stringify({ type: "error", status: reply.fail.status, error: { type: "server_error", message: reply.fail.message } }))
       for (const event of responsesStreamed(reply)) send(JSON.stringify(served(event, { model: body.model, usage: options.usage })))
@@ -214,7 +210,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
  * function sends one. Answers pings and closes, and offers no extensions,
  * so frames arrive uncompressed.
  */
-function webSocket(request: IncomingMessage, socket: Duplex, heard: (text: string) => void): (text: string) => void {
+export function webSocket(request: IncomingMessage, socket: Duplex, heard: (text: string) => void): (text: string) => void {
   const accept = createHash("sha1").update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64")
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
   const frame = (opcode: number, payload: Buffer) => {
@@ -437,6 +433,12 @@ function served(value: JsonObject, as: Serving): JsonObject {
     if (inner) next[key] = served(inner, as)
   }
   return next
+}
+
+/** What the Responses API answers a `generate: false` warm-up with: the response created and completed, with no output. */
+export function warmUpAnswer(): string[] {
+  const id = Math.random().toString(36).slice(2)
+  return [{ type: "response.created", response: responseObject(id, "in_progress", []) }, { type: "response.completed", response: responseObject(id, "completed", []) }].map((event) => JSON.stringify(event))
 }
 
 function responseObject(id: string, status: string, output: JsonObject[]): JsonObject {

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs"
 import { readdir, realpath } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
@@ -8,9 +9,15 @@ export async function codexBinary(): Promise<string | null> {
   if (!launcher) return null
   const real = await realpath(launcher)
   if (!real.endsWith(".js")) return real
-  const vendor = join(dirname(real), "..", "node_modules", `@openai/codex-${process.platform}-${process.arch}`, "vendor")
-  const [target] = await readdir(vendor)
-  return target ? join(vendor, target, "bin", "codex") : null
+  // The platform package is the launcher's dependency: nested under its package, or hoisted beside it.
+  const platform = join("node_modules", `@openai/codex-${process.platform}-${process.arch}`, "vendor")
+  for (let folder = dirname(dirname(real)); folder !== dirname(folder); folder = dirname(folder)) {
+    const vendor = join(folder, platform)
+    if (!existsSync(vendor)) continue
+    const [target] = await readdir(vendor)
+    return target ? join(vendor, target, "bin", "codex") : null
+  }
+  return null
 }
 
 /** The Claude Code the Agent SDK bundles, which Mako runs. */

@@ -87,7 +87,11 @@ for (const harness of (await readdir(FIXTURE_ROOT)).sort()) {
     mergedLines.forEach((line, index) => {
       if (line === recordLines[index]) return
       const kept = recordLines[index]!
-      const call = (drawn: string) => drawn.slice(0, drawn.lastIndexOf(" -> "))
+      // The call itself: what it ran, without its output or the flags (`pending`, `canceled`) that follow from one.
+      const call = (drawn: string) => {
+        const arrow = drawn.lastIndexOf(" -> ")
+        return (arrow < 0 ? drawn : drawn.slice(0, arrow)).replace(/(?: (?:pending|error|canceled|cut-off))+$/, "")
+      }
       assert.ok(onlyRecord.has(kept) && line.startsWith("tool ") && call(line) === call(kept), `${where}: the merge drew ${line} where the record draws ${kept}`)
       filled++
     })

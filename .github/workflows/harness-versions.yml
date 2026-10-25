@@ -69,7 +69,7 @@ jobs:
     env:
       BRANCH: harness-versions/${{ matrix.harness }}-${{ matrix.version }}
     steps:
-      # The pull request is the bot's (Verbiflow Mako Bot): one the workflow's own token opened would run no checks,
+      # The pull request is the bot's (Mako by Verbiflow): one the workflow's own token opened would run no checks,
       # and its checks are the news. People open theirs as themselves; only automations use the bot.
       - name: Act as the bot
         id: bot
@@ -100,6 +100,15 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build:control-runtime
         if: steps.open.outputs.exists != 'true'
+      # Codex sandboxes every command with bubblewrap on Linux. The runner has none, and Ubuntu 24.04 gives an
+      # unprivileged user namespace no capabilities, so Codex 0.164.0's sandbox failed every shell call
+      # (`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`) and each pair recorded that, not Codex at work.
+      - name: Let Codex's sandbox run as on a Linux workstation
+        if: steps.open.outputs.exists != 'true' && matrix.harness == 'codex'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Move tested and rerun the drift tools
         id: bump
         if: steps.open.outputs.exists != 'true'
@@ -116,7 +125,7 @@ jobs:
           git config user.name "$BOT[bot]"
           git config user.email "$(gh api "/users/$BOT%5Bbot%5D" --jq .id)+$BOT[bot]@users.noreply.github.com"
           git switch -c "$BRANCH"
-          git add -A packages scripts package.json package-lock.json
+          git add -A packages scripts docs/adding-a-harness.md package.json package-lock.json
           git commit -m "Move ${{ matrix.harness }} to ${{ matrix.version }}"
           # The branch is this job's alone. One left by a run that couldn't open its
           # pull request (none exists, or the step above would have skipped) is replaced.
@@ -159,20 +168,35 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      # The branch carries the release, so installing or building it can be the first thing it breaks (a patch that
+      # targets the old version, types its protocol changed): that's said on the pull request like a failed flow.
+      - name: Install
+        id: install
         if: steps.reported.outputs.done != 'true'
-      - run: npm run build:control-runtime
-        if: steps.reported.outputs.done != 'true'
+        continue-on-error: true
+        run: npm ci
+      - name: Build
+        id: build
+        if: steps.reported.outputs.done != 'true' && steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run build:control-runtime
       - name: Install tested and run the session flows
         id: flows
-        if: steps.reported.outputs.done != 'true'
+        if: steps.reported.outputs.done != 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         run: npx tsx scripts/bump-harness-versions.ts "${{ matrix.harness }}" --verify --summary "$RUNNER_TEMP/macos.md"
       - name: Report on the pull request
         if: steps.reported.outputs.done != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INSTALL: ${{ steps.install.outcome }}
+          BUILD: ${{ steps.build.outcome }}
           OUTCOME: ${{ steps.flows.outcome }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          { echo "Session flows on macOS: $OUTCOME"; echo; cat "$RUNNER_TEMP/macos.md" 2>/dev/null; } > "$RUNNER_TEMP/comment.md"
+          if [ "$INSTALL" != "success" ]; then outcome="not run: npm ci failed on this branch"
+          elif [ "$BUILD" != "success" ]; then outcome="not run: the build failed on this branch"
+          else outcome="$OUTCOME"; fi
+          # No summary when the flows didn't run: the step runs under `bash -e`, so its absence mustn't end it.
+          { echo "Session flows on macOS: $outcome"; echo; cat "$RUNNER_TEMP/macos.md" 2>/dev/null || true; echo; echo "[The run]($RUN)"; } > "$RUNNER_TEMP/comment.md"
           gh pr comment "$BRANCH" --body-file "$RUNNER_TEMP/comment.md"

@@ -322,3 +322,15 @@ test("a device's list is the one it read, then each change the stream said after
   list.clear()
   assert.equal(list.known, false)
 })
+
+test("a device's list holds each Session's waiting messages as the list read and the stream said them, in order", () => {
+  const list = new AccountSessions()
+  const waiting = (id: number, text: string) => ({ id: uuid(500 + id), session: uuid(1), conversation: "c-1", text, from: uuid(900), at: new Date(NOW).toISOString() })
+  assert.equal(list.listed({ sessions: [listed(1)], seq: 10, waiting: [waiting(1, "Merge it")] }), true)
+  assert.deepEqual(list.waiting(uuid(1)).map((message) => message.text), ["Merge it"])
+  assert.equal(list.heard({ seq: 9, event: { type: "messages-waiting", session: uuid(1), messages: [] } }), false, "from before the read: changes nothing")
+  assert.equal(list.heard({ seq: 11, event: { type: "messages-waiting", session: uuid(1), messages: [waiting(1, "Merge it"), waiting(2, "Then tag it")] } }), true)
+  assert.equal(list.waiting(uuid(1)).length, 2, "said whole, so nothing drifts")
+  assert.equal(list.heard({ seq: 12, event: { type: "messages-waiting", session: uuid(1), messages: [] } }), true)
+  assert.deepEqual([list.waiting(uuid(1)), list.allWaiting().size], [[], 0], "none once each was taken")
+})

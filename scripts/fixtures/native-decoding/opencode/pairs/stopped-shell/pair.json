@@ -3,11 +3,11 @@
   "native": {
     "version": "2.1.4"
   },
-  "about": "Run `sleep 30` in the shell. A long shell command the person stops while it runs.",
+  "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e8dceb2edffexGd1wWCHJm3wOs",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e8d17472effeQvoI43mnHp7KX5",
       "known": [
         {
           "side": "+",

@@ -64,7 +64,7 @@ import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore, type RestoreInput } from "./record-store.js"
 import type { RecordRoot } from "./harness-records.js"
-import { ReadingCopies, type CopyScope } from "./reading-copies.js"
+import { ReadingCopies, ReceivedCopies, type CopyPage, type CopyScope } from "./reading-copies.js"
 import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { GatewayHttpError } from "@mako/protocol/gateway-http"
@@ -384,6 +384,8 @@ export class SessionCatalog {
   private recordLink: { current: RecordsLink } | null = null
   /** This device's reading copies of the Sessions its account lists (`copies`), with a records store; null otherwise. */
   private readingCopies: ReadingCopies | null = null
+  /** Copies other devices keep, read here (`copyPage`); made when first read. */
+  private receivedCopies: ReceivedCopies | null = null
   /** Where the record store is kept, which the reading copies keep theirs beside; null for a catalog that writes nothing. */
   private readonly recordsFolder: string | null
   /** Where each session last read back from the record store was restored, which its entries' records name. */
@@ -1628,6 +1630,25 @@ export class SessionCatalog {
     return this.readingCopies?.status() ?? null
   }
 
+  /**
+   * A page of the copy another device keeps of one of its Sessions, at that device's records in the account (`link`),
+   * as of now: what a window reads while that device is off. Null when it keeps none, or this catalog writes nothing.
+   */
+  async copyPage(link: RecordsLink, harness: string, nativeId: string, before?: number, limit = 100): Promise<CopyPage | null> {
+    return (await this.received()?.page(link, harness, nativeId, before, limit)) ?? null
+  }
+
+  /** One entry of such a copy, by ID. */
+  async copyEntry(link: RecordsLink, harness: string, nativeId: string, id: string): Promise<Entry | null> {
+    return (await this.received()?.entry(link, harness, nativeId, id)) ?? null
+  }
+
+  private received(): ReceivedCopies | null {
+    if (this.receivedCopies || !this.recordsFolder || this.readOnly || this.stopped) return this.receivedCopies
+    this.receivedCopies = new ReceivedCopies(join(this.recordsFolder, "copies", "received"))
+    return this.receivedCopies
+  }
+
   private copies(): ReadingCopies | null {
     if (this.readingCopies || !this.recordsFolder || this.readOnly || this.stopped) return this.readingCopies
     const log = (level: "info" | "warn", message: string, fields: Record<string, string | number>) => (level === "warn" ? console.warn : console.info)(`Reading copies: ${message}`, JSON.stringify(fields))
@@ -1770,6 +1791,7 @@ export class SessionCatalog {
   async stop(): Promise<void> {
     this.recordPushes?.stop()
     this.readingCopies?.stop()
+    this.receivedCopies?.close()
     this.stopped = true
     this.watching = false
     this.aside?.stop()

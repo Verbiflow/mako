@@ -596,14 +596,14 @@ const codex: Recorder = {
 
 const OPENCODE_TOOLS: ToolVocabulary = {
   subagent: { absent: SCRIPTED_SUBAGENT },
-  monitor: { absent: "OpenCode 2.0.27 defines no tool that watches a command and reports what it prints (native-tools/opencode-2.0.27.json)" },
+  monitor: { absent: "OpenCode 2.1.4 defines no tool that watches a command and reports what it prints (native-tools/opencode-2.1.4.json)" },
   read: (path, lines) => ({ name: "read", arguments: { path, ...lines } }),
   shell: (command) => ({ name: "shell", arguments: { command } }),
   edit: (path, from, to) => ({ name: "edit", arguments: { path, oldString: from, newString: to } }),
   viewImage: (path) => ({ name: "read", arguments: { path } }),
-  todos: { absent: "OpenCode 2.0.27 defines no todo tool for its agents (native-tools/opencode-2.0.27.json)" },
+  todos: { absent: "OpenCode 2.1.4 defines no todo tool for its agents (native-tools/opencode-2.1.4.json)" },
   search: (pattern) => ({ name: "grep", arguments: { pattern } }),
-  codeMode: { absent: "OpenCode 2.0.27 defines no tool that runs code calling its other tools (native-tools/opencode-2.0.27.json)" },
+  codeMode: { absent: "OpenCode 2.1.4 defines no tool that runs code calling its other tools (native-tools/opencode-2.1.4.json)" },
   ask: (question) => ({ name: "question", arguments: { questions: [question] } }),
   // The plan agent's closing answer is its plan (`openCodePlan`); no tool proposes it.
   plan: (plan) => [{ text: plan }],
