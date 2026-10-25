@@ -9,9 +9,9 @@ import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
 import { hostCallReplay } from "../contracts/host-call-policy.js"
-import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, RuntimeDisconnectedError } from "../contracts/host-connection.js"
+import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, OwnerUnavailableError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { ForkInputSchema } from "../contracts/conversation-control.js"
-import { sessionAfter, type LiveBatch, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
+import { sessionAfter, type LiveBatch, type LiveSnapshot, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
 import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, type Actor as StoreActor, type SessionId, type ThreadPlacement } from "../contracts/thread-identity.js"
@@ -22,9 +22,20 @@ import { cloudRuntimeOf, namedUuid } from "./cloud-moves.js"
 import { AccountSessions } from "./account-threads.js"
 import { CloudPreviews } from "./cloud-previews.js"
 import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
+import { LiveHistoryReader } from "./live-history-reader.js"
+import type { LiveHistoryRead } from "../contracts/live-history.js"
+import type { ThreadPage } from "@mako/sessions"
+import type { Entry as HistoryEntry } from "@mako/sessions/entries"
+import type { CopyPage } from "@mako/sessions/reading-copies"
 
 /** The newest this many are kept, and followed while they're open. */
 const KEPT = 50
+/** A device found off is read from the account's copy for this long before it's asked again. */
+const ASLEEP_MS = 15_000
+/** Entries a copy's snapshot holds; a reader asks for earlier ones by the page. */
+const COPY_PAGE = 100
+/** The calls a copy answers: reading the conversation. Anything else needs its device. */
+const COPY_READS = new Set(["mako:live-snapshot", "mako:live-read"])
 const RETRY_MS = 1_000
 const RETRY_MAX_MS = 30_000
 /** For this long after a wake, a follow tries again this often: the network comes back within a second or two. */
@@ -89,6 +100,8 @@ const EntrySchema = z.object({
    * call opening it captures there as this conversation (`mako:live-capture`). Gone once the list says it's open.
    */
   capture: z.string().optional(),
+  /** Its native session, which its device's copy in the account is kept by: read while that device is off. */
+  nativeId: z.string().optional(),
 })
 
 type Entry = z.infer<typeof EntrySchema>
@@ -179,6 +192,14 @@ export type CloudConversationsOptions = {
   threads?(): AwayThreads | undefined
   /** Whether a cloud Thread is on its way back to this Mac: it begins no conversation meanwhile. */
   returning?(cloudThread: string): boolean
+  /** The copies other devices keep of their Sessions in the account, read while a device is off. */
+  copies?: CloudCopies
+}
+
+/** Copies another device keeps of its Sessions in the account (`ReadingCopies`), by that device, read here (`HostCatalog.copyPage`). */
+export type CloudCopies = {
+  page(device: string, harness: string, nativeId: string, before: number | undefined, limit: number): Promise<CopyPage | null>
+  entry(device: string, harness: string, nativeId: string, id: string): Promise<HistoryEntry | null>
 }
 
 /** What a conversation begun in a moved Thread reads and records of this Mac's Thread store. */
@@ -291,6 +312,16 @@ export class CloudConversations {
   readonly #fromHead = new Set<string>()
   /** A listed session's capture on its device, in flight or done, by conversation (`#captureListed`). */
   readonly #capturing = new Map<string, Promise<void>>()
+  /** Devices found off (`owner-unavailable`), by runtime, until when their conversations are read from their copies. */
+  readonly #asleep = new Map<string, number>()
+  /** The windows' reads of copies, paged as a conversation's history is (`LiveHistoryReader`), by `copy:<conversation>`. */
+  readonly #copyHistory = new LiveHistoryReader(
+    (path, before) => this.#copyThreadPage(path, before),
+    async (path, id) => {
+      const copy = this.#copyOf(path)
+      return copy ? (this.#options.copies?.entry(copy.device, copy.entry.harness, copy.nativeId, id) ?? null) : null
+    }
+  )
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
@@ -341,15 +372,85 @@ export class CloudConversations {
     await this.start()
     const entry = this.#entries.get(id)
     if (!entry) return { handled: false }
-    // A session its device's harness keeps that Mako there hasn't opened: opened there first, as this conversation.
-    if (entry.capture) await this.#captureListed(entry, entry.capture)
-    // A window opened one known only from the account's list: from now its batches come here, from the stream's head.
-    if (entry.listed && !this.#following.has(entry.threadId)) {
-      this.#fromHead.add(entry.threadId)
-      this.#follow(entry)
+    // Another device's, while it's known to be off: its copy answers a read, and nothing else is tried.
+    if (entry.runtime && (this.#asleep.get(entry.runtime) ?? 0) > Date.now()) return { handled: true, value: await this.#offCall(entry, channel, args) }
+    try {
+      // A session its device's harness keeps that Mako there hasn't opened: opened there first, as this conversation.
+      if (entry.capture) await this.#captureListed(entry, entry.capture)
+      // A window opened one known only from the account's list: from now its batches come here, from the stream's head.
+      if (entry.listed && !this.#following.has(entry.threadId)) {
+        this.#fromHead.add(entry.threadId)
+        this.#follow(entry)
+      }
+      if (channel === "mako:live-fork") return { handled: true, value: await this.#fork(entry, args) }
+      return { handled: true, value: await this.#call(entry, channel, args) }
+    } catch (error) {
+      // Its device is off (the cloud refused the call unapplied): read from its copy for a while, and say so.
+      if (!(error instanceof OwnerUnavailableError) || !entry.runtime) throw error
+      this.#asleep.set(entry.runtime, Date.now() + ASLEEP_MS)
+      hostLog("cloud-conversations", "another device is off; its conversation is read from its copy", { conversationId: entry.conversationId, runtime: entry.runtime })
+      return { handled: true, value: await this.#offCall(entry, channel, args) }
     }
-    if (channel === "mako:live-fork") return { handled: true, value: await this.#fork(entry, args) }
-    return { handled: true, value: await this.#call(entry, channel, args) }
+  }
+
+  /** A call for a conversation whose device is off: a read is answered from its copy in the account; anything else is refused, saying why. */
+  async #offCall(entry: Entry, channel: string, args: unknown[]): Promise<EncodedValue> {
+    const where = entry.summary?.elsewhere ?? "Its computer"
+    if (!COPY_READS.has(channel) || !this.#options.copies || !entry.nativeId)
+      throw new Error(`${where} is off, so this conversation can't be changed from here until it's back.`)
+    if (channel === "mako:live-snapshot") return encodeRuntimeValue(this.#copyHistory.present(await this.#copySnapshot(entry)))
+    // SAFETY: the dispatcher parsed this call's arguments with `mako:live-read`'s schema before routing it.
+    const [, input] = args as [string, LiveHistoryRead]
+    return encodeRuntimeValue(await this.#copyHistory.read(entry.conversationId, input, () => this.#copySnapshot(entry)))
+  }
+
+  /** Where a copy read names a conversation's copy: by the conversation, which says its device and native session. */
+  #copyOf(path: string): { entry: Entry; device: string; nativeId: string } | undefined {
+    const entry = path.startsWith("copy:") ? this.#entries.get(path.slice("copy:".length)) : undefined
+    if (!entry?.runtime || !entry.nativeId) return undefined
+    return { entry, device: entry.runtime.slice("d-".length), nativeId: entry.nativeId }
+  }
+
+  /** A page of a conversation's copy, as a page of its history: its revision is the copy's records' stamp. */
+  async #copyThreadPage(path: string, before?: number): Promise<ThreadPage | null> {
+    const copy = this.#copyOf(path)
+    const page = copy && (await this.#options.copies?.page(copy.device, copy.entry.harness, copy.nativeId, before, COPY_PAGE))
+    if (!copy || !page) return null
+    const { header } = page
+    const ref: ThreadPage["ref"] = { harness: header.harness, nativeId: header.nativeId, path, revision: header.stamp, updatedAt: new Date(header.at).toISOString() }
+    if (header.title) ref.title = header.title
+    if (header.cwd) ref.cwd = header.cwd
+    if (header.model) ref.model = header.model
+    return { ref, entries: page.entries, start: page.start, total: page.total, hasEarlier: page.start > 0, translator: header.translator }
+  }
+
+  /** The conversation as its copy has it: its history, and nothing at work, since nothing runs while its device is off. */
+  async #copySnapshot(entry: Entry): Promise<LiveSnapshot> {
+    const base = await this.#copyThreadPage(`copy:${entry.conversationId}`)
+    if (!base) throw new Error(`${entry.summary?.elsewhere ?? "Its computer"} is off, and the account has no copy of this conversation yet.`)
+    const at = Date.parse(base.ref.updatedAt ?? "") || Date.now()
+    const listed = entry.summary
+    const snapshot: LiveSnapshot = {
+      session: {
+        ...(listed?.session ?? { harness: entry.harness, cwd: base.ref.cwd ?? "", modes: [], currentMode: null, configOptions: [] }),
+        id: entry.conversationId,
+        status: "ready",
+        connection: "hibernated",
+      },
+      revision: at,
+      epoch: `copy-${at}`,
+      createdAt: listed?.createdAt ?? entry.createdAt,
+      copy: { at },
+      base,
+      blocks: [],
+      permissions: [],
+      requests: [],
+    }
+    if (listed?.elsewhere) snapshot.elsewhere = listed.elsewhere
+    if (listed?.threadId) snapshot.threadId = listed.threadId
+    if (listed?.sessionId) snapshot.sessionId = listed.sessionId
+    if (base.ref.title && !snapshot.session.title) snapshot.session.title = base.ref.title
+    return snapshot
   }
 
   /**
@@ -849,6 +950,9 @@ export class CloudConversations {
         return await send(attempt)
       } catch (error) {
         if (!(error instanceof RuntimeDisconnectedError)) throw error
+        // Another device's runtime that isn't connected, said before the call was applied: it's off, and a call doesn't
+        // wake a Mac as it does a cloud Thread's machine. Said at once, as itself, for its copy to answer a read.
+        if (how.runtime && error instanceof OwnerUnavailableError && !error.unconfirmed) throw error
         const waitMs = CLOUD_REPEAT_BACKOFF_MS[Math.min(attempt - 1, CLOUD_REPEAT_BACKOFF_MS.length - 1)]!
         if (repeatable && attempt < 8 && performance.now() - began + waitMs < CLOUD_REPEAT_MS) {
           hostLog("cloud-conversations", "a call didn't reach the Thread yet; repeating it", { threadId, channel, attempt, inMs: waitMs })
@@ -1053,6 +1157,7 @@ export class CloudConversations {
       if (runtime) entry.runtime = runtime
       if (row.capture && runtime) entry.capture = row.capture.path
       else delete entry.capture
+      if (row.nativeId) entry.nativeId = row.nativeId
       entry.summary = summary
       this.#entries.set(id, entry)
       listed.push(summary)

@@ -132,6 +132,7 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     activityAt: snapshot.activityAt,
     nativeActivity: snapshot.nativeActivity,
     history: snapshot.history,
+    copy: snapshot.copy,
     hydrated: true,
     projection: projectLive(snapshot, existing?.projection, pendingPrompts),
     permission: snapshot.permissions[0] ?? null,

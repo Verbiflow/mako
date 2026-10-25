@@ -960,6 +960,11 @@ export function Composer() {
 
   const busy = status.streaming || status.compacting
   const liveHarness = useAcp((state) => activeAcp(state)?.harness ?? null)
+  // Another device's conversation read from its copy while that device is off: where it waits to be sent.
+  const copyOn = useAcp((state) => {
+    const active = activeAcp(state)
+    return active?.kind === "live" && active.copy ? (active.elsewhere ?? "its computer") : null
+  })
   const steeringKind = useThreads((state) => {
     const steering = descriptorFor(state, liveHarness)?.capabilities.steering
     return steering?.state === "implemented" ? steering.lands : null
@@ -1048,7 +1053,9 @@ export function Composer() {
         ? `Draft a reply for ${harnessTitle(newHarness)} — loading conversation…`
         : `Draft a reply — moves this conversation to ${harnessTitle(newHarness)} once it loads`
     : liveOwnsComposer && liveHarness
-      ? liveStarting
+      ? copyOn
+        ? `Draft a message — it can go once ${copyOn} is back`
+        : liveStarting
         ? `Queue a message for ${harnessTitle(liveHarness)}`
         : liveRunning
           ? composerRunningPlaceholder(harnessTitle(liveHarness), enterAction, canSteer)

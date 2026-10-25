@@ -442,6 +442,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         },
         threads: () => threads.store ?? undefined,
         returning: (cloudThread) => late.cloudReturns?.returning(cloudThread) ?? false,
+        // Another device's Session while that device is off: read from the copy it keeps in the account.
+        copies: {
+          page: async (device, harness, nativeId, before, limit) => {
+            const cloud = late.cloud
+            return cloud ? catalog.copyPage(await cloud.deviceRecords(device), harness, nativeId, before, limit) : null
+          },
+          entry: async (device, harness, nativeId, id) => {
+            const cloud = late.cloud
+            return cloud ? catalog.copyEntry(await cloud.deviceRecords(device), harness, nativeId, id) : null
+          },
+        },
       })
   late.cloudConversations = cloudConversations
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))

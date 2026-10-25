@@ -37,6 +37,17 @@ export function formatRelative(value?: string | number) {
   return formatDay(date.getTime())
 }
 
+/** How long ago something was written, in words, for a sentence: "a moment ago", "4 minutes ago", "2 hours ago", "3 days ago". */
+export function copyAge(at: number, now = Date.now()): string {
+  const minutes = Math.floor((now - at) / 60_000)
+  if (minutes < 1) return "a moment ago"
+  if (minutes < 60) return minutes === 1 ? "a minute ago" : `${minutes} minutes ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return hours === 1 ? "an hour ago" : `${hours} hours ago`
+  const days = Math.floor(hours / 24)
+  return days === 1 ? "a day ago" : `${days} days ago`
+}
+
 /**
  * How long until a time to come: "in 12 min", "in 5 h", "in 89 days", or "expired" once it has passed.
  * `formatRelative` reads only the past; a future time there reads "now".

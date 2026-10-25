@@ -1,10 +1,11 @@
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import { planRecordImport, RecordConflictError } from "@mako/protocol/records"
-import { copyFile, CopyHeaderSchema, ReadingCopies } from "../dist/reading-copies.js"
+import { copyFile, CopyHeaderSchema, ReadingCopies, ReceivedCopies } from "../dist/reading-copies.js"
 
 /**
  * A device's reading copies: each Session in scope written as Mako draws it (a header line, then an entry a line) when
@@ -15,7 +16,7 @@ import { copyFile, CopyHeaderSchema, ReadingCopies } from "../dist/reading-copie
 /** The gateway's records routes in memory: chunks kept once by hash, versions taken by the protocol's rule. */
 class MemoryRemote {
   constructor(id) {
-    Object.assign(this, { id, chunks: new Map(), units: new Map(), bytes: 0, pushed: [] })
+    Object.assign(this, { id, chunks: new Map(), units: new Map(), versions: [], bytes: 0, pushed: [] })
   }
   async missing(hashes) {
     return hashes.filter((hash) => !this.chunks.has(hash))
@@ -37,8 +38,16 @@ class MemoryRemote {
   async holdings() {
     return { holdings: {}, next: null }
   }
-  async pull() {
-    return null
+  async pull(harness, nativeId, after) {
+    const mine = this.versions.filter((entry) => entry.harness === harness && entry.nativeId === nativeId)
+    if (!mine.length) return null
+    const page = mine.filter((entry) => entry.n > after)
+    const units = new Map()
+    for (const entry of page) {
+      if (!units.has(entry.unit.key)) units.set(entry.unit.key, { ...entry.unit, versions: [] })
+      units.get(entry.unit.key).versions.push(entry.version)
+    }
+    return { bundle: { harness, nativeId, layout: this.layout, marks: {}, units: [...units.values()] }, through: page.at(-1)?.n ?? after, more: false }
   }
   async sessions() {
     return []
@@ -55,10 +64,12 @@ class MemoryRemote {
         const held = this.units.get(key(unit))
         return held && { head: held.length - 1, version: (seq) => held[seq] }
       })
+      this.layout ??= bundle.layout
       for (const { unit, version } of plan.taking) {
         const held = this.units.get(key(unit.key)) ?? []
         held.push({ kind: version.kind, chunks: version.chunks })
         this.units.set(key(unit.key), held)
+        this.versions.push({ n: this.versions.length + 1, harness: bundle.harness, nativeId: bundle.nativeId, unit: { ...unit, versions: [] }, version })
       }
       if (plan.taking.length) this.pushed.push(bundle.nativeId)
       return { ok: true, versions: plan.taking.length, held: plan.held, through: 0 }
@@ -76,7 +87,8 @@ function sessionView(nativeId, entries) {
     ref: { harness: "claude", nativeId, path: `/rail/${nativeId}.jsonl`, title: `Session ${nativeId}`, cwd: "/Users/ana/api" },
   }
 }
-const turn = (n) => ({ id: `e-${n}`, type: "assistant", text: `${"An answer that goes on. ".repeat(200)}${n}` })
+/** An answer of its own, about 4 KB that doesn't compress to nothing, as a real one doesn't. */
+const turn = (n) => ({ id: `e-${n}`, type: "text", text: Array.from({ length: 64 }, (_, part) => createHash("sha256").update(`${n}:${part}`).digest("hex")).join(" ") })
 
 test("reading copies go up as Mako draws each Session, the ones at work first and more often, only what changed, and nothing again after a restart", async () => {
   const folder = await mkdtemp(join(tmpdir(), "mako-reading-copies-"))
@@ -114,7 +126,7 @@ test("reading copies go up as Mako draws each Session, the ones at work first an
     const header = CopyHeaderSchema.parse(JSON.parse(lines[0]))
     assert.deepEqual([header.nativeId, header.total, header.title, header.translator], ["busy", 40, "Session busy", "t-1"])
     assert.deepEqual(lines.slice(1).map((line) => JSON.parse(line).id), sessions.busy.map((entry) => entry.id), "then an entry a line, in order")
-    const first = remote.bytes
+    const chunksBefore = remote.chunks.size
 
     // A turn at work: copied again once 10 s have gone, and only its new chunks go up.
     sessions.busy.push(turn(40))
@@ -126,7 +138,7 @@ test("reading copies go up as Mako draws each Session, the ones at work first an
     copies.scope(scope())
     await copies.settled()
     assert.deepEqual(remote.pushed.slice(2), ["busy"])
-    assert.ok(remote.bytes - first < first / 4, `a turn sends what changed: ${remote.bytes - first} bytes of ${first}`)
+    assert.ok(remote.chunks.size - chunksBefore <= 3, `a turn sends the chunks that changed (its header's, its end's): ${remote.chunks.size - chunksBefore} of ${chunksBefore}`)
 
     // At rest it waits a minute; on a low battery it waits until there's more, while a Session at work still goes.
     sessions.rest.push(turn(102))
@@ -152,6 +164,52 @@ test("reading copies go up as Mako draws each Session, the ones at work first an
     assert.equal(drawn.length, before, "nothing drawn again")
     assert.equal(remote.pushed.length, 5, "nothing sent again")
     again.stop()
+  } finally {
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
+test("another device reads a copy as it stands: the newest version, a page at a time, read again once it's had a while, and nothing for a Session with none", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "mako-received-copies-"))
+  try {
+    const entries = Array.from({ length: 250 }, (_, n) => turn(n))
+    let stamp = "n:1"
+    const views = { view: async () => sessionView("s-1", entries), stamp: () => stamp, translator: () => "t-1" }
+    let ownerNow = 2_000_000
+    let now = 2_000_000
+    const remote = new MemoryRemote("gateway/d-studio")
+    const owner = new ReadingCopies(join(folder, "studio"), views, () => {}, { now: () => ownerNow, remote: () => remote })
+    const scope = { sessions: [{ harness: "claude", nativeId: "s-1", path: "/rail/s-1.jsonl", busy: true }], paused: false }
+    const link = { id: "https://cloud.test/v1/devices/studio/records", base: "https://cloud.test/v1/devices/studio/records", authorization: "Bearer b" }
+    owner.scope(scope)
+    owner.link(link)
+    await owner.settled()
+
+    let pulls = 0
+    const counted = new Proxy(remote, { get: (target, name) => (name === "pull" ? (...args) => (pulls++, target.pull(...args)) : typeof target[name] === "function" ? target[name].bind(target) : target[name]) })
+    const reader = new ReceivedCopies(join(folder, "laptop"), { now: () => now, remote: () => counted })
+    const newest = await reader.page(link, "claude", "s-1", undefined, 100)
+    assert.deepEqual([newest.start, newest.total, newest.entries.length, newest.header.title], [150, 250, 100, "Session s-1"])
+    assert.deepEqual(newest.entries.map((entry) => entry.id), entries.slice(150).map((entry) => entry.id), "the newest page, whole entries in order")
+    const earlier = await reader.page(link, "claude", "s-1", newest.start, 100)
+    assert.deepEqual([earlier.start, earlier.entries[0].id], [50, "e-50"], "then the page before it")
+    assert.equal(pulls, 1, "paging back reads it once")
+    assert.equal((await reader.entry(link, "claude", "s-1", "e-7"))?.id, "e-7")
+
+    // The owner's next turn: read once the last read has had 10 s.
+    entries.push(turn(250))
+    stamp = "n:2"
+    ownerNow += 10_000
+    owner.scope(scope)
+    await owner.settled()
+    assert.deepEqual(remote.versions.map((each) => each.version.kind), ["replace", "replace"], "a copy is taken whole each time, never as an append")
+    now += 9_000
+    assert.equal((await reader.page(link, "claude", "s-1", undefined, 10)).total, 250, "within 10 s of the last read: as it was")
+    now += 1_000
+    assert.equal((await reader.page(link, "claude", "s-1", undefined, 10)).total, 251, "then the newest")
+    assert.equal(await reader.page(link, "claude", "nobody", undefined, 10), null)
+    owner.stop()
+    reader.close()
   } finally {
     await rm(folder, { recursive: true, force: true })
   }

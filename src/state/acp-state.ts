@@ -45,6 +45,8 @@ interface AcpConversationBase {
   elsewhere?: string
   /** What a conversation listed from another device waits on there, while it waits on a person ("Approve: npm test"). */
   waitingOn?: string
+  /** Read from the copy its device keeps in the account, that device being off: when the device wrote it. */
+  copy?: { at: number }
   /** The Thread-store Thread and Session, from the host; a `+` tab's start knows them before it does. */
   threadId?: string
   sessionId?: string
