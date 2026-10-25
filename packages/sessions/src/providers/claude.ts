@@ -525,6 +525,10 @@ export class ClaudeProvider implements SessionProvider {
   }
 
   async peek(file: NativeFile): Promise<ThreadRef | null> {
+    // A subagent's transcript is read through its parent (`children`), never
+    // listed: its lines carry the parent's `sessionId`, so peeked as a session
+    // it named the parent and a write to it re-bound the parent's conversation.
+    if (claudeChildPath(file.path, this.roots())) return null
     const head = await readHead(file.path, 262_144)
     const ref: ThreadRef = {
       harness: this.harness,
