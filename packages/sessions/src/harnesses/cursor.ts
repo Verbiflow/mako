@@ -44,9 +44,9 @@ const RUN_LOST: StreamDifference = {
 export const CURSOR_VOCABULARY = defineVocabulary({
   harness: "cursor",
   checked: {
-    version: "SDK 1.0.31",
-    on: "2026-10-05",
-    against: "@cursor/sdk ToolType and its tool-call schema (scripts/fixtures/native-tools), and Cursor's SDK, CLI and Desktop stores through audit:tools",
+    version: "SDK 1.0.40",
+    on: "2026-10-25",
+    against: "@cursor/sdk ToolType and its tool-call schema (scripts/fixtures/native-tools; 1.0.40 added computerUse), and Cursor's SDK, CLI and Desktop stores through audit:tools",
   },
   mcp: ["s-t"],
   // `cursorUnfinishedToolNote` for a call the SDK's hooks refused: it reports no result of its own.
@@ -72,6 +72,7 @@ export const CURSOR_VOCABULARY = defineVocabulary({
     readTodos: { kind: "todo", unlisted: STORES_ONLY },
     task: { kind: "agent", aliases: ["Subagent"] },
     recordScreen: { kind: "other", label: "Record screen" },
+    computerUse: { kind: "computer", label: "Computer use" },
     askQuestion: { kind: "question", unlisted: STORES_ONLY },
     webSearch: { kind: "web-search", keys: { query: ["query", "searchTerm", "search_term"] }, unlisted: STORES_ONLY },
     webFetch: { kind: "web-fetch", unlisted: STORES_ONLY },
@@ -82,9 +83,9 @@ export const CURSOR_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "SDK 1.0.31",
-      on: "2026-10-06",
-      against: "@cursor/sdk 1.0.31 types and bundle (settingSources loaders, hook enum, skill and agent folders), cursor.com/docs (rules, hooks, skills, subagents), and the request context its agent sends, through harness:self-report",
+      version: "SDK 1.0.40",
+      on: "2026-10-25",
+      against: "@cursor/sdk 1.0.40 types and bundle (settingSources loaders, hook enum, skill and agent folders), cursor.com/docs (rules, hooks, skills, subagents), and the request context its agent sends, through harness:self-report",
     },
     instructions: {
       files: ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".cursorrules"],

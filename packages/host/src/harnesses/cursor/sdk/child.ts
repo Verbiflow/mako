@@ -169,9 +169,10 @@ const SpawnFailureSchema = z.object({ syscall: z.string().startsWith("spawn") })
  * (`AbortError code 20` right after Stop) and its shell tool rejects a
  * second promise when a command cannot start (`ENOENT` from a deleted
  * folder); in both the owning run or tool call settles on its own. Ending
- * the process for either ended the turn with it. Streaming-tool failures are
- * observed and delivered to their readers by `patch-cursor-sdk.mjs`, rather
- * than exempted here by an RPC name or error code.
+ * the process for either ended the turn with it. A streaming tool's failure
+ * reaches its readers inside the SDK (since 1.0.40; Mako patched it into
+ * 1.0.31), held so by `scripts/test-cursor-tool-stream.mjs`, rather than
+ * exempted here by an RPC name or error code.
  */
 function containedRejection(cause: unknown): boolean {
   if (!(cause instanceof Error)) return false
