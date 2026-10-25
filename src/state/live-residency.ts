@@ -22,6 +22,15 @@ import { ContentWeights, residencyPlan, type ResidencyBudget } from "@mako/host/
  */
 export const WINDOW_MEMORY: ResidencyBudget = { bytes: 64 * 1024 * 1024, recent: 2 }
 
+/**
+ * What one conversation keeps of its finished turns, the one being read included. Past it, the turns read longest ago
+ * go back to the host and come back as the reader nears them; what's on screen, near it, read in the last minute or
+ * still at work always stays. A session that runs for hours stays the size of its last stretch.
+ */
+export const CONVERSATION_MEMORY = 24 * 1024 * 1024
+/** How often a conversation under the window's budget is looked at for turns past its own. */
+const TRIM_MS = 5_000
+
 /** Conversations whose transcript something on screen or in flight still reads. */
 function inUse(): Set<string> {
   const keys = new Set<string>()
@@ -50,9 +59,11 @@ function whenIdle(work: () => void): void {
 }
 
 /** Reconsider residency when content, activity, or the visible panes change. */
-export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
+export function watchLiveResidency(budget = WINDOW_MEMORY, conversationBytes = CONVERSATION_MEMORY): () => void {
   /** In what order each conversation was last on screen; the one shown now is pinned instead. */
   const shownAt = new Map<string, number>()
+  /** When each conversation past its own share was last looked at for turns to release. */
+  const trimmedAt = new Map<string, number>()
   const weights = new ContentWeights()
   let shown = 0
   let active = acpStore.get().activeKey
@@ -75,20 +86,28 @@ export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
       })
     }
     for (const key of residencyPlan(candidates, budget).evict) unloadLive(key)
-    // Whole inactive conversations go first. If their removal was insufficient,
-    // release finished cold turns inside the conversations the panes still read.
-    let bytes = Object.values(acpStore.get().conversations).reduce((total, conversation) => total +
-      (conversation.hydrated ? weights.of(conversation) : 0), 0)
-    if (bytes > budget.bytes) {
+    // Whole inactive conversations go first. If their removal was insufficient, or one conversation holds more than
+    // its own share, release finished cold turns inside the conversations the panes still read.
+    const now = Date.now()
+    const held = new Map<string, number>()
+    for (const conversation of Object.values(acpStore.get().conversations))
+      if (conversation.hydrated) held.set(conversation.key, weights.of(conversation))
+    let bytes = [...held.values()].reduce((total, weight) => total + weight, 0)
+    const over = bytes > budget.bytes
+    const heavy = new Set([...held].filter(([key, weight]) =>
+      weight > conversationBytes && now - (trimmedAt.get(key) ?? -Infinity) >= TRIM_MS).map(([key]) => key))
+    for (const key of heavy) trimmedAt.set(key, now)
+    if (over || heavy.size) {
       const cold = []
       for (const conversation of Object.values(acpStore.get().conversations)) {
         if (conversation.kind !== "live" || !conversation.hydrated || !conversation.history?.ranges) continue
+        if (!over && !heavy.has(conversation.key)) continue
         const source = liveReadingSource(conversation.key)
         const protectedTurns = transcriptReaders.protected(source)
         // No mounted timeline for a pinned/operational conversation is not
         // evidence that its in-flight inputs can be discarded.
         if (!protectedTurns || (pinned.has(conversation.key) && !transcriptReaders.sources().has(source))) continue
-        const projection = projectAcp(conversation)
+        const projection = conversation.projection ?? projectAcp(conversation)
         const operating = new Set(conversation.requests?.filter(request =>
           ["dispatching", "queued", "held"].includes(request.status)).map(request => `acp-request-${request.id}`))
         for (const turn of historyTurns(projection.exchanges, conversation.blocks, conversation.history.blockStart,
@@ -107,11 +126,14 @@ export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
       cold.sort((left, right) => left.used - right.used || right.weight - left.weight)
       const releases = new Map<string, typeof cold>()
       for (const candidate of cold) {
-        if (bytes <= budget.bytes) break
-        const held = releases.get(candidate.key) ?? []
-        held.push(candidate)
-        releases.set(candidate.key, held)
-        bytes -= Math.max(0, candidate.weight - 1024)
+        const own = held.get(candidate.key) ?? 0
+        if (bytes <= budget.bytes && own <= conversationBytes) continue
+        const turns = releases.get(candidate.key) ?? []
+        turns.push(candidate)
+        releases.set(candidate.key, turns)
+        const freed = Math.max(0, candidate.weight - 1024)
+        bytes -= freed
+        held.set(candidate.key, own - freed)
       }
       for (const [key, turns] of releases) {
         const current = acpStore.get().conversations[key]
@@ -124,6 +146,7 @@ export function watchLiveResidency(budget = WINDOW_MEMORY): () => void {
       }
     }
     for (const key of shownAt.keys()) if (!acpStore.get().conversations[key]) shownAt.delete(key)
+    for (const key of trimmedAt.keys()) if (!acpStore.get().conversations[key]?.hydrated) trimmedAt.delete(key)
   }
   const settle = () => {
     const next = acpStore.get().activeKey

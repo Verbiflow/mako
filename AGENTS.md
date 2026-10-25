@@ -888,8 +888,13 @@ Three rules hold this together, and each has a specific failure it prevents:
   turn in the session.
 - **Long lists are virtualized, long content uses `content-visibility`.** The
   rail is windowed with `@tanstack/react-virtual`; transcript turns and
-  surface-panel rows carry `.contain-turn`. Timelines above 200 turns and
-  navigators above 100 prompts additionally window measured rows. Preserve
+  surface-panel rows carry `.contain-turn`. Timelines above 200 turns or 400
+  messages and calls (a few prompts can hold thousands of calls), and
+  navigators above 100 prompts, additionally window measured rows; a timeline
+  stays windowed while it's shown. A conversation keeps at most 24 MB of
+  finished turns (`CONVERSATION_MEMORY` in `live-residency.ts`), the one being
+  read included: what's on screen, near it, read in the last minute or still
+  at work stays, and the rest come back as the reader nears them. Preserve
   prompt identity, prepend anchors and complete answer-copy data. Only actual
   user scrolling may release follow mode; virtualizer size adjustments must not.
 - **Streamed prose is throttled, not debounced.** `useThrottled` in
