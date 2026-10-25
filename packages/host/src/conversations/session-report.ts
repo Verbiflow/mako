@@ -1,18 +1,31 @@
-import { LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import { LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import type { ThreadRef } from "@mako/sessions"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
+import type { ExternalThreadActivity } from "../contracts/host-events-boot.js"
 import type { LiveSummary } from "../contracts/live-conversations.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
-import type { SessionId, ThreadId, ThreadPlacement } from "../contracts/thread-identity.js"
+import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId, type ThreadPlacement } from "../contracts/thread-identity.js"
 import { Payload, SESSIONS_VERSION, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
 import { runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
+import { namedUuid } from "./cloud-moves.js"
 
 /** A Session moved within this long is listed; an older one only while it works or waits. */
 export const LISTED_FOR_MS = 30 * 24 * 60 * 60_000
 
-/** What the report reads of this host: its conversations, their work, and its Thread store. */
+/** A rail row as the report reads it: a session one of this Mac's harnesses keeps, placed in its Thread and Session. */
+export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived">
+
+/** What the report reads of this host: its conversations, their work, the sessions its harnesses keep, and its Thread store. */
 export type ReportSources = {
   /** Every conversation this host has, loaded or not (`LiveConversations.summaries`). */
   summaries(): readonly LiveSummary[]
+  /**
+   * The rail's rows: every session this Mac's harnesses keep, the ones a terminal or another app runs included, each
+   * with the Thread and Session the catalog placed it in. A Mako conversation's own session is among them.
+   */
+  native(): readonly NativeRow[]
+  /** What a native session's process is doing, by its path, as the activity engine reads it. */
+  activity(path: string): ExternalThreadActivity | undefined
   /** The lifecycle's work, which says which conversations work or wait (`lifecycleWork`). */
   work(): readonly LifecycleWork[]
   /** What a conversation waits on, in a line, while it waits. */
@@ -28,17 +41,41 @@ export type ReportSources = {
 const iso = (ms: number) => new Date(ms).toISOString()
 const line = (text: string) => (text.length > 200 ? `${text.slice(0, 199)}…` : text)
 
+/** The conversation a native session is opened as when another device opens it: named from its Session, so two devices opening it at once open one. */
+export function nativeConversation(session: string): string {
+  return namedUuid(`mako native session conversation\0${session}`)
+}
+
+/** How a list ranks two rows of one Session: one at work over one at rest, then the one that moved last. */
+function preferred(left: ReportedSession, right: ReportedSession): ReportedSession {
+  const busy = (row: ReportedSession) => row.state === "working" || row.state === "waiting" || row.state === "moving"
+  if (busy(left) !== busy(right)) return busy(left) ? left : right
+  return right.activityAt > left.activityAt ? right : left
+}
+
 /**
- * The Sessions this host owns, as the account's list shows them: each conversation filed under a Session whose owner
- * is here (or which is leaving here, or released and not yet claimed: `moving`), at the generation the store holds,
- * moved within 30 days or at work now, newest first. A conversation of a Session that runs elsewhere is the other
- * owner's to say; a closed one isn't listed.
+ * The Sessions this host owns, as the account's list shows them, one row each: its conversations, and the sessions its
+ * harnesses keep that Mako hasn't opened (a terminal's Claude Code, Cursor's editor, Codex's CLI), each filed under a
+ * Session whose owner is here (or which is leaving here, or released and not yet claimed: `moving`), at the generation
+ * the store holds, moved within 30 days or at work now, newest first. A Session that runs elsewhere is the other
+ * owner's to say; a closed conversation isn't listed, nor is a session its harness deleted or archived.
  */
 export function ownedSessions(sources: ReportSources): ReportedSession[] {
   const work = new Map(sources.work().map((item) => [item.id, item.status]))
   const now = sources.now()
-  const rows: ReportedSession[] = []
-  for (const summary of sources.summaries()) {
+  const bySession = new Map<string, ReportedSession>()
+  const add = (row: ReportedSession) => {
+    const held = bySession.get(row.session)
+    bySession.set(row.session, held ? preferred(held, row) : row)
+  }
+  // Every path a conversation of this host reads, closed ones included: its session is that conversation's to list.
+  const opened = new Set<string>()
+  const summaries = sources.summaries()
+  for (const summary of summaries) {
+    if (summary.threadPath) opened.add(summary.threadPath)
+    for (const path of summary.nativePaths ?? []) opened.add(path)
+  }
+  for (const summary of summaries) {
     const { session } = summary
     if (session.status === "closed") continue
     const placed = sources.placement(session.id)
@@ -73,18 +110,57 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
       if (on) row.waitingOn = line(on)
     }
     if (session.cwd) row.folder = session.cwd
+    if (session.nativeId) row.nativeId = session.nativeId
     // A harness or ID the protocol can't carry is left out, never the rest.
     const parsed = ReportedSessionSchema.safeParse(row)
-    if (parsed.success) rows.push(parsed.data)
+    if (parsed.success) add(parsed.data)
   }
-  return rows.sort((left, right) => (left.activityAt < right.activityAt ? 1 : left.activityAt > right.activityAt ? -1 : 0)).slice(0, LISTED_PER_OWNER)
+  const conversations = new Set(bySession.keys())
+  for (const ref of sources.native()) {
+    if (ref.archived || ref.copyOnly || ref.nativeArchived || !ref.updatedAt) continue
+    const sessionId = SessionIdSchema.safeParse(ref.sessionId)
+    const threadId = ThreadIdSchema.safeParse(ref.threadId)
+    if (!sessionId.success || !threadId.success) continue
+    if (conversations.has(sessionId.data) || opened.has(ref.path)) continue
+    const execution = sources.execution(sessionId.data)
+    if (execution?.state === "elsewhere") continue
+    const activity = sources.activity(ref.path)
+    const state: ListedState = execution?.state === "leaving" || execution?.state === "in-transit" ? "moving"
+      : activity?.status === "needs-input" ? "waiting"
+      : activity?.status === "active" ? "working"
+      : "idle"
+    const movedAt = Date.parse(ref.updatedAt)
+    if (!Number.isFinite(movedAt) || (now - movedAt > LISTED_FOR_MS && state !== "working" && state !== "waiting")) continue
+    const startedAt = ref.startedAt ? Date.parse(ref.startedAt) : Number.NaN
+    const row: ReportedSession = {
+      session: sessionId.data,
+      thread: threadId.data,
+      conversation: nativeConversation(sessionId.data),
+      harness: ref.harness,
+      state,
+      createdAt: iso(Number.isFinite(startedAt) ? Math.min(startedAt, movedAt) : movedAt),
+      activityAt: iso(movedAt),
+      generation: execution?.generation ?? 1,
+      nativeId: ref.nativeId,
+      capture: { path: ref.path },
+    }
+    const thread = sources.thread(threadId.data)
+    if (thread?.title && thread.titleSource !== "auto") row.threadTitle = line(thread.title)
+    if (ref.title) row.title = line(ref.title)
+    if (state === "waiting" && activity?.detail) row.waitingOn = line(activity.detail)
+    if (ref.cwd) row.folder = ref.cwd
+    const parsed = ReportedSessionSchema.safeParse(row)
+    if (parsed.success) add(parsed.data)
+  }
+  return [...bySession.values()].sort((left, right) => (left.activityAt < right.activityAt ? 1 : left.activityAt > right.activityAt ? -1 : 0)).slice(0, LISTED_PER_OWNER)
 }
 
 /** Whether two rows say the same, so an unchanged one isn't sent again. */
 function sameRow(left: ReportedSession | undefined, right: ReportedSession): boolean {
   return left !== undefined && left.session === right.session && left.thread === right.thread && left.threadTitle === right.threadTitle && left.conversation === right.conversation &&
     left.harness === right.harness && left.title === right.title && left.state === right.state && left.waitingOn === right.waitingOn &&
-    left.folder === right.folder && left.createdAt === right.createdAt && left.activityAt === right.activityAt && left.generation === right.generation
+    left.folder === right.folder && left.createdAt === right.createdAt && left.activityAt === right.activityAt && left.generation === right.generation &&
+    left.nativeId === right.nativeId && left.capture?.path === right.capture?.path
 }
 
 /**
@@ -166,8 +242,9 @@ export class SessionPublisher {
     if (!current || current.served.version < SESSIONS_VERSION) return
     const now = this.#now()
     if (now - this.#reportedAt < REPORT_MS || (!this.#dirty && now - this.#reportedAt < SWEEP_MS)) return
-    const rows = this.#rows()
-    if (!rows) return
+    const all = this.#rows()
+    if (!all) return
+    const rows = rowsForLink(all, current.served.version)
     this.#dirty = false
     this.#reportedAt = now
     const reports = this.#reporter.reports(current.link, rows)
