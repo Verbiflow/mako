@@ -361,22 +361,31 @@ function devinWrites(database: string, id: string): Writes | null {
 
 const GrokSummarySchema = z.object({ created_at: z.string().optional() }).loose()
 
+/**
+ * When a Grok session's files were first and last written: the first from
+ * their births and changes, the last from their changes alone, as
+ * `fileWrites` reads a file. A birth after a file's last change is a copy
+ * that kept its times (a restore), not a write.
+ */
 function grokWrites(folder: string): Writes | null {
-  const times: number[] = []
+  const changes: number[] = []
+  const births: number[] = []
   for (const name of readdirSafe(folder)) {
     if (name.endsWith(".lock")) continue
     const info = statSafe(join(folder, name))
-    if (info?.isFile()) times.push(info.mtimeMs, info.birthtimeMs)
+    if (!info?.isFile()) continue
+    changes.push(info.mtimeMs)
+    births.push(info.birthtimeMs)
   }
-  if (!times.length) return null
-  let first = Math.min(...times)
+  if (!changes.length) return null
+  let first = Math.min(...changes, ...births)
   try {
     const created = GrokSummarySchema.parse(JSON.parse(readFileSync(join(folder, "summary.json"), "utf8"))).created_at
     if (created) first = Math.min(first, Date.parse(created))
   } catch {
     // No summary yet: the files' own times stand.
   }
-  return { first, last: Math.max(...times) }
+  return { first, last: Math.max(...changes) }
 }
 
 const CursorMetaSchema = z.object({ createdAt: z.number().optional() }).loose()
@@ -384,7 +393,8 @@ const CursorMetaSchema = z.object({ createdAt: z.number().optional() }).loose()
 function cursorWrites(path: string): Writes | null {
   const files = [path, `${path}-wal`, join(dirname(path), "meta.json")].flatMap((file) => statSafe(file) ?? [])
   if (!files.length) return null
-  let first = Math.min(...files.map((info) => info.birthtimeMs))
+  // A file copied with its times kept is born after its last change: the change is when it was written.
+  let first = Math.min(...files.map((info) => Math.min(info.birthtimeMs, info.mtimeMs)))
   try {
     const { database } = openReadOnly(path, { timeout: 5_000 })
     try {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -117,7 +117,9 @@ try {
     const across = await session("8f1767c1", local(2026, 9, 11, 20, 49), local(2026, 9, 14, 9, 0))
     assert.equal((await reader().devinApp(across)).source, "unknown", "a launch whose log names no CLI ran while it was written")
     const early = await session("955ea1fe", local(2026, 9, 1, 0, 0), local(2026, 9, 11, 20, 51))
-    assert.match((await reader().devinApp(early)).why, /launch logs .* begin/, "written before the oldest launch log")
+    // Only a filesystem that moves a file's birth back (APFS) can make one first written before the oldest launch log.
+    if ((await stat(early)).birthtimeMs <= local(2026, 9, 1, 0, 0)) assert.match((await reader().devinApp(early)).why, /launch logs .* begin/, "written before the oldest launch log")
+    else console.log("skipped: this filesystem keeps a file's birth, so no session can be made older than its launch logs")
   }
 
   // Grok: its unified log names a session and each process's version.
