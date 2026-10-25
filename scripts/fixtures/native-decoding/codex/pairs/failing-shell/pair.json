@@ -1,14 +1,20 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.159.3"
+    "version": "0.164.0"
   },
   "about": "Run `grep -q Monday notes.md` in the shell and tell me from its exit code whether notes.md mentions Monday. A shell command that exits non-zero, which the harness may report as completed.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/12/rollout-2026-10-12T22-58-16-01a133d7-1599-7ec0-84f2-f697253fe5b0.jsonl",
-      "known": []
+      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T08-32-15-01a17230-61c1-7d10-a746-aec0089f1b20.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Warning — Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/co…",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

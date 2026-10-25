@@ -1,14 +1,19 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.159.3"
+    "version": "0.164.0"
   },
   "about": "Say hello. The model fails with a server error, the harness retries once and the turn fails.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/12/rollout-2026-10-12T22-58-23-01a133d7-307d-7833-9519-f0a63d81ac76.jsonl",
+      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T08-32-21-01a17230-77cd-7b81-8a76-23279d51ab9d.jsonl",
       "known": [
+        {
+          "side": "-",
+          "line": "note: Warning — Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/co…",
+          "reason": ""
+        },
         {
           "side": "-",
           "line": "note: Warning — Falling back from WebSockets to HTTPS transport. We’re currently experiencing high demand, which may cause temporary errors.",

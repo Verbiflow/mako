@@ -31,9 +31,27 @@ export type TurnStartParams = {
    * Ignored when this request steers an already-active turn.
    */
   turnTrigger?: string | null
+  /**
+   * ID of the turn that caused this new turn to start.
+   *
+   * Set this when starting work on behalf of another turn, such as delegated
+   * work in a different thread. Leave unset for work started directly by the
+   * user. Ignored when this request adds input to an active turn.
+   */
+  parentTurnId?: string | null
+  /**
+   * ID of the first turn in the chain of work that led to this new turn.
+   *
+   * When setting `parentTurnId`, set this to the parent turn's `rootTurnId`
+   * when known. This keeps descendant work attributed to the original turn.
+   * If omitted, the new turn becomes its own root. Ignored when this request
+   * adds input to an active turn.
+   */
+  rootTurnId?: string | null
   toolOutput?: TurnToolOutput | null
   /**
    * Optional metadata to enrich Codex's ResponsesAPI turn metadata.
+   * Replaces unprotected client-provided entries when supplied; an empty map clears them.
    *
    * Entries are flattened into the JSON string sent as
    * `client_metadata["x-codex-turn-metadata"]` on ResponsesAPI HTTP and websocket requests.
@@ -42,6 +60,11 @@ export type TurnStartParams = {
    * such as `session_id`, `thread_id`, `turn_id`, and `window_id` cannot be overridden.
    */
   responsesapiClientMetadata?: { [key in string]?: string } | null
+  /**
+   * Merge entries into the ResponsesAPI turn metadata without removing existing entries.
+   * Applied after `responsesapiClientMetadata` if both are provided; reserved keys remain protected.
+   */
+  responsesapiClientMetadataPatch?: { [key in string]?: string } | null
   /**
    * Optional client-provided context fragments keyed by an opaque source identifier.
    */
@@ -126,7 +149,7 @@ export type TurnStartParams = {
    */
   multiAgentMode?: MultiAgentMode | null
   /**
-   * EXPERIMENTAL - Request a workspace-authorized cyber program for this
+   * EXPERIMENTAL - Request an authorized cyber program for this
    * turn. Omission preserves automatic behavior. This does not grant access.
    */
   cyberAccessProgram?: CyberAccessProgram | null

@@ -1,14 +1,20 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.159.3"
+    "version": "0.164.0"
   },
   "about": "Run `echo hi > ../outside.txt` in the shell and tell me whether it worked. A command that writes outside the project, which a sandboxed harness refuses. Codex 0.159.3 sends no item for a command its sandbox refused; its rollout keeps the call.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/12/rollout-2026-10-12T22-58-17-01a133d7-19ea-7ad2-984e-1bdd1e0ec90b.jsonl",
-      "known": []
+      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T08-32-16-01a17230-6573-7a53-9193-54eea8be5881.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Warning — Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/co…",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

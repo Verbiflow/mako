@@ -193,6 +193,14 @@ export type ThreadItem =
     }
   | {
       type: "subAgentActivity"
+      /**
+       * Resolved model at sub-agent creation; absent from older records and other activities.
+       */
+      model: string | null
+      /**
+       * Resolved reasoning effort at sub-agent creation, when known.
+       */
+      reasoningEffort: ReasoningEffort | null
       id: string
       kind: SubAgentActivityKind
       agentThreadId: string

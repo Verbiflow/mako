@@ -1,14 +1,20 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.159.3"
+    "version": "0.164.0"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/12/rollout-2026-10-12T22-58-54-01a133d7-ab64-71f2-a1d1-aadf2d739608.jsonl",
-      "known": []
+      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T08-32-52-01a17230-f1db-73b1-9179-bbe3bf8a5b4f.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Warning — Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/co…",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

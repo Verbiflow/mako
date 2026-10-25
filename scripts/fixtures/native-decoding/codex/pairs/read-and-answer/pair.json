@@ -1,14 +1,20 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.159.3"
+    "version": "0.164.0"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/12/rollout-2026-10-12T22-58-14-01a133d7-0efc-7f12-8f0e-d7f70975cd57.jsonl",
-      "known": []
+      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T08-32-14-01a17230-5b7d-7072-8f17-53f342e0f829.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Warning — Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/co…",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

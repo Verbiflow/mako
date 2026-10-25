@@ -1,14 +1,20 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.159.3"
+    "version": "0.164.0"
   },
   "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/12/rollout-2026-10-12T22-58-15-01a133d7-1135-7372-a856-555e5c2e07aa.jsonl",
-      "known": []
+      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T08-32-14-01a17230-5d98-7d01-ac29-51b759eac6bf.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Warning — Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/co…",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

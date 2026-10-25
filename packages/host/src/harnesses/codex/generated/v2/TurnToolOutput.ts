@@ -7,4 +7,8 @@ export type TurnToolOutput = {
   name: string
   namespace: string | null
   output: FunctionCallOutputBody
+  /**
+   * Requests retention of this output in the thread's model history.
+   */
+  retain?: boolean
 }

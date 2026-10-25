@@ -1,14 +1,20 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.159.3"
+    "version": "0.164.0"
   },
   "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/12/rollout-2026-10-12T22-58-20-01a133d7-280b-7071-888d-dca286caa272.jsonl",
-      "known": []
+      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T08-32-19-01a17230-70b4-7342-9113-d519dfc9e604.jsonl",
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Warning — Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/co…",
+          "reason": ""
+        }
+      ]
     }
   ]
 }
