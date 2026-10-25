@@ -842,10 +842,22 @@ export function ConversationTimeline({
     return () => observer.disconnect()
   }, [identity, shown.length, mountedKeys])
 
+  // One lease per pane and source while both hold. A stream renders the transcript again every batch, and a lease
+  // made again each time has no reading until the next frame, which memory cleanup must read as "keep everything".
+  const readingLease = useRef<ReturnType<typeof transcriptReaders.attach> | null>(null)
+  useLayoutEffect(() => {
+    const held = transcriptReaders.attach(readingSource, paneKey)
+    readingLease.current = held
+    return () => {
+      held.release()
+      if (readingLease.current === held) readingLease.current = null
+    }
+  }, [readingSource, paneKey])
+
   useLayoutEffect(() => {
     const node = viewport.current
-    if (!node) return
-    const lease = transcriptReaders.attach(readingSource, paneKey)
+    const lease = readingLease.current
+    if (!node || !lease) return
     let frame = 0
     const report = () => {
       frame = 0
@@ -914,7 +926,6 @@ export function ConversationTimeline({
       document.removeEventListener("selectionchange", schedule)
       node.removeEventListener("focusin", schedule)
       node.removeEventListener("focusout", schedule)
-      lease.release()
     }
   }, [readingSource, exchanges, mountedKeys, paneKey, historyBlocks, historyBase])
 
