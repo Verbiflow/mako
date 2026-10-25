@@ -188,5 +188,6 @@ jobs:
           if [ "$INSTALL" != "success" ]; then outcome="not run: npm ci failed on this branch"
           elif [ "$BUILD" != "success" ]; then outcome="not run: the build failed on this branch"
           else outcome="$OUTCOME"; fi
-          { echo "Session flows on macOS: $outcome"; echo; cat "$RUNNER_TEMP/macos.md" 2>/dev/null; echo; echo "[The run]($RUN)"; } > "$RUNNER_TEMP/comment.md"
+          # No summary when the flows didn't run: the step runs under `bash -e`, so its absence mustn't end it.
+          { echo "Session flows on macOS: $outcome"; echo; cat "$RUNNER_TEMP/macos.md" 2>/dev/null || true; echo; echo "[The run]($RUN)"; } > "$RUNNER_TEMP/comment.md"
           gh pr comment "$BRANCH" --body-file "$RUNNER_TEMP/comment.md"
