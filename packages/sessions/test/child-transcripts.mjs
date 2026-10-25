@@ -74,6 +74,9 @@ try {
     ["a5c530d641cdf5d79", "complete", "toolu_01SJNsU4DAPq889b4D5SHP19", null],
   ], "a background child ends with its notification; a nested one hangs under the child that started it; a result with no transcript is missing")
   for (const child of children.filter((entry) => entry.path)) await readsWithLink(claude, child, "b225fcff-5836-4c8a-b1ac-9429eb0c8ac8")
+  // The subagent's transcript begins with the request records Claude Code 2.1.310 writes there (their shape, its
+  // values reduced): they name the parent's sessionId and no isSidechain, and once made a write to the file list it
+  // as the parent, in the parent's row.
   assert.equal(await claude.peek({ path: subagent.path, bytes: (await stat(subagent.path)).size, mtimeMs: 0 }), null, "a child is never a row")
   assert.deepEqual((await new SessionCatalog([new ClaudeProvider(home("claude"))]).scan()).map((ref) => ref.nativeId).sort(), ["b225fcff-5836-4c8a-b1ac-9429eb0c8ac8", "c308232d-05bb-469c-a2c2-6d75b0c707d9"])
 
