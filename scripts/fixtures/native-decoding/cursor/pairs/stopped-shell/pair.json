@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.0.31"
+    "version": "1.0.40"
   },
-  "about": "Run `sleep 30` in the shell. A long shell command the person stops while it runs.",
+  "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-e59ca221620fb5e7f7ca2f82f36faa2e08c1158c69a85addba90ceed37e78c9b/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-8d622adc957fd2f1fa0cfc57c5896dd6186d98c3d99013fd625f624f732772b1/store.db",
       "known": [
         {
           "side": "+",

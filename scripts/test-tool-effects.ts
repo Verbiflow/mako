@@ -131,12 +131,12 @@ for (const name of (await readdir(CASES_ROOT)).filter((file) => file.endsWith(".
 const KNOWN: readonly { pair: string; reader: string; side: "-" | "+"; effects: string; reason: string }[] = ["devin", "devin-ide"].flatMap((reader) => [
   {
     pair: "devin/stopped-shell", reader, side: "-" as const,
-    effects: '[{"kind":"command","command":"sleep 30","cwd":"/tmp/mako-pair/project"}]',
+    effects: '[{"kind":"command","command":"tail -f notes.md","cwd":"/tmp/mako-pair/project"}]',
     reason: "Devin 3000.10.23 names a command's folder (`cognition.ai/cwd`) in an update it sends while the command runs; for a stopped command its store keeps only the call and its cancellation, neither of which names it.",
   },
   {
     pair: "devin/stopped-shell", reader, side: "+" as const,
-    effects: '[{"kind":"command","command":"sleep 30"}]',
+    effects: '[{"kind":"command","command":"tail -f notes.md"}]',
     reason: "The same command read from the store, without the folder.",
   },
 ])

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process"
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -151,9 +151,20 @@ function run(name: string, command: string, args: string[], steps: Step[], env: 
   process.stderr.write(result.stderr ?? "")
   const ok = result.status === 0
   const step: Step = { name, ok }
-  if (!ok) step.detail = (result.stderr ?? "").trim().split("\n").slice(-3).join(" ").slice(-400) || `exited with ${result.status ?? result.signal}`
+  if (!ok) step.detail = failureOf(result.stderr ?? "") || `exited with ${result.status ?? result.signal}`
   steps.push(step)
   return ok
+}
+
+/**
+ * What a failed step says went wrong, for its row: every line that names a failure (an assertion's or error's
+ * message, a `✗` line), each once and in order, never the stack under it; the last line only when none names one.
+ */
+export function failureOf(stderr: string): string {
+  const lines = stderr.split("\n").map((line) => line.trim()).filter(Boolean)
+  const named = lines.filter((line) => /^(?:\w*Error\b.*?:|AssertionError|✗ )/.test(line) && !/^\s*at /.test(line))
+  const said = [...new Set(named.map((line) => line.replace(/^AssertionError \[ERR_ASSERTION\]: /, "").replace(/^Error: /, "")))]
+  return (said.length ? said.slice(0, 4).join(" · ") : (lines.at(-1) ?? "")).slice(0, 600)
 }
 
 /** Moves one declaration: tested, and the bundled package's version for a bundled runtime. */
@@ -174,6 +185,55 @@ function moveDeclaration(reading: Reading, tested: string, today: string): void 
 }
 
 const PackageJson = z.object({ version: z.string(), claudeCodeVersion: z.string().optional(), scripts: z.record(z.string(), z.string()).optional() })
+const Dependencies = z.record(z.string(), z.string()).optional()
+const WorkspacePackage = z.object({ workspaces: z.array(z.string()).optional(), dependencies: Dependencies, devDependencies: Dependencies, optionalDependencies: Dependencies })
+
+/** The root and every package of its workspace, as folders under it. */
+function workspaceFolders(): string[] {
+  const root = WorkspacePackage.parse(JSON.parse(readFileSync(join(REPO, "package.json"), "utf8")))
+  return [".", ...(root.workspaces ?? []).flatMap((pattern) => {
+    if (!pattern.endsWith("/*")) return [pattern]
+    const parent = pattern.slice(0, -2)
+    return readdirSync(join(REPO, parent)).map((folder) => `${parent}/${folder}`)
+  })]
+}
+
+/**
+ * Every package of the workspace that names `name` at one exact version. Each moves with the bump: one left on the old
+ * version keeps that build nested in its own node_modules, so the code it holds (the host runs every harness) would run
+ * the old build while the declaration names the new one. A range (`^0.3.283`) is left to npm, which resolves it to the
+ * hoisted build when that satisfies it.
+ */
+function exactPins(name: string): string[] {
+  return workspaceFolders().filter((folder) => {
+    const file = join(REPO, folder, "package.json")
+    if (!existsSync(file)) return false
+    const manifest = WorkspacePackage.parse(JSON.parse(readFileSync(file, "utf8")))
+    const spec = manifest.dependencies?.[name] ?? manifest.devDependencies?.[name] ?? manifest.optionalDependencies?.[name]
+    return spec !== undefined && /^\d/.test(spec)
+  })
+}
+
+/** The build of `name` code in `folder` loads: its own nested copy, else the hoisted one. */
+function resolvedVersion(folder: string, name: string): string | undefined {
+  for (const base of [join(REPO, folder), REPO]) {
+    const file = join(base, "node_modules", name, "package.json")
+    if (existsSync(file)) return PackageJson.parse(JSON.parse(readFileSync(file, "utf8"))).version
+  }
+  return undefined
+}
+
+/** Moves a bundled package in every package that pins it, and checks they all load the one build. */
+function moveBundled(name: string, version: string, steps: Step[]): void {
+  const pins = exactPins(name)
+  const workspaces = pins.filter((folder) => folder !== ".").flatMap((folder) => ["--workspace", folder])
+  // With no workspace named npm installs at the root; with any, only where told.
+  const root = workspaces.length && pins.includes(".") ? ["--include-workspace-root"] : []
+  run(`npm install ${name}@${version}`, "npm", ["install", "--save-exact", `${name}@${version}`, ...workspaces, ...root], steps)
+  const step: Step = { name: `every package loads ${name} ${version}`, ok: pins.every((folder) => resolvedVersion(folder, name) === version) }
+  if (!step.ok) step.detail = pins.map((folder) => `${folder === "." ? "the root" : folder} loads ${resolvedVersion(folder, name) ?? "nothing"}`).join(", ")
+  steps.push(step)
+}
 
 /**
  * Installs the harness's declared tested version through the same plan
@@ -206,6 +266,8 @@ function driftTools(provider: string, steps: Step[]): void {
   // A harness whose protocol types are generated from its CLI regenerates them.
   if (scripts[`generate:${provider}-inputs`]) run(`generate:${provider}-inputs`, "npm", ["run", `generate:${provider}-inputs`], steps)
   run("harness:native-tools", "npm", ["run", "harness:native-tools", "--", provider], steps)
+  // docs/adding-a-harness.md names each harness's tested version, generated from the declarations.
+  run("harness:checklist", "npm", ["run", "harness:checklist"], steps)
   run("harness:self-report", "npm", ["run", "harness:self-report", "--", provider], steps)
   run("session flows against the scripted model", "npm", ["run", "harness:decode-pairs", "--", provider, "--write", "--sealed"], steps)
 }
@@ -248,7 +310,7 @@ if (options.write || options.verify || options.install) {
     let tested = reading.newest
     if (reading.versions.bundled) {
       // A bundled runtime moves with Mako's lockfile; its tested version is the build the package ships.
-      run(`npm install ${reading.versions.bundled.package}@${reading.newest}`, "npm", ["install", "--save-exact", `${reading.versions.bundled.package}@${reading.newest}`], steps)
+      moveBundled(reading.versions.bundled.package, reading.newest, steps)
       const shipped = PackageJson.parse(JSON.parse(readFileSync(join(REPO, "node_modules", reading.versions.bundled.package, "package.json"), "utf8")))
       tested = shipped.claudeCodeVersion ?? shipped.version
     }

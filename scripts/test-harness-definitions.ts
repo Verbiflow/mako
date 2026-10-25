@@ -19,8 +19,8 @@ import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist 
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
 import { compareVersions } from "@mako/host/contracts/runtime-version"
-import { loadFixtures } from "./native-decoding.ts"
 import { z } from "zod"
+import { currentPairVersions } from "./native-decoding.ts"
 
 const nativeStores = new NativeStores(false)
 
@@ -266,21 +266,20 @@ for (const harness of harnesses) {
 
 // Each harness's versions are declared once, on its updates source, and
 // every per-version record Mako keeps is held to its tested version: the
-// vocabulary's tools and concepts, the native-tools recording, the newest
-// decoder fixture and the concepts fixture, and for a bundled runtime the
+// vocabulary's tools and concepts, the native-tools recording, the current
+// decode pairs (each replays its capture through the decoder beside the
+// store the same session wrote, and the bump records them again; a pair kept
+// from another build is `<scenario>@<version>`, and a standalone decoder
+// fixture names the build it was captured from, since the decoders read
+// every build's sessions) and the concepts fixture, and for a bundled
+// runtime the
 // package in Mako's lockfile. A record that names another version fails
 // here, unless it's listed below with why.
-const RECORD_EXCEPTIONS = new Map<string, Map<"concepts" | "concepts fixture", string>>([
-  ["claude", new Map([
-    ["concepts", "Claude Code's concepts were checked on October 6 against the terminal CLI 2.1.290 through harness:self-report, not the SDK's 2.1.283 build sessions run; the next `npm run harness:self-report -- claude` against the SDK's build moves them."],
-    ["concepts fixture", "Recorded with the concepts, from the terminal CLI 2.1.290."],
-  ])],
-])
+const RECORD_EXCEPTIONS = new Map<string, Map<"concepts" | "concepts fixture", string>>()
 const VersionField = z.object({ version: z.string().optional() })
 const ShippedPackage = z.object({ version: z.string(), claudeCodeVersion: z.string().optional() })
 const Lockfile = z.object({ packages: z.record(z.string(), z.object({ version: z.string().optional() })) })
 const plain = (version: string) => version.replace(/^SDK /, "")
-const { files: decoderFixtures } = await loadFixtures()
 const lockfile = Lockfile.parse(JSON.parse(readFileSync(join(import.meta.dirname, "..", "package-lock.json"), "utf8")))
 for (const { provider } of harnesses) {
   const source = providerHost.updateSources.get(provider)
@@ -295,7 +294,7 @@ for (const { provider } of harnesses) {
     if (oldest !== undefined) assert.ok(compareVersions(floor.version, oldest) > 0, `${provider}'s floor for ${feature} is above its oldest, or it would never apply`)
   }
   const exceptions = RECORD_EXCEPTIONS.get(provider)
-  const record = (name: "tools" | "concepts" | "native tools" | "decoder fixtures" | "concepts fixture", found: string | undefined) => {
+  const record = (name: "tools" | "concepts" | "native tools" | "decode pairs" | "concepts fixture", found: string | undefined) => {
     const excused = name === "concepts" || name === "concepts fixture" ? exceptions?.get(name) : undefined
     if (excused) {
       assert.notEqual(found, tested, `${provider}'s ${name} now name tested ${tested}; drop its exception`)
@@ -312,12 +311,8 @@ for (const { provider } of harnesses) {
     .filter((version) => version !== undefined)
     .sort(compareVersions)
   record("native tools", recordings.at(-1))
-  record("decoder fixtures", decoderFixtures
-    .filter((file) => file.fixture.harness === provider)
-    .map((file) => file.fixture.native.version)
-    .filter((version) => version != null)
-    .sort(compareVersions)
-    .at(-1))
+  const pairs = await currentPairVersions(provider)
+  record("decode pairs", pairs.length ? pairs.join(" and ") : undefined)
   const concepts = join(import.meta.dirname, "fixtures", "native-vocabulary", `${provider}-concepts.json`)
   record("concepts fixture", existsSync(concepts) ? VersionField.parse(JSON.parse(readFileSync(concepts, "utf8"))).version : undefined)
   if (versions.bundled) {

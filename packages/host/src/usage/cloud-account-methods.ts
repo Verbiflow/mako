@@ -6,6 +6,7 @@ import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking } from "./cloud-account.js"
 import type { AccountEvent } from "@mako/protocol/account-events"
 import type { SessionListings } from "@mako/protocol/thread-listing"
+import type { WaitingInput, WaitingMessage } from "@mako/protocol/waiting"
 import type { SessionPublishing } from "./machine-runtime.js"
 import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState, ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
@@ -74,6 +75,17 @@ export interface CloudAccount {
   sessionListings?(): Promise<SessionListings>
   /** Tells the account's list what changed of this host's Sessions (`SessionPublisher`); called on a tick. */
   reportSessions?(): void
+  /**
+   * A message for a Session whose owner is off, kept by the account until its owner takes it (`waiting.ts`), under its
+   * request ID: sent again, it's the same message. The Session's messages waiting, as they stand after it.
+   */
+  waitMessage?(session: string, id: string, input: WaitingInput): Promise<WaitingMessage[]>
+  /** A waiting message's words changed, only while they're still `expectedText` and it's still waiting. */
+  editWaiting?(session: string, id: string, expectedText: string, text: string): Promise<WaitingMessage[]>
+  /** A waiting message taken back before its owner took it. */
+  unwaitMessage?(session: string, id: string): Promise<WaitingMessage[]>
+  /** Its owner took it: it's a request of the Session now, under the same ID. */
+  tookWaiting?(session: string, id: string): Promise<void>
   /** The account's devices, by ID and name, and which is this one. */
   devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
   /**
@@ -87,7 +99,7 @@ export interface CloudAccount {
 }
 
 /** A change to the account's list of Sessions, as its stream said it. */
-export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: "sessions-listed" | "sessions-unlisted" }> }
+export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: "sessions-listed" | "sessions-unlisted" | "messages-waiting" }> }
 
 /** The account's store of shared sign-ins in Mako Cloud, through this Mac's device sign-in. */
 export interface HarnessSignInStore {
@@ -192,7 +204,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     // to the account's Threads goes to what lists them, which tells windows of the conversations it changes.
     onAccountEvent: (heard) => {
       const { event } = heard
-      if (event.type === "sessions-listed" || event.type === "sessions-unlisted") {
+      if (event.type === "sessions-listed" || event.type === "sessions-unlisted" || event.type === "messages-waiting") {
         for (const listener of threadListeners) listener({ seq: heard.seq, event })
         return
       }
@@ -258,6 +270,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     finishReturn: (threadId, move) => cloud.finishReturn(threadId, move),
     returnState: (threadId, move) => cloud.returnState(threadId, move),
     sessionListings: () => cloud.sessionListings(),
+    waitMessage: (session, id, input) => cloud.waitMessage(session, id, input),
+    editWaiting: (session, id, expectedText, text) => cloud.editWaiting(session, id, expectedText, text),
+    unwaitMessage: (session, id) => cloud.unwaitMessage(session, id),
+    tookWaiting: (session, id) => cloud.tookWaiting(session, id),
     reportSessions: () => cloud.reportSessions(),
     devices: () => cloud.devices(),
     onThreadListings: (listener) => {

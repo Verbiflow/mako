@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.0.31"
+    "version": "1.0.40"
   },
   "about": "Read only lines 10 to 20 of log.md with your file read tool, once, and tell me the last line you were shown. Don't run commands. A read of lines 10 to 20 of a long file, so a harness's own cut can be told from one the model asked for.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-a0326e76564aa30f0c5f58f70c57ba1db9bdd7648ce777f1d178ac60d744e5ac/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-bb3ef6919e4604248de93ef650fefdef1af34362dc1a9f04d561b708f2754b76/store.db",
       "known": []
     }
   ]

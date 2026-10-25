@@ -19,13 +19,18 @@ export function WorkspaceFocusProvider({ children }: { children: ReactNode }) {
   const liveTitle = useAcp((state) => activeAcp(state)?.title)
   const liveThreadPath = useAcp((state) => activeAcp(state)?.threadPath)
   const liveElsewhere = useAcp((state) => Boolean(activeAcp(state)?.elsewhere))
+  // Read from its copy: the computer that has its folder is off.
+  const liveOff = useAcp((state) => {
+    const active = activeAcp(state)
+    return active?.kind === "live" && active.copy ? (active.elsewhere ?? "Its computer") : undefined
+  })
   const focus = workspaceFocusOf({
     sessionCwd,
     sessionTitle,
     viewing,
     live:
       liveId && liveCwd
-        ? { id: liveId, cwd: liveCwd, title: liveTitle, elsewhere: liveElsewhere }
+        ? { id: liveId, cwd: liveCwd, title: liveTitle, elsewhere: liveElsewhere, off: liveOff }
         : undefined,
     liveThreadPath,
     sessionElsewhere,

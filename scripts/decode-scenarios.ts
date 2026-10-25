@@ -549,11 +549,13 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "stopped-shell",
     about: "A long shell command the person stops while it runs.",
-    files: {},
+    files: { "notes.md": NOTES },
     turns: [{
-      prompt: "Run `sleep 30` in the shell.",
+      // A command that runs until it's stopped, not a wait: Claude Code 2.1.310 refuses any command that begins with a
+      // `sleep` of 30 seconds ("use Monitor"), so with `sleep 30` nothing ran to be stopped.
+      prompt: "Run `tail -f notes.md` in the shell.",
       stop: true,
-      steps: [{ text: "Waiting on the shell.", call: (tools) => tools.shell("sleep 30", "Wait thirty seconds") }],
+      steps: [{ text: "Following notes.md.", call: (tools) => tools.shell("tail -f notes.md", "Follow notes.md") }],
     }],
   },
   {

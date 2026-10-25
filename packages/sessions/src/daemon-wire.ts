@@ -1,5 +1,5 @@
 import { ReceivedRecordsSchema, ReceivingSessionSchema, RecordsLinkSchema, SentRecordsSchema, StagedRecordsSchema, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords } from "./record-sync.js"
-import { CopyScopeSchema, type CopyScope } from "./reading-copies.js"
+import { CopyPageSchema, CopyScopeSchema, type CopyPage, type CopyScope } from "./reading-copies.js"
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
 import {
@@ -136,6 +136,10 @@ export type DaemonRequestFrame =
   | { id: number; op: "receive-records"; link: RecordsLink; sessions: ReceivingSession[]; installed: Record<string, InstalledReading | null> }
   /** Pulls sessions' records from a remote store into this one ahead of a move (`SessionCatalog.stageRecords`). */
   | { id: number; op: "stage-records"; link: RecordsLink; sessions: ReceivingSession[] }
+  /** A page of the copy another device keeps of a Session, at its records in the account (`SessionCatalog.copyPage`). */
+  | { id: number; op: "copy-page"; link: RecordsLink; harness: string; nativeId: string; before?: number; limit: number }
+  /** One entry of such a copy (`SessionCatalog.copyEntry`). */
+  | { id: number; op: "copy-entry"; link: RecordsLink; harness: string; nativeId: string; entry: string }
 
 export type DaemonResponseFrame =
   | {
@@ -153,6 +157,7 @@ export type DaemonResponseFrame =
         | SentRecords[]
         | ReceivedRecords[]
         | StagedRecords[]
+        | CopyPage
         | boolean
         | null
     }
@@ -238,6 +243,11 @@ interface StageRecordsPending extends PendingBase {
   resolve: (staged: StagedRecords[]) => void
 }
 
+interface CopyPagePending extends PendingBase {
+  kind: "copy-page"
+  resolve: (page: CopyPage | null) => void
+}
+
 interface AckPending extends PendingBase {
   kind: "ack"
   resolve: () => void
@@ -256,6 +266,7 @@ export type PendingRequest =
   | SendRecordsPending
   | ReceiveRecordsPending
   | StageRecordsPending
+  | CopyPagePending
   | AckPending
 
 export type ParsedDaemonResponse =
@@ -271,6 +282,7 @@ export type ParsedDaemonResponse =
   | { kind: "send-records"; pending: SendRecordsPending; result: SentRecords[] }
   | { kind: "receive-records"; pending: ReceiveRecordsPending; result: ReceivedRecords[] }
   | { kind: "stage-records"; pending: StageRecordsPending; result: StagedRecords[] }
+  | { kind: "copy-page"; pending: CopyPagePending; result: CopyPage | null }
   | { kind: "ack"; pending: AckPending }
   | { kind: "error"; pending: PendingRequest; error: Error }
 
@@ -381,6 +393,16 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       const parsed = z.object({ link: RecordsLinkSchema, sessions: z.array(ReceivingSessionSchema) }).safeParse(record)
       return parsed.success ? { id, op, ...parsed.data } : null
     }
+    case "copy-page": {
+      const parsed = z.object({ link: RecordsLinkSchema, harness: z.string().min(1), nativeId: z.string().min(1), before: z.number().int().nonnegative().optional(), limit: z.number().int().positive().max(1_000) }).safeParse(record)
+      if (!parsed.success) return null
+      const { before, ...rest } = parsed.data
+      return before === undefined ? { id, op, ...rest } : { id, op, ...rest, before }
+    }
+    case "copy-entry": {
+      const parsed = z.object({ link: RecordsLinkSchema, harness: z.string().min(1), nativeId: z.string().min(1), entry: z.string().min(1) }).safeParse(record)
+      return parsed.success ? { id, op, ...parsed.data } : null
+    }
     default:
       return null
   }
@@ -452,6 +474,11 @@ export function parseDaemonResponse(
     case "stage-records": {
       const result = z.array(StagedRecordsSchema).safeParse(record.result)
       return result.success ? { kind: "stage-records", pending, result: result.data } : null
+    }
+    case "copy-page": {
+      if (record.result === null) return { kind: "copy-page", pending, result: null }
+      const result = CopyPageSchema.safeParse(record.result)
+      return result.success ? { kind: "copy-page", pending, result: result.data } : null
     }
     case "ack":
       return record.result === null ? { kind: "ack", pending } : null

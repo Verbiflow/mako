@@ -273,6 +273,11 @@ export interface LiveSummary {
    * person there: the row asks for them as a local one would.
    */
   waitingOn?: string
+  /**
+   * Read from the account's copy, its device being off: when that device wrote it. Nothing in it runs or answers until
+   * the device is back; a window says so and how old it is.
+   */
+  copy?: { at: number }
   createdAt: number
   /** The Thread and Session this conversation belongs to, the same IDs a catalog row carries. */
   threadId?: string

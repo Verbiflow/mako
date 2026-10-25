@@ -13,17 +13,18 @@
 //    the parent's nested writes and a subagent's own writer stay ordered. It
 //    appends only while the conversation state extends what was written: a
 //    server-side summary replaces the root messages and adds an archive, and
-//    a new child starts at zero, so both rewrite the file in full as before.
-// A cached streaming tool also starts consume() without observing its promise.
-// Its source failure must reach every active and later replay reader, instead
-// of closing those readers successfully and rejecting an orphaned promise.
+//    a new child starts at zero, so both rewrite the file in full, which the
+//    SDK's own streamed writer (`streamFullJsonlWrites`) does a megabyte at a
+//    time instead of as one string.
+// A cached streaming tool's source failure reaches every active and later
+// replay reader in the SDK itself since 1.0.40 (`scripts/test-cursor-tool-stream.mjs`).
 import { readFileSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-const VERSION = "1.0.31"
-const MARKER = "/*mako:patched:3*/"
+const VERSION = "1.0.40"
+const MARKER = "/*mako:patched:4*/"
 const ANY_MARKER = "/*mako:patched"
 
 /**
@@ -33,124 +34,104 @@ const ANY_MARKER = "/*mako:patched"
  * drops the first of two leading user messages, so a file is rewritten until
  * it holds 16 messages: both are written by then unless 15 are system prompts.
  */
-const APPEND_TRANSCRIPT = [
+const appendTranscript = writer => [
   "appendTranscript(e,t,r,n,o){",
-  "const i=e.resolveFilePath(n,\"jsonl\"),s=f.transcripts.get(i)??{count:0,archives:0,last:void 0,chain:Promise.resolve()};f.transcripts.set(i,s);",
+  `const i=e.resolveFilePath(n,"jsonl"),s=${writer}.transcripts.get(i)??{count:0,archives:0,last:void 0,chain:Promise.resolve()};${writer}.transcripts.set(i,s);`,
   "const k=x=>null==x?void 0:\"string\"==typeof x?x:Buffer.from(x).toString(\"hex\"),a=()=>r.summaryArchives?.length??0;",
   "return s.chain=s.chain.then((()=>{const m=r.rootPromptMessagesJson,c=s.count>=16&&a()===s.archives&&m.length>=s.count&&k(m[s.count-1])===s.last?s.count:0;",
   "return e.writeFromStateIncremental(t,r,n,c,o)})).then((c=>{s.count=c||0,s.archives=a(),s.last=s.count>0?k(r.rootPromptMessagesJson[s.count-1]):void 0}),(()=>{s.count=0})),s.chain}",
 ].join("")
+
+/** The same in both builds: the module's names didn't differ in 1.0.40. */
 const BLOB_STORE = [
   [
-    "class I{constructor(e){this.persistBlob=e,this.blobs=new Map}",
-    `${MARKER}class I{constructor(e,t){this.persistBlob=e,this.loadBlob=t,this.blobs=new Map}`,
+    "class x{constructor(t){this.persistBlob=t,this.blobs=new Map}",
+    `${MARKER}class x{constructor(t,r){this.persistBlob=t,this.loadBlob=r,this.blobs=new Map}`,
   ],
   [
-    "getBlob(e,t){return a(this,void 0,void 0,(function*(){return this.blobs.get((0,r.nj)(t))}))}",
-    "getBlob(e,t){return a(this,void 0,void 0,(function*(){const n=(0,r.nj)(t),s=this.blobs.get(n);return void 0===s&&this.loadBlob?yield this.loadBlob(n):s}))}",
+    "async getBlob(t,r){return this.blobs.get((0,n.nj)(r))}",
+    "async getBlob(t,r){const e=(0,n.nj)(r),s=this.blobs.get(e);return void 0===s&&this.loadBlob?await this.loadBlob(e):s}",
   ],
   [
-    "this.blobs.set(s,o),yield null===(e=this.persistBlob)||void 0===e?void 0:e.call(this,s,o)}))}",
-    "this.blobs.set(s,o),yield null===(e=this.persistBlob)||void 0===e?void 0:e.call(this,s,o),this.loadBlob&&this.blobs.get(s)===o&&this.blobs.delete(s)}))}",
+    "this.blobs.set(s,i),await(this.persistBlob?.(s,i))}",
+    "this.blobs.set(s,i),await(this.persistBlob?.(s,i)),this.loadBlob&&this.blobs.get(s)===i&&this.blobs.delete(s)}",
   ],
   [
-    "const n=yield this.getScopedAgentDocument(e);return(null==n?void 0:n.latestCheckpoint)?this.setBlobStore(e,yield f(this.localStore,e,n.latestCheckpoint)):this.createPersistingBlobStore(e)}))}",
-    "return yield this.getScopedAgentDocument(e),this.createPersistingBlobStore(e)}))}",
+    "const e=await this.getScopedAgentDocument(t);return e?.latestCheckpoint?this.setBlobStore(t,await f(this.localStore,t,e.latestCheckpoint)):this.createPersistingBlobStore(t)}",
+    "return await this.getScopedAgentDocument(t),this.createPersistingBlobStore(t)}",
   ],
   [
-    "createPersistingBlobStore(e){const t=new I(this.createPersistBlob(e));return this.blobStores.set(e,t),t}",
-    "createPersistingBlobStore(e){const t=new I(this.createPersistBlob(e),this.createLoadBlob(e));return this.blobStores.set(e,t),t}createLoadBlob(e){return t=>a(this,void 0,void 0,(function*(){const n=yield this.localStore.checkpoints.get({agentId:e,blobId:t});return null==n?void 0:L(n)}))}",
+    "createPersistingBlobStore(t){const r=new x(this.createPersistBlob(t));return this.blobStores.set(t,r),r}",
+    "createPersistingBlobStore(t){const r=new x(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(t){return async r=>{const e=await this.localStore.checkpoints.get({agentId:t,blobId:r});return null==e?void 0:T(e)}}",
   ],
   [
-    "const n=yield f(this.localStore,e,t.latestCheckpoint),r=this.setBlobStore(e,n),i=yield r.getBlob((0,s.q6)(),R(n.rootBlobId));",
-    "const r=this.createPersistingBlobStore(e),i=yield r.getBlob((0,s.q6)(),R(t.latestCheckpoint.rootBlobId));",
+    "const e=await f(this.localStore,t,r.latestCheckpoint),n=this.setBlobStore(t,e),o=await n.getBlob((0,s.q6)(),k(e.rootBlobId));",
+    "const n=this.createPersistingBlobStore(t),o=await n.getBlob((0,s.q6)(),k(r.latestCheckpoint.rootBlobId));",
   ],
   [
-    "const n=yield f(this.localStore,e,t.latestCheckpoint),i=new r.We;",
-    "const n=t.latestCheckpoint,i=new r.We;",
+    "const e=await f(this.localStore,t,r.latestCheckpoint),o=new n.We;",
+    "const e=r.latestCheckpoint,o=new n.We;",
   ],
   [
-    "const a=new r.pH(this.setBlobStore(e,n),i);",
-    "const a=new r.pH(this.createPersistingBlobStore(e),i);",
-  ],
-]
-const TRANSCRIPTS = [
-  [
-    "class f{constructor(e){this.writeChain=Promise.resolve(),",
-    `${MARKER}class f{static transcripts=new Map;constructor(e){this.writeChain=Promise.resolve(),`,
-  ],
-  [
-    "Object.assign({writeText:!1,writeJsonl:!0},t?{pathResolver:t}:{})",
-    "Object.assign({writeText:!1,writeJsonl:!0,appendFile:o.appendFile},t?{pathResolver:t}:{})",
-  ],
-  [
-    "this.nestedSubagentTranscriptStore=new a.YF(this.projectDir,e.blobStore,p,{writeText:!1,writeJsonl:!0,",
-    "this.nestedSubagentTranscriptStore=new a.YF(this.projectDir,e.blobStore,p,{writeText:!1,writeJsonl:!0,appendFile:o.appendFile,",
-  ],
-  [
-    "yield this.transcriptStore.writeFromStateFull(e,t,this.conversationId);",
-    "yield this.appendTranscript(this.transcriptStore,e,t,this.conversationId);",
-  ],
-  [
-    "(yield this.nestedSubagentTranscriptStore.writeFromStateFull(e,n.conversationState,t))",
-    "(yield this.appendTranscript(this.nestedSubagentTranscriptStore,e,n.conversationState,t))",
-  ],
-  [
-    "yield this.transcriptStore.writeFromStateFull(e,t,this.conversationId,{turnEnded:r})",
-    "yield this.appendTranscript(this.transcriptStore,e,t,this.conversationId,{turnEnded:r})",
-  ],
-  [
-    "waitForPendingWrites(){return this.writeChain}",
-    APPEND_TRANSCRIPT + "waitForPendingWrites(){return this.writeChain}",
+    "const a=new n.pH(this.setBlobStore(t,e),o);",
+    "const a=new n.pH(this.createPersistingBlobStore(t),o);",
   ],
 ]
 
-function legacyTeamReposReplacement(proto) {
-  const original = `getTeamRepos(){return this.dashboardClient.getTeamReposOrEmptyIfNotInTeam(new ${proto}.aYW({}))}`
-  const patched = `getTeamRepos(){return this.dashboardClient.getTeamReposOrEmptyIfNotInTeam(new ${proto}.aYW({})).catch((e=>{if(e instanceof Error&&e.name==="ConnectError"&&e.code===14&&Object.isExtensible(e))Object.defineProperty(e,Symbol.for("mako.cursor-sdk.team-repos-unavailable"),{value:!0});throw e}))}`
-  return [original, patched]
-}
-
-function toolStreamReplacements(awaitValue, generator) {
+/** `writer` is the transcript writer's class, `store` the transcript store's, `write` its file writer, `fs` node:fs/promises. */
+function transcripts({ writer, store, write, fs }) {
+  const options = `writeText:!1,writeJsonl:!0,appendFile:${fs}.appendFile,streamFullJsonlWrites:!0,`
   return [
     [
-      "finally{this.closed=!0;for(const e of this.forks)e.close();this.forks.clear()}",
-      "/*mako:patched:tool-stream-errors:1*/catch(e){this.failure={error:e};for(const t of this.forks)t.throw(e)}finally{this.closed=!0;for(const e of this.forks)e.close();this.forks.clear()}",
+      `class ${writer}{constructor(e){this.writeChain=Promise.resolve(),`,
+      `${MARKER}class ${writer}{static transcripts=new Map;constructor(e){this.writeChain=Promise.resolve(),`,
     ],
     [
-      `fork(){if(this.closed){const e=this.pastElements;return function(){return ${generator}(this,arguments,(function*(){for(const t of e)yield yield ${awaitValue}(t)}))}()}`,
-      `fork(){if(this.closed){const e=this.pastElements,t=this.failure;return function(){return ${generator}(this,arguments,(function*(){for(const t of e)yield yield ${awaitValue}(t);if(t)throw t.error}))}()}`,
+      `this.transcriptStore=new ${store}(this.projectDir,e.blobStore,${write},{writeText:!1,writeJsonl:!0,...t?`,
+      `this.transcriptStore=new ${store}(this.projectDir,e.blobStore,${write},{${options}...t?`,
     ],
     [
-      "finally{r.forks.delete(e)}}))}()}}",
-      "finally{r.forks.delete(e)}if(r.failure)throw r.failure.error}))}()}}",
+      `this.nestedSubagentTranscriptStore=new ${store}(this.projectDir,e.blobStore,${write},{writeText:!1,writeJsonl:!0,`,
+      `this.nestedSubagentTranscriptStore=new ${store}(this.projectDir,e.blobStore,${write},{${options}`,
+    ],
+    [
+      "await this.transcriptStore.writeFromStateFull(e,t,this.conversationId);",
+      "await this.appendTranscript(this.transcriptStore,e,t,this.conversationId);",
+    ],
+    [
+      "await this.nestedSubagentTranscriptStore.writeFromStateFull(e,o.conversationState,t)",
+      "await this.appendTranscript(this.nestedSubagentTranscriptStore,e,o.conversationState,t)",
+    ],
+    [
+      "await this.transcriptStore.writeFromStateFull(e,t,this.conversationId,{turnEnded:r})",
+      "await this.appendTranscript(this.transcriptStore,e,t,this.conversationId,{turnEnded:r})",
+    ],
+    [
+      "waitForPendingWrites(){return this.writeChain}",
+      appendTranscript(writer) + "waitForPendingWrites(){return this.writeChain}",
     ],
   ]
 }
 
-// The previous RPC-specific marker is removed from cached dependencies too.
-// Error ownership now belongs to the streaming cache, regardless of RPC/code.
-const undoTeamReposMarker = proto => [legacyTeamReposReplacement(proto).toReversed()]
-
 export const CURSOR_SDK_PATCHES = [
   { target: "dist/esm/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
   { target: "dist/cjs/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
-  { target: "dist/esm/357.js", replacements: [...TRANSCRIPTS, ...toolStreamReplacements("hs", "ps")], previous: TRANSCRIPTS, migrations: undoTeamReposMarker("Zc"), change: "incremental transcripts and streaming-tool error ownership" },
-  { target: "dist/cjs/222.js", replacements: toolStreamReplacements("Cv", "_v"), migrations: undoTeamReposMarker("rS"), change: "streaming-tool error ownership" },
+  { target: "dist/esm/331.js", replacements: transcripts({ writer: "kI", store: "l_", write: "SI", fs: "Os" }), change: "incremental transcripts" },
+  { target: "dist/cjs/331.js", replacements: transcripts({ writer: "CI", store: "d_", write: "EI", fs: "Ns" }), change: "incremental transcripts" },
 ]
 
 function assertVersion(read) {
   const { version } = JSON.parse(read("package.json"))
   if (version !== VERSION)
-    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs, transcript writes and streaming-tool error ownership, then port or delete this patch.`)
+    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs and transcript writes, then port or delete this patch.`)
 }
 
 /** Checks every replacement, including the SDK bytes inside the built archive. */
 export function assertCursorSdkPatched(read) {
   assertVersion(read)
-  for (const { target, replacements, migrations = [], change } of CURSOR_SDK_PATCHES) {
+  for (const { target, replacements, change } of CURSOR_SDK_PATCHES) {
     const source = read(target)
-    if (!replacements.every(([, patched]) => source.includes(patched)) || migrations.some(([obsolete]) => source.includes(obsolete)))
+    if (!replacements.every(([, patched]) => source.includes(patched)))
       throw new Error(`@cursor/sdk ${target} lacks Mako's complete ${change} patch; rebuild with scripts/patch-cursor-sdk.mjs`)
   }
 }
@@ -158,24 +139,17 @@ export function assertCursorSdkPatched(read) {
 export function patchCursorSdk(root) {
   const read = (target) => readFileSync(join(root, target), "utf8")
   assertVersion(read)
-  for (const { target, replacements, previous, migrations = [], change } of CURSOR_SDK_PATCHES) {
-    const file = join(root, target)
-    const before = read(target)
-    let source = before
-    for (const [obsolete, original] of migrations) source = source.replace(obsolete, () => original)
-    if (replacements.every(([, patched]) => source.includes(patched))) {
-      if (source !== before) writeFileSync(file, source)
-      continue
-    }
-    if (source.includes(ANY_MARKER) && !previous?.every(([, patched]) => source.includes(patched)))
+  for (const { target, replacements, change } of CURSOR_SDK_PATCHES) {
+    let source = read(target)
+    if (replacements.every(([, patched]) => source.includes(patched))) continue
+    if (source.includes(ANY_MARKER))
       throw new Error(`@cursor/sdk ${target} has an incomplete or older Mako patch; reinstall @cursor/sdk before rebuilding`)
     for (const [from, to] of replacements) {
-      if (source.includes(to)) continue
       const count = source.split(from).length - 1
       if (count !== 1) throw new Error(`@cursor/sdk ${target}: expected one match, found ${count}: ${from.slice(0, 80)}`)
       source = source.replace(from, () => to)
     }
-    writeFileSync(file, source)
+    writeFileSync(join(root, target), source)
     console.log(`patched @cursor/sdk ${target}: ${change}`)
   }
   assertCursorSdkPatched(read)

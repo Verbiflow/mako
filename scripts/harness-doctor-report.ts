@@ -21,7 +21,7 @@ import { capabilityText, LIVE_CAPABILITY_KEYS, LIVE_CAPABILITY_LABELS, type Live
 import { HARNESS_FEATURE_KEYS, HARNESS_FEATURES, type HarnessFeatures, type UniqueCapability } from "@mako/host/contracts/harness-features"
 import { featureCell, uniqueCell } from "./harness-checklist.ts"
 import { readRuntimeVersion } from "@mako/host/harnesses/runtime-updates"
-import { FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
+import { currentPairVersions, FIXTURE_ROOT, loadFixtures, type FixtureFile } from "./native-decoding.ts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { childCompleteness, SAVED_HISTORY_READERS, type ChildCompleteness } from "@mako/sessions"
@@ -284,7 +284,7 @@ export async function doctorReport(options: DoctorOptions): Promise<DoctorReport
       live: providerHost.harnesses.get(harness)?.capabilities ?? null,
       features: providerHost.harnesses.get(harness)?.features ?? null,
       unique: providerHost.harnesses.get(harness)?.unique ?? [],
-      version: versionReport(await installed(harness), files, providerHost.updateSources.get(harness)),
+      version: versionReport(await installed(harness), files, providerHost.updateSources.get(harness), await currentPairVersions(harness, options.fixtureRoot ?? FIXTURE_ROOT)),
       decoder: decoderReport(harness, files, fixtures.invalid.filter((file) => file.name.startsWith(`${harness}/`)).map((file) => file.name)),
       tools: toolReport(harness),
       logs: markHandled(logReports.get(harness) ?? emptyLogs(harness), handledKinds(harness, files)),
@@ -362,14 +362,16 @@ async function readSdk(name: string): Promise<Sdk | null> {
   return parsed?.success ? { name, version: parsed.data.version } : null
 }
 
+/** `pairs` are the versions the harness's current decode pairs were recorded with (`currentPairVersions`). */
 export function versionReport(
   installed: InstalledRuntime,
   files: FixtureFile[],
-  source?: { versions?: HarnessVersions; belowOldest?(version: string): boolean }
+  source?: { versions?: HarnessVersions; belowOldest?(version: string): boolean },
+  pairs: string[] = [],
 ): VersionReport {
   const newest = (versions: (string | null | undefined)[]) =>
     versions.filter((version) => version != null).sort(compareVersions).at(-1) ?? null
-  const newestFixture = newest(files.map((file) => file.fixture.native.version))
+  const newestFixture = newest([...files.map((file) => file.fixture.native.version), ...pairs])
   const newestCaptured = newest(files.filter((file) => file.fixture.native.origin === "captured").map((file) => file.fixture.native.version))
   const versions = source?.versions
   const declared = versions ? { oldest: versions.oldest, tested: versions.tested, bundled: versions.bundled, features: versions.features } : null
@@ -378,7 +380,9 @@ export function versionReport(
     : !standing ? "no-declaration"
       : standing === "newer" ? "newer-than-tested" : standing
   const sdk = installed.sdk
-  const newestSdk = sdk ? newest(files.map((file) => file.fixture.native.sdk?.name === sdk.name ? file.fixture.native.sdk.version : null)) : null
+  // A harness whose runtime is the SDK it bundles (Cursor's) records its pairs with that SDK's version.
+  const sdkPairs = sdk && versions?.bundled?.package === sdk.name && versions.bundled.version === versions.tested ? pairs : []
+  const newestSdk = sdk ? newest([...files.map((file) => file.fixture.native.sdk?.name === sdk.name ? file.fixture.native.sdk.version : null), ...sdkPairs]) : null
   return {
     installed,
     declared,

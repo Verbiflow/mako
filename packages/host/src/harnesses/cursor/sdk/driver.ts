@@ -526,12 +526,12 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   return {
     provider: "cursor",
     launchEnvironment: { kind: "prepared", via: "SDK auth resolves its credential over the admitted account environment." },
-    compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Cursor accepts a summarize request from a local run, but SDK 1.0.31 has no way to send one." },
-    goals: { kind: "mako", reason: "SDK 1.0.31 has no goal to set or read; Cursor's own goal tools stay inside its agent." },
+    compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Cursor accepts a summarize request from a local run, but SDK 1.0.40 has no way to send one." },
+    goals: { kind: "mako", reason: "SDK 1.0.40 has no goal to set or read; Cursor's own goal tools stay inside its agent." },
     review: { kind: "mako", reason: "Cursor's SDK has no review; Bugbot reviews pull requests on Cursor's servers." },
     sideQuestions: {
       kind: "fork",
-      via: "SDK 1.0.31 has no side question, so Mako copies the agent's store to a new agent, resumes it with read-only tools and asks it there; closing the side conversation deletes the copy.",
+      via: "SDK 1.0.40 has no side question, so Mako copies the agent's store to a new agent, resumes it with read-only tools and asks it there; closing the side conversation deletes the copy.",
       async ask(id, { side, question, earlier, stream, signal }) {
         const live = requireLive(id)
         live.sides.set(side, stream)
