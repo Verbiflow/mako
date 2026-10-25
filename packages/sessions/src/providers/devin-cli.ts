@@ -118,7 +118,7 @@ interface MessageRow {
 
 interface MessageTranslator {
   push(row: MessageRow): void
-  /** A subagent's model call, spent in whichever turn is open. */
+  /** A subagent's model call, spent in the turn running, or in the next when none runs. */
   spend(usage: TurnUsage): void
   snapshot(): Entry[]
   /** The rows it couldn't draw, by kind. */
@@ -582,9 +582,10 @@ interface ChildSpend {
 
 /**
  * A session's main chain, drawn, with each of its subagents' calls spent in
- * the turn open when it was made, as live counts them. One a background
- * subagent made between turns counts in the turn before, which started it or
- * ran while it worked.
+ * the turn running when it was made. One a background subagent made while
+ * the session was idle counts in the turn that follows (the one its report
+ * opens), as Grok's own ledger counts a subagent that wakes its parent
+ * (`GrokWokenSpend`), or with none after it, in the last.
  */
 function translatedMainChain(db: DatabaseSync, sessionId: string, leafId: number, spend: readonly ChildSpend[] = []): TranslatedChain {
   const cwd = sqliteText(db.prepare("SELECT working_directory AS cwd FROM sessions WHERE id = ?").get(sessionId)?.cwd)
@@ -846,9 +847,12 @@ function translator(
   const calls = new Map<string, MadeCall>()
   /** What the open turn's model calls spent. */
   let spent: TurnUsage | undefined
+  /** What subagents spent while no turn ran, which the next turn counts. */
+  let idle: TurnUsage | undefined
   const commit = (): void => {
     turns.commit(spent)
-    spent = undefined
+    spent = idle
+    idle = undefined
   }
   /** A turn ends with an assistant message that calls no tool, or a stop. */
   let running = false
@@ -1003,9 +1007,12 @@ function translator(
       turns.unread(`message ${message.role ?? "(no role)"}`, "unknown", JSON.parse(row.chatMessage))
     },
     spend(usage) {
-      spent = addUsage(spent, usage)
+      if (running) spent = addUsage(spent, usage)
+      else idle = addUsage(idle, usage)
     },
     snapshot() {
+      if (idle) spent = addUsage(spent, idle)
+      idle = undefined
       commit()
       return turns.done()
     },
