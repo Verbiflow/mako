@@ -159,20 +159,34 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      - run: npm ci
+      # The branch carries the release, so installing or building it can be the first thing it breaks (a patch that
+      # targets the old version, types its protocol changed): that's said on the pull request like a failed flow.
+      - name: Install
+        id: install
         if: steps.reported.outputs.done != 'true'
-      - run: npm run build:control-runtime
-        if: steps.reported.outputs.done != 'true'
+        continue-on-error: true
+        run: npm ci
+      - name: Build
+        id: build
+        if: steps.reported.outputs.done != 'true' && steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run build:control-runtime
       - name: Install tested and run the session flows
         id: flows
-        if: steps.reported.outputs.done != 'true'
+        if: steps.reported.outputs.done != 'true' && steps.build.outcome == 'success'
         continue-on-error: true
         run: npx tsx scripts/bump-harness-versions.ts "${{ matrix.harness }}" --verify --summary "$RUNNER_TEMP/macos.md"
       - name: Report on the pull request
         if: steps.reported.outputs.done != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INSTALL: ${{ steps.install.outcome }}
+          BUILD: ${{ steps.build.outcome }}
           OUTCOME: ${{ steps.flows.outcome }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          { echo "Session flows on macOS: $OUTCOME"; echo; cat "$RUNNER_TEMP/macos.md" 2>/dev/null; } > "$RUNNER_TEMP/comment.md"
+          if [ "$INSTALL" != "success" ]; then outcome="not run: npm ci failed on this branch"
+          elif [ "$BUILD" != "success" ]; then outcome="not run: the build failed on this branch"
+          else outcome="$OUTCOME"; fi
+          { echo "Session flows on macOS: $outcome"; echo; cat "$RUNNER_TEMP/macos.md" 2>/dev/null; echo; echo "[The run]($RUN)"; } > "$RUNNER_TEMP/comment.md"
           gh pr comment "$BRANCH" --body-file "$RUNNER_TEMP/comment.md"
