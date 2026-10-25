@@ -118,6 +118,10 @@ const APART = new Map<string, Apart>([
   ["grok/rewound-turn", { apart: "saved", because: "a rewound turn leaves the conversation, but what it spent stays spent" }],
   ["grok/stopped-shell@1.0.44", { apart: "stored", because: "Grok 1.0.44 and 1.0.46 saved no spend for a turn they were stopped in, though they reported it live; 1.0.70 saves it" }],
   ["opencode/rewound-turn", { apart: "stored", because: "OpenCode deletes a reverted turn's messages, and their spend with them" }],
+  // Reader gaps, not the stores': each subagent's spend is kept, in its own transcript, which these readers don't count into the parent's turn yet.
+  ["claude/subagent", { apart: "saved", because: "Claude Code keeps a subagent's calls in its own transcript (`subagents/agent-*.jsonl`), and the parent's Agent result names only the last one's usage; the saved reader reads the parent's alone" }],
+  ["opencode/subagent", { apart: "saved", because: "OpenCode keeps a subagent's steps in its own session, and the saved reader reads the root session's messages alone" }],
+  ["codex/subagent", { apart: "scanned", because: "Codex keeps a subagent's calls in its own rollout and reports them on its own thread; the live meter and the saved reader count the parent thread's alone, the scanner every rollout" }],
 ])
 
 function sum(entries: readonly Entry[]): Tokens {

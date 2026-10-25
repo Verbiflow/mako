@@ -33,14 +33,23 @@ export interface ToolVocabulary {
   ask: Optional<(question: Question) => Call>
   /** How a plan-mode turn proposes `plan`: the steps that end it, approved where the harness asks. */
   plan: Optional<(plan: string) => Step[]>
-  /** A subagent started on `task`, which runs its own calls and reports back. */
-  subagent: Optional<(task: { description: string; prompt: string }) => Call>
+  /** A subagent started on a task, which runs its own calls and reports back. */
+  subagent: Optional<SubagentTools>
   /** A watch left running on `command`, each line it prints reported to the agent as it comes. */
   monitor: Optional<(command: string, description: string) => Call>
 }
 
-/** Why a harness answered by the scripted model records no subagent. */
-export const SCRIPTED_SUBAGENT = "The scripted model answers one conversation step by step, and a subagent's own requests would take its parent's next step"
+/** What a subagent is started on: the harness's own subagent tool takes both. */
+export type Task = { description: string; prompt: string }
+
+export interface SubagentTools {
+  /** The call that starts a subagent on `task`, which returns its report unless the harness has `wait`. */
+  start(task: Task): Call
+  /** The call that waits for the report, for a harness whose start returns at once (Codex's `wait_agent`). */
+  wait?: Call
+  /** The model whose turns offer these tools, for a harness that offers them to some models only. */
+  model?: string
+}
 
 /** A type, not an interface, so it is JSON a call's arguments can carry. */
 export type Question = {
@@ -99,6 +108,12 @@ export interface Step {
   plan?: string
   /** Text the request this step answers must carry: a steered message the harness had to deliver. */
   hears?: string
+  /**
+   * A subagent started on the task, whose own requests take `steps`: the
+   * scripted model tells them from its parent's by the task's prompt, which
+   * they carry and the parent's carry only beside the turn's own prompt.
+   */
+  subagent?: Task & { steps: Step[] }
 }
 
 /**
@@ -154,11 +169,6 @@ function search(tools: ToolVocabulary, pattern: string): Call {
 function cell(tools: ToolVocabulary, source: string): Call {
   if ("absent" in tools.codeMode) throw new Error(tools.codeMode.absent)
   return tools.codeMode.cell(source)
-}
-
-function subagent(tools: ToolVocabulary, task: { description: string; prompt: string }): Call {
-  if ("absent" in tools.subagent) throw new Error(tools.subagent.absent)
-  return tools.subagent(task)
 }
 
 function monitor(tools: ToolVocabulary, command: string, description: string): Call {
@@ -587,7 +597,17 @@ export const SCENARIOS: Scenario[] = [
     turns: [{
       prompt: "Start one subagent to read notes.md and docs/plan.md and report which day the release ships and when the branch freezes. Don't read the files yourself; answer with what it reports.",
       steps: [
-        { call: (tools) => subagent(tools, { description: "Read the release notes", prompt: "Read notes.md and docs/plan.md, then report which day the release ships and when the branch freezes." }) },
+        {
+          subagent: {
+            description: "Read the release notes",
+            prompt: "Read notes.md and docs/plan.md, then report which day the release ships and when the branch freezes.",
+            steps: [
+              { call: (tools, project) => tools.read(join(project, "notes.md")) },
+              { call: (tools, project) => tools.read(join(project, "docs/plan.md")) },
+              { text: "The release ships on Friday, and the branch freezes on Friday." },
+            ],
+          },
+        },
         { text: "The release ships on Friday, and the branch freezes on Friday." },
       ],
     }],
@@ -700,37 +720,68 @@ export const SCENARIOS: Scenario[] = [
  * Each conversation request takes the next step, its call numbered in order.
  * A failed step keeps failing until a request carries the next turn's prompt:
  * a server that is down stays down, however many times the harness retries.
+ * A subagent's requests take its own steps, in their own order beside its
+ * parent's.
  */
 export function script(scenario: Scenario, tools: ToolVocabulary, project: string): Script {
-  const steps = scenario.turns.flatMap((turn) => turn.steps.map((step) => ({ step, turn }))).flatMap(({ step, turn }) => {
-    if (step.plan === undefined) return [{ step, turn }]
-    if ("absent" in tools.plan) throw new Error(tools.plan.absent)
-    return tools.plan(step.plan).map((planned) => ({ step: planned, turn }))
-  })
-  let next = 0
-  let woken = scenario.woken
   const unheard: string[] = []
-  const retried = (heard: string) => {
-    const failed = steps[next - 1]
-    if (!failed?.step.fail) return false
-    const following = steps[next]
-    return !following || (following.turn !== failed.turn && !heard.includes(JSON.stringify(following.turn.prompt).slice(1, -1)))
+  const quoted = (text: string) => JSON.stringify(text).slice(1, -1)
+  const children: { prompt: string; steps: Steps }[] = []
+  const expand = (step: Step): Step[] => {
+    if (step.plan !== undefined) {
+      if ("absent" in tools.plan) throw new Error(tools.plan.absent)
+      return tools.plan(step.plan)
+    }
+    if (!step.subagent) return [step]
+    if ("absent" in tools.subagent) throw new Error(tools.subagent.absent)
+    const { steps: own, ...task } = step.subagent
+    const { start, wait } = tools.subagent
+    children.push({ prompt: quoted(task.prompt), steps: steps(`subagent ${children.length + 1} `, `call_s${children.length + 1}_`, own.flatMap(expand)) })
+    return [{ reasoning: step.reasoning, call: () => start(task) }, ...wait ? [{ call: () => wait }] : []]
   }
+  const steps = (label: string, ids: string, list: Step[]): Steps => ({ label, ids, list, next: 0 })
+  const parent = steps("", "call_", scenario.turns.flatMap((turn) => turn.steps.flatMap(expand).map((step) => ({ ...step, turn }))))
+  const prompts = scenario.turns.map((turn) => quoted(turn.prompt))
+  let woken = scenario.woken
+  const retried = (heard: string) => {
+    const failed = parent.list[parent.next - 1]
+    if (!failed?.fail) return false
+    const following = parent.list[parent.next]
+    return !following || (following.turn !== failed.turn && !heard.includes(quoted(following.turn!.prompt)))
+  }
+  const taken: string[] = []
   return {
     unheard,
+    taken,
+    unfinished: () => children.flatMap(({ steps: child }) => child.next < child.list.length ? [`${child.label.trim()} (took ${child.next} of ${child.list.length})`] : []),
     reply: (heard) => {
-      let step = retried(heard) ? steps[next - 1]!.step : steps[next++]?.step
-      if (!step && woken) [step, woken] = [woken, undefined]
+      const child = prompts.some((prompt) => heard.includes(prompt)) ? undefined : children.find((candidate) => heard.includes(candidate.prompt))
+      const at = child?.steps ?? parent
+      let step = !child && retried(heard) ? at.list[at.next - 1] : at.list[at.next++]
+      if (!step && !child && woken) [step, woken] = [woken, undefined]
+      taken.push(step ? `${at.label}step ${at.next}` : `${at.label || "parent "}past its last step`)
       if (!step) return undefined
-      if (step.hears && !heard.includes(step.hears)) unheard.push(`step ${next} never heard "${step.hears}"`)
+      if (step.hears && !heard.includes(step.hears)) unheard.push(`${at.label}step ${at.next} never heard "${step.hears}"`)
       const call = step.call?.(tools, project, heard)
-      return { reasoning: step.reasoning, text: step.text, call: call && { id: `call_${next}`, ...call }, fail: step.fail }
+      return { reasoning: step.reasoning, text: step.text, call: call && { id: `${at.ids}${at.next}`, ...call }, fail: step.fail }
     },
   }
+}
+
+/** One conversation's steps and the next to take; a turn's steps carry it, for retries. */
+interface Steps {
+  label: string
+  ids: string
+  list: (Step & { turn?: Turn })[]
+  next: number
 }
 
 export interface Script {
   reply: (heard: string) => ScriptedReply | undefined
   /** Each step whose request lacked what it `hears`, which the run fails on once it ends. */
   unheard: string[]
+  /** Which conversation's step each conversation request took, in order: what a failed run's requests were answered with. */
+  taken: string[]
+  /** Each subagent whose requests didn't take all its steps: one the harness never started, or stopped early. */
+  unfinished: () => string[]
 }

@@ -51,7 +51,7 @@ import { DEVIN_APP_USER, differences, liveDrawing, PairSchema, PAIRS_FOLDER, rep
 import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
 import { FIXTURE_ROOT, readRecording, type Frame, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
 import { scriptedModel } from "./scripted-model.ts"
-import { planFile, SCENARIOS, SCRIPTED_SUBAGENT, script, STOP_AFTER_MS, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
+import { planFile, SCENARIOS, script, STOP_AFTER_MS, type Call, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
@@ -146,7 +146,8 @@ function unrecordable(recorder: Recorder, scenario: Scenario): string | undefine
 const GROK_DASHBOARD_ASK = `"role":"user","content":"<system-reminder>Write an ultra-short dashboard line`
 
 const GROK_TOOLS: ToolVocabulary = {
-  subagent: { absent: SCRIPTED_SUBAGENT },
+  // Grok 1.0.70 starts a subagent in the background unless told not to.
+  subagent: { start: ({ description, prompt }) => ({ name: "spawn_subagent", arguments: { description, prompt, background: false } }) },
   monitor: (command, description) => ({ name: "monitor", arguments: { command, description } }),
   read: (path, lines) => ({ name: "read_file", arguments: { target_file: path, ...lines } }),
   shell: (command, description) => ({ name: "run_terminal_command", arguments: { command, description } }),
@@ -236,7 +237,8 @@ const grok: Recorder = {
 }
 
 const CLAUDE_TOOLS: ToolVocabulary = {
-  subagent: { absent: SCRIPTED_SUBAGENT },
+  // Claude Code 2.1.310 starts a subagent in the background unless told not to.
+  subagent: { start: ({ description, prompt }) => ({ name: "Agent", arguments: { description, prompt, subagent_type: "general-purpose", run_in_background: false } }) },
   monitor: (command, description) => ({ name: "Monitor", arguments: { command, description, timeout_ms: 60_000 } }),
   read: (path, lines) => ({ name: "Read", arguments: { file_path: path, ...lines } }),
   shell: (command, description) => ({ name: "Bash", arguments: { command, description } }),
@@ -418,18 +420,27 @@ function claudeMode(turn: Turn | undefined): "plan" | "default" {
 
 /** The harness asked the model once per step: no fewer, as a turn it never asked for; no more, as an unscripted request. */
 function scripted(harness: string, scenario: Scenario, requests: Awaited<ReturnType<typeof scriptedModel>>["requests"], steps: Script): void {
-  const listed = () => requests.map((request) => `${request.path}${request.conversation ? " (turn)" : ""}${request.unscripted ? " (unscripted)" : ""}`).join(", ")
+  let turn = 0
+  const listed = () => requests.map((request) => `${request.path}${request.conversation ? ` (turn: ${steps.taken[turn++] ?? "?"})` : ""}${request.unscripted ? " (unscripted)" : ""}`).join(", ")
   const unscripted = requests.filter((request) => request.unscripted).length
   if (unscripted) throw new Error(`${harness} asked the model ${unscripted} more times than ${scenario.name} has steps: ${listed()}`)
   if (!requests.some((request) => request.conversation)) throw new Error(`${harness} never asked the scripted model for the turn: ${listed()}`)
   if (steps.unheard.length) throw new Error(`${harness} never delivered what ${scenario.name}'s steps wait on: ${steps.unheard.join("; ")}`)
+  const unfinished = steps.unfinished()
+  if (unfinished.length) throw new Error(`${harness} never asked for every step of ${scenario.name}'s ${unfinished.join("; ")}: ${listed()}`)
 }
 
 /** gpt-5.5 calls `exec_command` and `apply_patch` itself; the gpt-6 models reach them only from inside `exec`, Codex's code mode. */
 const CODEX_MODEL = "gpt-5.5"
 
 const CODEX_TOOLS: ToolVocabulary = {
-  subagent: { absent: SCRIPTED_SUBAGENT },
+  // Only the gpt-6 and gpt-5.6 sol and terra models have the agent tools; `fork_turns: "none"` starts the subagent on its task alone.
+  // A task name takes lowercase letters, digits and underscores only.
+  subagent: {
+    model: "gpt-6-sol",
+    start: ({ description, prompt }) => ({ name: "spawn_agent", arguments: { task_name: description.toLowerCase().replace(/[^a-z0-9]+/g, "_"), message: prompt, fork_turns: "none" } }),
+    wait: { name: "wait_agent", arguments: {} },
+  },
   monitor: { absent: "Codex 0.164.0 defines no tool that watches a command and reports what it prints (native-tools/codex-0.164.0.json)" },
   read: (path, lines) => ({
     name: "exec_command",
@@ -446,12 +457,35 @@ const CODEX_TOOLS: ToolVocabulary = {
   plan: (plan) => [{ text: `<proposed_plan>\n${plan}\n</proposed_plan>` }],
 }
 
+/** The gpt-6 models' vocabulary: Codex's tools inside an `exec` cell, the only tool such a model calls besides the agent tools. */
+const CODEX_CELL_TOOLS: ToolVocabulary = {
+  ...CODEX_TOOLS,
+  read: (path, lines) => codexCell(CODEX_TOOLS.read(path, lines)),
+  shell: (command, description) => codexCell(CODEX_TOOLS.shell(command, description)),
+  edit: (path, from, to) => codexCell(CODEX_TOOLS.edit(path, from, to)),
+  viewImage: (path) => codexCell(CODEX_TOOLS.viewImage(path)),
+}
+
+function codexCell(call: Call): Call {
+  if ("absent" in CODEX_TOOLS.codeMode) throw new Error(CODEX_TOOLS.codeMode.absent)
+  const input = "input" in call ? JSON.stringify(call.input) : JSON.stringify(call.arguments)
+  return CODEX_TOOLS.codeMode.cell(`text(JSON.stringify(await tools.${call.name}(${input})))`)
+}
+
 /** The scenario's file line holding `text`, which a patch replaces whole. */
 function patchLine(path: string, text: string): string {
   const scenario = SCENARIOS.find((candidate) => Object.entries(candidate.files).some(([name, body]) => path.endsWith(`/${name}`) && body.includes(text)))
   const line = scenario && Object.entries(scenario.files).find(([name]) => path.endsWith(`/${name}`))?.[1].split("\n").find((candidate) => candidate.includes(text))
   if (!line) throw new Error(`No scenario file at ${path} holds ${text}`)
   return line
+}
+
+/** The model whose turns have the tools `scenario` needs. */
+function codexModel(scenario: Scenario): string {
+  const { codeMode, subagent } = CODEX_TOOLS
+  if (scenario.needs?.includes("codeMode") && !("absent" in codeMode)) return codeMode.model
+  if (scenario.needs?.includes("subagent") && !("absent" in subagent) && subagent.model) return subagent.model
+  return CODEX_MODEL
 }
 
 /** Codex's app-server with Mako's thread config, its model sealed to the scripted one; every approval is accepted once. */
@@ -471,7 +505,8 @@ const codex: Recorder = {
     if (!executable) throw new Error("Codex is not installed")
     const version = /\d+(?:\.\d+)+/.exec((await run(executable, ["--version"])).stdout)?.[0]
     if (!version) throw new Error("Codex reported no version")
-    const steps = script(scenario, CODEX_TOOLS, sandbox.project)
+    const threadModel = codexModel(scenario)
+    const steps = script(scenario, threadModel === CODEX_MODEL ? CODEX_TOOLS : CODEX_CELL_TOOLS, sandbox.project)
     const model = await scriptedModel({ reply: steps.reply })
     const codexHome = join(sandbox.home, ".codex")
     await mkdir(codexHome, { recursive: true })
@@ -524,8 +559,6 @@ const codex: Recorder = {
     }
     try {
       await initialize()
-      const codeMode = scenario.needs?.includes("codeMode") && !("absent" in CODEX_TOOLS.codeMode) ? CODEX_TOOLS.codeMode.model : undefined
-      const threadModel = codeMode ?? CODEX_MODEL
       const thread = CodexThread.parse(await peer.call("thread/start", { cwd: sandbox.project, model: threadModel, config: codexInteractiveConfig() }))
       if (thread.thread.path) rollout = new CodexRolloutTail(thread.thread.path)
       /** As Mako resumes Codex (`openThread`, `excludeTurns`): an idle app-server ends and a new one resumes the thread, replaying no turns; Mako draws the store's. */
@@ -596,7 +629,7 @@ const codex: Recorder = {
 }
 
 const OPENCODE_TOOLS: ToolVocabulary = {
-  subagent: { absent: SCRIPTED_SUBAGENT },
+  subagent: { start: ({ description, prompt }) => ({ name: "subagent", arguments: { agent: "general", description, prompt } }) },
   monitor: { absent: "OpenCode 2.1.4 defines no tool that watches a command and reports what it prints (native-tools/opencode-2.1.4.json)" },
   read: (path, lines) => ({ name: "read", arguments: { path, ...lines } }),
   shell: (command) => ({ name: "shell", arguments: { command } }),
@@ -1090,6 +1123,7 @@ const CodexToolStarted = z.object({ item: z.object({ type: z.enum(["commandExecu
 
 /** An ACP update that starts a tool. */
 const AcpToolStarted = z.object({ update: z.object({ sessionUpdate: z.literal("tool_call") }).loose() }).loose()
+const AcpNotified = z.object({ sessionId: z.string() }).loose()
 
 const RECORDERS = new Map<string, Recorder>([["claude", claude], ["codex", codex], ["cursor", cursor], ["devin", devin], ["grok", grok], ["opencode", opencode]])
 
@@ -1189,6 +1223,8 @@ async function acpSession(
   let stopTurn: (() => void) | undefined
   let steered: Promise<void> | undefined
   let compaction: AcpCompaction | undefined
+  /** The session Mako opened: another's updates, a subagent's own, Mako's client drops unrecorded (`sessionUpdate` in `acp.ts`). */
+  let opened: string | undefined
   let child = spawn(executable, input.args, { cwd: input.cwd, env: input.env, stdio: ["pipe", "pipe", "pipe"] })
   const connect = () => rpcPeer(child, {
     jsonrpc: true,
@@ -1196,6 +1232,7 @@ async function acpSession(
     refusal: "Mako's decode-pairs client does not answer this",
     received: (message) => {
       if (!message.method) return
+      if (message.method === "session/update" && opened && AcpNotified.safeParse(message.params).data?.sessionId !== opened) return
       messages.push(message.id === undefined ? { method: message.method, params: params(message) } : { request: message.method, params: params(message) })
       if (message.method === "session/update" && AcpToolStarted.safeParse(message.params).success) {
         const stopping = stopTurn
@@ -1256,6 +1293,7 @@ async function acpSession(
     const created = await peer.call("session/new", { cwd: input.cwd, mcpServers: [] })
     messages.push({ response: "session/new", result: z.record(z.string(), z.json()).parse(created) })
     const session = AcpNewSession.parse(created)
+    opened = session.sessionId
     if (input.mode) await peer.call("session/set_mode", { sessionId: session.sessionId, modeId: input.mode })
     const own = input.mode ?? session.modes?.currentModeId
     let mode = own

@@ -271,9 +271,6 @@ export class OpenCodeDecoder {
   private turn(event: OpenCodeEvent): Decoded<OpenCodeEffect>[] {
     const decoded: Decoded<OpenCodeEffect>[] = []
     if (event.type === "session.execution.started" && event.data.sessionID === this.root) this.reply = undefined
-    if ((event.type === "session.execution.failed" || event.type === "session.execution.interrupted") && this.children.has(event.data.sessionID))
-      for (const update of this.content.settle(event.data.sessionID, event.type === "session.execution.failed" ? "failed" : "cancelled", "The subagent stopped before this call finished."))
-        decoded.push({ kind: "update", update })
     if (event.type === "session.compaction.failed" && event.data.sessionID === this.root) decoded.push({ kind: "activity", activity: null })
     // A stopped turn reads as interrupted, from the driver, which knows whether the person stopped it.
     if (event.type === "session.execution.failed" && event.data.sessionID === this.root && event.data.error.type !== "aborted")

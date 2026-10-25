@@ -63,9 +63,10 @@ function toolTitle(name: string, input: JsonValue | undefined): string {
  * One OpenCode conversation as live transcript updates, from its stream
  * (electron's `openCodeEventUpdates`) or from the messages its store keeps
  * (`OpenCodeProvider`), so both draw it the same way. Tool IDs are session
- * scoped, so a child's call never overwrites its parent's. Child sessions
- * contribute tool rows under their own title; their prose stays in their own
- * native session.
+ * scoped, so a child's call never overwrites its parent's. A child session's
+ * calls are followed, so a request one makes names its call, and drawn only
+ * in the child's own transcript (`OpenCodeProvider.children`), as the store
+ * draws them: rows of the child's in the parent were gone once it reloaded.
  */
 export class OpenCodeContent {
   private readonly tools = new Map<string, Tool>()
@@ -81,7 +82,7 @@ export class OpenCodeContent {
     this.cwd = cwd
   }
 
-  /** Child session titles, from `session.created`, prefix that child's tool rows. */
+  /** Child session titles, from `session.created`, prefix that child's requests. */
   nameSession(sessionID: string, title: string | undefined): void {
     if (sessionID !== this.root && title) this.titles.set(sessionID, title)
   }
@@ -96,7 +97,7 @@ export class OpenCodeContent {
     return this.tools.get(`${sessionID}:${toolID}`)?.name
   }
 
-  /** What a child session's rows and requests are prefixed with. */
+  /** What a child session's requests are prefixed with. */
   prefix(sessionID: string): string {
     return sessionID === this.root ? "" : `${this.titles.get(sessionID) ?? "Subagent"}: `
   }
@@ -145,17 +146,17 @@ export class OpenCodeContent {
   toolCalled(sessionID: string, toolID: string, input: JsonValue | undefined): LiveUpdate[] {
     const id = `${sessionID}:${toolID}`
     const tool = this.tools.get(id)
-    if (!tool) return [{ kind: "tool-update", id, status: "in_progress", input: JSON.stringify(input, null, 2) }]
+    if (!tool) return this.drawn(sessionID, [{ kind: "tool-update", id, status: "in_progress", input: JSON.stringify(input, null, 2) }])
     const updates: LiveUpdate[] = []
     tool.input = input
     tool.title = toolTitle(tool.name, input)
-    updates.push({ kind: "tool-update", id, title: `${this.prefix(sessionID)}${tool.title}`, status: "in_progress",
+    updates.push({ kind: "tool-update", id, title: tool.title, status: "in_progress",
       input: JSON.stringify(input, null, 2), details: this.details(tool) })
     if (tool.name === "todowrite") {
       const todo = Todo.safeParse(input)
       if (todo.success) updates.push({ kind: "plan", entries: todo.data.todos })
     }
-    return updates
+    return this.drawn(sessionID, updates)
   }
 
   toolEnded(sessionID: string, toolID: string, end: OpenCodeToolEnd): LiveUpdate[] {
@@ -176,7 +177,7 @@ export class OpenCodeContent {
     const effects = tool ? this.effects(tool, output, end.metadata) : []
     if (effects.length) update.effects = effects
     updates.push(update)
-    return updates
+    return this.drawn(sessionID, updates)
   }
 
   /** Rows a session left open when its execution stopped without finishing them. */
@@ -191,7 +192,7 @@ export class OpenCodeContent {
       if (effects.length) update.effects = effects
       updates.push(update)
     }
-    return updates
+    return this.drawn(sessionID, updates)
   }
 
   /** This stream carries `messageID`'s reply: it started a step, text, reasoning or a call there. */
@@ -221,10 +222,15 @@ export class OpenCodeContent {
     if (this.tools.has(id)) return []
     if (this.tools.size >= MAX_OPEN_TOOLS) this.tools.delete(this.tools.keys().next().value!)
     this.tools.set(id, { sessionID, name, title: name, input: {} })
-    return [{ kind: "tool", id, title: `${this.prefix(sessionID)}${name}`, name, toolKind: openCodeToolKind(name), status: "pending" }]
+    return this.drawn(sessionID, [{ kind: "tool", id, title: name, name, toolKind: openCodeToolKind(name), status: "pending" }])
   }
 
-  /** What a call reported doing; a child session's calls run in the same folder. */
+  /** The root's updates; a child's rows are its own transcript's. */
+  private drawn(sessionID: string, updates: LiveUpdate[]): LiveUpdate[] {
+    return sessionID === this.root ? updates : []
+  }
+
+  /** What a call reported doing. */
   private effects(tool: Tool, output: string, metadata: JsonValue | undefined): ToolEffect[] {
     return reportedEffects({ harness: "opencode", name: tool.name, args: tool.input, result: metadata, output, cwd: this.cwd })
   }
