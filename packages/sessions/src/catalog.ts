@@ -263,12 +263,23 @@ function baseRoot(name: string): string {
 }
 
 /** Whether a write at `path` re-runs this provider's discovery or refreshes the one file. */
-function rescansFor(provider: SessionProvider, path: string): boolean {
+export function rescansFor(provider: SessionProvider, path: string): boolean {
   return provider.rescanRoot?.(path) ?? false
 }
 
+/**
+ * The session file a write at `path` under the provider's roots refreshes,
+ * or null for a write the catalog ignores: SQLite's shared-memory file,
+ * which changes when anyone reads, and whatever the provider maps away.
+ */
+export function writtenSession(provider: SessionProvider, path: string): string | null {
+  if (path.endsWith("-shm")) return null
+  const mapped = provider.watchTarget?.(path)
+  return mapped === null ? null : mapped ?? path
+}
+
 /** The stat facts the catalog compares, from the provider when it knows better than `stat`. */
-async function nativeFileOf(
+export async function nativeFileOf(
   provider: SessionProvider,
   path: string
 ): Promise<NativeFile | null> {
@@ -1894,9 +1905,8 @@ export class SessionCatalog {
     if (path.endsWith("-shm")) return
     const provider = this.ownerOf(followedTarget ?? path)
     if (!provider) return
-    const mapped = followedTarget ?? provider.watchTarget?.(path)
-    if (mapped === null) return
-    const target = mapped ?? path
+    const target = followedTarget ?? writtenSession(provider, path)
+    if (target === null) return
     const rescan = rescansFor(provider, target)
     // A write to a shared database can have moved any of that provider's
     // sessions, and only that provider's: Cursor Desktop writing state.vscdb

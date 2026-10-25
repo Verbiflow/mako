@@ -64,12 +64,14 @@ const message = "msg_assistant"
 
   content.nameSession(child, "Explore the repo")
   assert.equal(content.prefix(child), "Explore the repo: ")
-  const childRow = openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: child, assistantMessageID: "msg_c", id: "t1", name: "read" }))
-  assert.deepEqual(childRow, [{ kind: "tool", id: `${child}:t1`, title: "Explore the repo: read", name: "read", toolKind: "read", status: "pending" }],
-    "a child's call ID never collides with its parent's")
-  const [childCalled] = openCodeEventUpdates(content, event("session.tool.called", { sessionID: child, assistantMessageID: "msg_c", id: "t1", input: { filePath: "src/a.ts" }, executed: false }))
-  assert.deepEqual(childCalled.kind === "tool-update" && childCalled.details, [{ type: "location", path: "/work/src/a.ts" }])
-  assert.equal(childCalled.kind === "tool-update" && childCalled.title, "Explore the repo: src/a.ts")
+  assert.deepEqual(openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: child, assistantMessageID: "msg_c", id: "t1", name: "read" })), [],
+    "a child's call is drawn in its own transcript, as the store draws it, never as a row of its parent's")
+  assert.deepEqual(openCodeEventUpdates(content, event("session.tool.called", { sessionID: child, assistantMessageID: "msg_c", id: "t1", input: { filePath: "src/a.ts" }, executed: false })), [])
+  openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: child, assistantMessageID: "msg_c", id: "todo", name: "todowrite" }))
+  assert.deepEqual(openCodeEventUpdates(content, event("session.tool.called", { sessionID: child, assistantMessageID: "msg_c", id: "todo", input: { todos: [{ content: "child step", status: "pending", priority: "high" }] }, executed: false })), [],
+    "a child's todos are not the conversation's plan")
+  assert.equal(content.title(child, "t1"), "src/a.ts", "a child's open call is followed, so a request it makes names it")
+  assert.equal(content.name(root, "t1"), undefined, "a child's call ID never collides with its parent's")
 
   const unknown: string[] = []
   assert.deepEqual(openCodeEventUpdates(content, event("session.step.started", { sessionID: root }), (type) => unknown.push(type)), [])
@@ -142,7 +144,8 @@ const message = "msg_assistant"
     "settling ends every open row in the session, an unanswered question included")
   assert.ok(settled.every(update => update.kind === "tool-update" && update.status === "cancelled" && !update.unfinished))
   assert.equal(content.name(child, "t1"), "read", "settling one session leaves another's calls open")
-  const cutOff = content.settle(child, "failed", "OpenCode ended the turn before this call finished: exited")
+  openCodeEventUpdates(content, event("session.tool.input.started", { sessionID: root, assistantMessageID: message, id: "cut", name: "bash" }))
+  const cutOff = content.settle(root, "failed", "OpenCode ended the turn before this call finished: exited")
   assert.ok(cutOff.length > 0 && cutOff.every(update => update.kind === "tool-update" && update.unfinished),
     "a failed turn's open calls never returned; a stopped one's were stopped")
 
@@ -566,4 +569,4 @@ process.stdin.on("end", () => process.exit(0))
   }
 }
 
-console.log("OpenCode projection: session-scoped rows, child labels, diffs, plans, answered question rows, missed-start naming, settling, bounded calls; native permission/form wire, one-shot answers, gap reconciliation, bounded requests, shutdown and retention failure; model pass-through; ordered inbox ids; retry countdown, compaction summary and failure, OpenCode's own stops, a turn OpenCode starts on a notice, MCP failures once, explicit ignores and unknown-event logging")
+console.log("OpenCode projection: session-scoped rows, child calls followed but drawn in their own transcript, child request labels, diffs, plans, answered question rows, missed-start naming, settling, bounded calls; native permission/form wire, one-shot answers, gap reconciliation, bounded requests, shutdown and retention failure; model pass-through; ordered inbox ids; retry countdown, compaction summary and failure, OpenCode's own stops, a turn OpenCode starts on a notice, MCP failures once, explicit ignores and unknown-event logging")

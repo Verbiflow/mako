@@ -1,0 +1,18 @@
+{
+  "subagent_id": "01a17465-4161-7671-8c02-e5908324fc50",
+  "attempt_id": "at1.122533bd74d7485aac2a1d1816e2f9de",
+  "parent_session_id": "01a17465-4091-76c2-b5a0-479584b418b4",
+  "child_session_id": "01a17465-4161-7671-8c02-e5908324fc50",
+  "subagent_type": "general-purpose",
+  "description": "Read the release notes",
+  "prompt": "Read notes.md and docs/plan.md, then report which day the release ships and when the branch freezes.",
+  "status": "completed",
+  "started_at": "2026-10-25T18:49:15.366272Z",
+  "completed_at": "2026-10-25T18:49:15.760360Z",
+  "duration_ms": 392,
+  "tool_calls": 2,
+  "turns": 1,
+  "effective_context_source": "new",
+  "child_cwd": "/tmp/mako-pair/project",
+  "effective_model_id": "grok-4.6"
+}

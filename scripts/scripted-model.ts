@@ -19,8 +19,11 @@ import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 export interface ScriptedReply {
   reasoning?: string
   text?: string
-  /** A function tool takes `arguments`; a freeform one (Codex's `apply_patch`) takes `input` text. */
-  call?: { id: string; name: string } & ({ arguments: JsonObject } | { input: string })
+  /**
+   * A function tool takes `arguments`; a freeform one (Codex's `apply_patch`) takes `input` text.
+   * `namespace` is the one the request offered the tool in, which a Responses call names.
+   */
+  call?: { id: string; name: string; namespace?: string } & ({ arguments: JsonObject } | { input: string })
   /** The request fails with this status and the wire's own error shape instead. */
   fail?: { status: number; message: string }
   /** A Responses `compaction` item's content, which only the provider reads. */
@@ -32,8 +35,9 @@ type Wire = "chat" | "messages" | "responses"
 const ModelRequest = z.object({ model: z.string().optional(), stream: z.boolean().optional(), tools: z.array(z.json()).optional(), tool_choice: z.json().optional(), input: z.json().optional() }).loose()
 /**
  * A Responses request on the WebSocket; `generate: false` only warms the
- * connection. One that continues `previous_response_id` keeps the tools of
- * the request it continues and sends none: Codex 0.159.3 does for gpt-6-sol.
+ * connection. One that continues `previous_response_id` sends only what is
+ * new since the response it continues, and no tools: it keeps that
+ * request's (Codex 0.159.3 does for gpt-6-sol).
  */
 const SocketRequest = z.object({
   type: z.literal("response.create"),
@@ -50,7 +54,8 @@ const SocketRequest = z.object({
  * namespace's flattened: Codex 0.159.3 sends gpt-6-sol's this way.
  */
 const AdditionalTools = z.object({ type: z.literal("additional_tools"), tools: z.array(z.json()) }).loose()
-const Namespace = z.object({ type: z.literal("namespace"), tools: z.array(z.json()) }).loose()
+const Namespace = z.object({ type: z.literal("namespace"), name: z.string(), tools: z.array(z.json()) }).loose()
+const NamespacedTool = z.object({ name: z.string(), namespace: z.string() }).loose()
 
 /**
  * Codex 0.159.3's remote compaction asks with a `compaction_trigger` input
@@ -63,11 +68,21 @@ function compacting(input: JsonValue | undefined, reply: ScriptedReply): Scripte
   return asked && reply.text ? { compaction: reply.text } : reply
 }
 
-/** The tools `body` offers the model, wherever its wire lists them. */
+/** The tools `body` offers the model, wherever its wire lists them; a namespace's each carry its `namespace`. */
 function offeredTools(body: { tools?: JsonValue[]; input?: JsonValue }): JsonValue[] | undefined {
   const listed = (Array.isArray(body.input) ? body.input : []).flatMap((item) => AdditionalTools.safeParse(item).data?.tools ?? [])
-  const tools = [...body.tools ?? [], ...listed].flatMap((tool) => Namespace.safeParse(tool).data?.tools ?? [tool])
+  const tools = [...body.tools ?? [], ...listed].flatMap((tool) => {
+    const namespace = Namespace.safeParse(tool).data
+    return namespace ? namespace.tools.map((inner) => JsonRecord.safeParse(inner).success ? { ...JsonRecord.parse(inner), namespace: namespace.name } : inner) : [tool]
+  })
   return tools.length ? tools : undefined
+}
+
+/** The call, with the namespace the request offered its tool in: Codex 0.164.0 runs a gpt-6 model's `collaboration.spawn_agent` only so named. */
+function namespaced(reply: ScriptedReply, tools: readonly JsonValue[] | undefined): ScriptedReply {
+  const call = reply.call
+  const namespace = call && (tools ?? []).map((tool) => NamespacedTool.safeParse(tool).data).find((tool) => tool?.name === call.name)?.namespace
+  return namespace && call ? { ...reply, call: { ...call, namespace } } : reply
 }
 
 /** A tool choice that names one tool: Responses and Anthropic put the name on it, Chat Completions under `function`. */
@@ -169,25 +184,30 @@ export async function scriptedModel(options: ScriptedModelOptions) {
     const conversation = Boolean(body.tools?.length) && !forced && !options.side?.(heard)
     const scripted = conversation ? options.reply(heard) : forced ?? { text: aside }
     requests.push({ path, conversation, unscripted: scripted ? undefined : true })
-    return scripted ?? { text: "The script has no more steps." }
+    return scripted ? namespaced(scripted, body.tools) : { text: "The script has no more steps." }
   }
   /** Upgraded sockets, which `closeAllConnections` leaves open. */
   const sockets = new Set<Duplex>()
+  /** What each served response's conversation carried, for a request that continues it: a subagent's runs beside its parent's, on its own socket or the same one. */
+  const chains = new Map<string, { tools?: JsonValue[]; heard: string }>()
   server.on("upgrade", (request: IncomingMessage, socket: Duplex) => {
     sockets.add(socket)
     socket.on("close", () => sockets.delete(socket))
     const path = request.url ?? "/"
     if (!new URL(path, "http://scripted").pathname.endsWith("/responses"))
       return void socket.end("HTTP/1.1 404 Not Found\r\nconnection: close\r\n\r\n")
-    let tools: JsonValue[] | undefined
     const send = webSocket(request, socket, (text) => {
       const body = SocketRequest.safeParse(safeJson(text)).data
       if (!body) return void send(JSON.stringify({ type: "error", status: 400, error: { type: "invalid_request_error", message: "The scripted model answers response.create only" } }))
-      tools = offeredTools(body) ?? (body.previous_response_id ? tools : undefined)
-      if (body.generate === false) return void warmUpAnswer().forEach(send)
-      const reply = compacting(body.input, answer(`WS ${path}`, { tools, tool_choice: body.tool_choice }, text))
+      const continued = body.previous_response_id === undefined ? undefined : chains.get(body.previous_response_id)
+      // The whole conversation the request carries, as one sent without `previous_response_id` would.
+      const chain = { tools: offeredTools(body) ?? continued?.tools, heard: `${continued?.heard ?? ""}${text}` }
+      const id = responseId()
+      chains.set(`resp_${id}`, chain)
+      if (body.generate === false) return void warmUpAnswer(id).forEach(send)
+      const reply = compacting(body.input, answer(`WS ${path}`, { tools: chain.tools, tool_choice: body.tool_choice }, chain.heard))
       if (reply.fail) return void send(JSON.stringify({ type: "error", status: reply.fail.status, error: { type: "server_error", message: reply.fail.message } }))
-      for (const event of responsesStreamed(reply)) send(JSON.stringify(served(event, { model: body.model, usage: options.usage })))
+      for (const event of responsesStreamed(reply, id)) send(JSON.stringify(served(event, { model: body.model, usage: options.usage })))
     })
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
@@ -399,7 +419,7 @@ function responseItems(reply: ScriptedReply, id: string): ResponseItem[] {
   } else if (call) {
     const args = argumentText(call)
     const item_id = `fc_${id}`
-    const item = { type: "function_call", id: item_id, call_id: call.id, name: call.name, arguments: args, status: "completed" }
+    const item = { type: "function_call", id: item_id, call_id: call.id, name: call.name, ...call.namespace && { namespace: call.namespace }, arguments: args, status: "completed" }
     items.push({ item, opened: { ...item, arguments: "", status: "in_progress" }, deltas: (output_index): JsonObject[] => [
       { type: "response.function_call_arguments.delta", item_id, output_index, delta: args },
       { type: "response.function_call_arguments.done", item_id, output_index, arguments: args },
@@ -436,8 +456,7 @@ function served(value: JsonObject, as: Serving): JsonObject {
 }
 
 /** What the Responses API answers a `generate: false` warm-up with: the response created and completed, with no output. */
-export function warmUpAnswer(): string[] {
-  const id = Math.random().toString(36).slice(2)
+export function warmUpAnswer(id = responseId()): string[] {
   return [{ type: "response.created", response: responseObject(id, "in_progress", []) }, { type: "response.completed", response: responseObject(id, "completed", []) }].map((event) => JSON.stringify(event))
 }
 
@@ -445,8 +464,11 @@ function responseObject(id: string, status: string, output: JsonObject[]): JsonO
   return { id: `resp_${id}`, object: "response", created_at: Math.floor(Date.now() / 1000), status, model: MODEL, output, usage: status === "completed" ? RESPONSE_USAGE : null }
 }
 
-function responsesStreamed(reply: ScriptedReply): JsonObject[] {
-  const id = Math.random().toString(36).slice(2)
+function responseId(): string {
+  return Math.random().toString(36).slice(2)
+}
+
+function responsesStreamed(reply: ScriptedReply, id = responseId()): JsonObject[] {
   const items = responseItems(reply, id)
   const events: JsonObject[] = [{ type: "response.created", response: responseObject(id, "in_progress", []) }]
   items.forEach(({ item, opened, deltas }, output_index) => {
@@ -459,7 +481,7 @@ function responsesStreamed(reply: ScriptedReply): JsonObject[] {
 }
 
 function responsesWhole(reply: ScriptedReply): JsonObject {
-  const id = Math.random().toString(36).slice(2)
+  const id = responseId()
   return responseObject(id, "completed", responseItems(reply, id).map(({ item }) => item))
 }
 
