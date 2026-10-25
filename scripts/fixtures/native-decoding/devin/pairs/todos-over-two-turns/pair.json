@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.10.23"
+    "version": "3000.11.205"
   },
   "about": "Use your todo list to plan the release in two items: QA sign-off, in progress, then shipping the release, pending. Don't run commands or change files. / QA signed off. Update the todo list: QA sign-off completed, shipping in progress. Don't run commands or change files. A todo list in the first turn, updated in the second.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#lead-planet",
+      "path": ".local/share/devin/cli/sessions.db#eggplant-climb",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/b5451513-3429-4d85-97a5-d56d8449b935.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/a02ee0fb-f088-4c04-a6ca-5d4a5f80d03f.db",
       "known": []
     }
   ],

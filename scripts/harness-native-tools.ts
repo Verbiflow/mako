@@ -1,12 +1,12 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
 import type { AddressInfo } from "node:net"
 import { join } from "node:path"
 import type { Duplex } from "node:stream"
 import { promisify } from "node:util"
-import { gunzipSync } from "node:zlib"
+import { brotliDecompressSync, gunzipSync, inflateSync, zstdDecompressSync } from "node:zlib"
 import { z } from "zod"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { resolveExecutable } from "@mako/host/base/executable"
@@ -15,7 +15,7 @@ import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/
 import { acpClientCapabilities, type ProviderAcpSource } from "@mako/host/harnesses/acp-source"
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
-import { codexCollaborationMode, codexInteractiveConfig } from "@mako/host/harnesses/codex/settings"
+import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig } from "@mako/host/harnesses/codex/settings"
 import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
@@ -30,6 +30,7 @@ import {
   NATIVE_TOOLS_DIR, type Configuration, type DefinedTools, type Parameter, type Wire,
 } from "./native-tools.ts"
 import { RpcMessage, rpcPeer, sandboxed as sandboxedIn, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
+import { warmUpAnswer, webSocket } from "./scripted-model.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
@@ -120,45 +121,21 @@ function outline({ path, text, body }: Captured): string {
   return `${path} {${Object.keys(body).join(", ")}}${items.length ? ` input [${items.join(", ")}]` : ""}`
 }
 
-/** The first complete text message on a WebSocket, then a policy-violation close. */
-function firstWebSocketMessage(request: IncomingMessage, socket: Duplex, keep: (text: string) => void): void {
-  const accept = createHash("sha1").update(`${request.headers["sec-websocket-key"]}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest("base64")
-  socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`)
-  let buffer = Buffer.alloc(0)
-  const parts: Buffer[] = []
-  socket.on("error", () => socket.destroy())
-  socket.on("data", (chunk: Buffer) => {
-    buffer = Buffer.concat([buffer, chunk])
-    while (buffer.length >= 2) {
-      const final = (buffer[0]! & 0x80) !== 0
-      const opcode = buffer[0]! & 0x0f
-      let length = buffer[1]! & 0x7f
-      let offset = 2
-      if (length === 126) {
-        if (buffer.length < 4) return
-        length = buffer.readUInt16BE(2)
-        offset = 4
-      } else if (length === 127) {
-        if (buffer.length < 10) return
-        length = Number(buffer.readBigUInt64BE(2))
-        offset = 10
-      }
-      const masked = (buffer[1]! & 0x80) !== 0
-      const mask = masked ? buffer.subarray(offset, offset + 4) : undefined
-      if (masked) offset += 4
-      if (buffer.length < offset + length) return
-      const payload = Buffer.from(buffer.subarray(offset, offset + length))
-      if (mask) for (let index = 0; index < payload.length; index++) payload[index]! ^= mask[index % 4]!
-      buffer = buffer.subarray(offset + length)
-      if (opcode === 8) return void socket.destroy()
-      if (opcode !== 0 && opcode !== 1) continue
-      parts.push(payload)
-      if (!final) continue
-      keep(Buffer.concat(parts).toString("utf8"))
-      const reason = Buffer.from(REFUSAL.slice(0, 120))
-      socket.end(Buffer.concat([Buffer.from([0x88, reason.length + 2, 0x03, 0xf0]), reason]))
-      return
-    }
+const WarmUp = z.object({ generate: z.literal(false) }).loose()
+
+/**
+ * Every request on a Responses WebSocket, kept: a warm-up (`generate: false`; Codex 0.164.0 opens with one that lists
+ * no tools) answered as the API answers it, so the client goes on to its first real request, which is refused with a
+ * policy-violation close.
+ */
+function socketRequests(request: IncomingMessage, socket: Duplex, keep: (text: string) => void): void {
+  const send = webSocket(request, socket, (text) => {
+    keep(text)
+    let json: unknown
+    try { json = JSON.parse(text) } catch { json = undefined }
+    if (WarmUp.safeParse(json).success) return void warmUpAnswer().forEach(send)
+    const reason = Buffer.from(REFUSAL.slice(0, 120))
+    socket.end(Buffer.concat([Buffer.from([0x88, reason.length + 2, 0x03, 0xf0]), reason]))
   })
 }
 
@@ -187,7 +164,7 @@ async function modelEndpoint(answers: ReadonlyMap<string, string> = new Map()) {
       response.end(JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: REFUSAL } }))
     })
   })
-  server.on("upgrade", (request: IncomingMessage, socket: Duplex) => firstWebSocketMessage(request, socket, (text) => keep(`WS ${request.url}`, text)))
+  server.on("upgrade", (request: IncomingMessage, socket: Duplex) => socketRequests(request, socket, (text) => keep(`WS ${request.url}`, text)))
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   // SAFETY: a server listening on a TCP port reports its address as an AddressInfo.
   const { port } = server.address() as AddressInfo
@@ -346,7 +323,8 @@ async function codexDefinitions(): Promise<Captures> {
       const replied = new Promise<void>((_, reject) => { reached = () => reject(new ReachedRealModel("Codex")) })
       const peer = refusingPeer(child, false, ({ method }) => { if (method === "item/agentMessage/delta") reached?.() })
       try {
-        await peer.call("initialize", { clientInfo: { name: "mako-native-tools", version: "0" } })
+        // Mako's own initialize: Codex 0.164.0 refuses a turn's collaborationMode from a client without experimentalApi.
+        await peer.call("initialize", { clientInfo: { name: "mako-native-tools", version: "0" }, capabilities: CODEX_CLIENT_CAPABILITIES })
         peer.notify("initialized")
         const thread = z.object({ thread: z.object({ id: z.string() }) }).parse(await peer.call("thread/start", { cwd: sandbox.project, model, config: codexInteractiveConfig() }))
         const turn = peer.call("turn/start", {
@@ -471,10 +449,11 @@ function protoFields(bytes: Buffer): ProtoField[] {
  * json_schema_string 3, is_custom_tool 9), restated as chat-completions tools.
  * The field numbers are the ones Devin.app's bundled protobuf types give.
  */
-function windsurfTools(frame: Buffer): unknown[] {
+function windsurfTools(frame: Buffer, encoding: string | undefined): unknown[] {
   if (frame.length < 5) throw new Error("Devin's model request has no Connect frame")
-  if (frame[0]! & 1) throw new Error("Devin compressed its model request, which this capture doesn't read")
-  const message = frame.subarray(5, 5 + frame.readUInt32BE(1))
+  const payload = frame.subarray(5, 5 + frame.readUInt32BE(1))
+  // Devin 3000.11 compresses it, and names how in the request's encoding header.
+  const message = frame[0]! & 1 ? decompressed(payload, encoding) : payload
   return protoFields(message).flatMap((tool) => {
     if (tool.no !== 10 || tool.wire !== "bytes") return []
     const fields = protoFields(tool.bytes)
@@ -487,6 +466,19 @@ function windsurfTools(frame: Buffer): unknown[] {
     const schema = text(3)
     return [{ type: "function", function: { name: text(1) ?? "", description: text(2), parameters: schema ? JSON.parse(schema) : undefined } }]
   })
+}
+
+const HeaderValue = z.string().optional().catch(undefined)
+
+/** A compressed Connect message, by the encoding its request names. */
+function decompressed(payload: Buffer, encoding: string | undefined): Buffer {
+  switch (encoding) {
+    case "gzip": return gunzipSync(payload)
+    case "br": return brotliDecompressSync(payload)
+    case "zstd": return zstdDecompressSync(payload)
+    case "deflate": return inflateSync(payload)
+    default: throw new Error(`Devin compressed its model request${encoding ? ` with ${encoding}` : ""}, which this capture doesn't read`)
+  }
 }
 
 /**
@@ -511,7 +503,8 @@ async function windsurfEndpoint(): Promise<ModelEndpoint> {
       }
       const body = Buffer.concat(chunks)
       if (keepDir) void mkdir(keepDir, { recursive: true }).then(() => writeFile(join(keepDir, `${String(++kept).padStart(3, "0")}-${method}.bin`), body))
-      requests.push({ path, tools: method === "GetChatMessage" ? windsurfTools(body) : [] })
+      const encoding = HeaderValue.parse(request.headers["connect-content-encoding"]) ?? HeaderValue.parse(request.headers["grpc-encoding"])
+      requests.push({ path, tools: method === "GetChatMessage" ? windsurfTools(body, encoding) : [] })
       for (const listener of listeners) listener()
       response.writeHead(401, { "content-type": "application/json" })
       response.end(JSON.stringify({ code: "unauthenticated", message: REFUSAL }))

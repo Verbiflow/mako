@@ -161,9 +161,9 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "2.1.290",
-      on: "2026-10-06",
-      against: "SDK 0.3.283 types (HOOK_EVENTS, Settings, AgentDefinition), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings), and the binary through harness:self-report",
+      version: "2.1.283",
+      on: "2026-10-25",
+      against: "SDK 0.3.283 types (HOOK_EVENTS, Settings, AgentDefinition), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings) as read on 2026-10-06, and the build the SDK bundles through harness:self-report",
     },
     instructions: {
       files: ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude/AGENTS.md"],

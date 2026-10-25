@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
 import { NATIVE_SESSIONS_VERSION } from "./version.js"
+import { WaitingMessageSchema } from "./waiting.js"
 
 /**
  * An account's Threads as every device lists them: one row per Session, keyed by Mako's own Session and Thread IDs,
@@ -103,7 +104,12 @@ export type SessionsReport = z.infer<typeof SessionsReportSchema>
  * `GET /v1/sessions`: every listed Session of the account, and the account stream's number as they were read. A client
  * lists, then follows the stream after `seq`, and misses nothing between.
  */
-export const SessionListingsSchema = z.object({ sessions: z.array(ListedSessionSchema), seq: z.number().int().nonnegative() })
+export const SessionListingsSchema = z.object({
+  sessions: z.array(ListedSessionSchema),
+  seq: z.number().int().nonnegative(),
+  /** Messages waiting for Sessions whose owner is off (`waiting.ts`), as they stood at `seq`. */
+  waiting: z.array(WaitingMessageSchema).optional(),
+})
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
 /**

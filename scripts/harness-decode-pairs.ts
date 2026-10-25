@@ -818,7 +818,7 @@ const devin: Recorder = {
   model: {
     kind: "own",
     why: "Devin's model is behind Windsurf's API server, whose protocol the scripted model doesn't speak",
-    lacks: { codeMode: "Devin 3000.10.23 names no tool that runs code calling its other tools; its model ran the code-mode prompt as one chained `exec`" },
+    lacks: { codeMode: "Devin 3000.11.205 names no tool that runs code calling its other tools (native-tools/devin-3000.11.205.json); on 3000.10.23 its model ran the code-mode prompt as one chained `exec`" },
   },
   controls: {
     steer: "driven",

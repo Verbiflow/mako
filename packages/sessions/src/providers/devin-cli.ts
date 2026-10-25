@@ -665,14 +665,20 @@ const FILE_VIEW = /^<file-view\b[^>]*\bstart_line="(\d+)"[^>]*\bend_line="(\d+)"
 
 const ReadRange = z.object({ offset: z.number().optional(), limit: z.number().optional() }).loose()
 
+/** A subagent's report as the model read it (devin 3000.11.205): this header, then the report. */
+const SUBAGENT_REPORT = /^Subagent agent_id=\S+ completed successfully:\n\n/
+
 /**
  * A result Devin showed its client but didn't keep in its stored update
  * (devin 3000.10.23): a read was "N lines", and "N lines (truncated)" when
  * Devin cut it short of both the file's end and the lines asked for (about
- * 30 KB of a file read whole); the file itself stays the model's. Any other
- * such result showed no words.
+ * 30 KB of a file read whole); the file itself stays the model's. A
+ * subagent's was its report under `Subagent completed:` (3000.11.205). Any
+ * other such result showed no words.
  */
-function devinClientResult(output: string, input: string | undefined): string {
+function devinClientResult(name: string, output: string, input: string | undefined): string {
+  const report = name === "run_subagent" ? SUBAGENT_REPORT.exec(output) : null
+  if (report) return `Subagent completed:\n${output.slice(report[0].length)}`
   const view = FILE_VIEW.exec(output)
   if (!view) return ""
   const [start, end, total] = [Number(view[1]), Number(view[2]), Number(view[3])]
@@ -1009,7 +1015,7 @@ function toolEnd(id: string, call: MadeCall, stored: StoredAcpCall | undefined, 
     const said = (call.name === "read" ? viewedImage(input, message.images, cwd) : undefined) ??
       devinPicks(message.extensions?.[DEVIN_QUESTION_ANSWERS], input) ??
       (call.name === "exec" ? devinQuietExit(message.extensions?.[DEVIN_TERMINAL_OUTPUT]) : undefined) ??
-      devinClientResult(output, input)
+      devinClientResult(call.name, output, input)
     if (said) content.push(textPart(said))
   }
   if (!shown.attachments) content.push(...devinFoundFiles(call.name, output))

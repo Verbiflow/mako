@@ -298,10 +298,10 @@ const LogValueSchema = z.record(z.string(), z.json())
 export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLogEvent
 
 /**
- * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves. `elsewhere` is
- * a cloud router's word on a conversation it relays, never a journal's.
+ * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves. `elsewhere` and
+ * `copy` are a cloud router's word on a conversation it relays or reads from the account's copy, never a journal's.
  */
-type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn"
+type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "copy"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
