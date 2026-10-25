@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { doctorReport, formatReport, type InstalledRuntime } from "./harness-doctor-report.ts"
 import { loadFixtures } from "./native-decoding.ts"
+import { CODEX_VERSIONS } from "@mako/host/harnesses/codex/versions"
 import { CURSOR_VERSIONS } from "@mako/host/harnesses/cursor/versions"
 
 /**
@@ -114,8 +115,8 @@ try {
   assert.equal(codex.logs.streams, 1)
   assert.equal(codex.logs.signIn, undefined, "only a harness that declares a sign-in scope reports one")
   assert.equal(codex.version.verdict, "newer-than-tested", "installed is compared with the declared tested version, not the fixtures")
-  assert.equal(codex.version.declared?.tested, "0.159.3")
-  assert.equal(codex.version.newestFixture, "0.159.3")
+  assert.equal(codex.version.declared?.tested, CODEX_VERSIONS.tested)
+  assert.equal(codex.version.newestFixture, CODEX_VERSIONS.tested, "the current pairs, recorded with tested, are the newest decoder record")
   assert.equal(codex.version.newestCaptured, null)
   assert.deepEqual([codex.decoder.fixtures, codex.decoder.captured, codex.decoder.written], [15, 0, 15])
   assert.deepEqual(codex.decoder.unexercised, [])
@@ -162,8 +163,9 @@ try {
 
   const printed = `${JSON.stringify(report)}\n${formatReport(report)}`
   for (const secret of ["FAKEFAKE", TOKEN_VALUE, OPAQUE]) assert.ok(!printed.includes(secret), `never prints ${secret}`)
-  assert.match(formatReport(report), /installed is newer than tested 0\.159\.3: Mako runs it as it is/)
-  assert.match(formatReport(report), /oldest 0\.146\.0 · tested 0\.159\.3/)
+  const tested = CODEX_VERSIONS.tested.replaceAll(".", "\\.")
+  assert.match(formatReport(report), new RegExp(`installed is newer than tested ${tested}: Mako runs it as it is`))
+  assert.match(formatReport(report), new RegExp(`oldest 0\\.146\\.0 · tested ${tested}`))
   const below = await doctorReport({ dataDir: root, days: 7, now, installed: async () => ({ version: "0.140.0", from: "/bin/codex", sdk: null }), harness: "codex", streams })
   assert.equal(below.harnesses[0]?.version.verdict, "below-oldest")
   assert.match(formatReport(below), /installed is below oldest 0\.146\.0: sessions refuse it/)
