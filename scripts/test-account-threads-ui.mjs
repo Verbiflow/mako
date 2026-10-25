@@ -10,8 +10,9 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
  * Another device's cloud Thread, as this Mac's window shows it, against the production components and the fixture
  * desk signed in with the cloud: the host's `live-listed` arrives (the account's list said it), and the conversation
  * is in the rail at once, unopened, under its project; it changes as the list does, working then done; and when it
- * leaves the list it leaves the rail, and the one on screen says so. Screenshots of each, dark and light, stay in the
- * printed directory.
+ * leaves the list it leaves the rail, and the one on screen says so. Another Mac's conversation opened while that Mac is
+ * off reads from the copy it keeps in the account: the composer says what it's reading, how old, and when a message can
+ * go. Screenshots of each, dark and light, stay in the printed directory.
  */
 
 if (process.versions.electron) {
@@ -152,6 +153,37 @@ async function checkWindow() {
     assert.equal(await evaluate(`${studioRow}.getAttribute('data-tip')`), `${studioTitle} · on Studio · Approve: npm test`)
     await settle()
     await both("listed-waiting", ["[data-thread-row]"])
+
+    // 1c. The Studio is off: opened here, its conversation reads from the copy the Studio keeps in the account, and the
+    // window says what it's reading, how old it is, and that a message waits for the Studio.
+    await evaluate(`(() => { ${studioRow}.setAttribute('data-studio-row', ''); return true })()`)
+    await click("[data-studio-row]")
+    const copyAt = Date.now() - 4 * 60_000
+    const entries = [
+      { id: "u-1", type: "user", text: "Bump the harness versions and run the tests" },
+      { id: "a-1", type: "text", text: "I bumped Codex to 0.163.2 and Grok to 1.0.52, then ran the suite. Two decoder fixtures changed; I re-recorded them and the tests pass. Should I open the pull request?" },
+      { id: "u-2", type: "user", text: "Yes, and say which fixtures changed" },
+      { id: "a-2", type: "text", text: "Opened it with both fixtures named in the description. Waiting on CI." },
+    ]
+    const copySnapshot = {
+      session: { id: STUDIO, harness: "claude", cwd: "/Users/you/api", title: studioTitle, status: "ready", connection: "hibernated", modes: [], currentMode: null, configOptions: [] },
+      revision: copyAt, epoch: `copy-${copyAt}`, createdAt: copyAt - 3_600_000, copy: { at: copyAt }, elsewhere: "Studio",
+      base: { ref: { harness: "claude", nativeId: "0b7e", path: `copy:${STUDIO}`, title: studioTitle, revision: "n:7" }, entries, start: 0, total: entries.length, hasEarlier: false, translator: "t-1" },
+      blocks: [], permissions: [], requests: [],
+    }
+    await evaluate(`import('/src/state/live-recovery.ts').then(({ applyLiveSnapshot }) => (applyLiveSnapshot(${JSON.stringify(copySnapshot)}), true))`)
+    await until(`Boolean(document.querySelector('[data-copy-notice]'))`, "the copy's notice above the composer")
+    const notice = await evaluate(`document.querySelector('[data-copy-notice]').innerText`)
+    assert.match(notice, /Studio is off/, "where it runs, and that it's off")
+    assert.match(notice, /copy it keeps in your account, from 4 minutes ago/, "what's on screen, and how old")
+    assert.match(notice, /once Studio is back/, "and that a message waits for it")
+    await until(`document.body.innerText.includes('Waiting on CI.')`, "the copy's history on screen")
+    assert.equal(await evaluate(`document.querySelector('textarea')?.getAttribute('placeholder')`), "Draft a message — it can go once Studio is back", "the composer says when a message can go")
+    // The pointer off the rail, so no row's tip covers the pictures.
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 40 })
+    await settle()
+    await both("read-from-copy", ["[data-copy-notice]", "[data-thread-row]"])
+    await capture("read-from-copy-window")
 
     // 2. It finished there: the row says so as the list changes.
     await hostEvent({ type: "live-listed", summaries: [listed("ready")] })

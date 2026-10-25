@@ -24,7 +24,7 @@ import {
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { Git } from "@mako/git"
-import { CloudConversations, folderRepository } from "@mako/host/conversations/cloud-conversations"
+import { CloudConversations, folderRepository, type CloudConversationsOptions, type CloudCopies } from "@mako/host/conversations/cloud-conversations"
 import { cloudRuntimeOf, namedUuid } from "@mako/host/conversations/cloud-moves"
 import { MoveIdSchema } from "@mako/host/contracts/thread-execution"
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
@@ -238,12 +238,14 @@ function sessionOf(client: ClientSession): ClientSessionOverSockets {
 }
 
 /** The router, the conversations' events it relays, and apart from them, what it tells windows of each start. */
-function conversations(account: CloudAccount, file: string) {
+function conversations(account: CloudAccount, file: string, copies?: CloudCopies) {
   const events: RuntimeEvent[] = []
   const starts: RuntimeEvent[] = []
   /** Each conversation a window on its folder was told changed, in order. */
   const changed: string[] = []
-  const router = new CloudConversations({ account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id) })
+  const options: CloudConversationsOptions = { account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id) }
+  if (copies) options.copies = copies
+  const router = new CloudConversations(options)
   after(() => router.dispose())
   return { router, events, starts, changed }
 }
@@ -929,6 +931,70 @@ test("every Session the account lists is listed here, unopened and waking nothin
   const reading = reads
   say("account-changed")
   await until("the new account's list read", () => reads > reading && shown(cloudConversation) !== undefined && shown(studioConversation) === undefined)
+})
+
+test("another Mac's conversation while that Mac is off reads from the copy it keeps in the account, saying so, a page at a time; anything else is refused, saying why", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const studio = "3d0f6c2a-8b1e-4f7a-9c5d-2e1b0a9f8d7c"
+  const conversation = randomUUID()
+  const listed: ListedSession = {
+    session: randomUUIDFor(conversation), thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", conversation, harness: "claude", title: "Retry the webhooks", state: "idle",
+    folder: CLONE, createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:00:00.000Z", generation: 1, nativeId: "0b7e", runsOn: { kind: "device", deviceId: studio }, listedAt: "2026-10-24T20:00:01.000Z",
+  }
+  machine.account.sessionListings = async () => ({ sessions: [listed], seq: 1 })
+  machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
+  machine.account.onThreadListings = () => () => {}
+  // The Studio's copy: 250 entries, written at 21:10.
+  const at = Date.parse("2026-10-24T21:10:00.000Z")
+  const entries = Array.from({ length: 250 }, (_, n) => ({ id: `e-${n}`, type: "text" as const, text: `answer ${n}` }))
+  const asked: string[] = []
+  const copies: CloudCopies = {
+    page: async (device, harness, nativeId, before, limit) => {
+      asked.push(`${device} ${harness} ${nativeId} ${before ?? "newest"}`)
+      const end = before ?? entries.length
+      const start = Math.max(0, end - limit)
+      return { header: { copy: 1, harness, nativeId, title: "Retry the webhooks", cwd: CLONE, translator: "t-1", total: entries.length, stamp: "n:7", at }, entries: entries.slice(start, end), start, total: entries.length }
+    },
+    entry: async (_device, _harness, _nativeId, id) => entries.find((entry) => entry.id === id) ?? null,
+  }
+  const { router } = conversations(machine.account, join(scratch, "copies", "conversations.json"), copies)
+  await router.start()
+  await until("listed", () => router.summaries().some((summary) => summary.session.id === conversation))
+
+  // The Studio isn't connected: the cloud refuses the call unapplied, and the copy answers.
+  const opened = await router.route("mako:live-snapshot", [conversation])
+  assert.ok(opened.handled)
+  const cursor = z.object({ blocks: z.number(), base: z.number() })
+  const snapshot = z.object({
+    copy: z.object({ at: z.number() }).optional(),
+    elsewhere: z.string().optional(),
+    session: z.object({ status: z.string(), connection: z.string() }).loose(),
+    requests: z.array(z.unknown()),
+    blocks: z.array(z.unknown()),
+    base: z.object({ start: z.number(), hasEarlier: z.boolean(), entries: z.array(z.object({ id: z.string() }).loose()) }).loose().nullable(),
+    history: z.object({ token: z.string(), before: cursor.nullable() }).loose().optional(),
+  }).loose().parse(decodeRuntimeValue(opened.value))
+  assert.deepEqual(snapshot.copy, { at }, "read from the account's copy, as the Studio wrote it at 21:10")
+  assert.equal(snapshot.elsewhere, "Studio")
+  assert.deepEqual([snapshot.session.status, snapshot.session.connection, snapshot.requests.length, snapshot.blocks.length], ["ready", "hibernated", 0, 0], "nothing runs while its Mac is off")
+  assert.equal(snapshot.base?.entries.at(-1)?.id, "e-249", "its newest entries")
+  assert.equal(snapshot.base?.hasEarlier, true)
+  assert.ok(snapshot.history, "a window pages it as it pages any conversation's history")
+  assert.deepEqual(asked, [`${studio} claude 0b7e newest`], "by its device and native session")
+
+  // An earlier page, through the same history reads a window makes.
+  const earlier = await router.route("mako:live-read", [conversation, { kind: "earlier", token: snapshot.history!.token, before: snapshot.history!.before! }])
+  assert.ok(earlier.handled)
+  const chunk = z.object({ data: z.string(), next: z.number().nullable() }).loose().parse(decodeRuntimeValue(earlier.value))
+  assert.equal(chunk.next, null, "a page in one part")
+  const page = z.object({ base: z.object({ start: z.number(), entries: z.array(z.object({ id: z.string() }).loose()) }).loose() }).loose().parse(JSON.parse(chunk.data))
+  assert.equal(page.base.entries.at(-1)?.id, `e-${snapshot.base!.start - 1}`, "the page before what it holds")
+
+  // A message needs the Studio: refused, saying so, and the Studio isn't asked again for a while.
+  const asking = performance.now()
+  await assert.rejects(router.route("mako:live-prompt", [conversation, randomUUID(), "go on", [], undefined]), /Studio is off, so this conversation can't be changed from here until it's back/)
+  assert.ok(performance.now() - asking < 1_000, "at once: a Mac isn't woken by being called")
 })
 
 /** A Session ID for a conversation, the same each time it's asked. */
