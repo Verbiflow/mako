@@ -14,7 +14,7 @@ import { toast } from "sonner"
 import { settleMessage } from "@/state/message-outbox"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { prependLiveHistory, readLiveSnapshot, readLiveValue, retainLiveDetails } from "@/state/live-history"
-import type { LiveHistoryCursor, LiveHistoryPage } from "@mako/host/contracts/live-history"
+import { isHistoryExpired, type LiveHistoryCursor, type LiveHistoryPage } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 
 const fetching = new Map<string, Promise<boolean>>()
@@ -23,6 +23,11 @@ const pending = new Map<string, LiveBatch[]>()
 // Activation and reconnect retry them. Transient outages may recover on a later
 // batch even if the independent event stream stayed connected throughout.
 const failed = new Map<string, { description: string; reconnecting: boolean }>()
+/**
+ * The revision from which every batch merged into the window in order. A view read at or after it holds the window's
+ * history below the window as the window does: a batch that touched that history was buffered for a snapshot instead.
+ */
+const mergedSince = new Map<string, number>()
 
 function restoredLive(id: string): void {
   if (failed.delete(id)) toast.dismiss(`live-restore:${id}`)
@@ -73,6 +78,10 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
   const narrower = !stale && dropsLoadedHistory(existing, snapshot, covers)
   if (stale || narrower) {
     if (replyBindingId !== undefined) updateAcpConversation(id, (current) => ({ ...current, replyBindingId: replyBindingId ?? undefined }))
+    if (stale && existing.kind === "live") {
+      takeView(existing, snapshot)
+      dropHeld(existing)
+    }
     // The same state, read again over the range on screen, replaces it whole.
     if (narrower) rereadLive(id)
     return
@@ -142,9 +151,33 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
       existing?.threadPath,
       observedChange ? undefined : "hydrate"
     )
+  mergedSince.set(id, snapshot.revision)
   const buffered = pending.get(id) ?? []
   pending.delete(id)
   for (const batch of buffered) applyLiveBatch(batch)
+}
+
+/**
+ * A snapshot the stream overtook: the window holds newer content than it, but it names a view the host holds. When
+ * every batch since it merged in order and its history reaches back as far as the window's, that view holds the
+ * window's earlier history, released turns and full outputs exactly, so reads go to it rather than to a view the host
+ * let go. Without this, a window reading a conversation that streams could never replace a view the host let go.
+ */
+function takeView(existing: Extract<AcpConversation, { kind: "live" }>, snapshot: LiveSnapshot): void {
+  const since = mergedSince.get(existing.key)
+  const view = snapshot.history
+  if (!existing.history || !view || since === undefined || since > snapshot.revision || view.token === existing.history.token ||
+      (existing.base && (!snapshot.base || snapshot.base.start > existing.base.start)))
+    return
+  updateAcpConversation(existing.key, (current) => current.kind === "live" && current.history
+    ? { ...current, history: { ...current.history, token: view.token } } : current)
+}
+
+/** Buffered batches the window already holds wait for nothing; only one past it asks for a newer snapshot. */
+function dropHeld(existing: Extract<AcpConversation, { kind: "live" }>): void {
+  const waiting = pending.get(existing.key)?.filter((batch) => !sameEpoch(existing, batch) || batch.revision > (existing.revision ?? 0))
+  if (waiting?.length) pending.set(existing.key, waiting)
+  else pending.delete(existing.key)
 }
 
 /** Refreshes that must run again once the one in flight lands, over the window on screen by then. */
@@ -176,7 +209,11 @@ export async function hydrateLive(id: string, quiet = false): Promise<boolean> {
   const fetch = readLiveSnapshot(id, true)
     .then((snapshot) => {
       restored = true
-      if (snapshot && "kind" in snapshot) restoredLive(id)
+      if (snapshot && "kind" in snapshot) {
+        restoredLive(id)
+        const held = acpStore.get().conversations[id]
+        if (held?.kind === "live") dropHeld(held)
+      }
       else if (snapshot) applyLiveSnapshot(snapshot, undefined, covers)
       else {
         pending.delete(id)
@@ -217,6 +254,7 @@ export function unloadLive(id: string): boolean {
   const current = acpStore.get().conversations[id]
   if (current?.kind !== "live" || !current.hydrated || fetching.has(id)) return false
   pending.delete(id)
+  mergedSince.delete(id)
   replaceAcpConversation(id, {
     ...current,
     hydrated: false,
@@ -427,6 +465,7 @@ export function unlistLive(ids: readonly string[]): void {
   const active = acpStore.get().activeKey
   for (const id of ids) {
     pending.delete(id)
+    mergedSince.delete(id)
     removeAcpConversation(id)
   }
   if (active && ids.includes(active))
@@ -548,14 +587,43 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
 
 export async function loadEarlierLive(id: string): Promise<void> {
   const release = transcriptReaders.protect(liveReadingSource(id), "*")
-  try {
-    try { await readEarlierLive(id) }
-    catch (error) {
-      if (!(error instanceof Error) || !/history view expired|native history changed/.test(error.message)) throw error
-      if (!(await hydrateLive(id))) throw error
-      await readEarlierLive(id)
-    }
-  } finally { release() }
+  try { await withLiveView(id, () => readEarlierLive(id)) }
+  finally { release() }
+}
+
+/**
+ * Makes the window name a view other than `dead`, one a read was just refused against: the reread in flight when
+ * there is one, else the conversation read again over the window on screen. The view the window names afterwards, or
+ * `undefined` when it couldn't take one.
+ */
+export async function renewLiveView(id: string, dead: string): Promise<string | undefined> {
+  const named = () => {
+    const held = acpStore.get().conversations[id]
+    return held?.kind === "live" ? held.history?.token : undefined
+  }
+  await fetching.get(id)
+  if (named() === dead) {
+    const covers = windowStart(acpStore.get().conversations[id])
+    const snapshot = await readLiveSnapshot(id)
+    if (snapshot) applyLiveSnapshot(snapshot, undefined, covers)
+  }
+  const renewed = named()
+  return renewed === dead ? undefined : renewed
+}
+
+/**
+ * `attempt` reads against the window's view of conversation `id`. Refused because the host let the view go, or because
+ * the native history moved under it, the window takes a current view and `attempt` runs once more; only a second
+ * refusal reaches the person.
+ */
+export async function withLiveView<T>(id: string, attempt: () => Promise<T>): Promise<T> {
+  const held = acpStore.get().conversations[id]
+  const dead = held?.kind === "live" ? held.history?.token : undefined
+  try { return await attempt() }
+  catch (error) {
+    if (!dead || !(error instanceof Error) || !isHistoryExpired(error) || !(await renewLiveView(id, dead))) throw error
+    return await attempt()
+  }
 }
 
 async function readEarlierLive(id: string): Promise<void> {

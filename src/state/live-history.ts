@@ -101,7 +101,7 @@ export function prependLiveHistory<T extends Pick<LiveSnapshot, "blocks" | "base
  * from the same captured view without moving the viewport or loading tool bodies. */
 export async function completeLiveAnswer(id: string | undefined, exchange: Exchange): Promise<string> {
   const release = id ? transcriptReaders.protect(liveReadingSource(id), exchange.id) : () => {}
-  try { return await readCompleteLiveAnswer(id, exchange) }
+  try { return id ? await (await import("@/state/live-recovery")).withLiveView(id, () => readCompleteLiveAnswer(id, exchange)) : responseText(exchange) }
   finally { release() }
 }
 
@@ -131,11 +131,14 @@ async function readCompleteLiveAnswer(id: string | undefined, exchange: Exchange
  */
 export function readLiveOriginal(id: string, entry: ShownEntry, saved?: { path: string; id: string }): Promise<OriginalReading> {
   const live = (async () => {
-    if (entry.at.kind === "live") await (await import("@/state/live-recovery")).recaptureLive(id)
-    const held = acpStore.get().conversations[id]
-    if (held?.kind !== "live" || !held.history) throw new Error("This conversation's history isn't open in this window.")
-    const at = entry.at.kind === "live" ? { kind: "live" as const, index: locateShown(held.blocks, held.history.blockStart, entry.at.index, entry) } : entry.at
-    return readLiveValue<EntryOriginal>(id, { kind: "original", token: held.history.token, at })
+    const { recaptureLive, withLiveView } = await import("@/state/live-recovery")
+    if (entry.at.kind === "live") await recaptureLive(id)
+    return withLiveView(id, () => {
+      const held = acpStore.get().conversations[id]
+      if (held?.kind !== "live" || !held.history) throw new Error("This conversation's history isn't open in this window.")
+      const at = entry.at.kind === "live" ? { kind: "live" as const, index: locateShown(held.blocks, held.history.blockStart, entry.at.index, entry) } : entry.at
+      return readLiveValue<EntryOriginal>(id, { kind: "original", token: held.history.token, at })
+    })
   })()
   return originalReading(saved ? live.catch(() => getMako().threadOriginal(saved.path, saved.id)) : live)
 }
@@ -149,33 +152,32 @@ export function loadReleasedLiveTurn(id: string, turnId: string): Promise<void> 
   const loading = turnLoads.get(key)
   if (loading) return loading
   const work = (async () => {
-    const held = acpStore.get().conversations[id]
-    const turn = held?.releasedTurns?.find(item => item.id === turnId)
-    if (held?.kind !== "live" || !held.history || !turn) return
     const release = transcriptReaders.protect(liveReadingSource(id), turnId)
-    try {
-      const page = await readLiveValue<LiveHistoryPage>(id, { kind: "range", token: held.history.token,
-        from: { blocks: turn.blocks.start, base: turn.base.start }, to: { blocks: turn.blocks.end, base: turn.base.end } })
-      const current = acpStore.get().conversations[id]
-      if (current?.kind !== "live" || current.history?.token !== held.history.token ||
-          current.releasedTurns?.find(item => item.id === turnId) !== turn) return
-      if (page.history.token !== held.history.token || page.history.blockStart !== turn.blocks.start ||
-          page.history.blockEnd !== turn.blocks.end || page.blocks.length !== turn.blocks.end - turn.blocks.start ||
-          (turn.base.end > turn.base.start && (!page.base || page.base.start !== turn.base.start ||
-            page.base.entries.length !== turn.base.end - turn.base.start)))
-        throw new Error("The reloaded turn did not match this conversation view.")
-      const next = restoreTurn(current, turn, page)
-      replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
-    } catch (error) {
-      if (!(error instanceof Error) || !/history view expired|native history changed/.test(error.message)) throw error
-      // Expiry/rewrite reacquires the source across the held window, keeping
-      // the old display until the coherent replacement is ready.
-      const { hydrateLive } = await import("@/state/live-recovery")
-      if (!(await hydrateLive(id))) throw error
-    } finally { release() }
+    // A view the host let go is renewed and the turn read again from the new one; a renewal that read the whole
+    // window back has brought the turn with it.
+    try { await (await import("@/state/live-recovery")).withLiveView(id, () => restoreReleasedTurn(id, turnId)) }
+    finally { release() }
   })().finally(() => turnLoads.delete(key))
   turnLoads.set(key, work)
   return work
+}
+
+async function restoreReleasedTurn(id: string, turnId: string): Promise<void> {
+  const held = acpStore.get().conversations[id]
+  const turn = held?.releasedTurns?.find(item => item.id === turnId)
+  if (held?.kind !== "live" || !held.history || !turn) return
+  const page = await readLiveValue<LiveHistoryPage>(id, { kind: "range", token: held.history.token,
+    from: { blocks: turn.blocks.start, base: turn.base.start }, to: { blocks: turn.blocks.end, base: turn.base.end } })
+  const current = acpStore.get().conversations[id]
+  if (current?.kind !== "live" || current.history?.token !== held.history.token ||
+      current.releasedTurns?.find(item => item.id === turnId) !== turn) return
+  if (page.history.token !== held.history.token || page.history.blockStart !== turn.blocks.start ||
+      page.history.blockEnd !== turn.blocks.end || page.blocks.length !== turn.blocks.end - turn.blocks.start ||
+      (turn.base.end > turn.base.start && (!page.base || page.base.start !== turn.base.start ||
+        page.base.entries.length !== turn.base.end - turn.base.start)))
+    throw new Error("The reloaded turn did not match this conversation view.")
+  const next = restoreTurn(current, turn, page)
+  replaceAcpConversation(id, { ...next, projection: projectAcp(next) })
 }
 
 function restoreTurn<T extends { blocks: Entry[]; base?: LiveSnapshot["base"]; history?: LiveSnapshot["history"]; releasedTurns?: ReleasedTurn[] }>(
@@ -194,9 +196,15 @@ export function loadLiveHistoryDetail(id: string, token: string, at: LiveHistory
   const work = (async () => {
     const release = transcriptReaders.protect(liveReadingSource(id), "*")
     try {
-    const value = EntrySchema.parse(await readLiveValue<Entry>(id, { kind: "detail", token, at }))
+    // The row names the view its preview came from; once the window took another, the window's is the one to read.
+    let read = token
+    const value = await (await import("@/state/live-recovery")).withLiveView(id, async () => {
+      const held = acpStore.get().conversations[id]
+      read = held?.kind === "live" && held.history ? held.history.token : token
+      return EntrySchema.parse(await readLiveValue<Entry>(id, { kind: "detail", token: read, at }))
+    })
     const current = acpStore.get().conversations[id]
-    if (current?.kind !== "live" || current.history?.token !== token) return
+    if (current?.kind !== "live" || current.history?.token !== read) return
     if (at.kind === "live") {
       const local = at.index - current.history.blockStart
       const before = current.blocks[local]
