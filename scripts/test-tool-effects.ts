@@ -125,21 +125,33 @@ for (const name of (await readdir(CASES_ROOT)).filter((file) => file.endsWith(".
 
 /**
  * Differences between what a pair's live wire and a store report, each
- * because the harness itself keeps less than it streamed. `-` is reported
- * only live, `+` only from the store.
+ * because the harness keeps other than it streamed: less, or what came after
+ * the wire ended. `-` is reported only live, `+` only from the store.
  */
-const KNOWN: readonly { pair: string; reader: string; side: "-" | "+"; effects: string; reason: string }[] = ["devin", "devin-ide"].flatMap((reader) => [
+const KNOWN: readonly { pair: string; reader: string; side: "-" | "+"; effects: string; reason: string }[] = [
   {
-    pair: "devin/stopped-shell", reader, side: "-" as const,
-    effects: '[{"kind":"command","command":"sleep 30","cwd":"/tmp/mako-pair/project"}]',
-    reason: "Devin 3000.10.23 names a command's folder (`cognition.ai/cwd`) in an update it sends while the command runs; for a stopped command its store keeps only the call and its cancellation, neither of which names it.",
+    pair: "codex/stopped-shell", reader: "codex", side: "-",
+    effects: '[{"kind":"command","command":"tail -f notes.md","cwd":"/tmp/mako-pair/project"}]',
+    reason: "Codex 0.164.0's app-server sent only the stopped command's start before the turn ended, so live names no exit.",
   },
   {
-    pair: "devin/stopped-shell", reader, side: "+" as const,
-    effects: '[{"kind":"command","command":"sleep 30"}]',
-    reason: "The same command read from the store, without the folder.",
+    pair: "codex/stopped-shell", reader: "codex", side: "+",
+    effects: '[{"kind":"command","command":"tail -f notes.md","cwd":"/tmp/mako-pair/project","exitCode":137}]',
+    reason: "Codex 0.164.0 writes the stopped command's item to its rollout once its process is killed, after the turn's abort: exit 137, killed by signal 9, with what it had printed.",
   },
-])
+  ...["devin", "devin-ide"].flatMap((reader) => [
+    {
+      pair: "devin/stopped-shell", reader, side: "-" as const,
+      effects: '[{"kind":"command","command":"tail -f notes.md","cwd":"/tmp/mako-pair/project"}]',
+      reason: "Devin 3000.10.23 names a command's folder (`cognition.ai/cwd`) in an update it sends while the command runs; for a stopped command its store keeps only the call and its cancellation, neither of which names it.",
+    },
+    {
+      pair: "devin/stopped-shell", reader, side: "+" as const,
+      effects: '[{"kind":"command","command":"tail -f notes.md"}]',
+      reason: "The same command read from the store, without the folder.",
+    },
+  ]),
+]
 
 /** A side's calls that report effects, each as its effects' JSON, in order. */
 const effectLines = (blocks: readonly { effects?: ToolEffect[] }[]) => blocks.flatMap((block) => block.effects?.length ? [JSON.stringify(block.effects)] : [])

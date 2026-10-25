@@ -7,14 +7,8 @@
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T08-32-14-01a17230-5b7d-7072-8f17-53f342e0f829.jsonl",
-      "known": [
-        {
-          "side": "-",
-          "line": "note: Warning — Codex could not find bubblewrap on PATH. Install bubblewrap with your OS package manager. See the sandbox prerequisites: https://developers.openai.com/codex/co…",
-          "reason": ""
-        }
-      ]
+      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T02-53-16-01a1727a-8eb9-7893-be02-703416089635.jsonl",
+      "known": []
     }
   ]
 }

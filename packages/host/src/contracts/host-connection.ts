@@ -46,3 +46,15 @@ export class RuntimeDisconnectedError extends Error {
     this.conversationId = conversationId
   }
 }
+
+/**
+ * The host a call was for isn't connected: another device's runtime that's off or asleep, as the cloud says when it
+ * refuses the call unapplied (`owner-unavailable`). A disconnect like any other to whoever doesn't ask; a reader that
+ * can answer from elsewhere (the account's copy of a Session) tells it from its own connection's loss.
+ */
+export class OwnerUnavailableError extends RuntimeDisconnectedError {
+  constructor(unconfirmed: boolean, conversationId?: string, message?: string) {
+    super(unconfirmed, conversationId, message)
+    this.name = "OwnerUnavailableError"
+  }
+}

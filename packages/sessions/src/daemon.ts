@@ -26,7 +26,7 @@
  */
 
 import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "./record-sync.js"
-import type { CopyScope } from "./reading-copies.js"
+import type { CopyPage, CopyScope } from "./reading-copies.js"
 import type { InstalledReading } from "./record-writers.js"
 import {
   createConnection,
@@ -437,6 +437,12 @@ function catalogService(
           case "stage-records":
             reply({ id: frame.id, ok: true, result: await catalog.stageRecords(frame.link, frame.sessions) })
             return
+          case "copy-page":
+            reply({ id: frame.id, ok: true, result: await catalog.copyPage(frame.link, frame.harness, frame.nativeId, frame.before, frame.limit) })
+            return
+          case "copy-entry":
+            reply({ id: frame.id, ok: true, result: await catalog.copyEntry(frame.link, frame.harness, frame.nativeId, frame.entry) })
+            return
           case "retire": {
             // A newer client wants this vintage gone. Answer, then leave —
             // the socket frees, and the successor takes over the watchers.
@@ -616,6 +622,10 @@ export interface DaemonClient {
   receiveRecords(link: RecordsLink, sessions: ReceivingSession[], installed: Record<string, InstalledReading | null>): Promise<ReceivedRecords[]>
   /** Pulls sessions' records from a remote store into this one ahead of a move (`SessionCatalog.stageRecords`). */
   stageRecords(link: RecordsLink, sessions: ReceivingSession[]): Promise<StagedRecords[]>
+  /** A page of the copy another device keeps of a Session (`SessionCatalog.copyPage`). */
+  copyPage(link: RecordsLink, harness: string, nativeId: string, before: number | undefined, limit: number): Promise<CopyPage | null>
+  /** One entry of such a copy (`SessionCatalog.copyEntry`). */
+  copyEntry(link: RecordsLink, harness: string, nativeId: string, entry: string): Promise<Entry | null>
   onEvent(listener: (event: DaemonEvent) => void): () => void
   /** Fires once if the daemon goes away; the client is dead afterwards. */
   onClose(listener: () => void): void
@@ -733,6 +743,9 @@ async function connectDaemonLink(
           response.pending.resolve(response.result)
           break
         case "stage-records":
+          response.pending.resolve(response.result)
+          break
+        case "copy-page":
           response.pending.resolve(response.result)
           break
         case "ack":
@@ -907,6 +920,22 @@ async function connectDaemonLink(
       send({ id, op: "stage-records", link, sessions })
     })
 
+  const requestCopyPage = (link: RecordsLink, harness: string, nativeId: string, before: number | undefined, limit: number): Promise<CopyPage | null> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))
+      pending.set(id, { kind: "copy-page", resolve, reject, timer })
+      send(before === undefined ? { id, op: "copy-page", link, harness, nativeId, limit } : { id, op: "copy-page", link, harness, nativeId, before, limit })
+    })
+
+  const requestCopyEntry = (link: RecordsLink, harness: string, nativeId: string, entry: string): Promise<Entry | null> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, HOLD_TIMEOUT_MS))
+      pending.set(id, { kind: "entry", resolve, reject, timer })
+      send({ id, op: "copy-entry", link, harness, nativeId, entry })
+    })
+
   const requestAck = (
     frame: (id: number) => DaemonRequestFrame
   ): Promise<void> =>
@@ -940,6 +969,8 @@ async function connectDaemonLink(
       sendRecords: requestSendRecords,
       receiveRecords: requestReceiveRecords,
       stageRecords: requestStageRecords,
+      copyPage: requestCopyPage,
+      copyEntry: requestCopyEntry,
       onEvent: (listener) => {
         eventListeners.add(listener)
         return () => eventListeners.delete(listener)

@@ -8,6 +8,7 @@ import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 import { sessionStream, streamConversation } from "../dist/socket.js"
 import { AccountEventSchema } from "../dist/account-events.js"
+import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
 import { ListedSessionSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
@@ -1485,6 +1486,20 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.throws(() => ListedSessionSchema.parse({ ...listed, title: "x".repeat(201) }), "a title is a row's, not a message's")
     assert.throws(() => SessionsReportSchema.parse({ listed: Array.from({ length: 201 }, () => session), gone: [] }), "at most 200 rows a report")
     assert.deepEqual(SessionListingsSchema.parse({ sessions: [listed], seq: 12 }), { sessions: [listed], seq: 12 })
+  })
+
+  test("a message waiting for a Session's owner: what a device sends, what the account keeps, said whole on the stream", () => {
+    const input = { conversation: "c-1", text: "Run the tests again" }
+    assert.deepEqual(WaitingInputSchema.parse(input), input)
+    assert.throws(() => WaitingInputSchema.parse({ ...input, attachments: [] }), "text only: a file stays where it was sent from")
+    assert.throws(() => WaitingInputSchema.parse({ ...input, text: "" }))
+    const kept = { ...input, id: "0f8e2b6a-4c1d-4e7a-9b3c-5d2e1f0a9b8c", session: session.session, from: mac.deviceId, at: "2026-10-25T09:00:00.000Z" }
+    assert.deepEqual(WaitingMessageSchema.parse({ ...kept, later: true }), kept, "read leniently")
+    assert.equal(sameWaiting(input, { ...input }), true)
+    assert.equal(sameWaiting(input, { ...input, text: "Run them once" }), false, "the same ID with other words is another message")
+    assert.deepEqual(AccountEventSchema.parse({ type: "messages-waiting", session: session.session, messages: [kept] }).type, "messages-waiting")
+    assert.deepEqual(AccountEventSchema.parse({ type: "messages-waiting", session: session.session, messages: [] }).messages, [], "none waiting: each was taken, or taken back")
+    assert.deepEqual(SessionListingsSchema.parse({ sessions: [], seq: 3, waiting: [kept] }).waiting, [kept])
   })
 
   test("the one-owner rule: a higher generation replaces a row, the same one only from the same owner, a lower one never", () => {

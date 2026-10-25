@@ -10,6 +10,7 @@ import { ModelChoiceNotice } from "@/components/composer/model-notice"
 import { RuntimeVersionNotice } from "@/components/composer/runtime-version-notice"
 import { RestoreVersionNotice } from "@/components/composer/restore-version-notice"
 import { LedgerNotice } from "@/components/composer/ledger-notice"
+import { CopyNotice } from "@/components/composer/copy-notice"
 import { ThreadMoveNotice } from "@/components/composer/thread-move-notice"
 import { SignInRecovery } from "@/components/composer/sign-in-recovery"
 import { MovedReviewCard } from "@/components/composer/moved-review-card"
@@ -127,6 +128,7 @@ export function installBuiltins(): () => void {
     registerSlot("runtime-version", "composer.above", RuntimeVersionNotice),
     registerSlot("restore-version", "composer.above", RestoreVersionNotice),
     registerSlot("newer-ledger", "composer.above", LedgerNotice),
+    registerSlot("device-copy", "composer.above", CopyNotice),
     registerSlot("provider-connection", "composer.above", ProviderConnectionNotice),
     registerSlot("sign-in-recovery", "composer.above", SignInRecovery),
     registerSlot("account-switch", "composer.above", AccountSwitchNotice),
