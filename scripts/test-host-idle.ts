@@ -1,12 +1,13 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdtemp, readdir, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   IdleShutdown,
   activeHostLeases,
   holdHostLease,
+  removeRuntimeDirectory,
 } from "@mako/host/base/host-idle"
 
 // The idle window is measured as one continuous span; any activity restarts it.
@@ -62,7 +63,23 @@ try {
   await releaseOther()
   assert.deepEqual(await activeHostLeases(root), [])
   assert.deepEqual(await activeHostLeases(join(root, "missing")), [], "no lease directory means no holders")
-  console.log("Host idle: continuous idle window, activity reset, single quit and pid-bound launcher leases passed")
+
+  // A stopping host removes its runtime directory, but a live launcher's lease stays for the profile's next host.
+  const runtime = join(root, "runtime")
+  await mkdir(runtime)
+  await writeFile(join(runtime, "host.sock"), "")
+  const releaseLauncher = await holdHostLease(runtime)
+  removeRuntimeDirectory(runtime)
+  assert.deepEqual(await readdir(runtime), ["leases"], "only the leases stay")
+  assert.deepEqual(await activeHostLeases(runtime), [process.pid], "the next host is held by the same launcher")
+  await releaseLauncher()
+  removeRuntimeDirectory(runtime)
+  assert.deepEqual(await readdir(root).then((names) => names.includes("runtime")), false, "with no live lease the directory goes")
+  const bare = join(root, "bare")
+  await mkdir(bare)
+  removeRuntimeDirectory(bare)
+  assert.equal((await readdir(root)).includes("bare"), false, "a host no launcher held removes its directory")
+  console.log("Host idle: continuous idle window, activity reset, single quit, pid-bound launcher leases and leases kept across a restart passed")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

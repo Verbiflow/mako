@@ -1,4 +1,3 @@
-import { rmSync } from "node:fs"
 import { Foreground } from "./base/foreground.js"
 import { lstat, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -15,7 +14,7 @@ import { hostChannelDomain, hostChannels, type HostChannel } from "./contracts/h
 import { isClientCall, socketCalls } from "./contracts/client-calls.js"
 import { hostSecretStore, type SecretKeyHandover } from "./base/host-secrets.js"
 import type { CrashReports } from "./base/crash.js"
-import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases } from "./base/host-idle.js"
+import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases, removeRuntimeDirectory } from "./base/host-idle.js"
 import type { TerminalClients } from "./terminals/index.js"
 import type { Core } from "./core.js"
 import { runtimeBuild } from "./base/build-identity.js"
@@ -179,10 +178,10 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     if (socketClosed) return
     socketClosed = true
     web?.close()
-    // The runtime directory is this host's alone; leaving it behind is how
-    // fifty of them piled up in the temp folder.
+    // The runtime directory is this host's; leaving it behind is how fifty of them piled up in the temp folder. Leases
+    // a live launcher holds stay for the profile's next host.
     try {
-      rmSync(dirname(config.socket), { recursive: true, force: true })
+      removeRuntimeDirectory(dirname(config.socket))
     } catch {
       /* best effort */
     }

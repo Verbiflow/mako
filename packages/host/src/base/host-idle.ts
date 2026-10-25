@@ -1,3 +1,4 @@
+import { existsSync, readdirSync, rmSync } from "node:fs"
 import { mkdir, readdir, unlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -86,6 +87,22 @@ export async function holdHostLease(hostDirectory: string, pid = process.pid): P
   return async () => {
     await unlink(file).catch(() => undefined)
   }
+}
+
+/**
+ * Removes a stopping host's runtime directory but the leases a live launcher still holds in it: the profile's next
+ * host, after a restart, runs in the same directory and is held by the same launcher. Removing them once let a
+ * restarted dev host stop itself 15 seconds later under a launcher that was still serving its page.
+ */
+export function removeRuntimeDirectory(hostDirectory: string): void {
+  const leases = leaseDirectory(hostDirectory)
+  const held = existsSync(leases) && readdirSync(leases, { withFileTypes: true }).some((entry) =>
+    entry.name.startsWith(LEASE_PREFIX) && processAlive(Number(entry.name.slice(LEASE_PREFIX.length))))
+  if (!held) {
+    rmSync(hostDirectory, { recursive: true, force: true })
+    return
+  }
+  for (const entry of readdirSync(hostDirectory)) if (entry !== "leases") rmSync(join(hostDirectory, entry), { recursive: true, force: true })
 }
 
 /** Pids of launchers currently holding this host; dead holders are removed. */

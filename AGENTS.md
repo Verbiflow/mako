@@ -3287,7 +3287,8 @@ the dev launcher holds a pid-keyed lease beside the host socket). Its
 `host.log` records what holds it each time that changes (`lifecycle idle
 watch holds=…`). The installed
 app's default-profile host never does. Every host removes its runtime
-directory on exit, and a new host removes driver sockets whose owner is dead.
+directory on exit but the leases a live launcher holds there, which hold the
+profile's next host after a restart, and a new host removes driver sockets whose owner is dead.
 Retained previous applications are pruned after a verified, launched install:
 only the newest backup survives, and only staging directories holding nothing
 but a backup and its installer script are removed, under the install lock.
