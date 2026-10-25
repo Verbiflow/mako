@@ -1,6 +1,7 @@
 import { open, stat } from "node:fs/promises"
 import { z } from "zod"
 import { parseLine, readLineBatch } from "@mako/sessions/jsonl"
+import { recordEncoding, statRecord } from "@mako/sessions/record-files"
 import type { ProviderBinding } from "../../contracts/conversation-control.js"
 import type { NativeQuestionHistory } from "../../contracts/live-questions.js"
 import { codexAnsweredQuestions, codexAsyncQuestion, CodexAsyncQuestionsSchema } from "./questions.js"
@@ -21,10 +22,12 @@ function userText(content: unknown[]): string {
 interface Scan {
   identity: string
   sessionId: string
+  /** The file's size on disk, which for a compressed file isn't the plain bytes read. */
   size: number
   mtime: number
   ctime: number
-  anchor: string
+  /** A plain file's last bytes, which an append keeps; a compressed one is rewritten whole, never appended to. */
+  anchor?: string
   bytes: number
   entries: NativeQuestionHistory
 }
@@ -38,12 +41,17 @@ async function anchor(path: string, end: number): Promise<string> {
   } finally { await file.close() }
 }
 
-/** Native rollouts are append-only. Cache only validated, complete prefixes. */
+/**
+ * Native rollouts are append-only. Cache only validated, complete prefixes.
+ * Codex compresses an idle rollout in place as `.jsonl.zst`, whose offsets
+ * count plain bytes while its stat counts the compressed ones.
+ */
 export function createCodexQuestionHistory() {
   const cache = new Map<string, Scan>()
   const pending = new Map<string, Promise<NativeQuestionHistory>>()
   async function scan(path: string, sessionId: string): Promise<NativeQuestionHistory> {
     const info = await stat(path)
+    const plain = recordEncoding(path) === "plain"
     const identity = `${info.dev}:${info.ino}`
     const saved = cache.get(path)
     const previous = saved?.identity === identity && saved.sessionId === sessionId ? saved : undefined
@@ -51,7 +59,7 @@ export function createCodexQuestionHistory() {
       cache.delete(path); cache.set(path, previous)
       return structuredClone(previous.entries)
     }
-    const append = previous && info.size > previous.size && await anchor(path, previous.size) === previous.anchor
+    const append = plain && previous?.anchor !== undefined && info.size > previous.size && await anchor(path, previous.size) === previous.anchor
     const entries: NativeQuestionHistory = append ? structuredClone(previous.entries) : []
     const byItem = new Map<string, NativeQuestionHistory>()
     for (const entry of entries) {
@@ -110,9 +118,11 @@ export function createCodexQuestionHistory() {
       }
     }, { identity, strict: true })
     const after = await stat(path)
-    if (!verified || read.nextByte !== read.size || after.size !== read.size || `${after.dev}:${after.ino}` !== identity || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs)
+    // The file as it was stat'ed before the read, read to the plain end its stat gives.
+    if (!verified || read.nextByte !== read.size || read.size !== (await statRecord(path, after))?.bytes || `${after.dev}:${after.ino}` !== identity ||
+      after.size !== info.size || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs)
       throw new Error("Native question history is still changing; refresh before answering")
-    const next: Scan = { identity, sessionId, size: read.size, mtime: after.mtimeMs, ctime: after.ctimeMs, anchor: await anchor(path, read.size), entries, bytes: Buffer.byteLength(JSON.stringify(entries)) }
+    const next: Scan = { identity, sessionId, size: info.size, mtime: after.mtimeMs, ctime: after.ctimeMs, anchor: plain ? await anchor(path, read.size) : undefined, entries, bytes: Buffer.byteLength(JSON.stringify(entries)) }
     cache.delete(path)
     // Evict the cache, not valid evidence, when a question is unusually large.
     if (next.bytes <= 16 * 1024 * 1024) cache.set(path, next)

@@ -2,8 +2,11 @@ import { registeredHarnessIds } from "./registered-harnesses.ts"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { appendFile, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { syncBuiltinESMExports } from "node:module"
+import { mock } from "node:test"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import zlib, { zstdCompressSync } from "node:zlib"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
@@ -83,12 +86,12 @@ try {
     const first=codexAsyncQuestion(native,"first","first",[{title:"First?"}])
     const newer=codexAsyncQuestion(native,"newer","newer",[{title:"Newer?"}])
     let evidence:NativeQuestionHistory=[{question:first,answered:[]}]
-    let unavailable=false, writes=0
+    let unavailable=false, writes=0, asked:string|undefined
     let gate:Promise<void>|undefined
     const driver:ProviderLiveDriver={
       ...noCapabilities,
       resume: fixtureResume(),
-      questions: { kind: "session", via: "Injected driver fixture", encodeAnswer:codexQuestionAnswer,history:async()=>{if(gate)await gate;if(unavailable)throw Error("Unavailable source");return evidence} },provider,available:()=>true,
+      questions: { kind: "session", via: "Injected driver fixture", encodeAnswer:codexQuestionAnswer,history:async(binding)=>{asked=binding.path;if(gate)await gate;if(unavailable)throw Error("Unavailable source");return evidence} },provider,available:()=>true,
       launchEnvironment:{kind:"unavailable",reason:"Fixture"},nativeIdentity:{kind:"unavailable",reason:"Fixture"},
       nativeExclusion:NO_NATIVE_EXCLUSION,nativePromptIdentity:NO_NATIVE_PROMPT_IDENTITY,
       planning:{via:"setting",option:"plan",proposal:"Fixture",feedback:{kind:"next-message",reason:"Fixture"}},backgroundStop:{kind:"ends-with-turn",evidence:"Fixture"},
@@ -104,6 +107,14 @@ try {
       snapshot=(await owner.refreshedSnapshot(id))!
       assert.equal(latestPendingQuestion(snapshot.control!,snapshot.requests)?.native.itemId,"newer")
       assert.equal(snapshot.control!.questions![0]!.id,saved.id,"Catch-up preserves durable identity")
+      // Codex compresses an idle rollout in place, and restores it on resume: the binding follows the file.
+      await rename(path,`${path}.zst`)
+      snapshot=(await owner.refreshedSnapshot(id))!
+      assert.equal(snapshot.control!.bindings[0]!.path,`${path}.zst`,"A compressed rollout's binding records its new name")
+      assert.equal(asked,`${path}.zst`,"Questions are read from the file as it is now")
+      await rename(`${path}.zst`,path)
+      snapshot=(await owner.refreshedSnapshot(id))!
+      assert.equal(snapshot.control!.bindings[0]!.path,path,"A restored rollout's binding records its plain name")
       evidence.unshift({question:codexAsyncQuestion(native,"older","older",[{title:"Older?"}]),answered:[]})
       snapshot=(await owner.refreshedSnapshot(id))!
       assert.equal(latestPendingQuestion(snapshot.control!,snapshot.requests)?.native.itemId,"newer","An imported older question cannot jump ahead of the latest")
@@ -139,6 +150,19 @@ try {
       assert.equal(owner.snapshot(id)!.control!.questions!.length,3,"A source read from an older owner generation cannot publish")
     } finally {owner.stop()}
   }
+  // A compressed rollout's stat counts its compressed bytes, its reads plain ones: it settles, and is decoded once while unchanged.
+  const decodes=mock.method(zlib,"createZstdDecompress")
+  syncBuiltinESMExports()
+  try {
+    const zipped={...binding,path:join(root,"compressed.jsonl.zst")}
+    await writeFile(zipped.path,zstdCompressSync(Buffer.from(meta+question("zipped")+reply("zipped")+question("zipped-newer"))))
+    assert.deepEqual((await history(zipped)).map(entry=>entry.answered.length),[2,0],"A stable compressed rollout settles")
+    assert.equal((await history(zipped)).length,2)
+    assert.equal(decodes.mock.callCount(),1,"An unchanged compressed rollout is answered from the cache")
+    await writeFile(zipped.path,zstdCompressSync(Buffer.from(meta+question("zipped")+reply("zipped")+question("zipped-newer")+reply("zipped-newer"))))
+    assert.equal((await history(zipped))[1]!.answered.length,2,"A rewritten compressed rollout is read again from its start")
+    assert.equal(decodes.mock.callCount(),2)
+  } finally {decodes.mock.restore();syncBuiltinESMExports()}
   // Read a large history once; unchanged and appended reads use the cache.
   const filler=JSON.stringify({type:"response_item",payload:{type:"function_call_output",output:"x".repeat(8192)}})+"\n"
   await writeFile(path,meta+filler.repeat(5000)+question("large"))
@@ -150,5 +174,5 @@ try {
   }
   assert.equal(source[0]!.answered.length,2)
   console.log(JSON.stringify({bytes:(await readFile(path)).length,timing}))
-  console.log("PASS native question history: all-six/future host contract, import, external answers, dismissal/reopen, identity, incomplete reads, source replacement and incremental cache")
+  console.log("PASS native question history: all-six/future host contract, import, external answers, dismissal/reopen, identity, incomplete reads, source replacement, compressed rollouts and incremental cache")
 } finally {await rm(root,{recursive:true,force:true})}
