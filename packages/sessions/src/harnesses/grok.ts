@@ -374,8 +374,19 @@ export function grokReplayedUser(update: AcpUserChunk): LiveUpdate | null | unde
         : { kind: "provider-turn", ...backgroundReminderTurn(text) ?? UNNAMED_TURN }
   const reminder = update.content.type === "text" ? backgroundReminderTurn(text) : undefined
   if (reminder) return { kind: "provider-turn", ...reminder }
-  const typed = meta?.interjection ? GrokDisplayText.safeParse(update.content._meta).data?.displayText : undefined
+  const typed = meta?.interjection ? GrokDisplayText.safeParse(update.content._meta).data?.displayText : grokWrappedSteer(text)
   return typed === undefined ? undefined : { kind: "user", text: typed, steeringFor: "running" }
+}
+
+/**
+ * What the person typed into a message steered into a running turn, as grok
+ * 1.0.20 and older saved it: inside Grok's own wrapper ("The user sent a
+ * message while you were working:" and `<user_query>`), with no
+ * `interjection` mark. Later builds mark the chunk and keep the typed words
+ * as its `displayText`.
+ */
+export function grokWrappedSteer(text: string): string | undefined {
+  return /^The user sent a message while you were working:\n<user_query>\n([\s\S]*?)\n<\/user_query>(?:\n[\s\S]*)?$/.exec(text)?.[1]
 }
 
 /**

@@ -126,6 +126,12 @@ new AgentSideConnection((connection) => {
       await connection.extNotification("_x.ai/scheduled_task_fired", { sessionId, update: { sessionUpdate: "scheduled_task_fired", task_id: "t1", prompt: "Check the deploy", human_schedule: "every hour", next_fire_at: "2026-10-08T13:00:00Z", subagent_id: "loop-1" } })
       await update({ sessionUpdate: "session_info_update", title: "Renamed by the agent" })
     },
+    // grok 1.0.24 sends each prompt back as it starts the turn; so does Devin to a client that groups messages.
+    async "echoes-prompt"() {
+      await update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "echoes-" }, _meta: { promptIndex: 0 } })
+      await update({ sessionUpdate: "user_message_chunk", content: { type: "text", text: "prompt" }, _meta: { promptIndex: 0 } })
+      await chunk("agent_message_chunk", "Answered once.")
+    },
     async "grok-subagent-foreground"() {
       await spawned("foreground-child")
       await turnSpent("foreground-child", "child-turn", spent(10806, 1792, 38))

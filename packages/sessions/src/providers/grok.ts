@@ -3,7 +3,7 @@ import type { WriterEvidenceLookups } from "../record-evidence.js"
 import type { WriterEvidence } from "../record-writers.js"
 import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
-import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, grokHostCommand, grokLineMillis, GrokTaskSnapshot, grokTokens, grokTurnsBetween, GrokTurnUsage, grokUpdateReading, grokWakingChild, GrokWokenSpend } from "../harnesses/grok.js"
+import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, grokHostCommand, grokWrappedSteer, grokLineMillis, GrokTaskSnapshot, grokTokens, grokTurnsBetween, GrokTurnUsage, grokUpdateReading, grokWakingChild, GrokWokenSpend } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
 import { UNNAMED_TURN } from "../provider-turn.js"
 import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTERRUPTED, manualCompaction, modelChangedEvent, plainWords, TURN_ENDED, TURN_FAILED, turnFailedEvent, usageLimitEvent, type TranscriptEvent } from "../events.js"
@@ -54,7 +54,8 @@ import type { NativeFile, SessionProvider } from "./types.js"
 import { filesUnder, type RecordRoot, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { GrokChildren } from "./grok-children.js"
-import { TurnUsageSchema, type Entry } from "../entries.js"
+import { TurnUsageSchema, type Entry, type RecordRef } from "../entries.js"
+import type { LiveUpdate } from "../live-content.js"
 import { EntrySink, type TurnState } from "../entry-sink.js"
 import { grokFork } from "./grok-fork.js"
 
@@ -434,7 +435,7 @@ function parseSavedLine(raw: string, place?: LinePlace): SavedLine | null {
       // `promptIndex`, `hostTurn`, and `interjection` with what the person typed in `displayText`.
       const chunk = objectValue(update["_meta"])
       const content = objectValue(update["content"])
-      const steered = chunk?.["interjection"] === true ? stringValue(objectValue(content?.["_meta"])?.["displayText"]) : undefined
+      const steered = chunk?.["interjection"] === true ? stringValue(objectValue(content?.["_meta"])?.["displayText"]) : grokWrappedSteer(acpText(update["content"]))
       return {
         kind: "user",
         at,
@@ -1027,9 +1028,18 @@ function updatesTranslator(after?: string, state?: TurnState, childTurns?: Child
     if (carried) reachedBack = true
   }
 
+  /**
+   * The failure the line before this one queued, while it is the open turn's
+   * last: grok 1.0.10 and older write a failed turn's prompt after the
+   * failure (`retry_state` failed), though the prompt was made first.
+   */
+  let lastFailure: { update: LiveUpdate; at: string; record: RecordRef | undefined } | undefined
+
   const push = (raw: string, place?: LinePlace): void => {
     turns.sink.reading(lineRecord(place))
     before = undefined
+    const failureBefore = lastFailure
+    lastFailure = undefined
     const line = parseSavedLine(raw, place)
     if (line?.kind === "user" && !line.hostTurn)
       before = { started: turns.began, counted: earlier + counted.length, ...count.state, failed, tasks: [...tasks].map(([id, task]) => [id, structuredClone(task)]), watches: [...watches], ended: lastEnded, woken: [...woken.pending] }
@@ -1066,8 +1076,11 @@ function updatesTranslator(after?: string, state?: TurnState, childTurns?: Child
           turns.prompted({ at: line.at, steeringFor: prompt, text: line.text, attachments: [...line.attachments] })
           return
         }
+        // A failure written just before this prompt but made after it belongs to the turn this prompt opens.
+        const late = failureBefore && line.at !== undefined && line.at < failureBefore.at && turns.takeLast(failureBefore.update) ? failureBefore : undefined
         commit()
-        if (before) turns.sink.turn({ ...before, counted: earlier + counted.length })
+        // A prompt read ahead of the failure written before it marks no place to resume from: that place would skip the failure.
+        if (before && !late) turns.sink.turn({ ...before, counted: earlier + counted.length })
         counts = opening.counts
         prompt = line.promptIndex === undefined ? undefined : `prompt-${line.promptIndex}`
         turns.prompted({
@@ -1077,6 +1090,10 @@ function updatesTranslator(after?: string, state?: TurnState, childTurns?: Child
           attachments: [...line.attachments],
           opener: line.attachments.length ? undefined : backgroundReminderTurn(line.text, tasks),
         })
+        if (late) {
+          turns.close()
+          turns.queue(late.update, late.at, late.record)
+        }
         return
       }
       case "update":
@@ -1102,10 +1119,14 @@ function updatesTranslator(after?: string, state?: TurnState, childTurns?: Child
       case "unread":
         turns.unread(line.type, line.reason, line.raw)
         return
-      case "marker":
-        if (line.marker.label === TURN_FAILED) failed = true
-        turns.queue({ kind: "event", ...line.marker }, line.at)
+      case "marker": {
+        const update: LiveUpdate = { kind: "event", ...line.marker }
+        turns.queue(update, line.at)
+        if (line.marker.label !== TURN_FAILED) return
+        failed = true
+        if (line.at !== undefined) lastFailure = { update, at: line.at, record: turns.sink.record }
         return
+      }
       case "turn-end": {
         const ended = failed ? undefined : grokTurnEnd(line.stopReason, line.result, line.meta)
         if (ended) {

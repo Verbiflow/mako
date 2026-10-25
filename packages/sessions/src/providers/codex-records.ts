@@ -1074,9 +1074,12 @@ export class CodexRecords {
     if (!text && !attachments.length) return
     this.compaction = undefined
     this.started = true
+    // Codex 0.145.0 saves its prompts without an id: the turn's own id names the one that opened it, so a message
+    // steered into that turn names what it was steered into, as it does on a build that gives prompts ids.
+    const id = event.id ?? (inTurn && !this.prompt && this.turnId ? `${this.turnId}:prompt` : undefined)
     const steeringFor = inTurn ? this.prompt : undefined
-    if (inTurn && !this.prompt) this.prompt = event.id
-    out.push(this.update({ kind: "user", ...event.id && { messageId: event.id }, ...steeringFor && { steeringFor }, text: text ?? "", attachments }, event.at))
+    if (inTurn && !this.prompt) this.prompt = id
+    out.push(this.update({ kind: "user", ...id && { messageId: id }, ...steeringFor && { steeringFor }, text: text ?? "", attachments }, event.at))
   }
 
   /** Content of a reply: it ends any compaction's hold, and before any prompt it has no place. */

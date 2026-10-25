@@ -1350,11 +1350,11 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "tokens": {
         "state": "implemented",
-        "via": "Each `turn_completed`'s usage."
+        "via": "Each `turn_completed`'s usage, and a subagent's turns that woke its parent (`subagent_finished` with `will_wake`) with the parent's next turn, as Grok's own ledger counts them (`GrokWokenSpend`)."
       },
       "cost": {
         "state": "implemented",
-        "via": "Each `turn_completed`'s `costUsdTicks`."
+        "via": "Each `turn_completed`'s `costUsdTicks`, a woken subagent's with its parent's next turn."
       },
       "missedCalls": {
         "state": "implemented",

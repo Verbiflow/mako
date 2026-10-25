@@ -170,7 +170,8 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
   switch (raw.sessionUpdate) {
     case "user_message_chunk":
       // Replayed history (session/load streams the past back). Live user
-      // turns are emitted by livePrompt itself and never arrive this way.
+      // turns are emitted by livePrompt itself; an agent's echo of one is
+      // taken by `AcpUpdateDecoder.sent` before it reaches here.
       update = raw.content.type === "text"
         ? { kind: "user", text: raw.content.text }
         : { kind: "user", text: "", attachments: [acpAttachment(raw.content)] }
@@ -268,12 +269,41 @@ export class AcpUpdateDecoder<Plans extends AcpPlanDecoder = AcpPlanDecoder> {
   private readonly effects: AcpCallEffects | undefined
   private readonly hooks: AcpDecoderHooks<Plans> | undefined
   private readonly settings: () => SessionSettings | undefined
+  /** The prompt Mako last sent, and how much of it the agent has echoed back (`sent`). */
+  private echo: { text: string; seen: string; attachments: number } | undefined
 
   constructor(hooks: AcpDecoderHooks<Plans> | undefined, settings: () => SessionSettings | undefined = () => undefined) {
     this.hooks = hooks
     this.settings = settings
     this.plans = hooks?.plans?.()
     this.effects = hooks?.effects && new AcpCallEffects(hooks.effects)
+  }
+
+  /**
+   * A prompt Mako sent, which it draws itself: its text, then its
+   * attachments, as `acpPromptBlocks` sends them. An agent that echoes the
+   * prompt back as `user_message_chunk`s (Grok 1.0.24 after every prompt;
+   * Devin to a client that groups messages) draws nothing more. Chunks are
+   * taken against the text, then one for each attachment, in order, until one
+   * doesn't fit; that one, and everything after, draws as it would.
+   */
+  sent(text: string, attachments: number): void {
+    this.echo = { text, seen: "", attachments }
+  }
+
+  /** Whether `update` is the next piece of the echo of the prompt Mako sent. */
+  private echoed(update: AcpUserChunk): boolean {
+    const echo = this.echo
+    if (!echo) return false
+    const seen = update.content.type === "text" ? echo.seen + update.content.text : undefined
+    if (seen !== undefined && echo.text.startsWith(seen)) echo.seen = seen
+    else if (seen === undefined && echo.seen === echo.text && echo.attachments > 0) echo.attachments -= 1
+    else {
+      this.echo = undefined
+      return false
+    }
+    if (echo.seen === echo.text && echo.attachments === 0) this.echo = undefined
+    return true
   }
 
   /** A `session/update`. An unknown kind is `session/update/<kind>`, with the notification kept. */
@@ -283,6 +313,7 @@ export class AcpUpdateDecoder<Plans extends AcpPlanDecoder = AcpPlanDecoder> {
     if (restated === null) return []
     const update = restated ?? notification.update
     if (update.sessionUpdate === "user_message_chunk") {
+      if (this.echoed(update)) return []
       const read = this.hooks?.replayedUser?.(update)
       if (read === null) return []
       if (read) return [content(read)]

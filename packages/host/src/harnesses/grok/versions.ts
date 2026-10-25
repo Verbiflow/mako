@@ -9,12 +9,12 @@ import type { HarnessVersions } from "../../contracts/harness-versions.js"
  * that answers instead of a version, so no feature names one.
  */
 export const GROK_VERSIONS: HarnessVersions = {
-  oldest: "1.0.25",
+  oldest: "0.2.97",
   tested: "1.0.70",
   feed: { npm: "@xai-official/grok" },
   releases: { npm: "@xai-official/grok" },
   checked: {
     on: "2026-10-25",
-    how: "harness:decode-pairs against the scripted model with --native builds: 1.0.25, 1.0.30, 1.0.40 and 1.0.44 run all 23 scenarios with exactly 1.0.46's differences, while 1.0.24 and older (1.0.22-1.0.24, 1.0.20, 1.0.10, 1.0.0) store sessions whose prompts Mako's reader doesn't draw; 1.0.46 was then the version every record named. On 2026-10-25 every record moved to 1.0.70: its pairs run all scenarios, recorded on macOS against the scripted model",
+    how: "harness:decode-pairs against the scripted model with --native builds: 0.2.97, 1.0.0, 1.0.10, 1.0.20 and 1.0.24 run every scenario, and 0.2.97's pairs are kept. Before 1.0.25 Grok echoes each prompt back, which the ACP decoder takes as the prompt it sent (`AcpUpdateDecoder.sent`); through 1.0.20 it saves a steered message in its own wrapper, which history reads as the steer (`grokWrappedSteer`); through 1.0.10 it writes a failed turn's prompt after the failure, which history reads in the order of their times; and it reports a watch's end otherwise, the one difference left. 0.2.96 and older report no spend for a turn, and 0.2.85 and older name no tool their calls ran or break plan mode. 1.0.70 is the version every record names",
   },
 }

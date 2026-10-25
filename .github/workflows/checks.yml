@@ -69,5 +69,9 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build:control-runtime
+      # The harness definitions, their versions and the pages generated from them (adding-a-harness.md, the descriptors).
+      - run: npx tsx --tsconfig tsconfig.app.json scripts/test-harness-definitions.ts
       - run: npm run test:decoders
       - run: npm run test:usage
+      # The native-store layer's own suite: every harness's readers, the record store, catalogs and followers.
+      - run: npm test -w @mako/sessions
