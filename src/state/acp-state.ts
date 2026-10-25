@@ -52,6 +52,8 @@ interface AcpConversationBase {
   sessionId?: string
   control?: LiveSnapshot["control"]
   requests?: LiveSnapshot["requests"]
+  harnessTurns?: LiveSnapshot["harnessTurns"]
+  spentThrough?: LiveSnapshot["spentThrough"]
   base?: LiveSnapshot["base"]
   /** While `base` is null on a hydrated conversation, the host is reading it from this session. */
   baseSource?: LiveSnapshot["baseSource"]

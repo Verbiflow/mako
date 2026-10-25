@@ -245,8 +245,8 @@ const RecordedSpendSchema = z.object({
 
 /**
  * What Mako measured while running harnesses whose own stores keep no token
- * counts, read from each conversation's journal; a journal is read again
- * only after it changes.
+ * counts, read from each conversation's journal (its requests' turns and
+ * the harness's own); a journal is read again only after it changes.
  */
 async function scanRecorded(scan: UsageScan, root: string, recorded: ReadonlyMap<string, string>): Promise<void> {
   let names: string[]
@@ -277,7 +277,11 @@ async function scanRecorded(scan: UsageScan, root: string, recorded: ReadonlyMap
 function readJournal(scan: UsageScan, path: string, conversation: string, recorded: ReadonlyMap<string, string>): void {
   const db = new DatabaseSync(path, { readOnly: true })
   try {
-    const rows = db.prepare(`SELECT value FROM requests WHERE value LIKE '%"spend"%'`).all()
+    // Mako's requests, and the turns the harness ran without one; a journal from before those were kept has no such table.
+    const turns = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='harness_turns'").get()
+      ? db.prepare("SELECT value FROM harness_turns").all()
+      : []
+    const rows = [...db.prepare(`SELECT value FROM requests WHERE value LIKE '%"spend"%'`).all(), ...turns]
     if (!rows.length) return
     const metadata = JournalRowSchema.safeParse(db.prepare("SELECT value FROM metadata WHERE id=1").get()).data
     const cwd = (metadata && stringValue(objectValue(parseObject(metadata.value)?.session)?.cwd)) ?? "unknown"

@@ -1,9 +1,10 @@
-import { spendBetween } from "../contracts/usage-ledger.js"
+import { randomUUID } from "node:crypto"
+import { spendBetween, type TurnSpend } from "../contracts/usage-ledger.js"
 import { priceEstimate } from "../usage/index.js"
-import type { InterruptionReason, LiveRequest } from "../contracts/live-conversations.js"
+import type { InterruptionReason, LiveRequest, LiveSnapshot, SpentThrough, UsageMark } from "../contracts/live-conversations.js"
 import { advancePromptDelivery } from "../contracts/prompt-delivery.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
-import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LiveSessionState } from "../contracts/providers-acp.js"
+import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LiveSessionState, type LiveSessionUsage } from "../contracts/providers-acp.js"
 
 /**
  * The dispatching request's verdict when its session leaves `running`, for
@@ -38,14 +39,53 @@ export function settleRequest(request: LiveRequest, session: LiveSessionState, e
     settled.failure = dropped === "connection-lost" ? "network" : classifyProviderFailure(session.error).kind
   } else if (status === "interrupted") settled.interruption = { reason, at: Date.now() }
   if (status === "failed") settled.failure = classifyProviderFailure(session.error).kind
-  const spend = spendBetween(request.usageFrom, session.usage)
-  if (spend.tokens || spend.cost !== undefined || spend.unrecorded) {
-    const model = session.settings?.model
-    // Priced once, here, from the table current now: a later table never reprices this turn.
-    const estimate = spend.cost === undefined && spend.tokens ? priceEstimate(model, { ...spend.tokens, summed: true }) : null
-    settled.spend = { provider: session.harness, model, at: Date.now(), ...spend, ...estimate && { estimate } }
-  }
+  const spend = measuredSpend(request.usageFrom, session)
+  if (spend) settled.spend = spend
   return settled
+}
+
+/** What the meter read between `from` and `session`'s reading now, priced once, here: a later table never reprices it. */
+export function measuredSpend(from: UsageMark | undefined, session: LiveSessionState): TurnSpend | undefined {
+  const spend = spendBetween(from, session.usage)
+  if (!spend.tokens && spend.cost === undefined && !spend.unrecorded) return undefined
+  const model = session.settings?.model
+  const estimate = spend.cost === undefined && spend.tokens ? priceEstimate(model, { ...spend.tokens, summed: true }) : null
+  return { provider: session.harness, model, at: Date.now(), ...spend, ...estimate && { estimate } }
+}
+
+/** A meter reading as a turn is measured from it. */
+export function usageMark(usage: LiveSessionUsage | undefined): UsageMark | undefined {
+  if (!usage?.tokens && !usage?.cost && !usage?.unrecorded) return undefined
+  return { ...usage.tokens && { tokens: usage.tokens }, ...usage.cost && { cost: usage.cost }, ...usage.unrecorded && { unrecorded: usage.unrecorded } }
+}
+
+/**
+ * The conversation's spend records as a turn ends, or as its process goes.
+ * A turn Mako sent settled its request; one the harness ran on its own is
+ * recorded here, from the last turn's end. Either way the next counts from
+ * now. When the process goes between turns, what it spent after the last
+ * turn (a background subagent finishing with no turn after it) is recorded
+ * as `after`, and nothing is counted from its meter again.
+ */
+export function turnSpendAt(
+  snapshot: Pick<LiveSnapshot, "spentThrough" | "harnessTurns" | "session">,
+  bindingId: string,
+  how: { ended: boolean; ownTurn: boolean; gone: boolean }
+): Pick<LiveSnapshot, "spentThrough" | "harnessTurns"> {
+  const held = snapshot.spentThrough?.bindingId === bindingId ? snapshot.spentThrough : undefined
+  let harnessTurns = snapshot.harnessTurns
+  const kind = how.ended ? (how.ownTurn ? "turn" : undefined) : how.gone ? "after" : undefined
+  const spend = held && kind ? measuredSpend(held.usage, snapshot.session) : undefined
+  if (spend && kind) harnessTurns = [...harnessTurns ?? [], { id: randomUUID(), kind, spend }]
+  // Spread over the snapshot, so a process that went sets `spentThrough` away rather than leaving it out.
+  const spentThrough = how.gone ? (held ? undefined : snapshot.spentThrough) : { bindingId, usage: usageMark(snapshot.session.usage) ?? {} }
+  return { harnessTurns, spentThrough }
+}
+
+/** Where the next turn in `bindingId`'s process counts from: the last turn's end there, else the meter now. */
+export function turnStart(snapshot: Pick<LiveSnapshot, "spentThrough" | "session">, bindingId: string): SpentThrough {
+  const held = snapshot.spentThrough
+  return held?.bindingId === bindingId ? held : { bindingId, usage: usageMark(snapshot.session.usage) ?? {} }
 }
 
 /**
