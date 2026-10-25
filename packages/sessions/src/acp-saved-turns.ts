@@ -173,6 +173,25 @@ export class AcpSavedTurns {
     this.pendingRecords.push(record)
   }
 
+  /**
+   * Takes `update` back out of the open turn while it is still the turn's
+   * last, as queued or as the event it reduced to (a snapshot reduces). A
+   * reader that finds it belongs after what comes next queues it again there.
+   */
+  takeLast(update: LiveUpdate): boolean {
+    if (this.pending.at(-1) === update) {
+      this.pending.pop()
+      this.pendingAt.pop()
+      this.pendingRecords.pop()
+      return true
+    }
+    if (this.pending.length || update.kind !== "event") return false
+    const last = this.blocks.at(-1)
+    if (last?.type !== "event" || last.label !== update.label || last.detail !== update.detail) return false
+    this.blocks = this.blocks.slice(0, -1)
+    return true
+  }
+
   /** A record being read that the decoder couldn't draw, where it stands in the open turn. */
   unread(kind: string, reason: UnreadRecord["reason"], sample?: NativeRecordSample): void {
     this.close()

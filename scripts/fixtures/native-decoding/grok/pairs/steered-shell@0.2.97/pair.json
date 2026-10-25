@@ -1,0 +1,14 @@
+{
+  "harness": "grok",
+  "native": {
+    "version": "0.2.97"
+  },
+  "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
+  "stores": [
+    {
+      "reader": "grok",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a173ff-ced5-7c03-a06e-945ebcd83fa9/updates.jsonl",
+      "known": []
+    }
+  ]
+}

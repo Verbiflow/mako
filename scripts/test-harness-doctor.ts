@@ -165,10 +165,11 @@ try {
   for (const secret of ["FAKEFAKE", TOKEN_VALUE, OPAQUE]) assert.ok(!printed.includes(secret), `never prints ${secret}`)
   const tested = CODEX_VERSIONS.tested.replaceAll(".", "\\.")
   assert.match(formatReport(report), new RegExp(`installed is newer than tested ${tested}: Mako runs it as it is`))
-  assert.match(formatReport(report), new RegExp(`oldest 0\\.146\\.0 · tested ${tested}`))
+  const oldest = CODEX_VERSIONS.oldest?.replaceAll(".", "\\.")
+  assert.match(formatReport(report), new RegExp(`oldest ${oldest} · tested ${tested}`))
   const below = await doctorReport({ dataDir: root, days: 7, now, installed: async () => ({ version: "0.140.0", from: "/bin/codex", sdk: null }), harness: "codex", streams })
   assert.equal(below.harnesses[0]?.version.verdict, "below-oldest")
-  assert.match(formatReport(below), /installed is below oldest 0\.146\.0: sessions refuse it/)
+  assert.match(formatReport(below), new RegExp(`installed is below oldest ${oldest}: sessions refuse it`))
 
   const empty = await doctorReport({ dataDir: join(root, "missing"), days: 7, now, installed, harness: "claude", streams: join(root, "missing") })
   assert.equal(empty.harnesses.length, 1)

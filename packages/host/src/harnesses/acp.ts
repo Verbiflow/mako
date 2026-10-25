@@ -164,6 +164,8 @@ interface Live {
   checkpoint?(): string | undefined
   /** Every frame of this launch's wire, when the host keeps streams. */
   stream?: NativeStream<AcpNotificationRecord | AcpRequestRecord | AcpResponseRecord>
+  /** Tells this launch's decoder the prompt Mako sent and drew, so an agent's echo of it draws nothing (`AcpUpdateDecoder.sent`). */
+  sent?: (text: string, attachments: number) => void
   /** Where the side answer being written takes its side chain's updates. */
   sideListener?: (update: SessionNotification) => void
 }
@@ -475,6 +477,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     child.once("close", () => live.stream?.ended())
 
     const decoder = new AcpDecoder(source, () => live.state.settings)
+    live.sent = (text, attachments) => decoder.sent(text, attachments)
     const stream = nativeStream<AcpNotificationRecord | AcpRequestRecord | AcpResponseRecord>(harness, id, () => ({ settings: { model: live.state.settings?.model ?? null } }), dependencies.streams, () => live.state.nativeId)
     if (stream) live.stream = stream
     /**
@@ -970,6 +973,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     live.heldCause = undefined
     update(live, { status: "running", nativeRunId: turn.id, nativeForkId: undefined, error: undefined, lastStop: undefined, settings: applied.settings, configOptions: normalizeAcpOptions(applied.options) })
     engine.emitUpdate(live, { kind: "user", text })
+    live.sent?.(text, attachments.length)
     live.stream?.prompted({ text, shown: dispatch.shown, shownAt: dispatch.shownAt, attachments })
     const prompt = acpPromptBlocks(text, attachments, live.promptCapabilities)
     dispatch.report({ kind: "submitted", source: "transport-call", correlationId: turn.id })

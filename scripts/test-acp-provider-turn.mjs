@@ -117,6 +117,13 @@ async function check() {
     }
   }
 
+  // An agent that sends the prompt back as it starts the turn draws it once: the prompt Mako sent.
+  const echoing = await conversation("provider-turn-grok")
+  await echoing.prompt("echoes-prompt")
+  assert.deepEqual(echoing.updates().filter((update) => update.kind === "user").map((update) => update.text), ["echoes-prompt"], "an echoed prompt draws once")
+  await echoing.close()
+  console.log("PASS: a prompt the agent sends back is drawn once")
+
   // A subagent's spend counts once, as Grok's own ledger counts it: inside its parent's turn when the parent waited on it,
   // and with the turn it wakes when it finished while the parent was idle.
   const foreground = await conversation("provider-turn-grok")

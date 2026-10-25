@@ -21,7 +21,7 @@ import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.t
 import { DevinLocalProvider } from "../packages/sessions/src/providers/devin-local.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { OpenCodeProvider } from "../packages/sessions/src/providers/opencode.ts"
-import { decoderFor, readRecording, type Frame, type Opening, type Prompt, type Recording } from "./native-decoding.ts"
+import { decoderFor, promptedTurn, readRecording, type Frame, type Opening, type Prompt, type Recording } from "./native-decoding.ts"
 import { withFrame } from "@mako/host/harnesses/native-stream"
 import type { RecordRef } from "@mako/sessions/entries"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -97,7 +97,7 @@ export function liveUpdates(harness: string, recording: Recording, until = recor
   const frame = (place: Frame | undefined): RecordRef | undefined => stream && place ? { file: stream, ranges: [[place[0], place[1]]] } : undefined
   const prompt = (prompted: Prompt) => {
     if (prompted.steered) return updates.push({ kind: "user", text: prompted.text ?? "", steeringFor: "running" })
-    decoder.prompted?.(prompted.compaction && { compaction: true })
+    decoder.prompted?.(promptedTurn(prompted))
     if (prompted.run !== undefined && prompted.drawnAt === undefined) runs.set(prompted.run, updates.length)
     // The host draws no prompt for a turn that sent no words or files (`live-dispatch.ts`): a compaction's.
     const opened = frame(prompted.frame)

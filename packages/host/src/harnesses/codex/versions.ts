@@ -9,11 +9,11 @@ import type { HarnessVersions } from "../../contracts/harness-versions.js"
  * decoder and concepts records to it.
  */
 export const CODEX_VERSIONS: HarnessVersions = {
-  oldest: "0.146.0",
+  oldest: "0.142.0",
   tested: "0.164.0",
   feed: { npm: "@openai/codex" },
   checked: {
     on: "2026-10-25",
-    how: "harness:decode-pairs against the scripted model with --native builds: 0.146.0 through 0.150.0 run all 21 scenarios with only 0.159.3's known differences, while 0.145.0 and 0.140.0 draw a steered message differently from their rollout; 0.159.3 is the version every record names",
+    how: "harness:decode-pairs against the scripted model with --native builds: 0.142.0 through 0.145.0 run all 21 scenarios with only the known differences (0.142.0's kept as pairs), and every method Mako calls is in 0.142.0's generated protocol; 0.141.0 and older keep no item ids in their rollouts, so a streamed reply has no record to join and draws twice live. 0.164.0 is the version every record names",
   },
 }

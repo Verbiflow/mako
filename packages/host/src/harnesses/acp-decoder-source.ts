@@ -94,6 +94,7 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
       return {
         prompted(turn) {
           compacting = turn?.compaction === true
+          if (turn?.text !== undefined) decoder.sent(turn.text, turn.attachments ?? 0)
         },
         opening() {
           opening = true

@@ -52,9 +52,10 @@ export interface RecordedDecoder {
   /**
    * A turn opened where the capture says so, for a decoder whose driver
    * starts one per turn; `compaction` when Mako opened it to compact
-   * (`StreamedPrompt.compaction`).
+   * (`StreamedPrompt.compaction`), else the prompt Mako sent: its text and
+   * how many attachments, which an agent may echo back.
    */
-  prompted?(turn?: { compaction?: true }): void
+  prompted?(turn?: { compaction?: true; text?: string; attachments?: number }): void
   /**
    * A resumed session's process starting where the capture says so: until
    * `opened`, what it reports is its history replayed, whose spend was
