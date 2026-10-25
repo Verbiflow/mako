@@ -4,7 +4,8 @@
 # workspace; exits 1 naming what broke. CI runs it on Linux with `.github/actions/codex-sandbox`, as the daily bump does.
 set -uo pipefail
 workspace=$(mktemp -d)
-outside=$(mktemp -d)
+# Outside the workspace and outside what workspace-write also allows by design (/tmp and $TMPDIR): the home folder.
+outside=$(mktemp -d "$HOME/.codex-sandbox-outside.XXXXXX")
 trap 'rm -rf "$workspace" "$outside"' EXIT
 cd "$workspace" || exit 1
 echo "$(codex --version)"
