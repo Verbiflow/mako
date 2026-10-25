@@ -5,6 +5,10 @@ import { rowsForLink, type ListedSession, type ReportedSession, type SessionsRep
 import { AccountSessions } from "@mako/host/conversations/account-threads"
 import { LISTED_FOR_MS, nativeConversation, ownedSessions, SessionPublisher, SessionReporter, type NativeRow, type ReportSources } from "@mako/host/conversations/session-report"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
+import { SessionUploads, uploadScope, UPLOAD_BATTERY_FLOOR } from "@mako/host/conversations/session-uploads"
+import { parsePower, type PowerReading } from "@mako/host/base/power"
+import type { RecordsLink } from "@mako/sessions/record-sync"
+import type { CopyScope } from "@mako/sessions/reading-copies"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { DeviceIdSchema, MoveIdSchema, RuntimeIdSchema, type SessionExecution } from "@mako/host/contracts/thread-execution"
@@ -235,6 +239,69 @@ test("a publisher reports when something changed, sweeps every half minute regar
   const before = sent.length
   older.report({ link: await newLink(), served: served(4) })
   assert.equal(sent.length, before)
+})
+
+test("macOS's power reads as pmset says it: the source, the battery, and Low Power Mode in either spelling", () => {
+  assert.deepEqual(parsePower("Now drawing from 'AC Power'\n -InternalBattery-0 (id=22806627)\t100%; charged; 0:00 remaining present: true\n", " powermode            2\n"), { onBattery: false, percent: 100, lowPower: false })
+  assert.deepEqual(parsePower("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=1)\t17%; discharging; 1:02 remaining present: true\n", " powermode            1\n"), { onBattery: true, percent: 17, lowPower: true })
+  assert.equal(parsePower("", " lowpowermode         1\n").lowPower, true, "before macOS 14")
+  assert.deepEqual(parsePower("", ""), { onBattery: false, percent: undefined, lowPower: false }, "nothing said reads as plugged in")
+})
+
+test("a device's history goes up at work first, then newest first; catching up waits on a low battery; the scope always goes before the link", async () => {
+  const plugged: PowerReading = { onBattery: false, percent: 100, lowPower: false }
+  const rows: ReportedSession[] = [
+    { ...row(1), nativeId: "n-1" },
+    { ...row(2, "working"), nativeId: "n-2" },
+    { ...row(3), nativeId: "n-3" },
+    { ...row(4, "waiting"), nativeId: "n-4" },
+    row(5),
+  ]
+  const pathOf = (_harness: string, nativeId: string) => (nativeId === "n-3" ? undefined : `/rail/${nativeId}.jsonl`)
+  assert.deepEqual(uploadScope(rows, plugged, pathOf).sessions.map((each) => [each.nativeId, each.path, each.busy]), [["n-2", "/rail/n-2.jsonl", true], ["n-4", "/rail/n-4.jsonl", true], ["n-1", "/rail/n-1.jsonl", false]], "at work first, each as listed, where the rail reads it; one with no native session yet, or the rail doesn't list, waits")
+  assert.equal(uploadScope(rows, { onBattery: true, percent: UPLOAD_BATTERY_FLOOR - 1, lowPower: false }, pathOf).paused, true)
+  assert.equal(uploadScope(rows, { onBattery: true, percent: UPLOAD_BATTERY_FLOOR, lowPower: false }, pathOf).paused, false)
+  assert.equal(uploadScope(rows, { ...plugged, lowPower: true }, pathOf).paused, true)
+
+  const said: string[] = []
+  let link: RecordsLink | undefined
+  let listedRows: ReportedSession[] | undefined
+  let power = plugged
+  let powerReads = 0
+  let now = 0
+  const uploads = new SessionUploads({
+    rows: () => listedRows,
+    path: pathOf,
+    link: async () => link,
+    power: async () => (powerReads++, power),
+    scope: async (scope: CopyScope) => void said.push(`scope ${scope.sessions.map((each) => each.nativeId).join(",")}${scope.paused ? " waiting" : ""}`),
+    sync: async (given) => void said.push(given ? `link ${given.authorization}` : "stop"),
+    now: () => now,
+  })
+  await uploads.tick()
+  assert.deepEqual(said, [], "signed out, or no cloud: nothing leaves the Mac")
+  link = { id: "d-1", base: "https://cloud.test/v1/devices/d-1/records", authorization: "Bearer a" }
+  await uploads.tick()
+  assert.deepEqual(said, [], "no link before the Sessions are known: it would catch up on the whole store")
+  listedRows = rows
+  await uploads.tick()
+  assert.deepEqual(said, ["scope n-2,n-4,n-1", "link Bearer a"])
+  await uploads.tick()
+  assert.equal(said.length, 2, "nothing changed: nothing said")
+  link = { ...link, authorization: "Bearer b" }
+  await uploads.tick()
+  assert.deepEqual(said.slice(2), ["link Bearer b"], "a renewed token, the link again")
+  power = { onBattery: true, percent: 12, lowPower: false }
+  now += 30_000
+  await uploads.tick()
+  assert.equal(said.length, 3, "the power read at most once a minute")
+  now += 30_000
+  await uploads.tick()
+  assert.deepEqual(said.slice(3), ["scope n-2,n-4,n-1 waiting"])
+  assert.equal(powerReads, 2)
+  link = undefined
+  await uploads.tick()
+  assert.deepEqual(said.slice(4), ["stop"], "signed out: it stops")
 })
 
 const listed = (n: number, state: ListedSession["state"] = "idle"): ListedSession => ({ ...row(n, state), runsOn: { kind: "device", deviceId: uuid(900) }, listedAt: new Date(NOW).toISOString() })

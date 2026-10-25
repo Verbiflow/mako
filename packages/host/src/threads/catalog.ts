@@ -17,6 +17,7 @@ import { makoRecords } from "@mako/sessions/record-streams"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import type { InstalledReading, SessionWriters } from "@mako/sessions/record-writers"
 import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "@mako/sessions/record-sync"
+import type { CopyScope } from "@mako/sessions/reading-copies"
 import { isReplyEntry } from "@mako/sessions/entries"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { existsSync } from "node:fs"
@@ -283,6 +284,12 @@ export interface ThreadCatalog {
    * as it lands (`SessionCatalog.syncRecords`); null stops. Kept across a restart of the catalog's reader.
    */
   syncRecords(link: RecordsLink | null): Promise<void>
+  /**
+   * On a device: its reading copies of the Sessions its account lists, kept in step in its records in the account
+   * (`SessionCatalog.syncCopies`, `scopeCopies`), the most wanted first. Kept across a restart of the catalog's reader.
+   */
+  syncCopies(link: RecordsLink | null): Promise<void>
+  scopeCopies(scope: CopyScope): Promise<void>
   /** Sends the sessions at `paths` to a remote store now and through to their newest, as a move hands them on (`SessionCatalog.sendRecords`). */
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   /** Takes sessions from a remote store into their harnesses' own stores here, as a move's destination does (`SessionCatalog.receiveRecords`). */
@@ -473,9 +480,11 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let catalogLifetime: AbortController | null = null
   /** Where records are kept in step, given again to whichever reader serves next. */
   let recordsLink: RecordsLink | null = null
+  let copiesLink: RecordsLink | null = null
+  let copyScope: CopyScope | null = null
 
   async function awaitCatalogReady(): Promise<{
-    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept" | "syncRecords" | "sendRecords" | "receiveRecords" | "stageRecords">
+    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept" | "syncRecords" | "syncCopies" | "scopeCopies" | "sendRecords" | "receiveRecords" | "stageRecords">
     signal: AbortSignal
   }> {
     const signal = catalogLifetime?.signal
@@ -779,6 +788,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     daemon = client
     daemonKind = kind
     refreshFollowForReader(client)
+    if (copyScope) void client.scopeCopies(copyScope).catch((error: Error) => hostWarn("threads", "copies' scope not given to the catalog", { error: error.message }))
+    if (copiesLink) void client.syncCopies(copiesLink).catch((error: Error) => hostWarn("threads", "copies' link not given to the catalog", { error: error.message }))
     if (recordsLink) void client.syncRecords(recordsLink).catch((error: Error) => hostWarn("threads", "records link not given to the catalog", { error: error.message }))
     const started = performance.now()
     let hydrated = false
@@ -1067,6 +1078,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       catalog = source
       refreshFollowForReader(source)
       if (recordsLink) source.syncRecords(recordsLink)
+      if (copyScope) source.scopeCopies(copyScope)
+      if (copiesLink) source.syncCopies(copiesLink)
       source.onEvent((event) => {
         if (signal.aborted || catalog !== source) return
         if (event.type === "removed") {
@@ -1258,6 +1271,20 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
     await source.syncRecords(link)
+  }
+
+  async function syncCopies(link: RecordsLink | null): Promise<void> {
+    copiesLink = link
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    await source.syncCopies(link)
+  }
+
+  async function scopeCopies(scope: CopyScope): Promise<void> {
+    copyScope = scope
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    await source.scopeCopies(scope)
   }
 
   async function sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]> {
@@ -1565,6 +1592,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     hold: holdThread,
     restoreKept,
     syncRecords,
+    syncCopies,
+    scopeCopies,
     sendRecords,
     receiveRecords,
     stageRecords,

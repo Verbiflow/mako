@@ -124,6 +124,7 @@ function setup(name: string) {
     deviceId: async () => device,
     createThread: unused, askBases: unused, sendCheckpoint: unused, handOverMove: unused, refuseMove: unused, moveAnswer: unused,
     threadRecords: async (threadId) => ({ id: threadId, base: `https://gateway.test/v1/threads/${threadId}/records`, authorization: "Bearer token" }),
+    deviceRecords: async (deviceId) => ({ id: deviceId, base: `https://gateway.test/v1/devices/${deviceId}/records`, authorization: "Bearer token" }),
     readCheckpoint: async (_threadId, sha256, file) => copyFileSync(cloud.checkpoints.get(sha256) ?? "/missing", file),
     beginReturn: async (_threadId, move) => cloud.step(move, (record) => record ?? { phase: "returning", move, at: clock++ }),
     releaseReturn: async (_threadId, move, departure) => cloud.step(move, (record) => record?.phase === "returning" ? { phase: "released", move, at: clock++, departure } : "past"),

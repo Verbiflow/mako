@@ -224,10 +224,16 @@ export class SessionPublisher {
   #watching: { link: RuntimeLink; conversations: ReadonlySet<string> } | undefined
   #dirty = true
   #reportedAt = Number.NEGATIVE_INFINITY
+  #listed: readonly ReportedSession[] | undefined
 
   constructor(options: { rows: () => readonly ReportedSession[] | undefined; now?: () => number }) {
     this.#rows = options.rows
     this.#now = options.now ?? Date.now
+  }
+
+  /** The Sessions the account lists of this host as last worked out, every link's version alike; undefined until then. */
+  listed(): readonly ReportedSession[] | undefined {
+    return this.#listed
   }
 
   /** Something a row may show changed: a batch, a move, a rename. */
@@ -244,6 +250,7 @@ export class SessionPublisher {
     if (now - this.#reportedAt < REPORT_MS || (!this.#dirty && now - this.#reportedAt < SWEEP_MS)) return
     const all = this.#rows()
     if (!all) return
+    this.#listed = all
     const rows = rowsForLink(all, current.served.version)
     this.#dirty = false
     this.#reportedAt = now

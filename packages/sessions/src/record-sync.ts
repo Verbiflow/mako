@@ -420,6 +420,18 @@ export async function withFreshLink<Value>(link: () => Promise<RecordsLink> | Re
   }
 }
 
+/**
+ * Which of the store's sessions go to a remote, most wanted first, and whether catching up on the rest waits: a device
+ * keeps the sessions its account lists in step (the ones at work first, then the newest), and waits while it runs on a
+ * low battery. A session in scope is pushed as each capture lands, waiting or not; one out of scope isn't pushed. No
+ * scope (a cloud machine's): every session the store holds, in the store's order.
+ */
+export const RecordScopeSchema = z.object({
+  sessions: z.array(z.object({ harness: z.string().min(1), nativeId: z.string().min(1) })).max(10_000),
+  paused: z.boolean(),
+})
+export type RecordScope = z.infer<typeof RecordScopeSchema>
+
 /** How pushing has gone: for the machine's state and its log. */
 export type PushStatus = {
   link: string | null
@@ -429,10 +441,19 @@ export type PushStatus = {
   failures: number
   /** Sessions waiting for a push, or with one in flight. */
   waiting: number
+  /** In scope and not yet caught up on this link, and whether catching up waits. */
+  behind?: number
+  paused?: boolean
   last?: { harness: string; nativeId: string; at: number; ms: number; versions: number; error?: string }
 }
 
-type PushEntry = { harness: string; nativeId: string; again: boolean; failures: number; flight?: Promise<void>; timer?: ReturnType<typeof setTimeout> }
+type PushEntry = { harness: string; nativeId: string; again: boolean; failures: number; flight?: Promise<void>; timer?: ReturnType<typeof setTimeout>; queued?: true }
+
+/**
+ * Pushes in flight at once on a link with a scope (a device's): the rest wait, and the most wanted of them goes next, so
+ * a Session at work isn't left sharing a slow connection with everything a first catch-up has.
+ */
+const SCOPED_FLIGHTS = 2
 
 /** The first wait after a failed push, doubling to the most. */
 const RETRY_MS = 2_000
@@ -450,6 +471,12 @@ export class RecordPushes {
   readonly #state = new Map<string, PushEntry>()
   readonly #status: PushStatus
   #stopped = false
+  /** Each session in scope by its rank, the most wanted first; null, every session. */
+  #scope: Map<string, number> | null = null
+  #paused = false
+  /** In scope and not yet caught up on this link, by key. */
+  readonly #behind = new Map<string, { harness: string; nativeId: string }>()
+  #draining: Promise<void> | undefined
 
   constructor(store: RecordStore, remote: RecordRemote, private readonly log: (level: "info" | "warn", message: string, fields: Record<string, string | number>) => void) {
     this.#sync = new RecordSync(store, remote)
@@ -457,10 +484,29 @@ export class RecordPushes {
     this.#status = { link: remote.id, pushes: 0, versions: 0, bytes: 0, failures: 0, waiting: 0 }
   }
 
+  /**
+   * Keeps only the sessions `scope` names in step, catching up on the ones this link hasn't caught up on yet, the most
+   * wanted first, one at a time, unless it waits. Said again as the list changes: a session new to it is caught up in
+   * its place, one gone from it is pushed no more.
+   */
+  scoped(scope: RecordScope): void {
+    if (this.#stopped) return
+    const before = this.#scope
+    this.#scope = new Map(scope.sessions.map((session, rank) => [`${session.harness}\n${session.nativeId}`, rank]))
+    this.#paused = scope.paused
+    for (const key of this.#behind.keys()) if (!this.#scope.has(key)) this.#behind.delete(key)
+    for (const session of scope.sessions) {
+      const key = `${session.harness}\n${session.nativeId}`
+      if (!before?.has(key)) this.#behind.set(key, session)
+    }
+    this.#drain()
+  }
+
   /** A capture of the session finished. */
   captured(harness: string, nativeId: string): void {
     if (this.#stopped) return
     const key = `${harness}\n${nativeId}`
+    if (this.#scope && !this.#scope.has(key)) return
     let entry = this.#state.get(key)
     if (!entry) this.#state.set(key, (entry = { harness, nativeId, again: false, failures: 0 }))
     if (entry.timer) clearTimeout(entry.timer)
@@ -469,7 +515,22 @@ export class RecordPushes {
       entry.again = true
       return
     }
+    if (this.#scope && [...this.#state.values()].filter((other) => other.flight).length >= SCOPED_FLIGHTS) {
+      entry.queued = true
+      return
+    }
+    delete entry.queued
     entry.flight = this.#run(entry)
+  }
+
+  /** The most wanted push waiting for a flight, started. */
+  #next(): void {
+    let next: PushEntry | undefined
+    const rank = (entry: PushEntry) => this.#scope?.get(`${entry.harness}\n${entry.nativeId}`) ?? Number.MAX_SAFE_INTEGER
+    for (const entry of this.#state.values()) if (entry.queued && (!next || rank(entry) < rank(next))) next = entry
+    if (!next || this.#stopped) return
+    delete next.queued
+    next.flight = this.#run(next)
   }
 
   /** Every session the store holds, pushed in turn: what was captured before this remote was given. */
@@ -483,16 +544,42 @@ export class RecordPushes {
   }
 
   status(): PushStatus {
-    return { ...this.#status, waiting: [...this.#state.values()].filter((entry) => entry.flight || entry.timer).length }
+    const status: PushStatus = { ...this.#status, waiting: [...this.#state.values()].filter((entry) => entry.flight || entry.timer || entry.queued).length }
+    if (this.#scope) {
+      status.behind = this.#behind.size
+      status.paused = this.#paused
+    }
+    return status
   }
 
-  /** Once every push in flight has settled. */
+  /** Once every push in flight has settled, and catching up has gone as far as it goes now. */
   async settled(): Promise<void> {
     for (;;) {
       const flights = [...this.#state.values()].flatMap((entry) => entry.flight ?? [])
+      if (this.#draining) flights.push(this.#draining)
       if (!flights.length) return
       await Promise.all(flights)
     }
+  }
+
+  /** Catches up on the sessions in scope this link is behind on, the most wanted first, one at a time, until it waits. */
+  #drain(): void {
+    if (this.#draining || this.#paused || this.#stopped || !this.#behind.size) return
+    this.#draining = (async () => {
+      while (!this.#paused && !this.#stopped && this.#behind.size) {
+        let next: [string, { harness: string; nativeId: string }] | undefined
+        for (const entry of this.#behind) if (!next || (this.#scope?.get(entry[0]) ?? 0) < (this.#scope?.get(next[0]) ?? 0)) next = entry
+        if (!next) break
+        const [key, session] = next
+        this.#behind.delete(key)
+        this.captured(session.harness, session.nativeId)
+        await this.#state.get(key)?.flight
+      }
+    })().finally(() => {
+      this.#draining = undefined
+      // A list said again while the last session went may have more for it.
+      if (!this.#paused && !this.#stopped && this.#behind.size) this.#drain()
+    })
   }
 
   stop(): void {
@@ -507,6 +594,7 @@ export class RecordPushes {
       await this.#once(entry)
     } while (entry.again && !this.#stopped)
     entry.flight = undefined
+    this.#next()
   }
 
   async #once(entry: PushEntry): Promise<void> {

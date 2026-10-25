@@ -64,6 +64,7 @@ import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
 import { RecordStore, type RestoreInput } from "./record-store.js"
 import type { RecordRoot } from "./harness-records.js"
+import { ReadingCopies, type CopyScope } from "./reading-copies.js"
 import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { GatewayHttpError } from "@mako/protocol/gateway-http"
@@ -381,6 +382,10 @@ export class SessionCatalog {
   private recordPushes: RecordPushes | null = null
   /** The remote the pushes go to, read at each request: a renewed credential is taken without starting over. */
   private recordLink: { current: RecordsLink } | null = null
+  /** This device's reading copies of the Sessions its account lists (`copies`), with a records store; null otherwise. */
+  private readingCopies: ReadingCopies | null = null
+  /** Where the record store is kept, which the reading copies keep theirs beside; null for a catalog that writes nothing. */
+  private readonly recordsFolder: string | null
   /** Where each session last read back from the record store was restored, which its entries' records name. */
   private readonly restoredFrom = new Map<string, string>()
   private recordReads: RecordReads | null = null
@@ -458,6 +463,7 @@ export class SessionCatalog {
     this.writer = options.writer
     this.attachments = options.attachmentReaders ? { readers: options.attachmentReaders, views: options.viewsPath, ...options.decodeAside && { aside: options.decodeAside.executable } } : null
     if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome, options.readBack, options.backfill ? options.log ?? null : undefined)
+    this.recordsFolder = options.recordsPath && !this.readOnly ? options.recordsPath : null
     const build = () => this.translator ??= translatorBuild()
     // Every view's unread records, the large ones on disk and the small ones held in memory alike (`unread-index.ts`).
     this.unread = openUnreadIndex(options.viewsPath && !this.readOnly ? join(options.viewsPath, UNREAD_INDEX_FILE) : null, options.writer)
@@ -1605,6 +1611,34 @@ export class SessionCatalog {
     void pushes.catchUp(store.sessions()).catch((error: Error) => log("warn", "catching up stopped", { error: error.message }))
   }
 
+  /**
+   * Where this device's reading copies go (its records in the account), and which Sessions it keeps copies of, the
+   * most wanted first (`ReadingCopies`): what another device reads while this one is off. Null stops them.
+   */
+  syncCopies(link: RecordsLink | null): void {
+    this.copies()?.link(link)
+  }
+
+  scopeCopies(scope: CopyScope): void {
+    this.copies()?.scope(scope)
+  }
+
+  /** How keeping the copies has gone; null when they aren't kept. */
+  copiesStatus(): ReturnType<ReadingCopies["status"]> {
+    return this.readingCopies?.status() ?? null
+  }
+
+  private copies(): ReadingCopies | null {
+    if (this.readingCopies || !this.recordsFolder || this.readOnly || this.stopped) return this.readingCopies
+    const log = (level: "info" | "warn", message: string, fields: Record<string, string | number>) => (level === "warn" ? console.warn : console.info)(`Reading copies: ${message}`, JSON.stringify(fields))
+    this.readingCopies = new ReadingCopies(join(this.recordsFolder, "copies"), {
+      view: (path) => this.served(path),
+      stamp: (path) => this.stampOf(path),
+      translator: () => (this.translator ??= translatorBuild()),
+    }, log)
+    return this.readingCopies
+  }
+
   /** How keeping the remote in step has gone; null without a link. */
   recordsStatus(): PushStatus | null {
     return this.recordPushes?.status() ?? null
@@ -1735,6 +1769,7 @@ export class SessionCatalog {
 
   async stop(): Promise<void> {
     this.recordPushes?.stop()
+    this.readingCopies?.stop()
     this.stopped = true
     this.watching = false
     this.aside?.stop()

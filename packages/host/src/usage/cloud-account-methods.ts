@@ -59,6 +59,8 @@ export interface CloudAccount {
   moveAnswer(threadId: string, move: string, waitMs?: number): Promise<MoveAnswer | undefined>
   /** Where a cloud Thread's session records are kept, as this Mac's device reaches them. */
   threadRecords(threadId: string): Promise<RecordsLink>
+  /** Where a device's session records are kept in the account (`CloudAccounts.deviceRecords`): this Mac's own, or another's to read. */
+  deviceRecords(deviceId: string): Promise<RecordsLink>
   /** A checkpoint kept beside a cloud Thread's records, read whole into `file`. */
   readCheckpoint(threadId: string, sha256: string, file: string): Promise<void>
   /** A cloud Thread's return to this Mac, step by step (`CloudAccounts.beginReturn` and the rest). */
@@ -247,6 +249,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),
     moveAnswer: (threadId, move, waitMs) => cloud.moveAnswer(threadId, move, waitMs),
     threadRecords: (threadId) => cloud.threadRecords(threadId),
+    deviceRecords: (deviceId) => cloud.deviceRecords(deviceId),
     readCheckpoint: (threadId, sha256, file) => cloud.readCheckpoint(threadId, sha256, file),
     beginReturn: (threadId, move) => cloud.beginReturn(threadId, move),
     releaseReturn: (threadId, move, departure) => cloud.releaseReturn(threadId, move, departure),

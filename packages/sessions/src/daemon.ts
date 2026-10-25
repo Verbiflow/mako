@@ -26,6 +26,7 @@
  */
 
 import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "./record-sync.js"
+import type { CopyScope } from "./reading-copies.js"
 import type { InstalledReading } from "./record-writers.js"
 import {
   createConnection,
@@ -419,6 +420,14 @@ function catalogService(
             catalog.syncRecords(frame.link)
             reply({ id: frame.id, ok: true, result: null })
             return
+          case "copies":
+            catalog.syncCopies(frame.link)
+            reply({ id: frame.id, ok: true, result: null })
+            return
+          case "copy-scope":
+            catalog.scopeCopies(frame.scope)
+            reply({ id: frame.id, ok: true, result: null })
+            return
           case "send-records":
             reply({ id: frame.id, ok: true, result: await catalog.sendRecords(frame.link, frame.paths) })
             return
@@ -597,6 +606,10 @@ export interface DaemonClient {
   retire(): Promise<void>
   /** Keeps a remote store in step with the catalog's (`SessionCatalog.syncRecords`); null stops. */
   syncRecords(link: RecordsLink | null): Promise<void>
+  /** Where this device's reading copies go (`SessionCatalog.syncCopies`); null stops them. */
+  syncCopies(link: RecordsLink | null): Promise<void>
+  /** Which Sessions it keeps copies of, most wanted first (`SessionCatalog.scopeCopies`). */
+  scopeCopies(scope: CopyScope): Promise<void>
   /** Sends sessions' records to a remote store now (`SessionCatalog.sendRecords`). */
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   /** Takes sessions' records from a remote store into their harnesses' stores here (`SessionCatalog.receiveRecords`). */
@@ -922,6 +935,8 @@ async function connectDaemonLink(
       unfollow: (path) => requestAck((id) => ({ id, op: "unfollow", path })),
       retire: () => requestAck((id) => ({ id, op: "retire" })),
       syncRecords: (link) => requestAck((id) => ({ id, op: "records", link })),
+      syncCopies: (link) => requestAck((id) => ({ id, op: "copies", link })),
+      scopeCopies: (scope) => requestAck((id) => ({ id, op: "copy-scope", scope })),
       sendRecords: requestSendRecords,
       receiveRecords: requestReceiveRecords,
       stageRecords: requestStageRecords,

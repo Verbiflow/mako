@@ -1,4 +1,5 @@
 import { ReceivedRecordsSchema, ReceivingSessionSchema, RecordsLinkSchema, SentRecordsSchema, StagedRecordsSchema, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords } from "./record-sync.js"
+import { CopyScopeSchema, type CopyScope } from "./reading-copies.js"
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
 import {
@@ -125,6 +126,10 @@ export type DaemonRequestFrame =
   | { id: number; op: "retire" }
   /** Where the store's records are kept in step (`SessionCatalog.syncRecords`); null stops. */
   | { id: number; op: "records"; link: RecordsLink | null }
+  /** Where this device's reading copies go (`SessionCatalog.syncCopies`); null stops them. */
+  | { id: number; op: "copies"; link: RecordsLink | null }
+  /** Which Sessions it keeps copies of, most wanted first (`SessionCatalog.scopeCopies`). */
+  | { id: number; op: "copy-scope"; scope: CopyScope }
   /** Sends sessions' records to a remote store now (`SessionCatalog.sendRecords`). */
   | { id: number; op: "send-records"; link: RecordsLink; paths: string[] }
   /** Takes sessions' records from a remote store into their harnesses' stores here (`SessionCatalog.receiveRecords`). */
@@ -350,6 +355,15 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       if (record.link === null) return { id, op, link: null }
       const link = RecordsLinkSchema.safeParse(record.link)
       return link.success ? { id, op, link: link.data } : null
+    }
+    case "copies": {
+      if (record.link === null) return { id, op, link: null }
+      const link = RecordsLinkSchema.safeParse(record.link)
+      return link.success ? { id, op, link: link.data } : null
+    }
+    case "copy-scope": {
+      const scope = CopyScopeSchema.safeParse(record.scope)
+      return scope.success ? { id, op, scope: scope.data } : null
     }
     case "send-records": {
       const parsed = z.object({ link: RecordsLinkSchema, paths: z.array(z.string().min(1)) }).safeParse(record)

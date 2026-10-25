@@ -544,6 +544,15 @@ export class CloudAccounts {
     return MoveHandOverStateSchema.parse(await response.json())
   }
 
+  /**
+   * Where a device's session records are kept in the account: this Mac's own, which it keeps in step with its listed
+   * Sessions, or another device's, which this Mac reads a Session's copy from while that device is off.
+   */
+  async deviceRecords(deviceId: string): Promise<RecordsLink> {
+    const base = new URL(`/v1/devices/${encodeURIComponent(deviceId)}/records`, this.#require()).toString()
+    return { id: base, base, authorization: `Bearer ${await this.#connectionToken()}` }
+  }
+
   /** Where a cloud Thread's session records are kept, as this Mac's device reaches them, for sending a move's. */
   async threadRecords(threadId: string): Promise<RecordsLink> {
     const base = new URL(`/v1/threads/${encodeURIComponent(threadId)}/records`, this.#require()).toString()
