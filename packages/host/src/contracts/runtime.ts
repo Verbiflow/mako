@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { Json } from "@mako/protocol"
 import type { RuntimeEvent, RuntimeEventRouting } from "./runtime-value.js"
-import { HOST_CLOSED_CODE, HOST_RESTARTING_CODE, RuntimeDisconnectedError } from "./host-connection.js"
+import { HOST_CLOSED_CODE, HOST_RESTARTING_CODE, OwnerUnavailableError, RuntimeDisconnectedError } from "./host-connection.js"
 import { FIXTURE_REFUSED_CODE, FixtureDeskRefusedError } from "./fixture-desk-policy.js"
 
 /**
@@ -168,7 +168,7 @@ export function runtimeReplyValue(reply: RuntimeReply): RuntimeValue {
 }
 
 export function runtimeFailureError(failure: RuntimeFailure): Error {
-  if (failure.code === "owner-unavailable") return new RuntimeDisconnectedError(failure.unconfirmed ?? true, failure.conversationId)
+  if (failure.code === "owner-unavailable") return new OwnerUnavailableError(failure.unconfirmed ?? true, failure.conversationId)
   if (failure.code === HOST_RESTARTING_CODE) return new RuntimeDisconnectedError(true)
   if (failure.code === HOST_CLOSED_CODE) return new RuntimeDisconnectedError(false)
   return new Error(failure.error)

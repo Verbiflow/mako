@@ -15,6 +15,6 @@ export const GROK_VERSIONS: HarnessVersions = {
   releases: { npm: "@xai-official/grok" },
   checked: {
     on: "2026-10-25",
-    how: "harness:decode-pairs against the scripted model with --native builds: 1.0.25, 1.0.30, 1.0.40 and 1.0.44 run all 23 scenarios with exactly 1.0.46's differences, while 1.0.24 and older (1.0.22-1.0.24, 1.0.20, 1.0.10, 1.0.0) store sessions whose prompts Mako's reader doesn't draw; 1.0.46 is the version every record names",
+    how: "harness:decode-pairs against the scripted model with --native builds: 1.0.25, 1.0.30, 1.0.40 and 1.0.44 run all 23 scenarios with exactly 1.0.46's differences, while 1.0.24 and older (1.0.22-1.0.24, 1.0.20, 1.0.10, 1.0.0) store sessions whose prompts Mako's reader doesn't draw; 1.0.46 was then the version every record named. On 2026-10-25 every record moved to 1.0.70: its pairs run all scenarios, recorded on macOS against the scripted model",
   },
 }

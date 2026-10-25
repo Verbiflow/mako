@@ -154,7 +154,7 @@ const GROK_TOOLS: ToolVocabulary = {
   viewImage: (path) => ({ name: "read_file", arguments: { target_file: path } }),
   todos: (items) => ({ name: "todo_write", arguments: { merge: false, todos: items } }),
   search: (pattern) => ({ name: "grep", arguments: { pattern } }),
-  codeMode: { absent: "Grok 1.0.46 defines no tool that runs code calling its other tools (native-tools/grok-1.0.46.json)" },
+  codeMode: { absent: "Grok 1.0.70 defines no tool that runs code calling its other tools (native-tools/grok-1.0.70.json)" },
   ask: (question) => ({ name: "ask_user_question", arguments: { questions: [{ question: question.question, options: question.options }] } }),
   plan: (plan) => [
     { call: (_tools, _project, heard) => ({ name: "write", arguments: { file_path: planFile("Grok", heard), content: plan } }) },

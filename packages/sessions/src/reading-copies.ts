@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import { closeSync, createReadStream, openSync, writeSync } from "node:fs"
-import { mkdir, rename, stat } from "node:fs/promises"
+import { mkdir, readFile, rename, rm, stat } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { z } from "zod"
@@ -8,7 +8,8 @@ import { recordsOverHttp } from "@mako/protocol/records-http"
 import type { ThreadRef } from "./format.js"
 import { NativeStores } from "./read-only-sqlite.js"
 import { RecordStore } from "./record-store.js"
-import { RecordPushes, type PushStatus, type RecordRemote, type RecordsLink } from "./record-sync.js"
+import { RecordPushes, RecordSync, type PushStatus, type RecordRemote, type RecordsLink } from "./record-sync.js"
+import { EntrySchema, type Entry } from "./entries.js"
 import type { SessionView } from "./view-cache.js"
 
 /**
@@ -64,9 +65,19 @@ const REST_EVERY_MS = 60_000
 /** How often copies are looked at; a look that finds nothing changed reads a stamp a Session. */
 const LOOK_EVERY_MS = 5_000
 
-/** Where a Session's copy is written, under the copies' folder. */
+/**
+ * Where a Session's copy is written, under the copies' folder. Not `.jsonl`: the record store takes a `.jsonl` file
+ * that grew as an append, checking only its old end (a harness's transcript is only ever appended to), while a copy's
+ * header changes with every write and an entry can change in place, so each copy is taken whole, and content-defined
+ * chunks still carry only what changed.
+ */
 export function copyFile(folder: string, harness: string, nativeId: string): string {
-  return join(folder, "files", harness, `${createHash("sha1").update(nativeId).digest("hex")}.jsonl`)
+  return join(folder, "files", copyName(harness, nativeId))
+}
+
+/** A copy's file within its root, the same where it's written and where another device restores it. */
+function copyName(harness: string, nativeId: string): string {
+  return join(harness, `${createHash("sha1").update(nativeId).digest("hex")}.copy`)
 }
 
 /** A copy's first line, read without reading the rest; null when there's none or it isn't one. */
@@ -260,4 +271,133 @@ export class ReadingCopies {
     this.#written += 1
     this.#pushes?.captured(session.harness, session.nativeId)
   }
+}
+
+/** A copy as read here: its header, and its entries in order. */
+export type ReadCopy = { header: CopyHeader; entries: Entry[] }
+/** A run of a copy's entries ending before `before` (the newest when it isn't given), with the copy's header. */
+export const CopyPageSchema = z.object({
+  header: CopyHeaderSchema,
+  entries: z.array(EntrySchema),
+  start: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+})
+export type CopyPage = z.infer<typeof CopyPageSchema>
+
+/** A copy read again at most this often: a reader paging back through one asks every page. */
+const PULL_EVERY_MS = 10_000
+/** Copies held parsed: the ones the windows read now. */
+const HELD_COPIES = 3
+
+type HeldCopy = { copy: ReadCopy; through: number; pulledAt: number; used: number }
+
+/**
+ * Copies other devices keep (`ReadingCopies`), read here: pulled into a record store of their own (only the versions
+ * past the last pull, and only the chunks this store lacks), the newest version restored into a home made for the
+ * read and parsed, entry by entry against `EntrySchema`. The last few read are held, and pulled again at most every 10
+ * seconds, so paging back through one reads it once.
+ */
+export class ReceivedCopies {
+  readonly #folder: string
+  readonly #remote: (link: { current: RecordsLink }) => RecordRemote
+  readonly #now: () => number
+  #store: RecordStore | null = null
+  /** Each device's records as pulled from: the link renewed in place, and the remote's own ID, which names its cursors. */
+  readonly #links = new Map<string, { holder: { current: RecordsLink }; sync: RecordSync; remote: string }>()
+  readonly #held = new Map<string, HeldCopy>()
+  readonly #reading = new Map<string, Promise<HeldCopy | null>>()
+
+  constructor(folder: string, options: { now?: () => number; remote?: (link: { current: RecordsLink }) => RecordRemote } = {}) {
+    this.#folder = folder
+    this.#now = options.now ?? Date.now
+    this.#remote = options.remote ?? ((link) => recordsOverHttp({ id: link.current.id, base: link.current.base, authorization: () => link.current.authorization }))
+  }
+
+  /** The copy of a Session another device keeps at `link`, as of now; null when it keeps none. */
+  async read(link: RecordsLink, harness: string, nativeId: string): Promise<ReadCopy | null> {
+    return (await this.#copy(link, harness, nativeId))?.copy ?? null
+  }
+
+  /** A page of it, newest first (`ThreadPage`'s paging): entries ending before `before`. */
+  async page(link: RecordsLink, harness: string, nativeId: string, before: number | undefined, limit: number): Promise<CopyPage | null> {
+    const held = await this.#copy(link, harness, nativeId)
+    if (!held) return null
+    const { header, entries } = held.copy
+    const end = Math.min(before ?? entries.length, entries.length)
+    const start = Math.max(0, end - limit)
+    return { header, entries: entries.slice(start, end), start, total: entries.length }
+  }
+
+  /** One of its entries, by ID. */
+  async entry(link: RecordsLink, harness: string, nativeId: string, id: string): Promise<Entry | null> {
+    return (await this.#copy(link, harness, nativeId))?.copy.entries.find((entry) => entry.id === id) ?? null
+  }
+
+  close(): void {
+    this.#store?.close()
+    this.#store = null
+  }
+
+  #copy(link: RecordsLink, harness: string, nativeId: string): Promise<HeldCopy | null> {
+    const key = `${link.id}\n${harness}\n${nativeId}`
+    const held = this.#held.get(key)
+    if (held && this.#now() - held.pulledAt < PULL_EVERY_MS) {
+      held.used = this.#now()
+      return Promise.resolve(held)
+    }
+    let reading = this.#reading.get(key)
+    if (!reading) {
+      reading = this.#pull(key, link, harness, nativeId).finally(() => this.#reading.delete(key))
+      this.#reading.set(key, reading)
+    }
+    return reading
+  }
+
+  async #pull(key: string, link: RecordsLink, harness: string, nativeId: string): Promise<HeldCopy | null> {
+    const store = (this.#store ??= new RecordStore(join(this.#folder, "store"), new NativeStores(true, join(this.#folder, "restored"))))
+    let remote = this.#links.get(link.id)
+    if (remote) remote.holder.current = link
+    else {
+      const holder = { current: link }
+      const records = this.#remote(holder)
+      remote = { holder, sync: new RecordSync(store, records), remote: records.id }
+      this.#links.set(link.id, remote)
+    }
+    await remote.sync.pull(harness, nativeId)
+    const through = store.pulledThrough(remote.remote, harness, nativeId)
+    const held = this.#held.get(key)
+    if (held && held.through === through) {
+      held.pulledAt = held.used = this.#now()
+      return held
+    }
+    if (!store.units(harness, nativeId).length) return null
+    // A home of its own for each read, gone once it's parsed: nothing here is read again from it.
+    const home = join(this.#folder, "homes", createHash("sha1").update(key).digest("hex"), String(through))
+    try {
+      await store.restore({ harness, nativeId, home, roots: [{ name: "copy", path: home }] })
+      const text = await readFile(join(home, copyName(harness, nativeId)), "utf8")
+      const copy = parseCopy(text)
+      const fresh: HeldCopy = { copy, through, pulledAt: this.#now(), used: this.#now() }
+      this.#held.set(key, fresh)
+      for (const [other, value] of [...this.#held].sort((left, right) => right[1].used - left[1].used).slice(HELD_COPIES)) {
+        if (value !== fresh) this.#held.delete(other)
+      }
+      return fresh
+    } finally {
+      await rm(home, { recursive: true, force: true })
+    }
+  }
+}
+
+/** A copy's text, read: its header line, then an entry a line, each checked; a line that isn't one fails the read. */
+export function parseCopy(text: string): ReadCopy {
+  const lines = text.split("\n")
+  const header = CopyHeaderSchema.parse(JSON.parse(lines[0] ?? ""))
+  const entries: Entry[] = []
+  for (let index = 1; index < lines.length; index++) {
+    const line = lines[index]
+    if (!line) continue
+    entries.push(EntrySchema.parse(JSON.parse(line)))
+  }
+  return { header, entries }
 }

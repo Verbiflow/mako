@@ -8,6 +8,7 @@ import type { Decoded } from "@mako/host/contracts/native-decoding"
 import type { DecoderEffect, ProviderDecoderSource, RecordedDecoder } from "@mako/host/harnesses/decoder-source"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { compareVersions } from "@mako/host/contracts/runtime-version"
 import { NativeEventSourceSchema, TurnCauseSchema } from "@mako/sessions/events"
 
 const nativeStores = new NativeStores(false)
@@ -26,6 +27,23 @@ const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
  * order, so a review reads the message beside its meaning.
  */
 export const FIXTURE_ROOT = join(import.meta.dirname, "fixtures", "native-decoding")
+
+const PairVersion = z.object({ native: z.object({ version: z.string() }) })
+
+/**
+ * The versions a harness's current decode pairs were recorded with, each once, oldest first. A pair replays its capture
+ * through the decoder beside the store the same session wrote, and the daily bump records them again; one kept from
+ * another build is `<scenario>@<version>`, and isn't current.
+ */
+export async function currentPairVersions(harness: string, root = FIXTURE_ROOT): Promise<string[]> {
+  const folder = join(root, harness, "pairs")
+  const versions = new Set<string>()
+  for (const name of (await readdir(folder).catch(() => [])).filter((entry) => !entry.includes("@"))) {
+    const text = await readFile(join(folder, name, "pair.json"), "utf8").catch(() => null)
+    if (text !== null) versions.add(PairVersion.parse(JSON.parse(text)).native.version)
+  }
+  return [...versions].sort(compareVersions)
+}
 
 /** A key set to `undefined` (a state patch clearing it) has no JSON form; fixtures spell it out. */
 export const UNSET = "(undefined)"

@@ -14,9 +14,9 @@ import { cutOffTurn, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 export const GROK_VOCABULARY = defineVocabulary({
   harness: "grok",
   checked: {
-    version: "1.0.46",
-    on: "2026-10-06",
-    against: "the model request of grok agent stdio 1.0.46 in every Mako mode (scripts/fixtures/native-tools), and ~/.grok/sessions updates.jsonl through audit:tools",
+    version: "1.0.70",
+    on: "2026-10-25",
+    against: "the model request of grok agent stdio 1.0.70 in every Mako mode (scripts/fixtures/native-tools; unchanged since 1.0.46), and ~/.grok/sessions updates.jsonl through audit:tools as of 2026-10-06",
   },
   mcp: ["s__t"],
   tools: {
@@ -52,9 +52,9 @@ export const GROK_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "1.0.46",
-      on: "2026-10-06",
-      against: "the user guide grok 1.0.46 ships in ~/.grok/docs, grok --help, an initialize-only ACP call, and the binary through harness:self-report",
+      version: "1.0.70",
+      on: "2026-10-25",
+      against: "the binary through harness:self-report (every declared name, and every skill and MCP place listed), and the user guide grok 1.0.46 ships in ~/.grok/docs, grok --help and an initialize-only ACP call as read on 2026-10-06",
     },
     instructions: {
       files: ["Agents.md", "Claude.md", "CLAUDE.md", "CLAUDE.local.md", "AGENT.md", "AGENTS.md", ".claude/CLAUDE.md", ".claude/CLAUDE.local.md"],
@@ -176,6 +176,14 @@ export function grokProposedPlan(id: string, text: string): LiveUpdate[] {
  *   While you were idle, 1 background subagent completed:
  *   - [general-purpose] "<description>" — completed successfully (32.9s, 2 tool calls)
  *   …
+ *
+ * and so does a watch the agent left running that ends after the turn it
+ * reported in (grok 1.0.70):
+ *
+ *   <system-reminder>
+ *   Monitor "<task>" ended: [monitor ended: exited (code 0)].
+ *   Description: <description> | Duration: 2.0s
+ *   Use get_command_or_subagent_output("<task>") for full output.
  */
 export function backgroundReminderLabel(text: string): string | undefined {
   return backgroundReminderTurn(text)?.reason
@@ -192,8 +200,10 @@ export const GrokTaskSnapshot = z.object({
   task_id: z.string().nullish(),
   description: z.string().nullish(),
   command: z.string().nullish(),
-  /** `bash`, or `monitor` for a watch the agent left running. */
+  /** `bash`, or `monitor` for a watch the agent left running (grok 1.0.41 to 1.0.46). */
   kind: z.string().nullish(),
+  /** What Grok shows for the task; a watch's begins `[monitor] ` (grok 1.0.70, whose snapshot names no kind). */
+  display_command: z.string().nullish(),
   exit_code: z.number().nullish(),
   signal: z.string().nullish(),
   explicitly_killed: z.boolean().nullish(),
@@ -216,8 +226,9 @@ function snapshotDuration(task: GrokTaskSnapshot): number | undefined {
 
 /** A settled task as the cause of the turn Grok runs on it: what ran, how it ended, how long it took, and the end of its output. */
 export function grokTaskTurn(task: GrokTaskSnapshot): ProviderTurnCause {
+  const watch = task.kind === "monitor" || task.display_command?.startsWith("[monitor] ") === true
   const outcome = {
-    description: task.description ?? undefined,
+    description: task.description ?? (watch ? task.display_command?.slice("[monitor] ".length) : undefined) ?? undefined,
     command: task.command ?? undefined,
     exitCode: task.exit_code,
     signal: task.signal,
@@ -226,8 +237,11 @@ export function grokTaskTurn(task: GrokTaskSnapshot): ProviderTurnCause {
     output: task.output ?? undefined,
   }
   const turn = backgroundCommandTurn(outcome)
-  if (task.kind !== "monitor") return turn
-  // A monitor's task ends when its watch does; what it printed last is the news.
+  return watch ? watchEnded(turn) : turn
+}
+
+/** A monitor's task ends when its watch does; what it printed last is the news. */
+function watchEnded(turn: ProviderTurnCause): ProviderTurnCause {
   const name = turn.cause?.kind === "command" ? turn.cause.name : undefined
   return { ...turn, cause: { kind: "monitor", outcome: "ended", ...name && { name } } }
 }
@@ -248,6 +262,18 @@ export function backgroundReminderTurn(text: string, snapshots?: ReadonlyMap<str
   if (!body) return undefined
   const subagents = /^While you were idle, (\d+) background subagents? \w+:/.exec(body)
   if (subagents) return subagentReminderTurn(body, Number(subagents[1]))
+  const watch = /^Monitor "([^"]*)" ended: \[monitor ended: ([^\]]*)\]/.exec(body)
+  if (watch) {
+    const snapshot = watch[1] ? snapshots?.get(watch[1]) : undefined
+    if (snapshot) return grokTaskTurn({ ...snapshot, kind: "monitor" })
+    const exitCode = /code (-?\d+)/.exec(watch[2] ?? "")?.[1]
+    return watchEnded(backgroundCommandTurn({
+      description: /^Description:\s*(.*?)(?:\s*\|\s*Duration:.*)?$/m.exec(body)?.[1],
+      exitCode: exitCode === undefined ? undefined : Number(exitCode),
+      stopped: /kill|stop|cancel/i.test(watch[2] ?? ""),
+      durationMs: reminderSeconds(/\|\s*Duration:\s*([\d.]+)s/.exec(body)?.[1]),
+    }))
+  }
   const task = /^Background task "([^"]*)" ([^\n(.]+)/.exec(body)
   const status = task?.[2]?.trim()
   if (!status) return undefined
@@ -364,9 +390,9 @@ const GrokDisplayText = z.looseObject({ displayText: z.string() })
  *
  * - `marker`: a transcript fact, drawn by `grokUpdateMarker`.
  * - `activity`: what Grok is doing or the session's title, shown live only.
- * - `observed`: read by other observers: background tasks, the goal, the
- *   turns Grok starts itself, and subagents, which Mako follows through their
- *   `meta.json`. A `turn_completed` also says why Grok ended the turn
+ * - `observed`: read by other observers: background tasks (a watch's start
+ *   names the call its output goes to), the goal, the turns Grok starts
+ *   itself, and subagents, which Mako follows through their `meta.json`. A `turn_completed` also says why Grok ended the turn
  *   itself, which is drawn.
  * - `ignored`: Grok's own bookkeeping and streaming detail, already shown
  *   through ACP's updates or not about the conversation.
@@ -390,7 +416,7 @@ export const GROK_UPDATES = {
   turn_completed: "observed",
   subagent_spawned: "observed",
   subagent_finished: "observed",
-  task_backgrounded: "ignored",
+  task_backgrounded: "observed",
   compaction_checkpoint: "ignored",
   session_recap: "ignored",
   session_recap_unavailable: "ignored",

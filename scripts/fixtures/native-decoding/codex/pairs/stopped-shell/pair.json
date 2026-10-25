@@ -3,11 +3,11 @@
   "native": {
     "version": "0.159.3"
   },
-  "about": "Run `sleep 30` in the shell. A long shell command the person stops while it runs.",
+  "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/12/rollout-2026-10-12T22-58-55-01a133d7-af31-79e3-a167-681dfe719ebf.jsonl",
+      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T03-14-47-01a1728e-4057-7783-9eb6-963f33a49b0a.jsonl",
       "known": []
     }
   ]

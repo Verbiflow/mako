@@ -119,6 +119,13 @@ export type Control = "steer" | "rewind" | "compact" | "resume" | "still-running
 export interface Scenario {
   name: string
   about: string
+  /**
+   * The model's answer, once, if the harness runs a turn of its own after the
+   * last step on a report that came in once that turn had ended (Grok 1.0.70
+   * wakes on its watch's end); a harness that takes the report into the turn
+   * asks for none.
+   */
+  woken?: Step
   files: Record<string, string>
   /** Image files, written beside `files`. */
   images?: Record<string, Buffer>
@@ -462,7 +469,8 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     name: "monitor-event",
-    about: "A watch the agent left running reports while a shell command runs in the same turn, then ends; the harness takes both reports in before its next step.",
+    about: "A watch the agent left running reports while a shell command runs in the same turn, then ends; the harness takes the reports in before its next step, or wakes on the end once the turn is over.",
+    woken: { text: "The watch has ended; it saw both ticks." },
     files: {},
     needs: ["monitor"],
     scripted: "the watch has to report while a command runs, on cue",
@@ -549,11 +557,13 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "stopped-shell",
     about: "A long shell command the person stops while it runs.",
-    files: {},
+    files: { "notes.md": NOTES },
     turns: [{
-      prompt: "Run `sleep 30` in the shell.",
+      // A command that runs until it's stopped, not a wait: Claude Code 2.1.310 refuses any command that begins with a
+      // `sleep` of 30 seconds ("use Monitor"), so with `sleep 30` nothing ran to be stopped.
+      prompt: "Run `tail -f notes.md` in the shell.",
       stop: true,
-      steps: [{ text: "Waiting on the shell.", call: (tools) => tools.shell("sleep 30", "Wait thirty seconds") }],
+      steps: [{ text: "Following notes.md.", call: (tools) => tools.shell("tail -f notes.md", "Follow notes.md") }],
     }],
   },
   {
@@ -698,6 +708,7 @@ export function script(scenario: Scenario, tools: ToolVocabulary, project: strin
     return tools.plan(step.plan).map((planned) => ({ step: planned, turn }))
   })
   let next = 0
+  let woken = scenario.woken
   const unheard: string[] = []
   const retried = (heard: string) => {
     const failed = steps[next - 1]
@@ -708,7 +719,8 @@ export function script(scenario: Scenario, tools: ToolVocabulary, project: strin
   return {
     unheard,
     reply: (heard) => {
-      const step = retried(heard) ? steps[next - 1]!.step : steps[next++]?.step
+      let step = retried(heard) ? steps[next - 1]!.step : steps[next++]?.step
+      if (!step && woken) [step, woken] = [woken, undefined]
       if (!step) return undefined
       if (step.hears && !heard.includes(step.hears)) unheard.push(`step ${next} never heard "${step.hears}"`)
       const call = step.call?.(tools, project, heard)

@@ -7,6 +7,7 @@ import { pipeline } from "node:stream/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
 import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thread-listing"
+import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
 import type { SessionPublishing } from "./machine-runtime.js"
 import { MOVE_ANSWER_WAIT_MS, MOVE_REASON_MAX, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
@@ -106,6 +107,8 @@ const EnrollmentSchema = z.object({
 /** `credential`: a successor to this Mac's credential, once it's due to rotate; the old one works until it's used. */
 const RefreshSchema = EnrollmentSchema.omit({ credential: true }).extend({ credential: z.string().regex(/^mako_dc_[\w-]{43}$/).optional() })
 const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z.string() })
+/** What the account says of a Session's waiting messages after a change to one. */
+const WaitingAnswerSchema = z.object({ messages: z.array(WaitingMessageSchema) })
 const BrowserSessionsSchema = z.object({ sessions: z.array(CloudBrowserSessionSchema) })
 const EndedSchema = z.object({ ended: z.number().int().nonnegative() })
 /** What the cloud answers a Thread made or made again with; only whether its machine is ready is read. */
@@ -383,6 +386,29 @@ export class CloudAccounts {
    */
   async sessionListings(): Promise<SessionListings> {
     return SessionListingsSchema.parse(await (await this.#call("sessions.list", "GET", "/v1/sessions")).json())
+  }
+
+  /** A message for a Session whose owner is off, kept by the account until its owner takes it (`waiting.ts`). */
+  async waitMessage(session: string, id: string, input: WaitingInput): Promise<WaitingMessage[]> {
+    const answer = await this.#call("messages.wait", "PUT", `/v1/sessions/${encodeURIComponent(session)}/waiting/${encodeURIComponent(id)}`, WaitingInputSchema.parse(input))
+    return WaitingAnswerSchema.parse(await answer.json()).messages
+  }
+
+  /** A waiting message's words, changed while they're still `expectedText`. */
+  async editWaiting(session: string, id: string, expectedText: string, text: string): Promise<WaitingMessage[]> {
+    const answer = await this.#call("messages.edit", "POST", `/v1/sessions/${encodeURIComponent(session)}/waiting/${encodeURIComponent(id)}/edit`, { expectedText, text })
+    return WaitingAnswerSchema.parse(await answer.json()).messages
+  }
+
+  /** A waiting message taken back. */
+  async unwaitMessage(session: string, id: string): Promise<WaitingMessage[]> {
+    const answer = await this.#call("messages.unwait", "DELETE", `/v1/sessions/${encodeURIComponent(session)}/waiting/${encodeURIComponent(id)}`)
+    return WaitingAnswerSchema.parse(await answer.json()).messages
+  }
+
+  /** Its owner took it, as a request of the Session under the same ID. */
+  async tookWaiting(session: string, id: string): Promise<void> {
+    await this.#call("messages.taken", "POST", `/v1/sessions/${encodeURIComponent(session)}/waiting/${encodeURIComponent(id)}/taken`, {})
   }
 
   /** Tells the account's list what changed of this Mac's Sessions, on the runtime link it serves now (none while signed out). */

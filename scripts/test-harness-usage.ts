@@ -104,7 +104,7 @@ type Reader = "live" | "saved" | "scanned"
  * A scenario whose readers cannot agree, with the reader that stands apart and
  * why. `stored` stands for the saved reader and the scanner together: the
  * store itself lacks what the live wire said. A pair recorded on another
- * build (`compaction@2.1.278`) is its scenario's.
+ * build (`compaction@2.1.278`) is its scenario's, unless listed under its own name.
  */
 interface Apart { apart: Reader | "stored"; because: string }
 const APART = new Map<string, Apart>([
@@ -116,7 +116,7 @@ const APART = new Map<string, Apart>([
   ["devin/resumed", { apart: "scanned", because: "the resumed session compacts first, and Devin reports no usage for the `compactor` call that wrote the summary; only the store holds what it spent" }],
   ["devin/rewound-turn", { apart: "saved", because: "a rewound turn leaves the conversation, but what it spent stays spent" }],
   ["grok/rewound-turn", { apart: "saved", because: "a rewound turn leaves the conversation, but what it spent stays spent" }],
-  ["grok/stopped-shell", { apart: "stored", because: "Grok saves no spend for a turn it was stopped in, though it reports it live" }],
+  ["grok/stopped-shell@1.0.44", { apart: "stored", because: "Grok 1.0.44 and 1.0.46 saved no spend for a turn they were stopped in, though they reported it live; 1.0.70 saves it" }],
   ["opencode/rewound-turn", { apart: "stored", because: "OpenCode deletes a reverted turn's messages, and their spend with them" }],
 ])
 
@@ -161,7 +161,7 @@ for (const harness of HARNESSES) {
     const name = `${harness}/${scenario}`
     const read = await readers(harness, join(PAIRS, harness, "pairs", scenario))
     pairs += 1
-    const known = APART.get(`${harness}/${scenario.split("@")[0]}`)
+    const known = APART.get(name) ?? APART.get(`${harness}/${scenario.split("@")[0]}`)
     const together: Reader[] = known?.apart === "stored" ? ["saved", "scanned"] : (["live", "saved", "scanned"] as const).filter((reader) => reader !== known?.apart)
     const disagree = together.some((reader) => !same(read[reader], read[together[0]!]))
     const apart = known && (known.apart === "stored" ? !same(read.live, read.saved) : !same(read[known.apart], read[together[0]!]))
