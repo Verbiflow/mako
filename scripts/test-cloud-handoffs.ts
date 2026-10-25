@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -55,9 +56,16 @@ try {
       conversation(randomUUID(), randomUUID(), { status: "running", state: "elsewhere" }),
     ]
     const inCloud = conversation(randomUUID(), randomUUID(), { status: "running" })
-    const byId = new Map([...all, inCloud].map((each) => [each.summary.session.id, each]))
+    // Only on disk: at rest, and never read back in to find out.
+    const unloaded = conversation(randomUUID(), randomUUID(), { status: "running" })
+    const byId = new Map([...all, inCloud, unloaded].map((each) => [each.summary.session.id, each]))
+    const read: string[] = []
     const working = workingThreads({
-      live: { summaries: () => [...byId.values()].map((each) => each.summary), snapshot: (id) => byId.get(id)?.snapshot ?? null },
+      live: {
+        summaries: () => [...byId.values()].map((each) => each.summary),
+        loaded: (id) => id !== unloaded.summary.session.id,
+        snapshot: (id) => (read.push(id), byId.get(id)?.snapshot ?? null),
+      },
       threads: {
         journalPlacement: (id) => byId.get(id)?.placement,
         execution: (session: SessionId) => {
@@ -69,6 +77,7 @@ try {
     })
     assert.deepEqual(working.map((each) => each.thread).sort(), [threadA, threadB].sort(), "Threads at work, each once")
     assert.equal(working.find((each) => each.thread === threadA)?.conversationId, all[1]?.summary.session.id, "the running conversation is the one asked from")
+    assert.ok(!read.includes(unloaded.summary.session.id), "a conversation only on disk isn't read back in")
   }
 
   // A handoff: one move per Thread, named by the handoff and the Thread (asked again, the same moves); a Thread that
