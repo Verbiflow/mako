@@ -871,3 +871,24 @@ console.log("PASS: Codex approval missing request, validation refusal and unconf
   rmSync(dir, { recursive: true, force: true })
   console.log("PASS: Codex's rollout records draw the turn, its streamed text and output give way to them, and refused commands draw with no item")
 }
+
+// The conversation's meter counts what the agents its thread spawned spend, and theirs, as each reports it; another thread on the connection is not its.
+{
+  const decoder = new CodexDecoder({ threadId: "thread-1", state: structuredClone(state) })
+  const spentTokens = (decoded: ReturnType<CodexDecoder["decode"]>) =>
+    decoded.flatMap((item) => (item.kind === "state" && item.patch.usage?.tokens ? [item.patch.usage.tokens.input] : [])).at(-1)
+  const tokens = (input: number) => ({ totalTokens: input + 10, inputTokens: input, cachedInputTokens: 0, outputTokens: 10, reasoningOutputTokens: 0 })
+  const report = (threadId: string, total: number, call: number) =>
+    decoder.decode({ method: "thread/tokenUsage/updated", params: { threadId, turnId: "t-" + threadId, tokenUsage: { total: tokens(total), last: tokens(call), modelContextWindow: 400_000 } } })
+  const spawned = (threadId: string, agent: string) =>
+    decoder.decode({ method: "item/started", params: { threadId, turnId: "t-" + threadId, item: { type: "subAgentActivity", id: "spawn-" + agent, kind: "started", agentThreadId: agent, agentPath: "/root/" + agent } } })
+  decoder.decode({ method: "turn/started", params: { threadId: "thread-1", turn: { id: "t-thread-1", items: [], status: "inProgress", error: null } } })
+  report("thread-1", 1000, 1000)
+  assert.equal(spentTokens(report("stranger", 500, 500)), undefined, "a thread this one never spawned spends nothing of its")
+  spawned("thread-1", "agent-a")
+  assert.equal(spentTokens(report("agent-a", 300, 300)), 1300, "an agent's first reading is its first call")
+  assert.equal(spentTokens(report("agent-a", 700, 400)), 1700, "each later one adds what its total grew by")
+  spawned("agent-a", "agent-b")
+  assert.equal(spentTokens(report("agent-b", 200, 200)), 1900, "an agent's own agent counts too")
+  console.log("PASS: Codex's live meter counts the agents its thread spawned, and theirs, and no other thread on the connection")
+}

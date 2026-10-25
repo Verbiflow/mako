@@ -3,8 +3,9 @@
 // the live meter, the saved-history reader, and the usage scanner behind the
 // 30-day summary. This holds the maps on real and damaged fields, then holds
 // the three readers to the same spend on every recorded pair: a capture
-// through the live decoder, its store through the history reader, the same
-// store through the scanner. A difference a harness's own store forces is
+// through the live decoder, its store through the history reader (with its
+// subagents' histories, where the session's own doesn't count them), the
+// same store through the scanner. A difference a harness's own store forces is
 // listed with its reason, and one that stops happening fails until removed.
 import assert from "node:assert/strict"
 import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
@@ -118,10 +119,6 @@ const APART = new Map<string, Apart>([
   ["grok/rewound-turn", { apart: "saved", because: "a rewound turn leaves the conversation, but what it spent stays spent" }],
   ["grok/stopped-shell@1.0.44", { apart: "stored", because: "Grok 1.0.44 and 1.0.46 saved no spend for a turn they were stopped in, though they reported it live; 1.0.70 saves it" }],
   ["opencode/rewound-turn", { apart: "stored", because: "OpenCode deletes a reverted turn's messages, and their spend with them" }],
-  // Reader gaps, not the stores': each subagent's spend is kept, in its own transcript, which these readers don't count into the parent's turn yet.
-  ["claude/subagent", { apart: "saved", because: "Claude Code keeps a subagent's calls in its own transcript (`subagents/agent-*.jsonl`), and the parent's Agent result names only the last one's usage; the saved reader reads the parent's alone" }],
-  ["opencode/subagent", { apart: "saved", because: "OpenCode keeps a subagent's steps in its own session, and the saved reader reads the root session's messages alone" }],
-  ["codex/subagent", { apart: "scanned", because: "Codex keeps a subagent's calls in its own rollout and reports them on its own thread; the live meter and the saved reader count the parent thread's alone, the scanner every rollout" }],
 ])
 
 function sum(entries: readonly Entry[]): Tokens {
@@ -150,12 +147,17 @@ async function readers(harness: string, folder: string): Promise<Record<Reader, 
     for (const item of decoded)
       if (item.kind === "state" && item.patch.usage?.tokens) live = item.patch.usage.tokens
   const home = join(folder, "home")
-  const thread = await storeReader(harness, home).read(join(home, ownStore(pair)))
+  const reader = storeReader(harness, home)
+  const thread = await reader.read(join(home, ownStore(pair)))
   if (!thread) throw new Error(`${folder}: the history reader found no session at ${ownStore(pair)}`)
+  // A conversation's history is its session's and its subagents', each in its own unless the session's counts them (`subagentSpendInParent`).
+  const children = reader.subagentSpendInParent ? [] : (await reader.children?.(join(home, ownStore(pair)))) ?? []
+  const histories = [thread.entries]
+  for (const child of children) if (child.path) histories.push((await reader.read(child.path))?.entries ?? [])
   const summary = await usageSummary(harnesses, join(folder, "no-sessions"), home, undefined, { now: NOW })
   if (summary.truncated) throw new Error(`${folder}: the scanner left records unread`)
   const { input, output, cacheRead, cacheWrite } = summary.total
-  return { live: { input: live.input, output: live.output, cacheRead: live.cacheRead, cacheWrite: live.cacheWrite }, saved: sum(thread.entries), scanned: { input, output, cacheRead, cacheWrite } }
+  return { live: { input: live.input, output: live.output, cacheRead: live.cacheRead, cacheWrite: live.cacheWrite }, saved: sum(histories.flat()), scanned: { input, output, cacheRead, cacheWrite } }
 }
 
 const failures: string[] = []

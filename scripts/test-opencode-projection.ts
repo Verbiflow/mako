@@ -522,8 +522,8 @@ process.stdin.on("end", () => process.exit(0))
     const opened = opener.type === "live-update" && opener.update.kind === "provider-turn" ? opener.update : undefined
     assert.ok(opened?.at !== undefined && opened.at <= Date.now(), "stamped with when the host saw the turn open")
     assert.deepEqual({ ...opened, at: 0 }, { kind: "provider-turn", reason: "Background command \"npm test\" completed (exit code 0)",
-      cause: { kind: "command", outcome: "finished", name: "npm test", exitCode: 0 }, body: "```output\nok\n```", at: 0 },
-      "a turn OpenCode starts on a finished command names that command, and opens onto what it printed")
+      cause: { kind: "command", outcome: "finished", name: "npm test", exitCode: 0 }, body: "```output\nok\n```", at: 0, source: { harness: "opencode", record: "msg_notice" } },
+      "a turn OpenCode starts on a finished command names that command, opens onto what it printed, and cites the notice its store keeps as the turn's first line")
     push(event("session.execution.succeeded", { sessionID: root }))
     await until("OpenCode's own turn to end", () => session()?.status === "ready" && session()?.lastStop === "end_turn")
 

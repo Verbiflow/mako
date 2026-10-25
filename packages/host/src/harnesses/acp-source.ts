@@ -375,6 +375,9 @@ export interface AcpVendorRequest {
   ask: AcpAsk
 }
 
+/** Output that begins a turn: a turn the agent announced opens at the first of it while the session is idle. A tool update can still belong to the turn before. */
+export const TURN_CONTENT: ReadonlySet<string> = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "plan"])
+
 /** Vendor notifications about turns the agent started itself. */
 /**
  * A turn the agent says it starts on its own, and why. `wakes`: the agent

@@ -287,6 +287,31 @@ export const TAKE_IN_WAIT_MS = 750
  * for once per notification queued (`waited` holds how many were), for at
  * most `TAKE_IN_WAIT_MS`, since its writer flushes on a timer.
  */
+/** How long a turn Claude opened on a notification waits for its prompt's line to be flushed. */
+export const TASK_PROMPT_WAIT_MS = 1_500
+
+/**
+ * The lines up to and including the prompt of a turn Claude opened on a
+ * notification, taken from `held` (lines read earlier), reading `more` as
+ * Claude Code flushes them until `deadline`. Nothing when no fresh prompt
+ * came; `held` keeps what it had then.
+ */
+export async function openedTurnLines(
+  held: TranscriptNotification[],
+  fresh: (item: TranscriptNotification) => boolean,
+  more: (() => TranscriptNotification[]) | undefined,
+  deadline: number,
+  closed: () => boolean
+): Promise<TranscriptNotification[] | undefined> {
+  for (;;) {
+    const index = held.findIndex(fresh)
+    if (index >= 0) return held.splice(0, index + 1)
+    if (!more || closed() || Date.now() >= deadline) return undefined
+    await delay(50)
+    held.push(...more())
+  }
+}
+
 export async function takenIn(tail: ClaudeTranscriptTail, waited: { queued: number }, closed: () => boolean): Promise<TranscriptNotification[]> {
   const found = tail.read()
   const queued = tail.enqueued()
