@@ -129,7 +129,7 @@ export type WorkingSnapshot = Pick<LiveSnapshot, "permissions" | "nativeAgents">
 
 /** What `workingThreads` reads of the live conversations and the Thread store. */
 export type WorkingSources = {
-  live: { summaries(): ReadonlyArray<{ session: Pick<LiveSummary["session"], "id"> }>; snapshot(id: string): WorkingSnapshot | null }
+  live: { summaries(): ReadonlyArray<{ session: Pick<LiveSummary["session"], "id"> }>; loaded(id: string): boolean; snapshot(id: string): WorkingSnapshot | null }
   threads: { journalPlacement(conversationId: string): ThreadPlacement | undefined; execution(session: SessionId): Pick<SessionExecution, "state"> | undefined } | undefined
   /** Whether a conversation runs on a cloud machine already (`CloudConversations.has`). */
   cloud(conversationId: string): boolean
@@ -145,7 +145,9 @@ export function workingThreads(sources: WorkingSources): WorkingThread[] {
   const byThread = new Map<string, WorkingThread & { running: boolean }>()
   for (const summary of sources.live.summaries()) {
     const id = summary.session.id
-    if (sources.cloud(id)) continue
+    // One only on disk is at rest (memory keeps whatever works), and its snapshot would read it back in: every
+    // conversation this host has, each round.
+    if (sources.cloud(id) || !sources.live.loaded(id)) continue
     const placed = threads.journalPlacement(id)
     if (!placed || threads.execution(placed.session)?.state !== "here") continue
     const snapshot = sources.live.snapshot(id)

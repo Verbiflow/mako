@@ -43,6 +43,7 @@ import {
   reclaimSnapshotOrphans,
   type SnapshotObjects,
 } from "./snapshot-git.js"
+import { copyGitIndex } from "./index-copy.js"
 const OperationSchema = z.object({
   plan: RewindPlanSchema,
   backupId: z.string().uuid(),
@@ -681,7 +682,7 @@ export class WorkspaceSnapshots {
       const captureGit = (args: string[], index?: string) =>
         this.snapshotGit(scope, args, index, undefined, objects)
       if (hasIndex) {
-        await copyFile(userIndex, index)
+        await copyGitIndex(userIndex, index)
         // Expand split indexes so retained snapshots do not depend on sharedindex GC.
         await captureGit(["update-index", "--no-split-index"], index)
       } else {
@@ -692,7 +693,7 @@ export class WorkspaceSnapshots {
       const stagedTree = hasIndex
         ? (await captureGit(["write-tree"], index)).trim()
         : undefined
-      if (hasIndex) await copyFile(index, workingIndex)
+      if (hasIndex) await copyGitIndex(index, workingIndex)
       const indexDigest = hasIndex
         ? createHash("sha256")
             .update(await readFile(index))

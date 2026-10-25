@@ -1,11 +1,12 @@
 import type { Git } from "@mako/git"
 import { createHash } from "node:crypto"
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises"
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve } from "node:path"
 import { z } from "zod"
 import { contentRef, diffLines, splitLines, type Attribution, type CheckoutShares, type ChangeClass, type Partition, type PartitionFile, type Share } from "../attribution/index.js"
 import type { MoveOutcome, MoveShare, MoveShares } from "../contracts/workspace-moves.js"
+import { copyGitIndex } from "./index-copy.js"
 
 /*
  * Moving a Thread's uncommitted changes from the main checkout into its new
@@ -255,7 +256,7 @@ async function backUp(git: Git, repoRoot: string, head: string, ref: string, mes
   try {
     const index = join(directory, "index")
     const real = resolve(repoRoot, await git.output(repoRoot, ["rev-parse", "--git-path", "index"]))
-    await copyFile(real, index).catch(() => undefined)
+    await copyGitIndex(real, index).catch(() => undefined)
     const env = { GIT_INDEX_FILE: index }
     await git.run({ cwd: repoRoot, args: ["add", "-A", "--", "."], env })
     const tree = await git.text({ cwd: repoRoot, args: ["write-tree"], env })

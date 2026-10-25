@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto"
 import { createReadStream, existsSync } from "node:fs"
-import { copyFile, mkdtemp, rm, stat, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Git, RunOptions } from "@mako/git"
 import { MOVE_CHECKPOINT_MAX_BYTES, MoveCheckpointSchema, type MoveCheckpoint } from "@mako/protocol/moves"
+import { copyGitIndex } from "./index-copy.js"
 
 /**
  * A checkout as it stands, carried to another computer: its commits that the repository's remote doesn't have, what's
@@ -71,7 +72,7 @@ export async function captureMoveCheckpoint(git: Git, checkout: string, folder: 
     const tree = async (indexFile: string, stage: boolean): Promise<string> => {
       const at = { ...env, GIT_INDEX_FILE: indexFile }
       // A checkout with no index yet reads as HEAD.
-      if (existsSync(index)) await copyFile(index, indexFile)
+      if (existsSync(index)) await copyGitIndex(index, indexFile)
       else await run(git, { cwd: checkout, args: ["read-tree", head], env: at })
       if (stage) await run(git, { cwd: checkout, args: ["add", "--all", "--", "."], env: at })
       const written = await git.run({ cwd: checkout, args: ["-c", "core.fsmonitor=false", "write-tree"], env: at, timeoutMs: TIMEOUT_MS, codes: [0, 128] })
