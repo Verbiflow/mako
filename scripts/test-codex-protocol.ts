@@ -447,6 +447,22 @@ state.error = undefined
 console.log("PASS: Codex reports compaction and retries as activity, a retried error as no failure, and unknown events")
 
 {
+  // A newer Codex can reshape an item it already sends, or the turn's error: the turn still ends.
+  unhandled.length = 0
+  notify("turn/started", { threadId: "thread-1", turn: { id: "reshaped-turn", status: "inProgress", items: [] } })
+  assert.equal(state.status, "running")
+  notify("turn/completed", { threadId: "thread-1", turn: { id: "reshaped-turn", status: "completed", error: { message: 42 }, items: [
+    { type: "reasoning", id: "reasoning-1", summary: [{ text: "a summary as objects" }], content: [] },
+    { type: "agentMessage", id: "message-1", text: "Done." },
+    { note: "an item with no type or id" },
+  ] } })
+  assert.equal(state.status, "ready", "a turn whose items a newer Codex reshaped still ends")
+  assert.equal(unhandled.length, 0, "the turn's end is read, not logged as unknown")
+  state.error = undefined
+  console.log("PASS: a Codex turn ends whatever shape a newer build gives its items or its error")
+}
+
+{
   const markers: TranscriptEvent[] = []
   const patches: Array<Partial<LiveSessionState>> = []
   const updateState = context.protocol.updateState
