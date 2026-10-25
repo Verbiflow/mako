@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ThreadPage } from "@mako/sessions"
@@ -251,6 +251,7 @@ async function followsMovedSession() {
     await waitFor(() => Boolean(first.snapshot(id)?.baseSource), "held")
     await first.stop()
     f.native.at = `${f.path}.zst`
+    renameSync(f.path, f.native.at)
     f.native.page = { ...pageOf(f.native.at, ["first ask", "first answer", "second ask", "second answer"]), ref: { ...pageOf(f.native.at, []).ref, bytes: 120 } }
     const second = f.host()
     second.snapshot(id)
@@ -282,6 +283,7 @@ async function settlesMovedCopy() {
     await first.stop()
     assert.ok(copiedBaseBytes(f.journals, id) > 0)
     f.native.at = `${f.path}.zst`
+    renameSync(f.path, f.native.at)
     f.native.page = pageOf(f.native.at, ["first ask", "first answer", "second ask", "second answer"])
     f.native.hold = true
     const second = f.host()

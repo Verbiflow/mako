@@ -3,6 +3,7 @@ import type { Foreground } from "../base/foreground.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { dirname } from "node:path"
 import { hostWarn } from "../base/host-log.js"
+import { currentRecordPath } from "@mako/sessions/record-files"
 import type { PromptAttachment, LiveSessionState } from "../contracts/providers-acp.js"
 import type {
   AccountSwitchWait,
@@ -402,10 +403,13 @@ export async function revokeTools(dependencies: Pick<Dependencies, "revokeTools"
 /**
  * The path a binding records for a session: the catalog's when it lists that
  * session, the reported one otherwise. A driver can name its file through an
- * account's store, a symlink to the one the catalog lists.
+ * account's store, a symlink to the one the catalog lists. Either is taken
+ * under the encoding its file is in now: Codex compresses an idle rollout in
+ * place as `.jsonl.zst`, and restores it when the thread resumes.
  */
-export function bindingPath(dependencies: Pick<Dependencies, "nativePath">, session: LiveSessionState, reported: string | undefined): string | undefined {
-  return dependencies.nativePath?.({ ...session, nativePath: reported }) ?? reported
+export function bindingPath(dependencies: Pick<Dependencies, "nativePath">, session: Omit<NativeSourceIdentity, "nativePath">, reported: string | undefined): string | undefined {
+  const path = dependencies.nativePath?.({ ...session, nativePath: reported }) ?? reported
+  return path && (currentRecordPath(path) ?? path)
 }
 
 /**

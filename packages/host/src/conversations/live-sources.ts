@@ -6,6 +6,7 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { nativeRecord } from "../harnesses/index.js"
 import type { ThreadPage } from "@mako/sessions"
+import { currentRecordPath } from "@mako/sessions/record-files"
 import type { BaseSource, BaseSpan, LiveSnapshot } from "../contracts/live-conversations.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import { capturedThread } from "./live-context.js"
@@ -340,7 +341,7 @@ export class LiveSources {
 
   /** Where `source`'s session is now, by its identity; its harness may have moved it, as Codex compresses an idle rollout in place. */
   private located(source: BaseSource): string {
-    return this.access.dependencies.nativePath?.({ harness: source.harness, nativeId: source.nativeId, nativePath: source.path }) ?? source.path
+    return bindingPath(this.access.dependencies, { harness: source.harness, nativeId: source.nativeId }, source.path) ?? source.path
   }
 
   /**
@@ -656,9 +657,10 @@ export class LiveSources {
 
   discoverNativePath(resident: Resident): void {
     const binding = activeBinding(resident)
-    if (!binding?.nativeId || (resident.driver && binding.path)) return
+    if (!binding?.nativeId) return
     const session = { ...resident.snapshot.session, harness: binding.provider, nativeId: binding.nativeId, nativePath: binding.path }
-    const path = this.access.dependencies.nativePath?.(session)
+    // A driver's session keeps the file it reports, under whichever encoding that file is in now.
+    const path = resident.driver && binding.path ? currentRecordPath(binding.path) : bindingPath(this.access.dependencies, session, binding.path)
     if (!path || path === binding.path) return
     updateBinding(this.access.dependencies, resident, { ...session, nativePath: path })
     this.access.flush(resident)

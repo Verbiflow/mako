@@ -19,7 +19,7 @@ import { open, type FileHandle } from "node:fs/promises"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { createZstdDecompress } from "node:zlib"
 import type { RecordRef } from "./entries.js"
-import { plainRecordPath, recordEncoding, type RecordEncoding } from "./record-encoding.js"
+import { encodedRecordPath, plainRecordPath, recordEncoding, type RecordEncoding } from "./record-encoding.js"
 
 export { encodedRecordPath, oneFilePerRecord, plainRecordPath, recordEncoding, type RecordEncoding } from "./record-encoding.js"
 
@@ -38,6 +38,16 @@ export function recordFilePath(sessionPath: string, record: RecordRef): string {
   const own = ownFile(sessionPath)
   if (!record.file) return own
   return isAbsolute(record.file) ? record.file : join(dirname(own), record.file)
+}
+
+/**
+ * The record's file as it is now: `path` while it is a file, else the same
+ * record under its other encoding, as its harness compresses or restores it
+ * in place. Undefined when neither is a file.
+ */
+export function currentRecordPath(path: string): string | undefined {
+  const other = encodedRecordPath(path, recordEncoding(path) === "plain" ? "zstd" : "plain")
+  return [path, other].find((file) => statSync(file, { throwIfNoEntry: false })?.isFile())
 }
 
 function ownFile(sessionPath: string): string {
