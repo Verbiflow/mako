@@ -31,6 +31,7 @@ import {
 } from "./media.js"
 import { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
+import type { RuntimeListing } from "./thread-listing.js"
 import { MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
 import {
   WireError,
@@ -115,9 +116,12 @@ type Running = {
  * Everything crosses as wire text, as it would over a socket, and the gateway reads envelopes
  * alone: inputs, values and events reach their consumers as their producers encoded them.
  */
-/** The fake, plus what its tests read of it: each Thread's runtime's last word on whether it's working. */
+/** The fake, plus what its tests read of it: each Thread's runtime's last word on whether it's working, and on its conversations. */
 export type FakeGateway = GatewayUnderTest & {
   activity(threadId: string): { busy: boolean; work: string[]; at: Date } | undefined
+  listing(threadId: string): RuntimeListing | undefined
+  /** How many listings the Thread's runtime has sent it, for a test that it says one only when it changes. */
+  listingsHeard(threadId: string): number
   /** The operations waiting for the Thread's runtime (`whenAsleep: "defer"`). */
   deferred(threadId: string): string[]
 }
@@ -135,6 +139,8 @@ export function createFakeGateway(
   const running = new Map<string, Running>()
   const admissions = new Map<string, number>()
   const activity = new Map<string, { busy: boolean; work: string[]; at: Date }>()
+  const listings = new Map<string, RuntimeListing>()
+  const listingsHeard = new Map<string, number>()
   /** Streams being watched, each by one client, served by the runtime that ran its Thread when it was asked. */
   const watches = new Map<MediaStreamId, { threadId: string; runtime: Connection; inbox: Inbox<MediaDelivery> }>()
 
@@ -420,6 +426,13 @@ export function createFakeGateway(
       activity.set(frame.threadId, { busy: frame.busy, work: frame.work, at: now() })
       return
     }
+    if (frame.type === "listing") {
+      const target = threads.get(frame.threadId)
+      if (target?.owner !== connection.runtimeId || target.generation !== frame.generation) return
+      listings.set(frame.threadId, frame.listing)
+      listingsHeard.set(frame.threadId, (listingsHeard.get(frame.threadId) ?? 0) + 1)
+      return
+    }
     if (frame.type === "reply") {
       const waiting = running.get(frame.reply.id)
       if (!waiting || waiting.runtimeId !== connection.runtimeId) return
@@ -688,6 +701,8 @@ export function createFakeGateway(
     },
 
     activity: (threadId) => activity.get(threadId),
+    listing: (threadId) => listings.get(threadId),
+    listingsHeard: (threadId) => listingsHeard.get(threadId) ?? 0,
     deferred: (threadId) => thread(threadId).deferred.map((operation) => operation.id),
   }
 }

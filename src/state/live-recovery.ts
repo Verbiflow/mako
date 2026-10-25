@@ -3,7 +3,8 @@ import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
-import { acpStore, carriedFailureSeen, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
+import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
@@ -416,6 +417,20 @@ function notifyCompletion(
     )
   )
     playFeedback("complete")
+}
+
+/**
+ * Conversations the account no longer lists here (another device's cloud conversation that went home with its Thread,
+ * or ended): gone from the rail. The one on screen says so, rather than vanishing under the reader.
+ */
+export function unlistLive(ids: readonly string[]): void {
+  const active = acpStore.get().activeKey
+  for (const id of ids) {
+    pending.delete(id)
+    removeAcpConversation(id)
+  }
+  if (active && ids.includes(active))
+    toast.info("That conversation left the cloud", { description: "It went back to the computer it came from, or it ended.", duration: ACTION_TOAST_MS })
 }
 
 export function hydrateLiveSummaries(

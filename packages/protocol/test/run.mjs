@@ -6,6 +6,8 @@ import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, Move
 import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
 import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
+import { AccountEventSchema } from "../dist/account-events.js"
+import { ThreadListingSchema, ThreadListingsSchema, RuntimeListingSchema, sameListing } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
   CLOSE_CODES,
@@ -76,7 +78,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 3)
+    assert.equal(SUPPORTED_VERSIONS.max, 4)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -442,6 +444,32 @@ describe("a runtime served through serveRuntime", () => {
     assert.equal(older.version, 1)
     assert.equal(older.activity(true, ["x"]), false)
     assert.equal(gateway.activity("th-2"), undefined)
+    older.close()
+    await gateway.close()
+  })
+
+  test("says what a Thread's conversations are on a gateway that speaks version 4, heard from the Thread's owner alone; an older one never hears it", async () => {
+    const gateway = createFakeGateway()
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "machine", build: "test", handle: async (operation) => answer(operation, null) })
+    await gateway.assign("th-1", "machine")
+    while (!runtime.claims().length) await new Promise((resolve) => setImmediate(resolve))
+    const listing = { conversations: [{ id: "c-1", harness: "codex", title: "Retry the webhooks", state: "working", createdAt: "2026-10-24T20:00:00.000Z" }] }
+    assert.equal(runtime.listing("th-1", listing), true)
+    assert.equal(runtime.listing("th-none", listing), false, "a Thread it doesn't run")
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(gateway.listing("th-1"), listing)
+    // Taken by another runtime: what this one says of the Thread no longer counts.
+    await gateway.assign("th-1", "elsewhere")
+    runtime.listing("th-1", { conversations: [] })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(gateway.listing("th-1"), listing)
+    runtime.close()
+    const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "old", build: "test", versions: { min: 1, max: 3 }, handle: async (operation) => answer(operation, null) })
+    await gateway.assign("th-2", "old")
+    while (!older.claims().length) await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(older.version, 3)
+    assert.equal(older.listing("th-2", listing), false)
+    assert.equal(gateway.listing("th-2"), undefined)
     older.close()
     await gateway.close()
   })
@@ -1411,5 +1439,33 @@ describe("a Thread moving between a device and the cloud", () => {
     const move = crypto.randomUUID()
     assert.equal(MoveAnswerSchema.parse({ kind: "claimed", move, at: 1, sessions: [{ ...session, generation: 4 }] }).kind, "claimed")
     assert.equal(MoveAnswerSchema.parse({ kind: "refused", move, at: 1, reason: "the checkout didn't arrive" }).kind, "refused")
+  })
+})
+
+describe("an account's list of Threads", () => {
+  const conversation = { id: "c-1", harness: "claude", title: "Retry the webhooks", state: "waiting", folder: "/Users/ana/api", thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", session: "0b8f3e1a-7c2d-4f6a-9e5b-1d3c8a7f2e60", createdAt: "2026-10-24T20:00:00.000Z" }
+  const listing = { threadId: "t-0123456789abcdef", home: "cloud", repository: { url: "https://github.com/ana/api", branch: "main" }, conversations: [conversation], updatedAt: "2026-10-24T20:01:00.000Z" }
+
+  test("a listing holds what a row shows and nothing else", () => {
+    assert.deepEqual(ThreadListingSchema.parse(listing), listing)
+    assert.throws(() => ThreadListingSchema.parse({ ...listing, transcript: "…" }), "no field it doesn't define")
+    assert.throws(() => RuntimeListingSchema.parse({ conversations: [{ ...conversation, state: "thinking" }] }), "a state is one of five")
+    assert.throws(() => RuntimeListingSchema.parse({ conversations: [{ ...conversation, title: "x".repeat(201) }] }), "a title is a row's, not a message's")
+    assert.throws(() => RuntimeListingSchema.parse({ conversations: Array.from({ length: 51 }, (_, index) => ({ ...conversation, id: `c-${index}` })) }), "at most 50 conversations")
+    assert.deepEqual(ThreadListingsSchema.parse({ threads: [listing], seq: 12 }), { threads: [listing], seq: 12 })
+  })
+
+  test("two listings are the same when a list would show them alike, whatever order their keys were built in and whenever they changed", () => {
+    const reordered = { updatedAt: "2026-10-25T00:00:00.000Z", conversations: [Object.fromEntries(Object.entries(conversation).reverse())], repository: { branch: "main", url: "https://github.com/ana/api" }, home: "cloud", threadId: listing.threadId }
+    assert.equal(sameListing(listing, reordered), true)
+    assert.equal(sameListing(listing, { ...listing, conversations: [{ ...conversation, state: "idle" }] }), false)
+    assert.equal(sameListing(listing, undefined), false)
+    assert.equal(sameListing(undefined, undefined), true)
+  })
+
+  test("the account's stream says a Thread listed, whole, and one unlisted, with why", () => {
+    assert.deepEqual(AccountEventSchema.parse({ type: "thread-listed", thread: listing }), { type: "thread-listed", thread: listing })
+    assert.deepEqual(AccountEventSchema.parse({ type: "thread-unlisted", threadId: listing.threadId, reason: "returned" }), { type: "thread-unlisted", threadId: listing.threadId, reason: "returned" })
+    assert.equal(AccountEventSchema.safeParse({ type: "thread-unlisted", threadId: listing.threadId, reason: "gone" }).success, false)
   })
 })

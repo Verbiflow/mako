@@ -1,11 +1,14 @@
 import { z } from "zod"
 import type { StreamId } from "./events.js"
+import { ThreadIdSchema } from "./ids.js"
+import { ThreadListingSchema, UnlistedReasonSchema } from "./thread-listing.js"
 
 /**
- * What an account's own stream (`account:<id>`) carries: what happened to its devices, each event numbered by the
- * account's one object and kept, so every device following it hears of each in order, and a device that was off
- * hears of what happened meanwhile when it comes back. A device that joined, from where and how; a device that left,
- * and why. An event of a type a client doesn't know is skipped, never refused.
+ * What an account's own stream (`account:<id>`) carries: what happened to its devices and its Threads, each event
+ * numbered by the account's one object and kept, so every device following it hears of each in order, and a device
+ * that was off hears of what happened meanwhile when it comes back. A device that joined, from where and how; a
+ * device that left, and why; a Thread listed or changed, whole (`thread-listed`, `thread-listing.ts`), and one that
+ * left the list. An event of a type a client doesn't know is skipped, never refused.
  */
 
 /** Where a request came from, as the cloud read its address: never the address. */
@@ -30,8 +33,13 @@ export const AccountEventSchema = z.discriminatedUnion("type", [
     reason: z.enum(["removed", "signed-out", "credential-reused"]),
     by: z.uuid().nullable(),
   }),
+  /** A Thread listed for the first time, or changed as a list shows it: the whole listing, which replaces the last. */
+  z.object({ type: z.literal("thread-listed"), thread: ThreadListingSchema }),
+  z.object({ type: z.literal("thread-unlisted"), threadId: ThreadIdSchema, reason: UnlistedReasonSchema }),
 ])
 export type AccountEvent = z.infer<typeof AccountEventSchema>
+/** An event about the account's devices, as against its Threads. */
+export type AccountDeviceEvent = Extract<AccountEvent, { type: "device-joined" | "device-removed" }>
 
 /** The stream an account's devices follow for its events. */
 export function accountStream(accountId: string): StreamId {

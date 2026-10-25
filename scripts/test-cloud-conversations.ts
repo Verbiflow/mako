@@ -2,7 +2,7 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { createServer, connect, type AddressInfo, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -33,7 +33,9 @@ import type { CloudPrepareLaunch, CloudRepository } from "@mako/host/contracts/c
 import { githubRepositoryUrl } from "@mako/host/contracts/cloud-threads"
 import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
-import type { CloudAccount } from "@mako/host/usage/cloud-account-methods"
+import type { CloudAccount, ThreadListHeard } from "@mako/host/usage/cloud-account-methods"
+import type { ListedState, ThreadListing, ThreadListings } from "@mako/protocol/thread-listing"
+import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { z } from "zod"
 
 /** A move's calls and its way back's, which these conversations never make (`test-cloud-moves.ts` covers them). */
@@ -794,4 +796,84 @@ test("in a Thread that moved to the cloud, a new tab and a fork start on its mac
   assert.equal(store.createSession({ operationId, thread: placed.thread, actor: store.person(), session: given }).session, given)
   assert.equal(store.createSession({ operationId, thread: placed.thread, actor: store.person(), session: given }).session, given, "asked again, the same")
   assert.throws(() => store.createSession({ operationId: randomUUID(), thread: placed.thread, actor: store.person(), session: given }), /exists here already/)
+})
+
+test("another device's cloud conversation is listed here from the account's list, unopened and waking nothing; it changes and leaves as the list does, and once opened it's followed from the stream's head", async () => {
+  const machine = await cloudMachine()
+  const theirs = "t-00000000000000aa"
+  await machine.account.createThread(theirs, REPOSITORY)
+  const listed = randomUUID()
+  const thread = "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40"
+  const listingOf = (state: ListedState, title = "Retry the webhooks"): ThreadListing => ({
+    threadId: theirs,
+    home: "cloud",
+    repository: REPOSITORY,
+    conversations: [{ id: listed, harness: "claude", title, state, folder: CLONE, thread, createdAt: "2026-10-24T20:00:00.000Z" }],
+    updatedAt: "2026-10-24T20:00:00.000Z",
+  })
+  const listeners = new Set<(heard: ThreadListHeard | "account-changed") => void>()
+  let answer: ThreadListings = { threads: [listingOf("working")], seq: 5 }
+  let reads = 0
+  machine.account.threadListings = async () => (reads++, answer)
+  machine.account.onThreadListings = (listener) => {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  }
+  const say = (heard: ThreadListHeard | "account-changed") => {
+    for (const listener of listeners) listener(heard)
+  }
+  const file = join(scratch, "listed", "conversations.json")
+  const { router, events } = conversations(machine.account, file)
+  await router.start()
+  await until("the list read and listed here", () => router.summaries().some((summary) => summary.session.id === listed))
+  const shown = () => router.summaries().find((summary) => summary.session.id === listed)
+  assert.equal(shown()?.session.status, "running")
+  assert.equal(shown()?.session.title, "Retry the webhooks")
+  assert.equal(shown()?.elsewhere, "a cloud machine")
+  assert.equal(shown()?.threadId, thread, "filed under the Thread its device has")
+  const told = (type: string) => events.filter((event) => event.type === type).map((event) => JSON.parse(event.payload))
+  assert.deepEqual(told("live-listed").map((event) => event.summaries.map((summary: LiveSummary) => summary.session.id)), [[listed]], "windows list it as they list one at boot")
+  assert.equal(machine.calls.length, 0, "listing it called nothing on its machine")
+
+  say({ seq: 5, event: { type: "thread-listed", thread: listingOf("idle") } })
+  assert.equal(shown()?.session.status, "running", "a change from before the list read changes nothing")
+  say({ seq: 6, event: { type: "thread-listed", thread: listingOf("idle", "Retry the webhooks with backoff") } })
+  assert.equal(shown()?.session.status, "ready")
+  assert.equal(shown()?.session.title, "Retry the webhooks with backoff")
+  assert.equal(told("live-listed").length, 2)
+  say({ seq: 7, event: { type: "thread-listed", thread: listingOf("idle", "Retry the webhooks with backoff") } })
+  assert.equal(told("live-listed").length, 2, "a change a row wouldn't show tells nobody")
+
+  // This Mac's own cloud conversation is its own, whatever the list says of it.
+  const own = randomUUID()
+  await router.route("mako:live-start", ["codex", "/Users/me/project", { conversationId: own, cloud: { repository: REPOSITORY } }])
+  const ownThread = machine.created.find((id) => id !== theirs)!
+  say({ seq: 8, event: { type: "thread-listed", thread: { ...listingOf("idle"), threadId: ownThread, conversations: [{ id: own, harness: "codex", state: "failed", createdAt: "2026-10-24T20:00:00.000Z" }] } } })
+  assert.equal(router.summaries().find((summary) => summary.session.id === own)?.session.status, "running", "the list never overwrites what this Mac follows itself")
+  const remembered = z.object({ conversations: z.array(z.object({ conversationId: z.string() }).loose()) }).parse(JSON.parse(await readFile(file, "utf8")))
+  assert.deepEqual(remembered.conversations.map((entry) => entry.conversationId), [own], "only this Mac's own are remembered; the list says the rest again")
+
+  // Opened: answered on its machine, and followed from the stream's head, not from the Thread's first event.
+  machine.batch(theirs, listed, 1, "running")
+  const opened = await router.route("mako:live-snapshot", [listed])
+  assert.ok(opened.handled)
+  assert.ok(machine.calls.some((call) => call.channel === "mako:live-snapshot"), "opening it reads it on its machine")
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(events.filter((event) => event.conversation === listed).length, 0, "the batch from before it was opened isn't replayed")
+  machine.batch(theirs, listed, 2, "ready")
+  await until("its next batch relayed", () => events.some((event) => event.conversation === listed))
+  say({ seq: 9, event: { type: "thread-listed", thread: listingOf("working", "From the list") } })
+  assert.notEqual(shown()?.session.title, "From the list", "once followed, its own batches say more, and sooner, than the list")
+
+  // Its Thread went home: gone here, and windows hear so.
+  say({ seq: 10, event: { type: "thread-unlisted", threadId: theirs, reason: "returned" } })
+  assert.equal(shown(), undefined)
+  assert.deepEqual(told("live-unlisted").map((event) => event.ids), [[listed]])
+  assert.equal((await router.route("mako:live-snapshot", [listed])).handled, false, "no longer answered here")
+
+  // Another account: whatever the last one listed is gone, and the new account's list is read.
+  answer = { threads: [listingOf("idle")], seq: 1 }
+  const before = reads
+  say("account-changed")
+  await until("the new account's list read", () => reads > before && router.summaries().some((summary) => summary.session.id === listed))
 })

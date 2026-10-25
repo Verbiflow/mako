@@ -10,7 +10,8 @@ import { type MediaHandler, type MediaSender, type MediaStreamId, encodeMediaMes
 import type { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
-import { ACTIVITY_VERSION, MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import type { RuntimeListing } from "./thread-listing.js"
+import { ACTIVITY_VERSION, LISTING_VERSION, MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 
 export class RuntimeRefusedError extends Error {
   readonly problem: Problem
@@ -58,6 +59,11 @@ export type ServedRuntime = {
    * older one, which never hears it). Not kept: a link that drops loses it, and the runtime says it again on the next.
    */
   activity(busy: boolean, work: string[]): boolean
+  /**
+   * Says what one Thread's conversations are, as the account's list shows them, on a gateway that speaks version 4 or
+   * later (false on an older one, or for a Thread this runtime doesn't run). Not kept: say it again on each new link.
+   */
+  listing(threadId: string, listing: RuntimeListing): boolean
   /** Settles when the link closes. */
   done: Promise<void>
   /** Why the link ended: the gateway's refusal, or undefined when the connection just closed. */
@@ -221,6 +227,12 @@ export async function serveRuntime(
     activity: (busy, work) => {
       if (first.version < ACTIVITY_VERSION || link.closed) return false
       for (const { threadId, generation } of threads.claims()) link.send({ type: "activity", threadId, generation, busy, work: work.slice(0, 20).map((item) => item.slice(0, 120)) })
+      return true
+    },
+    listing: (threadId, listing) => {
+      const generation = threads.generation(threadId)
+      if (first.version < LISTING_VERSION || link.closed || generation === undefined) return false
+      link.send({ type: "listing", threadId, generation, listing })
       return true
     },
     done,
