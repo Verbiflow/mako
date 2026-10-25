@@ -58,9 +58,10 @@ jobs:
     # at the version the bump declares, as a new machine would.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # Reading only: the bot's own token pushes and opens the pull request.
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +69,19 @@ jobs:
     env:
       BRANCH: harness-versions/${{ matrix.harness }}-${{ matrix.version }}
     steps:
+      # The pull request is the bot's (Verbiflow Mako Bot): one the workflow's own token opened would run no checks,
+      # and its checks are the news. People open theirs as themselves; only automations use the bot.
+      - name: Act as the bot
+        id: bot
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.MAKO_BOT_APP_ID }}
+          private-key: ${{ secrets.MAKO_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          token: ${{ steps.bot.outputs.token }}
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
@@ -96,11 +109,12 @@ jobs:
       - name: Open the pull request
         if: steps.open.outputs.exists != 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
           OUTCOME: ${{ steps.bump.outcome }}
+          BOT: ${{ steps.bot.outputs.app-slug }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "$BOT[bot]"
+          git config user.email "$(gh api "/users/$BOT%5Bbot%5D" --jq .id)+$BOT[bot]@users.noreply.github.com"
           git switch -c "$BRANCH"
           git add -A packages scripts package.json package-lock.json
           git commit -m "Move ${{ matrix.harness }} to ${{ matrix.version }}"
