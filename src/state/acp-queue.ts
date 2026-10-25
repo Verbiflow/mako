@@ -135,10 +135,13 @@ async function attemptSend(
  * Pick up a turn that was cut short — by Mako's exit or by the provider's
  * own dropped connection. The provider kept the session; a short prompt asks
  * it to go on, through the same send as any other message, so the request
- * queues, steers or resumes exactly as one typed would.
+ * queues, steers or resumes exactly as one typed would. It names the
+ * background work the cut stopped, as the host recorded it on the turn
+ * (`Interruption.stopped`), the same words Mako's own continuation uses.
  */
 export function continueTurn(id: string, reason: InterruptionReason = "host-quit"): Promise<boolean> {
-  return sendTo(id, continueTurnPrompt(reason, "person"))
+  const cut = acpStore.get().conversations[id]?.requests?.findLast((request) => request.interruption?.reason === reason)
+  return sendTo(id, continueTurnPrompt(reason, "person", cut?.interruption?.stopped))
 }
 
 /**

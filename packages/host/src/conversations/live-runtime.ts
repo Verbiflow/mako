@@ -103,7 +103,7 @@ export interface Resident {
   signInResume?: Promise<SignInResume>
   retireWhenIdle?: boolean
   /** The scheduled continuation of a turn that ended on a dropped connection, while it is pending. */
-  autoContinue?: { requestId: string; timer: ReturnType<typeof setTimeout> }
+  autoContinue?: { requestId: string; timer: ReturnType<typeof setTimeout>; restarted: boolean }
   /** Mako's goal loop's next continuation, while it waits. */
   goalContinue?: ReturnType<typeof setTimeout>
   /** The turn whose tokens the goal is counting, and the goal's count before it. */
@@ -122,6 +122,8 @@ export interface Resident {
   stopping?: string
   /** Why `stopping` was stopped: the user's Stop, or Mako handing the Thread to another machine. */
   stoppingFor?: "stopped" | "handed-off"
+  /** The background work a handoff stops with the turn (`Interruption.stopped`), until the turn settles. */
+  stoppingWork?: string[]
   /** The running turn's steps and results in the order they arrived; see `TurnSteps`. */
   steps?: TurnSteps
 }

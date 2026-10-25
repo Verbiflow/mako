@@ -12,9 +12,10 @@ import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LiveSessionState } f
  * as, so the renderer can say whether sending again is worth anything
  * without reading the text itself. `ended` says the user stopped this turn
  * or closed the conversation: unless the turn finished first, it settles
- * stopped however the driver reported the end.
+ * stopped however the driver reported the end. `work`: the background work
+ * a handoff stopped with the turn, which its interruption keeps.
  */
-export function settleRequest(request: LiveRequest, session: LiveSessionState, ended: boolean, reason: "stopped" | "handed-off" = "stopped"): LiveRequest {
+export function settleRequest(request: LiveRequest, session: LiveSessionState, ended: boolean, reason: "stopped" | "handed-off" = "stopped", work?: string[]): LiveRequest {
   const stopped = (ended && session.status !== "ready") || /cancel|interrupt/i.test(session.lastStop ?? "")
   const dropped = stopped ? undefined : continuableInterruption(request, session)
   const status = stopped || dropped ? "interrupted" : session.status === "ready" ? "completed" : "failed"
@@ -36,7 +37,7 @@ export function settleRequest(request: LiveRequest, session: LiveSessionState, e
     // recorded so the panel can say what ended it.
     settled.interruption = { reason: dropped, at: Date.now() }
     settled.failure = dropped === "connection-lost" ? "network" : classifyProviderFailure(session.error).kind
-  } else if (status === "interrupted") settled.interruption = { reason, at: Date.now() }
+  } else if (status === "interrupted") settled.interruption = { reason, at: Date.now(), ...work?.length && { stopped: work } }
   if (status === "failed") settled.failure = classifyProviderFailure(session.error).kind
   const spend = spendBetween(request.usageFrom, session.usage)
   if (spend.tokens || spend.cost !== undefined || spend.unrecorded) {

@@ -4,6 +4,7 @@ import {
   durationText,
   INTERRUPTED,
   MCP_SERVER_FAILED,
+  retriesLabel,
   TURN_ENDED,
   TURN_FAILED,
   type EventTone,
@@ -21,7 +22,8 @@ import {
  * - a cause: background work settled and the provider started a turn on it,
  *   drawn where a prompt would stand;
  * - Mako's own line: a turn Mako started (a continuation, a move, a goal);
- * - ambient: a state change inside a turn (compaction, model, review mode);
+ * - ambient: a state change inside a turn (compaction, model, review mode,
+ *   a provider's retries it recovered from);
  * - attention: something failed or wants a person (`tone`).
  */
 export type EventGlyph =
@@ -41,6 +43,7 @@ export type EventGlyph =
   | "hook"
   | "key"
   | "limit"
+  | "retry"
   | "notice"
   | "warning"
   | "error"
@@ -155,6 +158,8 @@ export function eventWords(note: TranscriptEvent): EventWords {
     if (note.tone && !words.tone) words.tone = note.tone
     return words
   }
+  // A provider's retries: the outcome and how many, the provider's words for what failed, and how long they took.
+  if (note.retries) return timed(said("retry", retriesLabel(note.retries), note.detail, note.tone), note.retries.durationMs)
   if (note.label === MCP_SERVER_FAILED) {
     const { server, reason } = mcpServer(note)
     return said("mcp", server ? `MCP server ${server} didn't start` : "An MCP server didn't start", reason, note.tone)

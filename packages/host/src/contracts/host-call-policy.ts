@@ -29,6 +29,7 @@ const reads = [
   /** The Threads at work here a handoff would take, and the person's choice for sleep, as they stand. */
   "mako:handoff-candidates",
   "mako:handoff-settings",
+  "mako:conversation-settings",
   "mako:git-status",
   "mako:git-diff",
   "mako:git-diff-all",
@@ -223,6 +224,8 @@ const replays = [
   "mako:handoff",
   /** Setting the same choice again leaves the same choice. */
   "mako:handoff-settings-set",
+  /** The same settings saved twice are one choice. */
+  "mako:conversation-settings-set",
   /** `LiveAutoContinue.continueNow`: the request id is the continuation's; a repeat finds it and changes nothing. */
   "mako:live-continue-turn",
   /** `ThreadStore.renameThread` and `clearThreadTitle`: the operation id is receipted. */

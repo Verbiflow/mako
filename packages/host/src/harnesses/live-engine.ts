@@ -11,7 +11,9 @@ import type { NativeActivityObservation, NativeNotice } from "../contracts/nativ
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import {
   compactionEvent,
+  retriesEvent,
   type Compaction,
+  type Retries,
   type TranscriptEvent,
 } from "@mako/sessions/events"
 import type { JsonValue } from "../contracts/json.js"
@@ -236,6 +238,37 @@ interface Compacting {
   until?: number
 }
 
+/** A provider's retries of the model while they last: since its first retry notice, and how many it made. */
+interface Retrying {
+  since: number
+  count: number
+  /** The attempt the last notice numbered: a notice that says the same attempt again counts once. */
+  attempt?: number
+  /** The provider's words for what failed, as its last notice gave them. */
+  reason?: string
+}
+
+/** The model answering: what ends a provider's retries as recovered. */
+function answers(update: LiveUpdate): boolean {
+  switch (update.kind) {
+    case "text":
+    case "thinking":
+      return update.text.length > 0
+    case "tool":
+    case "proposed-plan":
+    case "plan":
+      return true
+    default:
+      return false
+  }
+}
+
+/** The first line of a provider's failure, as the words of a marker's detail. */
+function firstLine(text: string | undefined): string | undefined {
+  const line = text?.trim().split("\n", 1)[0]?.trim()
+  return line ? (line.length > 160 ? `${line.slice(0, 159)}…` : line) : undefined
+}
+
 export function createLiveEngine<
   Live extends EngineLive,
 >(hooks: LiveEngineHooks<Live> = {}): LiveEngineApi<Live> {
@@ -266,6 +299,33 @@ export function createLiveEngine<
     }
   }
   const compacting = new WeakMap<Live, Compacting>()
+  /**
+   * The provider's retries in progress. They end in one marker: recovered,
+   * when the model answers; given up, when the provider reports the failure
+   * (an error marker, or an error in its state). A turn that ends any other
+   * way (a Stop, a process gone) ends them unsaid, its own ending says why.
+   * Every end but the turn's is decoded from the harness's own messages and
+   * measured by the frames' clock, so a replay of the stream draws what the
+   * window drew.
+   */
+  const retrying = new WeakMap<Live, Retrying>()
+  const retried = (live: Live, observation: Extract<NativeActivityObservation, { kind: "retrying" }>): void => {
+    const held = retrying.get(live)
+    const reason = observation.reason ?? held?.reason
+    const repeated = held !== undefined && observation.attempt !== undefined && observation.attempt === held.attempt
+    const next: Retrying = { since: held?.since ?? clock(), count: (held?.count ?? 0) + (repeated ? 0 : 1) }
+    if (observation.attempt !== undefined) next.attempt = observation.attempt
+    if (reason) next.reason = reason
+    retrying.set(live, next)
+  }
+  const endRetries = (live: Live, outcome: Retries["outcome"] | undefined, failure?: string): void => {
+    const held = retrying.get(live)
+    if (!held) return
+    retrying.delete(live)
+    if (!outcome) return
+    const retries: Retries = { count: held.count, outcome, durationMs: Math.max(0, Math.round(clock() - held.since)) }
+    drawEvent(live, retriesEvent(retries, held.reason ?? firstLine(failure)))
+  }
   /** Compacting stops when the provider reports something else, or its turn ends; a retry is part of it. */
   const stopCompacting = (live: Live): void => {
     const held = compacting.get(live)
@@ -280,6 +340,7 @@ export function createLiveEngine<
       if (!held || held.until !== undefined)
         compacting.set(live, { since: clock() })
     } else if (observation?.kind !== "retrying") stopCompacting(live)
+    if (observation?.kind === "retrying") retried(live, observation)
     live.emit({
       type: "live-activity",
       id: live.state.id,
@@ -298,6 +359,8 @@ export function createLiveEngine<
   }
   const event = (live: Live, marker: TranscriptEvent, id?: string): void => {
     if (id && repeated(live, id)) return
+    // The failure a provider retried and gave up on: its retries are summed up before it.
+    if (marker.tone === "error" || marker.limit) endRetries(live, "gave-up", marker.detail ?? marker.label)
     drawEvent(live, marker, id)
   }
   const drawEvent = (live: Live, marker: TranscriptEvent, id?: string, completes = false): void => {
@@ -362,6 +425,8 @@ export function createLiveEngine<
   const patch = (live: Live, change: Partial<LiveSessionState>): void => {
     if (change.status !== undefined && change.status !== "running")
       stopCompacting(live)
+    if (change.error) endRetries(live, "gave-up", change.error)
+    else if (change.status !== undefined && change.status !== "running") endRetries(live, undefined)
     const next: Partial<LiveSessionState> = { ...change }
     // SAFETY: `next` is a copy of a Partial<LiveSessionState>, so its own keys are LiveSessionState's.
     for (const key of Object.keys(next) as (keyof LiveSessionState)[])
@@ -378,12 +443,14 @@ export function createLiveEngine<
     return stamped(timed(calls, update))
   }
   const emitUpdate = (live: Live, update: LiveUpdate): void => {
+    if (answers(update)) endRetries(live, "recovered")
     if (update.kind === "tool") retainUndeclaredTools(live.state.harness, [update])
     observeCalls(live, [update])
     live.emit({ type: "live-update", id: live.state.id, update: leaving(live, update) })
   }
   const emitUpdates = (live: Live, updates: LiveUpdate[]): void => {
     if (updates.length === 0) return
+    if (updates.some(answers)) endRetries(live, "recovered")
     retainUndeclaredTools(live.state.harness, updates)
     observeCalls(live, updates)
     live.emit({ type: "live-updates", id: live.state.id, updates: updates.map((update) => leaving(live, update)) })

@@ -57,6 +57,7 @@ import type { NativeRequest, NativeRequestInput } from "./native-requests.js"
 import type { ForkInput, TransferInput } from "./conversation-control.js"
 import type { HarnessDescriptor, ContextBreakdown, HarnessProfile, LivePermissionResponse, PromptAttachment } from "./providers-acp.js"
 import type { LiveStartOptions, LiveSnapshot, LiveRequest, SignInReadiness, SignInResume } from "./live-conversations.js"
+import type { ConversationSettings } from "./turn-continuation.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
@@ -290,6 +291,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:thread-abort-run", path),
 
     /* Interactive foreign agents (ACP). */
+    /** How the person set conversations to behave: whether Mako continues the turns its own restart cut short. */
+    conversationSettings: () => invokeTrustedHost<ConversationSettings>("mako:conversation-settings"),
+    setConversationSettings: (settings: ConversationSettings) => invokeTrustedHost<ConversationSettings>("mako:conversation-settings-set", settings),
     liveStart: (harness: string, cwd: string, options: LiveStartOptions) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-start", harness, cwd, options),
     nativeReceipt: (id: string) =>

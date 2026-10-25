@@ -180,13 +180,15 @@ export class LiveEvents {
                   request,
                   outcome,
                   resident.closing || resident.stopping === request.id,
-                  resident.stopping === request.id ? resident.stoppingFor : undefined
+                  resident.stopping === request.id ? resident.stoppingFor : undefined,
+                  resident.stopping === request.id ? resident.stoppingWork : undefined
                 )
               : request
           ),
         }
         resident.stopping = undefined
         resident.stoppingFor = undefined
+        resident.stoppingWork = undefined
         if (settling) {
           if (resident.snapshot.requests.find((request) => request.id === settling.id)?.failure === "auth")
             resident.snapshot = {

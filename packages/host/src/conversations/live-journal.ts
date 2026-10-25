@@ -123,6 +123,7 @@ export const LiveRequestSchema = z.object({
       moreCalls: z.number().int().positive().optional(),
       told: z.number().optional(),
       closed: z.array(z.string()).optional(),
+      stopped: z.array(z.string()).optional(),
     })
     .optional(),
   failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),

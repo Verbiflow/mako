@@ -8,7 +8,13 @@
     {
       "reader": "grok",
       "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a172ad-0168-7db2-80ef-2094f42d2057/updates.jsonl",
-      "known": []
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Gave up after 3 retries — Server error",
+          "reason": "Mako sums up the retries it watched on the wire (Grok's `retry_state` updates) in one marker, measured by the frames' clock; the store keeps each retry's update, never Mako's measure, so only the live drawing has it (RETRY_MARKERS, declared stream-only)."
+        }
+      ]
     }
   ]
 }

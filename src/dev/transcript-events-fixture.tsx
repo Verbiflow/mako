@@ -6,7 +6,7 @@
 import type { ReactNode } from "react"
 import type { Entry, EntryOf } from "@mako/sessions/entries"
 import { backgroundReminderTurn, claudeTaskTurn, grokSubagentTurn, grokTaskTurn, parseClaudeTaskNotification, type GrokTaskSnapshot } from "@mako/sessions/harnesses"
-import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, type TranscriptEvent } from "@mako/sessions/events"
+import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, retriesEvent, type TranscriptEvent } from "@mako/sessions/events"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { backgroundCommandTurn, codexGoalTurn, subagentTurn, type ProviderTurnCause } from "@mako/sessions/provider-turn"
 import { goalContinuePrompt } from "@mako/host/contracts/live-goals"
@@ -466,6 +466,17 @@ const CASES: EventCase[] = [
     id: "marker-turn-failed",
     title: "Turn failed, with the provider's body",
     exchanges: live([go, reply("a1", "Running the suite."), marker({ label: "Turn failed", detail: "stream disconnected before completion", body: "stream disconnected before completion: error sending request for url (https://api.example.test/v1/responses)\nCaused by: connection reset by peer", tone: "error" })], "codex"),
+    failed: "acp-request-",
+  },
+  {
+    id: "marker-retries-recovered",
+    title: "The provider retried and recovered",
+    exchanges: live([go, reply("a1", "Reading the failing test."), marker(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)")), reply("a2", "The fixture expects UTC; fixing the parser.")]),
+  },
+  {
+    id: "marker-retries-gave-up",
+    title: "The provider retried and gave up",
+    exchanges: live([go, marker(retriesEvent({ count: 5, outcome: "gave-up", durationMs: 62_000 }, "We're currently experiencing high demand, which may cause temporary errors.")), marker({ label: "Turn failed", detail: "Server error", body: "We're currently experiencing high demand, which may cause temporary errors.", tone: "error" })], "codex"),
     failed: "acp-request-",
   },
   {

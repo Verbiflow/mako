@@ -35,10 +35,12 @@ export class LiveAutoContinue {
    * `settled`, the request whose turn ended in this very transition, is
    * considered: an older interruption the user left alone, or a
    * provider-started turn or compaction ending later, never revives one.
+   * `restarted`: `settled` is a turn the last host's exit cut short, which
+   * this host continues as the person chose (`LiveRestarts`).
    */
-  schedule(resident: Resident, settled: string): void {
+  schedule(resident: Resident, settled: string, restarted = false): void {
     if (resident.autoContinue || (!resident.driver && !this.reconnectBinding(resident)) || this.access.admission.closed) return
-    const candidate = autoContinueCandidate(resident.snapshot.requests)
+    const candidate = autoContinueCandidate(resident.snapshot.requests, restarted)
     if (candidate?.id !== settled || !candidate.interruption) return
     const delay = this.access.dependencies.autoContinueDelayMs ?? AUTO_CONTINUE_DELAY_MS
     const at = Date.now() + delay
@@ -52,14 +54,15 @@ export class LiveAutoContinue {
     }
     const timer = setTimeout(() => this.fire(resident.snapshot.session.id, candidate.id), delay)
     timer.unref?.()
-    resident.autoContinue = { requestId: candidate.id, timer }
+    resident.autoContinue = { requestId: candidate.id, timer, restarted }
   }
 
   private fire(id: string, requestId: string): void {
     const resident = this.access.resident(id)
-    if (!resident || resident.autoContinue?.requestId !== requestId) return
+    const pending = resident?.autoContinue
+    if (!resident || pending?.requestId !== requestId) return
     resident.autoContinue = undefined
-    const source = autoContinueCandidate(resident.snapshot.requests)
+    const source = autoContinueCandidate(resident.snapshot.requests, pending.restarted)
     resident.snapshot = {
       ...resident.snapshot,
       requests: clearAutoContinue(resident.snapshot.requests, requestId),
@@ -86,7 +89,7 @@ export class LiveAutoContinue {
       actor,
       id: randomUUID(),
       createdAt: Date.now(),
-      text: continueTurnPrompt(reason, "mako"),
+      text: continueTurnPrompt(reason, "mako", source.interruption.stopped),
       attachments: [],
       tuning: source.tuning,
       status: "queued",
@@ -98,7 +101,7 @@ export class LiveAutoContinue {
       if (reconnect)
         this.access.transfer(id, { id: request.id, provider: reconnect.provider, text: request.text, attachments: [], tuning: source.tuning }, actor, continues)
       else this.access.admit(resident, request)
-      hostLog("live", "continued a dropped turn", {
+      hostLog("live", pending.restarted ? "continued a turn Mako's exit cut short" : "continued a dropped turn", {
         conversation: id,
         harness: resident.snapshot.session.harness,
         request: request.id,
@@ -120,7 +123,8 @@ export class LiveAutoContinue {
   /**
    * Continues a turn cut short now, as Mako, with Mako's words for `reason`: a turn Mako stopped to hand its Thread
    * to another machine continues where the Thread runs next. `continues` names the request that was cut short, which
-   * may be in another host's journal. Asked again under the same `requestId`, it changes nothing.
+   * may be in another host's journal; `stopped` is the background work the cut stopped, else what that request kept
+   * of it (`Interruption.stopped`). Asked again under the same `requestId`, it changes nothing.
    */
   continueNow(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; actor: Actor }): void {
     const resident = this.access.resident(id)
@@ -133,7 +137,7 @@ export class LiveAutoContinue {
       actor: input.actor,
       id: input.requestId,
       createdAt: Date.now(),
-      text: continueTurnPrompt(input.reason, "mako", input.stopped),
+      text: continueTurnPrompt(input.reason, "mako", input.stopped ?? resident.snapshot.requests.find((request) => request.id === input.continues)?.interruption?.stopped),
       attachments: [],
       tuning,
       status: "queued",

@@ -131,6 +131,8 @@ export type HostEventBody =
   | { type: "cloud-sign-ins"; signIns: CloudSignInsState }
   /** The person's choice about handing agents to the cloud as this Mac sleeps changed. */
   | { type: "handoff-settings"; settings: import("./cloud-threads.js").HandOffSettings }
+  /** The person's conversation settings changed (`ConversationSettings`). */
+  | { type: "conversation-settings"; settings: import("./turn-continuation.js").ConversationSettings }
   /** Something happened to the account's devices (`@mako/protocol/account-events`); `mine` when it's about this Mac. */
   | { type: "cloud-account-event"; seq: number; at: string; event: AccountDeviceEvent; mine: boolean }
   /** A runtime's installed or public version was read, or an update moved; window-wide. */

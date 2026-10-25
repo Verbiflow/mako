@@ -8,7 +8,13 @@
     {
       "reader": "opencode",
       "path": ".local/share/opencode/opencode.db#v2:ses_e8d18abdbffeqRoS3G6tTMMaOD",
-      "known": []
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Gave up after 10 retries — The scripted model failed",
+          "reason": "Mako sums up the retries it watched on the wire (OpenCode's `session.retry.scheduled`) in one marker, measured by the frames' clock; the store keeps at most a step's retry, never Mako's measure, so only the live drawing has it (RETRY_MARKERS, declared stream-only)."
+        }
+      ]
     }
   ]
 }
