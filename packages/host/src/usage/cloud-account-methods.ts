@@ -4,6 +4,8 @@ import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking } from "./cloud-account.js"
+import type { AccountEvent } from "@mako/protocol/account-events"
+import type { ThreadListings } from "@mako/protocol/thread-listing"
 import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState, ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
@@ -65,10 +67,20 @@ export interface CloudAccount {
   giveBackReturn(threadId: string, move: string, reason: string): Promise<ReturnState>
   finishReturn(threadId: string, move: string): Promise<ReturnState>
   returnState(threadId: string, move: string): Promise<ReturnState | undefined>
+  /** The account's Threads as every device lists them (`GET /v1/threads`), and the account stream's number then. */
+  threadListings?(): Promise<ThreadListings>
+  /**
+   * Hears each change to the account's list of Threads, in the stream's order, as it comes, and `account-changed` when
+   * this Mac signs in, out or to another account, after which the list is another's; returns how to stop.
+   */
+  onThreadListings?(listener: (heard: ThreadListHeard | "account-changed") => void): () => void
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   stop(): void
 }
+
+/** A change to the account's list of Threads, as its stream said it. */
+export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: "thread-listed" | "thread-unlisted" }> }
 
 /** The account's store of shared sign-ins in Mako Cloud, through this Mac's device sign-in. */
 export interface HarnessSignInStore {
@@ -139,6 +151,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
+  const threadListeners = new Set<(heard: ThreadListHeard | "account-changed") => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -158,14 +171,23 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       // A grant, a revoke, a sign-in or a sign-out changes what the sign-ins may do; read them again then,
       // or Settings keeps saying "no cloud" after the grant until something else asks.
       const next = account.state.status === "signed-in" ? `${account.state.account.id}:${account.state.account.entitlements.join(",")}` : account.state.status
-      if (standing !== undefined && next !== standing) void sync?.check()
+      if (standing !== undefined && next !== standing) {
+        void sync?.check()
+        for (const listener of threadListeners) listener("account-changed")
+      }
       standing = next
     },
     log: (message, fields) => hostLog("cloud", message, fields),
-    // Every window hears of the account's devices, so one that joined is said wherever this Mac is looked at.
+    // Every window hears of the account's devices, so one that joined is said wherever this Mac is looked at. A change
+    // to the account's Threads goes to what lists them, which tells windows of the conversations it changes.
     onAccountEvent: (heard) => {
-      hostLog("cloud", "account event", { seq: heard.seq, type: heard.event.type, mine: heard.mine })
-      emit({ type: "cloud-account-event", ...heard })
+      const { event } = heard
+      if (event.type === "thread-listed" || event.type === "thread-unlisted") {
+        for (const listener of threadListeners) listener({ seq: heard.seq, event })
+        return
+      }
+      hostLog("cloud", "account event", { seq: heard.seq, type: event.type, mine: heard.mine })
+      emit({ type: "cloud-account-event", seq: heard.seq, at: heard.at, event, mine: heard.mine })
     },
     onRequest: request,
     // With the cloud entitlement, this Mac answers its account's other devices and the cloud through the same
@@ -220,6 +242,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     giveBackReturn: (threadId, move, reason) => cloud.giveBackReturn(threadId, move, reason),
     finishReturn: (threadId, move) => cloud.finishReturn(threadId, move),
     returnState: (threadId, move) => cloud.returnState(threadId, move),
+    threadListings: () => cloud.threadListings(),
+    onThreadListings: (listener) => {
+      threadListeners.add(listener)
+      return () => threadListeners.delete(listener)
+    },
     wake: () => {
       cloud.wake()
       sync?.wake()

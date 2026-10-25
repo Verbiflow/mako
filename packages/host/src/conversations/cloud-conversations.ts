@@ -4,6 +4,7 @@ import { dirname, join } from "node:path"
 import { threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
 import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
+import type { ListedConversation, ListedState } from "@mako/protocol/thread-listing"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
@@ -18,6 +19,7 @@ import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/ind
 import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
 import { CloudControlPreviews } from "./cloud-control-previews.js"
 import { cloudRuntimeOf, namedUuid } from "./cloud-moves.js"
+import { AccountThreads } from "./account-threads.js"
 import { CloudPreviews } from "./cloud-previews.js"
 import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
 
@@ -71,9 +73,43 @@ const EntrySchema = z.object({
   /** The window's own ID for a conversation that took one started ahead (`conversationId`), so a repeated start finds it. */
   startedAs: z.string().optional(),
   summary: LiveSummarySchema.optional(),
+  /**
+   * Listed by the account, not started or moved here: another device's, or one this Mac forgot. Known from the
+   * account's list alone until a window opens it, and never remembered: the list says it again.
+   */
+  listed: z.literal(true).optional(),
 })
 
 type Entry = z.infer<typeof EntrySchema>
+
+/** How a list shows a conversation's state, as a session's status: `waiting` is a turn at work as far as a row goes. */
+const LISTED_STATUS = { working: "running", waiting: "running", idle: "ready", failed: "failed", closed: "closed" } as const satisfies Record<ListedState, LiveSummary["session"]["status"]>
+
+/**
+ * What a window lists of a conversation it knows only from the account's list: the row, and nothing that takes its
+ * machine. Opening it reads the rest there, as it would any cloud conversation's.
+ */
+function listedSummary(conversation: ListedConversation): LiveSummary {
+  const summary: LiveSummary = {
+    session: {
+      id: conversation.id,
+      harness: conversation.harness,
+      cwd: conversation.folder ?? "",
+      status: LISTED_STATUS[conversation.state],
+      connection: "hibernated",
+      modes: [],
+      currentMode: null,
+      configOptions: [],
+    },
+    revision: 0,
+    createdAt: Date.parse(conversation.createdAt),
+    elsewhere: CLOUD_FOLDER_WHERE,
+  }
+  if (conversation.title) summary.session.title = conversation.title
+  if (conversation.thread) summary.threadId = conversation.thread
+  if (conversation.session) summary.sessionId = conversation.session
+  return summary
+}
 
 /**
  * A cloud Thread made ahead of a new conversation's first message, while the person writes it with Cloud chosen.
@@ -229,6 +265,15 @@ export class CloudConversations {
   readonly #previews: CloudPreviews
   /** By conversation: the last view of its app a window was given, shown while its machine sleeps. */
   readonly #views = new Map<string, unknown>()
+  /** The account's Threads as every device lists them: what puts another device's cloud conversations here. */
+  readonly #list = new AccountThreads()
+  #unlisten: (() => void) | undefined
+  #listing: Promise<void> | undefined
+  /**
+   * Threads followed from the stream's head rather than from an event relayed: a listed conversation a window opened,
+   * whose history its snapshot reads on the machine. Replaying the Thread from its first event would carry all of it.
+   */
+  readonly #fromHead = new Set<string>()
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
@@ -238,7 +283,7 @@ export class CloudConversations {
 
   /** Reads what this Mac remembers and follows each open conversation's Thread. */
   start(): Promise<void> {
-    this.#loading ??= this.#load()
+    this.#loading ??= this.#load().then(() => this.#watchList())
     return this.#loading
   }
 
@@ -279,6 +324,11 @@ export class CloudConversations {
     await this.start()
     const entry = this.#entries.get(id)
     if (!entry) return { handled: false }
+    // A window opened one known only from the account's list: from now its batches come here, from the stream's head.
+    if (entry.listed && !this.#following.has(entry.threadId)) {
+      this.#fromHead.add(entry.threadId)
+      this.#follow(entry)
+    }
     if (channel === "mako:live-fork") return { handled: true, value: await this.#fork(entry, args) }
     return { handled: true, value: await this.#call(entry, channel, args) }
   }
@@ -388,10 +438,12 @@ export class CloudConversations {
     this.#wokeAt = performance.now()
     this.#session?.session.wake()
     for (const resume of this.#pauses) resume()
+    if (!this.#list.known) void this.#readList()
   }
 
   dispose(): void {
     this.#closed = true
+    this.#unlisten?.()
     for (const resume of this.#pauses) resume()
     clearTimeout(this.#saving)
     for (const prepared of this.#prepared.values()) clearTimeout(prepared.watching)
@@ -792,11 +844,13 @@ export class CloudConversations {
       while (!this.#closed && this.#entries.get(entry.conversationId) === entry) {
         try {
           const { session } = await this.#connected()
-          const subscription = session.subscribe({ stream: threadStream(entry.threadId), after: entry.seq })
+          const fromHead = this.#fromHead.has(entry.threadId)
+          const subscription = session.subscribe({ stream: threadStream(entry.threadId), after: fromHead ? Number.MAX_SAFE_INTEGER : entry.seq })
           this.#following.set(entry.threadId, subscription)
           for (;;) {
             const frame = await subscription.next()
             if (frame.seq <= entry.seq) continue
+            this.#fromHead.delete(entry.threadId)
             entry.seq = frame.seq
             this.#relay(entry, frame.event.text)
             this.#saveSoon()
@@ -819,7 +873,10 @@ export class CloudConversations {
         wait = Math.min(wait * 2, RETRY_MAX_MS)
       }
     }
-    void run().finally(() => this.#following.delete(entry.threadId))
+    void run().finally(() => {
+      this.#following.delete(entry.threadId)
+      this.#fromHead.delete(entry.threadId)
+    })
   }
 
   /** Waits `ms`, or less when the Mac wakes or this closes. */
@@ -875,6 +932,75 @@ export class CloudConversations {
     this.#changes.set(conversationId, timer)
   }
 
+  /** Hears the account's list of Threads change, and reads it whole once. */
+  #watchList(): void {
+    const account = this.#options.account()
+    if (this.#closed || this.#unlisten || !account?.onThreadListings) return
+    this.#unlisten = account.onThreadListings((heard) => {
+      if (heard === "account-changed") {
+        this.#list.clear()
+        this.#reconcile()
+        void this.#readList()
+      } else if (this.#list.heard(heard)) this.#reconcile()
+      else if (!this.#list.known) void this.#readList()
+    })
+    void this.#readList()
+  }
+
+  /** The account's list, read whole: once at start, after a sign-in, and after a wake while it isn't known. */
+  #readList(): Promise<void> {
+    this.#listing ??= (async () => {
+      const account = this.#options.account()
+      if (this.#closed || !account?.threadListings || !(await account.id())) return
+      try {
+        if (this.#list.listed(await account.threadListings())) this.#reconcile()
+      } catch (error) {
+        hostLog("cloud-conversations", "the account's Threads couldn't be listed; listed again when the account or the network changes", { error: error instanceof Error ? error.message : String(error) })
+      }
+    })().finally(() => {
+      this.#listing = undefined
+    })
+    return this.#listing
+  }
+
+  /**
+   * Holds the conversations known from the account's list to it: a cloud conversation another device has, or this
+   * Mac forgot, is listed here, changed as the list changes, and gone when it leaves it. This Mac's own (started or
+   * moved here) are never touched, and one a window opened goes on from its own batches, which say more and sooner.
+   * Windows hear what changed, and list it as they list a conversation at boot: nothing wakes a machine until one opens.
+   */
+  #reconcile(): void {
+    const wanted = new Map<string, { repository: CloudRepository; conversation: ListedConversation; threadId: string }>()
+    for (const thread of this.#list.threads().values()) {
+      const repository = CloudRepositorySchema.safeParse(thread.repository)
+      if (thread.home !== "cloud" || !repository.success || this.#options.returning?.(thread.threadId)) continue
+      for (const conversation of thread.conversations)
+        if (conversation.state !== "closed") wanted.set(conversation.id, { repository: repository.data, conversation, threadId: thread.threadId })
+    }
+    const unlisted: string[] = []
+    // Deleting from a Map as it's walked is safe: the walk goes on past what went.
+    for (const entry of this.#entries.values()) {
+      if (!entry.listed || wanted.has(entry.conversationId)) continue
+      this.#entries.delete(entry.conversationId)
+      this.controlPreviews.forget(entry.conversationId)
+      this.#views.delete(entry.conversationId)
+      unlisted.push(entry.conversationId)
+      if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
+    }
+    const listed: LiveSummary[] = []
+    for (const [id, { repository, conversation, threadId }] of wanted) {
+      const known = this.#entries.get(id)
+      if (known && (!known.listed || this.#following.has(known.threadId))) continue
+      const summary = listedSummary(conversation)
+      if (known?.summary && JSON.stringify(known.summary) === JSON.stringify(summary)) continue
+      this.#entries.set(id, { ...(known ?? { conversationId: id, threadId, harness: conversation.harness, repository, createdAt: summary.createdAt, created: true, seq: 0, listed: true as const }), summary })
+      listed.push(summary)
+    }
+    if (listed.length) this.#options.emit(encodeRuntimeEvent({ type: "live-listed", summaries: listed }))
+    if (unlisted.length) this.#options.emit(encodeRuntimeEvent({ type: "live-unlisted", ids: unlisted }))
+    if (listed.length || unlisted.length) hostLog("cloud-conversations", "the account's list changed what's listed here", { listed: listed.length, unlisted: unlisted.length })
+  }
+
   async #load(): Promise<void> {
     const text = await readFile(this.#options.file, "utf8").catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return undefined
@@ -898,9 +1024,9 @@ export class CloudConversations {
   }
 
   #save(): Promise<void> {
-    const kept = [...this.#entries.values()].sort((left, right) => right.createdAt - left.createdAt).slice(0, KEPT)
+    const kept = [...this.#entries.values()].filter((entry) => !entry.listed).sort((left, right) => right.createdAt - left.createdAt).slice(0, KEPT)
     for (const entry of this.#entries.values())
-      if (!kept.includes(entry)) {
+      if (!entry.listed && !kept.includes(entry)) {
         this.#entries.delete(entry.conversationId)
         this.controlPreviews.forget(entry.conversationId)
       }

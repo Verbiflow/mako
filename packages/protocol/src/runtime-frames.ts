@@ -14,6 +14,7 @@ import {
   ThreadIdSchema,
 } from "./ids.js"
 import { MediaStreamIdSchema } from "./media.js"
+import { RuntimeListingSchema } from "./thread-listing.js"
 import type { Payload } from "./payload.js"
 import { VersionRangeSchema } from "./version.js"
 
@@ -73,6 +74,19 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       generation: GenerationSchema,
       busy: z.boolean(),
       work: z.array(z.string().min(1).max(120)).max(20),
+    })
+    .strict(),
+  /**
+   * What the Thread's conversations are, as the account's list shows them (version 4 on, `thread-listing.ts`): sent
+   * when that changes and once on each enrolment, never as a heartbeat. The Thread's object keeps the last, so a
+   * paused machine's Thread is listed as it was.
+   */
+  z
+    .object({
+      type: z.literal("listing"),
+      threadId: ThreadIdSchema,
+      generation: GenerationSchema,
+      listing: RuntimeListingSchema,
     })
     .strict(),
   /** The runtime ended a stream it served (version 3 on, `media.ts`); its viewer hears why. */

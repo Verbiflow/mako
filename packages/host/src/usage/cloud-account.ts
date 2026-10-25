@@ -6,6 +6,7 @@ import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
+import { ThreadListingsSchema, type ThreadListings } from "@mako/protocol/thread-listing"
 import { MOVE_ANSWER_WAIT_MS, MOVE_REASON_MAX, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
@@ -369,6 +370,14 @@ export class CloudAccounts {
   cancelSignIn(): CloudAccount {
     if (this.#signIn) this.#endSignIn()
     return this.account()
+  }
+
+  /**
+   * The account's Threads as every device lists them, and the account stream's number they were read at: this Mac
+   * follows the stream after it, and misses nothing between.
+   */
+  async threadListings(): Promise<ThreadListings> {
+    return ThreadListingsSchema.parse(await (await this.#call("threads.list", "GET", "/v1/threads")).json())
   }
 
   async devices(): Promise<{ devices: CloudDevice[]; current: string }> {
@@ -999,7 +1008,7 @@ export class CloudAccounts {
     // A kind of event this build doesn't know is passed over, never refused.
     if (!parsed.success) return
     const event = parsed.data
-    const mine = event.type === "device-joined" ? event.device.id === stored.device.id : event.deviceId === stored.device.id
+    const mine = event.type === "device-joined" ? event.device.id === stored.device.id : event.type === "device-removed" ? event.deviceId === stored.device.id : false
     if (event.type === "device-joined" && Date.parse(frame.at) < Date.parse(stored.device.createdAt)) return
     this.#options.onAccountEvent?.({ seq: frame.seq, at: frame.at, event, mine })
   }

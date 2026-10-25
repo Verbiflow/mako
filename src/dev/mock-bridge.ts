@@ -210,6 +210,8 @@ export function installMockBridge() {
   const terminalListeners = new Set<(event: TerminalEvent) => void>()
   const emit = (event: HostEvent) =>
     listeners.forEach((listener) => listener(event))
+  // `?events`: a UI check sends host events as the host would (another device's Thread listed), through the window's own path.
+  if (new URLSearchParams(globalThis.location?.search).has("events")) Reflect.set(globalThis, "makoMockHost", { emit })
   const emitTerminal = (event: TerminalEvent) =>
     terminalListeners.forEach((listener) => listener(event))
   /**

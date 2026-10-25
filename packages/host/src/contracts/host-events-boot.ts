@@ -1,4 +1,4 @@
-import type { AccountEvent } from "@mako/protocol/account-events"
+import type { AccountDeviceEvent } from "@mako/protocol/account-events"
 import type { LifecycleState, LifecycleAction, UpdateInstallation } from "./app-lifecycle.js"
 import type { ThreadArchiveSnapshot } from "./thread-lifecycle.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
@@ -106,6 +106,13 @@ export type HostEventBody =
       lead?: string; title?: string
     }
   | { type: "live-batch"; batch: LiveBatch }
+  /**
+   * Conversations the account lists that this host doesn't run (another device's in the cloud): each listed as one is
+   * at boot, unopened, or listed again as it changed. Opening one reads it where it runs.
+   */
+  | { type: "live-listed"; summaries: LiveSummary[] }
+  /** Conversations the account no longer lists here: gone from every window. */
+  | { type: "live-unlisted"; ids: string[] }
   | { type: "live-owner-connection"; ids: string[]; connected: boolean }
   | { type: "session"; session: SessionState }
   | { type: "meta"; meta: SessionMeta }
@@ -125,7 +132,7 @@ export type HostEventBody =
   /** The person's choice about handing agents to the cloud as this Mac sleeps changed. */
   | { type: "handoff-settings"; settings: import("./cloud-threads.js").HandOffSettings }
   /** Something happened to the account's devices (`@mako/protocol/account-events`); `mine` when it's about this Mac. */
-  | { type: "cloud-account-event"; seq: number; at: string; event: AccountEvent; mine: boolean }
+  | { type: "cloud-account-event"; seq: number; at: string; event: AccountDeviceEvent; mine: boolean }
   /** A runtime's installed or public version was read, or an update moved; window-wide. */
   | { type: "runtime-updates"; updates: HarnessUpdates }
   | { type: "notice"; level: "info" | "success" | "error"; message: string }
