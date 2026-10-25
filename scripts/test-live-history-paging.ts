@@ -336,8 +336,36 @@ const evictedReader = new LiveHistoryReader()
 const expiring = auditSnapshot(0)
 expiring.epoch = "eviction"
 const oldView = evictedReader.capture(expiring)
+const current = { kind: "snapshot" as const, epoch: expiring.epoch, ifCurrent: { token: oldView.history!.token, revision: expiring.revision } }
+// Other conversations streaming never push out the view of the one being read.
 for (let n = 0; n < 40; n++) evictedReader.capture({ ...expiring, session: { ...expiring.session, id: auditId(5000 + n) } })
+assert.deepEqual(await read(evictedReader, expiring, current), { kind: "unchanged", token: oldView.history!.token, revision: expiring.revision, epoch: expiring.epoch },
+  "A conversation's view outlasts other conversations' captures")
+// Its own newer views do.
+for (let n = 1; n <= 4; n++) evictedReader.capture({ ...expiring, revision: expiring.revision + n })
 const recaptured = await read<LiveSnapshot>(evictedReader, expiring, { kind: "snapshot", epoch: expiring.epoch,
   ifCurrent: { token: oldView.history!.token, revision: expiring.revision } })
 assert.notEqual(recaptured.history!.token, oldView.history!.token, "Eviction returns a fresh usable view, never an unchanged acknowledgement")
 console.log("PASS: conditional refresh owner/epoch and eviction fences")
+
+{
+  // Views weigh only what they keep alive beyond memory: a held conversation's newest view stays whatever its size,
+  // while views of conversations only on disk yield to the budget, most recently used first.
+  const big = (n: number): LiveSnapshot => {
+    const snapshot = auditSnapshot(0)
+    snapshot.session = { ...snapshot.session, id: auditId(7000 + n) }
+    snapshot.epoch = "weights"
+    snapshot.blocks = [{ type: "text", text: `${n}`.padEnd(40_000_000, "x") }]
+    return snapshot
+  }
+  const held = big(0), first = big(1), second = big(2), small = auditSnapshot(1)
+  small.session = { ...small.session, id: auditId(7003) }
+  small.epoch = "weights"
+  const reader = new LiveHistoryReader(undefined, undefined, undefined, (id) => id === held.session.id ? held : undefined)
+  const views = [held, first, second, small].map((snapshot) => reader.capture(snapshot).history!.token)
+  const detail = (snapshot: LiveSnapshot, token: string) => reader.read(snapshot.session.id, { kind: "detail", token, at: { kind: "live", index: 0 } }, async () => snapshot)
+  await detail(held, views[0]!)
+  await assert.rejects(detail(first, views[1]!), /history view expired/, "an unheld view past the budget goes")
+  await detail(second, views[2]!)
+  console.log("PASS: views weigh what they keep beyond memory; a held conversation's newest view stays")
+}

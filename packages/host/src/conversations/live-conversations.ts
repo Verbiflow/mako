@@ -313,6 +313,11 @@ export class LiveConversations {
     return this.records.session(id)
   }
 
+  /** What memory holds of the conversation now; `undefined` for one only on disk, which this never reads in. */
+  held(id: string): LiveSnapshot | undefined {
+    return this.records.get(id)?.snapshot
+  }
+
   /** Whether the conversation is in memory; one only on disk runs nothing, and `snapshot` would read it in. */
   loaded(id: string): boolean {
     return this.records.has(id)

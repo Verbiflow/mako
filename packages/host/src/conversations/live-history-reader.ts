@@ -3,19 +3,26 @@ import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
 import { isTurnStart } from "@mako/sessions/live-content"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
-import { LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryAddress, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
+import { HISTORY_VIEW_EXPIRED, LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryAddress, type LiveHistoryRead, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryPage, type LiveHistorySnapshot } from "../contracts/live-history.js"
 import { historyJsonChunks } from "./live-history-json.js"
 import { nativeHistoryRevision } from "./native-history.js"
 import { cutOffRequests, mergedBase } from "./stream-merging.js"
 import { ContentWeights } from "../contracts/residency.js"
 import type { Entry } from "@mako/sessions/entries"
 import { readOriginal, readStreamOriginal, type EntryOriginal } from "@mako/sessions/record-original"
+import { hostLog } from "../base/host-log.js"
 
 const PAGE_CHARS = 192 * 1024
 const PAGE_ITEMS = 80
 const TOOL_PREVIEW = 2048
-const MAX_VIEWS = 32
+/** A conversation's newest views: the one its windows hold, and ones a read still in flight names. */
+const VIEWS_PER_CONVERSATION = 4
+/** What views keep alive beyond what memory holds of their conversations anyway. */
 const VIEW_BYTES = 128 * 1024 * 1024
+/** How long a read may go without weighing the views again; a capture always does. */
+const PRUNE_MS = 30_000
+/** Views let go, remembered by token so a read naming one says why. */
+const GONE_KEPT = 256
 const MAX_RECORDS = 8
 const MAX_ACTIVE_READS = 32
 const IDLE_MS = 10 * 60_000
@@ -58,12 +65,17 @@ export class LiveHistoryReader {
   private readonly nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>
   private readonly nativeEntry?: (path: string, id: string) => Promise<Entry | null>
   private readonly originals?: Originals
+  /** What memory holds of a conversation now, without reading one only on disk back in. */
+  private readonly held?: (id: string) => LiveSnapshot | undefined
+  private readonly gone = new Map<string, { id: string; why: string; at: number }>()
+  private pruned = 0
 
   constructor(
     nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>,
     nativeEntry?: (path: string, id: string) => Promise<Entry | null>,
     originals?: Originals,
-  ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry; this.originals = originals }
+    held?: (id: string) => LiveSnapshot | undefined,
+  ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry; this.originals = originals; this.held = held }
 
   /** Shared response boundary for operations that return a snapshot. */
   present<Result>(value: Result): Result {
@@ -117,7 +129,7 @@ export class LiveHistoryReader {
   }
 
   async read(id: string, input: LiveHistoryRead, snapshot: () => Promise<LiveSnapshot | null>): Promise<LiveHistoryChunk> {
-    this.pruneViews()
+    if (Date.now() - this.pruned > PRUNE_MS) this.pruneViews()
     this.pruneRecords()
     if (input.kind === "part") {
       const record = this.records.get(input.record)
@@ -140,7 +152,7 @@ export class LiveHistoryReader {
       }
     } else {
       const view = this.views.get(input.token)
-      if (!view || view.id !== id) throw new Error("This history view expired. Open the conversation again to refresh it.")
+      if (!view || view.id !== id) throw this.expired(id, input.token, view)
       this.touchView(input.token, view)
       if (input.kind === "earlier" || input.kind === "range") {
         const before = input.kind === "earlier" ? input.before : input.to
@@ -245,18 +257,53 @@ export class LiveHistoryReader {
     }
   }
 
+  /**
+   * Views stay while they cost little. A conversation's newest view stays while memory holds the conversation: it
+   * shares what memory holds, so it keeps only what changed since alive. The rest stay most recently used first while
+   * what they keep alive beyond memory fits `VIEW_BYTES`, and none past `VIEWS_PER_CONVERSATION` of one conversation,
+   * so one conversation's stream never pushes out the view of another being read.
+   */
   private pruneViews(): void {
     const now = Date.now()
-    const views = [...this.views].reverse().sort((a, b) => b[1].used - a[1].used)
-    let bytes = 0
+    this.pruned = now
     const shared = new WeakSet<object>()
-    for (const [index, [key, view]] of views.entries()) {
+    const newer = new Map<string, number>()
+    let bytes = 0
+    let first = true
+    for (const [key, view] of [...this.views].reverse().sort((a, b) => b[1].used - a[1].used)) {
+      const count = newer.get(view.id) ?? 0
+      const held = count === 0 ? this.held?.(view.id) : undefined
+      if (held) this.weights.of(held, shared, true)
       const weight = this.weights.of(view.snapshot, shared)
-      // The current capture can exceed the target. Older immutable tokens
-      // expire rather than keeping 32 complete copies of a giant transcript.
-      if (index > 0 && (index >= MAX_VIEWS || bytes + weight > VIEW_BYTES || now - view.used > IDLE_MS)) this.views.delete(key)
-      else { bytes += weight; this.weights.of(view.snapshot, shared, true) }
+      const why = count >= VIEWS_PER_CONVERSATION ? "newer views of its conversation"
+        : first || held ? undefined
+        : now - view.used > IDLE_MS ? "unused for ten minutes"
+        : bytes + weight > VIEW_BYTES ? "views past their memory budget" : undefined
+      first = false
+      if (why) this.letGo(key, view, why)
+      else {
+        newer.set(view.id, count + 1)
+        bytes += weight
+        this.weights.of(view.snapshot, shared, true)
+      }
     }
+  }
+
+  private letGo(token: string, view: View, why: string): void {
+    this.views.delete(token)
+    this.gone.set(token, { id: view.id, why, at: Date.now() })
+    if (this.gone.size > GONE_KEPT) this.gone.delete(this.gone.keys().next().value!)
+  }
+
+  /** A read naming a view this host doesn't hold, said with why it went so a window that keeps asking is traceable. */
+  private expired(id: string, token: string, view: View | undefined): Error {
+    const gone = this.gone.get(token)
+    hostLog("history", "a read named a view this host doesn't hold", {
+      conversation: id,
+      why: view ? "it belongs to another conversation" : gone ? gone.why : "never held here: a host that started since, or another host",
+      ...gone && { goneMs: Date.now() - gone.at },
+    })
+    return new Error(HISTORY_VIEW_EXPIRED)
   }
 
   private touchView(token: string, view: View): void {

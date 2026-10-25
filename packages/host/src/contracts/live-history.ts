@@ -65,3 +65,10 @@ export interface LiveHistoryChunk {
 
 // A JSON-escaped frame is at most ~1.6 MiB, including pathological strings.
 export const LIVE_HISTORY_CHUNK_CHARS = 256 * 1024
+
+/** What a read against a view the host let go says; a window reads the conversation again and retries against the new view. */
+export const HISTORY_VIEW_EXPIRED = "This history view expired. Open the conversation again to refresh it."
+/** A read against a view or a read the host let go, or against history the native session rewrote: reading again repairs it. */
+export function isHistoryExpired(error: Error): boolean {
+  return /history (?:view|read) expired|native history changed/.test(error.message)
+}

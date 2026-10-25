@@ -113,7 +113,9 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const { catalog, memory } = threads
   const { host } = harnesses
   const dataRoot = environment.dataRoot
-  const history = new LiveHistoryReader(catalog.page, catalog.entry, deps.streams === undefined ? undefined : { record: catalog.original, streams: deps.streams })
+  // `live` is made below; the reader asks it only once a read arrives.
+  const history = new LiveHistoryReader(catalog.page, catalog.entry, deps.streams === undefined ? undefined : { record: catalog.original, streams: deps.streams },
+    (id) => live.held(id))
   // Every resume, from the rail, a reconnect or a wake, first puts a session its harness deleted back from Mako's records.
   const restoring = restoringResume({
     assess: (binding) => harnesses.assessResume(binding),
