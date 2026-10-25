@@ -20,6 +20,7 @@ import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
 import { compareVersions } from "@mako/host/contracts/runtime-version"
 import { z } from "zod"
+import { currentPairVersions } from "./native-decoding.ts"
 
 const nativeStores = new NativeStores(false)
 
@@ -281,14 +282,6 @@ const RECORD_EXCEPTIONS = new Map<string, Map<"concepts" | "concepts fixture", s
   ])],
 ])
 const VersionField = z.object({ version: z.string().optional() })
-const PairVersion = z.object({ native: z.object({ version: z.string() }) })
-/** The versions a harness's current decode pairs were recorded with, each once; a pair kept from another build (`<scenario>@<version>`) isn't current. */
-const pairVersions = (provider: string): string[] => {
-  const folder = join(import.meta.dirname, "fixtures", "native-decoding", provider, "pairs")
-  if (!existsSync(folder)) return []
-  return [...new Set(readdirSync(folder).filter((name) => !name.includes("@")).map((name) => join(folder, name, "pair.json")).filter((file) => existsSync(file))
-    .map((file) => PairVersion.parse(JSON.parse(readFileSync(file, "utf8"))).native.version))].sort(compareVersions)
-}
 const ShippedPackage = z.object({ version: z.string(), claudeCodeVersion: z.string().optional() })
 const Lockfile = z.object({ packages: z.record(z.string(), z.object({ version: z.string().optional() })) })
 const plain = (version: string) => version.replace(/^SDK /, "")
@@ -323,7 +316,7 @@ for (const { provider } of harnesses) {
     .filter((version) => version !== undefined)
     .sort(compareVersions)
   record("native tools", recordings.at(-1))
-  const pairs = pairVersions(provider)
+  const pairs = await currentPairVersions(provider)
   record("decode pairs", pairs.length ? pairs.join(" and ") : undefined)
   const concepts = join(import.meta.dirname, "fixtures", "native-vocabulary", `${provider}-concepts.json`)
   record("concepts fixture", existsSync(concepts) ? VersionField.parse(JSON.parse(readFileSync(concepts, "utf8"))).version : undefined)

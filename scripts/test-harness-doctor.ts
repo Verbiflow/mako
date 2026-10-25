@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { doctorReport, formatReport, type InstalledRuntime } from "./harness-doctor-report.ts"
 import { loadFixtures } from "./native-decoding.ts"
+import { CURSOR_VERSIONS } from "@mako/host/harnesses/cursor/versions"
 
 /**
  * The doctor against a synthetic data directory: unknown records, stream
@@ -71,7 +72,7 @@ try {
 
   const installed = async (harness: string): Promise<InstalledRuntime> =>
     harness === "codex" ? { version: "9.9.9", from: "/bin/codex", sdk: null }
-      : harness === "cursor" ? { version: "1.0.31", from: "node_modules/@cursor/sdk", sdk: { name: "@cursor/sdk", version: "1.0.31" } }
+      : harness === "cursor" ? { version: CURSOR_VERSIONS.tested, from: "node_modules/@cursor/sdk", sdk: { name: "@cursor/sdk", version: CURSOR_VERSIONS.tested } }
         : { version: null, from: null, sdk: null, problem: "not installed" }
   // Saved records the readers couldn't read, as the views noted them; no record store here, so no version is known.
   const views = join(root, "views")
