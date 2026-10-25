@@ -71,3 +71,23 @@ jobs:
       - run: npm run build:control-runtime
       - run: npm run test:decoders
       - run: npm run test:usage
+
+  # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
+  # writes the workspace and nothing else, read-only writes nothing, and neither reaches the network.
+  codex-sandbox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/codex-sandbox
+      - name: Codex's sandbox at the tested build
+        run: |
+          version=$(node -e 'import("./packages/host/src/harnesses/codex/versions.ts").then((m) => console.log(m.CODEX_VERSIONS.tested))')
+          npm install --prefix "$RUNNER_TEMP/codex" --no-audit --no-fund "@openai/codex@$version"
+          PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" scripts/check-codex-sandbox.sh
