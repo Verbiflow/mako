@@ -291,6 +291,7 @@ function turnScene(scene: TurnScene, now: number): Pick<LiveSnapshot, "blocks" |
         blocks: [
           ...snapshot.blocks,
           prompt,
+          tool("read-routes", "Read", { file_path: `${cwd}/src/router/routes.ts` }, "completed", now - 72_000, "export const routes = [ … ]"),
           { type: "thinking" as const, text: "Four independent questions: split them across agents.", at: now - 70_000 },
           agent("agent-routes", "Map every protected route", "Explore", "pending", now - 66_000),
           agent("agent-refresh", "Trace the session refresh", "Explore", "pending", now - 66_000),

@@ -610,6 +610,14 @@ function WorkSection({
   const step = useMemo(() => (live ? liveStep(messages) : undefined), [live, messages])
   // While it runs, the summary says only what has finished; the running step is its own row.
   const done = useMemo(() => (step ? summarizeWork(messages, undefined, step.group ?? true) : undefined), [step, messages])
+  // The open list leaves out what the live row under it says, so the row stays its last entry.
+  // The thought is the newest message's only; earlier messages lose only the step's calls.
+  const shown = useMemo(() => {
+    if (!step) return undefined
+    const calls = new Set((step.group ?? (step.call ? [step.call] : [])).map((call) => call.id))
+    const earlier: LiveShown = { calls, thought: false }
+    return { earlier, newest: step.thinking ? { calls, thought: true } : earlier }
+  }, [step])
   const folded = work.tools >= 3 && !whole
   const summarized = live ? (done?.tools ?? 0) > 0 : folded
   const toggle = () =>
@@ -638,7 +646,7 @@ function WorkSection({
             )}
           >
             {messages.map((message) => (
-              <Response key={message.id} message={message} showWork />
+              <Response key={message.id} message={message} showWork live={message === messages.at(-1) ? shown?.newest : shown?.earlier} />
             ))}
           </div>
         </FollowingList>
@@ -646,6 +654,12 @@ function WorkSection({
       {step ? <LiveRow step={step} open={open} onToggle={step.call || step.thinking || summarized ? toggle : undefined} /> : null}
     </div>
   )
+}
+
+/** What a running stretch's live row says: the calls it stands for, and whether its step is a thought. */
+interface LiveShown {
+  calls: ReadonlySet<string>
+  thought: boolean
 }
 
 /**
@@ -873,10 +887,13 @@ function Response({
   message,
   showWork,
   previewedFiles,
+  live,
 }: {
   message: ChatMessage
   showWork: boolean
   previewedFiles?: readonly string[]
+  /** What the running turn's live row already says, left out here so it is said once: its calls, and its thought when the step is one. */
+  live?: LiveShown
 }) {
   const showThinking = usePrefs((prefs) => prefs.showThinking)
 
@@ -884,16 +901,17 @@ function Response({
     const thinkingParts: string[] = []
     const textParts: string[] = []
     for (const block of message.blocks) {
-      if (block.type === "thinking" && block.thinking)
+      if (block.type === "thinking" && block.thinking && !live?.thought)
         thinkingParts.push(block.thinking)
       if (block.type === "text" && block.text) textParts.push(block.text)
     }
+    const paired = pairTools(message.blocks)
     return {
       thinking: thinkingParts.join("\n\n"),
-      tools: pairTools(message.blocks),
+      tools: live?.calls.size ? paired.filter((call) => !live.calls.has(call.id)) : paired,
       text: textParts.join(""),
     }
-  }, [message.blocks])
+  }, [message.blocks, live])
 
   const attachments = message.blocks.flatMap((block) =>
     block.type === "attachment" ? [block] : []
