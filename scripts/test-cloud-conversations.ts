@@ -238,13 +238,14 @@ function sessionOf(client: ClientSession): ClientSessionOverSockets {
 }
 
 /** The router, the conversations' events it relays, and apart from them, what it tells windows of each start. */
-function conversations(account: CloudAccount, file: string, copies?: CloudCopies) {
+function conversations(account: CloudAccount, file: string, copies?: CloudCopies, asleepMs?: number) {
   const events: RuntimeEvent[] = []
   const starts: RuntimeEvent[] = []
   /** Each conversation a window on its folder was told changed, in order. */
   const changed: string[] = []
   const options: CloudConversationsOptions = { account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id) }
   if (copies) options.copies = copies
+  if (asleepMs) options.asleepMs = asleepMs
   const router = new CloudConversations(options)
   after(() => router.dispose())
   return { router, events, starts, changed }
@@ -958,7 +959,7 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
     },
     entry: async (_device, _harness, _nativeId, id) => entries.find((entry) => entry.id === id) ?? null,
   }
-  const { router } = conversations(machine.account, join(scratch, "copies", "conversations.json"), copies)
+  const { router, events } = conversations(machine.account, join(scratch, "copies", "conversations.json"), copies, 200)
   await router.start()
   await until("listed", () => router.summaries().some((summary) => summary.session.id === conversation))
 
@@ -995,6 +996,21 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
   const asking = performance.now()
   await assert.rejects(router.route("mako:live-prompt", [conversation, randomUUID(), "go on", [], undefined]), /Studio is off, so this conversation can't be changed from here until it's back/)
   assert.ok(performance.now() - asking < 1_000, "at once: a Mac isn't woken by being called")
+
+  // The Studio comes back: a window with its conversation open is told, and reads it there again, live.
+  const studioCalls: string[] = []
+  const studioRuntime = await serveHostThroughGateway(await machine.gateway.connectRuntime(), {
+    runtimeId: `d-${studio}`,
+    build: "test",
+    invoke: async (channel) => (studioCalls.push(channel), JSON.stringify({ session: { id: conversation } })),
+  })
+  after(() => studioRuntime.close())
+  const listedBefore = events.filter((event) => event.type === "live-listed").length
+  await until("the window told the Studio is back", () => events.filter((event) => event.type === "live-listed").length > listedBefore, 5_000)
+  assert.ok(studioCalls.includes("mako:live-state"), "asked with the smallest read there is")
+  studioCalls.length = 0
+  await router.route("mako:live-snapshot", [conversation])
+  assert.deepEqual(studioCalls, ["mako:live-snapshot"], "and read on the Studio, not from its copy")
 })
 
 /** A Session ID for a conversation, the same each time it's asked. */

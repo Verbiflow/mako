@@ -25,7 +25,9 @@ import {
   fitsBeside,
 } from "@/components/stage/stage-width"
 import { cn } from "@/lib/utils"
-import { ArrowLeftIcon } from "lucide-react"
+import { ArrowLeftIcon, PowerOffIcon } from "lucide-react"
+import { Blank } from "@/components/ui/kit"
+import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import type { TabStage } from "@/state/stage"
 
 /** Identity-stable fallback so the selector never allocates per render. */
@@ -348,6 +350,15 @@ const CompanionBody = memo(function CompanionBody({
 }: {
   render: React.ComponentType<Record<never, never>>
 }) {
+  // The computer that has the conversation's folder is off: nothing of it can be read, so every panel says so once
+  // rather than each waiting on it.
+  const off = useWorkspaceFocus().off
+  if (off)
+    return (
+      <div data-device-off className="h-full">
+        <Blank icon={<PowerOffIcon />} title={`${off} is off`} body={`Its changes, files and agents show here once ${off} is back. The conversation reads from the copy it keeps in your account.`} />
+      </div>
+    )
   return <Render />
 })
 

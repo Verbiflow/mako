@@ -69,7 +69,7 @@ jobs:
     env:
       BRANCH: harness-versions/${{ matrix.harness }}-${{ matrix.version }}
     steps:
-      # The pull request is the bot's (Verbiflow Mako Bot): one the workflow's own token opened would run no checks,
+      # The pull request is the bot's (Mako by Verbiflow): one the workflow's own token opened would run no checks,
       # and its checks are the news. People open theirs as themselves; only automations use the bot.
       - name: Act as the bot
         id: bot
