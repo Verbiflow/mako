@@ -199,10 +199,11 @@ const ALLOWED_EMAIL = /^(?:noreply@anthropic\.com|[^@]+@example\.(?:com|org|net|
 /**
  * Home folders a fixture may name: the stand-in, the placeholders hand-written
  * fixtures use, xAI's build machine, which Grok's binary reports in its
- * built-in workflows' `workflowPath`, and the example paths in Devin's own
- * system prompt (`/home/ubuntu/repos/project`).
+ * built-in workflows' `workflowPath` (`actions-runner` to 1.0.46, `buildkite`
+ * in 1.0.70), and the example paths in Devin's own system prompt
+ * (`/home/ubuntu/repos/project`).
  */
-const ALLOWED_HOME = /^\/(?:Users|home)\/(?:mako|me|user|ubuntu|admin\/actions-runner)\//
+const ALLOWED_HOME = /^\/(?:Users|home)\/(?:mako|me|user|ubuntu|admin\/(?:actions-runner|buildkite))\//
 const STATIC_LEAKS: readonly { kind: string; pattern: RegExp; allowed?: RegExp }[] = [
   { kind: "email", pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[a-z]{2,}/g, allowed: ALLOWED_EMAIL },
   { kind: "home path", pattern: /\/(?:Users|home)\/[A-Za-z0-9_-][A-Za-z0-9._-]*\/(?:[A-Za-z0-9._-]+\/)?/g, allowed: ALLOWED_HOME },

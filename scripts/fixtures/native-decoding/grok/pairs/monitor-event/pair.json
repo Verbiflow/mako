@@ -1,23 +1,23 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.46"
+    "version": "1.0.70"
   },
-  "about": "Watch for two ticks, then wait four seconds and tell me what the watch saw. A watch the agent left running reports while a shell command runs in the same turn, then ends; the harness takes both reports in before its next step.",
+  "about": "Watch for two ticks, then wait four seconds and tell me what the watch saw. A watch the agent left running reports while a shell command runs in the same turn, then ends; the harness takes the reports in before its next step, or wakes on the end once the turn is over.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a133c2-f8ae-78a0-8389-5e51e7109ef2/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a172ac-e61b-7fb3-a3ad-f605aadbc830/updates.jsonl",
       "known": [
         {
-          "side": "-",
-          "line": "tool #1 shell monitor {\"command\":\"sleep 1; echo tick-one; sleep 1; echo tick-two\",\"description\":\"Tick watch\",\"persistent\":false,\"timeout_ms\":36000000,\"variant\":\"Monitor\"} pending -> tick-one\\ntick-two",
-          "reason": "Grok 1.0.46 streams a monitor's output as in-progress updates to its call after the call completed, and sends its events as `_x.ai/monitor_event`; its store keeps neither"
+          "side": "+",
+          "line": "note: Background command \"Tick watch\" completed (exit code 0)",
+          "reason": "Grok 1.0.70 delivers a watch's end that comes in after the turn as a turn of its own (a `syntheticPrompt` reminder, prompt id `task-completed-<task>`). The pair's live drawing stops where the prompted turn ends; Mako's live driver follows the woken turn from `_x.ai/task_completed`, and the store draws it as Grok's own turn."
         },
         {
           "side": "+",
-          "line": "tool #1 shell monitor {\"command\":\"sleep 1; echo tick-one; sleep 1; echo tick-two\",\"description\":\"Tick watch\",\"persistent\":false,\"timeout_ms\":36000000,\"variant\":\"Monitor\"} -> ",
-          "reason": "Grok 1.0.46 stores only the monitor call's completion, whose output is the task it started, not what the watch printed"
+          "line": "text: The watch has ended; it saw both ticks.",
+          "reason": "Grok 1.0.70 delivers a watch's end that comes in after the turn as a turn of its own (a `syntheticPrompt` reminder, prompt id `task-completed-<task>`). The pair's live drawing stops where the prompted turn ends; Mako's live driver follows the woken turn from `_x.ai/task_completed`, and the store draws it as Grok's own turn."
         }
       ]
     }

@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.46"
+    "version": "1.0.70"
   },
   "about": "Use your todo list to plan the release in two items: QA sign-off, in progress, then shipping the release, pending. Don't run commands or change files. / QA signed off. Update the todo list: QA sign-off completed, shipping in progress. Don't run commands or change files. A todo list in the first turn, updated in the second.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11b84-47ff-7291-96b5-b088a53c0266/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a172ad-c843-7bc0-8ea6-8ec9618c722d/updates.jsonl",
       "known": []
     }
   ]

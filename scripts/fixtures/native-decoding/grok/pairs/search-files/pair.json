@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.46"
+    "version": "1.0.70"
   },
   "about": "Without the shell, use your file search tools to find the Markdown files in this project, then search them for the word Friday and tell me which ones mention it. A file search matching in two files of three, one in a subdirectory, then the answer naming them.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11b84-57c4-72b1-9781-465aea68b87e/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a172ad-fa3c-7e61-9f73-7a09da1f6b4f/updates.jsonl",
       "known": []
     }
   ]

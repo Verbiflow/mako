@@ -1,23 +1,28 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.46"
+    "version": "1.0.70"
   },
   "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1728e-4c8c-7172-9fc4-d8e12339171d/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a172ad-eb37-7073-a962-9608d8a91d0b/updates.jsonl",
       "known": [
         {
           "side": "-",
           "line": "tool #1 shell run_terminal_command {\"command\":\"tail -f notes.md\",\"description\":\"Follow notes.md\",\"is_background\":false,\"variant\":\"Bash\"} pending -> The release ships on Friday.\\nQA signs off on Thursday.",
-          "reason": "Grok 1.0.46 writes nothing to updates.jsonl once the person stops the turn: not the stopped call's last update, which carries its input again with is_background and variant and what the command had printed, nor an end of the turn."
+          "reason": "Grok 1.0.70 keeps only the stopped call's first update, whose content is the command's description, not the output it streamed after or a status, then ends the turn with `turn_completed` stopped `cancelled` (1.0.46 wrote nothing once the person stopped the turn)."
         },
         {
           "side": "+",
-          "line": "tool #1 shell run_terminal_command {\"command\":\"tail -f notes.md\",\"description\":\"Follow notes.md\"} pending",
-          "reason": "Grok 1.0.46 writes nothing to updates.jsonl once the person stops the turn: not the stopped call's last update, which carries its input again with is_background and variant and what the command had printed, nor an end of the turn."
+          "line": "tool #1 shell run_terminal_command {\"command\":\"tail -f notes.md\",\"description\":\"Follow notes.md\",\"is_background\":false,\"variant\":\"Bash\"} -> Follow notes.md",
+          "reason": "Grok 1.0.70 keeps only the stopped call's first update, whose content is the command's description, not the output it streamed after or a status, then ends the turn with `turn_completed` stopped `cancelled` (1.0.46 wrote nothing once the person stopped the turn)."
+        },
+        {
+          "side": "+",
+          "line": "note: Interrupted",
+          "reason": "The window draws a stopped turn's stop as its footer: live from the host's turn state, which the pair's live drawing doesn't include, and reopened from this marker, which it then hides beside the footer (notesBesideStop, src/lib/exchanges.ts)."
         }
       ]
     }

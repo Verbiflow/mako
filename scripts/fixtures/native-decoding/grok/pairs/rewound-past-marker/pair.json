@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.46"
+    "version": "1.0.70"
   },
   "about": "Say hello. / Say hello again. / /rewind / Without running anything, say done. Two turns failing with a server error, each leaving a marker both sides cite, a rewind to before the second, then a turn that replaces it: the first marker stays, citing the same record, and the second goes.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a11b84-6e89-7612-98a4-6a3a04fe2165/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a172ae-2ae9-7c03-9480-88f12e3df4a1/updates.jsonl",
       "known": [
         {
           "side": "-",

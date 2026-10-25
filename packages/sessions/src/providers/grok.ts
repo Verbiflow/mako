@@ -106,7 +106,9 @@ type SavedLine =
     }
   | { kind: "update"; at?: string; notification: SessionNotification }
   /** A background task settled; the reminder of the turn Grok runs on it names it, and this holds its output. */
-  | { kind: "task"; task: GrokTaskSnapshot & { task_id: string } }
+  | { kind: "task"; task: GrokTaskSnapshot & { task_id: string }; sessionId?: string }
+  /** A call left a watch running as a background task (`task_backgrounded` with `monitor_description`). */
+  | { kind: "watch"; call: string; task: string }
   /** A line Mako has no meaning for: an update kind it doesn't know, or a known one it couldn't read. */
   | { kind: "unread"; type: string; reason: UnreadRecord["reason"]; raw: NativeRecordSample }
   | {
@@ -265,6 +267,8 @@ const GrokTurnStateSchema = z.object({
   failed: z.boolean(),
   /** Settled tasks by id, oldest first. */
   tasks: z.array(z.tuple([z.string(), GrokTaskSnapshot])),
+  /** Watches still running, by task id, each with the call that started it. */
+  watches: z.array(z.tuple([z.string(), z.string()])).optional(),
 })
 type GrokTurnState = z.infer<typeof GrokTurnStateSchema>
 
@@ -442,7 +446,12 @@ function parseSavedLine(raw: string, place?: LinePlace): SavedLine | null {
       }
     case "task_completed": {
       const task = GrokTaskSnapshot.safeParse(update["task_snapshot"]).data
-      return task?.task_id ? { kind: "task", task: { ...task, task_id: task.task_id } } : null
+      return task?.task_id ? { kind: "task", task: { ...task, task_id: task.task_id }, sessionId: stringValue(params["sessionId"]) } : null
+    }
+    case "task_backgrounded": {
+      const call = stringValue(update["tool_call_id"])
+      const task = stringValue(update["task_id"])
+      return call && task && update["monitor_description"] !== undefined ? { kind: "watch", call, task } : null
     }
     case "rewind_marker": {
       const target = numberValue(update["target_prompt_index"])
@@ -937,6 +946,12 @@ function updatesTranslator(after?: string, state?: TurnState): GrokTranslator {
   let failed = carried?.failed ?? false
   /** Settled tasks by id, for the reminder that opens the turn on one; the newest few are enough. */
   const tasks = new Map<string, GrokTaskSnapshot>(carried?.tasks)
+  /**
+   * Watches by task id, each with the call that started it. Grok 1.0.70 streams a watch's output into its call as it
+   * runs and keeps none of that in `updates.jsonl`, only the task's snapshot when it ends; the snapshot's output is
+   * given to the call as the stream's last update gave it.
+   */
+  const watches = new Map<string, string>(carried?.watches)
   /** A line reached back before where this translator began. */
   let reachedBack = state !== undefined && !carried
   /** What the line being read found, for a turn it begins. */
@@ -967,7 +982,7 @@ function updatesTranslator(after?: string, state?: TurnState): GrokTranslator {
     before = undefined
     const line = parseSavedLine(raw, place)
     if (line?.kind === "user" && !line.hostTurn)
-      before = { started: turns.began, counted: earlier + counted.length, ...count.state, failed, tasks: [...tasks].map(([id, task]) => [id, structuredClone(task)]) }
+      before = { started: turns.began, counted: earlier + counted.length, ...count.state, failed, tasks: [...tasks].map(([id, task]) => [id, structuredClone(task)]), watches: [...watches] }
     if (line?.kind !== "user" || line.hostTurn) {
       count.other()
       turns.close()
@@ -1017,10 +1032,22 @@ function updatesTranslator(after?: string, state?: TurnState): GrokTranslator {
       case "update":
         turns.update(line.notification, line.at)
         return
-      case "task":
+      case "task": {
         tasks.delete(line.task.task_id)
         tasks.set(line.task.task_id, line.task)
         if (tasks.size > 64) tasks.delete(tasks.keys().next().value!)
+        const call = watches.get(line.task.task_id)
+        watches.delete(line.task.task_id)
+        const output = line.task.output
+        if (!call || !output || !line.sessionId) return
+        const saved = SavedAcpNotificationSchema.safeParse({ sessionId: line.sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: call, content: [{ type: "content", content: { type: "text", text: output } }] } }).data
+        const notification = saved && acpSavedNotification(saved)
+        if (notification) turns.update(notification, undefined)
+        return
+      }
+      case "watch":
+        watches.set(line.task, line.call)
+        if (watches.size > 64) watches.delete(watches.keys().next().value!)
         return
       case "unread":
         turns.unread(line.type, line.reason, line.raw)
