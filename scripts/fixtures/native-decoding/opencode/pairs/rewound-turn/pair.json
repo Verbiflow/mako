@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.0.27"
+    "version": "2.1.4"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / Which day does QA sign off? Answer without reading anything. / /rewind / Without reading anything, how many lines does notes.md have? Two turns, a rewind to before the second, then a turn that replaces it.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_ed08dae0affeiJ1IXQidYve7VF",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e8dce95a9ffeyYMHtJoX5Pa2c0",
       "known": []
     }
   ]

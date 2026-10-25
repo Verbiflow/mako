@@ -1,7 +1,7 @@
 {
   "harness": "opencode",
-  "version": "2.0.27",
-  "on": "2026-10-12",
+  "version": "2.1.4",
+  "on": "2026-10-25",
   "searched": "opencode.exe",
   "probed": 1,
   "missing": [],
@@ -23,8 +23,11 @@
     "via": "its own listing",
     "listed": [
       "~/.config/opencode/opencode.json",
+      "~/.config/opencode/opencode.jsonc",
       "opencode.json",
-      ".opencode/opencode.json"
+      "opencode.jsonc",
+      ".opencode/opencode.json",
+      ".opencode/opencode.jsonc"
     ],
     "missing": []
   }

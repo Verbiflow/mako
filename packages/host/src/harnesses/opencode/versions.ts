@@ -13,10 +13,10 @@ import type { HarnessVersions } from "../../contracts/harness-versions.js"
  */
 export const OPENCODE_VERSIONS = {
   oldest: "2.0.0",
-  tested: "2.0.27",
+  tested: "2.1.4",
   feed: { npm: "@opencode/cli" },
   checked: {
-    on: "2026-10-13",
+    on: "2026-10-25",
     how: "tested: @opencode/client 2.0.27, which the vocabulary, native-tools/opencode-2.0.27.json, the decoder fixtures and opencode-concepts.json name, and harness:decode-pairs against the scripted model passes on 2.0.27. oldest: harness:decode-pairs on each release from 2.0.0 to 2.0.6 draws what it draws on 2.0.27 (21 scenarios the same, 7 skipped, and the one store-only note on stopped-shell), differing only in OpenCode's own shell output wording; the requests Mako sends that it doesn't (adding an MCP server, a slash command, both forks, a form's state and its cancel) answer on 2.0.0, 2.0.1 and 2.0.3 as on 2.0.27. Prereleases run from dev build 19656, the first with 2.0.4's API",
   },
 } as const satisfies HarnessVersions
