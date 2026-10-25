@@ -41,6 +41,9 @@ jobs:
       - run: npm ci
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      # The scripts read Mako's own packages (@mako/sessions, @mako/git, …) from
+      # their built output, as the host does; a fresh checkout has none.
+      - run: npm run build:control-runtime
       - name: Read every vendor's newest release
         id: read
         run: |
@@ -82,6 +85,8 @@ jobs:
         if: steps.open.outputs.exists != 'true'
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      - run: npm run build:control-runtime
+        if: steps.open.outputs.exists != 'true'
       - name: Move tested and rerun the drift tools
         id: bump
         if: steps.open.outputs.exists != 'true'
@@ -139,6 +144,8 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - run: npm ci
+        if: steps.reported.outputs.done != 'true'
+      - run: npm run build:control-runtime
         if: steps.reported.outputs.done != 'true'
       - name: Install tested and run the session flows
         id: flows
