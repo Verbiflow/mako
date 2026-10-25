@@ -11,10 +11,10 @@ import { scriptInstall } from "../update-source.js"
  * ACP handshake advertises a capability, that answers instead of a version.
  */
 export const DEVIN_VERSIONS: HarnessVersions = {
-  tested: "3000.10.23",
+  tested: "3000.11.205",
   feed: { manifest: "https://static.devin.ai/cli/current/manifest.json" },
   checked: {
-    on: "2026-10-12",
+    on: "2026-10-25",
     how: "the version every record names: the vocabulary, native-tools/devin-3000.10.23.json, the decoder fixtures and devin-concepts.json",
   },
 }
