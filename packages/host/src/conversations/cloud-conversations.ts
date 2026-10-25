@@ -435,7 +435,7 @@ export class CloudConversations {
   }
 
   async #lookForWaking(): Promise<void> {
-    for (const runtime of [...this.#asleep.keys()]) {
+    for (const runtime of this.#asleep.keys()) {
       const open = [...this.#entries.values()].filter((entry) => entry.runtime === runtime && this.#following.has(entry.threadId))
       const asked = open[0]
       if (!asked) {

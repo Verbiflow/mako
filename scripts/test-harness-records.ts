@@ -150,6 +150,35 @@ async function opencode(): Promise<void> {
   checked.push(`OpenCode ${await version(executable)}`)
 }
 
+/**
+ * The `case"…":` labels of the minified switch whose body holds `at`, its own only: a switch nested in one of its
+ * cases (1.0.40 formats a tool call's arguments with a `switch(typeof e)` inside its `tool-call` case) is skipped.
+ */
+function switchCases(text: string, at: number): string[] {
+  let open = text.lastIndexOf("switch(", at)
+  while (open >= 0) {
+    const body = text.indexOf("{", text.indexOf(")", open))
+    const cases: string[] = []
+    let depth = 0
+    for (let index = body; index < text.length; index++) {
+      const char = text[index]
+      if (char === '"' || char === "'") {
+        // A string's braces aren't the code's.
+        for (index++; index < text.length && text[index] !== char; index++) if (text[index] === "\\") index++
+        continue
+      }
+      if (char === "{") depth++
+      else if (char === "}" && --depth === 0) {
+        if (index > at) return cases
+        break
+      }
+      else if (depth === 1 && text.startsWith('case"', index)) cases.push(/^case"([a-z-]+)":/.exec(text.slice(index, index + 64))?.[1] ?? "")
+    }
+    open = text.lastIndexOf("switch(", open - 1)
+  }
+  return []
+}
+
 /** The parts the SDK's own transcript reader switches on, beside `redacted-reasoning`. */
 async function cursor(): Promise<void> {
   const root = new URL("../node_modules/@cursor/sdk/", import.meta.url)
@@ -158,12 +187,8 @@ async function cursor(): Promise<void> {
   const parts = new Set<string>()
   for (const name of (await readdir(cjs)).filter((file) => file.endsWith(".js"))) {
     const text = await readFile(join(cjs, name), "utf8")
-    for (const match of text.matchAll(/case"redacted-reasoning":/g)) {
-      const start = text.lastIndexOf("switch(", match.index)
-      const end = text.indexOf("}", text.indexOf('case"tool-result"', match.index))
-      if (start < 0 || end < 0) continue
-      for (const [, part] of text.slice(start, end).matchAll(/case"([a-z-]+)":/g)) parts.add(part!)
-    }
+    for (const match of text.matchAll(/case"redacted-reasoning":/g))
+      for (const part of switchCases(text, match.index)) if (part) parts.add(part)
   }
   compare("cursor message parts", parts, new Set(Object.values(CURSOR_MESSAGE_PARTS).flat()))
   checked.push(`Cursor SDK ${sdk}`)
