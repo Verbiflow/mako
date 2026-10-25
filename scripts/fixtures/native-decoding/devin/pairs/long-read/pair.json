@@ -1,14 +1,44 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.10.23"
+    "version": "3000.11.205"
   },
   "about": "Read log.md with your file read tool, once and without an offset or limit, then tell me the last line you were shown. Don't run commands. One read of a file longer than a harness shows at once, then the answer.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#alder-network",
+      "path": ".local/share/devin/cli/sessions.db#obsidian-ballcap",
       "known": []
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/9d6d5294-3d6e-4ad1-93ed-046303848443.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/log.md\"} -> 1918 lines (truncated) details=[{\"path\":\"/tmp/mako-pair/project/log.md\",\"type\":\"location\"}]",
+          "reason": "Devin 3000.11.205 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+        },
+        {
+          "side": "+",
+          "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/log.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/log.md\",\"type\":\"location\"}]",
+          "reason": "Devin 3000.11.205 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+        }
+      ]
     }
-  ]
+  ],
+  "replay": {
+    "known": [
+      {
+        "side": "-",
+        "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/log.md\"} -> 1918 lines (truncated) details=[{\"path\":\"/tmp/mako-pair/project/log.md\",\"type\":\"location\"}]",
+        "reason": "Devin 3000.11.205 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+      },
+      {
+        "side": "+",
+        "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/log.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/log.md\",\"type\":\"location\"}]",
+        "reason": "Devin 3000.11.205 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+      }
+    ]
+  }
 }

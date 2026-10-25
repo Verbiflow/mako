@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.0.31"
+    "version": "1.0.40"
   },
   "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-53b077d1b257c01f7e405fa5ccc449c605fc8fb8467ef5f58819207ee8618816/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-3e6cb59f628daab50ac45044b1b10d0e41fe86bd8f1fae49764ca1dfc1bfe1d9/store.db",
       "known": []
     }
   ]

@@ -239,8 +239,13 @@ async function filesUnder(root: string): Promise<string[]> {
   return nested.flat()
 }
 
+/**
+ * Every column of an ordinary table. A virtual table and the tables behind it are left to the database: Devin
+ * 3000.11's full-text index (`message_search`, contentless FTS5) refuses writes to its own tables, and the triggers on
+ * the rows it indexes keep it in step as they're rewritten.
+ */
 function databaseColumns(database: DatabaseSync): { table: string; column: string }[] {
-  const tables = Tables.parse(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all())
+  const tables = Tables.parse(database.prepare("SELECT name FROM pragma_table_list WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'").all())
   return tables.flatMap(({ name }) => Columns.parse(database.prepare("SELECT name FROM pragma_table_info(?)").all(name)).map((column) => ({ table: name, column: column.name })))
 }
 
@@ -305,6 +310,9 @@ export function rewriteDatabase(database: DatabaseSync, rewrite: (text: string) 
       if (text !== undefined && text !== value) changes += Number(update.run(text, row).changes)
     })
   }
+  // A full-text index keeps what it unindexed as deletions until its segments merge; merged, it holds only what's there.
+  if (changes) for (const { name } of Tables.parse(database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND sql LIKE 'CREATE VIRTUAL TABLE%USING fts5%'").all()))
+    database.exec(`INSERT INTO "${name}" ("${name}") VALUES ('optimize')`)
   return changes
 }
 
