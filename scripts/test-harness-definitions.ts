@@ -275,12 +275,7 @@ for (const harness of harnesses) {
 // runtime the
 // package in Mako's lockfile. A record that names another version fails
 // here, unless it's listed below with why.
-const RECORD_EXCEPTIONS = new Map<string, Map<"concepts" | "concepts fixture", string>>([
-  ["claude", new Map([
-    ["concepts", "Claude Code's concepts were checked on October 6 against the terminal CLI 2.1.290 through harness:self-report, not the SDK's 2.1.283 build sessions run; the next `npm run harness:self-report -- claude` against the SDK's build moves them."],
-    ["concepts fixture", "Recorded with the concepts, from the terminal CLI 2.1.290."],
-  ])],
-])
+const RECORD_EXCEPTIONS = new Map<string, Map<"concepts" | "concepts fixture", string>>()
 const VersionField = z.object({ version: z.string().optional() })
 const ShippedPackage = z.object({ version: z.string(), claudeCodeVersion: z.string().optional() })
 const Lockfile = z.object({ packages: z.record(z.string(), z.object({ version: z.string().optional() })) })
