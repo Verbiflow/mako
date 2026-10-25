@@ -1,0 +1,18 @@
+{
+  "subagent_id": "01a17386-9ff4-7c53-8ea5-39255bf39196",
+  "attempt_id": "at1.11f978c12c8f4a138bdf9e4bc2e0aa6e",
+  "parent_session_id": "01a17386-961b-7921-8030-53429ed5f9b5",
+  "child_session_id": "01a17386-9ff4-7c53-8ea5-39255bf39196",
+  "subagent_type": "general-purpose",
+  "description": "Reply CHILD_DONE_GROK",
+  "prompt": "Reply with exactly CHILD_DONE_GROK and nothing else. Use no tools. Do not explain. Do not add punctuation or extra words. Your entire response must be exactly:\n\nCHILD_DONE_GROK",
+  "status": "completed",
+  "started_at": "2026-10-25T14:46:05.058673Z",
+  "completed_at": "2026-10-25T14:46:07.240076Z",
+  "duration_ms": 2184,
+  "tool_calls": 0,
+  "turns": 1,
+  "effective_context_source": "new",
+  "child_cwd": "/tmp/mako-pair/project",
+  "effective_model_id": "grok-4.7"
+}

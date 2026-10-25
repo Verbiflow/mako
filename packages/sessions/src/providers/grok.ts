@@ -3,7 +3,7 @@ import type { WriterEvidenceLookups } from "../record-evidence.js"
 import type { WriterEvidence } from "../record-writers.js"
 import { AcpSavedTurns, acpSavedNotification, acpSavedRefusal, SavedAcpNotificationSchema } from "../acp-saved-turns.js"
 import { acpAttachments, acpText } from "../acp-tool-details.js"
-import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, grokHostCommand, GrokTaskSnapshot, grokTokens, GrokTurnUsage, grokUpdateReading } from "../harnesses/grok.js"
+import { backgroundReminderTurn, GROK_ACP_HOOKS, grokCost, grokHostCommand, grokLineMillis, GrokTaskSnapshot, grokTokens, grokTurnsBetween, GrokTurnUsage, grokUpdateReading, grokWakingChild, GrokWokenSpend } from "../harnesses/grok.js"
 import type { AttachmentContent } from "../content.js"
 import { UNNAMED_TURN } from "../provider-turn.js"
 import { compactionEvent, compactionFailedEvent, CONTEXT_COMPACTED, event, INTERRUPTED, manualCompaction, modelChangedEvent, plainWords, TURN_ENDED, TURN_FAILED, turnFailedEvent, usageLimitEvent, type TranscriptEvent } from "../events.js"
@@ -54,7 +54,7 @@ import type { NativeFile, SessionProvider } from "./types.js"
 import { filesUnder, type RecordRoot, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { GrokChildren } from "./grok-children.js"
-import type { Entry } from "../entries.js"
+import { TurnUsageSchema, type Entry } from "../entries.js"
 import { EntrySink, type TurnState } from "../entry-sink.js"
 import { grokFork } from "./grok-fork.js"
 
@@ -111,9 +111,13 @@ type SavedLine =
   | { kind: "watch"; call: string; task: string }
   /** A line Mako has no meaning for: an update kind it doesn't know, or a known one it couldn't read. */
   | { kind: "unread"; type: string; reason: UnreadRecord["reason"]; raw: NativeRecordSample }
+  /** A subagent finished while the session was idle and will wake it (`grokWakingChild`); `ms` is when. */
+  | { kind: "woke"; child: string; ms?: number }
   | {
       kind: "turn-end"
       at?: string
+      /** When it ended, in epoch ms, as `grokLineMillis` reads a line. */
+      ms?: number
       stopReason?: string
       /** What Grok said ended the turn: the error's words on an `error` or `rate_limit` stop. */
       result?: string
@@ -269,6 +273,10 @@ const GrokTurnStateSchema = z.object({
   tasks: z.array(z.tuple([z.string(), GrokTaskSnapshot])),
   /** Watches still running, by task id, each with the call that started it. */
   watches: z.array(z.tuple([z.string(), z.string()])).optional(),
+  /** When the last turn ended (epoch ms): a subagent's turns after it are in none of this session's turns. */
+  ended: z.number().optional(),
+  /** Subagent turns that woke the session, which count in its next turn (`GrokWokenSpend`). */
+  woken: z.array(TurnUsageSchema).optional(),
 })
 type GrokTurnState = z.infer<typeof GrokTurnStateSchema>
 
@@ -391,7 +399,10 @@ function isHiddenSession(
 
 function parseUsage(value: JsonValue | undefined): TurnUsage | undefined {
   const usage = GrokTurnUsage.safeParse(value).data
-  if (!usage) return undefined
+  return usage && turnUsage(usage)
+}
+
+function turnUsage(usage: GrokTurnUsage): TurnUsage {
   const { input, output, cacheRead, cacheWrite } = grokTokens(usage)
   const parsed: TurnUsage = { input, output, cacheRead, cacheWrite }
   const cost = grokCost(usage)
@@ -438,6 +449,7 @@ function parseSavedLine(raw: string, place?: LinePlace): SavedLine | null {
       return {
         kind: "turn-end",
         at,
+        ms: grokLineMillis(root),
         stopReason: stringValue(update["stop_reason"]),
         result: stringValue(update["agent_result"]),
         usage: parseUsage(update["usage"]),
@@ -456,6 +468,11 @@ function parseSavedLine(raw: string, place?: LinePlace): SavedLine | null {
     case "rewind_marker": {
       const target = numberValue(update["target_prompt_index"])
       return method === "_x.ai/session/update" && target !== undefined ? { kind: "rewind", at, target } : null
+    }
+    case "subagent_finished": {
+      const child = grokWakingChild(update)
+      if (child) return { kind: "woke", child, ms: grokLineMillis(root) }
+      break
     }
   }
   const saved = method === "session/update" ? SavedAcpNotificationSchema.safeParse(params).data : undefined
@@ -771,13 +788,13 @@ export class GrokProvider implements SessionProvider {
     const file = await stat(path).catch(() => null)
     if (!file) return null
     const ref = (await this.peek({ path, bytes: file.size, mtimeMs: file.mtimeMs })) ?? (await this.childLinks.ref(path, file.size, file.mtimeMs))
-    const decode = ref && (await decodeFrom(path, from, updatesTranslator(after, from.state)))
+    const decode = ref && (await decodeFrom(path, from, updatesTranslator(after, from.state, childTurnsBeside(path))))
     return decode && { ref, ...decode }
   }
 
   createFollower(path: string, fromByte: number, start?: FollowStart) {
     if (basename(path) !== TRANSCRIPT_UPDATES) return createJsonlFollower(path, fromByte, legacyTranslator)
-    return createJsonlFollower(path, fromByte, updatesTranslator, undefined, start)
+    return createJsonlFollower(path, fromByte, (after, state) => updatesTranslator(after, state, childTurnsBeside(path)), undefined, start)
   }
 
   async tail(
@@ -811,8 +828,38 @@ export class GrokProvider implements SessionProvider {
 
 function createTranslator(path: string): () => GrokTranslator {
   return basename(path) === TRANSCRIPT_UPDATES
-    ? updatesTranslator
+    ? () => updatesTranslator(undefined, undefined, childTurnsBeside(path))
     : legacyTranslator
+}
+
+/** A subagent's turns that ended after `after` and by `until` (epoch ms), from its own session. */
+type ChildTurns = (child: string, after: number | undefined, until: number | undefined) => TurnUsage[]
+
+/** The turns of a subagent of the session whose transcript is `path`: a session of its own beside it. */
+function childTurnsBeside(path: string): ChildTurns {
+  return (child, after, until) => {
+    // The id is the store's own data; it names a folder beside the session's and nothing else.
+    if (!/^[\w-]+$/.test(child)) return []
+    let text: string
+    try {
+      text = readFileSync(join(dirname(dirname(path)), child, TRANSCRIPT_UPDATES), "utf8")
+    } catch {
+      return []
+    }
+    return grokTurnsBetween(text, child, after, until).map((turn) => turnUsage(turn.usage))
+  }
+}
+
+/** A turn's own spend with the subagent turns that woke it, field by field. */
+function withWoken(usage: TurnUsage | undefined, woken: readonly TurnUsage[]): TurnUsage | undefined {
+  if (!woken.length) return usage
+  const total: TurnUsage = {}
+  for (const part of [usage, ...woken])
+    for (const key of ["input", "output", "cacheRead", "cacheWrite", "costUsd"] as const) {
+      const value = part?.[key]
+      if (value !== undefined) total[key] = (total[key] ?? 0) + value
+    }
+  return total
 }
 
 /**
@@ -930,7 +977,7 @@ class GrokTurnCount {
  * Grok marks the rest itself: the person's prompts and the messages they
  * steered in, the end of each turn, its markers, and rewinds.
  */
-function updatesTranslator(after?: string, state?: TurnState): GrokTranslator {
+function updatesTranslator(after?: string, state?: TurnState, childTurns?: ChildTurns): GrokTranslator {
   const carried = state === undefined ? undefined : GrokTurnStateSchema.safeParse(state).data
   const turns = new AcpSavedTurns(GROK_ACP_HOOKS, after, carried?.started)
   const count = new GrokTurnCount(carried)
@@ -952,6 +999,9 @@ function updatesTranslator(after?: string, state?: TurnState): GrokTranslator {
    * given to the call as the stream's last update gave it.
    */
   const watches = new Map<string, string>(carried?.watches)
+  /** When the last turn ended, and the subagent turns that woke the session since. */
+  let lastEnded = carried?.ended
+  const woken = new GrokWokenSpend<TurnUsage>(carried?.woken)
   /** A line reached back before where this translator began. */
   let reachedBack = state !== undefined && !carried
   /** What the line being read found, for a turn it begins. */
@@ -982,7 +1032,7 @@ function updatesTranslator(after?: string, state?: TurnState): GrokTranslator {
     before = undefined
     const line = parseSavedLine(raw, place)
     if (line?.kind === "user" && !line.hostTurn)
-      before = { started: turns.began, counted: earlier + counted.length, ...count.state, failed, tasks: [...tasks].map(([id, task]) => [id, structuredClone(task)]), watches: [...watches] }
+      before = { started: turns.began, counted: earlier + counted.length, ...count.state, failed, tasks: [...tasks].map(([id, task]) => [id, structuredClone(task)]), watches: [...watches], ended: lastEnded, woken: [...woken.pending] }
     if (line?.kind !== "user" || line.hostTurn) {
       count.other()
       turns.close()
@@ -1063,10 +1113,14 @@ function updatesTranslator(after?: string, state?: TurnState): GrokTranslator {
           if (line.source) marker.source = line.source
           turns.queue(marker, line.at)
         }
-        commit(line.usage)
+        commit(withWoken(line.usage, woken.parentTurn()))
+        lastEnded = line.ms ?? lastEnded
         failed = false
         return
       }
+      case "woke":
+        woken.finished(line.child, true, childTurns?.(line.child, lastEnded, line.ms))
+        return
       case "rewind": {
         commit()
         if (line.target < earlier) {

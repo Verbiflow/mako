@@ -79,6 +79,7 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
       const settings = SessionSchema.parse(session)?.settings
       const decoder = new AcpDecoder(source, () => settings)
       const startup = source.mcpStartup?.()
+      const childSpend = source.childSpend?.()
       const usage = new SessionUsage()
       const models = new AcpModelWindow(source)
       // As the live client, which counts no spend before the session has its id.
@@ -119,7 +120,9 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
             return [...vendor.updates.map(decoded.update), ask(vendor.ask)]
           }
           if (recorded.data.method !== "session/update") {
-            const notified = vendor(recorded.data, startup)
+            const heard = vendor(recorded.data, startup)
+            // As the live client: what of a child's spend the session counts, before anything else reads it.
+            const notified = heard && childSpend ? { ...heard, usage: childSpend.screen(recorded.data.params, heard.usage) } : heard
             if (!notified?.notices) return [decoded.unknown(notified?.kind ?? recorded.data.method, message)]
             const notices = compacting
               ? notified.notices.map((notice) => notice.kind === "event" ? { ...notice, event: manualCompaction(notice.event) } : notice)

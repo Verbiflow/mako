@@ -27,6 +27,12 @@ new AgentSideConnection((connection) => {
     await connection.extNotification("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "subagent_spawned", subagent_id: "01a0c67b", parent_session_id: sessionId, child_session_id: "01a0c67b", subagent_type: "general-purpose", description: "Sleep 20 then reply" } })
     await connection.extNotification("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "subagent_finished", subagent_id: "01a0c67b", child_session_id: "01a0c67b", status: "completed", tool_calls: 2, turns: 1, duration_ms: 32944, tokens_used: 14941, output: "CHILD_DONE_GROK_A", will_wake: true } })
   }
+  // grok 1.0.70's spend around a subagent, from two real sessions: one it waited on, whose calls its parent's turn
+  // counts, and one that woke it, whose calls no turn of its parent's counts (`GrokWokenSpend`).
+  const spent = (inputTokens, cachedReadTokens, outputTokens) => ({ inputTokens, cachedReadTokens, cacheCreationTokens: 0, outputTokens, totalTokens: inputTokens + outputTokens })
+  const turnSpent = (session, prompt_id, usage) => connection.extNotification("_x.ai/session_notification", { sessionId: session, update: { sessionUpdate: "turn_completed", prompt_id, stop_reason: "end_turn", usage } })
+  const spawned = (child) => connection.extNotification("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "subagent_spawned", subagent_id: child, parent_session_id: sessionId, child_session_id: child, subagent_type: "general-purpose", description: "Reply with a marker" } })
+  const finished = (child, will_wake) => connection.extNotification("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "subagent_finished", subagent_id: child, child_session_id: child, status: "completed", tool_calls: 0, turns: 1, duration_ms: 2184, output: "CHILD_DONE_GROK", will_wake } })
   const turnCompleted = (stop_reason) => connection.extNotification("_x.ai/session_notification", {
     sessionId, update: { sessionUpdate: "turn_completed", prompt_id: "task-completed-01a0-task", stop_reason, elapsed_ms: 1798 },
   })
@@ -97,6 +103,13 @@ new AgentSideConnection((connection) => {
     async "devin-midturn-completion"() {
       await agentStopped("complete")
     },
+    async "grok-subagent-wakes"() {
+      await turnSpent("wake-child", "child-turn", spent(10806, 1792, 46))
+      await finished("wake-child", true)
+      await pause(20)
+      await chunk("agent_message_chunk", "The subagent finished and replied CHILD_DONE_GROK.")
+      await turnSpent(sessionId, "subagent-completed-wake-child", spent(17607, 14720, 405))
+    },
   }
   // Played inside the prompted turn, as grok 1.0.44 and devin 3000.10.23
   // send them mid-turn.
@@ -112,6 +125,16 @@ new AgentSideConnection((connection) => {
       // A loop's firing, on the method grok 1.0.46 sends it on: state for Grok's tasks pane, not the transcript.
       await connection.extNotification("_x.ai/scheduled_task_fired", { sessionId, update: { sessionUpdate: "scheduled_task_fired", task_id: "t1", prompt: "Check the deploy", human_schedule: "every hour", next_fire_at: "2026-10-08T13:00:00Z", subagent_id: "loop-1" } })
       await update({ sessionUpdate: "session_info_update", title: "Renamed by the agent" })
+    },
+    async "grok-subagent-foreground"() {
+      await spawned("foreground-child")
+      await turnSpent("foreground-child", "child-turn", spent(10806, 1792, 38))
+      await finished("foreground-child", false)
+      await turnSpent(sessionId, "foreground-turn", spent(42626, 18432, 220))
+    },
+    async "grok-subagent-wakes"() {
+      await spawned("wake-child")
+      await turnSpent(sessionId, "wake-turn", spent(29262, 16640, 159))
     },
     // Updates the ACP SDK refuses: Grok's own kinds on ACP's method (one
     // completion sent twice, as a replay would), a kind nobody declares, and

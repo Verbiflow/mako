@@ -66,6 +66,7 @@ import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { bindProviderPid } from "../base/provider-children.js"
 import { errorMessage } from "../base/error-message.js"
+import { objectValue } from "../base/json-values.js"
 import { basename } from "node:path"
 import { applyAcpSettings } from "./acp-config.js"
 import { acpObservedSettings } from "@mako/sessions/acp-decoder"
@@ -593,7 +594,10 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
      * A notification for another session is not this conversation's; an unknown one is logged either way.
      * Notices said while the session is still opening (MCP servers failing to start) wait for its id.
      */
-    function applyNotification(decoded: AcpNotificationDecoding, raw?: JsonObject): void {
+    function applyNotification(notified: AcpNotificationDecoding, raw?: JsonObject): void {
+      // What of a child's spend this session counts is read before the notification is screened by session.
+      const params = objectValue(raw?.["params"])
+      const decoded = childSpend && params ? { ...notified, usage: childSpend.screen(params, notified.usage) } : notified
       const { sessionId, kind, notices, state, id: noticeId } = decoded
       if ((notices?.length || decoded.usage?.length) && !live.sessionId) {
         opening.push({ decoded, line: lineOf() })
@@ -631,6 +635,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       for (const path of paths) engine.unknown(live, `session/update/${kind}/lost/${path}`, "unreadable", { method: "session/update", params })
     }
     const mcpStartup = source.mcpStartup?.()
+    const childSpend = source.childSpend?.()
     const opening: { decoded: AcpNotificationDecoding; line: RecordedLine | undefined }[] = []
     const background = source.observeBackground?.()
     live.background = background

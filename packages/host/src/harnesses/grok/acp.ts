@@ -7,7 +7,7 @@ import { GrokAgents } from "./agents.js"
 import { GROK_OWN_PERMISSIONS, grokLaunchNotices, grokPermissionPolicy } from "./permission-policy.js"
 import { grokMcpStartup } from "./mcp-startup.js"
 import { grokNotification } from "./notifications.js"
-import { grokModelWindow } from "./usage.js"
+import { grokChildSpend, grokModelWindow } from "./usage.js"
 import { GROK_FOLDER_TRUST_CAPABILITY } from "./folder-trust.js"
 import { grokFork, GrokTurnCounts } from "./fork.js"
 import { grokRequests } from "./plans.js"
@@ -233,6 +233,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
       }
     },
     decodeNotification: grokNotification,
+    childSpend: grokChildSpend,
     modelWindow: grokModelWindow,
     mcpStartup: grokMcpStartup,
     ...GROK_ACP_HOOKS,
