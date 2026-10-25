@@ -207,7 +207,11 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         prefetchStart: async (harness) => (await core.load("run a start ahead")).prefetchStart(harness),
         prefetchSignedIn: async (harness) => (await core.load("run a start's sign-in stage ahead")).prefetchSignedIn(harness),
         work: () => core.current()?.work() ?? [],
-        listing: () => core.current()?.listing(),
+        // The core's publisher, once it's loaded: events reach it through the core's own tap.
+        sessions: {
+          report: (current) => core.current()?.sessions.report(current),
+          watch: (link, conversations) => core.current()?.sessions.watch(link, conversations),
+        },
         media: () => core.current()?.media,
         linked: async (link) => (await core.load("the machine's link")).machineLinked(link),
       })

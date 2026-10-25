@@ -14,7 +14,7 @@ import {
   ThreadIdSchema,
 } from "./ids.js"
 import { MediaStreamIdSchema } from "./media.js"
-import { RuntimeListingSchema } from "./thread-listing.js"
+import { SessionsReportSchema } from "./thread-listing.js"
 import type { Payload } from "./payload.js"
 import { VersionRangeSchema } from "./version.js"
 
@@ -77,18 +77,27 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   /**
-   * What the Thread's conversations are, as the account's list shows them (version 4 on, `thread-listing.ts`): sent
-   * when that changes and once on each enrolment, never as a heartbeat. The Thread's object keeps the last, so a
-   * paused machine's Thread is listed as it was.
+   * Link version 4's listing, keyed by cloud Thread (2026-10-24): runtimes on that version send it, and a gateway
+   * decodes it so their link holds, then drops it. `sessions` replaced it.
    */
   z
     .object({
       type: z.literal("listing"),
       threadId: ThreadIdSchema,
       generation: GenerationSchema,
-      listing: RuntimeListingSchema,
+      listing: z.object({ conversations: z.array(z.object({ id: z.string() }).loose()).max(50) }).strict(),
     })
     .strict(),
+  /**
+   * The runtime's Sessions, as the account's list shows them (version 5 on, `thread-listing.ts`): every one it owns on
+   * each enrolment (`owned`), then what changes, never as a heartbeat. Where they run, the cloud knows from who sent it.
+   */
+  z.object({ type: z.literal("sessions"), report: SessionsReportSchema }).strict(),
+  /**
+   * One live update of a conversation someone watches (version 5 on, `sessionStream`), its event after the envelope as
+   * the runtime encoded it. Not kept and not acknowledged: a watcher that misses one asks for a snapshot.
+   */
+  z.object({ type: z.literal("live"), conversation: z.string().min(1).max(128) }).strict(),
   /** The runtime ended a stream it served (version 3 on, `media.ts`); its viewer hears why. */
   z
     .object({
@@ -192,14 +201,21 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
     .strict(),
   /** The stream's viewer stopped watching or left: send nothing more on it. */
   z.object({ type: z.literal("media-unwatch"), stream: MediaStreamIdSchema }).strict(),
+  /**
+   * The conversations of this runtime someone watches now, the whole set, replacing the last (version 5 on): send their
+   * live updates and no others'. A new link starts with none watched; this is said on enrolment when some are, and on
+   * each change, so any one frame is the truth for its link.
+   */
+  z.object({ type: z.literal("watch"), conversations: z.array(z.string().min(1).max(128)).max(1_000) }).strict(),
 ])
 
 export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>
 export type GatewayFrameEnvelope = z.infer<typeof GatewayFrameEnvelopeSchema>
 
 export type RuntimeFrame =
-  | Exclude<RuntimeFrameEnvelope, { type: "event" | "reply" }>
+  | Exclude<RuntimeFrameEnvelope, { type: "event" | "reply" | "live" }>
   | (Extract<RuntimeFrameEnvelope, { type: "event" }> & { event: Payload })
+  | (Extract<RuntimeFrameEnvelope, { type: "live" }> & { event: Payload })
   | { type: "reply"; reply: Reply }
 export type GatewayFrame =
   | Exclude<GatewayFrameEnvelope, { type: "operation" | "media-watch" }>

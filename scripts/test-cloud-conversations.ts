@@ -34,8 +34,7 @@ import { githubRepositoryUrl } from "@mako/host/contracts/cloud-threads"
 import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { CloudAccount, ThreadListHeard } from "@mako/host/usage/cloud-account-methods"
-import type { ListedState, ThreadListing, ThreadListings } from "@mako/protocol/thread-listing"
-import type { LiveSummary } from "@mako/host/contracts/live-conversations"
+import type { ListedSession, ListedState, SessionListings } from "@mako/protocol/thread-listing"
 import { z } from "zod"
 
 /** A move's calls and its way back's, which these conversations never make (`test-cloud-moves.ts` covers them). */
@@ -150,7 +149,7 @@ async function cloudMachine(reach: Reach = {}) {
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, asked, machineState, bases, batch, network, served, forkSessions, filing }
+  return { account, calls, created, asked, machineState, bases, batch, network, served, forkSessions, filing, gateway }
 }
 
 /**
@@ -798,23 +797,47 @@ test("in a Thread that moved to the cloud, a new tab and a fork start on its mac
   assert.throws(() => store.createSession({ operationId: randomUUID(), thread: placed.thread, actor: store.person(), session: given }), /exists here already/)
 })
 
-test("another device's cloud conversation is listed here from the account's list, unopened and waking nothing; it changes and leaves as the list does, and once opened it's followed from the stream's head", async () => {
+test("every Session the account lists is listed here, unopened and waking nothing: another device's cloud conversations and its own; each changes and leaves as the list does, and opened it's answered and followed where it runs", async () => {
   const machine = await cloudMachine()
   const theirs = "t-00000000000000aa"
   await machine.account.createThread(theirs, REPOSITORY)
-  const listed = randomUUID()
-  const thread = "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40"
-  const listingOf = (state: ListedState, title = "Retry the webhooks"): ThreadListing => ({
-    threadId: theirs,
-    home: "cloud",
-    repository: REPOSITORY,
-    conversations: [{ id: listed, harness: "claude", title, state, folder: CLONE, thread, createdAt: "2026-10-24T20:00:00.000Z" }],
-    updatedAt: "2026-10-24T20:00:00.000Z",
+  const myDevice = await machine.account.deviceId()
+  const studio = "9c1f4a2e-5b6d-4e8f-a1b2-c3d4e5f60718"
+  // The Studio's own runtime, as the cloud reaches it: its calls answered there, its conversations streamed while watched.
+  const studioCalls: string[] = []
+  const watched: string[][] = []
+  const studioRuntime = await serveHostThroughGateway(await machine.gateway.connectRuntime(), {
+    runtimeId: `d-${studio}`,
+    build: "test",
+    invoke: async (channel) => (studioCalls.push(channel), JSON.stringify({ channel })),
+    watch: (conversations) => watched.push([...conversations]),
   })
+  after(() => studioRuntime.close())
+  const cloudConversation = randomUUID()
+  const studioConversation = randomUUID()
+  const row = (conversation: string, runsOn: ListedSession["runsOn"], state: ListedState, extra: Partial<ListedSession> = {}): ListedSession => ({
+    session: randomUUIDFor(conversation),
+    thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40",
+    conversation,
+    harness: "claude",
+    title: "Retry the webhooks",
+    state,
+    folder: CLONE,
+    createdAt: "2026-10-24T20:00:00.000Z",
+    activityAt: "2026-10-24T20:00:00.000Z",
+    generation: 1,
+    runsOn,
+    listedAt: "2026-10-24T20:00:01.000Z",
+    ...extra,
+  })
+  const inCloud = (state: ListedState, extra: Partial<ListedSession> = {}) => row(cloudConversation, { kind: "cloud", threadId: theirs }, state, extra)
+  const onStudio = (state: ListedState, extra: Partial<ListedSession> = {}) => row(studioConversation, { kind: "device", deviceId: studio }, state, extra)
+  const mine = row(randomUUID(), { kind: "device", deviceId: myDevice! }, "working")
   const listeners = new Set<(heard: ThreadListHeard | "account-changed") => void>()
-  let answer: ThreadListings = { threads: [listingOf("working")], seq: 5 }
+  let answer: SessionListings = { sessions: [inCloud("working"), onStudio("waiting", { waitingOn: "Approve: npm test" }), mine], seq: 5 }
   let reads = 0
-  machine.account.threadListings = async () => (reads++, answer)
+  machine.account.sessionListings = async () => (reads++, answer)
+  machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
   machine.account.onThreadListings = (listener) => {
     listeners.add(listener)
     return () => listeners.delete(listener)
@@ -825,55 +848,66 @@ test("another device's cloud conversation is listed here from the account's list
   const file = join(scratch, "listed", "conversations.json")
   const { router, events } = conversations(machine.account, file)
   await router.start()
-  await until("the list read and listed here", () => router.summaries().some((summary) => summary.session.id === listed))
-  const shown = () => router.summaries().find((summary) => summary.session.id === listed)
-  assert.equal(shown()?.session.status, "running")
-  assert.equal(shown()?.session.title, "Retry the webhooks")
-  assert.equal(shown()?.elsewhere, "a cloud machine")
-  assert.equal(shown()?.threadId, thread, "filed under the Thread its device has")
+  const shown = (id: string) => router.summaries().find((summary) => summary.session.id === id)
+  await until("the list read and listed here", () => shown(cloudConversation) !== undefined && shown(studioConversation) !== undefined)
+  assert.equal(shown(mine.conversation), undefined, "this Mac's own Sessions are its own")
+  assert.deepEqual([shown(cloudConversation)?.session.status, shown(cloudConversation)?.elsewhere], ["running", "a cloud machine"])
+  assert.deepEqual([shown(studioConversation)?.elsewhere, shown(studioConversation)?.waitingOn], ["Studio", "Approve: npm test"], "where it runs, by name, and what it waits on")
+  assert.equal(shown(studioConversation)?.sessionId, onStudio("idle").session, "filed under its own Session")
   const told = (type: string) => events.filter((event) => event.type === type).map((event) => JSON.parse(event.payload))
-  assert.deepEqual(told("live-listed").map((event) => event.summaries.map((summary: LiveSummary) => summary.session.id)), [[listed]], "windows list it as they list one at boot")
-  assert.equal(machine.calls.length, 0, "listing it called nothing on its machine")
+  assert.equal(told("live-listed").length, 1, "windows list them as they list one at boot")
+  assert.deepEqual([machine.calls.length, studioCalls.length], [0, 0], "listing them called nothing anywhere")
 
-  say({ seq: 5, event: { type: "thread-listed", thread: listingOf("idle") } })
-  assert.equal(shown()?.session.status, "running", "a change from before the list read changes nothing")
-  say({ seq: 6, event: { type: "thread-listed", thread: listingOf("idle", "Retry the webhooks with backoff") } })
-  assert.equal(shown()?.session.status, "ready")
-  assert.equal(shown()?.session.title, "Retry the webhooks with backoff")
-  assert.equal(told("live-listed").length, 2)
-  say({ seq: 7, event: { type: "thread-listed", thread: listingOf("idle", "Retry the webhooks with backoff") } })
-  assert.equal(told("live-listed").length, 2, "a change a row wouldn't show tells nobody")
+  say({ seq: 5, event: { type: "sessions-listed", sessions: [inCloud("idle")] } })
+  assert.equal(shown(cloudConversation)?.session.status, "running", "a change from before the list read changes nothing")
+  say({ seq: 6, event: { type: "sessions-listed", sessions: [onStudio("idle", { title: "Retry the webhooks with backoff" })] } })
+  assert.deepEqual([shown(studioConversation)?.session.status, shown(studioConversation)?.waitingOn, shown(studioConversation)?.session.title], ["ready", undefined, "Retry the webhooks with backoff"])
+  const before = told("live-listed").length
+  say({ seq: 7, event: { type: "sessions-listed", sessions: [onStudio("idle", { title: "Retry the webhooks with backoff", listedAt: "2026-10-24T21:00:00.000Z" })] } })
+  assert.equal(told("live-listed").length, before, "a change a row wouldn't show tells nobody")
+  const remembered = await readFile(file, "utf8").catch(() => "{\"conversations\":[]}")
+  assert.equal(JSON.parse(remembered).conversations.length, 0, "listed ones aren't remembered; the list says them again")
 
-  // This Mac's own cloud conversation is its own, whatever the list says of it.
-  const own = randomUUID()
-  await router.route("mako:live-start", ["codex", "/Users/me/project", { conversationId: own, cloud: { repository: REPOSITORY } }])
-  const ownThread = machine.created.find((id) => id !== theirs)!
-  say({ seq: 8, event: { type: "thread-listed", thread: { ...listingOf("idle"), threadId: ownThread, conversations: [{ id: own, harness: "codex", state: "failed", createdAt: "2026-10-24T20:00:00.000Z" }] } } })
-  assert.equal(router.summaries().find((summary) => summary.session.id === own)?.session.status, "running", "the list never overwrites what this Mac follows itself")
-  const remembered = z.object({ conversations: z.array(z.object({ conversationId: z.string() }).loose()) }).parse(JSON.parse(await readFile(file, "utf8")))
-  assert.deepEqual(remembered.conversations.map((entry) => entry.conversationId), [own], "only this Mac's own are remembered; the list says the rest again")
-
-  // Opened: answered on its machine, and followed from the stream's head, not from the Thread's first event.
-  machine.batch(theirs, listed, 1, "running")
-  const opened = await router.route("mako:live-snapshot", [listed])
+  // Opened on the Studio: answered there, and its live updates arrive while it's watched, and stop after.
+  const opened = await router.route("mako:live-snapshot", [studioConversation])
   assert.ok(opened.handled)
-  assert.ok(machine.calls.some((call) => call.channel === "mako:live-snapshot"), "opening it reads it on its machine")
-  await new Promise((resolve) => setTimeout(resolve, 50))
-  assert.equal(events.filter((event) => event.conversation === listed).length, 0, "the batch from before it was opened isn't replayed")
-  machine.batch(theirs, listed, 2, "ready")
-  await until("its next batch relayed", () => events.some((event) => event.conversation === listed))
-  say({ seq: 9, event: { type: "thread-listed", thread: listingOf("working", "From the list") } })
-  assert.notEqual(shown()?.session.title, "From the list", "once followed, its own batches say more, and sooner, than the list")
+  assert.deepEqual(studioCalls, ["mako:live-snapshot"], "answered by the Studio, where it runs")
+  await until("the Studio told it's watched", () => watched.at(-1)?.includes(studioConversation) === true)
+  // SAFETY: a batch as the Studio's live driver sends it, filled only as far as the router and summary read it.
+  studioRuntime.live(studioConversation, Payload.encoded(runtimeEventLine("event", encodeRuntimeEvent({ type: "live-batch", batch: { id: studioConversation, revision: 3, updates: [] } } as never)).slice(0, -1)))
+  await until("its batch relayed", () => events.some((event) => event.conversation === studioConversation))
 
-  // Its Thread went home: gone here, and windows hear so.
-  say({ seq: 10, event: { type: "thread-unlisted", threadId: theirs, reason: "returned" } })
-  assert.equal(shown(), undefined)
-  assert.deepEqual(told("live-unlisted").map((event) => event.ids), [[listed]])
-  assert.equal((await router.route("mako:live-snapshot", [listed])).handled, false, "no longer answered here")
+  // Opened in the cloud: answered on its machine, followed from the stream's head.
+  machine.batch(theirs, cloudConversation, 1, "running")
+  assert.ok((await router.route("mako:live-snapshot", [cloudConversation])).handled)
+  assert.ok(machine.calls.some((call) => call.channel === "mako:live-snapshot"))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(events.filter((event) => event.conversation === cloudConversation).length, 0, "the batch from before it was opened isn't replayed")
+  machine.batch(theirs, cloudConversation, 2, "ready")
+  await until("its next batch relayed", () => events.some((event) => event.conversation === cloudConversation))
+
+  // The Studio's Session moved to the cloud: it leaves the Studio, and is listed where it runs now.
+  say({ seq: 8, event: { type: "sessions-listed", sessions: [row(studioConversation, { kind: "cloud", threadId: theirs }, "idle", { generation: 3, session: onStudio("idle").session })] } })
+  assert.equal(told("live-unlisted").length, 0, "a move is never told as leaving")
+  assert.equal(shown(studioConversation)?.elsewhere, "a cloud machine", "it's listed where it runs now")
+  assert.equal(told("live-listed").at(-1)?.summaries[0]?.elsewhere, "a cloud machine")
+  await until("the Studio no longer watched", () => watched.at(-1)?.length === 0)
+
+  say({ seq: 9, event: { type: "sessions-unlisted", sessions: [inCloud("idle").session] } })
+  assert.equal(shown(cloudConversation), undefined)
+  assert.equal((await router.route("mako:live-snapshot", [cloudConversation])).handled, false, "no longer answered here")
 
   // Another account: whatever the last one listed is gone, and the new account's list is read.
-  answer = { threads: [listingOf("idle")], seq: 1 }
-  const before = reads
+  answer = { sessions: [inCloud("idle")], seq: 1 }
+  const reading = reads
   say("account-changed")
-  await until("the new account's list read", () => reads > before && router.summaries().some((summary) => summary.session.id === listed))
+  await until("the new account's list read", () => reads > reading && shown(cloudConversation) !== undefined && shown(studioConversation) === undefined)
 })
+
+/** A Session ID for a conversation, the same each time it's asked. */
+function randomUUIDFor(conversation: string): string {
+  const known = sessionIds.get(conversation) ?? randomUUID()
+  sessionIds.set(conversation, known)
+  return known
+}
+const sessionIds = new Map<string, string>()

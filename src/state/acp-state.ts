@@ -43,6 +43,8 @@ interface AcpConversationBase {
   threadPath?: string
   /** Where its folder is when it isn't on this Mac, in words (`a cloud machine`): its files and Git are read there. */
   elsewhere?: string
+  /** What a conversation listed from another device waits on there, while it waits on a person ("Approve: npm test"). */
+  waitingOn?: string
   /** The Thread-store Thread and Session, from the host; a `+` tab's start knows them before it does. */
   threadId?: string
   sessionId?: string

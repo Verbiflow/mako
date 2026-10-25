@@ -6,8 +6,9 @@ import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, Move
 import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
 import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
+import { sessionStream, streamConversation } from "../dist/socket.js"
 import { AccountEventSchema } from "../dist/account-events.js"
-import { ThreadListingSchema, ThreadListingsSchema, RuntimeListingSchema, sameListing } from "../dist/thread-listing.js"
+import { ListedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
   CLOSE_CODES,
@@ -78,7 +79,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 4)
+    assert.equal(SUPPORTED_VERSIONS.max, 5)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -448,29 +449,52 @@ describe("a runtime served through serveRuntime", () => {
     await gateway.close()
   })
 
-  test("says what a Thread's conversations are on a gateway that speaks version 4, heard from the Thread's owner alone; an older one never hears it", async () => {
+  test("reports its Sessions on a gateway that speaks version 5; an older one never hears it, and version 4's listing is taken and dropped", async () => {
     const gateway = createFakeGateway()
-    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "machine", build: "test", handle: async (operation) => answer(operation, null) })
-    await gateway.assign("th-1", "machine")
-    while (!runtime.claims().length) await new Promise((resolve) => setImmediate(resolve))
-    const listing = { conversations: [{ id: "c-1", harness: "codex", title: "Retry the webhooks", state: "working", createdAt: "2026-10-24T20:00:00.000Z" }] }
-    assert.equal(runtime.listing("th-1", listing), true)
-    assert.equal(runtime.listing("th-none", listing), false, "a Thread it doesn't run")
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", handle: async (operation) => answer(operation, null) })
+    const report = { owned: [{ session: "0b8f3e1a-7c2d-4f6a-9e5b-1d3c8a7f2e60", generation: 1 }], listed: [], gone: [] }
+    assert.equal(runtime.sessions(report), true)
     await new Promise((resolve) => setImmediate(resolve))
-    assert.deepEqual(gateway.listing("th-1"), listing)
-    // Taken by another runtime: what this one says of the Thread no longer counts.
-    await gateway.assign("th-1", "elsewhere")
-    runtime.listing("th-1", { conversations: [] })
-    await new Promise((resolve) => setImmediate(resolve))
-    assert.deepEqual(gateway.listing("th-1"), listing)
+    assert.deepEqual(gateway.reports("d-mac"), [report])
     runtime.close()
-    const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "old", build: "test", versions: { min: 1, max: 3 }, handle: async (operation) => answer(operation, null) })
+    const oldLink = await gateway.connectRuntime()
+    const older = await serveRuntime(oldLink, { runtimeId: "old", build: "test", versions: { min: 1, max: 4 }, handle: async (operation) => answer(operation, null) })
+    assert.equal(older.version, 4)
+    assert.equal(older.sessions(report), false)
     await gateway.assign("th-2", "old")
     while (!older.claims().length) await new Promise((resolve) => setImmediate(resolve))
-    assert.equal(older.version, 3)
-    assert.equal(older.listing("th-2", listing), false)
-    assert.equal(gateway.listing("th-2"), undefined)
+    // A runtime from 2026-10-24 on version 4 sends the listing keyed by cloud Thread: its link holds.
+    oldLink.send({ type: "listing", threadId: "th-2", generation: 1, listing: { conversations: [{ id: "c-1", harness: "codex" }] } })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(gateway.reports("old"), [])
+    assert.equal(older.claims().length, 1, "its link held")
     older.close()
+    await gateway.close()
+  })
+
+  test("a conversation's live updates go to whoever watches it: the runtime is told on the first watcher and the last, and again on a new link", async () => {
+    const gateway = createFakeGateway()
+    const watching = []
+    const serve = async () => serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", handle: async (operation) => answer(operation, null), watch: (conversations) => watching.push([...conversations]) })
+    let runtime = await serve()
+    const watcher = await gateway.connectClient(client)
+    const stream = sessionStream("d-mac", "c-1")
+    assert.deepEqual(streamConversation(stream), { runtimeId: "d-mac", conversation: "c-1" })
+    const first = watcher.subscribe({ stream, after: 0 })
+    const second = watcher.subscribe({ stream, after: 0 })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(watching, [["c-1"]], "a new link watches nothing until the first watcher")
+    assert.equal(runtime.live("c-1", Payload.of({ n: 1 })), true)
+    assert.deepEqual([(await first.next(1_000)).event.decode(), (await second.next(1_000)).event.decode()], [{ n: 1 }, { n: 1 }])
+    runtime.close()
+    runtime = await serve()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(watching.at(-1), ["c-1"], "a new link hears what's watched")
+    first.close()
+    second.close()
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(watching.at(-1), [], "and the last watcher leaving")
+    runtime.close()
     await gateway.close()
   })
 
@@ -1442,30 +1466,39 @@ describe("a Thread moving between a device and the cloud", () => {
   })
 })
 
-describe("an account's list of Threads", () => {
-  const conversation = { id: "c-1", harness: "claude", title: "Retry the webhooks", state: "waiting", folder: "/Users/ana/api", thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", session: "0b8f3e1a-7c2d-4f6a-9e5b-1d3c8a7f2e60", createdAt: "2026-10-24T20:00:00.000Z" }
-  const listing = { threadId: "t-0123456789abcdef", home: "cloud", repository: { url: "https://github.com/ana/api", branch: "main" }, conversations: [conversation], updatedAt: "2026-10-24T20:01:00.000Z" }
+describe("an account's list of Threads, one row per Session", () => {
+  const session = { session: "0b8f3e1a-7c2d-4f6a-9e5b-1d3c8a7f2e60", thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", threadTitle: "Webhooks", conversation: "c-1", harness: "claude", title: "Retry the webhooks", state: "waiting", waitingOn: "Approve: npm test", folder: "/Users/ana/api", createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:05:00.000Z", generation: 1 }
+  const mac = { kind: "device", deviceId: "9c1f4a2e-5b6d-4e8f-a1b2-c3d4e5f60718" }
+  const cloud = { kind: "cloud", threadId: "t-0123456789abcdef" }
+  const listed = { ...session, runsOn: mac, listedAt: "2026-10-24T20:05:01.000Z" }
 
-  test("a listing holds what a row shows and nothing else", () => {
-    assert.deepEqual(ThreadListingSchema.parse(listing), listing)
-    assert.throws(() => ThreadListingSchema.parse({ ...listing, transcript: "…" }), "no field it doesn't define")
-    assert.throws(() => RuntimeListingSchema.parse({ conversations: [{ ...conversation, state: "thinking" }] }), "a state is one of five")
-    assert.throws(() => RuntimeListingSchema.parse({ conversations: [{ ...conversation, title: "x".repeat(201) }] }), "a title is a row's, not a message's")
-    assert.throws(() => RuntimeListingSchema.parse({ conversations: Array.from({ length: 51 }, (_, index) => ({ ...conversation, id: `c-${index}` })) }), "at most 50 conversations")
-    assert.deepEqual(ThreadListingsSchema.parse({ threads: [listing], seq: 12 }), { threads: [listing], seq: 12 })
+  test("a row holds what a list shows and nothing else, and says where it runs", () => {
+    assert.deepEqual(ListedSessionSchema.parse(listed), listed)
+    assert.throws(() => ListedSessionSchema.parse({ ...listed, transcript: "…" }), "no field it doesn't define")
+    assert.throws(() => ListedSessionSchema.parse({ ...listed, state: "thinking" }), "a state is one of five")
+    assert.throws(() => ListedSessionSchema.parse({ ...listed, title: "x".repeat(201) }), "a title is a row's, not a message's")
+    assert.throws(() => SessionsReportSchema.parse({ listed: Array.from({ length: 201 }, () => session), gone: [] }), "at most 200 rows a report")
+    assert.deepEqual(SessionListingsSchema.parse({ sessions: [listed], seq: 12 }), { sessions: [listed], seq: 12 })
   })
 
-  test("two listings are the same when a list would show them alike, whatever order their keys were built in and whenever they changed", () => {
-    const reordered = { updatedAt: "2026-10-25T00:00:00.000Z", conversations: [Object.fromEntries(Object.entries(conversation).reverse())], repository: { branch: "main", url: "https://github.com/ana/api" }, home: "cloud", threadId: listing.threadId }
-    assert.equal(sameListing(listing, reordered), true)
-    assert.equal(sameListing(listing, { ...listing, conversations: [{ ...conversation, state: "idle" }] }), false)
-    assert.equal(sameListing(listing, undefined), false)
-    assert.equal(sameListing(undefined, undefined), true)
+  test("the one-owner rule: a higher generation replaces a row, the same one only from the same owner, a lower one never", () => {
+    assert.equal(mayReplace(undefined, { generation: 1, runsOn: mac }), true)
+    assert.equal(mayReplace(listed, { generation: 1, runsOn: mac }), true, "its owner, again")
+    assert.equal(mayReplace(listed, { generation: 1, runsOn: cloud }), false, "another owner at the same generation: refused")
+    assert.equal(mayReplace(listed, { generation: 3, runsOn: cloud }), true, "moved: claimed where it went")
+    assert.equal(mayReplace({ ...listed, generation: 3, runsOn: cloud }, { generation: 1, runsOn: mac }), false, "the old owner's late word")
   })
 
-  test("the account's stream says a Thread listed, whole, and one unlisted, with why", () => {
-    assert.deepEqual(AccountEventSchema.parse({ type: "thread-listed", thread: listing }), { type: "thread-listed", thread: listing })
-    assert.deepEqual(AccountEventSchema.parse({ type: "thread-unlisted", threadId: listing.threadId, reason: "returned" }), { type: "thread-unlisted", threadId: listing.threadId, reason: "returned" })
-    assert.equal(AccountEventSchema.safeParse({ type: "thread-unlisted", threadId: listing.threadId, reason: "gone" }).success, false)
+  test("two rows are the same when a list would show them alike; when they were heard isn't compared", () => {
+    assert.equal(sameListed(listed, { ...listed, listedAt: "2026-10-25T00:00:00.000Z" }), true)
+    assert.equal(sameListed(listed, { ...listed, state: "idle", waitingOn: undefined }), false)
+    assert.equal(sameListed(listed, { ...listed, runsOn: cloud }), false)
+    assert.equal(sameListed(undefined, listed), false)
+  })
+
+  test("the account's stream says Sessions listed, each whole, and Sessions unlisted, by ID", () => {
+    assert.deepEqual(AccountEventSchema.parse({ type: "sessions-listed", sessions: [listed] }), { type: "sessions-listed", sessions: [listed] })
+    assert.deepEqual(AccountEventSchema.parse({ type: "sessions-unlisted", sessions: [session.session] }), { type: "sessions-unlisted", sessions: [session.session] })
+    assert.equal(AccountEventSchema.safeParse({ type: "sessions-unlisted", sessions: [] }).success, false, "an event says something")
   })
 })

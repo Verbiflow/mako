@@ -22,6 +22,8 @@ export type GatewayHostOptions = {
   onFrame?: RuntimeOptions["onFrame"]
   /** The live streams its Threads' clients watch; without it, every watch ends at once. */
   media?: RuntimeOptions["media"]
+  /** Whether another device watches one of its conversations (`RuntimeOptions.watch`). */
+  watch?: RuntimeOptions["watch"]
 }
 
 /**
@@ -75,5 +77,6 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
   if (options.threads) runtime.threads = options.threads
   if (options.onFrame) runtime.onFrame = options.onFrame
   if (options.media) runtime.media = options.media
+  if (options.watch) runtime.watch = options.watch
   return serveRuntime(link, runtime)
 }

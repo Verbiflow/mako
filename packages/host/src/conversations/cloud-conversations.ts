@@ -1,10 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
+import { sessionStream, threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
 import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
-import type { ListedConversation, ListedState } from "@mako/protocol/thread-listing"
+import type { ListedSession, ListedState } from "@mako/protocol/thread-listing"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
@@ -19,7 +19,7 @@ import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/ind
 import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
 import { CloudControlPreviews } from "./cloud-control-previews.js"
 import { cloudRuntimeOf, namedUuid } from "./cloud-moves.js"
-import { AccountThreads } from "./account-threads.js"
+import { AccountSessions } from "./account-threads.js"
 import { CloudPreviews } from "./cloud-previews.js"
 import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
 
@@ -64,7 +64,8 @@ const EntrySchema = z.object({
   conversationId: z.string(),
   threadId: z.string(),
   harness: z.string(),
-  repository: CloudRepositorySchema,
+  /** The repository its cloud Thread clones; none for a conversation another device runs in its own folder. */
+  repository: CloudRepositorySchema.optional(),
   createdAt: z.number(),
   /** The cloud has the Thread: made once, so a start repeated after a crash makes it again under the same ID only until then. */
   created: z.boolean(),
@@ -78,36 +79,42 @@ const EntrySchema = z.object({
    * account's list alone until a window opens it, and never remembered: the list says it again.
    */
   listed: z.literal(true).optional(),
+  /**
+   * Another device's runtime that runs it (`d-<device>`), for a listed conversation that isn't in the cloud: its calls
+   * go there, and `threadId` holds its session stream (`sessionStream`), which carries its live updates while watched.
+   */
+  runtime: z.string().optional(),
 })
 
 type Entry = z.infer<typeof EntrySchema>
 
-/** How a list shows a conversation's state, as a session's status: `waiting` is a turn at work as far as a row goes. */
-const LISTED_STATUS = { working: "running", waiting: "running", idle: "ready", failed: "failed", closed: "closed" } as const satisfies Record<ListedState, LiveSummary["session"]["status"]>
+/** How a list shows a Session's state, as a session's status: `waiting` is a turn at work, with what it waits on said beside. */
+const LISTED_STATUS = { working: "running", waiting: "running", idle: "ready", failed: "failed", moving: "starting" } as const satisfies Record<ListedState, LiveSummary["session"]["status"]>
 
 /**
- * What a window lists of a conversation it knows only from the account's list: the row, and nothing that takes its
- * machine. Opening it reads the rest there, as it would any cloud conversation's.
+ * What a window lists of a Session it knows only from the account's list: the row, where it runs in words, and nothing
+ * that takes its owner. Opening it reads the rest there, as it would any cloud conversation's.
  */
-function listedSummary(conversation: ListedConversation): LiveSummary {
+function listedSummary(row: ListedSession, where: string): LiveSummary {
   const summary: LiveSummary = {
     session: {
-      id: conversation.id,
-      harness: conversation.harness,
-      cwd: conversation.folder ?? "",
-      status: LISTED_STATUS[conversation.state],
+      id: row.conversation,
+      harness: row.harness,
+      cwd: row.folder ?? "",
+      status: LISTED_STATUS[row.state],
       connection: "hibernated",
       modes: [],
       currentMode: null,
       configOptions: [],
     },
     revision: 0,
-    createdAt: Date.parse(conversation.createdAt),
-    elsewhere: CLOUD_FOLDER_WHERE,
+    createdAt: Date.parse(row.createdAt),
+    elsewhere: where,
+    threadId: row.thread,
+    sessionId: row.session,
   }
-  if (conversation.title) summary.session.title = conversation.title
-  if (conversation.thread) summary.threadId = conversation.thread
-  if (conversation.session) summary.sessionId = conversation.session
+  if (row.title) summary.session.title = row.title
+  if (row.waitingOn) summary.waitingOn = row.waitingOn
   return summary
 }
 
@@ -266,7 +273,10 @@ export class CloudConversations {
   /** By conversation: the last view of its app a window was given, shown while its machine sleeps. */
   readonly #views = new Map<string, unknown>()
   /** The account's Threads as every device lists them: what puts another device's cloud conversations here. */
-  readonly #list = new AccountThreads()
+  readonly #list = new AccountSessions()
+  /** This Mac's device, whose own Sessions are its own, and the names of the account's devices, for where a Session runs. */
+  #device: string | undefined
+  readonly #deviceNames = new Map<string, string>()
   #unlisten: (() => void) | undefined
   #listing: Promise<void> | undefined
   /**
@@ -652,15 +662,18 @@ export class CloudConversations {
       await this.#save()
     }
     const account = this.#account()
+    const repository = entry.repository
+    // A start this Mac made names its repository; only a conversation listed from another device has none, and isn't started here.
+    if (!repository) throw new Error("That conversation runs on another device; it isn't started from this Mac.")
     if (!entry.created) {
-      await account.createThread(entry.threadId, entry.repository, { harness })
+      await account.createThread(entry.threadId, repository, { harness })
       entry.created = true
       await this.#save()
-      hostLog("cloud-conversations", "made a cloud Thread", { threadId: entry.threadId, conversationId: entry.conversationId, harness, repository: entry.repository.url })
+      hostLog("cloud-conversations", "made a cloud Thread", { threadId: entry.threadId, conversationId: entry.conversationId, harness, repository: repository.url })
     }
     this.#follow(entry)
     const cwd = ahead?.cwd ?? bootFolder(await this.#call(entry, "mako:boot", []))
-    if (step !== "starting") this.#step(options.conversationId, "starting", entry.repository)
+    if (step !== "starting") this.#step(options.conversationId, "starting", repository)
     // The machine's own start: in its clone, with nothing of this Mac's folders or Thread store. Repeated for a
     // conversation started ahead, it brings the first message (`LiveConversations.firstMessage` on the machine).
     const start: LiveStartOptions = { ...options, conversationId: entry.conversationId }
@@ -782,14 +795,15 @@ export class CloudConversations {
    * for a call only the person may repeat, the window hears it as a reconnect, in a cloud Thread's words.
    */
   #call(entry: Entry, channel: string, args: readonly unknown[]): Promise<EncodedValue> {
-    return this.#callThread(entry.threadId, channel, args, { conversationId: entry.conversationId })
+    return this.#callThread(entry.threadId, channel, args, { conversationId: entry.conversationId, runtime: entry.runtime })
   }
 
   /** `#call` to a Thread by its ID, for its conversation when it has one, or made ahead of a person's message. */
-  async #callThread(threadId: string, channel: string, args: readonly unknown[], how: { conversationId?: string; ahead?: boolean; passive?: boolean; refuseUnstarted?: boolean }): Promise<EncodedValue> {
+  async #callThread(threadId: string, channel: string, args: readonly unknown[], how: { conversationId?: string; runtime?: string | undefined; ahead?: boolean; passive?: boolean; refuseUnstarted?: boolean }): Promise<EncodedValue> {
     const { session, deviceId } = await this.#connected()
     const actor: Actor = { kind: "client", client: "desktop", deviceId }
-    const calls: GatewayHostCallsOptions = { threadId, actor, history: hostHistoryPaging() }
+    // Another device's conversation is answered by that device's runtime, through the cloud.
+    const calls: GatewayHostCallsOptions = how.runtime ? { runtimeId: how.runtime, actor, history: hostHistoryPaging() } : { threadId, actor, history: hostHistoryPaging() }
     if (how.ahead) calls.ahead = true
     if (how.passive) calls.passive = true
     if (how.refuseUnstarted) calls.refuseUnstarted = true
@@ -845,7 +859,10 @@ export class CloudConversations {
         try {
           const { session } = await this.#connected()
           const fromHead = this.#fromHead.has(entry.threadId)
-          const subscription = session.subscribe({ stream: threadStream(entry.threadId), after: fromHead ? Number.MAX_SAFE_INTEGER : entry.seq })
+          // Another device's conversation streams only while watched, and keeps nothing to replay: always from now.
+          const subscription = entry.runtime
+            ? session.subscribe({ stream: entry.threadId, after: 0 })
+            : session.subscribe({ stream: threadStream(entry.threadId), after: fromHead ? Number.MAX_SAFE_INTEGER : entry.seq })
           this.#following.set(entry.threadId, subscription)
           for (;;) {
             const frame = await subscription.next()
@@ -951,9 +968,12 @@ export class CloudConversations {
   #readList(): Promise<void> {
     this.#listing ??= (async () => {
       const account = this.#options.account()
-      if (this.#closed || !account?.threadListings || !(await account.id())) return
+      if (this.#closed || !account?.sessionListings || !(await account.id())) return
       try {
-        if (this.#list.listed(await account.threadListings())) this.#reconcile()
+        this.#device = await account.deviceId()
+        const [listings, devices] = await Promise.all([account.sessionListings(), account.devices?.().catch(() => undefined)])
+        for (const device of devices?.devices ?? []) this.#deviceNames.set(device.id, device.name)
+        if (this.#list.listed(listings)) this.#reconcile()
       } catch (error) {
         hostLog("cloud-conversations", "the account's Threads couldn't be listed; listed again when the account or the network changes", { error: error instanceof Error ? error.message : String(error) })
       }
@@ -964,23 +984,25 @@ export class CloudConversations {
   }
 
   /**
-   * Holds the conversations known from the account's list to it: a cloud conversation another device has, or this
-   * Mac forgot, is listed here, changed as the list changes, and gone when it leaves it. This Mac's own (started or
-   * moved here) are never touched, and one a window opened goes on from its own batches, which say more and sooner.
-   * Windows hear what changed, and list it as they list a conversation at boot: nothing wakes a machine until one opens.
+   * Holds the conversations known from the account's list to it: a Session another device has (in the cloud or on
+   * itself) is listed here, changed as the list changes, and gone when it leaves it. This Mac's own Sessions, and the
+   * cloud conversations this Mac started or moved, are never touched, and one a window opened goes on from its own
+   * batches, which say more and sooner. Windows hear what changed and list it as they list a conversation at boot:
+   * nothing wakes a machine or reaches a Mac until one opens.
    */
   #reconcile(): void {
-    const wanted = new Map<string, { repository: CloudRepository; conversation: ListedConversation; threadId: string }>()
-    for (const thread of this.#list.threads().values()) {
-      const repository = CloudRepositorySchema.safeParse(thread.repository)
-      if (thread.home !== "cloud" || !repository.success || this.#options.returning?.(thread.threadId)) continue
-      for (const conversation of thread.conversations)
-        if (conversation.state !== "closed") wanted.set(conversation.id, { repository: repository.data, conversation, threadId: thread.threadId })
+    const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string }>()
+    for (const row of this.#list.sessions().values()) {
+      if (row.runsOn.kind === "device") {
+        if (row.runsOn.deviceId === this.#device) continue
+        const runtime = `d-${row.runsOn.deviceId}`
+        wanted.set(row.conversation, { row, threadId: sessionStream(runtime, row.conversation), runtime, where: this.#deviceNames.get(row.runsOn.deviceId) ?? "another computer" })
+      } else if (!this.#options.returning?.(row.runsOn.threadId)) wanted.set(row.conversation, { row, threadId: row.runsOn.threadId, where: CLOUD_FOLDER_WHERE })
     }
     const unlisted: string[] = []
     // Deleting from a Map as it's walked is safe: the walk goes on past what went.
     for (const entry of this.#entries.values()) {
-      if (!entry.listed || wanted.has(entry.conversationId)) continue
+      if (!entry.listed || wanted.get(entry.conversationId)?.threadId === entry.threadId) continue
       this.#entries.delete(entry.conversationId)
       this.controlPreviews.forget(entry.conversationId)
       this.#views.delete(entry.conversationId)
@@ -988,17 +1010,22 @@ export class CloudConversations {
       if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
     }
     const listed: LiveSummary[] = []
-    for (const [id, { repository, conversation, threadId }] of wanted) {
+    for (const [id, { row, threadId, runtime, where }] of wanted) {
       const known = this.#entries.get(id)
       if (known && (!known.listed || this.#following.has(known.threadId))) continue
-      const summary = listedSummary(conversation)
+      const summary = listedSummary(row, where)
       if (known?.summary && JSON.stringify(known.summary) === JSON.stringify(summary)) continue
-      this.#entries.set(id, { ...(known ?? { conversationId: id, threadId, harness: conversation.harness, repository, createdAt: summary.createdAt, created: true, seq: 0, listed: true as const }), summary })
+      const entry: Entry = known ?? { conversationId: id, threadId, harness: row.harness, createdAt: summary.createdAt, created: true, seq: 0, listed: true }
+      if (runtime) entry.runtime = runtime
+      entry.summary = summary
+      this.#entries.set(id, entry)
       listed.push(summary)
     }
+    // A Session that moved (another device's to the cloud, or back) is listed where it runs now, never unlisted on the way.
+    const gone = unlisted.filter((id) => !listed.some((summary) => summary.session.id === id))
     if (listed.length) this.#options.emit(encodeRuntimeEvent({ type: "live-listed", summaries: listed }))
-    if (unlisted.length) this.#options.emit(encodeRuntimeEvent({ type: "live-unlisted", ids: unlisted }))
-    if (listed.length || unlisted.length) hostLog("cloud-conversations", "the account's list changed what's listed here", { listed: listed.length, unlisted: unlisted.length })
+    if (gone.length) this.#options.emit(encodeRuntimeEvent({ type: "live-unlisted", ids: gone }))
+    if (listed.length || gone.length) hostLog("cloud-conversations", "the account's list changed what's listed here", { listed: listed.length, unlisted: gone.length, moved: unlisted.length - gone.length })
   }
 
   async #load(): Promise<void> {

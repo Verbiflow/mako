@@ -21,6 +21,10 @@ export interface AcpPresence {
   status: "starting" | "ready" | "running" | "background" | "needs-permission" | "failed"
   /** What the session waits on while `background`. */
   background?: number
+  /** Where it runs when not on this Mac, in words ("Studio", "a cloud machine"). */
+  elsewhere?: string
+  /** What a conversation on another device waits on there, in a line ("Approve: npm test"). */
+  waitingOn?: string
 }
 
 export function selectAcpPresence(state: AcpState): AcpPresence[] {
@@ -60,6 +64,8 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
         // sign-out waits on the person, as a question does.
         status:
           (conversation.permission && conversation.session.status !== "failed") ||
+          // Waiting on a person on the device it runs on: they're needed here too.
+          Boolean(conversation.waitingOn) ||
           (conversation.session.status !== "running" && signInPause(conversation.requests ?? []))
             ? "needs-permission"
             : conversation.session.status === "failed" && autoContinuePending(conversation.requests)
@@ -71,6 +77,8 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
                   : conversation.session.status,
       }
       if (presence.status === "background" && work) presence.background = work.count
+      if (conversation.elsewhere) presence.elsewhere = conversation.elsewhere
+      if (conversation.waitingOn) presence.waitingOn = conversation.waitingOn
       return [presence]
     })
     .sort((left, right) => right.createdAt - left.createdAt)
@@ -98,6 +106,8 @@ export function sameAcpPresence(
         (candidate.nativePaths ?? []).join("\0") ===
           (presence.nativePaths ?? []).join("\0") &&
         candidate.status === presence.status &&
+        candidate.elsewhere === presence.elsewhere &&
+        candidate.waitingOn === presence.waitingOn &&
         candidate.background === presence.background
       )
     })

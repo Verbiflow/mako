@@ -10,8 +10,8 @@ import { type MediaHandler, type MediaSender, type MediaStreamId, encodeMediaMes
 import type { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
-import type { RuntimeListing } from "./thread-listing.js"
-import { ACTIVITY_VERSION, LISTING_VERSION, MEDIA_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import type { SessionsReport } from "./thread-listing.js"
+import { ACTIVITY_VERSION, MEDIA_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 
 export class RuntimeRefusedError extends Error {
   readonly problem: Problem
@@ -44,6 +44,11 @@ export type RuntimeOptions = {
   credential?: ConnectionCredential
   /** Serves the live streams clients watch (`media.ts`); without it, every watch ends at once. */
   media?: MediaHandler
+  /**
+   * The conversations another device watches now, the whole set, for this link alone (version 5 on): send their live
+   * updates with `live`, and no others'. A new link starts with none watched.
+   */
+  watch?: (conversations: readonly string[]) => void
 }
 
 export type ServedRuntime = {
@@ -60,10 +65,12 @@ export type ServedRuntime = {
    */
   activity(busy: boolean, work: string[]): boolean
   /**
-   * Says what one Thread's conversations are, as the account's list shows them, on a gateway that speaks version 4 or
-   * later (false on an older one, or for a Thread this runtime doesn't run). Not kept: say it again on each new link.
+   * Reports the Sessions this runtime owns, as the account's list shows them, on a gateway that speaks version 5 or
+   * later (false on an older one, or once the link closed). Not kept: the first report on each new link says them all.
    */
-  listing(threadId: string, listing: RuntimeListing): boolean
+  sessions(report: SessionsReport): boolean
+  /** One live update of a watched conversation, as its event's line; false on a gateway older than version 5 or a closed link. */
+  live(conversation: string, event: Payload): boolean
   /** Settles when the link closes. */
   done: Promise<void>
   /** Why the link ended: the gateway's refusal, or undefined when the connection just closed. */
@@ -195,6 +202,7 @@ export async function serveRuntime(
       else if (frame.type === "operation")
         void answer(frame.operation, frame.generation)
       else if (frame.type === "media-watch") watched(frame)
+      else if (frame.type === "watch") options.watch?.(frame.conversations)
       else if (frame.type === "media-ack") {
         if (streams.has(frame.stream)) options.media?.acked(frame.stream, frame.received)
       } else if (frame.type === "media-unwatch") {
@@ -229,10 +237,14 @@ export async function serveRuntime(
       for (const { threadId, generation } of threads.claims()) link.send({ type: "activity", threadId, generation, busy, work: work.slice(0, 20).map((item) => item.slice(0, 120)) })
       return true
     },
-    listing: (threadId, listing) => {
-      const generation = threads.generation(threadId)
-      if (first.version < LISTING_VERSION || link.closed || generation === undefined) return false
-      link.send({ type: "listing", threadId, generation, listing })
+    sessions: (report) => {
+      if (first.version < SESSIONS_VERSION || link.closed) return false
+      link.send({ type: "sessions", report })
+      return true
+    },
+    live: (conversation, event) => {
+      if (first.version < SESSIONS_VERSION || link.closed) return false
+      link.send({ type: "live", conversation, event })
       return true
     },
     done,
