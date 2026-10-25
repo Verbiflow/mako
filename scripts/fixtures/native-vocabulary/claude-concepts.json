@@ -1,8 +1,8 @@
 {
   "harness": "claude",
-  "version": "2.1.290",
-  "on": "2026-10-06",
-  "searched": "2.1.290",
+  "version": "2.1.310",
+  "on": "2026-10-25",
+  "searched": "claude",
   "probed": 36,
   "missing": [],
   "mcpConfig": {

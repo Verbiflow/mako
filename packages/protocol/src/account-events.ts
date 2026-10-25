@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { StreamId } from "./events.js"
 import { LISTED_PER_FRAME, ListedSessionSchema } from "./thread-listing.js"
+import { WAITING_PER_SESSION, WaitingMessageSchema } from "./waiting.js"
 
 /**
  * What an account's own stream (`account:<id>`) carries: what happened to its devices and its Threads, each event
@@ -36,6 +37,8 @@ export const AccountEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sessions-listed"), sessions: z.array(ListedSessionSchema).min(1).max(LISTED_PER_FRAME) }),
   /** Sessions that left the list: closed, older than it keeps, or on a device that left the account. */
   z.object({ type: z.literal("sessions-unlisted"), sessions: z.array(z.uuid()).min(1).max(LISTED_PER_FRAME) }),
+  /** A Session's messages waiting for its owner (`waiting.ts`), all of them as they stand now; none once each was taken or taken back. */
+  z.object({ type: z.literal("messages-waiting"), session: z.uuid(), messages: z.array(WaitingMessageSchema).max(WAITING_PER_SESSION) }),
 ])
 export type AccountEvent = z.infer<typeof AccountEventSchema>
 /** An event about the account's devices, as against its Threads. */

@@ -32,32 +32,37 @@ export const CLAUDE_RECORD_TYPES: readonly string[] = [
 ]
 
 /**
- * The `system` records Claude Code 2.1.278 to 2.1.293 makes; history draws
+ * The `system` records Claude Code 2.1.278 to 2.1.310 makes; history draws
  * compactions, refusals and local commands. 2.1.293's additions are signals
  * for a host's UI and its bridge, and a title the transcript's title
- * records also hold.
+ * records also hold. 2.1.310's are bookkeeping: an ephemeral mark a remote
+ * client gets once a turn's events are stored (`checkpoint_done`), the
+ * stand-in a rewind keeps for a message it can't return to whole
+ * (`rewind_stand_in`), and a stream signal (`turn_began_before_init`).
  */
 export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
   "agents_killed", "api_error", "api_retry", "away_summary", "background_tasks_changed",
-  "bridge_state", "bridge_status", "cloud_session_delta", "cloud_session_status", "code_change_published",
-  "commands_changed", "compact_boundary", "control_request_progress", "dev_intent", "elicitation_complete",
-  "feedback_draft_queued", "file_attachments_missing", "file_snapshot", "hook_progress", "hook_response",
-  "hook_started", "informational", "init", "instruction_size_warning", "local_command",
-  "memory_recall", "memory_saved", "mirror_error", "model_consent_fallback", "model_fallback",
-  "model_refusal_fallback", "model_refusal_no_fallback", "notification", "peer_message_hold", "per_turn_effort_changed",
-  "permission_check_status", "permission_denied", "permission_retry", "plugin_install", "post_turn_summary",
-  "scheduled_task_fire", "session_metadata", "session_state_changed", "session_title_changed", "status",
-  "stop_hook_summary", "task_notification", "task_progress", "task_started", "task_summary",
-  "task_updated", "thinking_tokens", "tool_host_result", "turn_duration", "turn_handoff_available",
-  "turn_preempted", "turn_starting", "ui_focus", "ui_invalidate", "ui_log",
-  "ui_panes", "ui_scroll", "ui_status", "ui_toast", "vcs_state_changed",
-  "worker_shutting_down",
+  "bridge_state", "bridge_status", "checkpoint_done", "cloud_session_delta", "cloud_session_status",
+  "code_change_published", "commands_changed", "compact_boundary", "control_request_progress", "dev_intent",
+  "elicitation_complete", "feedback_draft_queued", "file_attachments_missing", "file_snapshot", "hook_progress",
+  "hook_response", "hook_started", "informational", "init", "instruction_size_warning",
+  "local_command", "memory_recall", "memory_saved", "mirror_error", "model_consent_fallback",
+  "model_fallback", "model_refusal_fallback", "model_refusal_no_fallback", "notification", "peer_message_hold",
+  "per_turn_effort_changed", "permission_check_status", "permission_denied", "permission_retry", "plugin_install",
+  "post_turn_summary", "rewind_stand_in", "scheduled_task_fire", "session_metadata", "session_state_changed",
+  "session_title_changed", "status", "stop_hook_summary", "task_notification", "task_progress",
+  "task_started", "task_summary", "task_updated", "thinking_tokens", "tool_host_result",
+  "turn_began_before_init", "turn_duration", "turn_handoff_available", "turn_preempted", "turn_starting",
+  "ui_focus", "ui_invalidate", "ui_log", "ui_panes", "ui_scroll",
+  "ui_status", "ui_toast", "vcs_state_changed", "worker_shutting_down",
 ]
 
 /**
- * The attachments Claude Code 2.1.278 to 2.1.293 names: context it gives the model
+ * The attachments Claude Code 2.1.278 to 2.1.310 names: context it gives the model
  * beside a prompt. History reads only `queued_command`, a prompt the person
- * sent while a turn ran.
+ * sent while a turn ran. 2.1.310's are context too: goals, the model's output
+ * cap (`output_limit_note`), the project docs read, and a question carried
+ * across a compaction (`projects_thread_ask`).
  */
 export const CLAUDE_ATTACHMENT_TYPES: readonly string[] = [
   "account_memory_recall", "advisor_stripped", "advisor_tool", "agent_listing_delta", "agent_mention",
@@ -68,15 +73,16 @@ export const CLAUDE_ATTACHMENT_TYPES: readonly string[] = [
   "critical_system_reminder", "date", "date_change", "deferred_tools_delta", "deferred_tools_record",
   "diagnostics", "dir_sync_notice", "directory", "dynamic_skill", "edited_image_file",
   "edited_text_file", "elapsed_time_reminder", "environment", "file", "fork_briefing",
-  "goal_status", "hook_additional_context", "hook_blocking_error", "hook_cancelled", "hook_deferred_tool",
-  "hook_error_during_execution", "hook_non_blocking_error", "hook_permission_decision", "hook_plugin_listing", "hook_stopped_continuation",
-  "hook_success", "hook_system_message", "inlined_image_paths", "instructions", "invoked_skills",
-  "language", "max_turns_reached", "mcp_dropped_tools_delta", "mcp_instructions_delta", "mcp_resource",
-  "memory_update", "model", "nested_memory", "opened_file_in_ide", "output_style",
-  "output_style_instructions", "output_token_usage", "pdf_reference", "peer_mention", "plan_file_reference",
-  "plan_mode", "plan_mode_exit", "plan_mode_reentry", "poll_events", "prefix_delta",
-  "proactivity", "prompt_render_point", "prompt_snapshot", "queued_command", "read_truncation_notice",
-  "relevant_memories", "remote_session_change", "repl_mcp_needs_auth", "sandbox_instructions", "secondary_reminder", "secondary_reminder_sent",
+  "goal_status", "goals", "hook_additional_context", "hook_blocking_error", "hook_cancelled",
+  "hook_deferred_tool", "hook_error_during_execution", "hook_non_blocking_error", "hook_permission_decision", "hook_plugin_listing",
+  "hook_stopped_continuation", "hook_success", "hook_system_message", "inlined_image_paths", "instructions",
+  "invoked_skills", "language", "max_turns_reached", "mcp_dropped_tools_delta", "mcp_instructions_delta",
+  "mcp_resource", "memory_update", "model", "nested_memory", "opened_file_in_ide",
+  "output_limit_note", "output_style", "output_style_instructions", "output_token_usage", "pdf_reference",
+  "peer_mention", "plan_file_reference", "plan_mode", "plan_mode_exit", "plan_mode_reentry",
+  "poll_events", "prefix_delta", "proactivity", "project_doc_reads", "projects_thread_ask",
+  "prompt_render_point", "prompt_snapshot", "queued_command", "read_truncation_notice", "relevant_memories",
+  "remote_session_change", "repl_mcp_needs_auth", "sandbox_instructions", "secondary_reminder", "secondary_reminder_sent",
   "selected_lines_in_diff", "selected_lines_in_ide", "session_context", "session_cron_carry", "session_settings",
   "silent_turn_reminder", "skill_listing", "skill_mention", "structured_output", "task_reminder",
   "task_status", "team_context", "teammate_mailbox", "teammate_shutdown_batch", "thinking_drop",
@@ -107,9 +113,9 @@ const CLAUDE_REFUSALS = [
 export const CLAUDE_VOCABULARY = defineVocabulary({
   harness: "claude",
   checked: {
-    version: "2.1.283",
-    on: "2026-10-06",
-    against: "the model request of the SDK's Claude Code 2.1.283, which Mako runs, in every Mako mode (scripts/fixtures/native-tools), the 2.1.290 CLI's print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools",
+    version: "2.1.310",
+    on: "2026-10-25",
+    against: "the model request of the SDK's Claude Code 2.1.310, which Mako runs, in every Mako mode (scripts/fixtures/native-tools; unchanged since 2.1.283), its print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools as of 2026-10-06",
   },
   mcp: [],
   refusals: CLAUDE_REFUSALS,
@@ -161,9 +167,9 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "2.1.290",
-      on: "2026-10-06",
-      against: "SDK 0.3.283 types (HOOK_EVENTS, Settings, AgentDefinition), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings), and the binary through harness:self-report",
+      version: "2.1.310",
+      on: "2026-10-25",
+      against: "SDK 0.3.310 types (HOOK_EVENTS, unchanged since 0.3.283; Settings, AgentDefinition), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings) as read on 2026-10-06, and the build the SDK bundles through harness:self-report",
     },
     instructions: {
       files: ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude/AGENTS.md"],
