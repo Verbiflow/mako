@@ -507,19 +507,33 @@ export function parseSteerResponse(
     : invalidResult("Codex returned an invalid steering receipt")
 }
 
+/**
+ * A turn is its id and status. Its items and error are read as far as they
+ * can be: an item whose fields a newer Codex shaped otherwise reads as
+ * `unsupported`, as an unknown type does, and an error keeps what message it
+ * has. One reshaped item once failed the whole turn, so its `turn/completed`
+ * was dropped and the turn never ended (and a `turn/start` reply or a
+ * resumed thread's turns failed the same way).
+ */
 function parseTurn(value: JsonValue | undefined): Turn | null {
   const root = objectValue(value)
   const id = stringValue(root?.id)
   const status = stringValue(root?.status)
-  const items = parseArray(root?.items, parseThreadItem)
-  const error = parseTurnError(root?.error)
-  return root &&
-    id !== undefined &&
-    status !== undefined &&
-    items &&
-    error.valid
-    ? { id, status, items, error: error.value }
-    : null
+  if (!root || id === undefined || status === undefined) return null
+  const items = Array.isArray(root.items) ? root.items.flatMap(turnItem) : []
+  const error = parseTurnError(root.error)
+  const message = stringValue(objectValue(root.error)?.message)
+  return { id, status, items, error: error.valid ? error.value : root.error == null ? null : message === undefined ? {} : { message } }
+}
+
+/** An item of a turn: as it parses, else `unsupported` by its type and id, else nothing. */
+function turnItem(entry: JsonValue): ThreadItem[] {
+  const item = parseThreadItem(entry)
+  if (item) return [item]
+  const root = objectValue(entry)
+  const type = stringValue(root?.type)
+  const id = stringValue(root?.id)
+  return type !== undefined && id !== undefined ? [{ type: "unsupported", id, sourceType: type }] : []
 }
 
 function parseTurnError(
