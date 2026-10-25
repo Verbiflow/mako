@@ -100,15 +100,11 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       - run: npm run build:control-runtime
         if: steps.open.outputs.exists != 'true'
-      # Codex sandboxes every command with bubblewrap on Linux. The runner has none, and Ubuntu 24.04 gives an
-      # unprivileged user namespace no capabilities, so Codex 0.164.0's sandbox failed every shell call
-      # (`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`) and each pair recorded that, not Codex at work.
+      # Without it each Codex pair recorded its sandbox failing every shell call, not Codex at work. `checks.yml`'s
+      # codex-sandbox job runs the same setup with Codex at tested on every pull request.
       - name: Let Codex's sandbox run as on a Linux workstation
         if: steps.open.outputs.exists != 'true' && matrix.harness == 'codex'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        uses: ./.github/actions/codex-sandbox
       - name: Move tested and rerun the drift tools
         id: bump
         if: steps.open.outputs.exists != 'true'
