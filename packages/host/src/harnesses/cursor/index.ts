@@ -62,9 +62,9 @@ export const installCursor: ProviderModule = (host, context) => {
       toolSpend: harnessLacks("Cursor's SDK reports what each turn spent; its tool calls carry no tokens."),
     },
     features: {
-      goals: { native: native("goals", "goal tool calls in its protocol (`create_goal_tool_call`)"), mako: makosOwn("Neither SDK 1.0.31 nor 1.0.37, the newest, offers a goal to a local run: its goal tool calls are protocol types the SDK's stream drops, and its API has no goal.") },
+      goals: { native: native("goals", "goal tool calls in its protocol (`create_goal_tool_call`)"), mako: makosOwn("Neither SDK 1.0.31 nor 1.0.40, the newest, offers a goal to a local run: its goal tool calls are protocol types the SDK's stream drops, and its API has no goal.") },
       review: { mako: makosOwn("Cursor's SDK has no review; Bugbot reviews pull requests on Cursor's servers.") },
-      sideQuestions: { mako: makosOwn("SDK 1.0.31 has no side question, so Mako asks a read-only copy of the agent.") },
+      sideQuestions: { mako: makosOwn("SDK 1.0.40 has no side question, so Mako asks a read-only copy of the agent.") },
       scheduledPrompts: { mako: harnessLacks("Cursor's SDK has no schedule.") },
       cloudRuns: { native: native("cloud agents", "`AgentOptions.cloud`; agent IDs starting `bc-`"), mako: makoLacks("Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built.") },
       backgroundSessions: { mako: makosOwn() },

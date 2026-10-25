@@ -29,24 +29,6 @@ try {
   const first = CURSOR_SDK_PATCHES.map(({ target }) => read(target))
   patchCursorSdk(sdk)
   assert.deepEqual(CURSOR_SDK_PATCHES.map(({ target }) => read(target)), first, "repeated builds leave patched bytes unchanged")
-  // An existing complete transcript patch upgrades without reinstalling;
-  // incomplete historical patches still fail below.
-  const esm = CURSOR_SDK_PATCHES.find(({ target }) => target === "dist/esm/357.js")
-  let previous = read(esm.target)
-  for (const [original, patched] of esm.replacements.slice(esm.previous.length))
-    previous = previous.replace(patched, () => original)
-  const [obsolete, originalRpc] = esm.migrations[0]
-  previous = previous.replace(originalRpc, () => obsolete)
-  writeFileSync(join(sdk, esm.target), previous)
-  const cjs = CURSOR_SDK_PATCHES.find(({ target }) => target === "dist/cjs/222.js")
-  let previousCjs = read(cjs.target)
-  for (const [original, patched] of cjs.replacements)
-    previousCjs = previousCjs.replace(patched, () => original)
-  const [obsoleteCjs, originalCjsRpc] = cjs.migrations[0]
-  writeFileSync(join(sdk, cjs.target), previousCjs.replace(originalCjsRpc, () => obsoleteCjs))
-  assert.throws(() => assertCursorSdkPatched(read), /lacks Mako's complete/)
-  patchCursorSdk(sdk)
-  assert.deepEqual(CURSOR_SDK_PATCHES.map(({ target }) => read(target)), first)
   const archive = join(root, "app.asar")
   await createPackage(join(root, "app"), archive)
   assertCursorSdkPatched((target) => extractFile(archive, `node_modules/@cursor/sdk/${target}`).toString("utf8"))

@@ -546,12 +546,47 @@ export function schemaObjectName(statement: string): string | undefined {
   return undefined
 }
 
+/** Each virtual table a schema creates, by the prefix its shadow tables' names take, with its statement. */
+function virtualTables(statements: readonly string[]): Map<string, string> {
+  const tables = new Map<string, string>()
+  for (const statement of statements) {
+    const name = statement.startsWith("CREATE VIRTUAL TABLE ") ? schemaObjectName(statement) : undefined
+    if (name !== undefined) tables.set(`${name.toLowerCase()}_`, statement)
+  }
+  return tables
+}
+
+/** The virtual table whose shadow table `statement` creates, among `tables`. */
+function shadowOwner(tables: ReadonlyMap<string, string>, statement: string): string | undefined {
+  const name = statement.startsWith("CREATE TABLE ") ? schemaObjectName(statement) : undefined
+  return name === undefined ? undefined : [...tables].find(([prefix]) => name.toLowerCase().startsWith(prefix))?.[1]
+}
+
+/**
+ * A database's schema in the order it's made: `rowid` order, with each virtual table's shadow tables right after
+ * it, as creating it writes them. `VACUUM` moves shadow tables ahead of their table (it makes every table with pages
+ * first), so a store and its restore, made by creating, list the same schema once it's in this order.
+ */
+function schemaInOrder(statements: readonly string[]): string[] {
+  const tables = virtualTables(statements)
+  const ordered: string[] = []
+  for (const statement of statements) {
+    if (shadowOwner(tables, statement) !== undefined) continue
+    ordered.push(statement)
+    if (tables.has(`${schemaObjectName(statement)?.toLowerCase()}_`) && statement.startsWith("CREATE VIRTUAL TABLE "))
+      ordered.push(...statements.filter((shadow) => shadowOwner(tables, shadow) === statement))
+  }
+  return ordered
+}
+
 /**
  * A captured schema written into the database a restore opened: each object the database lacks, by name, and
  * the user version when it has none. One it already holds stays as it is, whatever its text: a store its harness
- * migrated keeps statements `ALTER TABLE` rewrote, and a virtual table makes its shadow tables itself.
+ * migrated keeps statements `ALTER TABLE` rewrote, and a virtual table makes its shadow tables itself (Devin 3000.11's
+ * `message_search`, FTS5, makes `message_search_data` and the rest).
  */
 function applySchema(db: DatabaseSync, snapshot: SchemaSnapshot): void {
+  const virtual = virtualTables(snapshot.statements)
   const objects = () => SchemaObjectSchema.array().parse(db.prepare("SELECT name, sql FROM sqlite_master").all())
   const names = new Set<string>()
   const texts = new Set<string>()
@@ -565,7 +600,8 @@ function applySchema(db: DatabaseSync, snapshot: SchemaSnapshot): void {
   for (const statement of snapshot.statements) {
     const name = schemaObjectName(statement)
     if (name === undefined ? texts.has(statement) : names.has(name.toLowerCase())) continue
-    db.exec(statement)
+    // A schema captured in `rowid` order from a vacuumed store lists a shadow table first: its table makes it.
+    db.exec(shadowOwner(virtual, statement) ?? statement)
     // A virtual table's shadow tables come with it.
     list()
   }
@@ -2026,7 +2062,7 @@ export class RecordStore {
     }
     const source = new SourceRead(database.path)
     try {
-      const statements = SchemaStatementSchema.array().parse(source.statement("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid").all()).map((row) => row.sql)
+      const statements = schemaInOrder(SchemaStatementSchema.array().parse(source.statement("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid").all()).map((row) => row.sql))
       const userVersion = Number(UserVersionSchema.parse(source.statement("PRAGMA user_version").get()).user_version)
       const schema = Buffer.from(JSON.stringify({ statements, userVersion }))
       const schemaDigest = sha256(schema)
