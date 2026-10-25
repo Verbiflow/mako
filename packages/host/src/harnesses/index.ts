@@ -98,6 +98,7 @@ export function openHarnesses({ host, appRoot, catalog, live, emit, jobs, subscr
       void profiles.refresh(provider)
     },
   })
+  host.launchReadings.bind((provider) => updates.launchVersion(provider))
   // When each harness published its releases, for the record store's evidence pass: read hourly at most once a day, never waited on.
   const releases = new ReleaseTimelines({ evidence: join(makoRecords(), "evidence"), sources: () => host.updateSources.list() })
   jobs.every("release-timelines", 60 * 60_000, () => releases.refresh(), { firstAfterMs: 60_000 })

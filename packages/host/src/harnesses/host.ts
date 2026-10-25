@@ -13,7 +13,7 @@ import type { ProviderUsageHistory } from "../usage/index.js"
 import { ProviderRegistry } from "./registry.js"
 import { DiscoveryProcesses } from "./discovery-process.js"
 import { LiveDrivers } from "./live-drivers.js"
-import { runtimeFloor } from "./runtime-floor.js"
+import { LaunchReadings, runtimeFloor } from "./runtime-floor.js"
 import { accountAdmission } from "./execution-admission.js"
 import { HarnessAccounts } from "./accounts.js"
 import { join } from "node:path"
@@ -50,6 +50,8 @@ export interface ProviderHost {
   usageHistories: ProviderRegistry<ProviderUsageHistory>
   /** The CLIs run to discover settings, accounts and versions, bounded together. */
   discovery: DiscoveryProcesses
+  /** The installed version each launch would start, bound to the runtime readings once the harnesses open. */
+  launchReadings: LaunchReadings
 }
 
 /** What the host a harness serves gives it: where its files go, its secrets and the person's screen. */
@@ -83,9 +85,11 @@ export function createProviderHost(work: HostWork = unwatchedWork): ProviderHost
   const harnesses = new ProviderRegistry<HarnessRecord>()
   const profiles = new ProviderRegistry<ProviderProfileLoader>()
   const updateSources = new ProviderRegistry<ProviderUpdateSource>()
+  const launchReadings = new LaunchReadings()
   const floor = runtimeFloor(
     (provider) => updateSources.get(provider),
-    (provider) => profiles.get(provider)?.label ?? provider
+    (provider) => profiles.get(provider)?.label ?? provider,
+    launchReadings
   )
   return {
     harnesses,
@@ -109,5 +113,6 @@ export function createProviderHost(work: HostWork = unwatchedWork): ProviderHost
     accountCapabilities,
     accounts,
     discovery: new DiscoveryProcesses(),
+    launchReadings,
   }
 }
