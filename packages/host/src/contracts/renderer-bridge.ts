@@ -372,6 +372,8 @@ export function createMakoBridge(transport: BridgeTransport) {
         attachments,
         tuning
       ),
+    liveHoldUntil: (id: string, requestId: string, input: { after: string; at: number }) =>
+      invokeTrustedHost<LiveRequest>("mako:live-hold-until", id, requestId, input),
     livePermission: (
       id: string,
       requestId: string,

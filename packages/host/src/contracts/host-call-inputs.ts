@@ -469,6 +469,12 @@ const inputs = {
         })
         .optional(),
     ]),
+  "mako:live-hold-until": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z.object({ after: z.string(), at: z.number() }),
+    ]),
   "mako:live-locate": () => z.tuple([z.string(), z.string()]),
   "mako:live-merge-fork": () => z.tuple([z.string(), z.string()]),
   "mako:live-mode": () => z.tuple([z.string(), z.string()]),
@@ -1761,6 +1767,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-edit-queued", "conversations"],
   ["mako:live-fork", "conversations"],
   ["mako:live-goal", "conversations"],
+  ["mako:live-hold-until", "conversations"],
   ["mako:live-locate", "conversations"],
   ["mako:live-merge-fork", "conversations"],
   ["mako:live-mode", "conversations"],

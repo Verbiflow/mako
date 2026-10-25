@@ -1,6 +1,8 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
-import { SignInRecovery } from "../src/components/composer/sign-in-recovery"
+import { useSignInRecoveryNotice } from "../src/components/composer/sign-in-recovery"
+import { ProducedNotice } from "../src/components/composer/composer-notices"
+import type { ReactNode } from "react"
 import { accountsStore, removalNotice, type ProviderAccount } from "../src/state/accounts"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp-state"
 import { syncThreadStatus } from "../src/state/acp-live"
@@ -81,7 +83,15 @@ function render(requests: LiveRequest[]): string {
     blocks: [], queued: [], hiddenUserPrompt: null, createdAt: 0, updatedAt: 0,
   }
   acpStore.set({ activeKey: conversation.key, conversations: { [conversation.key]: conversation } })
-  return renderToStaticMarkup(<SignInRecovery />)
+  // The line, and what it keeps behind its info button.
+  let detail: ReactNode = null
+  function Detail() {
+    detail = useSignInRecoveryNotice({ meta: undefined, draftKey: conversation.draftKey })?.detail ?? null
+    return null
+  }
+  const line = renderToStaticMarkup(<ProducedNotice use={useSignInRecoveryNotice} />)
+  renderToStaticMarkup(<Detail />)
+  return line + (detail ? renderToStaticMarkup(<>{detail}</>) : "")
 }
 
 assert.equal(render([{ id: "done", text: "earlier", attachments: [], status: "completed" }]), "", "silent with nothing paused")
@@ -98,7 +108,7 @@ assert.match(terminal, /data-sign-in-recovery="checking"/)
 const work = { ...hold, account: "account-work" }
 const kept = render(held.map((request) => request.signIn ? { ...request, signIn: work } : request))
 assert.match(kept, /Claude Code signed out of work@example\.com/)
-assert.match(kept, />Sign in again</, "an account Mako keeps signs in again from the card")
+assert.match(kept, />Sign in again</, "an account Mako keeps signs in again from the notice")
 assert.doesNotMatch(kept, /claude auth login/)
 
 const review = render([unknown, { id: "w1", text: "a", attachments: [], status: "held", signIn: hold }, { id: "w2", text: "b", attachments: [], status: "held", signIn: hold }])

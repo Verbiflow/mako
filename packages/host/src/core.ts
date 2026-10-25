@@ -51,6 +51,9 @@ import type { HostOwner } from "./create-host.js"
 
 type WebHost = Awaited<ReturnType<typeof startWebHost>>
 
+/** How often held messages are checked for their time; a wake lands at most this late. */
+const HELD_WAKE_TICK_MS = 15_000
+
 /** What the host gives its core: the socket, the method table, and the domains that load on their own. */
 export interface CoreShell {
   config: HostConfig
@@ -513,6 +516,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   late.conversations = opened
   const { live, runs, native } = opened
+  // A message held until a time (a usage limit's reset) sends itself within a tick of it, across restarts.
+  jobs.every("held-wakes", HELD_WAKE_TICK_MS, () => void live.wakeDue(), { firstAfterMs: 2_000 })
   /** Filled once the handoffs exist: the cloud Thread each Thread at work keeps ready, which its move takes. */
   let readinessOnce: CloudReadiness | undefined
   // A person's Mac moves its Threads to the cloud (`mako:thread-move`); a machine takes them (`mako:move-arrive`).

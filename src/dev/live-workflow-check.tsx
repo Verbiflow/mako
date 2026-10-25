@@ -10,6 +10,7 @@ import { createRoot } from "react-dom/client"
 import { Composer } from "@/components/composer/composer"
 import { AppshotButton } from "@/components/composer/appshot-button"
 import { registerSlot } from "@/extend/slots"
+import { installComposerNotices } from "@/desk/notices"
 import { HotIndicator } from "@/components/shell/hot-indicator"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { Exchange } from "@/components/transcript/exchange"
@@ -34,6 +35,7 @@ import "../index.css"
 
 const mock = installMockBridge()
 registerSlot("appshot", "composer.controls", AppshotButton, -10)
+installComposerNotices()
 const id = "11111111-1111-4111-8111-111111111111"
 const requestId = "22222222-2222-4222-8222-222222222222"
 const cwd = "/fixture/project"

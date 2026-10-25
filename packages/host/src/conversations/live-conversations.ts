@@ -494,12 +494,15 @@ export class LiveConversations {
     targetBindingId?: string,
     displayText?: string,
     actor?: Actor,
-    marks: Pick<LiveRequest, "goal" | "review" | "verbatim"> = {}
+    marks: Pick<LiveRequest, "goal" | "review" | "verbatim" | "wake"> = {}
   ): LiveRequest {
     this.admission.assert()
     const resident = this.records.require(id)
     if (resident.rewinding)
       throw new Error("Wait for the workspace rewind to finish before sending")
+    // A request whose process has gone can't be answered; a new message is what the person did instead.
+    if (resident.snapshot.permissions.some((permission) => permission.gone))
+      resident.snapshot = { ...resident.snapshot, permissions: resident.snapshot.permissions.filter((permission) => !permission.gone) }
     this.flush(resident)
     const request = LiveRequestSchema.parse({
       actor: this.threads.actor(actor),
@@ -556,6 +559,11 @@ export class LiveConversations {
       request.inputDigest = inputDigest
       return this.admit(resident, { ...request, status: "held", signIn: pause.hold })
     }
+    // A message for later waits here, held, whatever the process is doing; `wakeDue` releases it.
+    if (request.wake) {
+      request.inputDigest = inputDigest
+      return this.admit(resident, { ...request, status: "held" })
+    }
     if (resident.hibernating || (!resident.driver && this.hibernation.reopens(resident))) {
       request.inputDigest = inputDigest
       const accepted = this.admit(resident, request)
@@ -589,6 +597,46 @@ export class LiveConversations {
     if (!launched(activeBinding(resident))) throw new Error("This conversation was closed before it started a session. Start a new conversation to carry on.")
     resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, status: "ready", connection: "hibernated", error: undefined } }
     hostLog("residency", "a closed conversation reopens for a new message", { conversation: resident.snapshot.session.id })
+  }
+
+  /**
+   * Sends a failed request's message again at `at`, as a new request held
+   * until then: the person's "Resume at 3:40 PM" after a usage limit. The
+   * failed record stays; the new one repeats its words, attachments and
+   * tuning, and a repeated id answers with the first acceptance.
+   */
+  holdUntil(id: string, requestId: string, input: { after: string; at: number }, actor?: Actor): LiveRequest {
+    const failed = this.records.require(id).snapshot.requests.find((request) => request.id === input.after)
+    if (!failed || failed.status !== "failed") throw new Error("That message is no longer waiting to be sent again.")
+    if (!Number.isFinite(input.at) || input.at <= 0) throw new Error("A send time is required.")
+    return this.submit(id, requestId, failed.text, failed.attachments, failed.tuning, undefined, failed.displayText, actor, { wake: { at: input.at, after: failed.id } })
+  }
+
+  /**
+   * Releases every held request whose time has come, in conversations loaded
+   * or not; run by the host's `held-wakes` job. A released request goes as a
+   * Resume would: queued, and the session reopened when its process went.
+   */
+  wakeDue(now = Date.now()): string[] {
+    const due = this.records.listing().filter((summary) => summary.wakeAt !== undefined && summary.wakeAt <= now).map((summary) => summary.session.id)
+    for (const id of due) {
+      const resident = this.records.load(id)
+      if (!resident || resident.closing || resident.snapshot.session.status === "closed") continue
+      const released = resident.snapshot.requests.filter((request) => request.status === "held" && request.wake && request.wake.at <= now)
+      if (!released.length) continue
+      const ids = new Set(released.map((request) => request.id))
+      const session = resident.snapshot.session
+      resident.snapshot = {
+        ...resident.snapshot,
+        session: session.status === "failed" ? { ...session, status: "ready", error: undefined } : session,
+        requests: resident.snapshot.requests.map((request) => ids.has(request.id) ? { ...request, status: request.signIn ? "held" : "queued", wake: undefined } : request),
+      }
+      this.flush(resident)
+      hostLog("live", "a held message's time came", { conversation: id, requests: released.length })
+      if (!resident.driver && !resident.opening && this.hibernation.reopens(resident)) void this.hibernation.wake(resident)
+      else this.dispatch.drain(resident)
+    }
+    return due
   }
 
   /** Record a new request in the journal and start it when the session is free. */
@@ -743,16 +791,17 @@ export class LiveConversations {
         next = { ...request, status: "canceled", signIn: undefined }
         break
       case "pause":
-        next = { ...request, status: "held" }
+        next = { ...request, status: "held", wake: undefined }
         break
       // A message waiting on a sign-out keeps waiting; only the session's Resume releases it.
       case "resume":
-        next = { ...request, status: request.signIn ? "held" : "queued" }
+        next = { ...request, status: request.signIn ? "held" : "queued", wake: undefined }
         break
       case "edit":
         next = {
           ...request,
           status: request.signIn ? "held" : "queued",
+          wake: undefined,
           text: command.change.text,
           displayText: undefined,
           nativeDelivery: undefined,
@@ -1018,6 +1067,12 @@ export class LiveConversations {
     const requestId = this.activeRequest(id)
     if (requestId) { await this.stopRequest(id, requestId); return }
     const resident = this.records.require(id)
+    // Stop on a request whose process has gone puts it away: there is no turn left to stop.
+    if (resident.snapshot.permissions.some((permission) => permission.gone)) {
+      resident.snapshot = { ...resident.snapshot, permissions: resident.snapshot.permissions.filter((permission) => !permission.gone) }
+      this.flush(resident)
+      return
+    }
     // Stop during the wait before Mako continues a dropped turn is the user's
     // answer: leave the turn where it stopped, and say so.
     if (resident.autoContinue) {

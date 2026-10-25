@@ -3,7 +3,7 @@ import type { WorkspaceMoveRequest } from "@mako/host/contracts/workspace-moves"
 import { NoticeAction } from "@/components/ui/notice"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { useHarnessLabels } from "@/lib/harness-label"
-import { cn } from "@/lib/utils"
+import type { ComposerNotice } from "@/extend/notices"
 import { useAcp } from "@/state/acp"
 import {
   projectName,
@@ -15,17 +15,14 @@ import {
   workspaceMoves,
 } from "@/state/workspace-moves"
 
-const CARD =
-  "mx-2 mt-2 shrink-0 rounded-xl bg-popover text-ui text-foreground [box-shadow:inset_0_0_0_0.5px_var(--hairline)] motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-[var(--ease-out)]"
-
 /**
  * The agent on screen asked, through Mako's workspace tools, to go on on
  * its Thread's own branch. Allowed, once or for the project, it moves with
  * the Thread's other sessions in that checkout when all their turns end; the
- * card stays until then so the move can still be called off. Registered on
- * `composer.above`.
+ * notice stays until then so the move can still be called off. A notice
+ * producer (`registerNotice`).
  */
-export function WorkspaceMoveCard() {
+export function useWorkspaceMoveNotice(): ComposerNotice | null {
   const labels = useHarnessLabels()
   const harnessLabel = (harness: string) => labels[harness] ?? harness
   const activeKey = useAcp((state) => state.activeKey)
@@ -34,42 +31,18 @@ export function WorkspaceMoveCard() {
   )
   if (!request) return null
   const project = projectName(request.project)
+  const target = request.joins ? request.joins : "its own branch"
 
   if (request.state === "allowed")
-    return (
-      <section
-        role="status"
-        data-workspace-move="allowed"
-        className={cn(CARD, "flex items-center gap-2.5 py-1.5 pr-1.5 pl-3")}
-      >
-        <GitBranchIcon
-          aria-hidden
-          className="size-3.5 shrink-0 text-muted-foreground"
-        />
-        <p
-          className="min-w-0 flex-1 truncate text-muted-foreground"
-          title={request.waiting}
-        >
-          {request.waiting ? (
-            <>
-              Waiting to move to {request.joins ? request.joins : "its own branch"}:{" "}
-              {request.waiting}
-            </>
-          ) : (
-            <>
-              Moves to {request.joins ? request.joins : "its own branch"} when{" "}
-              {request.companions ? "the thread's turns end" : "this turn ends"}
-            </>
-          )}
-        </p>
-        <NoticeAction
-          quiet
-          onClick={() => void workspaceMoves.answer(request.id, "deny")}
-        >
-          Stay here
-        </NoticeAction>
-      </section>
-    )
+    return {
+      id: "workspace-move",
+      tone: "progress",
+      icon: <GitBranchIcon className="text-muted-foreground" />,
+      title: request.waiting ? `Waiting to move to ${target}` : `Moves to ${target} when ${request.companions ? "the thread's turns end" : "this turn ends"}`,
+      description: request.waiting,
+      actions: [{ label: "Stay here", onClick: () => void workspaceMoves.answer(request.id, "deny") }],
+      data: { "data-workspace-move": "allowed" },
+    }
 
   const where = request.joins
     ? `It would join this thread's branch, ${request.joins}`
@@ -86,82 +59,44 @@ export function WorkspaceMoveCard() {
   const split = shares && !request.joins ? splitLine(shares.split) : undefined
   const bringable = shares && !request.joins ? unsure(shares) : 0
   const taking = along.length > 2 ? `${along.slice(0, -1).join(", ")} and ${along.at(-1)}` : along.join(" and ")
-  return (
-    <section
-      role="group"
-      aria-label="Move to its own branch"
-      data-workspace-move="asking"
-      className={CARD}
-    >
-      <div className="flex items-start gap-3 px-3 py-2.5">
-        <span
-          aria-hidden
-          className="relative mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-fill-hover"
-        >
-          <GitBranchIcon className="size-3.5 text-foreground" />
-          <span className="absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full bg-popover">
-            <HarnessIcon harness={request.harness} className="size-3" />
+  return {
+    id: "workspace-move",
+    tone: "caution",
+    priority: 0,
+    icon: <HarnessIcon harness={request.harness} />,
+    title: `${harnessLabel(request.harness)} wants to work on ${request.joins ? `this thread's branch, ${request.joins}` : "its own branch"}`,
+    description: `taking ${taking}`,
+    detail: (
+      <div className="flex flex-col gap-2">
+        <p>
+          {where}, taking {taking} along. The move happens when{" "}
+          {request.companions ? "every session's turn ends" : "this turn ends"}.
+        </p>
+        {staying || split ? (
+          <p data-workspace-move-stays className="text-faint" title={stayingPaths(shares).join("\n")}>
+            {[staying, split].filter(Boolean).join(". ")}
+          </p>
+        ) : null}
+        <span className="flex flex-wrap items-center gap-1.5">
+          {bringable ? (
+            <NoticeAction quiet onClick={() => void workspaceMoves.bring(request.id, !request.bring)}>
+              {request.bring ? "Leave them" : "Bring these"}
+            </NoticeAction>
+          ) : null}
+          <span title={`Agents in ${project} move to their own branch without asking. Settings › Worktrees lists the projects that allow it.`}>
+            <NoticeAction onClick={() => void workspaceMoves.answer(request.id, "always")}>
+              Always allow in {project}
+            </NoticeAction>
           </span>
         </span>
-        <div className="min-w-0 flex-1">
-          <p className="leading-5">
-            {harnessLabel(request.harness)} wants to work on its own branch
-          </p>
-          <p className="mt-0.5 text-label leading-relaxed text-muted-foreground">
-            {where}, taking {taking} along. The move happens when{" "}
-            {request.companions ? "every session's turn ends" : "this turn ends"}.
-          </p>
-          {staying || split ? (
-            <p
-              data-workspace-move-stays
-              className="mt-1 flex min-w-0 items-baseline gap-1.5 text-label text-faint"
-            >
-              <span
-                className="min-w-0 truncate"
-                title={[staying, split, ...stayingPaths(shares)].filter(Boolean).join("\n")}
-              >
-                {[staying, split].filter(Boolean).join(". ")}
-              </span>
-              {bringable ? (
-                <button
-                  type="button"
-                  data-workspace-move-bring={request.bring ? "on" : "off"}
-                  onClick={() => void workspaceMoves.bring(request.id, !request.bring)}
-                  className="pressable shrink-0 rounded text-label text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-                >
-                  {request.bring ? "Leave them" : "Bring these"}
-                </button>
-              ) : null}
-            </p>
-          ) : null}
-          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => void workspaceMoves.answer(request.id, "allow")}
-              className="pressable h-6 rounded-md bg-foreground px-2.5 text-label font-medium text-background transition-opacity duration-100 hover:opacity-90"
-            >
-              Allow
-            </button>
-            <span
-              title={`Agents in ${project} move to their own branch without asking. Settings › Worktrees lists the projects that allow it.`}
-            >
-              <NoticeAction
-                onClick={() => void workspaceMoves.answer(request.id, "always")}
-              >
-                Always allow in {project}
-              </NoticeAction>
-            </span>
-            <NoticeAction
-              quiet
-              onClick={() => void workspaceMoves.answer(request.id, "deny")}
-            >
-              Don't allow
-            </NoticeAction>
-          </div>
-        </div>
       </div>
-    </section>
-  )
+    ),
+    actions: [
+      { label: "Allow", primary: true, onClick: () => void workspaceMoves.answer(request.id, "allow") },
+      { label: "Don't allow", onClick: () => void workspaceMoves.answer(request.id, "deny") },
+    ],
+    data: { "data-workspace-move": "asking" },
+  }
 }
 
 /** What stays, path by path, for the line's tooltip. */
