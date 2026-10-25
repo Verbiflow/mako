@@ -63,6 +63,18 @@ export function watchRendererHealth(
     hostWarn("renderer", "unresponsive", { window: window.id, pid: contents.getOSProcessId() })
   })
   window.on("responsive", () => hostLog("renderer", "responsive", { window: window.id }))
+  // The window's own warnings and errors land beside the host's lines, so a window stuck asking for something is seen
+  // from its side too. Each message is said at most once a minute.
+  const said = new Map<string, number>()
+  contents.on("console-message", (event) => {
+    if (event.level !== "warning" && event.level !== "error") return
+    const message = event.message.slice(0, 600)
+    const now = Date.now()
+    if (now - (said.get(message) ?? -Infinity) < 60_000) return
+    said.set(message, now)
+    if (said.size > 256) said.delete(said.keys().next().value!)
+    hostWarn("renderer", event.level === "error" ? "console error" : "console warning", { window: window.id, message, source: `${event.sourceId.split("/").at(-1)}:${event.lineNumber}` })
+  })
   window.once("closed", () => {
     clearTimeout(timer)
     crashes.breadcrumb(`${source} closed`)
