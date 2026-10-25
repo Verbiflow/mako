@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
+import { NATIVE_SESSIONS_VERSION } from "./version.js"
 
 /**
  * An account's Threads as every device lists them: one row per Session, keyed by Mako's own Session and Thread IDs,
@@ -46,6 +47,16 @@ export const ReportedSessionSchema = z
     activityAt: z.iso.datetime(),
     /** Its owner's generation: the report counts only at one at least the listed row's. */
     generation: GenerationSchema,
+    /**
+     * The harness's own ID for its session, once it has one: what its records are kept by, so its history reads on any
+     * device (link version 6 on).
+     */
+    nativeId: z.string().min(1).max(512).optional(),
+    /**
+     * A session Mako hasn't opened as a conversation, one a terminal or another app runs: how its owner opens it when
+     * another device does, by the path its catalog reads it at (`mako:live-capture`), as `conversation` (link version 6 on).
+     */
+    capture: z.object({ path: z.string().min(1).max(4096) }).strict().optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -57,12 +68,15 @@ export const RunsOnSchema = z.discriminatedUnion("kind", [
 ])
 export type RunsOn = z.infer<typeof RunsOnSchema>
 
-/** One Session as every device lists it. */
+/**
+ * One Session as every device lists it. Read leniently, unlike a report: a field a newer build adds is passed over by
+ * an older one, which lists the rest.
+ */
 export const ListedSessionSchema = ReportedSessionSchema.extend({
   runsOn: RunsOnSchema,
   /** When the cloud last heard of it. */
   listedAt: z.iso.datetime(),
-}).strict()
+}).strip()
 export type ListedSession = z.infer<typeof ListedSessionSchema>
 
 /** At most this many rows in one frame or event, well under a message's megabyte. */
@@ -89,10 +103,24 @@ export type SessionsReport = z.infer<typeof SessionsReportSchema>
  * `GET /v1/sessions`: every listed Session of the account, and the account stream's number as they were read. A client
  * lists, then follows the stream after `seq`, and misses nothing between.
  */
-export const SessionListingsSchema = z
-  .object({ sessions: z.array(ListedSessionSchema), seq: z.number().int().nonnegative() })
-  .strict()
+export const SessionListingsSchema = z.object({ sessions: z.array(ListedSessionSchema), seq: z.number().int().nonnegative() })
 export type SessionListings = z.infer<typeof SessionListingsSchema>
+
+/**
+ * The rows a link of `version` takes: from link version 6, every one; before, a gateway knows neither field, so a
+ * Session Mako hasn't opened isn't listed there and the rest go without their native IDs.
+ */
+export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
+  if (version >= NATIVE_SESSIONS_VERSION) return [...rows]
+  const kept: ReportedSession[] = []
+  for (const row of rows) {
+    if (row.capture) continue
+    const older: ReportedSession = { ...row }
+    delete older.nativeId
+    kept.push(older)
+  }
+  return kept
+}
 
 /**
  * Whether a report about a Session may replace its row, by the one-owner rule: a higher generation always does (the
@@ -125,6 +153,8 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.createdAt === right.createdAt &&
     left.activityAt === right.activityAt &&
     left.generation === right.generation &&
+    left.nativeId === right.nativeId &&
+    left.capture?.path === right.capture?.path &&
     sameRunsOn(left.runsOn, right.runsOn)
   )
 }

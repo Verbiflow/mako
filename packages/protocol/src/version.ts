@@ -11,10 +11,11 @@ export const PROTOCOL_VERSION = 1
  * frame: whether it's working on a Thread, which keeps the Thread's machine running, and nothing else does. 3 adds
  * media (`media.ts`): live streams its clients watch, as binary messages beside the frames. 4 added a `listing` frame
  * keyed by cloud Thread, which a gateway takes and drops. 5 adds the runtime's `sessions` frame: its Sessions as the
- * account's list shows them, keyed by Mako's own IDs under the one-owner rule (`thread-listing.ts`). Every envelope
- * stays at `PROTOCOL_VERSION` on every link version.
+ * account's list shows them, keyed by Mako's own IDs under the one-owner rule (`thread-listing.ts`). 6 lets a `sessions` row name its native
+ * session, and list one Mako hasn't opened (a terminal's), with how its owner opens it. Every envelope stays at
+ * `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 5
+export const LINK_VERSION = 6
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -27,6 +28,9 @@ export const LISTING_VERSION = 4
 
 /** The first link version a runtime may send `sessions` on; a gateway that agreed less never sees one. */
 export const SESSIONS_VERSION = 5
+
+/** The first link version a `sessions` row may carry `nativeId` and `capture` on: a gateway that agreed less refuses them. */
+export const NATIVE_SESSIONS_VERSION = 6
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

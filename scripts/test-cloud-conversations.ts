@@ -805,11 +805,20 @@ test("every Session the account lists is listed here, unopened and waking nothin
   const studio = "9c1f4a2e-5b6d-4e8f-a1b2-c3d4e5f60718"
   // The Studio's own runtime, as the cloud reaches it: its calls answered there, its conversations streamed while watched.
   const studioCalls: string[] = []
+  const captures: unknown[][] = []
   const watched: string[][] = []
   const studioRuntime = await serveHostThroughGateway(await machine.gateway.connectRuntime(), {
     runtimeId: `d-${studio}`,
     build: "test",
-    invoke: async (channel) => (studioCalls.push(channel), JSON.stringify({ channel })),
+    invoke: async (channel, args) => {
+      studioCalls.push(channel)
+      if (channel === "mako:live-capture") {
+        captures.push([...args])
+        // A capture takes the Studio a moment: a second open meanwhile waits for it.
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+      return JSON.stringify({ channel })
+    },
     watch: (conversations) => watched.push([...conversations]),
   })
   after(() => studioRuntime.close())
@@ -877,6 +886,22 @@ test("every Session the account lists is listed here, unopened and waking nothin
   studioRuntime.live(studioConversation, Payload.encoded(runtimeEventLine("event", encodeRuntimeEvent({ type: "live-batch", batch: { id: studioConversation, revision: 3, updates: [] } } as never)).slice(0, -1)))
   await until("its batch relayed", () => events.some((event) => event.conversation === studioConversation))
 
+  // A session the Studio's terminal runs, which Mako there hasn't opened: listed like the rest, opened there first.
+  const terminalConversation = randomUUID()
+  const terminalPath = "/Users/ana/.claude/projects/-Users-ana-api/0b7e.jsonl"
+  const inTerminal = row(terminalConversation, { kind: "device", deviceId: studio }, "waiting", { waitingOn: "Approve: rm -rf dist", nativeId: "0b7e", capture: { path: terminalPath } })
+  say({ seq: 8, event: { type: "sessions-listed", sessions: [inTerminal] } })
+  await until("the terminal's session listed", () => shown(terminalConversation) !== undefined)
+  assert.deepEqual([shown(terminalConversation)?.elsewhere, shown(terminalConversation)?.waitingOn], ["Studio", "Approve: rm -rf dist"])
+  assert.equal(captures.length, 0, "listing it opens nothing on the Studio")
+  studioCalls.length = 0
+  const [first, second] = await Promise.all([router.route("mako:live-snapshot", [terminalConversation]), router.route("mako:live-read", [terminalConversation])])
+  assert.ok(first.handled && second.handled)
+  assert.deepEqual(captures, [[terminalConversation, terminalPath]], "opened on the Studio once, as the conversation the list named, by the path the Studio reads it at")
+  assert.equal(studioCalls[0], "mako:live-capture", "before anything else is asked of it")
+  await router.route("mako:live-snapshot", [terminalConversation])
+  assert.equal(captures.length, 1, "and not again")
+
   // Opened in the cloud: answered on its machine, followed from the stream's head.
   machine.batch(theirs, cloudConversation, 1, "running")
   assert.ok((await router.route("mako:live-snapshot", [cloudConversation])).handled)
@@ -887,13 +912,14 @@ test("every Session the account lists is listed here, unopened and waking nothin
   await until("its next batch relayed", () => events.some((event) => event.conversation === cloudConversation))
 
   // The Studio's Session moved to the cloud: it leaves the Studio, and is listed where it runs now.
-  say({ seq: 8, event: { type: "sessions-listed", sessions: [row(studioConversation, { kind: "cloud", threadId: theirs }, "idle", { generation: 3, session: onStudio("idle").session })] } })
+  say({ seq: 9, event: { type: "sessions-listed", sessions: [row(studioConversation, { kind: "cloud", threadId: theirs }, "idle", { generation: 3, session: onStudio("idle").session })] } })
   assert.equal(told("live-unlisted").length, 0, "a move is never told as leaving")
   assert.equal(shown(studioConversation)?.elsewhere, "a cloud machine", "it's listed where it runs now")
   assert.equal(told("live-listed").at(-1)?.summaries[0]?.elsewhere, "a cloud machine")
-  await until("the Studio no longer watched", () => watched.at(-1)?.length === 0)
+  await until("the Studio no longer watched for it", () => watched.at(-1)?.includes(studioConversation) === false)
+  assert.deepEqual(watched.at(-1), [terminalConversation], "the terminal's, opened, still is")
 
-  say({ seq: 9, event: { type: "sessions-unlisted", sessions: [inCloud("idle").session] } })
+  say({ seq: 10, event: { type: "sessions-unlisted", sessions: [inCloud("idle").session] } })
   assert.equal(shown(cloudConversation), undefined)
   assert.equal((await router.route("mako:live-snapshot", [cloudConversation])).handled, false, "no longer answered here")
 

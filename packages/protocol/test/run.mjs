@@ -8,7 +8,7 @@ import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 import { sessionStream, streamConversation } from "../dist/socket.js"
 import { AccountEventSchema } from "../dist/account-events.js"
-import { ListedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, sameListed } from "../dist/thread-listing.js"
+import { ListedSessionSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
   CLOSE_CODES,
@@ -79,7 +79,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 5)
+    assert.equal(SUPPORTED_VERSIONS.max, 6)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -1472,9 +1472,15 @@ describe("an account's list of Threads, one row per Session", () => {
   const cloud = { kind: "cloud", threadId: "t-0123456789abcdef" }
   const listed = { ...session, runsOn: mac, listedAt: "2026-10-24T20:05:01.000Z" }
 
-  test("a row holds what a list shows and nothing else, and says where it runs", () => {
+  test("a row holds what a list shows and says where it runs; a report holds nothing else, and a list read passes over what a newer build adds", () => {
     assert.deepEqual(ListedSessionSchema.parse(listed), listed)
-    assert.throws(() => ListedSessionSchema.parse({ ...listed, transcript: "…" }), "no field it doesn't define")
+    assert.throws(() => ReportedSessionSchema.parse({ ...session, transcript: "…" }), "a report holds no field it doesn't define")
+    assert.deepEqual(ListedSessionSchema.parse({ ...listed, transcript: "…" }), listed, "a list read drops it and lists the rest")
+    const terminal = { ...session, nativeId: "0b7e", capture: { path: "/Users/ana/.claude/projects/-Users-ana-api/0b7e.jsonl" } }
+    assert.deepEqual(ReportedSessionSchema.parse(terminal), terminal, "a session Mako hasn't opened, with how its owner opens it")
+    assert.throws(() => ReportedSessionSchema.parse({ ...terminal, capture: { path: "" } }))
+    assert.deepEqual(rowsForLink([session, terminal], 5), [session], "a link older than 6 hears neither")
+    assert.deepEqual(rowsForLink([session, terminal], 6), [session, terminal])
     assert.throws(() => ListedSessionSchema.parse({ ...listed, state: "thinking" }), "a state is one of five")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, title: "x".repeat(201) }), "a title is a row's, not a message's")
     assert.throws(() => SessionsReportSchema.parse({ listed: Array.from({ length: 201 }, () => session), gone: [] }), "at most 200 rows a report")

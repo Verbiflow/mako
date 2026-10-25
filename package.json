@@ -71,6 +71,7 @@
     "bench:attribution": "npm run -s build --workspace @mako/protocol && tsx scripts/bench-attribution.ts",
     "bench:footprint": "tsx scripts/bench-footprint.ts",
     "bench:watcher": "tsx scripts/bench-watcher.ts",
+    "bench:session-report": "tsx scripts/bench-session-report.ts",
     "bench:streams": "tsx --tsconfig tsconfig.app.json scripts/bench-native-streams.ts",
     "bench:backfill": "tsx scripts/bench-backfill.ts",
     "bench:orphans": "npm run -s build --workspace @mako/sessions && tsx scripts/bench-orphans.ts",

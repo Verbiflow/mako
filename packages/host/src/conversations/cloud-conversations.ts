@@ -84,6 +84,11 @@ const EntrySchema = z.object({
    * go there, and `threadId` holds its session stream (`sessionStream`), which carries its live updates while watched.
    */
   runtime: z.string().optional(),
+  /**
+   * A listed session Mako hasn't opened on its device (a terminal's): the path its device reads it at, which the first
+   * call opening it captures there as this conversation (`mako:live-capture`). Gone once the list says it's open.
+   */
+  capture: z.string().optional(),
 })
 
 type Entry = z.infer<typeof EntrySchema>
@@ -284,6 +289,8 @@ export class CloudConversations {
    * whose history its snapshot reads on the machine. Replaying the Thread from its first event would carry all of it.
    */
   readonly #fromHead = new Set<string>()
+  /** A listed session's capture on its device, in flight or done, by conversation (`#captureListed`). */
+  readonly #capturing = new Map<string, Promise<void>>()
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
@@ -334,6 +341,8 @@ export class CloudConversations {
     await this.start()
     const entry = this.#entries.get(id)
     if (!entry) return { handled: false }
+    // A session its device's harness keeps that Mako there hasn't opened: opened there first, as this conversation.
+    if (entry.capture) await this.#captureListed(entry, entry.capture)
     // A window opened one known only from the account's list: from now its batches come here, from the stream's head.
     if (entry.listed && !this.#following.has(entry.threadId)) {
       this.#fromHead.add(entry.threadId)
@@ -341,6 +350,30 @@ export class CloudConversations {
     }
     if (channel === "mako:live-fork") return { handled: true, value: await this.#fork(entry, args) }
     return { handled: true, value: await this.#call(entry, channel, args) }
+  }
+
+  /**
+   * Has another device open a session its harness keeps, one a terminal or another app runs, as the conversation the
+   * list named: its capture there is kept by path and ID, so two devices opening it at once open one conversation, and
+   * one opened since answers as it stands. Once open it's listed as a conversation and called like one.
+   */
+  #captureListed(entry: Entry, path: string): Promise<void> {
+    const id = entry.conversationId
+    const known = this.#capturing.get(id)
+    if (known) return known
+    const capturing = this.#capture(entry, path)
+    this.#capturing.set(id, capturing)
+    // One that failed (its device asleep, say) is asked again by the next open.
+    capturing.catch(() => {
+      if (this.#capturing.get(id) === capturing) this.#capturing.delete(id)
+    })
+    return capturing
+  }
+
+  async #capture(entry: Entry, path: string): Promise<void> {
+    await this.#call(entry, "mako:live-capture", [entry.conversationId, path])
+    if (entry.capture === path) delete entry.capture
+    hostLog("cloud-conversations", "a session another device's harness keeps was opened there", { conversationId: entry.conversationId, runtime: entry.runtime ?? "" })
   }
 
   /**
@@ -1006,6 +1039,7 @@ export class CloudConversations {
       this.#entries.delete(entry.conversationId)
       this.controlPreviews.forget(entry.conversationId)
       this.#views.delete(entry.conversationId)
+      this.#capturing.delete(entry.conversationId)
       unlisted.push(entry.conversationId)
       if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
     }
@@ -1017,6 +1051,8 @@ export class CloudConversations {
       if (known?.summary && JSON.stringify(known.summary) === JSON.stringify(summary)) continue
       const entry: Entry = known ?? { conversationId: id, threadId, harness: row.harness, createdAt: summary.createdAt, created: true, seq: 0, listed: true }
       if (runtime) entry.runtime = runtime
+      if (row.capture && runtime) entry.capture = row.capture.path
+      else delete entry.capture
       entry.summary = summary
       this.#entries.set(id, entry)
       listed.push(summary)

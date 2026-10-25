@@ -26,7 +26,7 @@ import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { makoRecords, streamsRoot } from "@mako/sessions/record-streams"
-import { makoViews } from "@mako/sessions"
+import { makoViews, type ThreadRef } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
@@ -342,13 +342,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   declareUnreadRecordMethods(methods, { views: makoViews(), records: makoRecords(), live: () => unknown.kinds(), since: Date.now(), streams })
   // This host's Sessions on the account's list, and a watched conversation's live updates to another device.
+  // The rail's rows, read again only once the catalog says its list changed: a sweep finds nothing new otherwise, and a
+  // session being written (a terminal's at work) changes its own row in place rather than the whole rail being read.
+  let railRows: ThreadRef[] | undefined
   const sessions = new SessionPublisher({
     rows: () => {
       const live = late.conversations?.live
       const store = threads.store
-      if (!live || !store) return undefined
+      // Until the catalog's first discovery is in, its rows would say this Mac has no sessions but Mako's own.
+      if (!live || !store || !catalog.ready()) return undefined
+      const activity = catalog.activity()
       return ownedSessions({
         summaries: () => live.summaries(),
+        native: () => (railRows ??= catalog.rail()),
+        activity: (path) => activity[path],
         work: () => application.lifecycle.snapshot().work,
         waitingOn: (id) => live.waitingOn(id),
         lastMoved: (id, revision) => live.lastMoved(id, revision),
@@ -358,6 +365,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         now: Date.now,
       })
     },
+  })
+  catalog.subscribe((event) => {
+    if (event.type === "thread-ref") {
+      const at = railRows?.findIndex((row) => row.path === event.ref.path) ?? -1
+      if (railRows && at >= 0) railRows[at] = event.ref
+      else railRows = undefined
+    } else if (event.type === "threads" || event.type === "thread-removed") railRows = undefined
+    else if (event.type !== "thread-activity") return
+    sessions.changed()
   })
   shell.jobs.every("tell the account this host's Sessions", 1_000, () => late.cloud?.reportSessions?.())
   late.cloud = declareCloudAccountMethods(methods, {
