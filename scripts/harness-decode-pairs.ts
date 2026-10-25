@@ -818,7 +818,7 @@ const devin: Recorder = {
   model: {
     kind: "own",
     why: "Devin's model is behind Windsurf's API server, whose protocol the scripted model doesn't speak",
-    lacks: { codeMode: "Devin 3000.10.23 names no tool that runs code calling its other tools; its model ran the code-mode prompt as one chained `exec`" },
+    lacks: { codeMode: "Devin 3000.11.205 names no tool that runs code calling its other tools (native-tools/devin-3000.11.205.json); on 3000.10.23 its model ran the code-mode prompt as one chained `exec`" },
   },
   controls: {
     steer: "driven",
@@ -966,14 +966,14 @@ const cursor: Recorder = {
     kind: "own",
     why: "Cursor's model is behind Cursor's own service, which the scripted model can't stand in for",
     lacks: {
-      codeMode: "Cursor SDK 1.0.31 reports no tool that runs code calling its other tools (native-tools/cursor-1.0.31.json)",
-      ask: "Cursor offers no `askQuestion` to a local SDK 1.0.31 run, even asked for by name, so Mako declares questions unavailable",
+      codeMode: "Cursor SDK 1.0.40 reports no tool that runs code calling its other tools (native-tools/cursor-1.0.40.json)",
+      ask: "Cursor offers no `askQuestion` to a local SDK run (1.0.31 not even asked for by name, and 1.0.40 lists none), so Mako declares questions unavailable",
     },
   },
   controls: {
     steer: "driven",
-    rewind: { absent: "Cursor SDK 1.0.31 has no rewind; Mako forks by writing the conversation into a new agent" },
-    compact: { absent: "Cursor summarizes on its server when the context fills; it accepts a summarize request from a local run, but SDK 1.0.31 has no way to send one" },
+    rewind: { absent: "Cursor SDK 1.0.40 has no rewind; Mako forks by writing the conversation into a new agent" },
+    compact: { absent: "Cursor summarizes on its server when the context fills; it accepts a summarize request from a local run, but SDK 1.0.40 has no way to send one" },
     resume: "driven",
     "still-running": { absent: NO_OTHER_CLIENT },
   },

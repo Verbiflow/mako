@@ -1,28 +1,39 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.10.23"
+    "version": "3000.11.205"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / Without reading anything again, which day was it? Two turns from another client of the harness, whose record of the session is read while the session is still open there.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#better-galaxy",
-      "known": []
-    },
-    {
-      "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/065c0ea0-5051-4e77-99bb-ca384e5efb72.db",
+      "path": ".local/share/devin/cli/sessions.db#stylish-fastball",
       "known": [
         {
           "side": "-",
           "line": "user: Read notes.md and tell me the release day. Don't run commands.",
-          "reason": "Devin.app's journal holds only the session updates Devin sends (`handleClientRequest` -> `_ingestSessionUpdate`); the prompt row the app draws is its own optimistic `user_message_chunk`, never stored. Devin 3000.10.23 sends no prompt back, even with Devin.app's `cognition.ai/messageGrouping` and a `cognition.ai/clientMessageId` on each prompt, so until the app reopens the session its journal has no prompts. Devin's CLI store keeps them, and the catalog shows that record where both hold the session (`clientCopy`)."
+          "reason": "Devin 3000.11.205 sends each prompt back to a client that groups messages (`cognition.ai/messageGrouping`, with a `cognition.ai/clientMessageId` on each prompt, as Devin.app does and as this pair's client does), so the pair's live drawing has each prompt twice: as sent, and as sent back. Its stores and Devin.app's journal hold it once. Mako's own client sends no message id and gets none back."
         },
         {
           "side": "-",
           "line": "user: Without reading anything again, which day was it?",
-          "reason": "Devin.app's journal holds only the session updates Devin sends (`handleClientRequest` -> `_ingestSessionUpdate`); the prompt row the app draws is its own optimistic `user_message_chunk`, never stored. Devin 3000.10.23 sends no prompt back, even with Devin.app's `cognition.ai/messageGrouping` and a `cognition.ai/clientMessageId` on each prompt, so until the app reopens the session its journal has no prompts. Devin's CLI store keeps them, and the catalog shows that record where both hold the session (`clientCopy`)."
+          "reason": "Devin 3000.11.205 sends each prompt back to a client that groups messages (`cognition.ai/messageGrouping`, with a `cognition.ai/clientMessageId` on each prompt, as Devin.app does and as this pair's client does), so the pair's live drawing has each prompt twice: as sent, and as sent back. Its stores and Devin.app's journal hold it once. Mako's own client sends no message id and gets none back."
+        }
+      ]
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/86c91e9c-e083-4a99-a82a-217794785adf.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "user: Read notes.md and tell me the release day. Don't run commands.",
+          "reason": "Devin 3000.11.205 sends each prompt back to a client that groups messages (`cognition.ai/messageGrouping`, with a `cognition.ai/clientMessageId` on each prompt, as Devin.app does and as this pair's client does), so the pair's live drawing has each prompt twice: as sent, and as sent back. Its stores and Devin.app's journal hold it once. Mako's own client sends no message id and gets none back."
+        },
+        {
+          "side": "-",
+          "line": "user: Without reading anything again, which day was it?",
+          "reason": "Devin 3000.11.205 sends each prompt back to a client that groups messages (`cognition.ai/messageGrouping`, with a `cognition.ai/clientMessageId` on each prompt, as Devin.app does and as this pair's client does), so the pair's live drawing has each prompt twice: as sent, and as sent back. Its stores and Devin.app's journal hold it once. Mako's own client sends no message id and gets none back."
         }
       ]
     }

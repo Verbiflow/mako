@@ -143,12 +143,22 @@ const KNOWN: readonly { pair: string; reader: string; side: "-" | "+"; effects: 
     {
       pair: "devin/stopped-shell", reader, side: "-" as const,
       effects: '[{"kind":"command","command":"tail -f notes.md","cwd":"/tmp/mako-pair/project"}]',
-      reason: "Devin 3000.10.23 names a command's folder (`cognition.ai/cwd`) in an update it sends while the command runs; for a stopped command its store keeps only the call and its cancellation, neither of which names it.",
+      reason: "Devin 3000.11.205 names a command's folder (`cognition.ai/cwd`) in an update it sends while the command runs; for a stopped command its store keeps only the call and its cancellation, neither of which names it.",
     },
     {
       pair: "devin/stopped-shell", reader, side: "+" as const,
       effects: '[{"kind":"command","command":"tail -f notes.md"}]',
       reason: "The same command read from the store, without the folder.",
+    },
+    {
+      pair: "devin/steered-shell", reader, side: "-" as const,
+      effects: '[{"kind":"command","command":"sleep 3","cwd":"/tmp/mako-pair/project","exitCode":0}]',
+      reason: "When a message is steered into a running command, Devin 3000.11.205 moves the command to the background; live, it still named the command's folder and, once it ended, its exit.",
+    },
+    {
+      pair: "devin/steered-shell", reader, side: "+" as const,
+      effects: '[{"kind":"command","command":"sleep 3"}]',
+      reason: "What Devin 3000.11.205 keeps of a command moved to the background is the model's word for it, which names neither its folder nor how it ended.",
     },
   ]),
 ]
