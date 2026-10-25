@@ -242,8 +242,8 @@ const CLAUDE_TOOLS: ToolVocabulary = {
   edit: (path, from, to) => ({ name: "Edit", arguments: { file_path: path, old_string: from, new_string: to } }),
   viewImage: (path) => ({ name: "Read", arguments: { file_path: path } }),
   todos: { absent: "Claude Code defines its todo tools only with CLAUDE_CODE_ENABLE_TODO_TOOLS set, which Mako doesn't set (CLAUDE_VOCABULARY)" },
-  search: { absent: "Claude Code 2.1.283 defines no file search tool as Mako launches it; its model searches through Bash (native-tools/claude-2.1.283.json)" },
-  codeMode: { absent: "Claude Code 2.1.283 defines no tool that runs code calling its other tools (native-tools/claude-2.1.283.json)" },
+  search: { absent: "Claude Code 2.1.310 defines no file search tool as Mako launches it; its model searches through Bash (native-tools/claude-2.1.310.json)" },
+  codeMode: { absent: "Claude Code 2.1.310 defines no tool that runs code calling its other tools (native-tools/claude-2.1.310.json)" },
   ask: (question) => ({ name: "AskUserQuestion", arguments: { questions: [{ ...question, multiSelect: false }] } }),
   plan: (plan) => [
     { call: (_tools, _project, heard) => ({ name: "Write", arguments: { file_path: planFile("Claude Code", heard), content: plan } }) },
@@ -257,7 +257,7 @@ const claude: Recorder = {
   model: { kind: "scripted", tools: CLAUDE_TOOLS },
   controls: {
     steer: "driven",
-    rewind: { absent: "Claude Code 2.1.283's SDK rewinds files only (`rewindFiles`); its conversation rewind is the TUI's /rewind" },
+    rewind: { absent: "Claude Code 2.1.310's SDK rewinds files only (`rewindFiles`); its conversation rewind is the TUI's /rewind" },
     compact: "driven",
     resume: "driven",
     "still-running": { absent: NO_OTHER_CLIENT },
