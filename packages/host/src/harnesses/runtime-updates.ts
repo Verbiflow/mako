@@ -286,7 +286,7 @@ export class RuntimeUpdates {
    */
   restoreRuntime(harness: string): RestoreRuntime {
     const sources = this.sources().filter((source) => source.provider === harness)
-    const runtime = sources.find((source) => source.primary) ?? sources.find((source) => source.key === harness)
+    const runtime = this.sessionSource(harness)
     if (!runtime) return { harness, version: null, offer: { kind: "manual" } }
     const installed = sources.filter((source) => this.updates[source.key]?.installed && this.updates[source.key]?.binary)
     // When the binary a version was read off was put there (its mtime, as the reading's signature holds it while unchanged), and whether it's the only install.
@@ -319,6 +319,28 @@ export class RuntimeUpdates {
     if (info?.managedBy) return { harness, ...known, offer: { kind: "owner", owner: info.managedBy.replace(/\.app$/, "") } }
     const install = runtime.install[0]
     return { harness, ...known, offer: install ? { kind: "manual", command: commandText(install) } : { kind: "manual" } }
+  }
+
+  /** The installation a new session of `harness` runs: the primary one, else the harness's own row. */
+  private sessionSource(harness: string) {
+    const sources = this.sources().filter((source) => source.provider === harness)
+    return sources.find((source) => source.primary) ?? sources.find((source) => source.key === harness)
+  }
+
+  /**
+   * The version a new session of `harness` would launch, as last read, while
+   * the binary it was read off is unchanged: the same path, size and mtime.
+   * Unknown once the binary has moved, before any reading, and for a build
+   * Mako ships (`versions.bundled`). One `stat`; never runs the binary.
+   */
+  async launchVersion(harness: string): Promise<string | undefined> {
+    await this.load()
+    const runtime = this.sessionSource(harness)
+    if (!runtime || runtime.versions?.bundled) return undefined
+    const held = this.signatures.get(runtime.key)
+    if (!held || this.updates[runtime.key]?.binary !== held.binary) return undefined
+    const now = await (this.options.stat ?? stat)(held.binary).catch(() => null)
+    return now && now.mtimeMs === held.mtimeMs && now.size === held.size ? held.installed : undefined
   }
 
   /**

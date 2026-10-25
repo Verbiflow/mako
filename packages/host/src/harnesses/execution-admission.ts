@@ -79,6 +79,9 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
     const emit = (event: LiveDriverEvent) =>
       options.emit(event.type === "live-session" && owners.get(id) === owner ? { ...event, session: confirmed(owner, event.session) } : event)
     const owner: Owner = { opening: Promise.resolve().then(() => traceProviderLaunch(driver.provider, id, async (trace) => {
+      // An installation already read as below its harness's oldest version starts nothing.
+      const tooOld = floor && await trace.step("runtime-discovery", () => floor.before(driver.provider))
+      if (tooOld) throw new Error(tooOld)
       const launch = await trace.step("account", () => admission.resolve(driver.provider, id))
       // Kept before any check can throw, so a superseded open still releases its hold.
       owner.launch = launch
@@ -119,14 +122,14 @@ export function withExecutionAdmission(driver: ProviderLiveDriver, admission: Ac
       owner.opened = true
       // Close owns late startup cleanup. Do not publish its returned session.
       current(id, owner)
-      // A runtime below its harness's declared oldest version is not kept.
-      const tooOld = floor?.refusal(driver.provider, session.executionContext)
-      if (tooOld) {
+      // A runtime that reports a version below its harness's oldest, which no reading had, is not kept.
+      const reported = floor?.refusal(driver.provider, session.executionContext)
+      if (reported) {
         if (!owner.closing) {
           try { await driver.close(id) }
           catch (cleanup) { owner.cleanupFailed = true; throw cleanup }
         }
-        throw new Error(tooOld)
+        throw new Error(reported)
       }
       try {
         await admission.assertCurrent(driver.provider, launch)

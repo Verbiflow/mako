@@ -10,7 +10,7 @@ import { installCommandText, runtimeRowView, runtimeRows, runtimesBehind } from 
 import { featureFloor, featureFloorText, sessionRuntime, tooOld, tooOldText } from "../src/lib/runtime-versions.ts"
 import { featureNeeds, runtimeVersions, versionStanding, versionsCompatible, type HarnessVersions } from "@mako/host/contracts/harness-versions"
 import { npmInstall, pinnedPolicy } from "@mako/host/harnesses/update-source"
-import { runtimeFloor } from "@mako/host/harnesses/runtime-floor"
+import { LaunchReadings, runtimeFloor } from "@mako/host/harnesses/runtime-floor"
 import { launchContext, reportedRuntime } from "@mako/host/base/execution-context"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
@@ -787,8 +787,26 @@ try {
   assert.equal(persisted.updates.codex.versions, undefined, "the standing is derived, never stored")
   assert.equal(runtimes.snapshot().codex.versions?.standing, "below-oldest")
 
+  // Before a launch: the reading the composer warned from refuses it while the binary is the one read; once the binary moved, nothing is known until it is read again.
+  assert.equal(await runtimes.launchVersion("codex"), undefined, "the binary's mtime moved since it was read (the clock moved on)")
+  const readAgain = await runtimes.refresh()
+  assert.equal(readAgain.codex.installed, "0.140.0")
+  assert.equal(await runtimes.launchVersion("codex"), "0.140.0", "read again, the reading stands for the binary as it is")
+  world.clock += 1
+  assert.equal(await runtimes.launchVersion("codex"), undefined, "a binary replaced since its reading is judged by what it reports once launched")
+  world.clock -= 1
+  assert.equal(await runtimes.launchVersion("nobody"), undefined, "a harness with no installation has no reading")
+  const readings = new LaunchReadings()
+  const floorCheck = runtimeFloor((provider) => provider === "codex" ? { ...codex, versions: declared } : undefined, () => "Codex", readings)
+  assert.equal(await floorCheck.before("codex"), undefined, "until the readings are bound, nothing is refused before launch")
+  readings.bind((provider) => runtimes.launchVersion(provider))
+  assert.match(await floorCheck.before("codex") ?? "", /^Codex 0\.140\.0 is older than Mako supports\. Mako needs 0\.146\.0 or newer\./, "the same words as the backstop's")
+  assert.equal(await floorCheck.before("grok"), undefined, "a harness with no declaration starts")
+  world.clock += 1
+  assert.equal(await floorCheck.before("codex"), undefined, "a binary that moved starts, and is judged by what it reports")
+  world.clock -= 1
+
   // The launch backstop: a reported runtime below oldest is refused with the same words, and nothing else is.
-  const floorCheck = runtimeFloor((provider) => provider === "codex" ? { ...codex, versions: declared } : undefined, () => "Codex")
   const launched = launchContext("app-server", { kind: "unavailable", reason: "test" })
   const reported = (version: string) => ({ ...launched, runtime: reportedRuntime(version, "initialize") })
   assert.match(floorCheck.refusal("codex", reported("0.140.0")) ?? "", /^Codex 0\.140\.0 is older than Mako supports\. Mako needs 0\.146\.0 or newer\./)
@@ -800,4 +818,4 @@ try {
   await rm(versionsDir, { recursive: true, force: true })
 }
 
-console.log("runtime updates: channel ladder, signature cache, registry TTL, persistence, update receipts and row words hold")
+console.log("runtime updates: channel ladder, signature cache, registry TTL, persistence, update receipts, row words, and the launch floor before and after start hold")

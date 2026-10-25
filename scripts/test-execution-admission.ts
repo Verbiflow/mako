@@ -323,6 +323,23 @@ try {
   await assert.rejects(unavailable.start(root, startOptions("managed")), /cannot apply the selected account/)
   assert.equal(unavailableStarts, 0, "future adapters must refuse unsupported managed-account launches before starting")
 
+  // A harness the runtime readings already place below its oldest version starts nothing and resolves no account; one that reports it once launched is closed.
+  let floorStarts = 0
+  let floorCloses = 0
+  const floorResolved: string[] = []
+  const tooOld = (provider: string, before: string | undefined, reported: string | undefined) => withExecutionAdmission({ ...prototype, provider,
+    start: async (_cwd, options) => { floorStarts++; return state(provider, options.conversationId) },
+    close: async () => { floorCloses++ },
+  }, { ...identityChecks, resolve: async (_provider, binding) => { floorResolved.push(binding); return launch("one") }, assertCurrent: async () => {} }, undefined, {
+    before: async () => before,
+    refusal: () => reported,
+    oldest: () => "2.0.0",
+  })
+  await assert.rejects(tooOld("floor-before-fixture", "Fixture 1.0.0 is older than Mako supports.", undefined).start(root, startOptions("known-old")), /older than Mako supports/)
+  assert.deepEqual([floorStarts, floorCloses, floorResolved], [0, 0, []], "a known too-old runtime is refused before its process or account")
+  await assert.rejects(tooOld("floor-after-fixture", undefined, "Fixture 1.0.0 is older than Mako supports.").start(root, startOptions("reported-old")), /older than Mako supports/)
+  assert.deepEqual([floorStarts, floorCloses], [1, 1], "a runtime that reports a too-old version once launched is closed")
+
   // The identity the native process reports is compared with the launch
   // account's email. A different principal refuses input before it reaches
   // the driver; a missing email or identity stays unverified, never matched.
