@@ -15,7 +15,7 @@ import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/
 import { acpClientCapabilities, type ProviderAcpSource } from "@mako/host/harnesses/acp-source"
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
-import { codexCollaborationMode, codexInteractiveConfig } from "@mako/host/harnesses/codex/settings"
+import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig } from "@mako/host/harnesses/codex/settings"
 import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
@@ -323,7 +323,8 @@ async function codexDefinitions(): Promise<Captures> {
       const replied = new Promise<void>((_, reject) => { reached = () => reject(new ReachedRealModel("Codex")) })
       const peer = refusingPeer(child, false, ({ method }) => { if (method === "item/agentMessage/delta") reached?.() })
       try {
-        await peer.call("initialize", { clientInfo: { name: "mako-native-tools", version: "0" } })
+        // Mako's own initialize: Codex 0.164.0 refuses a turn's collaborationMode from a client without experimentalApi.
+        await peer.call("initialize", { clientInfo: { name: "mako-native-tools", version: "0" }, capabilities: CODEX_CLIENT_CAPABILITIES })
         peer.notify("initialized")
         const thread = z.object({ thread: z.object({ id: z.string() }) }).parse(await peer.call("thread/start", { cwd: sandbox.project, model, config: codexInteractiveConfig() }))
         const turn = peer.call("turn/start", {
