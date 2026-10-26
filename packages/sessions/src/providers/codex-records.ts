@@ -15,6 +15,7 @@ import type { SessionSettings } from "../settings.js"
 import type { ToolEffect } from "../tool-effects.js"
 import { normalizeToolOutput } from "../tool-output.js"
 import { codexPlanDetails } from "../tool-plan.js"
+import { mediaDetails } from "../turn-media.js"
 import { codexToolEffects, type CodexCallFacts } from "./codex-effects.js"
 import {
   codexAborted,
@@ -179,6 +180,8 @@ interface NestedCall {
   output: string
   error: boolean
   attachments?: AttachmentContent[]
+  /** What the result's `_meta` stated (`mediaDetails`). */
+  details?: ToolDetail[]
 }
 
 /** A tool's typed item: what Codex ran and how it ended, over the call's raw arguments and output. */
@@ -410,8 +413,9 @@ const CommandItem = z.object({
 const StartedAt = z.number().nonnegative()
 /** An MCP result's content as the model reads it: its text, and a placeholder for each image or resource. */
 const McpResult = z.object({
-  content: z.array(z.object({ type: z.string(), text: z.string().optional() }).loose()).catch([]),
+  content: z.array(z.object({ type: z.string(), text: z.string().optional(), data: z.string().optional(), mimeType: z.string().optional() }).loose()).catch([]),
   isError: z.boolean().nullish(),
+  _meta: z.json().optional(),
 }).loose()
 const McpItem = z.object({
   id: z.string(),
@@ -612,8 +616,17 @@ function parseItem(payload: CodexJsonObject, at: string | undefined, unreadable:
     case "McpToolCall": {
       const call = McpItem.safeParse(item).data
       if (!call) return unreadable("event_msg item_completed McpToolCall")
-      const output = call.error?.message || (call.result?.content ?? []).map((part) => part.type === "text" ? (part.text ?? "") : `[${part.type}]`).join("\n")
-      return nestedCall(at, call.id, `mcp__${call.server}__${call.tool}`, `${call.server}: ${call.tool}`, call.arguments, output, call.result?.isError ? "failed" : call.status)
+      const parts = call.result?.content ?? []
+      // An image the tool returned is the call's attachment, as a call the model made has it.
+      const images = parts.flatMap((part): AttachmentContent[] => part.type === "image" && part.data
+        ? [{ type: "attachment", name: "image", mimeType: part.mimeType ?? "image/png", source: { kind: "inline", data: part.data } }]
+        : [])
+      const output = call.error?.message || parts.flatMap((part) => part.type === "text" ? [part.text ?? ""] : part.type === "image" && part.data ? [] : [`[${part.type}]`]).join("\n")
+      const nested = nestedCall(at, call.id, `mcp__${call.server}__${call.tool}`, `${call.server}: ${call.tool}`, call.arguments, output, call.result?.isError ? "failed" : call.status)
+      if (images.length) nested.attachments = images
+      const details = mediaDetails(call.result?._meta)
+      if (details.length) nested.details = details
+      return nested
     }
     case "DynamicToolCall": {
       const call = DynamicItem.safeParse(item).data
@@ -985,11 +998,21 @@ export class CodexRecords {
         this.item(out, event)
         return out
       case "nested_call": {
-        // Only a cell's own calls: a call the model made has its response items.
-        if (this.calls.has(event.callId) || !this.cells.size) return out
+        // Only a cell's own calls: a call the model made has its response items,
+        // which keep no `_meta`; what it stated is this item's.
+        const made = this.calls.get(event.callId)
+        if (made) {
+          if (event.details && !made.details?.length) {
+            made.details = event.details
+            out.push(this.drawn(made, "tool-update", event.at))
+          }
+          return out
+        }
+        if (!this.cells.size) return out
         this.content(out)
         const call = this.track({ id: event.callId, name: event.name, title: event.title, input: event.input, output: event.output, status: event.error ? "failed" : "completed", itemized: true, facts: {} })
         if (event.attachments) call.attachments = event.attachments
+        if (event.details) call.details = event.details
         if (event.name === "view_image" && event.attachments?.[0]?.source.kind === "file") call.facts = { path: event.attachments[0].source.path }
         out.push(this.drawn(call, "tool", event.at))
         return out

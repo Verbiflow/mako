@@ -21,7 +21,7 @@ import type {
   ProviderSteerResult,
 } from "./live-driver.js"
 import { resolveCodexExecutable } from "./codex/executable.js"
-import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type DriverGoalCommand, type DriverSideQuestion } from "./live-driver.js"
+import { SHUTDOWN_GRACE_MS, conversationInstructions, conversationServers, type AdmittedStartOptions, type DriverGoalCommand, type DriverSideQuestion } from "./live-driver.js"
 import { codexGoalObservation } from "./codex/goals.js"
 import { reviewDisplayText, type ReviewTarget } from "../contracts/live-reviews.js"
 import type { ReviewTarget as CodexReviewTarget } from "./codex/generated/v2/ReviewTarget.js"
@@ -105,6 +105,8 @@ type Live = {
   tuning?: Tuning
   /** Mako's own servers, opened with the token in `MAKO_CONVERSATIONS_TOKEN`. */
   makoServers: Array<{ name: string; url: string }>
+  /** Mako's instructions for the model (`conversationInstructions`), handed to every turn as Codex's application context. */
+  instructions?: string
   mcpSnapshot: McpRegistrySnapshot
   nextRequestId: number
   pending: Map<string, PendingRpc>
@@ -234,6 +236,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       tuning: options.tuning,
       emit,
       makoServers: options.conversationTools ? conversationServers(options.conversationTools) : [],
+      instructions: conversationInstructions(options.conversationTools),
       mcpSnapshot,
       nextRequestId: 0,
       pending: new Map(),
@@ -376,6 +379,8 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         ...codexWireSettings(tuning),
         ...codexCollaborationMode(tuning, live.state.settings?.model),
         ...codexTurnAccess(live.access),
+        // Codex hands an application entry to the model as developer context, again only when it changes; never the person's words.
+        ...live.instructions && { additionalContext: { mako: { kind: "application" as const, value: live.instructions } } },
       }),
     })
   }

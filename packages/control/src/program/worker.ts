@@ -195,7 +195,7 @@ const call = (
 }
 let repl: ControlRepl | undefined
 let documentation: string | undefined
-function emit(kind: "output" | "image", value: JsonValue) {
+function emit(kind: "output" | "image" | "file", value: JsonValue) {
   const active = runs.getStore()
   if (active?.active) port.postMessage({ kind, runId: active.runId, value: jsonSafe(value) })
 }
@@ -246,7 +246,9 @@ port.on("message", (raw) => {
   const artifacts = {
     save: (name: string, value: JsonValue) => {
       if (!runs.getStore()?.active) throw new Error("This script has already finished")
-      return saveArtifact(message.artifacts, z.string().min(1).parse(name), value)
+      const saved = saveArtifact(message.artifacts, z.string().min(1).parse(name), value)
+      emit("file", saved.path)
+      return saved
     },
   }
 

@@ -81,6 +81,22 @@ export const ToolDetailSchema = z.discriminatedUnion("type", [
     entries: z.array(z.object({ content: z.string(), status: z.string() })),
   }),
   ReviewReportSchema.extend({ type: z.literal("review") }),
+  /**
+   * Media files the tool's result stated, from its `_meta` (`MEDIA_META` in
+   * `turn-media.ts`): `show` put them in front of the person, `produced`
+   * says the call made them (a recording, a saved screenshot).
+   */
+  z.object({
+    type: z.literal("media"),
+    via: z.enum(["show", "produced"]),
+    title: z.string().max(200).optional(),
+    files: z.array(z.object({
+      path: z.string().min(2).startsWith("/"),
+      caption: z.string().max(500).optional(),
+      /** The SHA-256 of the copy Mako kept when it showed the file. */
+      digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    })).min(1).max(64),
+  }),
 ])
 export type ToolDetail = z.infer<typeof ToolDetailSchema>
 
@@ -109,6 +125,8 @@ export function describeToolDetails(details: ToolDetail[]): string {
               return `${priority}${finding.title}${where}${finding.body ? `\n${finding.body}` : ""}`
             }),
           ].filter(Boolean).join("\n\n") || "No findings."
+        case "media":
+          return [detail.title, ...detail.files.map((file) => file.caption ? `${file.path} (${file.caption})` : file.path)].filter(Boolean).join("\n")
       }
     })
     .join("\n\n")

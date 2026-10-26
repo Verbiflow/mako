@@ -27,6 +27,8 @@ const messageSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ runId: z.number(), kind: z.literal("output"), value: z.json() }),
   z.object({ runId: z.number(), kind: z.literal("image"), value: z.json() }),
+  /** A file the program wrote itself (`artifacts.save()`). */
+  z.object({ runId: z.number(), kind: z.literal("file"), value: z.string() }),
   z.object({ runId: z.number(), kind: z.literal("done"), value: z.json() }),
   z.object({
     runId: z.number(),
@@ -91,6 +93,40 @@ export type ControlCellReport = {
   effects: ControlEffect[]
   value?: JsonValue
   valueArtifact?: { path: string; bytes: number; sha256: string }
+  /** Media files the cell made, absolute (`producedMedia`): what it saved,
+   * recorded, captured to a file or downloaded. */
+  files?: string[]
+}
+
+/** The keys under which an action's result or arguments name a file it wrote. */
+const FILE_KEYS = new Set(["path", "file", "video", "screenshot_out_file", "output_file"])
+const MEDIA_FILE = /\.(?:png|jpe?g|gif|webp|avif|bmp|svg|heic|tiff?|mp4|mov|m4v|webm|mkv|mp3|wav|m4a|aac|ogg|oga|flac|opus|html?|pdf)$/i
+const FieldsSchema = z.record(z.string(), z.json())
+/** How much of a result `producedMedia` walks. */
+const MAX_WALK = 400
+
+/** The media files an action's arguments and result name as written: a
+ * recording's video, a screenshot's out file, a download. Absolute paths
+ * only, so nothing is guessed against a folder. */
+export function producedMedia(command: JsonObject, result: JsonValue): string[] {
+  const found: string[] = []
+  let walked = 0
+  const walk = (value: JsonValue | undefined, key?: string, depth = 0) => {
+    if (value === undefined || value === null || walked++ > MAX_WALK || depth > 5) return
+    const text = z.string().safeParse(value)
+    if (text.success) {
+      if (key && FILE_KEYS.has(key) && text.data.startsWith("/") && MEDIA_FILE.test(text.data) && !found.includes(text.data)) found.push(text.data)
+      return
+    }
+    if (Array.isArray(value)) for (const item of value) walk(item, key, depth + 1)
+    else {
+      const fields = FieldsSchema.safeParse(value)
+      if (fields.success) for (const [name, item] of Object.entries(fields.data)) walk(item, name, depth + 1)
+    }
+  }
+  walk(command.screenshot_out_file, "screenshot_out_file")
+  walk(result)
+  return found
 }
 
 export interface ControlProgramExecution {
@@ -362,6 +398,7 @@ export class ControlProgramRuntime {
       let inlineImageBytes = 0
       let finished = false
       const effects: ControlEffect[] = []
+      const files = new Set<string>()
       let returned: Pick<ControlCellReport, "value"> | Promise<Pick<ControlCellReport, "valueArtifact">> = {}
       const unfinished = new Map<number, { command: JsonObject; namespace: string }>()
       const effect = (call: { command: JsonObject; namespace: string }) => {
@@ -398,7 +435,7 @@ export class ControlProgramRuntime {
           void Promise.all(output).then(blocks => reject(new ControlProgramError(blocks, error, effects)), reject)
         } else
           Promise.all([Promise.all(output), returned]).then(([blocks, value]) => {
-            execution.report?.({ effects, ...value })
+            execution.report?.({ effects, ...value, ...files.size && { files: [...files] } })
             resolve(blocks)
           }, reject)
       }
@@ -475,6 +512,7 @@ export class ControlProgramRuntime {
                 unfinished.delete(value.id)
                 const name = effect(value)
                 if (name) effects.push({ call: name, outcome: "completed" })
+                for (const path of producedMedia(value.command, result)) files.add(path)
                 worker.postMessage({
                   kind: "reply",
                   id: value.id,
@@ -496,6 +534,9 @@ export class ControlProgramRuntime {
               }
             )
         } else if (value.kind === "output") appendText("log", value.value)
+        else if (value.kind === "file") {
+          if (MEDIA_FILE.test(value.value)) files.add(value.value)
+        }
         else if (value.kind === "image") {
           try {
             for (const block of this.options.image(value.value))

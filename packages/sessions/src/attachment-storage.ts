@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { createReadStream } from "node:fs"
+import { constants, createReadStream } from "node:fs"
 import {
   copyFile,
   link,
@@ -78,6 +78,27 @@ async function publish(
     // Repair corruption, or use atomic rename on a filesystem without hard links.
     // Concurrent repairs can only publish bytes for this same content address.
     await rename(temporary, path)
+  }
+}
+
+/**
+ * A copy of the file at `path` in `root`, named by the SHA-256 of the bytes
+ * copied (`<digest><extension>`), so every holder of the same bytes shares
+ * one. The copy is a copy-on-write clone where the file system makes one
+ * (APFS), which costs no space until either side changes; the bytes kept are
+ * what was copied, whatever the original becomes.
+ */
+export async function keepFileCopy(path: string, root: string, extension: string): Promise<{ path: string; digest: string }> {
+  await mkdir(root, { recursive: true })
+  const temporary = join(root, `${randomUUID()}.tmp`)
+  try {
+    await copyFile(path, temporary, constants.COPYFILE_FICLONE)
+    const digest = await fileDigest(temporary)
+    const kept = join(root, `${digest}${extension}`)
+    if (!(await intact(kept, digest))) await publish(temporary, kept, digest)
+    return { path: kept, digest }
+  } finally {
+    await rm(temporary, { force: true })
   }
 }
 

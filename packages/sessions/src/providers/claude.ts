@@ -296,8 +296,9 @@ function savedMessage(line: ClaudeLine, content: ScreenedBlocks | undefined): SD
   const results = content.read.flatMap((read) => read.type === "tool_result" ? [read.block] : [])
   // The call's structured result, which states the exact change an edit or a command made.
   const result = line.record["toolUseResult"]
-  const message = { ...base, type: "user", message: { role: "user", content: results }, ...result !== undefined && { tool_use_result: result } }
-  // SAFETY: the screen kept every field `ClaudeProjection` reads of a user message, and only its tool results; their structured result is read as unknown.
+  const meta = line.record["mcpMeta"]
+  const message = { ...base, type: "user", message: { role: "user", content: results }, ...result !== undefined && { tool_use_result: result }, ...meta !== undefined && { mcp_meta: meta } }
+  // SAFETY: the screen kept every field `ClaudeProjection` reads of a user message, and only its tool results; their structured result and MCP `_meta` are read as unknown.
   return message as SDKMessage
 }
 

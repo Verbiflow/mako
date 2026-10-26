@@ -2,6 +2,7 @@ import { eventText, type TranscriptEvent } from "@mako/sessions/events"
 import { proposedPlan, type Entry, type EntryOf, type RecordRef, type ReplyEntry } from "@mako/sessions/entries"
 import { liveToolFinished, toolTitle } from "@mako/sessions/live-content"
 import { AGENT_PLAN_TOOL, identifyTool } from "@mako/sessions/tool-identity"
+import { callMedia } from "@mako/sessions/turn-media"
 import type { LiveHistoryAddress } from "@mako/host/contracts/live-history"
 import { z } from "zod"
 import { formatBytes } from "@/lib/format"
@@ -288,6 +289,8 @@ function toolBlocks(entry: EntryOf<"tool">, turn: number, provider: string | und
   if (entry.unfinished) result.isCutOff = true
   if (live && !finished) result.streaming = true
   if (rest) result.rest = rest
+  const media = callMedia(entry, tool)
+  if (media.length) result.media = media
   return [call, result]
 }
 

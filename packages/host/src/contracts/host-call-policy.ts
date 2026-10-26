@@ -87,6 +87,8 @@ const reads = [
   "mako:thread-changes",
   "mako:change-usage",
   "mako:resolve-file-references",
+  /** Copies a turn's media by its content's hash and keeps the answer by call: asked twice, the same copy and answer. */
+  "mako:resolve-turn-media",
   "mako:lost-versions",
   "mako:plan-builds",
   "mako:harness-descriptors",
