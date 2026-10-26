@@ -1,9 +1,10 @@
+import { CheckIcon } from "lucide-react"
 import type { ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
-import type { ComposerNotice, ComposerNoticeAction } from "@/extend/notices"
+import { Notice, NoticeAction } from "@/components/ui/notice"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { returnNotice } from "@/lib/restore-plan"
-import { MoveSteps as Steps } from "./move-steps"
+import { cn } from "@/lib/utils"
 import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
 import { dismissOutdatedReturn, updateAndBringBack, useCloudMoves } from "@/state/cloud-moves"
@@ -65,8 +66,7 @@ function returnDetail(step: ThreadReturnStep): string {
  * that means for the Thread. One whose answer this Mac can't hear yet says so, in caution: the Thread runs nowhere
  * until it hears, and the host asks again.
  */
-export function useThreadMoveNotice(): ComposerNotice | null {
-  useHarnessIdentity()
+export function ThreadMoveNotice() {
   const key = useAcp((state) => activeAcp(state)?.key)
   const moving = useCloudMoves((state) => (key ? state.moving[key] : undefined))
   const returning = useCloudMoves((state) => (key ? state.returning[key] : undefined))
@@ -75,37 +75,36 @@ export function useThreadMoveNotice(): ComposerNotice | null {
     const unsettled = moving.step.kind === "unsettled"
     const handOff = moving.handOff === true
     const steps = handOff ? HANDOFF_STEPS : STEPS
-    const at = steps.findIndex((each) => each.kind === moving.step.kind)
-    return {
-      id: "thread-move",
-      tone: unsettled ? "caution" : "progress",
-      title: unsettled ? "Waiting for the cloud's answer" : handOff ? "Handing off to the cloud" : "Moving to the cloud",
-      description: unsettled ? undefined : steps[at]?.words,
-      detail: (
-        <>
-          <p>{detail(moving.step, handOff)}</p>
-          {!unsettled && <Steps steps={steps} at={at} />}
-        </>
-      ),
-      data: { "data-thread-move": moving.step.kind, "data-thread-handoff": handOff || undefined },
-    }
+    return (
+      <Notice tone={unsettled ? "caution" : "progress"} title={unsettled ? "Waiting for the cloud's answer" : handOff ? "Handing off to the cloud" : "Moving to the cloud"} description={detail(moving.step, handOff)} data-thread-move={moving.step.kind} data-thread-handoff={handOff || undefined} className="mb-1.5">
+        {!unsettled && <Steps steps={steps} at={steps.findIndex((each) => each.kind === moving.step.kind)} />}
+      </Notice>
+    )
   }
-  if (!returning) return key && outdated ? outdatedReturn(key, outdated) : null
+  if (!returning) return key && outdated ? <OutdatedReturn conversationId={key} entry={outdated} /> : null
   const unsettled = returning.step.kind === "unsettled"
-  const at = RETURN_STEPS.findIndex((each) => each.kind === returning.step.kind)
-  return {
-    id: "thread-move",
-    tone: unsettled ? "caution" : "progress",
-    title: unsettled ? "Waiting for the cloud's answer" : "Coming back to this Mac",
-    description: unsettled ? undefined : RETURN_STEPS[at]?.words,
-    detail: (
-      <>
-        <p>{returnDetail(returning.step)}</p>
-        {!unsettled && <Steps steps={RETURN_STEPS} at={at} />}
-      </>
-    ),
-    data: { "data-thread-return": returning.step.kind },
-  }
+  return (
+    <Notice tone={unsettled ? "caution" : "progress"} title={unsettled ? "Waiting for the cloud's answer" : "Coming back to this Mac"} description={returnDetail(returning.step)} data-thread-return={returning.step.kind} className="mb-1.5">
+      {!unsettled && <Steps steps={RETURN_STEPS} at={RETURN_STEPS.findIndex((each) => each.kind === returning.step.kind)} />}
+    </Notice>
+  )
+}
+
+function Steps({ steps, at }: { steps: ReadonlyArray<{ kind: string; words: string }>; at: number }) {
+  return (
+    <ol className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-label" aria-label="Steps">
+      {steps.map((each, index) => (
+        <li
+          key={each.kind}
+          aria-current={index === at ? "step" : undefined}
+          className={cn("flex items-center gap-1 whitespace-nowrap", index < at ? "text-muted-foreground" : index === at ? "text-foreground" : "text-faint")}
+        >
+          {index < at ? <CheckIcon className="size-3" aria-hidden /> : <span aria-hidden className={cn("size-1.5 rounded-full", index === at ? "bg-foreground" : "bg-faint")} />}
+          {each.words}
+        </li>
+      ))}
+    </ol>
+  )
 }
 
 /**
@@ -113,26 +112,30 @@ export function useThreadMoveNotice(): ComposerNotice | null {
  * which versions, and the one choice that settles it, updating the harness and bringing the Thread back. It stays
  * until that's done or the person puts it away; the Thread goes on in the cloud meanwhile.
  */
-function outdatedReturn(conversationId: string, entry: { outdated: OutdatedRestore; updating?: boolean; failed?: string }): ComposerNotice {
+function OutdatedReturn({ conversationId, entry }: { conversationId: string; entry: { outdated: OutdatedRestore; updating?: boolean; failed?: string } }) {
+  useHarnessIdentity()
   const label = harnessLabel(entry.outdated.harness)
   const words = returnNotice(label, entry.outdated)
   const offer = entry.outdated.offer
-  const action: ComposerNoticeAction | undefined =
-    offer.kind === "update"
-      ? { label: entry.updating ? `Updating ${label}…` : entry.failed ? "Try again" : `Update ${label} and bring it back`, primary: true, disabled: entry.updating, onClick: () => void updateAndBringBack(conversationId) }
-      : offer.kind === "owner" && offer.owner === "Mako"
-        ? { label: "Open Updates", onClick: () => application.openUpdates() }
-        : offer.kind === "manual" && offer.command
-          ? { label: "Copy command", onClick: () => void navigator.clipboard.writeText(offer.command ?? "") }
-          : undefined
-  return {
-    id: "thread-move",
-    tone: entry.failed ? "danger" : "caution",
-    title: "It stayed in the cloud",
-    description: entry.failed ? `${label} wasn't updated: ${entry.failed}` : words.line,
-    detail: <p>{`${words.line} ${words.detail}`}</p>,
-    actions: action ? [action] : undefined,
-    onDismiss: entry.updating ? undefined : () => dismissOutdatedReturn(conversationId),
-    data: { "data-thread-return": "outdated" },
-  }
+  const actions =
+    offer.kind === "update" ? (
+      <NoticeAction disabled={entry.updating} onClick={() => void updateAndBringBack(conversationId)}>
+        {entry.updating ? `Updating ${label}…` : entry.failed ? "Try again" : `Update ${label} and bring it back`}
+      </NoticeAction>
+    ) : offer.kind === "owner" && offer.owner === "Mako" ? (
+      <NoticeAction onClick={() => application.openUpdates()}>Open Updates</NoticeAction>
+    ) : offer.kind === "manual" && offer.command ? (
+      <NoticeAction onClick={() => void navigator.clipboard.writeText(offer.command ?? "")}>Copy command</NoticeAction>
+    ) : undefined
+  return (
+    <Notice
+      tone={entry.failed ? "danger" : "caution"}
+      title="It stayed in the cloud"
+      description={entry.failed ? `${label} wasn't updated: ${entry.failed}` : `${words.line} ${words.detail}`}
+      actions={actions}
+      onDismiss={entry.updating ? undefined : () => dismissOutdatedReturn(conversationId)}
+      data-thread-return="outdated"
+      className="mb-1.5"
+    />
+  )
 }

@@ -1,0 +1,237 @@
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index fbafd6c..093f5a4 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -972,6 +972,8 @@ pub async fn run_serve(
+ 
+     #[cfg(target_os = "linux")]
+     platform_linux::recover_orphaned_mpx_devices();
++    #[cfg(target_os = "linux")]
++    platform_linux::hold_wayland_seat_pointer();
+ 
+     // Create parent directory.
+     if let Some(dir) = std::path::Path::new(socket_path).parent() {
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/lib.rs b/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
+index 9697b5e..f54758a 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
+@@ -167,6 +167,15 @@ pub fn recover_orphaned_mpx_devices() {
+     input::reap_orphaned_master_pointers();
+ }
+ 
++/// Standalone daemon startup: give a native Wayland seat one pointer for the
++/// daemon's lifetime, so per-gesture virtual pointers never change whether the
++/// seat has a pointer. See `wayland::seat_pointer`.
++#[cfg(target_os = "linux")]
++pub fn hold_wayland_seat_pointer() {
++    wayland::ensure_nested_session();
++    wayland::seat_pointer::hold();
++}
++
+ #[cfg(test)]
+ mod display_detection_tests {
+     use super::detect_wsl;
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
+index 2aee290..af47835 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
+@@ -22,6 +22,7 @@ pub(crate) mod portal;
+ pub mod portal_screenshot;
+ mod primary_seat;
+ mod recording;
++pub mod seat_pointer;
+ pub mod shell_helper;
+ pub mod sway_ipc;
+ mod virtual_keyboard;
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/seat_pointer.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/seat_pointer.rs
+new file mode 100644
+index 0000000..fd21a55
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/seat_pointer.rs
+@@ -0,0 +1,186 @@
++//! One idle virtual pointer held on the input seat for the daemon's lifetime.
++//!
++//! Every wlroots gesture creates its own `zwlr_virtual_pointer_v1` (click,
++//! scroll and drag in the parent module, held buttons in
++//! [`super::persistent_vptr`]) and destroys it afterwards. On a seat with no
++//! other pointer, such as a headless or nested compositor, that device is the
++//! seat's only pointer: creating it makes the compositor announce
++//! `wl_seat.capabilities(pointer)` and destroying it withdraws the capability,
++//! which also destroys every client's `wl_pointer`. A client receives pointer
++//! events only after it answers the announcement with `wl_seat.get_pointer`;
++//! the compositor drops whatever it would have sent the client before then.
++//! A gesture presses tens of milliseconds after creating its device, so an app
++//! whose main loop was busy for that long never saw the press or the start of
++//! the drag. The injecting client cannot observe another client's binding, so
++//! no wait before the press could be correct.
++//!
++//! Holding one device from daemon startup gives the seat a pointer capability
++//! that never changes while the daemon runs. Apps bind their pointer once, when
++//! they start or when the daemon does, and each gesture's own device joins a
++//! seat that already has a pointer, so its first event reaches the app. The
++//! device itself sends nothing.
++
++use std::sync::OnceLock;
++
++use wayland_client::{
++    protocol::{
++        wl_registry,
++        wl_seat::{self, WlSeat},
++    },
++    Connection, Dispatch, EventQueue, Proxy, QueueHandle,
++};
++use wayland_protocols_wlr::virtual_pointer::v1::client::{
++    zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
++    zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
++};
++
++use super::primary_seat::Seats;
++
++#[derive(Default)]
++struct Anchor {
++    seats: Seats<WlSeat>,
++    manager: Option<ZwlrVirtualPointerManagerV1>,
++}
++
++/// Create the seat's pointer before the daemon accepts its first call, then
++/// keep it on its own thread until the compositor goes away. Idempotent. Does
++/// nothing outside a native Wayland input session, in nested-injection mode, or
++/// on compositors without wlroots virtual pointers (libei input goes through
++/// devices the compositor itself owns).
++pub fn hold() {
++    static STARTED: OnceLock<()> = OnceLock::new();
++    if !super::wayland_input_enabled() || super::is_inject_mode() {
++        return;
++    }
++    STARTED.get_or_init(|| {
++        // The thread owns the connection from the start; `hold` returns once
++        // the device exists or the thread has given up.
++        let (ready, created) = std::sync::mpsc::sync_channel::<()>(1);
++        let spawned = std::thread::Builder::new()
++            .name("cua-seat-pointer".into())
++            .spawn(move || {
++                let (_conn, mut queue, mut state, _pointer) = match open() {
++                    Ok(Some(held)) => held,
++                    Ok(None) => return,
++                    Err(error) => {
++                        tracing::warn!("could not hold a seat pointer: {error:#}");
++                        return;
++                    }
++                };
++                let _ = ready.send(());
++                // The device sends nothing; dispatching keeps the seat and
++                // registry events from piling up unread and ends the thread
++                // when the compositor exits.
++                loop {
++                    if let Err(error) = queue.blocking_dispatch(&mut state) {
++                        tracing::debug!("seat pointer connection ended: {error}");
++                        return;
++                    }
++                }
++            });
++        match spawned {
++            Ok(_) => {
++                let _ = created.recv();
++            }
++            Err(error) => tracing::warn!("could not hold a seat pointer: {error}"),
++        }
++    });
++}
++
++#[allow(clippy::type_complexity)]
++fn open() -> anyhow::Result<
++    Option<(
++        Connection,
++        EventQueue<Anchor>,
++        Anchor,
++        ZwlrVirtualPointerV1,
++    )>,
++> {
++    let conn = Connection::connect_to_env()?;
++    let mut queue = conn.new_event_queue::<Anchor>();
++    let qh = queue.handle();
++    conn.display().get_registry(&qh, ());
++    let mut state = Anchor::default();
++    // Globals first, then the seats' names, which choose the primary seat
++    // exactly as the gesture sessions do.
++    queue.roundtrip(&mut state)?;
++    queue.roundtrip(&mut state)?;
++    let (Some(manager), Some(seat)) = (state.manager.clone(), state.seats.selected()) else {
++        return Ok(None);
++    };
++    let pointer = manager.create_virtual_pointer(Some(&seat), &qh, ());
++    // Once this returns the compositor has added the device and announced the
++    // pointer capability to every client.
++    queue.roundtrip(&mut state)?;
++    Ok(Some((conn, queue, state, pointer)))
++}
++
++impl Dispatch<wl_registry::WlRegistry, ()> for Anchor {
++    fn event(
++        state: &mut Self,
++        registry: &wl_registry::WlRegistry,
++        event: wl_registry::Event,
++        _: &(),
++        _: &Connection,
++        qh: &QueueHandle<Self>,
++    ) {
++        if let wl_registry::Event::Global {
++            name,
++            interface,
++            version,
++        } = event
++        {
++            if interface == WlSeat::interface().name {
++                state
++                    .seats
++                    .add(registry.bind::<WlSeat, _, _>(name, version.min(7), qh, ()));
++            } else if interface == ZwlrVirtualPointerManagerV1::interface().name {
++                state.manager = Some(registry.bind::<ZwlrVirtualPointerManagerV1, _, _>(
++                    name,
++                    version.min(2),
++                    qh,
++                    (),
++                ));
++            }
++        }
++    }
++}
++
++impl Dispatch<WlSeat, ()> for Anchor {
++    fn event(
++        state: &mut Self,
++        seat: &WlSeat,
++        event: wl_seat::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        if let wl_seat::Event::Name { name } = event {
++            state.seats.name(seat, name);
++        }
++    }
++}
++
++impl Dispatch<ZwlrVirtualPointerManagerV1, ()> for Anchor {
++    fn event(
++        _: &mut Self,
++        _: &ZwlrVirtualPointerManagerV1,
++        _: <ZwlrVirtualPointerManagerV1 as Proxy>::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++    }
++}
++
++impl Dispatch<ZwlrVirtualPointerV1, ()> for Anchor {
++    fn event(
++        _: &mut Self,
++        _: &ZwlrVirtualPointerV1,
++        _: <ZwlrVirtualPointerV1 as Proxy>::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++    }
++}

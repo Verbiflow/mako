@@ -1,11 +1,12 @@
 import { useState } from "react"
 import { HarnessIcon } from "@/components/ui/provider-icon"
+import { Shimmer } from "@/components/ui/shimmer"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { tooOld, tooOldText } from "@/lib/runtime-versions"
 import { activeAcp, useAcp } from "@/state/acp"
 import { providers, useProviders } from "@/state/providers"
 import { useThreads } from "@/state/threads"
-import type { ComposerNotice } from "@/extend/notices"
+import { cn } from "@/lib/utils"
 
 /**
  * One line above the composer when the harness a reply would run under is
@@ -15,11 +16,11 @@ import type { ComposerNotice } from "@/extend/notices"
  * has tested, and the line goes away by itself once the reading is fine.
  *
  * A version newer than Mako has tested, or one Mako couldn't read, says
- * nothing here. A notice producer (`registerNotice`); routes the way the composer
+ * nothing here. Registered on `composer.above`; routes the way the composer
  * does: the live session's harness, then the thread on screen, then the
  * composer's own choice for a new thread.
  */
-export function useRuntimeVersionNotice(): ComposerNotice | null {
+export function RuntimeVersionNotice() {
   useHarnessIdentity()
   const liveHarness = useAcp((state) => activeAcp(state)?.harness ?? null)
   const routedHarness = useThreads(
@@ -49,19 +50,43 @@ export function useRuntimeVersionNotice(): ComposerNotice | null {
       setPending(false)
     }
   }
-  const text = tooOldText(label, runtime)
-  return {
-    id: "runtime-version",
-    tone: updating ? "progress" : "caution",
-    icon: <HarnessIcon harness={harness} />,
-    title: updating ? `Updating ${label}…` : problem ? `${label} wasn't updated` : `${label} ${runtime.installed} is too old for Mako`,
-    description: updating ? undefined : problem ?? (runtime.oldest ? `needs ${runtime.oldest} or newer` : undefined),
-    detail: updating ? undefined : <p>{text}{runtime.update ? "" : ` ${runtime.owner}`}</p>,
-    actions: [
-      runtime.update
-        ? { label: problem ? "Try again" : "Update", primary: true, disabled: updating, onClick: () => void update() }
-        : { label: "Settings", onClick: () => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "agents" })) },
-    ],
-    data: { "data-runtime-version-notice": harness },
-  }
+  const text = updating
+    ? `Updating ${label}…`
+    : problem
+      ? `${label} wasn't updated: ${problem}`
+      : `${tooOldText(label, runtime)}${runtime.update ? "" : ` ${runtime.owner}`}`
+
+  return (
+    <div
+      role="status"
+      data-runtime-version-notice={harness}
+      className={cn(
+        "mb-1.5 flex items-center gap-2 rounded-md bg-raised px-2 py-1 text-ui",
+        updating ? "text-muted-foreground" : "text-caution"
+      )}
+    >
+      <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate" title={text}>
+        {updating ? <Shimmer text={text} /> : text}
+      </span>
+      {runtime.update ? (
+        <button
+          type="button"
+          disabled={updating}
+          onClick={() => void update()}
+          className="pressable shrink-0 rounded px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover disabled:opacity-60"
+        >
+          {problem ? "Try again" : "Update"}
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "agents" }))}
+          className="pressable shrink-0 rounded px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+        >
+          Settings
+        </button>
+      )}
+    </div>
+  )
 }

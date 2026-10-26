@@ -14,7 +14,6 @@ import {
   type ToolView,
 } from "@/extend/slots"
 import { registerSurface, type SurfaceDefinition } from "@/extend/surfaces"
-import { registerNotice, type NoticeProducer } from "@/extend/notices"
 import { stage } from "@/state/stage"
 import { actions, store, useSession } from "@/state/session"
 import { threads, threadsStore, useThreads } from "@/state/threads"
@@ -64,8 +63,6 @@ export interface MakoApi {
     render: React.ComponentType<SlotMap[K]>,
     order?: number
   ) => void
-  /** A notice above the composer: a hook answering one line or null (`registerNotice`). */
-  registerNotice: (use: NoticeProducer, order?: number) => void
   registerToolView: (name: string, view: ToolView) => void
   registerSurface: (surface: SurfaceDefinition) => void
   /** Show, hide, or swap the stage's companion surface. */
@@ -121,7 +118,6 @@ function dispose(id: string) {
 function apiFor(id: string): MakoApi {
   const undo = disposers.get(id) ?? []
   disposers.set(id, undo)
-  let noticeCount = 0
   const track = (disposer: () => void) => {
     if (undo.length >= MAX_REGISTRATIONS_PER_EXTENSION) {
       disposer()
@@ -138,7 +134,6 @@ function apiFor(id: string): MakoApi {
     registerCommand: (command) => track(registerCommand(scopeCommand(id, command))),
     registerCommands: (list) => track(registerCommands(list.map((c) => scopeCommand(id, c)))),
     registerSlot: (slot, render, order) => track(registerSlot(id, slot, render, order ?? 0)),
-    registerNotice: (use, order) => track(registerNotice(`${id}:notice:${noticeCount++}`, use, order ?? 0)),
     registerToolView: (name, view) => track(registerToolView(name, view)),
     registerSurface: (surface) =>
       track(registerSurface({ ...surface, id: `${id}:${surface.id}` })),

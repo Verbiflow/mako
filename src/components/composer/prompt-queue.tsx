@@ -1,4 +1,3 @@
-import { clockText } from "@/state/request-recovery"
 import { draftText, rememberDraft, clearSubmittedDraft } from "@/state/drafts"
 import { useThreads } from "@/state/threads"
 import { useLayoutEffect, useRef, useState } from "react"
@@ -123,8 +122,6 @@ export function PromptQueue() {
             ? `Runs there once ${waitsFor} is back`
             : delivery[0] && "signIn" in delivery[0] && delivery[0].signIn
               ? "Sends after Resume"
-              : delivery[0] && "wake" in delivery[0] && delivery[0].wake
-                ? `Sends at ${clockText(delivery[0].wake.at)}`
               : delivery[0]?.status === "held"
                 ? "Paused"
                 : "After this turn"}
@@ -329,7 +326,7 @@ function QueueRow({
             {body || `${request.attachments.length} attachments`}
           </p>
           <div className="flex shrink-0 items-center gap-0.5 text-faint">
-            {request.status === "held" && !request.signIn ? <button type="button" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 rounded px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
+            {request.status === "held" && !request.signIn ? <button type="button" aria-label="Resume queued message" disabled={busy} onClick={() => void change("resume")} className="pressable h-6 rounded px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">Resume</button> : null}
             {canSteer ? (
               <button
                 type="button"
@@ -367,9 +364,7 @@ function QueueRow({
         </div>
       )}
       {request.status === "held" && !editing && !request.signIn ? (
-        <p className="mt-1 text-label text-faint" data-queue-wake={request.wake?.at}>
-          {request.wake ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets` : "Paused until you resume or edit this message"}
-        </p>
+        <p className="mt-1 text-label text-faint">Paused until you resume or edit this message</p>
       ) : null}
       {request.attachments.length ? (
         <p className="mt-1 truncate text-label text-faint">

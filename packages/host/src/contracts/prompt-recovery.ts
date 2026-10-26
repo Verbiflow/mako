@@ -1,24 +1,5 @@
 import type { LiveRequest } from "./live-conversations.js"
-import { describeProviderFailure, type ProviderFailureKind } from "./provider-failure.js"
-
-/** A failed message's outcome, in a few words: the headline its recovery is shown under. */
-const FAILURE_TITLES = {
-  "transcript-rejected": "Session history was rejected",
-  "context-exhausted": "Conversation context is full",
-  auth: "Sign-in required",
-  plan: "The plan doesn't cover this request",
-  "wrong-account": "Signed in as a different account",
-  "rate-limited": "Model temporarily unavailable",
-  "provider-unavailable": "The provider's service failed",
-  network: "The connection dropped",
-  "resume-failed": "Could not reopen this session",
-  "transport-limit": "Response too large to read",
-  "rejected-input": "Message was refused",
-  "missing-folder": "Folder no longer exists",
-  "launch-failed": "Agent could not start",
-  "launch-stalled": "Agent stopped responding while starting",
-  unknown: "Message could not be completed",
-} satisfies Record<ProviderFailureKind, string>
+import { describeProviderFailure } from "./provider-failure.js"
 
 /** Native receipt and execution outcome answer different questions. */
 export function describePromptRecovery(
@@ -40,9 +21,23 @@ export function describePromptRecovery(
     ? evidence === "accepted" ? "Message outcome is unconfirmed" : "Message delivery is unconfirmed"
     : request.status === "interrupted"
       ? "Message interrupted"
-      : request.status === "failed" && request.failure
-        ? FAILURE_TITLES[request.failure]
-        : "Message could not be completed"
+      : request.failure === "rate-limited"
+        ? "Model temporarily unavailable"
+        : request.failure === "auth"
+          ? "Sign-in required"
+          : request.failure === "wrong-account"
+            ? "Signed in as a different account"
+          : request.failure === "context-exhausted"
+            ? "Conversation context is full"
+            : request.failure === "resume-failed"
+              ? "Could not reopen this session"
+              : request.failure === "missing-folder"
+                ? "Folder no longer exists"
+                : request.failure === "launch-failed"
+                  ? "Agent could not start"
+                  : request.failure === "launch-stalled"
+                    ? "Agent stopped responding while starting"
+                    : "Message could not be completed"
   const canResend = request.status === "failed"
     && ((failure?.retriable ?? true) || (request.failure === "context-exhausted" && compacted))
   return {

@@ -2210,112 +2210,6 @@ async function providerExitContinued() {
   })
 }
 
-/**
- * A failed message the person asked to send at a usage limit's reset waits
- * held with its time, survives a restart in the journal, and goes once the
- * held-wakes job finds its time has come; Resume sends it at once.
- */
-async function heldUntilReset() {
-  const f = fixture()
-  try {
-    const first = randomUUID()
-    await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "limited", attachments: [] } })
-    f.started.resolve(f.state)
-    await tick()
-    f.prompts[0]!.reject(new Error("429 Too Many Requests: usage limit reached"))
-    await waitFor(() => f.owner.snapshot(f.id)?.requests[0]?.status === "failed", "the first message fails")
-    assert.equal(f.owner.snapshot(f.id)?.requests[0]?.failure, "rate-limited")
-    const at = Date.now() + 60_000
-    const later = randomUUID()
-    const held = f.owner.holdUntil(f.id, later, { after: first, at })
-    assert.equal(held.status, "held")
-    assert.deepEqual(held.wake, { at, after: first })
-    assert.equal(held.text, "limited")
-    assert.equal(f.owner.holdUntil(f.id, later, { after: first, at }).id, later, "a repeated id answers with the first acceptance")
-    assert.throws(() => f.owner.holdUntil(f.id, randomUUID(), { after: later, at }), /no longer waiting/)
-    assert.equal(f.owner.summaries().find((summary) => summary.session.id === f.id)?.wakeAt, at)
-    assert.deepEqual(f.owner.wakeDue(at - 1), [], "nothing goes before its time")
-    assert.equal(f.sent.length, 1)
-
-    // A new host finds the wait in the journal, without opening the conversation.
-    f.owner.stop()
-    const recovered = new LiveConversations(f.dependencies)
-    try {
-      assert.equal(recovered.summaries().find((summary) => summary.session.id === f.id)?.wakeAt, at)
-      assert.deepEqual(recovered.wakeDue(at), [f.id])
-      const released = recovered.snapshot(f.id)?.requests.find((request) => request.id === later)
-      assert.equal(released?.wake, undefined)
-      assert.notEqual(released?.status, "held", "its time came, so it is no longer held")
-      assert.equal(recovered.summaries().find((summary) => summary.session.id === f.id)?.wakeAt, undefined)
-    } finally {
-      recovered.stop()
-    }
-  } finally {
-    f.cleanup()
-  }
-}
-
-/** Resume on a timed hold sends it now and clears the time; removing it cancels the wait. */
-async function heldWakeResumes() {
-  const f = fixture()
-  try {
-    const first = randomUUID()
-    await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "limited", attachments: [] } })
-    f.started.resolve(f.state)
-    await tick()
-    f.prompts[0]!.reject(new Error("429 rate limit"))
-    await waitFor(() => f.owner.snapshot(f.id)?.requests[0]?.status === "failed", "the first message fails")
-    f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready" } })
-    const later = randomUUID()
-    f.owner.holdUntil(f.id, later, { after: first, at: Date.now() + 3_600_000 })
-    f.owner.editQueued(f.id, { requestId: later, expectedText: "limited", change: { kind: "resume" } })
-    await tick()
-    const resumed = f.owner.snapshot(f.id)?.requests.find((request) => request.id === later)
-    assert.equal(resumed?.wake, undefined)
-    assert.deepEqual(f.sent, ["limited", "limited"], "Resume sends the held message now")
-    const another = randomUUID()
-    f.prompts[1]!.resolve()
-    await tick()
-    f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready" } })
-    f.owner.holdUntil(f.id, another, { after: first, at: Date.now() + 3_600_000 })
-    f.owner.editQueued(f.id, { requestId: another, expectedText: "limited", change: { kind: "remove" } })
-    assert.equal(f.owner.snapshot(f.id)?.requests.find((request) => request.id === another)?.status, "canceled")
-    assert.deepEqual(f.owner.wakeDue(Date.now() + 7_200_000), [], "a canceled wait never wakes")
-  } finally {
-    f.cleanup()
-  }
-}
-
-/**
- * A request the agent asked and nobody answered, when its process exits, is
- * kept and marked gone rather than offered; Stop puts it away and so does
- * the next message.
- */
-async function approvalOfAGoneProcess() {
-  const f = fixture()
-  try {
-    const first = randomUUID()
-    await f.owner.start("test-provider", "/tmp", { conversationId: f.id, initialRequest: { id: first, text: "first", attachments: [] } })
-    f.started.resolve(f.state)
-    await tick()
-    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
-    f.prompts[0]!.resolve()
-    f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready" } })
-    await tick()
-    assert.equal(f.owner.snapshot(f.id)?.requests[0]?.status, "completed")
-    // Asked between turns (a background task's request): no turn settles when its process goes.
-    f.owner.observe({ type: "live-permission", request: { id: "ask", sessionId: f.id, title: "npm test", options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }] } })
-    assert.equal(f.owner.snapshot(f.id)?.permissions.length, 1)
-    assert.equal(f.owner.snapshot(f.id)?.permissions[0]?.gone, undefined)
-    f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready", connection: "disconnected" } })
-    assert.equal(f.owner.snapshot(f.id)?.permissions[0]?.gone, true, "the process that asked has gone")
-    await f.owner.cancel(f.id)
-    assert.deepEqual(f.owner.snapshot(f.id)?.permissions, [], "Stop puts the unanswerable request away")
-  } finally {
-    f.cleanup()
-  }
-}
-
 await refusedStartup()
 await settledVerdicts()
 await autoContinuedTurn()
@@ -2345,9 +2239,6 @@ await boundsWarmProviders()
 await prewarmOverlapsTyping()
 await unloadsHibernatedConversations()
 await failedCloseKeepsOwnership()
-await heldUntilReset()
-await heldWakeResumes()
-await approvalOfAGoneProcess()
 identityAndToolLifecycle()
 console.log(
   "Live conversations: durable deduplicated acceptance, a harness started ahead taking its first message, startup/terminal races, idle hibernation with one resume, recovery, batching, tool lifecycle, and 499/499 completed exchange identities passed"

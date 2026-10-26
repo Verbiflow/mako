@@ -17,7 +17,6 @@ import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "@mako/host/contracts/utility-work"
 import type { NativeRequestInput, NativeRequest } from "@mako/host/contracts/native-requests"
 import type { ForkInput, TransferInput } from "@mako/host/contracts/conversation-control"
-import { PROVIDER_FAILURE_KINDS, type ProviderFailureKind } from "@mako/host/contracts/provider-failure"
 import type { ContextBreakdown, Entry, GitStatus, ThreadRef, LivePermissionRequest, LiveSessionMode, LiveSnapshot, LiveStartOptions, LiveRequest, PullRequest, UpdateState, UtilityConnection, UtilityProviderInfo } from "@/lib/types"
 import type { LivePermissionResponse } from "@mako/host/contracts/providers-acp"
 import type { ConversationGoal, GoalCommand } from "@mako/host/contracts/live-goals"
@@ -2299,9 +2298,9 @@ export function installMockBridge() {
             case "edit":
               return { ...request, status: request.signIn ? "held" : "queued", text: input.change.text }
             case "pause":
-              return { ...request, status: "held", wake: undefined }
+              return { ...request, status: "held" }
             case "resume":
-              return { ...request, status: request.signIn ? "held" : "queued", wake: undefined }
+              return { ...request, status: request.signIn ? "held" : "queued" }
             case "remove":
               return { ...request, status: "canceled", signIn: undefined }
           }
@@ -2309,15 +2308,6 @@ export function installMockBridge() {
       }
       liveSnapshots.set(id, next)
       return next
-    },
-    // As the host does: a failed message's words, held until the time asked for.
-    liveHoldUntil: async (id, requestId, input) => {
-      const snapshot = liveSnapshots.get(id)
-      const failed = snapshot?.requests.find((request) => request.id === input.after && request.status === "failed")
-      if (!snapshot || !failed) throw new Error("That message is no longer waiting to be sent again.")
-      const held: LiveRequest = { id: requestId, text: failed.text, attachments: failed.attachments, displayText: failed.displayText, status: "held", wake: { at: input.at, after: failed.id } }
-      emitRequests(id, { ...snapshot, revision: snapshot.revision + 1, requests: [...snapshot.requests, held] })
-      return held
     },
     liveClearQueue: async (id: string) => {
       const snapshot = liveSnapshots.get(id)
@@ -2481,46 +2471,6 @@ export function installMockBridge() {
           blocks: reduceLiveUpdates(snapshot.blocks, withHarness(snapshot.session.harness, updates)),
         }, updates)
         return cut
-      }
-      // "fail as rate-limited", "fail as auth after it started", "hit the usage limit": a turn that fails the way
-      // that kind does, with the provider's own words, so each failure row can be looked at.
-      const failing = mockFailure(text)
-      if (failing) {
-        const at = Date.now()
-        if (failing.limit) {
-          const account = snapshot.session.executionContext?.account
-          const name = account?.kind === "configured" ? account.name : "default"
-          emit({ type: "account-usage", harness: snapshot.session.harness, name, usage: { status: "ok", plan: "max", windows: [{ usedPercent: 100, windowMinutes: 300, resetsAt: failing.limit }, { usedPercent: 64, windowMinutes: 10_080, resetsAt: at + 4 * 86_400_000 }] } })
-        }
-        const failed: LiveRequest = failing.kind === "uncertain"
-          ? { id: requestId, text, attachments, status: "uncertain", nativeDelivery: { attemptId: crypto.randomUUID(), bindingId: id, ownerEpoch: "fixture", evidence: { kind: "submitted", source: "transport-call" } } }
-          : failing.kind === "host-quit"
-            ? { id: requestId, text, attachments, status: "interrupted", interruption: { reason: "host-quit", at }, nativeDelivery: { attemptId: crypto.randomUUID(), bindingId: id, ownerEpoch: "fixture", evidence: { kind: "accepted", source: "native-response" } } }
-            : {
-                id: requestId, text, attachments, status: "failed", failure: failing.kind, error: failing.error,
-                nativeDelivery: { attemptId: crypto.randomUUID(), bindingId: id, ownerEpoch: "fixture", evidence: failing.started ? { kind: "accepted", source: "native-response" } : { kind: "not-accepted", source: "preflight", reason: "refused before it ran" } },
-              }
-        const updates: LiveUpdate[] = failing.unsent ? [] : [
-          { kind: "user", requestId, text },
-          ...failing.started || failing.kind === "host-quit" ? [{ kind: "text" as const, text: "Reading `src/net/retry.ts` and the two clients that call it." }] : [],
-        ]
-        const session: LiveSessionState = failing.kind === "host-quit" || failing.kind === "uncertain"
-          ? { ...snapshot.session, status: "ready", connection: "hibernated" }
-          : { ...snapshot.session, status: "failed", error: failing.error }
-        emitRequests(id, { ...snapshot, session, revision: snapshot.revision + 1, requests: [...snapshot.requests, failed], blocks: reduceLiveUpdates(snapshot.blocks, withHarness(snapshot.session.harness, updates)) }, updates)
-        return failed
-      }
-      // "ask and then exit": the agent asks to run a command, and its process exits before anyone answers.
-      if (/ask (?:me )?and then exit/i.test(text)) {
-        const updates: LiveUpdate[] = [{ kind: "user", requestId, text }, { kind: "text", text: "I'll run the suite to check the retry change." }]
-        const asked: LivePermissionRequest = { id: crypto.randomUUID(), sessionId: id, title: "npm test -- --run src/net", kind: "execute", gone: true,
-          options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }, { optionId: "always", name: "Always allow", kind: "allow_always" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] }
-        const session: LiveSessionState = { ...snapshot.session, status: "ready", connection: "disconnected" }
-        const next = { ...snapshot, session, permissions: [asked], revision: snapshot.revision + 1, requests: [...snapshot.requests, { id: requestId, text, attachments, status: "completed" as const }], blocks: reduceLiveUpdates(snapshot.blocks, withHarness(snapshot.session.harness, updates)) }
-        liveSnapshots.set(id, next)
-        acpSessions.set(id, session)
-        emit({ type: "live-batch", batch: { id, revision: next.revision, updates, session, permissions: [asked], requests: next.requests } })
-        return next.requests.at(-1)!
       }
       if (/run the (?:\w+ )?(?:tests|suite)/i.test(text)) {
         const running: LiveRequest = { id: requestId, text, attachments, status: "dispatching" }
@@ -3400,34 +3350,4 @@ function mockReply(
       implementsPlan: { plan: id, approve: approval.approve },
     },
   }
-}
-
-const MOCK_FAILURES = new Map<ProviderFailureKind, string>([
-  ["rate-limited", "429 {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"This request would exceed your account's rate limit. Please try again later.\"}}"],
-  ["auth", "401 {\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"OAuth token has expired. Please obtain a new token or refresh your existing token.\"}}"],
-  ["context-exhausted", "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"prompt is too long: 213456 tokens > 200000 maximum\"}}"],
-  ["transcript-rejected", "400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.14: `tool_use` ids were found without `tool_result` blocks immediately after: toolu_01Q8\"}}"],
-  ["provider-unavailable", "500 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"Internal server error\"}}"],
-  ["network", "request to https://api.anthropic.com/v1/messages failed, reason: socket hang up"],
-  ["plan", "402 Payment Required: your credit balance is too low to access the Anthropic API."],
-  ["launch-failed", "claude exited with code 1 during initialize: Error: invalid MCP config at .mcp.json: servers.linear.command must be a string"],
-  ["launch-stalled", "Claude Code produced no output for 20s during session/new (initialize had finished; the process is alive)"],
-  ["missing-folder", "/Users/you/mako-feature no longer exists. Open this in a folder that exists."],
-  ["wrong-account", "This agent is signed in as sam@work.dev, not you@mako.dev, the account this session started with."],
-  ["unknown", "The agent ended the turn without a result."],
-])
-
-/** The failure a mock message asks for, by its words; see the livePrompt branch that plays it. */
-function mockFailure(text: string): { kind: ProviderFailureKind | "uncertain" | "host-quit"; error?: string; started: boolean; unsent: boolean; limit?: number } | undefined {
-  if (/hit the usage limit/i.test(text)) {
-    const reset = new Date()
-    reset.setHours(reset.getHours() + 2, 40, 0, 0)
-    return { kind: "rate-limited", error: "Claude AI usage limit reached|" + Math.floor(reset.getTime() / 1000), started: false, unsent: false, limit: reset.getTime() }
-  }
-  if (/lose the reply/i.test(text)) return { kind: "uncertain", started: true, unsent: false }
-  if (/quit mid-?turn/i.test(text)) return { kind: "host-quit", started: true, unsent: false }
-  const named = /^fail as ([a-z-]+)/i.exec(text.trim())?.[1]
-  const kind = PROVIDER_FAILURE_KINDS.find((candidate) => candidate === named)
-  if (!kind) return undefined
-  return { kind, error: MOCK_FAILURES.get(kind), started: /after it started/i.test(text), unsent: kind === "missing-folder" || kind === "wrong-account" || kind === "launch-failed" }
 }

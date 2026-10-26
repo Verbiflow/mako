@@ -1,22 +1,29 @@
 import { useHarnessIdentity, useHarnessLabels } from "@/lib/harness-label"
 import { latestPendingQuestion } from "@mako/host/contracts/live-questions"
-import { carriedHistories, promptDelivery, recoverableRequests, recoveriesByPlace, makoPrompts, turnStops } from "@/state/prompt-delivery"
-import { FailureRow } from "@/components/transcript/failure-row"
-import { FailedRequestsContext } from "@/components/transcript/failed-requests"
+import { ApprovalStatus } from "./approval-status"
+import { carriedHistories, promptDelivery, recoverableRequests, makoPrompts, turnStopLabel, turnStops } from "@/state/prompt-delivery"
 import { agentActivity, startLabel } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
+import { useCopy } from "@/components/ui/use-copy"
+import { CompactionControl } from "@/components/composer/compaction-control"
+import { compactionAvailable } from "@mako/host/contracts/recovery"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { Shimmer } from "@/components/ui/shimmer"
 import { durationText } from "@mako/sessions/events"
+import { TransferStatus } from "./transfer-status"
+import { LiveActionStatus } from "./live-action-status"
 import { loadEarlierLive } from "@/state/live-recovery"
-import { continueTurn } from "@/state/acp-queue"
+import { sendTo } from "@/state/acp-queue"
 import { skipWorktree } from "@/state/acp-start"
 import { WorktreeOpening } from "@/components/viewer/worktree-opening"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
+import { prefsStore, setPref, usePrefs } from "@/state/prefs"
+import { RecoveryNotice } from "./recovery-notice"
 import { BackgroundWorkLine } from "./background-work-line"
-import { useEffect, useMemo, useState } from "react"
-import { Disclosure } from "@/components/ui/notice"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { Collapse } from "@/components/ui/collapse"
+import { Disclosure, NoticeAction } from "@/components/ui/notice"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { scopedAcp, scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
@@ -25,7 +32,8 @@ import { asksInSession, descriptorFor } from "@/state/descriptors"
 import { usePlanDecision } from "@/state/plan-mode"
 import { viewerHandedOff } from "@/state/thread-viewing"
 import { toast } from "sonner"
-import type { LivePermissionRequest, LiveRequest } from "@/lib/types"
+import type { InterruptionReason, LivePermissionRequest, LiveRequest } from "@/lib/types"
+import { describePromptRecovery } from "@mako/host/contracts/prompt-recovery"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { identifyTool } from "@mako/sessions/tool-identity"
@@ -34,7 +42,6 @@ import {
   CheckCheckIcon,
   CheckIcon,
   CircleAlertIcon,
-  PlayIcon,
   ShieldQuestionIcon,
   XIcon,
 } from "lucide-react"
@@ -54,7 +61,6 @@ import { Orb } from "@/components/ui/orb/orb"
  */
 
 const EMPTY_QUEUE: never[] = []
-const NO_RECOVERIES = { onTurns: new Map<string, LiveRequest>(), apart: EMPTY_QUEUE }
 
 export function AcpPanel() {
   const scope = useConversationScope()
@@ -88,6 +94,10 @@ export function AcpPanel() {
         <PaneWaiting />
       ) : (
         <>
+          <TransferStatus />
+          <LiveActionStatus />
+          <RetainedRequests />
+          <ApprovalStatus />
           <Permission />
           <SessionQuestion />
         </>
@@ -186,14 +196,6 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
     session?.status === "starting" ||
     session?.status === "running"
   const interruptedRequests = useMemo(() => turnStops(requests, running), [requests, running])
-  const blocks = useAcp((state) => scopedLiveAcp(state, scope)?.blocks ?? EMPTY_QUEUE)
-  const earlierRequests = useAcp((state) => scopedLiveAcp(state, scope)?.history?.earlierRequests)
-  // Only a conversation with a message to recover reads its turns for where each was said.
-  const recovering = requests.some((request) => request.status === "failed" || request.status === "uncertain" || request.status === "interrupted")
-  const recoveries = useMemo(
-    () => recovering ? recoveriesByPlace({ blocks, history: earlierRequests ? { earlierRequests } : undefined, requests }) : NO_RECOVERIES,
-    [recovering, blocks, earlierRequests, requests]
-  )
   const madeByMako = useMemo(() => makoPrompts(requests), [requests])
   const carried = useMemo(() => carriedHistories(requests), [requests])
   const exchanges = projection?.exchanges ?? EMPTY_QUEUE
@@ -212,7 +214,6 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
   const historyNote = historyState ? <HistoryReadNote state={historyState} /> : null
 
   return (
-    <FailedRequestsContext value={recoveries.onTurns}>
     <ConversationTimeline
       source={{ liveId: sessionId, historyFrom: historyWindow ? { blocks: historyWindow.blockStart, base: history?.start ?? 0 } : undefined }}
       identity={identity}
@@ -252,13 +253,6 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
       )}
       footer={
         <>
-          {sessionId && recoveries.apart.length ? (
-            <div className="flex flex-col gap-3">
-              {recoveries.apart.map((request) => (
-                <FailureRow key={request.id} conversationId={sessionId} request={request} quoted />
-              ))}
-            </div>
-          ) : null}
           <AcpActivity
             running={running}
             starting={starting || session?.status === "starting"}
@@ -269,7 +263,6 @@ function Blocks({ starting = false, continued = false }: { starting?: boolean; c
         </>
       }
     />
-    </FailedRequestsContext>
   )
 }
 
@@ -447,68 +440,14 @@ function Permission() {
     const live = activeLiveAcp(state)
     return live?.control?.approvalResponses?.find(item => item.id === live.permission?.id)
   })
-  // The process that asked has exited: the host marks it, and a dropped connection says so before the host does.
-  const gone = useAcp((state) => Boolean(activeLiveAcp(state)?.permission?.gone) || activeLiveAcp(state)?.session.connection === "disconnected")
   // A plan approval is answered from the plan bar above the composer.
   const planApproval = usePlanDecision()?.approval?.id
   if (!permission || planApproval === permission.id) return null
-  if (gone) return <GonePermission permission={permission} />
   // Keep a structured draft mounted while its answer is in flight. A proven
   // refusal can renew the public occurrence without clearing the user's input.
   return <div hidden={Boolean(receipt)}>
     <PermissionInput key={permission.origin ? JSON.stringify(permission.origin) : permission.id} permission={permission} />
   </div>
-}
-
-/**
- * A request whose agent process has gone: no answer can reach it, so it
- * offers none. It says so, names what was asked, and offers what still
- * works: Continue turn starts the agent again on this turn, which asks
- * again if it still needs to; Stop puts the request away.
- */
-function GonePermission({ permission }: { permission: LivePermissionRequest }) {
-  useHarnessIdentity()
-  const key = useAcp((state) => activeLiveAcp(state)?.key)
-  const harness = useAcp((state) => activeLiveAcp(state)?.harness)
-  const canceling = useAcp((state) => activeLiveAcp(state)?.canceling ?? false)
-  const [continuing, setContinuing] = useState(false)
-  const provider = harness ? harnessLabel(harness) : "The agent"
-  const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
-  const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
-  return (
-    <div data-permission-gone={permission.id} className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
-      <p className="flex items-center gap-1.5 text-ui text-foreground/90">
-        <CircleAlertIcon aria-hidden className="size-3.5 shrink-0 text-caution" />
-        <span className="min-w-0 truncate">{provider} stopped before you answered</span>
-      </p>
-      <p className="pt-0.5 pb-2 pl-5 text-label text-muted-foreground">
-        It asked about <span className={cn(!makoTool && !permission.detail && "font-mono")}>{makoTool ?? permission.title}</span>. Nothing can answer it now; continue the turn and it asks again if it still needs to.
-      </p>
-      <div className="flex flex-wrap gap-1.5 pl-5">
-        <button
-          type="button"
-          disabled={!key || continuing}
-          onClick={() => {
-            if (!key) return
-            setContinuing(true)
-            void continueTurn(key, "provider-exited").finally(() => setContinuing(false))
-          }}
-          className="pressable flex items-center gap-1.5 rounded-md border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90 disabled:opacity-50"
-        >
-          <PlayIcon className="size-3 fill-current" strokeWidth={0} />
-          {continuing ? "Continuing…" : "Continue turn"}
-        </button>
-        <button
-          type="button"
-          disabled={canceling}
-          onClick={() => void acp.cancel()}
-          className="pressable rounded-md border border-hairline px-2 py-1 text-label text-muted-foreground hover:text-foreground disabled:opacity-50"
-        >
-          Stop
-        </button>
-      </div>
-    </div>
-  )
 }
 
 function PermissionInput({ permission }: { permission: LivePermissionRequest }) {
@@ -731,12 +670,7 @@ function QuestionPermission({
   )
 }
 
-/**
- * Every message of the conversation that ended without an answer, newest
- * first, for the conversation menu: the archive behind the rows the
- * transcript draws where each one failed.
- */
-export function RetainedRequests() {
+export function RetainedRequests({ history = false }: { history?: boolean }) {
   const requests = useAcp(
     (state) => {
       const current = activeAcp(state)
@@ -747,12 +681,214 @@ export function RetainedRequests() {
       left.every((request, index) => request === right[index])
   )
   const conversation = useAcp((state) => activeLiveAcp(state)?.key)
-  if (!conversation || !requests.length) return null
+  const allRequests = useAcp(
+    (state) => activeLiveAcp(state)?.requests ?? EMPTY_QUEUE
+  )
+  const latest = useMemo(() => {
+    const completed = allRequests.findLastIndex(
+      (request) => request.status === "completed"
+    )
+    const candidates = new Set(
+      allRequests.slice(completed + 1).map((request) => request.id)
+    )
+    return requests.findLast((request) => candidates.has(request.id))
+  }, [allRequests, requests])
+  const dismissed = usePrefs((state) => state.dismissedRecoveryRequests)
+  if (history)
+    return requests.length ? (
+      <Disclosure summary={`Saved messages (${requests.length})`} className="px-2 py-2" bodyClassName="text-label text-muted-foreground">
+        {requests.map((request) => (
+          <RequestRecovery key={request.id} request={request} />
+        ))}
+      </Disclosure>
+    ) : null
+  if (
+    !conversation ||
+    !latest ||
+    dismissed[`${conversation}:${latest.id}`] === latest.status
+  )
+    return null
   return (
-    <Disclosure summary={`Saved messages (${requests.length})`} className="px-2 py-2" bodyClassName="flex flex-col gap-3 pt-2">
-      {[...requests].reverse().map((request) => (
-        <FailureRow key={request.id} conversationId={conversation} request={request} quoted compact />
-      ))}
-    </Disclosure>
+    <RequestNotice
+      key={`${conversation}:${latest.id}`}
+      request={latest}
+      earlier={requests.filter((request) => request.id !== latest.id)}
+      onDismiss={() => {
+        setPref("dismissedRecoveryRequests", {
+          ...prefsStore.get().dismissedRecoveryRequests,
+          [`${conversation}:${latest.id}`]: latest.status,
+        })
+      }}
+    />
+  )
+}
+
+function RequestNotice({
+  request,
+  earlier,
+  onDismiss,
+}: {
+  request: LiveRequest
+  earlier: LiveRequest[]
+  onDismiss(): void
+}) {
+  const [reviewId, setReview] = useState<string | null>(null)
+  const review = request.id === reviewId ? request : earlier.find((item) => item.id === reviewId) ?? null
+  const recovery = describePromptRecovery(request)
+  const [history, setHistory] = useState(false)
+  // The body keeps the last reviewed message while it folds away.
+  const [reviewed, setReviewed] = useState<LiveRequest | null>(null)
+  if (review && review !== reviewed) setReviewed(review)
+  return (
+    <RecoveryNotice
+      title={recovery.title}
+      description="Your message is saved. Review delivery details before trying again."
+      onDismiss={onDismiss}
+      actions={
+        <>
+          <NoticeAction
+            onClick={() => setReview(review ? null : request.id)}
+            expanded={Boolean(review)}
+          >
+            {review ? "Hide details" : "Review message"}
+          </NoticeAction>
+          {earlier.length ? (
+            <NoticeAction quiet onClick={() => setHistory(!history)} expanded={history}>
+              Earlier messages ({earlier.length})
+            </NoticeAction>
+          ) : null}
+        </>
+      }
+    >
+      <Collapse open={history}>
+        <div className="-mx-1 mb-1 space-y-0.5">
+          {[...earlier].reverse().map((item) => (
+            <button
+              type="button"
+              key={item.id}
+              className="pressable block w-full truncate rounded px-2 py-1 text-left text-label text-muted-foreground hover:bg-fill-hover"
+              onClick={() => {
+                setReview(item.id)
+                setHistory(false)
+              }}
+            >
+              {item.displayText ?? item.text}
+            </button>
+          ))}
+        </div>
+      </Collapse>
+      <Collapse open={Boolean(review)}>
+        {reviewed ? (
+          <RequestRecovery key={reviewed.id} request={reviewed} expanded />
+        ) : null}
+      </Collapse>
+    </RecoveryNotice>
+  )
+}
+
+/** The recovery row's word for a stopped message; the footer's label, with the message named. */
+function interruptedLabel(reason: InterruptionReason, provider: string): string {
+  return reason === "stopped" ? "Stopped message" : turnStopLabel(reason, provider)
+}
+
+function RequestRecovery({ request, expanded = false }: { request: LiveRequest; expanded?: boolean }) {
+  useHarnessIdentity()
+  const text = request.displayText ?? request.text
+  const { copy, copied } = useCopy(text)
+  const conversationId = useAcp((state) => activeLiveAcp(state)?.key ?? null)
+  const harness = useAcp((state) => activeLiveAcp(state)?.session.harness)
+  const [resent, setResent] = useState<"sending" | "sent" | null>(null)
+  const [restored, setRestored] = useState(false)
+  const continued = useAcp((state) => {
+    const requests = activeLiveAcp(state)?.requests ?? []
+    const index = requests.findIndex((item) => item.id === request.id)
+    return index >= 0 && requests.slice(index + 1).some((item) => item.status === "completed")
+  })
+  const recovered = useAcp((state) => activeLiveAcp(state)?.control?.actions?.some((action) =>
+    action.input.kind === "compact" && action.input.requestId === request.id && action.state.kind === "completed") ?? false)
+  const idle = useAcp((state) => {
+    const live = activeLiveAcp(state)
+    return Boolean(live && compactionAvailable(live.session, live.control?.actions ?? [],
+      live.requests?.some((item) => item.status === "queued" || item.status === "dispatching") ?? false))
+  })
+  const recovery = describePromptRecovery(request, harness ? harnessLabel(harness) : undefined, recovered)
+  const failure = recovery.failure
+  const label = failure
+    ? failure.title
+    : request.interruption
+      ? interruptedLabel(request.interruption.reason, harness ? harnessLabel(harness) : "the provider")
+      : request.status === "uncertain"
+        ? recovery.title
+        : request.status === "interrupted"
+          ? "Stopped message"
+          : "Message failed"
+  // A failed request is re-sent as a new request carrying the same text and
+  // attachments; the failed record stays, so nothing is replayed silently.
+  const resend = async () => {
+    if (!conversationId || resent || !idle || !recovery.resendLabel) return
+    setResent("sending")
+    const accepted = await sendTo(conversationId, request.text, request.attachments)
+    setResent(accepted ? "sent" : null)
+  }
+  // A new thread opens in the same folder over the same transport, so it can't escape these.
+  const freshThread = request.status === "failed" && request.failure !== "auth" && request.failure !== "transport-limit" && request.failure !== "missing-folder" && request.failure !== "launch-failed"
+  return (
+    <RecoveryBody expanded={expanded} summary={`${continued && request.status === "failed" ? "An earlier message failed" : label}. Review saved message`} request={request}>
+      {failure ? <p className="mt-2 text-foreground/80">{failure.guidance}</p> : null}
+      <p className="mt-2 text-foreground/80" data-delivery-evidence={request.nativeDelivery?.evidence.kind ?? "unknown"}>{recovery.delivery}</p>
+      {request.error ? <p className={cn("mt-2", failure && "text-faint")}>{request.error}</p> : null}
+      <p className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap">{text}</p>
+      {request.status === "failed" && request.failure === "context-exhausted" ? <CompactionControl requestId={request.id} /> : null}
+      {recovered && request.failure === "context-exhausted" ? <p className="mt-2">Compaction completed. You can send the saved message again.</p> : null}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+        {request.status === "failed" && request.failure === "auth" && conversationId ? (
+          <button type="button" disabled={restored} className="pressable h-6 rounded-md bg-fill-hover px-2 text-foreground hover:bg-fill-selected disabled:opacity-45"
+            onClick={() => {
+              const event = new CustomEvent("mako:restore-saved-message", { cancelable: true, detail: { conversationId, requestId: request.id } })
+              if (!window.dispatchEvent(event)) setRestored(true)
+            }}>{restored ? "Restored to composer" : "Restore to composer"}</button>
+        ) : null}
+        {recovery.resendLabel && conversationId ? (
+          <button type="button" onClick={() => void resend()} disabled={resent !== null || !idle} className="pressable h-6 rounded-md bg-fill-hover px-2 text-foreground hover:bg-fill-selected disabled:opacity-45">
+            {resent === "sent" ? "Sent again" : resent === "sending" ? "Sending…" : recovery.resendLabel}
+          </button>
+        ) : null}
+        {freshThread && conversationId ? (
+          <button type="button" disabled={resent !== null} className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground disabled:opacity-45"
+            onClick={() => {
+              setResent("sending")
+              void acp.recoverFresh(conversationId, request.id).then((accepted) => setResent(accepted ? "sent" : null))
+            }}>Use in new thread</button>
+        ) : null}
+        {request.status === "failed" && (request.failure === "auth" || request.failure === "wrong-account" || request.failure === "launch-failed" || request.failure === "launch-stalled") ? (
+          <button type="button" className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground"
+            onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: request.failure === "launch-stalled" ? "mcp" : "agents" }))}>
+            {request.failure === "launch-stalled" ? "MCP settings" : "Agents settings"}
+          </button>
+        ) : null}
+        <button type="button" onClick={() => void copy()} className="pressable h-6 rounded-md px-2 hover:bg-fill-hover hover:text-foreground">{copied ? "Copied" : "Copy saved message"}</button>
+      </div>
+      {freshThread ? <p className="mt-2 text-faint">A new thread starts with this message and its attachments. Earlier conversation stays here.</p> : null}
+      {request.status === "failed" && request.failure === "auth" ? <p className="mt-2 text-faint">Fix sign-in or choose an available model in Agents settings, then review and send the restored draft. Restoring does not send a message.</p> : null}
+    </RecoveryBody>
+  )
+}
+
+/** A saved message's recovery: open in the notice that reviews it, folded in a list of them. */
+function RecoveryBody({ expanded, summary, request, children }: { expanded: boolean; summary: string; request: LiveRequest; children: ReactNode }) {
+  const data = { "data-request-recovery": request.id, "data-failure": request.failure }
+  if (expanded)
+    return (
+      <div className="py-1" {...data}>
+        <p className="sr-only">{summary}</p>
+        {children}
+      </div>
+    )
+  return (
+    <div className="py-1.5" {...data}>
+      <Disclosure summary={summary} tone={request.status === "failed" ? "danger" : "caution"}>
+        {children}
+      </Disclosure>
+    </div>
   )
 }

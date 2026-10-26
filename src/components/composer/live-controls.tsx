@@ -60,7 +60,7 @@ export function LiveComposerControls() {
           className="max-h-[60vh] w-80 overflow-y-auto p-1"
         >
           <CompactionControl onStart={() => setOpen(false)} />
-          <RetainedRequests />
+          <RetainedRequests history />
           <TransferStatus history />
           <LiveActionStatus history />
           <ApprovalStatus history />

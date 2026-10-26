@@ -1,4 +1,4 @@
-import { LoaderCircleIcon, SquareDashedMousePointerIcon } from "lucide-react"
+import { LoaderCircleIcon, SquareDashedMousePointerIcon, XIcon } from "lucide-react"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import type { ComposerControlSlotProps } from "@/extend/slots"
 import { elementPicks, useElementPicks } from "@/state/element-picks"
@@ -31,6 +31,28 @@ export function ElementPickButton({ disabled, dismiss }: ComposerControlSlotProp
       )}
       {active ? `Picking in ${active.place}…` : "Pick an element…"}
     </button>
+  )
+}
+
+/** One line above the composer while a pick runs in a browser tab, with the way to end it from here. */
+export function ElementPickNotice() {
+  const active = useElementPicks((state) => state.active)
+  if (!active) return null
+  return (
+    <div role="status" className="mb-1.5 flex items-center gap-2 rounded-md bg-raised px-2 py-1 text-ui text-muted-foreground">
+      <SquareDashedMousePointerIcon className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate">
+        {active.starting ? `Opening the picker in ${active.place}…` : `Point at an element in ${active.place}, then add it there`}
+      </span>
+      <button
+        type="button"
+        onClick={() => elementPicks.cancel()}
+        className="pressable flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover"
+      >
+        <XIcon className="size-3" aria-hidden />
+        Cancel
+      </button>
+    </div>
   )
 }
 

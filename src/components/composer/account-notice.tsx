@@ -7,7 +7,7 @@ import { usageWindowName } from "@/lib/usage-window"
 import { accounts, useAccounts, type ProviderAccount } from "@/state/accounts"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { shallowEqual } from "@/state/store"
-import type { ComposerNotice, ComposerNoticeAction } from "@/extend/notices"
+import { cn } from "@/lib/utils"
 
 const NONE: ProviderAccount[] = []
 
@@ -20,9 +20,9 @@ const NONE: ProviderAccount[] = []
  * launched with, it says so; nothing is sent until that's fixed. Silent when
  * they agree.
  *
- * A notice producer (`registerNotice`).
+ * Registered on `composer.above`.
  */
-export function useAccountSwitchNotice(): ComposerNotice | null {
+export function AccountSwitchNotice() {
   const live = useAcp((state) => {
     const current = activeLiveAcp(state)
     return current ? { harness: current.harness, session: current.session, requests: current.requests, canceling: current.canceling } : null
@@ -35,39 +35,51 @@ export function useAccountSwitchNotice(): ComposerNotice | null {
   if (!live || !label || !reading) return null
   const text = noticeText(reading, live.session, label)
 
-  const actions: ComposerNoticeAction[] = []
-  if (reading.kind === "waiting" && stopSwitches(reading.waitingFor))
-    actions.push({ label: live.canceling ? "Stopping…" : "Stop and switch", primary: true, disabled: live.canceling, onClick: () => void acp.cancel() })
-  if (reading.kind === "differs")
-    actions.push({ label: "Settings", primary: true, onClick: () => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "agents" })) })
-  return {
-    id: "account-switch",
-    tone: reading.kind === "differs" ? "caution" : "info",
-    icon: <HarnessIcon harness={live.harness} />,
-    title: text.title,
-    description: text.description,
-    actions,
-    data: { "data-account-notice": reading.kind },
-  }
+  return (
+    <div
+      role="status"
+      data-account-notice={reading.kind}
+      className={cn(
+        "mb-1.5 flex items-center gap-2 rounded-md bg-raised px-2 py-1 text-ui",
+        reading.kind === "differs" ? "text-caution" : "text-muted-foreground"
+      )}
+    >
+      <HarnessIcon harness={live.harness} className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate" title={text}>{text}</span>
+      {reading.kind === "waiting" && stopSwitches(reading.waitingFor) ? (
+        <button
+          type="button"
+          disabled={live.canceling}
+          onClick={() => void acp.cancel()}
+          className="pressable shrink-0 rounded px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover disabled:opacity-60"
+        >
+          {live.canceling ? "Stopping…" : "Stop and switch"}
+        </button>
+      ) : null}
+      {reading.kind === "differs" ? (
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "agents" }))}
+          className="pressable shrink-0 rounded px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover"
+        >
+          Settings
+        </button>
+      ) : null}
+    </div>
+  )
 }
 
-/** A notice's words: what holds, then what follows from it. */
-interface NoticeWords {
-  title: string
-  description?: string
-}
-
-function noticeText(reading: AccountReading, session: LiveSessionState, label: string): NoticeWords {
-  if (reading.kind === "differs") return { title: `${label} is signed in as ${reading.principal}, not ${reading.expected}`, description: "messages won’t send until that’s fixed" }
-  if (reading.kind === "waiting") return { title: `Switches to ${reading.selected} when ${waitText(reading.waitingFor)}`, description: "your message is waiting" }
+function noticeText(reading: AccountReading, session: LiveSessionState, label: string): string {
+  if (reading.kind === "differs") return `${label} is signed in as ${reading.principal}, not ${reading.expected}. Messages won’t send until that’s fixed.`
+  if (reading.kind === "waiting") return `Switches to ${reading.selected} when ${waitText(reading.waitingFor)}. Your message is waiting.`
   const { running, selected, removing } = reading
   if (session.status === "running") return removing
-    ? { title: `This turn runs as ${running}`, description: `Mako removes it when the turn ends; the next message uses ${selected}` }
-    : { title: `This turn runs as ${running}`, description: `the next message switches to ${selected}` }
+    ? `This turn runs as ${running}, which Mako removes when the turn ends. The next message uses ${selected}.`
+    : `This turn runs as ${running}. The next message switches to ${selected}.`
   if (session.backgroundTasks) return removing
-    ? { title: `Background work runs as ${running}`, description: `Mako removes it when it finishes; a new message waits for it, then uses ${selected}` }
-    : { title: `Background work runs as ${running}`, description: `a new message waits for it, then switches to ${selected}` }
-  return { title: `This session runs as ${running}`, description: `your next message switches it to ${selected}` }
+    ? `Background work runs as ${running}, which Mako removes when it finishes. A new message waits for it, then uses ${selected}.`
+    : `Background work runs as ${running}. A new message waits for it, then switches to ${selected}.`
+  return `This session runs as ${running}. Your next message switches it to ${selected}.`
 }
 
 /**
@@ -77,9 +89,9 @@ function noticeText(reading: AccountReading, session: LiveSessionState, label: s
  * is the person's click, since an account is money. Goes once the account
  * in use is no longer the one the offer is about.
  *
- * A notice producer (`registerNotice`).
+ * Registered on `composer.above`.
  */
-export function useAccountLimitNotice(): ComposerNotice | null {
+export function AccountLimitNotice() {
   const harness = useAcp((state) => activeLiveAcp(state)?.harness)
   const offer = useAccounts((state) => harness ? state.limitOffers[harness] : undefined)
   const active = useAccounts((state) => harness ? state.accounts.find((account) => account.harness === harness && account.active)?.name : undefined)
@@ -88,29 +100,39 @@ export function useAccountLimitNotice(): ComposerNotice | null {
   if (!harness || !offer || !label || (active !== undefined && active !== offer.from.name)) return null
   const text = limitText(offer, label)
   const to = offer.to.email ?? offer.to.name
-  return {
-    id: "account-limit",
-    tone: offer.because === "refused" ? "caution" : "info",
-    icon: <HarnessIcon harness={harness} />,
-    title: text.title,
-    description: text.description,
-    actions: [
-      { label: `Switch to ${to}`, primary: true, disabled: busy, title: `Every ${label} session switches to ${to}`, onClick: () => void accounts.select(harness, offer.to.name) },
-      { label: "Not now", onClick: () => accounts.declineOffer(harness) },
-    ],
-    data: { "data-account-limit": offer.because },
-  }
+  return (
+    <div role="status" data-account-limit={offer.because} className="mb-1.5 flex items-center gap-2 rounded-md bg-raised px-2 py-1 text-ui text-muted-foreground">
+      <HarnessIcon harness={harness} className="size-3.5 shrink-0" />
+      <span className="min-w-0 flex-1 truncate" title={text}>{text}</span>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void accounts.select(harness, offer.to.name)}
+        title={`Every ${label} session switches to ${to}`}
+        className="pressable shrink-0 rounded px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover disabled:opacity-60"
+      >
+        Switch
+      </button>
+      <button
+        type="button"
+        onClick={() => accounts.declineOffer(harness)}
+        className="pressable shrink-0 rounded px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+      >
+        Not now
+      </button>
+    </div>
+  )
 }
 
-function limitText(offer: AccountLimitOffer, label: string): NoticeWords {
+function limitText(offer: AccountLimitOffer, label: string): string {
   const from = offer.from.email ?? offer.from.name
   const to = offer.to.email ?? offer.to.name
-  const room = offer.to.window ? `${to} is at ${Math.round(offer.to.window.usedPercent)}%` : `${to} has room`
-  if (offer.because === "refused") return { title: `${label} stopped the last turn on ${from}'s limits`, description: room }
+  const room = offer.to.window ? `${to} is at ${Math.round(offer.to.window.usedPercent)}%.` : `${to} has room.`
+  if (offer.because === "refused") return `${label} stopped the last turn on ${from}'s limits; ${room}`
   const window = offer.from.window
   return window
-    ? { title: `${from} is at ${Math.round(window.usedPercent)}% of its ${limitName(window)}`, description: room }
-    : { title: `${from} is near its ${label} limit`, description: room }
+    ? `${from} is at ${Math.round(window.usedPercent)}% of its ${limitName(window)}; ${room}`
+    : `${from} is near its ${label} limit; ${room}`
 }
 
 function limitName(window: UsageWindow): string {

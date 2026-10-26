@@ -6,8 +6,7 @@
 // the dark theme, anything else the light one. No host, account or harness is touched.
 import { createRoot } from "react-dom/client"
 import { UsageDetails } from "@/components/composer/context-meter"
-import { useAccountLimitNotice } from "@/components/composer/account-notice"
-import { ProducedNotice } from "@/components/composer/composer-notices"
+import { AccountLimitNotice } from "@/components/composer/account-notice"
 import { UsageSection } from "@/components/settings/usage-section"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { threadsStore } from "@/state/thread-store"
@@ -147,7 +146,7 @@ function Fixture() {
         </section>
         <section className="flex w-[760px] flex-col gap-2" data-fixture-limit>
           <span className="text-label text-faint">Above the composer, when the account in use nears its plan limit</span>
-          <ProducedNotice use={useAccountLimitNotice} />
+          <AccountLimitNotice />
         </section>
         <section className="w-[720px]" data-fixture-settings>
           <UsageSection />

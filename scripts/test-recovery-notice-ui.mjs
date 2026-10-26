@@ -36,7 +36,7 @@ async function checkWindow() {
   const evidence=resolve(process.env.MAKO_RECOVERY_EVIDENCE ?? 'docs/audits/2026-09-22/recovery-notice-ui')
   await mkdir(evidence,{recursive:true})
   const capture=async(name)=>{w.showInactive();await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(true))))');await evaluate("Promise.all(document.getAnimations().filter(a=>a.effect?.target instanceof Element && a.effect.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))).then(()=>true)");await writeFile(join(evidence,name),(await page.capturePage()).toPNG())}
-  const timer=setTimeout(()=>{console.error('Timed out');app.exit(1)},360000)
+  const timer=setTimeout(()=>app.exit(1),180000)
   try {
     await w.loadURL(process.env.MAKO_RECOVERY_URL+'scripts/live-workflow.html')
     await until("Boolean(document.querySelector('.composer-input'))")
@@ -73,7 +73,7 @@ async function checkWindow() {
     if (process.env.MAKO_RECOVERY_CONTROLS) {
       w.showInactive()
       const clickText=async(scope,text)=>{
-        await evaluate(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(scope)}+' button')].find(b=>b.textContent.trim()===${JSON.stringify(text)} && b.getClientRects().length);if(!b)throw Error('Missing recovery control: '+${JSON.stringify(text)});document.querySelector('[data-test-control]')?.removeAttribute('data-test-control');b.setAttribute('data-test-control','');b.scrollIntoView({block:'center'})})()`)
+        await evaluate(`(()=>{const b=[...document.querySelectorAll(${JSON.stringify(scope)}+' button')].find(b=>b.textContent.trim()===${JSON.stringify(text)} && b.getClientRects().length);if(!b)throw Error('Missing recovery control: '+${JSON.stringify(text)});document.querySelector('[data-test-control]')?.removeAttribute('data-test-control');b.setAttribute('data-test-control','')})()`)
         await click('[data-test-control]')
       }
       for(const harness of fixtureHarnesses) {
@@ -90,45 +90,43 @@ async function checkWindow() {
             {id:'quit-'+harness,status:'interrupted',text:'Cut short before it ran',attachments:[],interruption:{reason:'host-quit',at:1}}
           ],control:{...l.control,transfers:[],actions:[{input:{kind:'compact',id:'controls-action'},digest:'fixture',bindingId:s.activeKey,createdAt:1,state:{kind:'uncertain',reason:'Connection lost after dispatch'}}]}}}});
         })()`)
-        // The compaction's uncertainty is one line above the composer; its reason waits behind the line's info button.
-        await until("Boolean(document.querySelector('[data-action-recovery]'))")
+        await until("document.querySelector('[data-action-recovery] button[aria-expanded]')?.getAttribute('aria-expanded')==='false'")
         assert.equal(await evaluate("document.querySelector('[data-action-recovery]').textContent.includes('Connection lost after dispatch')"),false)
-        await evaluate(`document.querySelector('[data-action-recovery] [aria-label="More about this"]').click();true`)
-        await new Promise(r=>setTimeout(r,300))
-        await until("[...document.querySelectorAll('[data-slot=popover-content]')].some(n=>n.textContent.includes('Connection lost after dispatch'))")
+        await click('[data-action-recovery] button[aria-expanded]')
+        await until("document.querySelector('[data-action-recovery]').textContent.includes('Connection lost after dispatch')")
         if(harness==='claude') await capture('action-details-expanded.png')
-        for(const type of ['keyDown','keyUp'])await page.debugger.sendCommand('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
         await evaluate("import('/src/state/acp-state.ts').then(({acpStore})=>{const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,control:{...l.control,actions:[]}}}})})")
-        // None of these reached the transcript: each is a row after its last turn, quoting its words, newest last.
-        await until("document.querySelectorAll('[data-failure-row]').length===4")
-        assert.ok(await evaluate("document.querySelector('[data-failure-row^=\"rejected-\"]').textContent.includes('Review the rejected history')"))
-        assert.equal(await evaluate("document.querySelector('[data-failure-row^=\"rejected-\"] [data-recovery-primary]').textContent"),'Use in new thread')
-        assert.equal(await evaluate("[...document.querySelectorAll('[data-failure-row^=\"rejected-\"] button')].some(b=>/Send again|Send another copy/.test(b.textContent))"),false,'rejected transcript must not offer a retry on the same binding')
-        await clickText('[data-failure-row^="rejected-"]','Details')
-        await until("document.querySelector('[data-failure-row^=\"rejected-\"] [data-provider-error]')?.textContent.includes('encrypted_content was not issued')")
+        assert.equal(await evaluate("document.querySelectorAll('[data-recovery-notice]').length"),1)
+        assert.equal(await evaluate("document.querySelectorAll('[data-request-recovery]').length"),0)
+        await clickText('[data-recovery-notice]','Review message')
+        await until("document.querySelector('[data-request-recovery]')?.textContent.includes('Cut short before it ran')")
+        await clickText('[data-recovery-notice]','Earlier messages (3)')
+        await clickText('[data-recovery-notice]','Review the rejected history')
+        await until("document.querySelector('[data-request-recovery]')?.textContent.includes('encrypted_content was not issued')")
+        assert.ok(await evaluate("document.querySelector('[data-request-recovery]').textContent.includes('Use in new thread')"))
+        assert.equal(await evaluate("[...document.querySelectorAll('[data-request-recovery] button')].some(b=>/Send again|Send another copy/.test(b.textContent))"),false,'rejected transcript must not offer a retry on the same binding')
         if(harness==='claude') await capture('earlier-provider-failure-expanded.png')
-        assert.equal(await evaluate("document.querySelector('[data-failure-row^=\"failed-\"] [data-recovery-primary]').textContent"),'Send again','a message the agent never got is sent again, not copied')
-        assert.ok(await evaluate("document.querySelector('[data-failure-row^=\"unsent-\"]').textContent.includes('Do not lose a pre-dispatch stop')"))
+        await clickText('[data-recovery-notice]','Earlier messages (3)')
+        await clickText('[data-recovery-notice]','Failed input remains recoverable')
+        await until("document.querySelector('[data-request-recovery]')?.textContent.includes('Send again')")
+        await clickText('[data-recovery-notice]','Earlier messages (3)')
+        await clickText('[data-recovery-notice]','Do not lose a pre-dispatch stop')
+        await until("document.querySelector('[data-request-recovery]')?.textContent.includes('Do not lose a pre-dispatch stop')")
         await evaluate(`import('/src/state/acp-state.ts').then(({acpStore})=>{const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,requests:[{id:'compact-'+${JSON.stringify(harness)},status:'failed',failure:'context-exhausted',text:'Recover after compaction',attachments:[]}],control:{...l.control,actions:[]}}}})})`)
-        const primary="document.querySelector('[data-failure-row^=\"compact-\"] [data-recovery-primary]')"
-        // A harness that compacts on Mako's request offers Compact and retry; one that can't, or compacts on its own, a new thread.
-        const compacts=await evaluate(`import('/src/state/thread-store.ts').then(({threadsStore})=>threadsStore.get().descriptors.find(d=>d.provider===${JSON.stringify(harness)})?.capabilities.compaction.state==='implemented')`)
-        if(!compacts) {
-          await until(`${primary}?.textContent==='Use in new thread'`)
-          continue
-        }
-        await until(`${primary}?.textContent==='Compact and retry' && !${primary}.disabled`)
+        await clickText('[data-recovery-notice]','Review message')
+        await until("[...document.querySelectorAll('[data-request-recovery] button')].some(b=>b.textContent.includes('Compact conversation') && !b.disabled)")
         await evaluate("import('/src/state/acp-state.ts').then(({acpStore})=>{const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,control:{...l.control,actions:[{input:{kind:'compact',id:'controls-action',requestId:l.requests[0].id},digest:'fixture',bindingId:s.activeKey,createdAt:1,state:{kind:'accepted'}}]}}}})})")
-        await until(`${primary}?.disabled`)
+        await until("[...document.querySelectorAll('[data-request-recovery] button')].some(b=>b.textContent.includes('Compact conversation') && b.disabled)")
         await evaluate("import('/src/state/acp-state.ts').then(({acpStore})=>{const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,control:{...l.control,actions:l.control.actions.map(a=>({...a,state:{kind:'completed'}}))}}}})})")
-        await until(`${primary}?.textContent==='Send another copy'`)
+        await until("document.querySelector('[data-request-recovery]')?.textContent.includes('Compaction completed. You can send')")
         if(harness==='claude') await capture('compaction-completed-expanded.png')
-        await evaluate(`(async()=>{const {acpStore}=await import('/src/state/acp-state.ts');const {threadsStore}=await import('/src/state/thread-store.ts');const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,control:{...l.control,actions:[]}}}});threadsStore.set({descriptors:threadsStore.get().descriptors.map(d=>d.provider===${JSON.stringify(harness)}?{...d,capabilities:{...d.capabilities,compaction:{state:'absent',by:'harness',reason:'Fixture cannot compact'}}}:d)});})()`)
-        await until(`${primary}?.textContent==='Use in new thread'`)
+        await evaluate(`(async()=>{const {acpStore}=await import('/src/state/acp-state.ts');const {threadsStore}=await import('/src/state/thread-store.ts');const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,control:{...l.control,actions:[]}}}});threadsStore.set({descriptors:threadsStore.get().descriptors.map(d=>d.provider===${JSON.stringify(harness)}?{...d,recovery:{compaction:{kind:'unavailable',reason:'Fixture cannot compact'}}}:d)});})()`)
+        await until("document.querySelector('[data-request-recovery]')?.textContent.includes('Fixture cannot compact')")
+        assert.ok(await evaluate("document.querySelector('[data-request-recovery]').textContent.includes('Use in new thread')"))
         assert.deepEqual(await evaluate('window.__recoveryMutations'),[],'opening recovery details must not submit work')
         await capture(harness+'-unsupported-compaction.png')
       }
-      console.log('PASS: all-six failure rows keep action reasons, messages that never reached the transcript, native error text, retry eligibility and compaction state; viewing never submits work')
+      console.log('PASS: all-six recovery disclosures retain action reasons, earlier saved messages, native error text, retry eligibility and compaction state; viewing never submits work')
       console.log('Visual evidence: '+evidence)
       return
     }
@@ -417,64 +415,60 @@ async function checkWindow() {
       return
     }
     if (process.env.MAKO_RECOVERY_DELIVERY) {
-      const update = async (kind, connected = false, status = 'failed', sessionStatus = 'failed', failure = 'network') => evaluate(`(async()=>{
+      const update = async (kind, connected = false, status = 'failed', sessionStatus = 'failed') => evaluate(`(async()=>{
         const {acpStore}=await import('/src/state/acp-state.ts');
         const s=acpStore.get(),live=s.conversations[s.activeKey];
         const evidence=${JSON.stringify(kind)};
         acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...live,
           session:{...live.session,status:${JSON.stringify(sessionStatus)},connection:${JSON.stringify(connected ? 'connected' : 'disconnected')}},
-          requests:live.requests.map((request,index)=> index===live.requests.length-1 ? {...request,status:${JSON.stringify(status)},failure:${JSON.stringify(failure)},error:'Connection ended.',
+          requests:live.requests.map((request,index)=> index===live.requests.length-1 ? {...request,status:${JSON.stringify(status)},failure:'network',error:'Connection ended.',
             nativeDelivery:evidence ? {attemptId:'11111111-1111-4111-8111-111111111111',bindingId:'fixture',ownerEpoch:'fixture',evidence:evidence==='accepted'?{kind:evidence,source:'native-response'}:evidence==='not-accepted'?{kind:evidence,source:'preflight',reason:'Not connected'}:{kind:evidence,reason:'Lost response'}} : undefined} : request)
         }}});return true})()`)
-      const button = "document.querySelector('[data-failure-row=\"newest\"] [data-recovery-primary]')"
-      const row = "document.querySelector('[data-failure-row=\"newest\"]')"
+      const button = "[...document.querySelectorAll('[data-request-recovery] button')].find(n=>/Send again|Send another copy/.test(n.textContent))"
       for (const harness of fixtureHarnesses) {
-        await seed(harness,'newest')
+        await seed(harness,'delivery-'+harness)
         await update(undefined)
         if(harness==='codex') await capture('compact.png')
-        await evaluate(`[...${row}.querySelectorAll('button')].find(n=>n.textContent.startsWith('Details')).setAttribute('data-test-details','')`)
-        await click('[data-test-details]')
+        await click('[data-recovery-notice] button[aria-expanded]')
         await until("Boolean(document.querySelector('[data-delivery-evidence=unknown]'))")
-        // A send reopens a disconnected session, as any message does: the repeat is offered.
         assert.equal(await evaluate(`${button}.textContent`),'Send another copy')
+        assert.equal(await evaluate(`${button}.disabled`),true,'Disconnected session cannot resend')
         if(harness==='codex') await capture('legacy-unconfirmed.png')
         // The details stay open while a late native receipt changes the request.
         await update('accepted')
         await until("Boolean(document.querySelector('[data-delivery-evidence=accepted]'))")
         assert.ok(await evaluate("document.querySelector('[data-delivery-evidence]').textContent.includes('agent received')"))
-        // It got the message and only the connection dropped: the row goes on with the turn, a copy waits in its menu.
-        await until(`${button}.textContent==='Continue turn'`)
+        assert.equal(await evaluate(`${button}.textContent`),'Send another copy')
         await capture(harness+'-accepted.png')
-        await update('accepted',true,'failed','running','provider-unavailable')
-        await until(`${button}.textContent==='Send another copy'`)
+        await update('accepted',true,'failed','running')
         assert.equal(await evaluate(`${button}.disabled`),true,'Active session cannot resend')
         await update('not-accepted')
         await until("Boolean(document.querySelector('[data-delivery-evidence=not-accepted]'))")
         assert.equal(await evaluate(`${button}.textContent`),'Send again')
         if(harness==='codex') await capture('preflight-not-sent.png')
         await update('uncertain',false,'uncertain')
-        await until(`${row}.textContent.includes('Message delivery is unconfirmed')`)
-        assert.equal(await evaluate(`${button}.textContent`),'Restore to composer','an unconfirmed message offers no repeat')
+        await until("document.querySelector('[data-recovery-notice]').textContent.includes('Message delivery is unconfirmed')")
+        assert.equal(await evaluate(`Boolean(${button})`),false)
         await update('accepted',false,'uncertain')
-        await until(`${row}.textContent.includes('Message outcome is unconfirmed')`)
+        await until("document.querySelector('[data-recovery-notice]').textContent.includes('Message outcome is unconfirmed')")
+        await click('[aria-label="Dismiss error"]')
       }
       await seed('codex','explicit-copy')
-      await update('accepted',true,'failed','ready','provider-unavailable')
-      const copy = "document.querySelector('[data-failure-row=\"explicit-copy\"] [data-recovery-primary]')"
-      await until(`${copy}?.disabled===false`)
+      await update('accepted',true)
+      await click('[data-recovery-notice] button[aria-expanded]')
+      await until(`${button}?.disabled===false`)
       await evaluate("window.__recoverySends=[];window.mako.livePrompt=async(...args)=>{window.__recoverySends.push(args)};true")
-      // The empty composer offers the same send, with the same words.
-      assert.equal(await evaluate("document.querySelector('[data-composer-resume]')?.textContent"),'Send another copy')
       await capture('explicit-copy-ready.png')
-      await evaluate(`${copy}.setAttribute('data-test-resend','')`)
+      await evaluate(`${button}.setAttribute('data-test-resend','')`)
       await click('[data-test-resend]')
       await until("window.__recoverySends.length===1")
       const calls=await evaluate('window.__recoverySends')
       assert.notEqual(calls[0][1],'explicit-copy','Deliberate resend uses a new operation ID')
       assert.equal(calls[0][2],'Review my changes and help resolve the merge.')
       assert.equal(await evaluate("(async()=>{const {acpStore}=await import('/src/state/acp-state.ts');const s=acpStore.get();return s.conversations[s.activeKey].requests.find(r=>r.id==='explicit-copy').nativeDelivery.evidence.kind})()"),'accepted')
+      await until("document.querySelector('[data-test-resend]').disabled")
       await capture('explicit-copy-sent.png')
-      await evaluate("document.querySelector('aside[aria-label=\"Agents companion\"]')?.style.setProperty('display','none')")
+      await evaluate("document.querySelector('aside[aria-label=\"Agents companion\"]').style.display='none'")
       w.setSize(430,800)
       await capture('narrow.png')
       console.log('PASS: all-six receipt/refusal/legacy/uncertain presentation, late receipt while expanded, disconnected guard, explicit new-operation send and original receipt retained')
@@ -482,36 +476,40 @@ async function checkWindow() {
       return
     }
     await seed()
-    // Both failed before their turns reached the transcript: each is a row after its last turn, and on screen, so no line above the composer.
-    await until("document.querySelectorAll('[data-failure-row]').length===2")
-    await until("!document.querySelector('[data-recovery-notice]')")
-    assert.ok(await evaluate("document.querySelector('[data-failure-row=\"newest\"]').textContent.includes('Model temporarily unavailable')"))
-    assert.equal(await evaluate("document.querySelector('[data-failure-row=\"newest\"]').dataset.failureTone"),'caution','a capacity limit is a wait, said in the warning tone')
-    assert.equal(await evaluate("document.querySelector('[data-failure-row=\"newest\"]').textContent.includes('Selected model is at capacity')"),false,'the provider\'s words wait behind Details')
+    await until("document.querySelectorAll('[data-recovery-notice]').length===1")
+    assert.equal(await evaluate("document.querySelectorAll('[data-request-recovery]').length"),0)
     await capture('compact.png')
-    await evaluate("[...document.querySelector('[data-failure-row=\"newest\"]').querySelectorAll('button')].find(n=>n.textContent.startsWith('Details')).setAttribute('data-test-details','')")
-    await click('[data-test-details]')
-    await until("document.querySelector('[data-failure-row=\"newest\"] [data-provider-error]')?.textContent.includes('Selected model is at capacity')")
+    await click('[data-recovery-notice] button[aria-expanded]')
+    await until("Boolean(document.querySelector('[data-request-recovery=\"newest\"]'))")
     await capture('expanded.png')
-    // The overflow holds the rest, the saved messages list keeps every one.
-    await click('[data-failure-row="newest"] [aria-label="More ways to recover this message"]')
-    await until("[...document.querySelectorAll('[role=menuitem]')].some(n=>n.textContent==='Restore to composer')")
-    for(const type of ['keyDown','keyUp'])await page.debugger.sendCommand('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+    await click('[aria-label="Dismiss error"]')
+    await until("!document.querySelector('[data-recovery-notice]')")
+    await seed()
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-recovery-notice]'))"),false)
+    await w.loadURL(process.env.MAKO_RECOVERY_URL+'scripts/live-workflow.html')
+    await until("Boolean(document.querySelector('.composer-input'))")
+    await seed()
+    await new Promise(r=>setTimeout(r,150))
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-recovery-notice]'))"),false)
+    await capture('dismissed-after-reload.png')
+    assert.equal(await evaluate("(async()=>{const {acpStore}=await import('/src/state/acp-state.ts');const s=acpStore.get();return s.conversations[s.activeKey].requests.length})()"),2)
     await click('[aria-label="Conversation actions"]')
     await until("[...document.querySelectorAll('button[aria-expanded]')].some(n=>n.textContent.includes('Saved messages (2)'))")
-    for(const type of ['keyDown','keyUp'])await page.debugger.sendCommand('Input.dispatchKeyEvent',{type,key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+    await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
+    await page.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27})
     for(const harness of fixtureHarnesses) {
       await seed(harness,'new-'+harness)
-      await until(`Boolean(document.querySelector('[data-failure-row="new-${harness}"]'))`)
+      await until("Boolean(document.querySelector('[data-recovery-notice]'))")
+      assert.equal(await evaluate("document.querySelectorAll('[data-recovery-notice]').length"),1)
     }
-    await evaluate("document.querySelector('aside[aria-label=\"Agents companion\"]')?.style.setProperty('display','none')")
+    await evaluate("document.querySelector('aside[aria-label=\"Agents companion\"]').style.display='none'")
     await w.setSize(430,800)
     await new Promise(r=>setTimeout(r,150))
+    assert.ok(await evaluate("document.querySelector('[data-recovery-notice]').getBoundingClientRect().width > 350"))
     await capture('narrow.png')
-    // A later answer: the row says its message went through after all, and offers nothing twice.
     await evaluate("(async()=>{const {acpStore}=await import('/src/state/acp-state.ts');const s=acpStore.get(),l=s.conversations[s.activeKey];acpStore.set({conversations:{...s.conversations,[s.activeKey]:{...l,requests:[...l.requests,{id:'resolved',status:'completed',text:'A later successful turn',attachments:[]}]}}});return true})()")
-    await until("document.querySelectorAll('[data-failure-row]').length===0")
-    console.log('PASS: failure rows where the messages failed, warning tone for capacity, details on demand, overflow and saved messages, all-six provider fixtures, narrow screenshot')
+    await until("!document.querySelector('[data-recovery-notice]')")
+    console.log('PASS: one compact notice; details; persistent dismissal after reload; new failures visible; all-six provider fixtures; narrow screenshot')
     console.log('Visual evidence: '+evidence)
   } finally {clearTimeout(timer);w.destroy();app.quit()}
 }

@@ -189,8 +189,6 @@ export interface PendingPrompt {
   status?: LiveRequest["status"]
   /** Set on a held message that waits for its session to be signed in again and resumed. */
   signIn?: LiveRequest["signIn"]
-  /** Set on a held message that sends itself at a time: a usage limit's reset. */
-  wake?: LiveRequest["wake"]
   displayText?: string
   /**
    * The host dropped under this send and did not come back within the
@@ -232,29 +230,6 @@ export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "histo
       (request.status === "uncertain" && !(request.interruption && visible.has(request.id))) ||
       (request.status === "interrupted" && !visible.has(request.id))
   )
-}
-
-/**
- * Where each recoverable request is said. One whose turn the transcript
- * holds ends that turn with its failure row (`onTurns`, by request id); a
- * stopped or crashed turn there says so in its own footer instead. One that
- * never reached the transcript (refused before it was sent) is drawn after
- * the last turn (`apart`), but only since the last answer: older ones are in
- * the saved messages list.
- */
-export function recoveriesByPlace(input: Pick<DeliveryInput, "blocks" | "history" | "requests">) {
-  const visible = transcribedRequests(input)
-  const requests = input.requests ?? []
-  const answered = requests.findLastIndex((request) => request.status === "completed")
-  const recent = new Set(requests.slice(answered + 1).map((request) => request.id))
-  const onTurns = new Map<string, LiveRequest>()
-  const apart: LiveRequest[] = []
-  for (const request of recoverableRequests(input)) {
-    if (!visible.has(request.id)) {
-      if (recent.has(request.id)) apart.push(request)
-    } else if (request.status === "failed" || (request.status === "uncertain" && !request.interruption)) onTurns.set(request.id, request)
-  }
-  return { onTurns, apart }
 }
 
 /**
