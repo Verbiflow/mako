@@ -5,7 +5,7 @@ import type { ToolEffects } from "@mako/sessions/tool-effects"
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, readdirSync, realpathSync, renameSync, rmSync, statSync } from "node:fs"
 import { homedir, hostname, tmpdir } from "node:os"
-import { join, sep } from "node:path"
+import { join, resolve, sep } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { acquireHostLock } from "../base/host-lock.js"
 import type { HostJobs } from "../base/host-jobs.js"
@@ -678,7 +678,8 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       adoptJournal(folder, [
         ...otherFormats(deps.userRoot, folder).map((other) => other.journal),
         join(deps.dataRoot, "attribution", "journal.sqlite"),
-        ...(deps.defaultDataRoot ? [join(deps.defaultDataRoot, "attribution", "journal.sqlite")] : []),
+        // The installed app's own, only for a host of this user's: an isolated one (its user root is its data root) never reads the person's.
+        ...(deps.defaultDataRoot && resolve(deps.userRoot) !== resolve(deps.dataRoot) ? [join(deps.defaultDataRoot, "attribution", "journal.sqlite")] : []),
       ])
       return openLocal(folder)
     },

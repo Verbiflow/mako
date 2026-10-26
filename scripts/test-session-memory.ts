@@ -501,6 +501,8 @@ hostDataRoots()
   // --- Holds: one live host per native session -------------------------------
   installed.hold("cursor", "agent-1", "conv-a")
   assert.equal(installed.heldBy("cursor", "agent-1"), null, "a host's own hold is not a refusal")
+  assert.equal(installed.heldHere("cursor", "agent-1"), true, "the host that holds it runs it")
+  assert.equal(dev.heldHere("cursor", "agent-1"), false, "another host's hold isn't this one's")
   const seen = dev.heldBy("cursor", "agent-1")
   assert.equal(seen?.hostLabel, "the installed Mako app")
   assert.equal(seen?.conversationId, "conv-a")

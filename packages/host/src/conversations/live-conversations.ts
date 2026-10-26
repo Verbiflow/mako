@@ -645,6 +645,15 @@ export class LiveConversations {
   }
 
   /**
+   * The attribution journal opened: each turn in memory that ended while it
+   * wasn't open, or whose count it held, is counted now, as when its
+   * conversation loads.
+   */
+  journalOpened(): void {
+    for (const resident of this.records.values()) this.counts.loaded(resident)
+  }
+
+  /**
    * Releases every held request whose time has come, in conversations loaded
    * or not; run by the host's `held-wakes` job. A released request goes as a
    * Resume would: queued, and the session reopened when its process went.

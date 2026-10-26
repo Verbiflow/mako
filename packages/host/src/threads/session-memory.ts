@@ -494,6 +494,12 @@ export class SessionMemory {
     return row !== null && this.ownHold(row) && row.conversation_id === conversationId
   }
 
+  /** Whether this host holds the session: one it runs, whose harness process is Mako's own and not another app's. */
+  heldHere(provider: string, nativeId: string): boolean {
+    const row = this.readHold(provider, nativeId)
+    return row !== null && this.ownHold(row)
+  }
+
   heldBy(provider: string, nativeId: string): SessionHold | null {
     const row = this.readHold(provider, nativeId)
     if (!row) return null

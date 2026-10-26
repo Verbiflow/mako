@@ -691,6 +691,66 @@ test("a root idle past retention is let go, never one a Thread worked in or anyo
   await w.tracker.close()
 })
 
+test("the journal opens before its roots catch up, and a turn while one catches up is still heard and named", async () => {
+  const project = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-resume-")))
+  const repo = join(project, "repo")
+  mkdirSync(repo)
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+  git("init", "-q", "-b", "main")
+  git("config", "user.email", "test@example.com")
+  git("config", "user.name", "Test")
+  writeFileSync(join(repo, "a.ts"), "export const a = 1\n")
+  git("add", "-A")
+  git("commit", "-q", "-m", "base")
+  const clock = new FakeClock(Date.now())
+  const storage = mkdtempSync(join(tmpdir(), "mako-attribution-resume-journal-"))
+  const options = { repository: async (path: string) => gitRepository(runner, path) }
+  const first = await LaptopTracker.open({ fs: nodeFileSystem(), events: new FakeEventSource(), clock, storage, device: "regression" }, options)
+  await first.track({ id: "repo", path: repo, kind: "workspace" })
+  await first.close()
+  // The next host reads the system's history slowly, as on a checkout of a hundred thousand files.
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  class SlowHistory extends FakeEventSource {
+    override async since(...args: Parameters<FakeEventSource["since"]>) {
+      await held
+      return super.since(...args)
+    }
+  }
+  const events = new SlowHistory()
+  const opening = LaptopTracker.open({ fs: nodeFileSystem(), events, clock, storage, device: "regression" }, options)
+  const tracker = await Promise.race([opening, new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 2_000))])
+  assert.ok(tracker, "open doesn't wait for a root to catch up")
+  // A turn edits the file while its root still catches up; a second track of the root waits for the resume rather than watching twice.
+  const thread = { thread: "T1", session: "T1-session", checkout: project, cwd: project }
+  clock.advance(1_000)
+  tracker.activity({ kind: "turn", id: "t1", edge: "start", at: clock.now(), ...thread })
+  const started = clock.now()
+  tracker.activity({ kind: "call", id: "c1", edge: "start", at: started, ...thread })
+  writeFileSync(join(repo, "a.ts"), "export const a = 2\n")
+  utimesSync(join(repo, "a.ts"), clock.now() / 1000, clock.now() / 1000)
+  events.changed(join(repo, "a.ts"))
+  clock.advance(100)
+  tracker.reported({ thread: "T1", session: "T1-session", call: "c1", status: "completed", startedAt: started, endedAt: clock.now(), checkout: project, effects: [{ kind: "modify", path: join(repo, "a.ts"), edits: [{ old: "export const a = 1\n", new: "export const a = 2\n" }] }] })
+  tracker.activity({ kind: "call", id: "c1", edge: "end", at: clock.now(), ...thread })
+  tracker.activity({ kind: "turn", id: "t1", edge: "end", at: clock.now(), ...thread })
+  const tracked = tracker.track({ id: "repo", path: repo, kind: "workspace" })
+  let settled = false
+  void tracker.settled().then(() => { settled = true })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.equal(settled, false, "settled waits for the root to catch up")
+  release()
+  await tracked
+  await tracker.settled()
+  const changes = tracker.changes(0).filter((entry) => entry.path === "a.ts")
+  assert.equal(changes.length, 1, "journaled once")
+  // Caught up from the history, the change is the call's that ran when it landed.
+  assert.match(certainty(changes[0]!.author), /^(exact|window):T1$/, "and given to the Thread whose call made it")
+  await tracker.close()
+  rmSync(project, { recursive: true, force: true })
+  rmSync(storage, { recursive: true, force: true })
+})
+
 test("lines there before tracking are given to the session whose record wrote them, and only those", async () => {
   // A session outside Mako (a terminal Claude Code, since imported) wrote a
   // function into the file; the person typed a note into it too. Mako starts

@@ -22,6 +22,7 @@ function derive(overrides: Partial<ActivityInputs>): Map<string, ExternalThreadA
     probes: [],
     writes: new Map(),
     heldElsewhere: () => false,
+    heldHere: () => false,
     previous: new Map(),
     now,
     ...overrides,
@@ -70,6 +71,14 @@ const held = derive({
 assert.equal(held.get(devin.path)?.status, "active")
 assert.equal(held.get(devin.path)?.evidence, "writes")
 assert.equal(held.get(devin.path)?.provider, "devin")
+
+// A session this host runs is nothing done outside it, though its harness process has the store open and wrote it moments ago.
+const ours = derive({
+  probes: [["claude", [{ nativeId: "c-1", status: "open" }]]],
+  writes: new Map([[claude.path, now - 100]]),
+  heldHere: (ref) => ref.nativeId === "c-1",
+})
+assert.equal(ours.size, 0)
 
 // A written store nobody holds or has open says nothing: the renderer's
 // "Updated" covers that, and it must not become a working mark.

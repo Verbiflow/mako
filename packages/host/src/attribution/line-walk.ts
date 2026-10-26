@@ -72,8 +72,8 @@ export function walkLines<T>(chain: readonly StoredEntry[], read: (ref: ContentR
         index++
         removed++
       }
-      // Lines taken out before stay ahead of what takes their place.
-      while (item < lines.length && lines[item]!.gone) out.push(lines[item++]!)
+      // What takes their place stands right where they stood: a line taken out
+      // before, just after them, stood before the next line and stays there.
       for (let added = 0; added < hunk.added; added++) out.push({ text: next[hunk.b + added]!, by, seq })
     }
     while (item < lines.length) out.push(lines[item++]!)
