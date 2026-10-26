@@ -100,6 +100,13 @@ export const INTERRUPTION_REASONS = [
    * person continues it once Mako can save again, never Mako on its own.
    */
   "not-saved",
+  /**
+   * The conversation's goal spent its token budget mid-turn, so Mako stopped
+   * the turn there, as the goal asked. An outcome the person chose when they
+   * set the budget, not a fault; the goal is set aside and goes on only when
+   * the person sets it again with more.
+   */
+  "goal-budget",
 ] as const
 export type InterruptionReason = (typeof INTERRUPTION_REASONS)[number]
 
@@ -116,10 +123,10 @@ export type SavedReason = (typeof SAVED_REASONS)[number]
  * it knows, chosen by the build that writes it. The journal saves that one as
  * `reason` and the exact one as `exactReason`, which older builds pass over
  * and newer ones read; a reason added later must say its older reading here.
- * `not-saved` reads as the person's Stop, which is how every build before it
- * recorded this stop.
+ * `not-saved` and `goal-budget` read as the person's Stop, which is how every
+ * build before them recorded these stops.
  */
-export const OLDER_READING = { "not-saved": "stopped" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
+export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
 
 function isSavedReason(reason: InterruptionReason): reason is SavedReason {
   return SAVED_REASONS.some((saved) => saved === reason)

@@ -2799,6 +2799,12 @@ which writes `live Mako stops the provider's turn` to the host log with `why`:
 the error: the conversation couldn't be saved). Codex's engine adds `codex
 interrupt the turn` with the turn id Codex's own log names. A harness turn
 that ends interrupted with no such line was stopped by the harness itself.
+The turn a Stop ends reads as whose it was (`STOPPED_FOR`): only the
+person's settles as `stopped`; a handoff's as `handed-off`, a conversation
+Mako can't save as `not-saved`, and a goal at its token budget as
+`goal-budget`, which the footer says as quietly as a Stop, with the goal's
+mark, offering nothing, since going on would spend past the budget
+(`endedAsChosen`).
 A file an agent names that Mako can't read is an `unavailable` attachment
 (`LiveAssets`), never a failure to save, which would stop the turn: a Codex
 code cell's `view_image` names its image by a `file://` URL in the rollout
@@ -2834,8 +2840,8 @@ refuse the whole conversation for any other (a `ZodError` on open). So
 one `OLDER_READING` names for it, with the exact one in `exactReason`, which
 older builds pass over and this build reads back (`requestRow`, `controlRow`,
 `readStoredReason`). A reason added later must name its older reading, or the
-contract doesn't compile; `not-saved` reads as `stopped`, which is how every
-build before it recorded that stop. The window reads a reason it doesn't know
+contract doesn't compile; `not-saved` and `goal-budget` read as `stopped`,
+which is how every build before them recorded those stops. The window reads a reason it doesn't know
 (a newer host's, relayed from the cloud) as "Interrupted" (`turnStopLabel`).
 
 The fourth reason, `connection-lost`, is a turn the agent ended on its own

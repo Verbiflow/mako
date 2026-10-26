@@ -25,6 +25,15 @@ export interface TurnStop {
 }
 
 /**
+ * A turn that ended where the person chose: their own Stop, or their goal's
+ * token budget. It's said quietly and nothing offers to continue it; a goal
+ * at its budget goes on only when it's set again with more.
+ */
+export function endedAsChosen(reason: InterruptionReason): boolean {
+  return reason === "stopped" || reason === "goal-budget"
+}
+
+/**
  * The requests whose turn stopped before the provider finished, keyed by
  * request id. A user's Stop is plain `stopped`; a host exit carries its
  * recorded reason. Only the newest such turn can be continued, and only
@@ -45,7 +54,7 @@ export function turnStops(requests: readonly LiveRequest[], running: boolean): M
     const automatic = request.interruption?.autoContinue !== undefined
     const stop: TurnStop = {
       reason,
-      continuable: !running && !automatic && !request.signIn && reason !== "stopped" && request === newest,
+      continuable: !running && !automatic && !request.signIn && !endedAsChosen(reason) && request === newest,
       automatic,
     }
     const stopped = request.interruption?.stopped
@@ -149,6 +158,7 @@ const TURN_STOP_LABELS = {
   "signed-out": (provider) => `${provider} signed out`,
   "handed-off": () => "Paused to move to the cloud",
   "not-saved": () => "Stopped when Mako couldn't save",
+  "goal-budget": () => "Stopped at the goal's token budget",
 } satisfies Record<InterruptionReason, (provider: string) => string>
 
 /**

@@ -4,6 +4,7 @@ import { priceEstimate } from "../usage/index.js"
 import type { InterruptionReason, LiveRequest, LiveSnapshot, SpentThrough, UsageMark } from "../contracts/live-conversations.js"
 import { advancePromptDelivery } from "../contracts/prompt-delivery.js"
 import { classifyProviderFailure } from "../contracts/provider-failure.js"
+import type { StoppedFor } from "./live-runtime.js"
 import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LiveSessionState, type LiveSessionUsage } from "../contracts/providers-acp.js"
 
 /**
@@ -13,12 +14,12 @@ import { CONNECTION_LOST_STOP, RETRIES_EXHAUSTED_STOP, type LiveSessionState, ty
  * as, so the renderer can say whether sending again is worth anything
  * without reading the text itself. `ended` says the user stopped this turn
  * or closed the conversation: unless the turn finished first, it settles
- * stopped however the driver reported the end, for `reason`: the user's
- * Stop, a handoff, or a conversation Mako couldn't save. `work`: the
+ * stopped however the driver reported the end, for `reason`: whose Stop it
+ * was (`STOPPED_FOR`). `work`: the
  * background work a handoff stopped with the turn, which its interruption
  * keeps.
  */
-export function settleRequest(request: LiveRequest, session: LiveSessionState, ended: boolean, reason: "stopped" | "handed-off" | "not-saved" = "stopped", work?: string[]): LiveRequest {
+export function settleRequest(request: LiveRequest, session: LiveSessionState, ended: boolean, reason: StoppedFor = "stopped", work?: string[]): LiveRequest {
   const stopped = (ended && session.status !== "ready") || /cancel|interrupt/i.test(session.lastStop ?? "")
   const dropped = stopped ? undefined : continuableInterruption(request, session)
   const status = stopped || dropped ? "interrupted" : session.status === "ready" ? "completed" : "failed"

@@ -66,7 +66,7 @@ import { LiveRecords } from "./live-records.js"
 import { LiveRelocations } from "./live-relocations.js"
 import { LiveRestarts } from "./live-restarts.js"
 import { ContextBundles } from "./live-context.js"
-import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident } from "./live-runtime.js"
+import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { LiveTransfers } from "./live-transfers.js"
@@ -1022,11 +1022,12 @@ export class LiveConversations {
   }
 
   /**
-   * Stops the running request. `handed-off`: Mako stops it to hand the Thread to another machine, which continues it
-   * (`continueTurn`); its queued messages are held, to go with it, and the interruption keeps the background work
-   * that stops with it (`stopped`). `why`: who asked, as the host log says it (`stopProvider`).
+   * Stops the running request. `why`: who asked, as the host log says it (`stopProvider`) and the turn reads
+   * (`STOPPED_FOR`): only the person's Stop settles as `stopped`. `handed-off`: Mako stops it to hand the Thread to
+   * another machine, which continues it (`continueTurn`); its queued messages are held, to go with it, and the
+   * interruption keeps the background work that stops with it (`stopped`).
    */
-  stopRequest(id: string, requestId: string, reason: "stopped" | "handed-off" = "stopped", stopped: string[] = [], why: ProviderStop = reason === "handed-off" ? "handed-off" : "person"): Promise<boolean> {
+  stopRequest(id: string, requestId: string, why: ProviderStop = "person", stopped: string[] = []): Promise<boolean> {
     const previous = this.stops.get(id)
     if (previous?.requestId === requestId) return previous.result
     if (this.activeRequest(id) !== requestId) return Promise.resolve(false)
@@ -1038,7 +1039,7 @@ export class LiveConversations {
     // A turn Mako already stopped because it couldn't save it stays Mako's, whoever presses Stop after.
     if (resident.stopping !== requestId || resident.stoppingFor !== "not-saved") {
       resident.stopping = requestId
-      resident.stoppingFor = reason
+      resident.stoppingFor = STOPPED_FOR[why]
       resident.stoppingWork = stopped.length ? stopped : undefined
     }
     const result = this.cancelRequest(id, requestId, why).then(async () => { if (opening) await this.close(id); return true }).catch((error) => { this.stops.delete(id); throw error })
@@ -1169,7 +1170,7 @@ export class LiveConversations {
 
   private async cancelTurn(id: string, why: ProviderStop): Promise<void> {
     const requestId = this.activeRequest(id)
-    if (requestId) { await this.stopRequest(id, requestId, why === "handed-off" ? "handed-off" : "stopped", [], why); return }
+    if (requestId) { await this.stopRequest(id, requestId, why); return }
     const resident = this.records.require(id)
     // Stop on a request whose process has gone puts it away: there is no turn left to stop.
     if (resident.snapshot.permissions.some((permission) => permission.gone)) {
@@ -1377,7 +1378,7 @@ export class LiveConversations {
     const requestId = resident.snapshot.requests.find((request) => request.status === "dispatching")?.id
     if (resident.driver && requestId && resident.stopping !== requestId) {
       resident.stopping = requestId
-      resident.stoppingFor = "not-saved"
+      resident.stoppingFor = STOPPED_FOR["not-saved"]
       resident.stoppingError = error
       resident.stoppingWork = undefined
     }

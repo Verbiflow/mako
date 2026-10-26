@@ -9,6 +9,7 @@ import type { PromptAttachment, LiveSessionState } from "../contracts/providers-
 import type {
   AccountSwitchWait,
   LiveBatch,
+  InterruptionReason,
   LiveDriverEvent,
   LiveRequest,
   LiveSnapshot,
@@ -60,6 +61,15 @@ export interface ProviderConnection {
  * machine, a goal at its token budget, or a conversation Mako can't save.
  */
 export type ProviderStop = "person" | "handed-off" | "goal-budget" | "not-saved"
+
+/** How each Stop Mako sends ends the turn it stops: only the person's own reads as `stopped`. */
+export const STOPPED_FOR = {
+  person: "stopped",
+  "handed-off": "handed-off",
+  "goal-budget": "goal-budget",
+  "not-saved": "not-saved",
+} as const satisfies Record<ProviderStop, InterruptionReason>
+export type StoppedFor = (typeof STOPPED_FOR)[ProviderStop]
 
 export interface Resident {
   closing?: boolean
@@ -135,10 +145,10 @@ export interface Resident {
    */
   stopping?: string
   /**
-   * Why `stopping` was stopped: the user's Stop, Mako handing the Thread to another machine, or Mako stopping a turn
-   * it couldn't save (`stoppingError` says what failed).
+   * Why `stopping` was stopped (`STOPPED_FOR`): the user's Stop, Mako handing the Thread to another machine, a goal at
+   * its token budget, or a turn Mako couldn't save (`stoppingError` says what failed).
    */
-  stoppingFor?: "stopped" | "handed-off" | "not-saved"
+  stoppingFor?: StoppedFor
   stoppingError?: string
   /** The background work a handoff stops with the turn (`Interruption.stopped`), until the turn settles. */
   stoppingWork?: string[]

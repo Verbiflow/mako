@@ -126,6 +126,10 @@ try {
     const unsavedAccount = pendingInterruption([unsaved, next], "n", at + 60_000)!.account
     assert.match(unsavedAccount, /^Your previous turn was cut short at 22:25:35: Mako couldn't save the conversation, so it stopped you\. Work you did before then is in place\./)
     assert.match(unsavedAccount, /the user did not stop it/)
+    const budget = { ...interrupted, error: undefined, interruption: { ...interrupted.interruption!, reason: "goal-budget" as const } }
+    const budgetAccount = pendingInterruption([budget, next], "n", at + 60_000)!.account
+    assert.match(budgetAccount, /^Your previous turn was cut short at 22:25:35: the goal reached its token budget, so Mako stopped you\./)
+    assert.match(budgetAccount, /the user did not stop it/)
     const quit = { ...interrupted, interruption: { ...interrupted.interruption!, reason: "host-quit" as const } }
     assert.doesNotMatch(pendingInterruption([quit, next], "n")!.account, /did not stop it/, "quitting Mako was the user's doing")
   }

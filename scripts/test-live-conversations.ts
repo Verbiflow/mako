@@ -26,6 +26,7 @@ import { projectLive } from "../src/state/live-projection.js"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
 import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { OlderRequestSchema } from "./fixtures/older-request-schema.ts"
 
 const gitRunner = new Git()
 
@@ -1556,16 +1557,6 @@ async function unsavedTurnIsMakos() {
   }
   console.log("PASS: a journal Mako can't write stops the turn as Mako's (not-saved), live and reopened, and older builds still open it")
 }
-
-/**
- * How a build before `not-saved` reads a request: `reason` against the seven reasons it knew, the whole journal refused
- * for any other (measured on main a8314eb8: `journal.read` threw a ZodError and the conversation wouldn't open).
- */
-const OLDER_REASONS = ["stopped", "host-quit", "host-crashed", "connection-lost", "provider-exited", "signed-out", "handed-off"] as const
-const OlderRequestSchema = z.object({
-  interruption: z.object({ reason: z.enum(OLDER_REASONS), at: z.number() }).optional(),
-  continues: z.object({ requestId: z.string(), reason: z.enum(OLDER_REASONS), auto: z.boolean() }).optional(),
-})
 
 /**
  * Only a journal write is a save that stops a turn. Mako's copy of a long output it can't write keeps the output as

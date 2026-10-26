@@ -374,7 +374,7 @@ assert.match(text(pressed), /You continued the turn after Mako closed \d{1,2}:40
 assert.doesNotMatch(pressed, /Copy question/, "not drawn as the person's bubble")
 
 // Who sent a continuation is in its words, so a saved one says who, as live does; one saved before the words said so claims no one.
-for (const reason of ["connection-lost", "provider-exited", "signed-out", "host-quit", "not-saved"] as const)
+for (const reason of ["connection-lost", "provider-exited", "signed-out", "host-quit", "not-saved", "goal-budget"] as const)
   for (const sender of ["mako", "person"] as const)
     assert.deepEqual(savedContinuation(continueTurnPrompt(reason, sender)), { reason, sender }, `${reason} by ${sender} reads back`)
 assert.deepEqual(savedMakoPrompt(`  ${continueTurnPrompt("signed-out", "mako")}\n`), { kind: "continued", reason: "signed-out", sender: "mako" })

@@ -571,6 +571,17 @@ assert.doesNotMatch(unsavedMarkup, /data-turn-stopped/, "the footer doesn't say 
 assert.doesNotMatch(unsavedMarkup, />Stopped</, "never the person's Stop")
 conversation.requests = []
 publish()
+// A goal's turn Mako stopped at the token budget the person set: the footer says so, as quietly as a Stop, with the
+// goal's mark, and offers nothing.
+const budgetMarkup = renderToStaticMarkup(
+  <TranscriptSourceContext value={{ liveId: conversation.key }}>
+    <Exchange interrupted={{ reason: "goal-budget", continuable: false, automatic: false }} exchange={stoppedExchange} />
+  </TranscriptSourceContext>
+)
+assert.match(budgetMarkup, /data-turn-stopped="goal-budget"[^>]*>[^]*?lucide-target/)
+assert.match(budgetMarkup, /Stopped at the goal&#x27;s token budget/)
+assert.doesNotMatch(budgetMarkup, />Stopped</, "not the person's Stop")
+assert.doesNotMatch(budgetMarkup, /text-caution|Continue turn/, "an outcome the person set, not an alarm")
 // A turn the provider ended on its own dropped connection names that
 // provider's connection and offers to go on, since the work so far stands.
 const droppedMarkup = renderToStaticMarkup(

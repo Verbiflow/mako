@@ -142,6 +142,14 @@ const unsavedPlaces = recoveriesByPlace({ blocks: [{ type: "user" as const, requ
 assert.deepEqual([...unsavedPlaces.onTurns.keys()], ["unsaved"], "it ends on its failure row; a Stop of the person's keeps its footer")
 assert.deepEqual(composerResume([unsaved], turnStops([unsaved], false), context), { kind: "continue", reason: "not-saved", label: "Continue turn" })
 
+// A goal's turn Mako stopped at the token budget the person set: said quietly, never as their Stop, and offered
+// nothing, since going on would spend past the budget.
+const budget: LiveRequest = { ...stopped, id: "budget", interruption: { reason: "goal-budget", at: 1 } }
+assert.equal(turnStopLabel("goal-budget", "Claude Code"), "Stopped at the goal's token budget")
+assert.equal(turnStops([budget], false).get("budget")?.continuable, false)
+assert.equal(composerResume([budget], turnStops([budget], false), context), null)
+assert.deepEqual([...recoveriesByPlace({ blocks: [{ type: "user" as const, requestId: "budget", text: "Fix the tests" }], requests: [budget] }).onTurns.keys()], [], "its footer says it, not a failure row")
+
 // The notice stack's order: urgent first, then work under way, then the rest; registration order breaks ties.
 const notice = (id: string, tone: ComposerNotice["tone"], priority?: number): ComposerNotice => ({ id, tone, title: id, ...priority !== undefined && { priority } })
 assert.deepEqual(orderNotices([
