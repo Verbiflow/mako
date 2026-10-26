@@ -7,6 +7,7 @@ import { TURN_CHANGES_VERSION, type TurnChanges } from "@mako/host/contracts/tur
 import { LiveJournal, LiveRequestSchema } from "@mako/host/conversations/live-journal"
 import { residentOf } from "@mako/host/conversations/live-runtime"
 import { LiveTurnChanges, type TurnLedger } from "@mako/host/conversations/live-turn-changes"
+import { changeCounts } from "../src/state/thread-changes.ts"
 import { maybeWords, recordedTurnChanges, turnChangeSummary, turnChangeWords } from "../src/lib/turn-changes.ts"
 import { requestedTurn, type TurnReviewRequest } from "../src/state/review-scope.ts"
 
@@ -131,8 +132,25 @@ try {
   const loaded = residentOf(snapshotOf([{ ...request, changes: { ...summary, state: "settling" } }]), journal)
   counts.loaded(loaded)
   await until(() => loaded.snapshot.requests[0]!.changes?.state === "settled")
+  // A turn that ended before the journal opened stays due, and is counted once it opens (`journalOpened`).
+  let open: TurnLedger | undefined
+  const early = new LiveTurnChanges({ ledger: () => open, flush: () => void flushes++ })
+  const before = residentOf(snapshotOf([{ ...request }]), journal)
+  early.ended(before, request.id)
+  assert.equal(before.snapshot.requests[0]!.changes?.state, "pending")
+  assert.equal(before.counting ?? 0, 0, "nothing to wait on while the journal is closed")
+  open = ledger
+  early.loaded(before)
+  await until(() => before.snapshot.requests[0]!.changes?.state === "settled")
   journal.close()
   rmSync(scratch, { recursive: true, force: true })
+}
+
+// "Changes made" says paths outside the checkouts were touched only when the Thread's calls named them.
+{
+  const thread = { files: { created: 0, changed: 2, deleted: 0, renamed: 0 }, lines: { added: 4, removed: 2 }, commands: 0, maybe: 0 }
+  assert.equal(changeCounts({ ...thread, outside: { named: 0, maybe: 5 } })?.outside, 0, "five paths that only changed while it ran aren't its")
+  assert.equal(changeCounts({ ...thread, outside: { named: 2, maybe: 5 } })?.outside, 2)
 }
 
 console.log("turn changes record: ok")

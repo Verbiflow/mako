@@ -309,6 +309,24 @@ test("what Git wrote is nobody's: the writer runs don't name it and an undo keep
   rmSync(f.base, { recursive: true, force: true })
 })
 
+test("undo puts a line the turn replaced back where it stood, when the person since changed the line above it", async () => {
+  const f = await fixture("adjacent")
+  f.clock.advance(1_000)
+  f.mark("turn", "T1", R1, "start")
+  await f.call("T1", R1, "c1", [{ kind: "modify", path: f.abs("util.ts"), edits: [{ old: "util 5\n", new: "util 5 by turn 1\n" }] }], () => f.write("util.ts", lines(10, { 5: "util 5 by turn 1" }, "util")))
+  f.mark("turn", "T1", R1, "end")
+  // Right after the turn, the person rewrites the line just above the turn's.
+  await f.person("util.ts", lines(10, { 4: "util 4 by you", 5: "util 5 by turn 1" }, "util"))
+  f.clock.advance(15_000)
+  f.tracker.sweep()
+  const plan = undoPlan(f.view, "T1", { kind: "turn", requestId: R1 }, f.repo)
+  assert.deepEqual(plan.left, [])
+  const next = plan.writes.find((write) => write.path === "util.ts")?.next
+  assert.equal(next?.kind === "text" ? next.text : null, lines(10, { 4: "util 4 by you" }, "util"), "util 5 back on line 5, below the person's line 4")
+  await f.tracker.close()
+  rmSync(f.base, { recursive: true, force: true })
+})
+
 test("undo is refused while a run is on in the checkout", async () => {
   const f = await fixture("busy")
   await turns(f)

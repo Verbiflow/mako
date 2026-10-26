@@ -218,8 +218,31 @@ if (process.argv[2] === "owner-child") {
       placement: () => undefined,
       session: () => undefined,
     })
+    // A host isolated in a folder of its own (its user root is its data root) never starts from the installed app's.
+    const isolatedRoot = mkdtempSync(join(tmpdir(), "mako-shared-journal-isolated-"))
+    const isolated = await openAttribution({
+      dataRoot: isolatedRoot,
+      defaultDataRoot: legacyRoot,
+      userRoot: isolatedRoot,
+      label: "isolated",
+      git,
+      watch: watcher.watch,
+      jobs: new HostJobs(),
+      stores: () => [],
+      placement: () => undefined,
+      session: () => undefined,
+    })
+    try {
+      await isolated.settled()
+      assert.deepEqual(authorOf(isolated, repo, "a.ts") ?? [], [], "nothing of the person's journal")
+    } finally {
+      await isolated.close()
+      rmSync(isolatedRoot, { recursive: true, force: true })
+    }
     try {
       assert.equal(journal.status().sharing.role, "owner")
+      // The journal opens before its roots catch up.
+      await journal.settled()
       assert.deepEqual(authorOf(journal, repo, "a.ts"), ["exact:TA"], "what the old journal knew is kept")
       await journal.close()
       const newId = execFileSync("sqlite3", [join(sharedJournalFolder(userRoot), "journal.sqlite"), "SELECT value FROM meta WHERE key = 'journal'"], { encoding: "utf8" }).trim()

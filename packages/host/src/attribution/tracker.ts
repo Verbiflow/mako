@@ -199,8 +199,12 @@ export class LaptopTracker implements AttributionTracker {
   private readonly ports: TrackerPorts
   private readonly options: TrackerOptions
   private readonly states = new Map<string, RootState>()
-  /** Each folder's `track` under way, by path. */
+  /** Each folder's `track` under way, by path, and each root `open` is still resuming. */
   private readonly tracking = new Map<string, Promise<void>>()
+  /** The roots `open` resumes, one after another, after it returns. */
+  private resuming: Promise<void> = Promise.resolve()
+  /** Set by `close`: no root starts resuming after it. */
+  private closing = false
   readonly evidence: Evidence
   private readonly pending = new Map<number, Pending>()
   private settleTimer?: ReturnType<typeof setTimeout>
@@ -236,7 +240,14 @@ export class LaptopTracker implements AttributionTracker {
     return this.store.id
   }
 
-  /** Open the journal in `ports.storage` and resume every root it tracked, catching up from the system's history. */
+  /**
+   * Open the journal in `ports.storage` and resume every root it tracked,
+   * catching up from the system's history. The journal is open as soon as
+   * its file is: catching a large checkout up takes a minute and more, and
+   * the turns that run meanwhile must still be heard. The roots resume one
+   * after another behind it; `track` on one waits for its resume, and
+   * `settled` for them all.
+   */
   static async open(ports: TrackerPorts, options: TrackerOptions = {}): Promise<LaptopTracker> {
     const store = JournalStore.open(join(ports.storage, "journal.sqlite"), { device: ports.device })
     const tracker = new LaptopTracker(ports, options, store)
@@ -244,18 +255,30 @@ export class LaptopTracker implements AttributionTracker {
     const lastSeen = Math.max(0, ...roots.map((root) => root.seenAt))
     // Whatever was running when the last host stopped ran until it was last seen.
     if (lastSeen) store.closeOpenActivity(lastSeen)
+    let previous = Promise.resolve()
     for (const root of roots) {
-      try {
-        await tracker.resume(root)
-      } catch (error) {
-        // A root that can't be watched again (its folder went while the host was away) is let go.
-        tracker.states.get(root.id)?.watch?.close()
-        tracker.states.delete(root.id)
-        store.forgetRoot(root.id)
-        options.log?.("a root could not be resumed", { root: root.path, error: error instanceof Error ? error.message : String(error) })
-      }
+      const resumed = previous.then(() => tracker.resumeOrLetGo(root))
+      tracker.tracking.set(root.path, resumed)
+      void resumed.then(() => {
+        if (tracker.tracking.get(root.path) === resumed) tracker.tracking.delete(root.path)
+      })
+      previous = resumed
     }
+    tracker.resuming = previous
     return tracker
+  }
+
+  /** Resume a root `open` found; one that can't be watched again (its folder went while the host was away) is let go. */
+  private async resumeOrLetGo(root: StoredRoot): Promise<void> {
+    if (this.closing) return
+    try {
+      await this.resume(root)
+    } catch (error) {
+      this.states.get(root.id)?.watch?.close()
+      this.states.delete(root.id)
+      this.store.forgetRoot(root.id)
+      this.options.log?.("a root could not be resumed", { root: root.path, error: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   private now(): number {
@@ -1310,6 +1333,7 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   async settled(): Promise<void> {
+    await this.resuming
     for (;;) {
       const states = [...this.states.values()]
       for (const state of states) {
@@ -1454,6 +1478,8 @@ export class LaptopTracker implements AttributionTracker {
 
   async close(): Promise<void> {
     if (this.closed) return
+    // The root resuming now finishes; the rest resume when the journal next opens.
+    this.closing = true
     await this.settled()
     this.closed = true
     this.footprints?.close()

@@ -327,7 +327,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
   }).then((attribution) => {
     if (shell.closing()) void attribution.close()
-    else late.attribution = attribution
+    else {
+      late.attribution = attribution
+      late.conversations?.live.journalOpened()
+    }
   }, (error: Error) => hostWarn("attribution", "the journal could not open; changes aren't attributed this run", { error: error.message }))
   const wake = watchWake(shell.jobs, (source) => {
     hostLog("host", "woke", { source })

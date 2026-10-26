@@ -17,7 +17,9 @@ export function changeCounts(summary: ThreadChangeSummary): ChangeCounts | undef
     scope: "thread",
     kinds: summary.files,
     commands: summary.commands,
-    outside: summary.outside.named + summary.outside.maybe,
+    // "Touched outside its checkouts" counts only paths its calls named: one that only changed while it ran is
+    // most often another app's, as the person's own saves in its checkout are only "maybe yours".
+    outside: summary.outside.named,
     maybe: summary.maybe,
   }
 }

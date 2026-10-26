@@ -59,6 +59,12 @@ export interface ActivityInputs {
   writes: ReadonlyMap<string, number>
   /** Whether another host holds the session; asked only for recently written stores. */
   heldElsewhere: (ref: ActivityRef) => boolean
+  /**
+   * Whether this host holds the session: one it runs. Its harness process is
+   * this host's own, which a probe sees open like any other app's, so it is
+   * nothing done outside this host.
+   */
+  heldHere: (ref: ActivityRef) => boolean
   previous: ReadonlyMap<string, ExternalThreadActivity>
   now: number
 }
@@ -104,7 +110,7 @@ export function deriveActivity(inputs: ActivityInputs): Map<string, ExternalThre
       const ref =
         (session.path ? index.byPath.get(session.path) : undefined) ??
         (session.nativeId ? refForNativeId(provider, session.nativeId, index) : undefined)
-      if (!ref) continue
+      if (!ref || inputs.heldHere(ref)) continue
       if (session.status === "open" && written.has(ref.path))
         place(ref.path, provider, { ...session, status: "active" }, "writes")
       else place(ref.path, provider, session)

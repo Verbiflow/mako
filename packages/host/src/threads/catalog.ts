@@ -589,6 +589,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       probes: providerActivity,
       writes: storeWrites,
       heldElsewhere: (ref) => Boolean(sessionMemory?.heldBy(ref.harness, ref.nativeId)),
+      heldHere: (ref) => sessionMemory?.heldHere(ref.harness, ref.nativeId) ?? false,
       previous: emittedActivity,
       now,
     })
