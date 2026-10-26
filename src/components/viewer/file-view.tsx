@@ -1,12 +1,15 @@
 import { DiagnosticPreview } from "./diagnostic-preview"
 import {
   diagnosticFormat,
+  filePreviewFormat,
   officeFormat,
 } from "@mako/host/contracts/file-preview"
 import { OfficePreview } from "./office-preview"
 import { PdfPreview } from "./pdf-preview"
 import { resolveMarkdownMedia } from "@/lib/markdown-media"
 import { ArtifactPreview } from "./artifact-preview"
+import { HtmlFrame } from "./html-frame"
+import { MediaVideo } from "./media-video"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent, type RefObject } from "react"
 import type { SelectedLineRange } from "@pierre/diffs"
 import { File, Virtualizer } from "@pierre/diffs/react"
@@ -96,6 +99,9 @@ export function FileView({
     )
 
   if (file.binary) return <MediaPreview file={file} />
+
+  if (mode === "preview" && file.previewUrl && filePreviewFormat(file.path, file.mimeType) === "html")
+    return <HtmlFrame key={file.previewUrl} url={viewerFileUrl(file.previewUrl)} name={file.path.split("/").at(-1) ?? file.path} expanded />
 
   if (mode === "preview" && file.artifactPreview)
     return file.artifactPreview.kind === "html" ? (
@@ -327,9 +333,11 @@ function MediaPreview({ file }: { file: FileContents }) {
   if (file.previewUrl && file.media === "video") {
     return (
       <div className="flex min-h-full items-center justify-center bg-shell/40 p-4">
-        <video
-          controls
-          src={viewerFileUrl(file.previewUrl)}
+        <MediaVideo
+          key={file.previewUrl}
+          url={viewerFileUrl(file.previewUrl)}
+          poster={file.posterUrl && viewerFileUrl(file.posterUrl)}
+          name={file.path}
           className="max-h-full max-w-full rounded-md"
         />
       </div>

@@ -1178,7 +1178,8 @@ const inputs = {
   "mako:pull-requests": () => z.tuple([z.number().optional()]),
   "mako:quit-client": () => z.tuple([]),
   "mako:read-file": () => z.tuple([z.string()]),
-  "mako:read-live-file": () => z.tuple([z.string(), z.string()]),
+  "mako:read-live-file": () =>
+    z.tuple([z.string(), z.string(), z.literal("preview").optional()]),
   "mako:relaunch": () => z.tuple([]),
   "mako:reload-automations": () => z.tuple([]),
   "mako:repo-avatar": () => z.tuple([z.string()]),
@@ -1436,7 +1437,8 @@ const inputs = {
   "mako:thread-create-session": () =>
     z.tuple([z.string(), z.string(), z.string().optional()]),
   "mako:thread-entry": () => z.tuple([z.string(), z.string()]),
-  "mako:thread-file": () => z.tuple([z.string(), z.string()]),
+  "mako:thread-file": () =>
+    z.tuple([z.string(), z.string(), z.literal("preview").optional()]),
   "mako:thread-follow": () => z.tuple([z.string(), z.number()]),
   "mako:thread-groups": () => z.tuple([]),
   "mako:thread-move": () =>

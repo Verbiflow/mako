@@ -41,6 +41,7 @@ import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandO
 import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, MoveStageInputSchema, readyForMove, stageMove, type MoveArrivalDeps, type MoveArrivalWire, type MoveReadyInput, type MoveStageInput } from "./move-arrival.js"
 import { departMove, MoveDepartureInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveStayInput } from "./move-departure.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
+import type { FileReadPurpose } from "../contracts/git-workspace-search.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 import type { ConversationSettings } from "../contracts/turn-continuation.js"
@@ -443,11 +444,11 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-sign-in-resume", (id: string, anyway: boolean) => live.resumeSignIn(id, anyway))
   methods.handle("mako:live-earlier", (id: string) => live.earlier(id))
   methods.handle("mako:live-bind", (id: string, path: string) => live.bind(id, path))
-  methods.handle("mako:read-live-file", (id: string, path: string) => {
+  methods.handle("mako:read-live-file", (id: string, path: string, purpose?: FileReadPurpose) => {
     const session = live.session(id)
     if (!session) throw new Error("That conversation is unavailable")
     const dataDir = environments ? () => environments.fileDataDir({ conversationId: id, cwd: session.cwd }) : undefined
-    return files.read(session.cwd, path, dataDir)
+    return files.read(session.cwd, path, dataDir, purpose)
   })
   methods.handle("mako:live-snapshot", (id: string) => live.refreshedSnapshot(id))
   methods.handle("mako:live-context-breakdown", (id: string) => live.contextBreakdown(id))

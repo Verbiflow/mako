@@ -4,6 +4,8 @@ import type { RecordsLink } from "@mako/sessions/record-sync"
 import { encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { githubRepositoryUrl, type ThreadHandOff } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
+import { stat } from "node:fs/promises"
+import { mediaExecutable } from "@mako/control-runtime/media"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { hostLabel, type HostConfig } from "./host-config.js"
@@ -23,7 +25,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { resolveFilePreview, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { verifyFilePreview, fileIdentity, MediaRenditions, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -220,6 +222,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
    * reach the handlers. Background tabs keep streaming; they just take no orders.
    */
   const withHost = async <T>(run: (host: AgentHost) => T | Promise<T>): Promise<T> => run((await ready()).active)
+  const renditions = new MediaRenditions({ folder: join(environment.dataRoot, "thumbnails"), ffmpeg: () => mediaExecutable("ffmpeg") })
   const workspace = async () => (await ready()).active.workspace
 
   trace("host ready")
@@ -245,7 +248,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       },
     },
     harnesses: threadHarnesses(providerHost),
-    readFile: (cwd, path, dataDir) => conversationFiles.read(cwd, path, dataDir),
+    readFile: (cwd, path, dataDir, purpose) => conversationFiles.read(cwd, path, dataDir, purpose),
     emit,
     jobs: shell.jobs,
     subscribed: shell.subscribed,
@@ -835,7 +838,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return cloud?.handled ? cloud : opened.route(channel, args)
     },
     presentHistory: (value) => opened.history.present(value),
-    file: (request, client = "web") => withHostClient(client, () => readFilePreview(request, withHost)),
+    file: (request, client = "web") => withHostClient(client, () => readFilePreview(request, withHost, renditions)),
     disconnected: (client) => {
       shell.terminals.current()?.release(client)
       void workspaceClients.release(client)
@@ -938,10 +941,21 @@ function machineRecords(link: MachineGatewayLink | null): RecordsLink | undefine
   return { id: records, base: records, authorization: `Bearer ${link.credential}` }
 }
 
-async function readFilePreview(request: Request, withHost: <T>(run: (host: AgentHost) => T | Promise<T>) => Promise<T>): Promise<Response> {
+async function readFilePreview(request: Request, withHost: <T>(run: (host: AgentHost) => T | Promise<T>) => Promise<T>, renditions: MediaRenditions): Promise<Response> {
   if (request.method !== "GET") return new Response("Method not allowed", { status: 405 })
-  const artifact = resolveFilePreview(request.url)
-  if (artifact) return fileResponse(await localFile(artifact, request.signal), artifact, request)
+  const grant = await verifyFilePreview(request.url)
+  if (grant.kind === "refused") return new Response(`Refused: ${grant.reason}`, { status: 403 })
+  if (grant.kind === "file") {
+    // `?rendition=poster|thumbnail` asks for a smaller picture of the signed file; a thumbnail that can't be made is the file itself.
+    const kind = new URL(request.url).searchParams.get("rendition")
+    if (grant.entry && (kind === "poster" || kind === "thumbnail")) {
+      const info = await stat(grant.path)
+      const made = await renditions.rendition(grant.path, fileIdentity(info), kind)
+      if (made) return fileResponse(await localFile(made, request.signal), made, request, { cacheable: true })
+      if (kind === "poster") return new Response("No poster", { status: 404 })
+    }
+    return fileResponse(await localFile(grant.path, request.signal), grant.path, request, { cacheable: true, crossOrigin: !grant.entry })
+  }
   const path = workspacePreviewPath(request.url)
   if (!path) return new Response("Not found", { status: 404 })
   try {

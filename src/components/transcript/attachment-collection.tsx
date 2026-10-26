@@ -11,6 +11,6 @@ export function TranscriptAttachments({ attachments }: { attachments: Attachment
 
 /** A paragraph/list item remains a local group, including in the middle of a reply. */
 export function FilePreviewCollection({ paths }: { paths: string[] }) {
-  if (paths.length === 1) return <InlineFilePreview path={paths[0]} name={paths[0].split("/").at(-1) ?? paths[0]} />
-  return <AssetPreviewCollection items={paths.map(path => ({ id: path, name: path.split("/").at(-1) ?? path, path }))} render={item => <InlineFilePreview path={item.path} name={item.name} initiallyOpen />} />
+  if (paths.length === 1) return <InlineFilePreview path={paths[0]} name={paths[0].split("/").at(-1) ?? paths[0]} purpose="preview" />
+  return <AssetPreviewCollection items={paths.map(path => ({ id: path, name: path.split("/").at(-1) ?? path, path }))} render={item => <InlineFilePreview path={item.path} name={item.name} initiallyOpen purpose="preview" />} />
 }

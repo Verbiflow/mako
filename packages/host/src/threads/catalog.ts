@@ -87,7 +87,7 @@ import {
   setDaemonLogin,
 } from "./daemon-login.js"
 import type { ExternalThreadActivity, HostEvent } from "../contracts/host-events-boot.js"
-import type { FileContents } from "../contracts/git-workspace-search.js"
+import type { FileContents, FileReadPurpose } from "../contracts/git-workspace-search.js"
 import type { ThreadFileContext } from "../contracts/conversation-session.js"
 import { THREAD_LIST_CAP, threadList, unlistedThreadSessions } from "../contracts/thread-list.js"
 
@@ -216,7 +216,7 @@ export interface ThreadCatalogDeps {
   lineage: Pick<Lineage, "load" | "annotate">
   harnesses: ThreadHarnesses
   /** A file in a workspace, as the conversation that linked it sees it; Workspaces reads it. */
-  readFile(cwd: string, path: string, dataDir?: () => Promise<string | undefined>): Promise<FileContents>
+  readFile(cwd: string, path: string, dataDir?: () => Promise<string | undefined>, purpose?: FileReadPurpose): Promise<FileContents>
   /** Which catalog readers this host can share: the reader code it loaded as it opened, and the archive they write. */
   catalogIdentity(): Promise<string>
   jobs: HostJobs
@@ -264,7 +264,7 @@ export interface ThreadCatalog {
    * against the thread's workspace; absolute ones open as they are, so a file
    * the agent wrote outside the project and linked from its answer opens too.
    */
-  readFile(threadPath: string, filePath: string, homes?: ThreadFileHomes): Promise<FileContents>
+  readFile(threadPath: string, filePath: string, homes?: ThreadFileHomes, purpose?: FileReadPurpose): Promise<FileContents>
   page(path: string, before?: number, limit?: number, options?: ThreadPageOptions): Promise<ThreadPage | null>
   /**
    * Takes the session at `path` into the record store now. True once the
@@ -1211,7 +1211,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   async function readThreadFile(
     threadPath: string,
     filePath: string,
-    homes?: ThreadFileHomes
+    homes?: ThreadFileHomes,
+    purpose?: FileReadPurpose
   ): Promise<FileContents> {
     const ref = daemon
       ? mirror.get(threadPath)
@@ -1223,7 +1224,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       cwd: ref.cwd ?? ref.workspace ?? cwd,
       thread: threadStore?.place(ref, CATALOG_ACTOR).thread,
     }) : undefined
-    return deps.readFile(cwd ?? "/", filePath, dataDir)
+    return deps.readFile(cwd ?? "/", filePath, dataDir, purpose)
   }
 
   async function pageThread(

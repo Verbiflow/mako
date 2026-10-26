@@ -1,6 +1,6 @@
 import type { Root, PhrasingContent, InlineCode } from "mdast"
 import { visit } from "unist-util-visit"
-import { bareFileTarget, fileTargetHref, inlineFileTarget, linkFileCitations, markdownFileTarget } from "./file-citations"
+import { bareFileTarget, fileTargetHref, inlineFileTarget, linkFileCitations, markdownFileTarget, plainMediaPaths } from "./file-citations"
 
 /** Transform prose nodes only; code examples and link labels remain literal. */
 export function remarkFileCitations() {
@@ -59,6 +59,22 @@ export function remarkFileCitations() {
       }
       if (offset < linked.length)
         children.push({ type: "text", value: linked.slice(offset) })
+      parent.children.splice(index, 1, ...children)
+      return index + children.length
+    })
+    // Plain-text paths to media and pages link as backticked ones do; code and links keep their text.
+    visit(tree, "text", (node, index, parent) => {
+      if (index === undefined || !parent || parent.type === "link" || parent.type === "linkReference") return
+      const paths = plainMediaPaths(node.value)
+      if (!paths.length) return
+      const children: PhrasingContent[] = []
+      let offset = 0
+      for (const { index: at, path } of paths) {
+        if (at > offset) children.push({ type: "text", value: node.value.slice(offset, at) })
+        children.push({ type: "link", url: path, children: [{ type: "text", value: path }] })
+        offset = at + path.length
+      }
+      if (offset < node.value.length) children.push({ type: "text", value: node.value.slice(offset) })
       parent.children.splice(index, 1, ...children)
       return index + children.length
     })

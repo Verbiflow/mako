@@ -1,4 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
+import { MediaGalleryScope } from "@/components/viewer/media-gallery"
 import { PlanContextChips } from "@/components/composer/plan-context"
 import { ProposedPlanCard } from "./proposed-plan"
 import { ChangingLabel } from "@/components/ui/changing-label"
@@ -209,6 +210,8 @@ export const Exchange = memo(function Exchange({
   }
   return (
     <AnswerTimeContext.Provider value={finishedAt}>
+      {/* One gallery per exchange: every picture and video in the prompt, the answer and its work steps a step apart. */}
+      <MediaGalleryScope>
       <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
         {exchange.prompt ? (
           mako?.kind === "continued" ? (
@@ -253,6 +256,7 @@ export const Exchange = memo(function Exchange({
           <Footer exchange={exchange} streaming={streaming} interrupted={interrupted} />
         ) : null}
       </article>
+      </MediaGalleryScope>
     </AnswerTimeContext.Provider>
   )
 })

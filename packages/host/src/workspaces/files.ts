@@ -2,7 +2,8 @@ import type { Git } from "@mako/git"
 import { diagnosticFormat, officeFormat } from "../contracts/file-preview.js"
 import { fileContentType, mediaForContentType } from "./file-media.js"
 import type { ArtifactPreviews } from "./artifact-previews.js"
-import { filePreviewUrl } from "./file-previews.js"
+import { fileIdentity, filePreviewUrl } from "./file-previews.js"
+import { mediaDimensions } from "./media-dimensions.js"
 import {
   copyFile,
   mkdir,
@@ -23,7 +24,7 @@ import {
   resolve,
   sep,
 } from "node:path"
-import type { FileContents, StagedFile, WorkspaceFile } from "../contracts/git-workspace-search.js"
+import type { FileContents, FileReadPurpose, StagedFile, WorkspaceFile } from "../contracts/git-workspace-search.js"
 import { WorkspaceGit } from "../git/index.js"
 import { workspaceWrites } from "../base/workspace-writes.js"
 
@@ -35,7 +36,16 @@ import { workspaceWrites } from "../base/workspace-writes.js"
  */
 const FILE_VIEW_LIMIT = 2_000_000
 type ConversationDataDir = () => Promise<string | undefined>
-type FileReadOptions = { relativeTo: "cwd"; dataDir?: ConversationDataDir }
+/**
+ * `preview`: the read is for a preview the transcript shows unasked (an
+ * embed, a path an answer names). Outside the Thread's folders only what a
+ * preview is for (pictures, video, audio, pages, PDFs) is read; anything
+ * else comes back `withheld`, so an answer's `![](~/.ssh/id_rsa)` stays a
+ * link rather than a key on screen.
+ */
+type FileReadOptions = { relativeTo: "cwd"; dataDir?: ConversationDataDir; preview?: boolean }
+/** Larger than this on its longer side, a picture gets a thumbnail for grid tiles; smaller, the tile draws it. */
+const THUMBNAIL_ABOVE = 960
 
 /** The `@` picker re-queries per keystroke; the file set does not move that fast. */
 const FILE_CACHE_MS = 5_000
@@ -241,6 +251,12 @@ export class WorkspaceFiles {
     } finally {
       await prefixFile.close()
     }
+    const mimeType = await fileContentType(path, prefix)
+    const media = mediaForContentType(mimeType)
+    const page = mimeType === "text/html"
+    if (options?.preview && !(media && media.media !== "spreadsheet") && !page && !(await this.inside(absolute, options.dataDir)))
+      return { path, contents: "", size: info.size, binary: false, truncated: false, mimeType, withheld: "It's outside this Thread's folders, so it isn't previewed. Open it to read it." }
+    const identity = fileIdentity(info)
     const diagnostic = diagnosticFormat(path)
     if (diagnostic)
       return {
@@ -251,11 +267,13 @@ export class WorkspaceFiles {
         binary: false,
         truncated: info.size > prefix.length,
         mimeType: "application/json",
-        previewUrl: filePreviewUrl(absolute),
+        previewUrl: filePreviewUrl(absolute, identity),
       }
-    const mimeType = await fileContentType(path, prefix)
-    const media = mediaForContentType(mimeType)
     if (media || officeFormat(path, mimeType) || prefix.includes(0)) {
+      const previewUrl = filePreviewUrl(absolute, identity)
+      const visual = media?.media === "image" || media?.media === "video"
+      const size = visual ? await this.dimensions(absolute, prefix, info.size, mimeType) : undefined
+      const large = size && Math.max(size.width, size.height) > THUMBNAIL_ABOVE && mimeType !== "image/svg+xml" && mimeType !== "image/gif"
       return {
         path,
         contents: "",
@@ -264,7 +282,10 @@ export class WorkspaceFiles {
         truncated: false,
         media: media?.media,
         mimeType,
-        previewUrl: filePreviewUrl(absolute),
+        previewUrl,
+        ...size,
+        ...(media?.media === "video" && { posterUrl: `${previewUrl}?rendition=poster` }),
+        ...(media?.media === "image" && large && { thumbnailUrl: `${previewUrl}?rendition=thumbnail` }),
       }
     }
 
@@ -283,7 +304,7 @@ export class WorkspaceFiles {
           binary: true,
           truncated: false,
           mimeType,
-          previewUrl: filePreviewUrl(absolute),
+          previewUrl: filePreviewUrl(absolute, identity),
         }
       }
       const contents = buffer.toString("utf8")
@@ -312,9 +333,32 @@ export class WorkspaceFiles {
         binary: false,
         truncated: info.size > FILE_VIEW_LIMIT,
         artifactPreview,
+        // A page is shown by URL, so it loads the styles, scripts and pictures beside it.
+        ...(page && { mimeType, previewUrl: filePreviewUrl(absolute, identity, { folder: true }) }),
       }
     } finally {
       await handle.close()
+    }
+  }
+
+  /** Whether `absolute` sits in the folders this conversation works in: its checkout, its folder, or its Thread's data folder. */
+  private async inside(absolute: string, dataDir?: ConversationDataDir): Promise<boolean> {
+    const roots = [this.cwdValue, await this.git.root().catch(() => null), await dataDir?.()]
+    const real = await realpath(absolute).catch(() => absolute)
+    for (const root of roots) {
+      if (!root) continue
+      const folder = await realpath(resolve(root)).catch(() => resolve(root))
+      if (real === folder || real.startsWith(folder + sep)) return true
+    }
+    return false
+  }
+
+  private async dimensions(absolute: string, prefix: Buffer, size: number, mimeType: string | undefined) {
+    const file = await open(absolute, "r")
+    try {
+      return await mediaDimensions(file, prefix, size, mimeType)
+    } finally {
+      await file.close()
     }
   }
 
@@ -426,7 +470,7 @@ export class ConversationFiles {
     this.previews = previews
   }
 
-  read(cwd: string, path: string, dataDir?: ConversationDataDir): Promise<FileContents> {
+  read(cwd: string, path: string, dataDir?: ConversationDataDir, purpose?: FileReadPurpose): Promise<FileContents> {
     const key = resolve(cwd)
     const now = Date.now()
     for (const [folder, held] of this.held)
@@ -439,7 +483,7 @@ export class ConversationFiles {
       const oldest = this.held.keys().next().value
       if (oldest !== undefined) this.held.delete(oldest)
     }
-    return held.files.read(path, { relativeTo: "cwd", dataDir })
+    return held.files.read(path, { relativeTo: "cwd", dataDir, preview: purpose === "preview" })
   }
 }
 

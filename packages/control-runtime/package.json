@@ -19,7 +19,8 @@
     "./extension": "./dist/browser-extension-protocol.js",
     "./cli": "./dist/control-cli.js",
     "./mcp": "./dist/control-mcp.js",
-    "./heavy-packages": "./dist/heavy-packages.js"
+    "./heavy-packages": "./dist/heavy-packages.js",
+    "./media": "./dist/control-media.js"
   },
   "bin": {
     "mako-control": "dist/control-cli.js"
