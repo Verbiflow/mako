@@ -21,7 +21,7 @@ import { producedMedia } from "../packages/control/src/program/runtime.ts"
 import { registerShowTool, TurnMedia } from "../packages/host/src/media/index.ts"
 import { entriesToMessages } from "../src/lib/entry-messages.ts"
 import { exchangeMedia, responseSections, toExchanges } from "../src/lib/exchanges.ts"
-import { changedMedia, proseMediaSpellings, shelfMedia } from "../src/lib/media-shelf.ts"
+import { changedMedia, placeMadeMedia, proseMediaSpellings, shelfMedia } from "../src/lib/media-shelf.ts"
 import { TURN_CHANGES_VERSION, type TurnChanges } from "@mako/host/contracts/turn-changes"
 import { createHash } from "node:crypto"
 import { turnFolds } from "../src/lib/turn-fold.ts"
@@ -317,8 +317,28 @@ assert.deepEqual(shelfMedia(exchange, record).map((candidate) => [candidate.path
 const liveTurn = toExchanges(foldTools(entriesToMessages(turn, { kind: "live", running: false, provider: "claude" }).messages))[0]!
 assert.deepEqual(exchangeMedia(liveTurn), exchangeMedia(exchange))
 
+// Where it draws: what a call made stands after the stretch of work holding that call, in the answer's flow;
+// what only the record of changes names ends the answer. No shelf stapled under it.
+const placedOf = (turnExchange: typeof exchange, changes?: TurnChanges) =>
+  placeMadeMedia(responseSections(turnExchange.response), shelfMedia(turnExchange, changes)).map((section) =>
+    section.kind === "made" || section.kind === "shown" ? [section.kind, section.media.map((candidate) => candidate.path)] : [section.kind])
+const placed = placedOf(exchange, record)
+assert.deepEqual(placed.map(([kind]) => kind), ["work", "shown", "work", "made", "prose", "made"], "made media stands where its call did, the record's own at the end")
+assert.deepEqual(placed[3]![1], ["/repo/report.html"], "the page the Write made follows that Write's work")
+assert.deepEqual(placed[5]![1], ["/repo/tide.png"], "a file only the record names ends the answer")
+assert.deepEqual(placedOf(exchange).map(([kind]) => kind), ["work", "shown", "work", "made", "prose"], "before the record arrives, the calls' media is already in place")
+assert.deepEqual(placedOf(liveTurn, record), placed, "live and saved place every file at the same section")
+// While it runs, what a finished call made is already in place under that call's work, before any answer.
+const runningTurn = toExchanges(foldTools(entriesToMessages(turn.slice(0, 4), { kind: "live", running: true, provider: "claude" }).messages))[0]!
+assert.deepEqual(placedOf(runningTurn), [["work"], ["shown", ["/tmp/shots/home.png", "/tmp/flow.mp4"]], ["work"], ["made", ["/repo/report.html", "/repo/out/chart.png"]]], "a running turn draws what it made as each call finishes")
+const placedSections = placeMadeMedia(responseSections(exchange.response), shelfMedia(exchange, record))
+const [placedFold] = turnFolds(placedSections, 1)
+assert.deepEqual([placedFold?.start, placedFold?.end, placedFold?.kept], [0, 3, [1]], "a settled turn folds its work, and what it made stays in view with its answer")
+const plain = responseSections(exchange.response)
+assert.equal(placeMadeMedia(plain, []), plain, "a turn that made nothing keeps its sections as they are")
+
 // Every harness hears one line, and it reads plainly.
 assert.ok(SHOW_MEDIA_LINE.length < 260 && !SHOW_MEDIA_LINE.includes("\n"))
 
 await rm(root, { recursive: true, force: true })
-console.log("PASS: turn media reads the same live and saved for every source and harness shape, the host keeps what each turn made, show states what it showed, and the transcript draws each once")
+console.log("PASS: turn media reads the same live and saved for every source and harness shape, the host keeps what each turn made, show states what it showed, and the transcript draws each once, where its call stands")

@@ -1,100 +1,92 @@
 import { memo, useMemo } from "react"
 import type { AttachmentContent } from "@mako/sessions"
 import type { MediaCandidate } from "@mako/sessions/turn-media"
-import { visualAsset } from "@/components/viewer/media-tile-layout"
-import type { Exchange } from "@/lib/exchanges"
-import { mediaAttachment, shelfMedia } from "@/lib/media-shelf"
-import { useAcp } from "@/state/acp"
+import { visualAsset, type MediaSize } from "@/components/viewer/media-tile-layout"
+import { mediaAttachment, mediaSize } from "@/lib/media-shelf"
 import { mediaCheck, useMediaAnswers } from "@/state/turn-media"
 import { TranscriptAttachments } from "./attachment-collection"
-import { useTranscriptSource } from "./source-context"
 import { useVisible } from "./use-visible"
 
 /**
- * The media a turn made that its answer doesn't already show: screenshots
- * a command saved, a recording, a page it wrote, an image a tool returned
- * inside a folded row. Read from the turn's records (`callMedia`), so the
- * same live and saved, and filled as calls finish while the turn runs.
- * Nothing is asked of the host until the turn is near the screen.
+ * Media in the conversation, where the turn made it or the agent showed
+ * it: pictures and videos as themselves, a page as the page, each caption
+ * under what it captions. No heading: it reads as part of the answer. The
+ * host is asked about nothing until it is near the screen; what it already
+ * answered draws at once, so a turn scrolled back into view holds its place.
  */
-export const MediaShelf = memo(function MediaShelf({ exchange }: { exchange: Exchange }) {
-  const { liveId } = useTranscriptSource()
-  const requestId = exchange.prompt?.requestId
-  // The turn's record of changes: every file it left, however it wrote it, the same live and reopened.
-  const changes = useAcp((state) => {
-    const live = liveId ? state.conversations[liveId] : undefined
-    return live?.kind === "live" && requestId ? live.requests?.find((each) => each.id === requestId)?.changes : undefined
-  })
-  const media = useMemo(() => shelfMedia(exchange, changes), [exchange, changes])
+export const TurnMedia = memo(function TurnMedia({ media, shown }: { media: readonly MediaCandidate[]; shown?: boolean }) {
   const { ref, visible } = useVisible()
-  if (!media.length) return null
-  return (
-    <div ref={ref} data-media-shelf className="mt-3">
-      {visible ? <ConfirmedMedia media={media} label="Made in this turn" /> : null}
-    </div>
-  )
-})
-
-/**
- * What the agent put in front of the person with `show`, where it called it:
- * its heading, then each file with the agent's caption.
- */
-export const ShownMedia = memo(function ShownMedia({ media }: { media: readonly MediaCandidate[] }) {
-  const { ref, visible } = useVisible()
-  const title = media.find((candidate) => candidate.title)?.title
-  return (
-    <div ref={ref} data-shown-media>
-      {visible ? <ConfirmedMedia media={media} label={title} captioned /> : null}
-    </div>
-  )
-})
-
-function ConfirmedMedia({ media, label, captioned }: { media: readonly MediaCandidate[]; label?: string; captioned?: boolean }) {
   const checks = useMemo(() => media.map(mediaCheck), [media])
-  const answers = useMediaAnswers(checks)
-  const shown = useMemo(() => {
-    const attachments = []
-    const captions: (string | undefined)[] = []
+  const answers = useMediaAnswers(checks, visible)
+  const groups = useMemo(() => {
+    const drawn: Drawn[] = []
     for (const [index, candidate] of media.entries()) {
       const attachment = mediaAttachment(candidate, answers[index])
-      if (!attachment) continue
-      attachments.push(attachment)
-      captions.push(candidate.caption)
+      if (attachment) drawn.push({ attachment, caption: shown ? candidate.caption : undefined, size: mediaSize(answers[index]) })
     }
-    return { attachments, captions }
-  }, [media, answers])
-  const groups = useMemo(() => drawnGroups(shown.attachments, shown.captions), [shown])
-  if (!shown.attachments.length) return null
+    // `show`'s heading reads as the caption of what it showed when nothing has its own.
+    const title = shown && !drawn.some((each) => each.caption) ? media.find((candidate) => candidate.title)?.title : undefined
+    return drawnGroups(drawn, title)
+  }, [media, answers, shown])
   return (
-    <section aria-label={label ?? "Media"} className="flex flex-col gap-2 [&_[data-asset-collection]]:my-0">
-      {label ? <p className="text-label text-faint">{label}</p> : null}
+    // Its label is for a screen reader only: on screen it reads as part of the answer.
+    <div ref={ref} role="group" aria-label={shown ? "Shown by the agent" : "Made in this turn"} data-turn-media={shown ? "shown" : "made"} className="flex flex-col gap-4 empty:-mt-4 [&_[data-asset-collection]]:my-0 [&_[data-inline-file-preview]]:my-0">
       {groups.map((group) => (
-        <TranscriptAttachments key={group.attachments[0]!.id ?? group.attachments[0]!.name} attachments={group.attachments} captions={captioned ? group.captions : undefined} open />
+        <TranscriptAttachments
+          key={group.items[0]!.attachment.id ?? group.items[0]!.attachment.name}
+          attachments={group.items.map((each) => each.attachment)}
+          captions={group.items.some((each) => each.caption) ? group.items.map((each) => each.caption) : undefined}
+          sizes={group.items.map((each) => each.size)}
+          caption={group.caption}
+          open
+        />
       ))}
-    </section>
+    </div>
   )
+}, (before, after) => before.shown === after.shown && sameMedia(before.media, after.media))
+
+/**
+ * Whether two readings of a turn's media say the same: a streaming turn
+ * reads them again with each token, as new objects, and a token must not
+ * redraw what it made.
+ */
+function sameMedia(before: readonly MediaCandidate[], after: readonly MediaCandidate[]): boolean {
+  return before === after || (before.length === after.length && before.every((candidate, index) => {
+    const other = after[index]!
+    return candidate.key === other.key && candidate.callId === other.callId && candidate.evidence === other.evidence && candidate.digest === other.digest
+      && candidate.caption === other.caption && candidate.title === other.title && candidate.attachment === other.attachment
+      && candidate.startedAt === other.startedAt && candidate.endedAt === other.endedAt
+  }))
+}
+
+interface Drawn {
+  attachment: AttachmentContent
+  caption?: string
+  size?: MediaSize
+}
+
+interface DrawnGroup {
+  items: Drawn[]
+  caption?: string
 }
 
 /**
- * The media as it is drawn: pictures and videos together, as their grid,
- * then each page, document or recording of sound open on its own. Mixed in
- * one collection they would be a row of closed chips, and the person would
- * see none of what the turn made without a click.
+ * The media as it is drawn, in the order the turn made it: pictures and
+ * videos together where the first of them stands, as one picture or a
+ * grid, and each page, document or recording of sound open on its own. Mixed in one collection they would be a row of closed chips, and the
+ * person would see none of what the turn made without a click. `caption`
+ * goes under the first group.
  */
-interface DrawnGroup {
-  attachments: AttachmentContent[]
-  captions: (string | undefined)[]
-}
-
-function drawnGroups(attachments: readonly AttachmentContent[], captions: readonly (string | undefined)[]): DrawnGroup[] {
-  const visual: DrawnGroup = { attachments: [], captions: [] }
-  const others: DrawnGroup[] = []
-  attachments.forEach((attachment, index) => {
+function drawnGroups(drawn: readonly Drawn[], caption: string | undefined): DrawnGroup[] {
+  const groups: DrawnGroup[] = []
+  let visual: DrawnGroup | undefined
+  for (const each of drawn) {
+    const { attachment } = each
     const asset = { id: attachment.id ?? attachment.name, name: attachment.name, mimeType: attachment.mimeType, path: attachment.source.kind === "file" ? attachment.source.path : undefined }
-    if (visualAsset(asset)) {
-      visual.attachments.push(attachment)
-      visual.captions.push(captions[index])
-    } else others.push({ attachments: [attachment], captions: [captions[index]] })
-  })
-  return visual.attachments.length ? [visual, ...others] : others
+    if (!visualAsset(asset)) groups.push({ items: [each] })
+    else if (visual) visual.items.push(each)
+    else groups.push((visual = { items: [each] }))
+  }
+  if (groups[0] && caption) groups[0].caption = caption
+  return groups
 }

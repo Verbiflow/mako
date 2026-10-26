@@ -198,7 +198,9 @@
    * the composer dock, tab strips, tables, anything meeting a pane edge.
    * Everything placed on it is rounded, and the radius shrinks with depth:
    * floating surfaces (dialogs, menus, popovers, toasts, notice cards) xl;
-   * file tiles and preview frames use the separate sharp asset token;
+   * file chips, draft tiles and file cards use the separate sharp asset
+   * token; media in the conversation (pictures, videos, pages) is content
+   * like code and takes the soft media token;
    * other cards in a pane or the transcript (code, tool output, the
    * commit editor, settings cards) lg; controls, fields and one-line strips
    * md; marks (keycaps, inline code, badges) sm; pills and dots full. The
@@ -210,6 +212,7 @@
    * Menus portaled out of a region keep the floating radius.
    */
   --radius-asset: 0px;
+  --radius-media: var(--radius-lg);
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -2216,6 +2219,12 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   color: var(--foreground);
   background: color-mix(in oklab, var(--shell) 64%, transparent);
 }
+/* What the agent made, drawn in the conversation: soft corners, as code is. */
+.media-surface { border-radius: var(--radius-media); }
+/* A page taller than the conversation draws fades out where it stops, border and all. */
+.page-fade {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 7rem), transparent);
+}
 /* A page that sets no background was made to be read on white, in either theme. */
 .html-frame {
   color-scheme: light;
@@ -2457,7 +2466,7 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 [data-corners="square"] [class*="rounded"]:not([class*="rounded-full"]),
 [data-corners="square"] :is(.card, .skeleton, .mako-code) { border-radius: 0; }
 
-/* File chrome uses one shape across draft tiles, inline previews and the gallery. */
+/* File chrome uses one shape across draft tiles, file cards and the gallery; media in the conversation is `.media-surface`. */
 .asset-surface { border-radius: var(--radius-asset); }
 [data-asset-collection] [data-inline-file-preview],
 [data-asset-collection] [data-inline-document] { margin: 0; width: 100%; }

@@ -74,6 +74,15 @@ export type ResponseSection =
    */
   | { kind: "shown"; id: string; message: ChatMessage; media: MediaCandidate[] }
 
+/**
+ * An answer's sections as the exchange draws them: its own, and what the
+ * turn made that neither `show` nor its words put in front of the person,
+ * in the flow: after the stretch of work whose call made it, or at the end
+ * of the answer for a file only the turn's record of changes names
+ * (`placeMadeMedia` in `media-shelf.ts`).
+ */
+export type PlacedSection = ResponseSection | { kind: "made"; id: string; media: MediaCandidate[] }
+
 /** The provider's own marker for a turn that was stopped. */
 export function isInterruptedNote(message: ChatMessage): boolean {
   return message.blocks.some((block) =>

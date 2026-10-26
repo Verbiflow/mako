@@ -7,7 +7,7 @@ import { plainMediaPaths } from "../src/lib/file-citations"
 import { inlineFileLinks, inlineFileSpellings } from "../src/lib/inline-file-links"
 import { rehypeAssetGroups } from "../src/lib/markdown-asset-groups"
 import { VideoPlayback, type PlaybackDocument, type PlayableVideo } from "../src/lib/video-playback"
-import { MEDIA_GRID_TILES, mediaBox, mediaGridColumns, naturalSize, visualAsset } from "../src/components/viewer/media-tile-layout"
+import { MEDIA_GRID_TILES, mediaBox, mediaGridColumns, mediaRows, naturalSize, tileAspect, visualAsset } from "../src/components/viewer/media-tile-layout"
 
 /**
  * What the transcript decides about media without a window: which paths in
@@ -65,6 +65,17 @@ assert.equal(visualAsset({ id: "4", name: "report.pdf" }), false)
 assert.equal(visualAsset({ id: "5", name: "report.html" }), false)
 assert.deepEqual([1, 2, 3, 4, 5, 6, 7, 12].map(mediaGridColumns), [1, 2, 3, 2, 3, 3, 3, 3])
 assert.equal(MEDIA_GRID_TILES, 6)
+// A grid's tiles take their pictures' own shapes, sharing each row's height: a portrait screenshot beside two wide ones stays whole.
+const shot = (id: string, width: number, height: number) => ({ id, name: `${id}.png`, size: { width, height } })
+const [row] = mediaRows([shot("a", 1280, 800), shot("b", 750, 1000), shot("c", 1280, 800)])
+assert.deepEqual(row?.tiles.map((tile) => [tile.item.id, tile.aspect]), [["a", 1.6], ["b", 0.75], ["c", 1.6]])
+assert.equal(row?.filler, 0)
+assert.equal(tileAspect(undefined), 1.6, "an unknown size holds a screenshot's usual shape")
+assert.equal(tileAspect({ width: 300, height: 3000 }), 0.75, "a very tall picture crops to the narrowest tile")
+assert.equal(tileAspect({ width: 6000, height: 600 }), 21 / 9, "a panorama crops to the widest")
+const five = mediaRows(["a", "b", "c", "d", "e"].map((id) => shot(id, 1600, 1000)))
+assert.deepEqual(five.map((each) => [each.tiles.length, each.filler]), [[3, 0], [2, 1.6]], "a short last row keeps the rows' height, its missing tile's share left empty")
+assert.deepEqual(mediaRows([shot("a", 1600, 1000), shot("b", 1600, 1000), shot("c", 1600, 1000), shot("d", 1600, 1000)]).map((each) => each.tiles.length), [2, 2])
 
 // Video: nothing loads until near, one plays at a time, off screen, hidden or unmounted pauses.
 class FakeVideo implements PlayableVideo {

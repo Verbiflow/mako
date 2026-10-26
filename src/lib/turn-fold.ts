@@ -1,5 +1,5 @@
 import type { ChatMessage } from "@/lib/types"
-import type { ResponseSection } from "@/lib/exchanges"
+import type { PlacedSection } from "@/lib/exchanges"
 import { eventWords, isBoundary } from "@/lib/transcript-events"
 
 /**
@@ -33,9 +33,9 @@ export interface TurnFold {
  * change, a stop), or says what the turn was answering (background work
  * that settled). Folding those would hide why the answer reads as it does.
  */
-export function stillDrawn(section: ResponseSection): boolean {
-  // What the agent showed the person is part of the answer wherever it stands.
-  if (section.kind === "shown") return true
+export function stillDrawn(section: PlacedSection): boolean {
+  // What the agent showed the person, or made for them, is part of the answer wherever it stands.
+  if (section.kind === "shown" || section.kind === "made") return true
   if (section.kind !== "note") return false
   const note = section.message.note
   if (!note) return false
@@ -44,12 +44,12 @@ export function stillDrawn(section: ResponseSection): boolean {
   return Boolean(words.tone) || isBoundary(words)
 }
 
-function messagesOf(section: ResponseSection): ChatMessage[] {
-  return section.kind === "work" ? section.messages : section.kind === "shown" ? [] : [section.message]
+function messagesOf(section: PlacedSection): ChatMessage[] {
+  return section.kind === "work" ? section.messages : section.kind === "shown" || section.kind === "made" ? [] : [section.message]
 }
 
-/** A section that answers: the agent's words, or what it showed the person. */
-const answers = (section: ResponseSection) => section.kind === "prose" || section.kind === "shown"
+/** A section that answers: the agent's words, or what it showed the person or made for them. */
+const answers = (section: PlacedSection) => section.kind === "prose" || section.kind === "shown" || section.kind === "made"
 
 /**
  * The folds of a settled turn's sections, in order. `began` is when the
@@ -58,7 +58,7 @@ const answers = (section: ResponseSection) => section.kind === "prose" || sectio
  * prose it ends on; a stretch that ends on work has no answer and folds
  * whole.
  */
-export function turnFolds(sections: readonly ResponseSection[], began?: number): TurnFold[] {
+export function turnFolds(sections: readonly PlacedSection[], began?: number): TurnFold[] {
   const folds: TurnFold[] = []
   let start = 0
   let from = began
