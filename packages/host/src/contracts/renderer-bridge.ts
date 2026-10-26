@@ -1,4 +1,5 @@
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
+import type { TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
 import type { AuthoringApplied, AuthoringCatalog, AuthoringChange, AuthoringPlan, AuthoringTarget, AuthoringView } from "./native-authoring.js"
 import type {
   ThreadTarget,
@@ -325,10 +326,16 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveAction>(input.kind === "steer-queued" ? "mako:live-steer-queued" : "mako:live-action", id, input),
     liveAcknowledgeAction: (id: string, actionId: string) =>
       invokeTrustedHost<void>("mako:live-action-acknowledge", id, actionId),
-    liveTurnChanges: (id: string, requestId: string) =>
-      invokeTrustedHost<{ root: string; files: GitFile[] }>("mako:live-turn-changes", id, requestId),
-    liveTurnDiff: (id: string, requestId: string, path: string) =>
-      invokeTrustedHost<GitDiff>("mako:live-turn-diff", id, requestId, path),
+    liveTurnChanges: (id: string, requestId: string, workspace?: string) =>
+      invokeTrustedHost<{ root: string; files: GitFile[] }>("mako:live-turn-changes", id, requestId, workspace),
+    liveTurnDiff: (id: string, requestId: string, path: string, options?: { only?: boolean }) =>
+      invokeTrustedHost<GitDiff>("mako:live-turn-diff", id, requestId, path, options),
+    liveTurnWriters: (id: string, requestId: string, path: string) =>
+      invokeTrustedHost<TurnFileWriters | null>("mako:live-turn-writers", id, requestId, path),
+    liveTurnUndoPreview: (id: string, scope: TurnUndoScope) =>
+      invokeTrustedHost<TurnUndoPreview>("mako:live-turn-undo-preview", id, scope),
+    liveTurnUndo: (id: string, scope: TurnUndoScope, token: string) =>
+      invokeTrustedHost<TurnUndoResult>("mako:live-turn-undo", id, scope, token),
     liveRewind: (id: string, input: RewindInput) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-rewind", id, input),
     liveRecoverRewinds: () =>

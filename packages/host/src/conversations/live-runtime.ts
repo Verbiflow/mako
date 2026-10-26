@@ -1,3 +1,4 @@
+import type { Git } from "@mako/git"
 import type { Admission } from "../base/admission.js"
 import type { Foreground } from "../base/foreground.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
@@ -47,6 +48,7 @@ import type { PlanBuild } from "../contracts/plan-builds.js"
 import type { ResidencyBudget } from "../contracts/residency.js"
 import type { GoalObservation } from "../contracts/live-goals.js"
 import type { TurnLedger } from "./live-turn-changes.js"
+import type { TurnReviewLedger } from "./live-turn-review.js"
 
 export interface ProviderConnection {
   driver: AdmittedLiveDriver
@@ -173,6 +175,10 @@ export interface Dependencies {
   settled?(conversationId: string): void
   /** The attribution journal, which counts what each turn changed (`LiveTurnChanges`); undefined until it opens. */
   turnLedger?(): TurnLedger | undefined
+  /** The attribution journal as a turn's review and its undo read it (`LiveTurnReview`); undefined until it opens. */
+  turnReview?(): TurnReviewLedger | undefined
+  /** Git, for an undo's writer and its backup. */
+  git?: Git
   driver(provider: string): AdmittedLiveDriver | undefined
   /**
    * The catalog's listing and reader of native sessions: a handoff carries
@@ -259,6 +265,8 @@ export interface LiveAccess {
   residents(): Iterable<Resident>
   require(id: string): Resident
   load(id: string): Resident | undefined
+  /** A request as its conversation keeps it, without loading a conversation that isn't (`LiveRecords.request`). */
+  request(id: string, requestId: string): LiveRequest | undefined
   /** Keeps a new conversation, its journal already written. */
   add(resident: Resident): void
   control(resident: Resident): ConversationControl

@@ -42,6 +42,9 @@ const reads = [
   "mako:git-since-diff",
   "mako:live-turn-changes",
   "mako:live-turn-diff",
+  "mako:live-turn-writers",
+  /** What an undo would do, read from the journal; nothing is written. */
+  "mako:live-turn-undo-preview",
   "mako:git-doctor",
   "mako:github-status",
   "mako:pull-request",

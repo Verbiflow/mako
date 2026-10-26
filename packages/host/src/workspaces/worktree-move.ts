@@ -532,7 +532,7 @@ const backward = (writes: readonly Write[]): Write[] => writes.map((write) => ({
  * index. With `strict`, any file that is neither as the plan found it nor as
  * it wants refuses the whole move before anything is written.
  */
-async function applyWrites(git: Git, ledger: MoveLedger | undefined, repositories: readonly { plan: RepositoryPlan; worktree: Write[]; main: Write[]; index: { path: string; entry: string | null }[] }[], bytes: ReadonlyMap<string, Buffer>, strict: boolean, each?: () => void): Promise<string[]> {
+async function applyWrites(git: Git, ledger: Pick<MoveLedger, "mako"> | undefined, repositories: readonly { plan: RepositoryPlan; worktree: Write[]; main: Write[]; index: { path: string; entry: string | null }[] }[], bytes: ReadonlyMap<string, Buffer>, strict: boolean, each?: () => void): Promise<string[]> {
   const pending: { folder: string; writes: Write[]; directory: string }[] = []
   const left: string[] = []
   for (const { plan, worktree, main } of repositories) {
@@ -567,7 +567,7 @@ async function landed(repositories: readonly { plan: RepositoryPlan; worktree: W
 }
 
 /** Undo a plan's writes, leaving any file someone changed since as it is; names those left. */
-async function undo(git: Git, ledger: MoveLedger | undefined, plan: MovePlan, bytes: ReadonlyMap<string, Buffer>, paths: (repository: RepositoryPlan) => MovePath[]): Promise<string[]> {
+async function undo(git: Git, ledger: Pick<MoveLedger, "mako"> | undefined, plan: MovePlan, bytes: ReadonlyMap<string, Buffer>, paths: (repository: RepositoryPlan) => MovePath[]): Promise<string[]> {
   const repositories = plan.repositories.map((repository) => {
     const { worktree, main } = forward(repository, paths(repository))
     const index = repository.index.filter((change) => paths(repository).some((path) => path.path === change.path)).map((change) => ({ path: change.path, entry: change.from }))
@@ -721,12 +721,123 @@ export async function moveByAuthor(input: MoveInput): Promise<MovePlan> {
   return plan
 }
 
+/** One file a rewrite in place changes: its bytes now and after, null for no file. */
+export interface InPlaceFile {
+  /** Relative to its repository. */
+  path: string
+  before: Buffer | null
+  /** Its permission bits now; a file put back gets 0644. */
+  perm?: number
+  after: Buffer | null
+}
+
+export interface InPlaceInput {
+  git: Git
+  ledger: Pick<MoveLedger, "mako"> | undefined
+  /** A UUID: the plan's name and the backup's (`refs/mako/moves/<id>`). */
+  id: string
+  thread: string
+  /** The folder the outcome names paths against. */
+  project: string
+  repositories: readonly { repoRoot: string; head: string; files: readonly InPlaceFile[] }[]
+  /** The backup commit's message: what it was kept before. */
+  message: string
+  /** Keep the plan where a later start finds it; undefined once it needs no finishing. */
+  save(plan: MovePlan | undefined): Promise<void>
+  log: MoveInput["log"]
+  /** Each step as it's reached, for a test that stops there. */
+  stepped?: (step: string) => void
+}
+
+/**
+ * Rewrite files of one checkout in place, all or nothing, with the move's
+ * writer: every version is stored in the repository's objects, the
+ * checkout's whole state (files and index) is kept under
+ * `refs/mako/moves/<id>` for 14 days, the plan is saved, each file is
+ * replaced by a rename after checking it still holds what was read, and
+ * every file is read back. Anything off puts every file back as it was,
+ * leaving one someone changed meanwhile as they left it. The plan is a
+ * move's whose worktree side is the checkout's own "before" (nothing to
+ * write there), so a host that dies mid-write finishes or undoes it with
+ * `resumeMove`. The index is left as it is: a staged file reads as staged
+ * with the rewrite unstaged, as an editor's change would.
+ */
+export async function rewriteInPlace(input: InPlaceInput): Promise<MovePlan> {
+  const { git } = input
+  const bytes = new Map<string, Buffer>()
+  const repositories: RepositoryPlan[] = []
+  for (const repository of input.repositories) {
+    await pruneBackups(git, repository.repoRoot).catch(() => 0)
+    const format = await objectFormat(git, repository.repoRoot)
+    const version = (buffer: Buffer | null, perm: number | undefined): Version | null => {
+      if (!buffer) return null
+      const oid = blobId(buffer, format)
+      bytes.set(oid, buffer)
+      return { oid, perm: perm ?? 0o644 }
+    }
+    const paths = repository.files.map((file): MovePath => {
+      const before = version(file.before, file.perm)
+      return { path: file.path, how: "lines", base: before, before, thread: before, remaining: version(file.after, file.perm) }
+    })
+    repositories.push({ repoRoot: repository.repoRoot, worktree: repository.repoRoot, head: repository.head, format, backup: null, paths, index: [], bring: [] })
+  }
+  for (const repository of repositories) {
+    const oids = new Set(repository.paths.flatMap((path) => [path.before, path.remaining]).flatMap((version) => (version ? [version.oid] : [])))
+    await storeBlobs(git, repository.repoRoot, new Map([...oids].map((oid) => [oid, bytes.get(oid)!])))
+  }
+  input.stepped?.("stored")
+  const backup = `${BACKUP_REFS}${input.id}`
+  for (const repository of repositories) {
+    if (!repository.paths.length) continue
+    repository.backup = backup
+    await backUp(git, repository.repoRoot, repository.head, backup, input.message)
+  }
+  input.stepped?.("backed-up")
+  const named = repositories.flatMap((repository) => repository.paths.map((path) => relative(input.project, join(repository.repoRoot, path.path)) || path.path))
+  const empty = { files: 0, lines: 0, paths: [] }
+  const plan: MovePlan = {
+    id: input.id,
+    thread: input.thread,
+    at: Date.now(),
+    step: "writing",
+    brought: false,
+    repositories,
+    outcome: {
+      came: { files: named.length, lines: repositories.reduce((sum, repository) => sum + repository.paths.reduce((count, path) => count + changedLines(bytes, path.before, path.remaining), 0), 0), paths: named.slice(0, LISTED) },
+      stayed: { others: empty, person: empty, uncertain: empty, unattributed: empty },
+      split: [],
+      brought: false,
+      unstaged: [],
+      backup,
+    },
+  }
+  await input.save(plan)
+  input.stepped?.("saved")
+  const writes = repositories.map((repository) => ({ ...forward(repository, repository.paths), index: [] }))
+  try {
+    await applyWrites(git, input.ledger, writes, bytes, true, () => input.stepped?.("wrote"))
+    input.stepped?.("written")
+    const off = await landed(writes)
+    if (off) throw new Error(off)
+  } catch (error) {
+    const left = await undo(git, input.ledger, plan, bytes, (repository) => repository.paths).catch((undoError: Error) => [`(the undo failed: ${undoError.message})`])
+    await input.save(undefined)
+    input.log("rewrite rolled back", { thread: input.thread, reason: error instanceof Error ? error.message : String(error), left: left.join(", ").slice(0, 500), backup })
+    if (error instanceof MoveRefused) throw error
+    throw new Error(`The change didn't finish, so Mako put every file back as it was${left.length ? `, except ${left.join(", ")}, which changed since` : ""}. The checkout's state before it is kept as ${backup}. (${error instanceof Error ? error.message : String(error)})`, { cause: error })
+  }
+  plan.step = "done"
+  await input.save(undefined)
+  input.stepped?.("done")
+  return plan
+}
+
 /**
  * Finish a move cut short, from its saved plan: forward when every file on
  * both sides is as it was or as the plan wants, else back. Returns the plan,
  * done, or throws once it has rolled back.
  */
-export async function resumeMove(git: Git, ledger: MoveLedger | undefined, plan: MovePlan, log: MoveInput["log"]): Promise<MovePlan> {
+export async function resumeMove(git: Git, ledger: Pick<MoveLedger, "mako"> | undefined, plan: MovePlan, log: MoveInput["log"]): Promise<MovePlan> {
   if (plan.step === "done") return plan
   const bytes = new Map<string, Buffer>()
   for (const repository of plan.repositories) {

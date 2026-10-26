@@ -64,6 +64,7 @@ export { childBackend } from "./watch-backend.js"
 export { watchTree } from "./tree-watcher.js"
 export { watchOutsideGitDir } from "./git-dir-watch.js"
 export type { MoveLedger } from "./worktree-move.js"
+export { MovePlanSchema, MoveRefused, resumeMove, rewriteInPlace, type InPlaceFile, type MovePlan } from "./worktree-move.js"
 
 /** A long quiet, not a short timer: a stopped app keeps its files and data, and restarting it for nothing costs more than it frees. */
 const THREAD_APP_IDLE_MS = 6 * 60 * 60 * 1000

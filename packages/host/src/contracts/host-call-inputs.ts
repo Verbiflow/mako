@@ -744,8 +744,33 @@ const inputs = {
         modeId: z.string().optional(),
       }),
     ]),
-  "mako:live-turn-changes": () => z.tuple([z.string(), z.string()]),
-  "mako:live-turn-diff": () => z.tuple([z.string(), z.string(), z.string()]),
+  "mako:live-turn-changes": () =>
+    z.tuple([z.string(), z.string(), z.string().optional()]),
+  "mako:live-turn-diff": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z.string(),
+      z.object({ only: z.boolean().optional() }).optional(),
+    ]),
+  "mako:live-turn-undo": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.object({ kind: z.literal("turn"), requestId: z.string() }),
+        z.object({ kind: z.literal("thread") }),
+      ]),
+      z.string(),
+    ]),
+  "mako:live-turn-undo-preview": () =>
+    z.tuple([
+      z.string(),
+      z.union([
+        z.object({ kind: z.literal("turn"), requestId: z.string() }),
+        z.object({ kind: z.literal("thread") }),
+      ]),
+    ]),
+  "mako:live-turn-writers": () => z.tuple([z.string(), z.string(), z.string()]),
   "mako:lost-versions": () =>
     z.tuple([
       z.union([
@@ -1826,6 +1851,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-transfer", "conversations"],
   ["mako:live-turn-changes", "conversations"],
   ["mako:live-turn-diff", "conversations"],
+  ["mako:live-turn-undo", "conversations"],
+  ["mako:live-turn-undo-preview", "conversations"],
+  ["mako:live-turn-writers", "conversations"],
   ["mako:lost-versions", "attribution"],
   ["mako:machine-woke", "application"],
   ["mako:mcp-discover", "tools"],

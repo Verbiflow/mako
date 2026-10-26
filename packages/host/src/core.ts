@@ -535,6 +535,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         settleMs: ATTRIBUTION_SETTLE_MS,
       }
     },
+    // A turn's review and its undo, from the same journal.
+    turnReview: () => {
+      const attribution = late.attribution
+      return attribution && {
+        placement: (conversation) => threads.store?.journalPlacement(conversation),
+        settled: () => attribution.settled(),
+        blob: (ref) => attribution.blob(ref),
+        turnWriters: (thread, turn, file, shown) => attribution.turnWriters(thread, turn, file, shown),
+        turnOnly: (thread, turn, file) => attribution.turnOnly(thread, turn, file),
+        undoPlan: (thread, scope, checkout) => attribution.undoPlan(thread, scope, checkout),
+        running: (checkout) => attribution.running(checkout),
+        mako: (write) => attribution.mako(write),
+      }
+    },
     admission,
   })
   late.conversations = opened
