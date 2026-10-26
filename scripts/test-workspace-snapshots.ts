@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import {
   mkdtempSync,
+  realpathSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
@@ -84,6 +85,7 @@ try {
   const turnEnd = await store.capture(cwd)
   const turn = store.trees(original.id, turnEnd.id)
   assert.equal(turn.scope, original.scope)
+  assert.ok("from" in turn, "one repository's checkpoints compare as one pair of trees")
   const compared = new TreeComparison(gitRunner, { root: turn.scope, from: turn.from, to: turn.to, stores: turn.stores })
   try {
     assert.deepEqual(await compared.files(), [
@@ -259,10 +261,26 @@ try {
   await store.endRun(activeId)
   const overlappingA = randomUUID(),
     overlappingB = randomUUID()
-  await store.beginRun(overlappingA, cwd)
-  await assert.rejects(store.beginRun(overlappingB, cwd), /Another agent/)
-  await assert.rejects(store.endRun(overlappingA), /Another agent/)
-  await assert.rejects(store.endRun(overlappingB), /Another agent/)
+  const beforeA = await store.beginRun(overlappingA, cwd)
+  const beforeB = await store.beginRun(overlappingB, cwd)
+  assert.equal(beforeA.shared, undefined, "nothing else ran when the first turn began")
+  assert.deepEqual(beforeB.shared, [overlappingA], "the second turn's checkpoint names the turn already running")
+  file("tracked", "written while two turns ran\n")
+  await assert.rejects(store.preview(beforeA.id), /every agent/, "a rewind still waits for both turns")
+  const afterA = await store.endRun(overlappingA)
+  assert.deepEqual(afterA.shared, [overlappingB], "the first turn's closing checkpoint names the turn that joined it")
+  await assert.rejects(store.preview(afterA.id), /every agent/, "one turn still runs there")
+  const afterB = await store.endRun(overlappingB)
+  assert.deepEqual(afterB.shared, [overlappingA])
+  const sharedPreview = await store.preview(beforeA.id)
+  assert.deepEqual(sharedPreview.target.shared, undefined)
+  assert.ok(sharedPreview.changedFiles.includes("tracked"))
+  const sharedTurn = store.compare(store.trees(beforeB.id, afterB.id))
+  try {
+    assert.deepEqual((await sharedTurn.files()).map((changed) => changed.path), ["tracked"])
+  } finally {
+    sharedTurn.close()
+  }
   const finishing = randomUUID(),
     following = randomUUID()
   await store.beginRun(finishing, cwd)
@@ -271,13 +289,44 @@ try {
   await closing
   await store.endRun(following)
   console.log(
-    "PASS: active writers block rewind and overlapping runs cannot claim coordinated checkpoints; a turn that begins while another's closing checkpoint is written overlaps nothing"
+    "PASS: turns sharing a workspace both get checkpoints that name each other, a rewind waits until neither runs, and a turn that begins while another's closing checkpoint is written overlaps nothing"
   )
 
+  // A file Git was told not to look at (skip-worktree for a local config, assume-unchanged) is still captured and rewound, and keeps its flag.
+  file("local.json", '{"port":1}\n')
+  git("add", "local.json")
+  git("commit", "-qm", "local config")
+  git("update-index", "--skip-worktree", "local.json")
   git("update-index", "--assume-unchanged", "tracked")
-  await assert.rejects(store.capture(cwd), /assume-unchanged/)
+  file("local.json", '{"port":2}\n')
+  file("tracked", "assumed unchanged but edited\n")
+  const flaggedBefore = await store.capture(cwd)
+  file("local.json", '{"port":3}\n')
+  file("tracked", "edited again\n")
+  const flaggedAfter = await store.capture(cwd)
+  const flaggedTurn = store.compare(store.trees(flaggedBefore.id, flaggedAfter.id))
+  try {
+    assert.deepEqual((await flaggedTurn.files()).map((changed) => changed.path), ["local.json", "tracked"], "a flagged file's edit is in the turn")
+  } finally {
+    flaggedTurn.close()
+  }
+  const flaggedPreview = await store.preview(flaggedBefore.id)
+  await store.restore(plan(flaggedBefore.id, flaggedPreview.current.id), () => {})
+  assert.equal(read("local.json"), '{"port":2}\n')
+  assert.equal(read("tracked"), "assumed unchanged but edited\n")
+  assert.match(git("ls-files", "-v", "local.json", "tracked"), /^S local\.json\nh tracked$/, "the flags are the person's as before")
   git("update-index", "--no-assume-unchanged", "tracked")
-  console.log("PASS: index flags cannot silently omit changed files")
+  git("update-index", "--no-skip-worktree", "local.json")
+  console.log("PASS: skip-worktree and assume-unchanged files are captured and rewound, and keep their flags")
+
+  // A repository inside this one that it doesn't track is its own: left out, not refused.
+  mkdirSync(join(cwd, "vendor-repo"))
+  execFileSync("git", ["init", "-q"], { cwd: join(cwd, "vendor-repo") })
+  writeFileSync(join(cwd, "vendor-repo", "lib.js"), "module.exports = 1\n")
+  const withEmbedded = await store.capture(cwd)
+  assert.ok(withEmbedded.files > 0)
+  rmSync(join(cwd, "vendor-repo"), { recursive: true, force: true })
+  console.log("PASS: an untracked repository inside the workspace is left out of its checkpoint")
 } finally {
   store.close()
   rmSync(root, { recursive: true, force: true })
@@ -358,4 +407,144 @@ try {
 } finally {
   legacyStore.close()
   rmSync(legacyRoot, { recursive: true, force: true })
+}
+
+// A sparse checkout: what's outside the cone stays off disk through a capture and a rewind.
+const sparseRoot = mkdtempSync(join(tmpdir(), "mako-sparse-snapshots-"))
+const sparseCwd = join(sparseRoot, "workspace")
+mkdirSync(sparseCwd)
+const sparseGit = (...args: string[]) =>
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@localhost", ...args], { cwd: sparseCwd, encoding: "utf8" }).trim()
+const sparseStore = new WorkspaceSnapshots(gitRunner, join(sparseRoot, "store"))
+try {
+  sparseGit("init", "-q")
+  for (const folder of ["app", "docs"]) {
+    mkdirSync(join(sparseCwd, folder))
+    writeFileSync(join(sparseCwd, folder, "index.md"), `${folder}\n`)
+  }
+  sparseGit("add", ".")
+  sparseGit("commit", "-qm", "two folders")
+  sparseGit("sparse-checkout", "set", "--cone", "app")
+  assert.equal(existsSync(join(sparseCwd, "docs")), false)
+  const sparseBefore = await sparseStore.capture(sparseCwd)
+  writeFileSync(join(sparseCwd, "app", "index.md"), "app changed\n")
+  writeFileSync(join(sparseCwd, "app", "new.md"), "new\n")
+  const sparseAfter = await sparseStore.capture(sparseCwd)
+  const sparseTurn = sparseStore.compare(sparseStore.trees(sparseBefore.id, sparseAfter.id))
+  try {
+    assert.deepEqual((await sparseTurn.files()).map((changed) => changed.path), ["app/index.md", "app/new.md"])
+  } finally {
+    sparseTurn.close()
+  }
+  const sparsePreview = await sparseStore.preview(sparseBefore.id)
+  await sparseStore.restore(plan(sparseBefore.id, sparsePreview.current.id), () => {})
+  assert.equal(readFileSync(join(sparseCwd, "app", "index.md"), "utf8"), "app\n")
+  assert.equal(existsSync(join(sparseCwd, "app", "new.md")), false)
+  assert.equal(existsSync(join(sparseCwd, "docs")), false, "the rewind writes nothing outside the cone")
+  assert.match(sparseGit("ls-files", "-v", "docs/index.md"), /^S /, "what's outside the cone stays skipped")
+  console.log("PASS: a sparse checkout is captured and rewound inside its cone")
+} finally {
+  sparseStore.close()
+  rmSync(sparseRoot, { recursive: true, force: true })
+}
+
+// Past the old 20,000-file limit: Git reads again only what changed.
+const largeRoot = mkdtempSync(join(tmpdir(), "mako-large-snapshots-"))
+const largeCwd = join(largeRoot, "workspace")
+mkdirSync(largeCwd)
+const largeStore = new WorkspaceSnapshots(gitRunner, join(largeRoot, "store"))
+try {
+  for (let folder = 0; folder < 25; folder++) {
+    mkdirSync(join(largeCwd, `f${folder}`))
+    for (let index = 0; index < 1_000; index++) writeFileSync(join(largeCwd, `f${folder}`, `${index}.txt`), `${folder}/${index}\n`)
+  }
+  execFileSync("git", ["init", "-q"], { cwd: largeCwd })
+  execFileSync("git", ["add", "."], { cwd: largeCwd })
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@localhost", "commit", "-qm", "many"], { cwd: largeCwd })
+  const largeBefore = await largeStore.capture(largeCwd)
+  assert.equal(largeBefore.files, 25_000)
+  writeFileSync(join(largeCwd, "f3", "7.txt"), "changed\n")
+  const largeAfter = await largeStore.capture(largeCwd)
+  const largeTurn = largeStore.compare(largeStore.trees(largeBefore.id, largeAfter.id))
+  try {
+    assert.deepEqual((await largeTurn.files()).map((changed) => changed.path), ["f3/7.txt"])
+  } finally {
+    largeTurn.close()
+  }
+  const packed = Number(execFileSync("du", ["-sk", join(largeRoot, "store", largeAfter.id, "git", "objects")], { encoding: "utf8" }).split("\t")[0])
+  assert.ok(packed < 100, `a checkpoint's objects are what the turn changed, not the commit's: ${packed} KB`)
+  console.log("PASS: 25,000 files are captured, and a checkpoint keeps only what changed")
+} finally {
+  largeStore.close()
+  rmSync(largeRoot, { recursive: true, force: true, maxRetries: 3 })
+}
+
+// A project folder of two repositories, one with a submodule: a checkpoint of each, compared and rewound as one.
+const projectRoot = realpathSync(mkdtempSync(join(tmpdir(), "mako-project-snapshots-")))
+const project = join(projectRoot, "project")
+const projectStore = new WorkspaceSnapshots(gitRunner, join(projectRoot, "store"))
+try {
+  const repo = (folder: string, files: Record<string, string>) => {
+    mkdirSync(folder, { recursive: true })
+    for (const [name, text] of Object.entries(files)) writeFileSync(join(folder, name), text)
+    const run = (...args: string[]) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@localhost", "-c", "protocol.file.allow=always", ...args], { cwd: folder, encoding: "utf8" })
+    run("init", "-q")
+    run("add", ".")
+    run("commit", "-qm", "first")
+    return run
+  }
+  const library = join(projectRoot, "library")
+  repo(library, { "lib.ts": "export const lib = 1\n" })
+  repo(join(project, "api"), { "server.ts": "export const port = 1\n" })
+  const web = repo(join(project, "web"), { "page.tsx": "export const title = 'old'\n" })
+  web("submodule", "add", "-q", library, "vendor/library")
+  web("commit", "-qm", "library")
+  const runId = randomUUID()
+  const before = await projectStore.beginRun(runId, project)
+  assert.equal(before.scope, project)
+  writeFileSync(join(project, "api", "server.ts"), "export const port = 2\n")
+  writeFileSync(join(project, "web", "page.tsx"), "export const title = 'new'\n")
+  writeFileSync(join(project, "web", "vendor", "library", "lib.ts"), "export const lib = 2\n")
+  const after = await projectStore.endRun(runId)
+  const turn = projectStore.compare(projectStore.trees(before.id, after.id))
+  try {
+    assert.deepEqual((await turn.files()).map((changed) => changed.path), ["api/server.ts", "web/page.tsx", "web/vendor/library/lib.ts"])
+    assert.deepEqual(await turn.preview("web/vendor/library/lib.ts"), { kind: "files", before: "export const lib = 1\n", after: "export const lib = 2\n" })
+  } finally {
+    turn.close()
+  }
+  const preview = await projectStore.preview(before.id)
+  assert.equal(preview.changedFileCount, 3)
+  let forks = 0
+  const rewind = plan(before.id, preview.current.id)
+  await projectStore.restore(rewind, () => forks++)
+  assert.equal(readFileSync(join(project, "api", "server.ts"), "utf8"), "export const port = 1\n")
+  assert.equal(readFileSync(join(project, "web", "page.tsx"), "utf8"), "export const title = 'old'\n")
+  assert.equal(readFileSync(join(project, "web", "vendor", "library", "lib.ts"), "utf8"), "export const lib = 1\n")
+  assert.equal(forks, 1, "the fork is made once, after every repository is restored")
+  assert.deepEqual(projectStore.pending(), [])
+
+  // One repository changes after the preview: nothing is rewound and no fork is made.
+  writeFileSync(join(project, "api", "server.ts"), "export const port = 3\n")
+  const stalePreview = await projectStore.preview(before.id)
+  writeFileSync(join(project, "web", "page.tsx"), "export const title = 'newer'\n")
+  await assert.rejects(projectStore.restore(plan(before.id, stalePreview.current.id), () => forks++), /changed after the preview/)
+  assert.equal(readFileSync(join(project, "api", "server.ts"), "utf8"), "export const port = 3\n", "the repository restored first is put back")
+  assert.equal(forks, 1)
+  console.log("PASS: a project folder and a submodule are captured, compared and rewound per repository, all or nothing")
+} finally {
+  projectStore.close()
+  rmSync(projectRoot, { recursive: true, force: true })
+}
+
+const loose = mkdtempSync(join(tmpdir(), "mako-no-git-snapshots-"))
+const looseStore = new WorkspaceSnapshots(gitRunner, join(loose, "store"))
+try {
+  mkdirSync(join(loose, "notes"))
+  writeFileSync(join(loose, "notes", "a.md"), "a\n")
+  await assert.rejects(looseStore.capture(join(loose, "notes")), /Rewind needs Git/)
+  console.log("PASS: a folder with no repository says why it has no checkpoint")
+} finally {
+  looseStore.close()
+  rmSync(loose, { recursive: true, force: true })
 }

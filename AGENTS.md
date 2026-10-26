@@ -1551,7 +1551,7 @@ Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Elect
 
 A move into a Thread's worktree takes only the Thread's own uncommitted changes (`workspaces/worktree-move.ts`), never a stash of the whole checkout. The attribution journal (`attribution/`, `partition`) names each changed line's last writer: the worktree gets the base plus the Thread's lines and the files it created, deleted or renamed; the main checkout keeps everyone else's. Lines that might be the Thread's (`window`, `ambiguous`) and changes nobody can be named for (there before tracking, `unattributed`) stay unless the person chooses Bring these, on the move card before or on the toast after. A hunk that can't be split by line goes whole to whoever wrote most of it and is named. Without the journal nothing is attributed, so nothing moves unless brought. The move is all-or-nothing: it reads each file, checks it is what the journal holds and that the two sides add back up to it line for line, stores every version in the repository's objects, keeps the main checkout's whole state (files and index) as a commit under `refs/mako/moves/<id>` for 14 days, saves its plan (`<worktrees>/moves/<id>.json`, the receipt's `moving`), writes each file by a rename after checking it is still what it read, then reads both sides back. Anything off rolls back. A host that dies mid-move finishes it on the next start (`tidy`) when every file is as it was or as planned, and otherwise rolls back around whatever changed since. Each step is logged under `worktree-move`. `worktree_status` reports whose the main checkout's changes are; the move's result and the agent's message in the worktree say what came and what stayed. `npm run test:attribution` ends with `test-worktree-attribution-moves.ts`: three writers in one file, renames, deletes, binary and untracked files, staging, two repositories, and a process killed at each step.
 
-What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files.
+What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files. What Git put back (a checkout, pull, rebase, reset or stash no call named the file for) is journaled with `git` set, or not at all when a file holds exactly the new commit's content; no turn, "changes made", others' count or rewind writer counts it, and a version Git puts back keeps the writers it had. A call's exact bounds from a harness's hooks (`harnesses/call-bounds.ts`) go through `LiveActivity.bounds`, under the same request-keyed turn as the call's marks, so the journal has one record of each call.
 
 The agent's Git tools work in a project folder of several repositories, whose Thread checkout holds one worktree per repository, all on one branch. The `worktree_*` tools (`workspaces/tools.ts`) act on every repository at once. `worktree_update` updates each one on its own: the reply names each repository with what happened (merged, already current, refused and why, or stopped on conflicts with the files and how to finish), and a repository that's refused or stops doesn't keep the others from updating. `worktree_merge` checks every repository with commits before merging any; if Git still stops one, the reply says which ones merged and which didn't. A pull request belongs to one repository. `repositoryPlace` lists the repositories the calling Session can reach: this Thread's worktrees, each with its own start branch; the repository its folder is in; or each repository of a main checkout's project folder. Each is named by its folder in the project, which is how `worktree_status` lists it. Every `pull_request_*` tool takes that name as `repository`. Without it, a tool acts on the repository the Session's folder is inside, or on the only one. From the project folder itself, `pull_request_status` reports every repository. `pull_request_open` and `pull_request_merge` act only when exactly one repository fits (has work to push or open, or has an open pull request); otherwise they list where each one stands, before pushing or merging anything. The window adds the repository its Git panel shows to every staged Git action (`gitRepositoryName` in `contracts/git-actions.ts`, applied in `src/state/git-actions.ts`), so a person's button and the agent's call act on the same repository. `npm run test:thread-worktrees` covers both families: `test-git-actions.ts` against two real repositories, and `test-workspace-moves.ts`.
 
@@ -2901,8 +2901,12 @@ A failed resume must not silently create a replacement native session.
 native session, its context and its mode are kept. `test-devin-resume.ts` checks
 native revisions, lock handling and records without a checkpoint.
 
-New checkpoint payloads use self-contained private Git packs, not the user's
-object database. Captures must not add objects or refs to that database. Restore
+New checkpoint payloads use private Git packs, not the user's object
+database. A pack holds what the checkpoint adds to the commit checked out (the
+turn's new and changed files, staged blobs), never that commit's own tree: a
+rewind is refused once HEAD moves, so every restore finds those objects in the
+repository, and a 50,000-file checkout's checkpoint keeps kilobytes, not the
+whole tree. Captures must not add objects or refs to that database. Restore
 imports the selected pack before publishing the saved index, so later checkpoint
 expiration cannot strand staged blobs. Legacy repository-backed checkpoints remain
 readable; their refs are removed only after ownership checks and a Git compare-and-swap.
@@ -2921,7 +2925,25 @@ completed or live uncatalogued payloads remain protected and count against admis
 Completed restore receipts remain valid after their checkpoint expires.
 `npm run test:workspace-snapshots` checks these rules in disposable repositories.
 `npm run benchmark:snapshots` records capture/preview/restore timings and retained
-bytes for 100-file and 5,000-file fixtures.
+bytes for 100-, 5,000-, 20,000- and 50,000-file fixtures.
+
+A checkpoint takes what Git can read cheaply, not only plain repositories. The
+working index is a copy of the person's, so Git rereads only files whose stat
+changed; a sparse checkout's skipped entries stay off disk (`add --sparse`), and
+a file flagged skip-worktree or assume-unchanged that is on disk is unflagged in
+that copy alone, so its edits are captured and the person's flags survive a
+rewind. A restore starts from the current state's own working index, so Git
+rewrites only the files that differ. A project folder of several repositories,
+and a repository's checked-out submodules, are captured one repository at a time
+under one group checkpoint; their rewind restores each repository as its own
+durable operation naming the whole, puts back those already restored when one
+fails, and forks once at the end. An untracked repository inside a checkout is
+its own, left out. Turns sharing a workspace (Threads in one main checkout) both
+get checkpoints, each naming the other (`shared`), and the rewind preview lists
+each changed file's writers from the attribution journal; restoring still waits
+until no turn runs there. What still refuses (no Git at all, merge conflicts,
+more than 250,000 files, a turn's new files past 256 MB) says why where Rewind is
+offered.
 
 `npm run test:packaged-lifecycle -- /path/to/Mako.app --renderer-only` checks
 packaged launch and draft reload without starting a provider. Provider lifecycle

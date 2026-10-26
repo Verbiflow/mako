@@ -486,7 +486,11 @@ export interface ThreadChanges {
   maybe: number
 }
 
-/** What a Thread changed for sure, entry by entry: files, lines, commands and paths outside its checkout, with how sure each is. */
+/**
+ * What a Thread changed for sure, entry by entry: files, lines, commands and
+ * paths outside its checkout, with how sure each is. What Git put back
+ * (`StoredEntry.git`) is nobody's change.
+ */
 export function changes(view: JournalView, thread: string): ThreadChanges {
   const entries = view.store.entriesBy("thread", thread)
   const result: ThreadChanges = {
@@ -503,6 +507,7 @@ export function changes(view: JournalView, thread: string): ThreadChanges {
   const first = new Map<string, StoredEntry>()
   let uncertain = 0
   for (const entry of entries) {
+    if (entry.git) continue
     result.certainty[entry.author.certainty] = (result.certainty[entry.author.certainty] ?? 0) + 1
     // Only its own: a window only its turn spans is a maybe, as an ambiguous change naming it is.
     if (side(view.author(entry.seq), thread) !== "thread") {
@@ -579,13 +584,16 @@ interface FileCount {
  * The lines of one file across a stretch of its entries, each tagged with
  * whoever last wrote it in the stretch; undefined when some version's
  * content isn't kept. Each entry's change is the journal's own line diff of
- * its two sides, so the count agrees with the line maps.
+ * its two sides, so the count agrees with the line maps; and as there, a
+ * version Git put back (a stash popped) has the writers it had.
  */
 function countLines(view: JournalView, chain: readonly StoredEntry[], tagOf: (seq: number) => Tag): FileCount | undefined {
   const count: FileCount = { own: { added: 0, removed: 0 }, maybe: { added: 0, removed: 0 } }
   let lines: string[] = []
   let tags: Tag[] = []
   let at: ContentRef | null | undefined
+  /** Each version the stretch has been at, with its lines' tags then. */
+  const versions = new Map<ContentRef | null, Tag[]>()
   /** Lines of `next` in place of the current ones, written by `by`. */
   const apply = (next: string[], by: Tag) => {
     const out: Tag[] = []
@@ -607,15 +615,22 @@ function countLines(view: JournalView, chain: readonly StoredEntry[], tagOf: (se
       if (!first) return undefined
       lines = first
       tags = first.map(() => "pre")
+      versions.set(entry.before, tags)
     } else if (entry.before !== at) {
       // Something between two entries the journal kept apart: whoever it was, it wasn't the turn.
       const between = linesOf(view, entry.before)
       if (!between) return undefined
       apply(between, "other")
+      versions.set(entry.before, tags)
     }
     const after = linesOf(view, entry.after)
     if (!after) return undefined
-    apply(after, tagOf(entry.seq))
+    const put = entry.git && entry.before === at ? versions.get(entry.after) : undefined
+    if (put) {
+      lines = after
+      tags = put
+    } else apply(after, tagOf(entry.seq))
+    versions.set(entry.after, tags)
     at = entry.after
   }
   for (const tag of tags) if (tag === "own" || tag === "maybe") count[tag].added++
@@ -627,8 +642,10 @@ function countLines(view: JournalView, chain: readonly StoredEntry[], tagOf: (se
  * turn's entries touched, from the content before its first entry on it to
  * the content after its last, every line counted for whoever wrote it last
  * in between (`TurnChanges`). The turn's entries are the Thread's in that
- * turn and the ambiguous ones naming it with that turn; `others` counts
- * the rest of the checkout's entries while the turn ran.
+ * turn and the ambiguous ones naming it with that turn, never what Git put
+ * back (`entriesOfTurn`); `others` counts the rest of the checkout's
+ * entries while the turn ran. Whose each entry is reads as `side` says, as
+ * a rewind's writers do (`writersSince`).
  */
 export function turnChanges(view: JournalView, thread: string, turn: string, state: TurnChanges["state"] = "settled", now = Date.now()): TurnChanges {
   const store = view.store
@@ -734,7 +751,7 @@ function countFile(view: JournalView, group: TurnFile, tagOf: (seq: number) => T
   }
 }
 
-/** What others changed in the turn's checkout while it ran: files and lines as each entry stated them, never the Thread's. */
+/** What others changed in the turn's checkout while it ran: files and lines as each entry stated them, never the Thread's, Mako's or Git's. */
 function othersDuring(view: JournalView, thread: string, turn: string, tags: ReadonlyMap<number, Tag>): TurnChangeShare {
   const span = view.store.turn(thread, turn)
   const out = { files: 0, added: 0, removed: 0 }
@@ -742,7 +759,7 @@ function othersDuring(view: JournalView, thread: string, turn: string, tags: Rea
   const inside = new Set(rootsIn(view, span.checkout).map((root) => root.root.id))
   const files = new Set<string>()
   for (const entry of view.store.entriesBetween(span.start, span.end ?? Number.MAX_SAFE_INTEGER)) {
-    if (!inside.has(entry.root) || tags.has(entry.seq) || entry.author.certainty === "mako") continue
+    if (!inside.has(entry.root) || tags.has(entry.seq) || entry.author.certainty === "mako" || entry.git) continue
     if ("author" in entry.author && entry.author.author.thread === thread) continue
     files.add(`${entry.root}\u0000${entry.path}`)
     out.added += entry.added ?? 0

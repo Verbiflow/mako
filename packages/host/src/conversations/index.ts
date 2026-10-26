@@ -97,6 +97,7 @@ export interface ConversationsDeps {
   /** The MCP servers the harnesses have for `cwd`, which a launch hands its agent. */
   mcpSnapshot: NonNullable<LiveDependencies["mcpSnapshot"]>
   revokeTools: NonNullable<LiveDependencies["revokeTools"]>
+  rewindWriters?: LiveDependencies["rewindWriters"]
   suspendTools?: LiveDependencies["suspendTools"]
   controlInstructions: NonNullable<LiveDependencies["controlInstructions"]>
   /** A waiting move may go ahead; the moves are made after the conversations. */
@@ -140,6 +141,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     threads: threads.store ?? undefined,
     mcpSnapshot: deps.mcpSnapshot,
     workspaceSnapshots: new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots")),
+    rewindWriters: deps.rewindWriters,
     checkpoint: (path, provider) => {
       const sourceProvider = provider ?? catalog.ref(path)?.harness
       const driver = sourceProvider ? host.liveDrivers.get(sourceProvider) : undefined

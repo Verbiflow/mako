@@ -21,14 +21,15 @@ const gitRunner = new Git()
 
 const root = await mkdtemp(join(tmpdir(), "mako-snapshot-benchmark-"))
 const results = []
-for (const files of [100, 5000]) {
+for (const files of [100, 5000, 20_000, 50_000]) {
   const cwd = join(root, `workspace-${files}`)
   const storage = join(root, `snapshots-${files}`)
   await mkdir(cwd)
   const git = (...args: string[]) =>
     execFileSync(
       "git",
-      ["-c", "user.name=Test", "-c", "user.email=test@localhost", ...args],
+      // No automatic packing in the background: it races the fixture's removal.
+      ["-c", "user.name=Test", "-c", "user.email=test@localhost", "-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args],
       { cwd, encoding: "utf8" }
     ).trim()
   const contents = (index: number) =>
@@ -45,7 +46,11 @@ for (const files of [100, 5000]) {
   const store = new WorkspaceSnapshots(gitRunner, storage)
   try {
     let started = performance.now()
-    const before = await store.capture(cwd)
+    const before = await store.capture(cwd).catch((error: Error) => error)
+    if (before instanceof Error) {
+      results.push({ files, refused: before.message })
+      continue
+    }
     const coldCaptureMs = performance.now() - started
     await writeFile(join(cwd, "0.txt"), "changed")
     started = performance.now()
@@ -86,8 +91,8 @@ for (const files of [100, 5000]) {
     })
   } finally {
     store.close()
-    await rm(cwd, { recursive: true, force: true })
-    await rm(storage, { recursive: true, force: true })
+    await rm(cwd, { recursive: true, force: true, maxRetries: 3 })
+    await rm(storage, { recursive: true, force: true, maxRetries: 3 })
   }
 }
 await writeFile(

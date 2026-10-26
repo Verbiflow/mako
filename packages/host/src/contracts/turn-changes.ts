@@ -13,13 +13,18 @@ import { z } from "zod"
  * on it to the content after its last, each line counted for whoever wrote
  * it last in between. `own` lines are the Thread's for sure (`side` thread);
  * `maybe` lines only timing or a shared window names it for (`side`
- * uncertain: the person's save while the turn ran fits as well).
+ * uncertain: the person's save while the turn ran fits as well). What Git
+ * put back while the turn ran (a branch switch or pull the turn's own
+ * command made, a stash: the journal's `git` entries) is nobody's, and
+ * counts on no side.
  *
  * For a reader that goes further (a turn's diff, its hunks by writer,
  * undoing it): each file carries the journal's root and path, the content
  * on either side by address, and the entries that span it, so its bodies
  * come from `blob(before)` and `blob(after)` and its writers from the
- * entries in `entries.first..entries.last` (`queries.ts` `turnChanges`).
+ * entries in `entries.first..entries.last` (`queries.ts` `turnChanges`),
+ * whose by `side`, as `writersSince` reads them; an entry marked `git`
+ * there is no writer's, and a version Git put back has the writers it had.
  */
 
 /** Bumped when the record's meaning changes; a reader drops one it doesn't know and counts again. */

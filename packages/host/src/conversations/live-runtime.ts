@@ -40,6 +40,7 @@ import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import type { Actor } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { WorkspaceSnapshots } from "../workspaces/index.js"
+import type { FileWriters } from "../contracts/workspace-snapshots.js"
 import type { TurnSteps } from "./interrupted-turn.js"
 import type { ContextBundles } from "./live-context.js"
 import type { PlanBuild } from "../contracts/plan-builds.js"
@@ -138,6 +139,8 @@ export interface Dependencies {
   foreground?: Pick<Foreground, "hold" | "started">
   mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots
+  /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */
+  rewindWriters?(paths: readonly string[], since: number): FileWriters | undefined
   appPath: string
   tools?(
     bindingId: string,

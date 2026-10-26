@@ -46,6 +46,7 @@ export { carriedUsage, departedBinding, restorableTotals, spendBetween } from ".
 export { threadHarnesses } from "./thread-harnesses.js"
 export { usageHarnesses } from "./usage-harnesses.js"
 export { liveToolEffects, type LiveToolEffects } from "./live-engine.js"
+export { liveCallBounds, type LiveCallBounds } from "./call-bounds.js"
 export type { PromptDispatch } from "./prompt-dispatch.js"
 
 /** The six adapters as this host has them: their versions, accounts, and whether a session can resume. */

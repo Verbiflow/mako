@@ -38,11 +38,11 @@ function lines(count: LineCount | undefined): { insertions: number | null; delet
 const COUNT_WAIT_MS = 120
 
 /** What changed between two trees, as the Changes panel lists files. */
-export async function treeFiles(comparison: TreeComparison): Promise<GitFile[]> {
+export async function treeFiles(comparison: Pick<TreeComparison, "files">): Promise<GitFile[]> {
   return (await comparison.files()).map((file) => ({ path: file.path, status: CHANGE_STATUS.get(file.change) ?? "modified", staged: false, ...lines(file.lines), binary: file.lines === null }))
 }
 
-export async function treeDiff(comparison: TreeComparison, path: string): Promise<GitDiff> {
+export async function treeDiff(comparison: Pick<TreeComparison, "preview">, path: string): Promise<GitDiff> {
   return gitDiff(path, await comparison.preview(path))
 }
 

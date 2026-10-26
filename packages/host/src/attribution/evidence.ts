@@ -1,4 +1,4 @@
-import type { ActivityMark, Attribution, Author, ChangeKind, MakoWrite, ReportedCall, ReportedEffect } from "@mako/protocol"
+import type { ActivityMark, Attribution, Author, ChangeKind, ContentRef, MakoWrite, ReportedCall, ReportedEffect } from "@mako/protocol"
 import { diffLines, splitLines } from "./line-diff.js"
 import { applyPatch } from "./patch.js"
 import { within } from "./paths.js"
@@ -20,6 +20,12 @@ export const LEAD_MS = 100
 export const TRAIL_MS = 3_000
 /** A call this far in when a change lands has run long enough that the person may be working alongside it. */
 const STANDING_MS = 120_000
+/**
+ * Around a call's bounds as a hook marked them (`ReportedCall.exact`): the
+ * hook and the file's modification time read the same clock, so a write the
+ * tool made falls inside them but for rounding.
+ */
+const EXACT_SLACK_MS = 20
 /** Mako's own writes, which it marks around the operation, lag less. */
 const MAKO_TRAIL_MS = 1_500
 /** Candidates named in an ambiguous author, at most. */
@@ -69,6 +75,23 @@ export interface ObservedChange {
   root?: string
   /** An agent this host doesn't run was working where the change was heard, in a few words: timing can't name a Thread then. */
   outsider?: string
+  /**
+   * When the change was heard, where `changedAt` may not be when it was
+   * written: a deletion or rename, a modification time older than the
+   * watcher's lag allows (a copy that kept it), in the future, or rounded to
+   * the second by a coarse file system. Exact bounds then judge it by this,
+   * allowing for the watcher's lag.
+   */
+  heard?: number
+  /** The content's addresses either side, for a hook's own record of the file (`ExactBounds.files`). */
+  refs?: { before: ContentRef | null; after: ContentRef | null }
+}
+
+/** When something ran: its marks, or a hook's exact bounds (`exact`). */
+export interface Span {
+  start: number
+  end: number | null
+  exact?: boolean
 }
 
 export const authorOf = (interval: Pick<Interval, "thread" | "session" | "turn">, call?: string, work?: string): Author => {
@@ -133,7 +156,17 @@ export class Evidence {
     if (call.status !== "refused") this.worked.add(call.thread, { named: [], effects: call.effects.filter((effect) => !seen(effect)) })
     const id = key(call.session, call.call)
     const known = this.reports.get(id)
-    this.reports.set(id, known ? { ...known, ...call, effects: call.effects.length ? call.effects : known.effects } : call)
+    // A hook's bounds and the stream's report of the same call arrive apart: each keeps what the other lacks.
+    const exact = call.exact ?? known?.exact
+    const merged: ReportedCall = known ? { ...known, ...call, effects: call.effects.length ? call.effects : known.effects } : { ...call }
+    if (exact) merged.exact = exact
+    if (known?.endedAt !== undefined && merged.endedAt !== undefined) merged.endedAt = Math.max(known.endedAt, merged.endedAt)
+    this.reports.set(id, merged)
+  }
+
+  /** A call's report as it stands, every report of it merged. */
+  reportOf(session: string, call: string): ReportedCall | undefined {
+    return this.reports.get(key(session, call))
   }
 
   makoStart(write: MakoWrite, at: number): MakoInterval {
@@ -154,13 +187,74 @@ export class Evidence {
     return this.proofs.get(`${key(session, call)}\u0000${path}`)
   }
 
-  /** A call's span: its report's times, else its activity marks. */
-  callSpan(report: ReportedCall): { start: number; end: number | null } | undefined {
+  /**
+   * A call's span: a hook's exact bounds, else its report's times, else its
+   * activity marks. Exact bounds end when the tool returned or when its
+   * result reached the stream, whichever is later: the harness runs the
+   * person's own hooks (a formatter after an edit) between the two.
+   */
+  callSpan(report: ReportedCall): Span | undefined {
     const marked = this.intervals.get(key(report.session, `call:${report.call}`))
+    if (report.exact && !report.exact.detached) {
+      return { start: report.exact.start, end: Math.max(report.exact.end, report.endedAt ?? 0, marked?.end ?? 0), exact: true }
+    }
     const start = report.startedAt ?? marked?.start
     if (start === undefined) return undefined
     const end = report.endedAt ?? marked?.end ?? (report.status === "running" ? null : start)
     return { start, end }
+  }
+
+  /** When an interval ran: a call's exact bounds when a hook marked them; a turn's are exact when its session's calls are. */
+  span(interval: Interval): Span {
+    if (interval.kind === "call") {
+      const report = this.reports.get(key(interval.session, interval.id))
+      const span = report && this.callSpan(report)
+      if (span?.exact) return span
+    }
+    if (interval.kind === "turn" && this.exactSession(interval.session)) return { start: interval.start, end: interval.end, exact: true }
+    return { start: interval.start, end: interval.end }
+  }
+
+  /** Whether a hook marks this session's calls (`ReportedCall.exact`). */
+  private exactSession(session: string): boolean {
+    for (const report of this.reports.values()) if (report.session === session && report.exact && !report.exact.detached) return true
+    return false
+  }
+
+  /**
+   * Whether `change` falls where a turn whose calls a hook bounds wrote
+   * nothing: while the model wrote a call (or the person approved it) before
+   * the tool ran, or between a call's end and the next one's start. Only a
+   * call writes, and every one of this session's is accounted for. A call
+   * that left work running, and the stretch after the turn's last call (the
+   * person's own hooks run as it stops), are no such stretch.
+   */
+  between(turn: Interval, change: ObservedChange): boolean {
+    if (turn.kind !== "turn" || change.lost || change.heard !== undefined || !this.exactSession(turn.session)) return false
+    const at = change.changedAt
+    const found: Span[] = []
+    let writing = false
+    for (const interval of this.intervals.values()) {
+      if (interval.session !== turn.session || interval.kind === "turn") continue
+      const span = this.span(interval)
+      if (span.exact && interval.start - LEAD_MS <= at && at < span.start - EXACT_SLACK_MS) writing = true
+      found.push(span)
+    }
+    for (const report of this.reports.values()) {
+      if (report.session !== turn.session || report.status === "refused") continue
+      // Work a call left running before the change may have written it.
+      if (report.exact?.detached && report.exact.start <= at) return false
+      const span = this.callSpan(report)
+      if (span) found.push(span)
+    }
+    let ended: Span | undefined
+    let next = false
+    for (const span of found) {
+      if (covers(span, change)) return false
+      if (span.start > at) next = true
+      else if (span.end !== null && span.end < at && (ended?.end === undefined || ended.end === null || span.end > ended.end)) ended = span
+    }
+    return writing || (Boolean(ended?.exact) && next)
   }
 
   calls(): IterableIterator<ReportedCall> {
@@ -213,6 +307,18 @@ export class Evidence {
 
 const spans = (start: number, end: number | null, at: number, lead = LEAD_MS, trail = TRAIL_MS) =>
   start - lead <= at && (end === null || at <= end + trail)
+
+/**
+ * Whether a change could have happened while something ran. Within exact
+ * bounds by when the file was written, give or take rounding; or, for a
+ * change timed by when it was heard, up to the watcher's lag after. Within
+ * bounds the stream marked, with the lead and trail its lag needs.
+ */
+function covers(span: Span, change: ObservedChange): boolean {
+  if (!span.exact) return spans(span.start, span.end, change.changedAt)
+  if (change.heard !== undefined) return spans(span.start, span.end, change.heard, EXACT_SLACK_MS, TRAIL_MS)
+  return spans(span.start, span.end, change.changedAt, EXACT_SLACK_MS, EXACT_SLACK_MS)
+}
 const overlaps = (start: number, end: number | null, from: number, to: number) => start - LEAD_MS <= to && (end === null || end + TRAIL_MS >= from)
 
 /** A file the harness only saw change while the call ran: any process's write in that stretch is listed the same way. */
@@ -261,6 +367,15 @@ export function claim(effects: readonly ReportedEffect[], change: ObservedChange
     }
   }
   return undefined
+}
+
+/** A hook's own record of a file it saw the call change (`ExactBounds.files`): exactly this change, by content on both sides. */
+function hashed(report: ReportedCall, change: ObservedChange): { effect: "create" | "modify" | "delete"; proven: true } | undefined {
+  const refs = change.refs
+  if (!refs || change.from) return undefined
+  const file = report.exact?.files?.find((item) => item.path === change.path)
+  if (!file || file.before !== refs.before || file.after !== refs.after) return undefined
+  return { effect: refs.before === null ? "create" : refs.after === null ? "delete" : "modify", proven: true }
 }
 
 /** Whether the reported patch or edits, applied to `before`, give exactly `after`. */
@@ -376,9 +491,9 @@ export function attribute(change: ObservedChange, evidence: Evidence): Attributi
     for (const report of evidence.calls()) {
       if (report.status === "refused") continue
       const span = evidence.callSpan(report)
-      if (!span || !spans(span.start, span.end, at)) continue
+      if (!span || !covers(span, change)) continue
       const author = authorOf(report, report.call)
-      const claimed = claim(report.effects, change)
+      const claimed = hashed(report, change) ?? claim(report.effects, change)
       if (!claimed?.proven && spent(report.session, report.call)) continue
       if (claimed?.proven) exact.push({ author, effect: claimed.effect, start: span.start })
       else if (claimed) named.push({ author, by: "effect", start: span.start })
@@ -388,7 +503,7 @@ export function attribute(change: ObservedChange, evidence: Evidence): Attributi
       }
     }
     for (const interval of evidence.all()) {
-      if (interval.kind === "turn" || interval.readOnly || !spans(interval.start, interval.end, at)) continue
+      if (interval.kind === "turn" || interval.readOnly || !covers(evidence.span(interval), change)) continue
       if (interval.kind === "call" && spent(interval.session, interval.id)) continue
       const by = naming(interval, undefined, change)
       if (by) named.push({ author: authorOf(interval, interval.kind === "call" ? interval.id : undefined, interval.kind === "background" ? interval.id : undefined), by, start: interval.start })
@@ -411,7 +526,7 @@ export function attribute(change: ObservedChange, evidence: Evidence): Attributi
   for (const interval of evidence.all()) {
     // A call that only reads leaves its Thread running only as its turn is.
     if (interval.readOnly && !change.lost) continue
-    if (!(change.lost ? overlaps(interval.start, interval.end, from, to) : spans(interval.start, interval.end, at))) continue
+    if (!(change.lost ? overlaps(interval.start, interval.end, from, to) : covers(evidence.span(interval), change) && !evidence.between(interval, change))) continue
     const held = running.get(interval.thread)
     if (!held || closer(interval, held, to)) running.set(interval.thread, interval)
   }
@@ -451,16 +566,15 @@ export function attribute(change: ObservedChange, evidence: Evidence): Attributi
  * named paths are inside the change's repository, or hold the path itself.
  */
 function reachingThreads(change: ObservedChange, evidence: Evidence): Set<string> {
-  const at = change.changedAt
   const reaches = (folder: string) => (change.root !== undefined && within(change.root, folder)) || within(folder, change.path)
   const found = new Set<string>()
   for (const interval of evidence.all()) {
-    if (interval.kind === "turn" || interval.readOnly || !spans(interval.start, interval.end, at)) continue
+    if (interval.kind === "turn" || interval.readOnly || !covers(evidence.span(interval), change)) continue
     if ([interval.cwd, ...interval.named].some((folder) => folder !== undefined && reaches(folder))) found.add(interval.thread)
   }
   for (const report of evidence.calls()) {
     const span = evidence.callSpan(report)
-    if (!span || !spans(span.start, span.end, at) || readOnlyReport(report)) continue
+    if (!span || !covers(span, change) || readOnlyReport(report)) continue
     const folders = report.effects.flatMap((effect) => effect.kind === "command" ? [effect.cwd, ...(effect.named ?? [])] : effect.kind === "rename" ? [effect.from, effect.to] : [effect.path])
     if (folders.some((folder) => folder !== undefined && reaches(folder))) found.add(report.thread)
   }

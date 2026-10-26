@@ -43,6 +43,8 @@ import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
+import { CallBounds } from "../call-bounds.js"
+import { claudeCallHooks } from "./call-hooks.js"
 import { ClaudeRequests, ClaudeTranscriptTail, openedTurnLines, takenIn, TASK_PROMPT_WAIT_MS, transcriptNotification, type TranscriptNotification, type TranscriptTailStats } from "./transcript-tail.js"
 import { claudeGoalFeedback, claudeGoalLine, readClaudeGoal } from "./goals.js"
 import { claudeReviewCommand } from "./review.js"
@@ -694,6 +696,7 @@ export function createClaudeSdkDriver(
       const authDiagnostics = claudeAuthDiagnostics(config.env ?? process.env, fields =>
         hostWarn(CLAUDE_AUTH_LOG, "Native authentication failure", { conversation: conversationId, ...fields }),
       dependencies.inspectCredentials)
+      const callHooks = claudeCallHooks(new CallBounds(conversationId))
       let query: ClaudeQuery
       try { query = await dependencies.query({
         prompt: input,
@@ -709,6 +712,10 @@ export function createClaudeSdkDriver(
             UserPromptSubmit: [...(config.hooks?.UserPromptSubmit ?? []), { hooks: [transcript.hook] }],
             Stop: [...(config.hooks?.Stop ?? []), { hooks: [transcript.hook] }],
             PostCompact: [...(config.hooks?.PostCompact ?? []), { hooks: [decoder.hook] }],
+            // Each call's exact bounds and the files it wrote, for attribution (`CallBounds`).
+            PreToolUse: [...(config.hooks?.PreToolUse ?? []), { hooks: [callHooks.pre] }],
+            PostToolUse: [...(config.hooks?.PostToolUse ?? []), { hooks: [callHooks.post] }],
+            PostToolUseFailure: [...(config.hooks?.PostToolUseFailure ?? []), { hooks: [callHooks.post] }],
           },
           spawnClaudeCodeProcess: (options) => {
             const { child, stderr } = trace.sync("spawn", () => spawnClaudeProcess(options, conversationId))

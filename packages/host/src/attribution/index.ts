@@ -1,5 +1,5 @@
 import { locate, type Git } from "@mako/git"
-import type { ContentRef, MakoWrite, MakoWriting, PathMap, ThreadFileHistory } from "@mako/protocol"
+import type { ContentRef, ExactBounds, MakoWrite, MakoWriting, PathMap, ThreadFileHistory } from "@mako/protocol"
 import type { ChildSource } from "@mako/sessions"
 import type { ToolEffects } from "@mako/sessions/tool-effects"
 import { createHash, randomUUID } from "node:crypto"
@@ -14,6 +14,8 @@ import type { MethodTable } from "../base/methods.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { workspaceWrites, type WorkspaceWrite } from "../base/workspace-writes.js"
 import type { LiveBatch } from "../contracts/live-conversations.js"
+import type { FileWriters } from "../contracts/workspace-snapshots.js"
+import { writersSince } from "./writers-since.js"
 import { HISTORY_SCRATCH } from "../contracts/watcher-child.js"
 import type { ChangeUsage, LostVersion, ThreadChangeSummary } from "../contracts/thread-changes.js"
 import type { TurnChangedFile, TurnChanges } from "../contracts/turn-changes.js"
@@ -40,7 +42,7 @@ export { LaptopTracker, type TrackerOptions, type TrackerRepository } from "./tr
 export { changes, classOf, hunks, partition, restorable, shares, side, storedView, turnChanges, unattributed, writerOf, type ChangeClass, type CheckoutHunk, type CheckoutShares, type FileVersion, type JournalView, type Partition, type PartitionFile, type PartitionOptions, type Restorable, type Share, type ThreadChanges, type UncertainChange, type WholeHunk } from "./queries.js"
 export { threadTrees, type ThreadTree } from "./thread-tree.js"
 export { LOST_LISTED, lostVersions, restoreVersion } from "./recovery.js"
-export { contentRef } from "./content.js"
+export { contentRef, STORE_LIMIT } from "./content.js"
 export { diffLines, splitLines } from "./line-diff.js"
 export { LiveActivity, reportedEffect } from "./live-activity.js"
 export { gitRepository, nodeFileSystem, watcherEvents, type SystemHistory, type TreeWatcher } from "./ports.js"
@@ -190,12 +192,26 @@ export interface AttributionDeps {
   running?(): Readonly<Record<string, { status: string }>>
 }
 
+/** A call's exact bounds, as a hook its harness ran around the tool reported them (the harnesses' `liveCallBounds`). */
+export interface ReportedBounds {
+  /** The live conversation's id. */
+  conversation: string
+  /** The tool call's id, as the conversation's tool updates name it. */
+  call: string
+  status: "completed" | "failed"
+  exact: ExactBounds
+}
+
 /** Who changed what in every checkout Threads work in: the journal, what feeds it, and what it answers. */
 export interface Attribution {
   /** A batch the live conversations sent: turns, tool calls and background work starting and ending. */
   live(batch: LiveBatch): void
   /** A finished call's reported effects, from the live engine. */
   effects(conversation: string, call: ToolEffects): void
+  /** A call's exact bounds, from a hook its harness ran around the tool (`liveCallBounds`). */
+  bounds(bounds: ReportedBounds): void
+  /** Who changed each of these files (absolute) since `since`, for a rewind's preview. */
+  rewindWriters(paths: readonly string[], since: number): FileWriters
   mako(write: MakoWrite): MakoWriting
   hunks(checkout: string): CheckoutHunk[]
   changes(thread: string): ThreadChanges
@@ -761,11 +777,13 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
         effects: call.effects.map(reportedEffect),
       })
     },
+    bounds: ({ conversation, call, status, exact }) => activity.bounds(conversation, call, status, exact),
     mako(write) {
       const id = randomUUID()
       journal.writes.makoStart(id, write, Date.now())
       return { end: () => journal.writes.makoEnd(id, Date.now()) }
     },
+    rewindWriters: (paths, since) => writersSince(view(), paths, since),
     hunks: (checkout) => hunks(view(), checkout),
     changes: (thread) => changes(view(), thread),
     partition: (checkout, thread, options) => partition(view(), checkout, thread, options),

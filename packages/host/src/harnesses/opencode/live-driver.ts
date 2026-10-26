@@ -1,4 +1,5 @@
 import { realpath } from "node:fs/promises"
+import { OpenCodeCallBounds } from "./call-bounds.js"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { openCodeReviewCommand } from "./review.js"
 import { randomBytes, randomUUID } from "node:crypto"
@@ -94,6 +95,8 @@ interface Live {
   decoder?: OpenCodeDecoder
   sink?: DecodedSink<OpenCodeEffect>
   nativeStream: NativeStream<OpenCodeEvent> | null
+  /** Each call's bounds by OpenCode's own clock, for attribution (`OpenCodeCallBounds`). */
+  bounds: OpenCodeCallBounds
   catalog?: OpenCodeCatalog
   /** Bumped by each native catalog change; a load answers for the generation it started at. */
   catalogGeneration: number
@@ -542,6 +545,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       return
     }
     const frame = live.nativeStream?.record(event)
+    live.bounds.observe(event)
     if (event.type === "session.retry.scheduled" && event.data.sessionID === decoder.root)
       hostLog("opencode", "provider retry scheduled", { conversation: live.state.id, attempt: event.data.attempt, error: event.data.error.message })
     if (!decoder.transcript(event) || (!live.projection && !unnamedCall(live, event))) {
@@ -819,7 +823,7 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
       const context = launchContext("opencode-native-api", OPENCODE_NATIVE_IDENTITY, options.accountLaunch.account, installation.command)
       context.runtime = reportedRuntime(api.info.version, "launched native API info.version")
       const live: Live = {
-        api, cwd, env, emit: options.emit, launchAccess, nativeStream: null, catalogGeneration: 0, turn: null, queue: Promise.resolve(),
+        api, cwd, env, emit: options.emit, launchAccess, nativeStream: null, bounds: new OpenCodeCallBounds(options.conversationId), catalogGeneration: 0, turn: null, queue: Promise.resolve(),
         mcp: new OpenCodeMcpHealth(), mcpReads: Promise.resolve(),
         settling: [], childSettling: new Map(), stopped: new Set(), stopNotices: new Set(), stream: new AbortController(), closed: false,
         state: {
