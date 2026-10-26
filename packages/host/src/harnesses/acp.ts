@@ -14,7 +14,7 @@ import type { NativeNotice } from "../contracts/native-activity.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "./acp-access.js"
-import { acpClientCapabilities, type AcpLaunchOptions, type AcpAgentObserver } from "./acp-source.js"
+import { acpClientCapabilities, TURN_CONTENT, type AcpLaunchOptions, type AcpAgentObserver } from "./acp-source.js"
 import { accessModeId, accessTierOfModeId, type AccessTier } from "../contracts/access.js"
 import { heavy } from "../base/heavy-packages.js"
 import { adapters } from "./heavy.js"
@@ -170,8 +170,6 @@ interface Live {
   sideListener?: (update: SessionNotification) => void
 }
 
-/** Output that begins a turn. A tool update can still belong to the turn before. */
-const TURN_CONTENT = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "plan"])
 
 function newSessionRequest(
   cwd: string,

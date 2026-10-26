@@ -232,8 +232,8 @@ export const CODEX_RESPONSE_ITEMS = {
   configuration_update: "skipped",
   // The tools a turn offered the model beyond the session's own, for the next request.
   additional_tools: "skipped",
-  // A message between agents; each agent call is drawn from its own call.
-  agent_message: "skipped",
+  // A message between agents: the task an agent was spawned on is its prompt; the rest are drawn from each agent call.
+  agent_message: "read",
   image_generation_call: "undrawn",
 } as const satisfies Record<string, CodexRecordReading>
 

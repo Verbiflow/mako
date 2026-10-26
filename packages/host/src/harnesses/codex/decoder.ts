@@ -258,6 +258,12 @@ export class CodexDecoder {
   /** The thread's running total at its latest reading, which every process of the thread continues. */
   private threadTotal: TokenCounts | undefined
   /**
+   * The agent threads this thread spawned, and theirs, with each one's
+   * running total at its latest reading: what each spends is the
+   * conversation's, counted as it reports it (`agentSpend`).
+   */
+  private readonly agents = new Map<string, TokenCounts | undefined>()
+  /**
    * A compaction the records drew, held until Codex names it a few records
    * on, so the marker is drawn once with its item's id and the context after.
    */
@@ -445,6 +451,31 @@ export class CodexDecoder {
     return added ?? call
   }
 
+  /** The agent threads an item says were spawned: a `started` activity (multi-agent v2) or a spawn call's receivers (v1). */
+  private spawned(item: ThreadItem): void {
+    const threads = item.type === "subAgentActivity" && item.kind === "started" ? [item.agentThreadId]
+      : item.type === "collabAgentToolCall" && item.tool === "spawnAgent" ? item.receiverThreadIds
+      : []
+    for (const agent of threads) if (!this.agents.has(agent)) this.agents.set(agent, undefined)
+  }
+
+  /**
+   * A notification of an agent this thread spawned: the agents it spawns in
+   * turn, and what it spends, which the conversation's meter counts as the
+   * agent reports it. An agent's first reading is its first call; each later
+   * one adds what its total grew by.
+   */
+  private agentNotification(out: CodexDecoded[], agent: string, notification: ProtocolNotification): void {
+    if (notification.method === "item/started" || notification.method === "item/completed") return this.spawned(notification.item)
+    if (notification.method !== "thread/tokenUsage/updated" || !notification.total) return
+    const before = this.agents.get(agent)
+    this.agents.set(agent, notification.total)
+    const spent = before ? tokensSince(before, notification.total) : notification.call ?? notification.total
+    if (!spent || contextOf(spent) <= 0) return
+    const usage = this.meter.observe({ kind: "spent", tokens: spent })
+    if (usage) out.push(decoded.state({ usage }))
+  }
+
   private notification(out: CodexDecoded[], notification: ProtocolNotification, raw: JsonObject): void {
     if (notification.method === "invalid") {
       out.push(decoded.unknown(notification.kind, raw, "unreadable"))
@@ -452,6 +483,7 @@ export class CodexDecoder {
     }
     const thread = this.view.threadId
     if (notification.threadId && thread && notification.threadId !== thread) {
+      if (this.agents.has(notification.threadId)) this.agentNotification(out, notification.threadId, notification)
       if (notification.method === "turn/started" || notification.method === "turn/completed")
         out.push(decoded.effect({ type: "subagent-turn", threadId: notification.threadId, completed: notification.method === "turn/completed" }))
       if (notification.method === "item/started" && notification.item.type === "commandExecution")
@@ -690,6 +722,7 @@ export class CodexDecoder {
         return
       case "collabAgentToolCall":
       case "subAgentActivity":
+        this.spawned(item)
         out.push(decoded.effect({ type: "agents", item, replay: false, toolId: item.id }))
         return
       case "contextCompaction":

@@ -7,19 +7,8 @@
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a172ac-e61b-7fb3-a3ad-f605aadbc830/updates.jsonl",
-      "known": [
-        {
-          "side": "+",
-          "line": "note: Background command \"Tick watch\" completed (exit code 0)",
-          "reason": "Grok 1.0.70 delivers a watch's end that comes in after the turn as a turn of its own (a `syntheticPrompt` reminder, prompt id `task-completed-<task>`). The pair's live drawing stops where the prompted turn ends; Mako's live driver follows the woken turn from `_x.ai/task_completed`, and the store draws it as Grok's own turn."
-        },
-        {
-          "side": "+",
-          "line": "text: The watch has ended; it saw both ticks.",
-          "reason": "Grok 1.0.70 delivers a watch's end that comes in after the turn as a turn of its own (a `syntheticPrompt` reminder, prompt id `task-completed-<task>`). The pair's live drawing stops where the prompted turn ends; Mako's live driver follows the woken turn from `_x.ai/task_completed`, and the store draws it as Grok's own turn."
-        }
-      ]
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a17488-3115-7a61-a361-0c533334e704/updates.jsonl",
+      "known": []
     }
   ]
 }
