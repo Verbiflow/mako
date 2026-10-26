@@ -47,6 +47,18 @@ export const SETUP_NOTICES: StreamDifference = {
 }
 
 /**
+ * Mako's marker for a provider's retries of the model, measured as they
+ * streamed: how many, how long, and whether the model answered or the
+ * provider gave up. A record keeps at most each retry's own notice, never
+ * that measure, so the marker stays where it streamed.
+ */
+export const RETRY_MARKERS: StreamDifference = {
+  holds: "stream",
+  entry: { type: "event", retries: true },
+  why: "Mako sums up a provider's retries from the retry notices it streams and what ends them (Claude's api_retry, Codex's error with willRetry, Grok's retry_state, OpenCode's session.retry.scheduled, Devin's connection_retry); Codex keeps none of those notices in its rollout, and the decode pairs' server-error recordings on Codex, Grok and OpenCode hold no such marker in their stores.",
+}
+
+/**
  * A stopped turn's marker, which the record writes where the turn stopped;
  * live, the window draws the stop from the host's turn state, as the
  * footer the marker then sits beside (`notesBesideStop`).
@@ -73,6 +85,8 @@ export interface EntryPattern {
   /** A marker's detail; for a `changed` difference, as the record words it. */
   detail?: RegExp
   setup?: true
+  /** A marker summing up a provider's retries (`TranscriptEvent.retries`). */
+  retries?: true
   command?: MakoCommand
   steered?: true
   cutOff?: true
@@ -419,6 +433,7 @@ function matches(pattern: EntryPattern, entry: Entry, cutOff: boolean): boolean 
   if (pattern.type !== entry.type) return false
   if (pattern.cutOff && !cutOff) return false
   if (pattern.setup && !(entry.type === "event" && entry.setup)) return false
+  if (pattern.retries && !(entry.type === "event" && entry.retries)) return false
   if (pattern.command && !(entry.type === "user" && entry.command === pattern.command)) return false
   if (pattern.steered && !(entry.type === "user" && entry.steeringFor)) return false
   if (pattern.label) {

@@ -8,7 +8,13 @@
     {
       "reader": "opencode",
       "path": ".local/share/opencode/opencode.db#v2:ses_ee645685fffenLQoV6oczhzd9r",
-      "known": []
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Retried 4 times",
+          "reason": "Mako sums up the retries it watched on the wire (OpenCode's `session.retry.scheduled`) in one marker, measured by the frames' clock; the store keeps at most a step's retry, never Mako's measure, so only the live drawing has it (RETRY_MARKERS, declared stream-only)."
+        }
+      ]
     }
   ]
 }

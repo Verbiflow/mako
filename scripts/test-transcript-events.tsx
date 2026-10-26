@@ -7,7 +7,7 @@ import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import { entriesFromMessages, type DecodedEntry as ThreadEntry, type Entry, type RecordRef } from "@mako/sessions"
 import { backgroundReminderTurn, claudeTaskTurn, grokSubagentTurn, grokTaskTurn, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
-import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, type TranscriptEvent, type TurnCause } from "@mako/sessions/events"
+import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, retriesEvent, type TranscriptEvent, type TurnCause } from "@mako/sessions/events"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { backgroundCommandTurn, CODEX_GOAL, codexGoalTurn, outputTail, subagentTurn } from "@mako/sessions/provider-turn"
 import { Exchange } from "../src/components/transcript/exchange"
@@ -281,6 +281,19 @@ const failure = draw(streamed([go, marker({ label: "Turn failed", detail: "strea
 assert.match(failure, /lucide-circle-alert[^"]*text-negative/)
 assert.match(failure, /class="[^"]*text-negative">Turn failed</)
 
+// A provider's retries, quiet either way: the count, its words and how long; the failure after them says itself.
+const recoveredWords = eventWords(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)"))
+assert.deepEqual(recoveredWords, { glyph: "retry", title: "Recovered after 3 retries", detail: "Overloaded (529)", aside: "41s" })
+assert.deepEqual(eventWords(retriesEvent({ count: 1, outcome: "gave-up", durationMs: 62_000 }, "Overloaded (529)")),
+  { glyph: "retry", title: "Retried once", detail: "Overloaded (529)", aside: "1m 02s" })
+const retries = draw(streamed([go, marker(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)")), { kind: "text", id: "a3", text: "Here it is." },
+  marker(retriesEvent({ count: 5, outcome: "gave-up", durationMs: 62_000 }))]))
+assert.match(text(retries), /Recovered after 3 retries Overloaded \(529\) 41s/)
+assert.match(text(retries), /Retried 5 times 1m 02s/)
+assert.doesNotMatch(retries, /text-negative|text-caution/, "retries are ambient whichever way they ended: the failure after them owns the attention")
+assert.deepEqual(entriesToMessages(reduceLiveUpdates([], [{ kind: "event", ...retriesEvent({ count: 2, outcome: "recovered", durationMs: 3_000 }) }]), { kind: "live", running: false, provider: "claude" }).messages[0]?.note?.retries,
+  { count: 2, outcome: "recovered", durationMs: 3_000 }, "the measure reaches the window from the blocks the journal keeps")
+
 const long = draw(streamed([go, marker({ label: "Warning", detail: "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings in config.toml.", tone: "warning" })]))
 assert.match(long, /<button[^>]*data-event-line[^>]*aria-expanded="false"/, "a line too long to fit opens onto the whole of it")
 
@@ -368,6 +381,12 @@ const legacy = continueTurnPrompt("connection-lost", "mako").replace(/ Mako sent
 assert.deepEqual(savedContinuation(legacy), { reason: "connection-lost" }, "an older build's words name no sender")
 assert.equal(savedContinuation(`${continueTurnPrompt("connection-lost", "person")} Also fix the footer.`), undefined, "an edited continuation is the person's own message")
 assert.equal(savedContinuation("Continue where you left off."), undefined)
+// What Mako's exit or a handoff stopped is named between the two, in words that still read back.
+const stoppedWords = continueTurnPrompt("host-quit", "mako", ["npm run dev", "tail -f build.log"])
+assert.match(stoppedWords, /Mako's exit stopped what you had left running in the background: `npm run dev`; `tail -f build.log`\. Start again whatever of it you still need\./)
+assert.match(continueTurnPrompt("handed-off", "person", ["npm test"]), /The handoff stopped what you had left running in the background: `npm test`\./)
+for (const [reason, words] of [["host-quit", stoppedWords], ["handed-off", continueTurnPrompt("handed-off", "mako", ["npm test"])], ["host-quit", continueTurnPrompt("host-quit", "person", ["npm run dev"])]] as const)
+  assert.equal(savedContinuation(words)?.reason, reason, `a continuation naming stopped work reads back: ${words}`)
 const savedOne = (words: string) => draw(saved([{ kind: "user", at: at(43), text: words }, { kind: "assistant", blocks: [{ type: "text", text: "Picking up." }] }], "cursor"))
 assert.match(text(savedOne(continueTurnPrompt("provider-exited", "mako"))), /Mako restarted Cursor and continued the turn \d{1,2}:43 [AP]M/, "saved history names the harness from the answer")
 assert.match(text(savedOne(continueTurnPrompt("connection-lost", "person"))), /You continued the turn after the connection to Cursor dropped/)

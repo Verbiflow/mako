@@ -5,7 +5,7 @@ import type { LiveUpdate } from "../live-content.js"
 import { backgroundCommandTurn, causeBody, outputBody, outputTail, subagentTurn, UNNAMED_TURN, type ProviderTurnCause } from "../provider-turn.js"
 import { exclusiveTokens, inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
-import { cutOffTurn, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
+import { cutOffTurn, RETRY_MARKERS, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 
 /**
  * Names are `_meta["x.ai/tool"].name` on each ACP tool call. Server-side
@@ -95,6 +95,7 @@ export const GROK_VOCABULARY = defineVocabulary({
     },
     stream: [
       SETUP_NOTICES,
+      RETRY_MARKERS,
       STOP_MARKER,
       ...cutOffTurn(["tool", "text", "thinking"], "Grok 1.0.46 writes a turn's words and calls to updates.jsonl as they complete, so a turn its process was killed under keeps neither its call nor the words before it; the flows of 2026-10-16 stream them in a killed turn (01a1481a-a592) whose updates.jsonl lacks them."),
     ],

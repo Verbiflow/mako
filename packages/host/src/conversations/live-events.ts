@@ -184,13 +184,15 @@ export class LiveEvents {
                   request,
                   outcome,
                   resident.closing || resident.stopping === request.id,
-                  resident.stopping === request.id ? resident.stoppingFor : undefined
+                  resident.stopping === request.id ? resident.stoppingFor : undefined,
+                  resident.stopping === request.id ? resident.stoppingWork : undefined
                 )
               : request
           ),
         }
         resident.stopping = undefined
         resident.stoppingFor = undefined
+        resident.stoppingWork = undefined
         if (previousStatus === "running")
           resident.snapshot = { ...resident.snapshot, ...turnSpendAt(resident.snapshot, bindingId, { ended: true, ownTurn: !finishedRequest, gone }) }
         if (settling) {

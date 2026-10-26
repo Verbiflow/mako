@@ -1,11 +1,14 @@
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { disconnectNativeAgents } from "../contracts/native-agents.js"
+import { autoContinueCandidate } from "../contracts/turn-continuation.js"
+import { stoppedWork } from "./interrupted-turn.js"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveApprovals } from "./live-approvals.js"
 import { recordCutOff } from "./live-auto-continue.js"
 import { releaseHold } from "./live-ledger.js"
 import type { LiveRecords } from "./live-records.js"
+import type { LeftTurn, LiveRestarts } from "./live-restarts.js"
 import { revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { interruptRequests } from "./live-settlement.js"
 import type { LiveTransfers } from "./live-transfers.js"
@@ -19,6 +22,7 @@ export interface ClosingParts {
   actions: LiveActions
   approvals: LiveApprovals
   transfers: LiveTransfers
+  restarts: LiveRestarts
 }
 
 /** Conversations closing: one at a time on Close, all of them when the host leaves. */
@@ -260,6 +264,7 @@ export class LiveClosing {
     const { dependencies } = this.access
     const { records } = this.parts
     const closing: Promise<unknown>[] = []
+    const left: LeftTurn[] = []
     records.stop()
     this.parts.actions.stop()
     for (const resident of records.values()) {
@@ -318,23 +323,29 @@ export class LiveClosing {
       // journal says so, with the moment, so the next host does not read it
       // as a crash and the transcript can offer to continue the turn. An idle
       // conversation is left as it is, so stopping writes nothing for it.
+      // The background work it had sent off ends with the harness's process, and the request names it, as the
+      // continuation will tell the agent.
       const running = resident.snapshot.requests.find((request) => request.status === "dispatching")
       if (running) {
+        const stopped = stoppedWork(resident.snapshot, true)
         resident.snapshot = {
           ...resident.snapshot,
           requests: interruptRequests(
             resident.snapshot.requests,
             "host-quit",
             "Mako closed while this turn was running"
-          ),
+          ).map((request) => request.id === running.id && request.interruption && stopped.length ? { ...request, interruption: { ...request.interruption, stopped } } : request),
         }
         recordCutOff(resident, running.id, dependencies.root)
+        if (autoContinueCandidate(resident.snapshot.requests, true)?.id === running.id)
+          left.push({ conversationId: resident.snapshot.session.id, requestId: running.id })
       }
       this.access.flush(resident)
       // Open questions keep a conversation loaded until the host stops, so its dropped copy's space is reclaimed here.
       resident.journal.close((path) => { void this.access.reclaims.reclaim(path) })
     }
     records.clear()
+    this.parts.restarts.leave(left)
     return this.shutdown = Promise.allSettled(closing).then(() => {})
   }
 }

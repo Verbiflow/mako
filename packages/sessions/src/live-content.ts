@@ -759,6 +759,7 @@ function reduce(
         if (update.setup) block.setup = true
         if (update.cause) block.cause = update.cause
         if (update.limit) block.limit = update.limit
+        if (update.retries) block.retries = update.retries
         if (update.id) block.id = update.id
         if (update.completes) {
           let index = next.length - 1

@@ -43,6 +43,7 @@ import { departMove, MoveDepartureInputSchema, MoveStayInputSchema, stayMove, ty
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
+import type { ConversationSettings } from "../contracts/turn-continuation.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
@@ -182,6 +183,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       message: `Workspace rewind recovery needs attention: ${error instanceof Error ? error.message : String(error)}`,
     })
   )
+  // The turns the last host's exit cut short go on, if the person chose so, once their sessions reopen.
+  live.continueRestarted()
   // Headless runs report to every window, and claim their session in the ledger while they run.
   const runs = new NativeRuns(host, emit, {
     admission: deps.admission,
@@ -298,6 +301,8 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     return movers.worktreeMoves
   }
   methods.handle("mako:thread-continuation-resolve", (path: string) => continuation.resolve(path))
+  methods.handle("mako:conversation-settings", () => live.conversationSettings())
+  methods.handle("mako:conversation-settings-set", (settings: ConversationSettings) => live.setConversationSettings(settings))
   methods.handle("mako:thread-owner-resolve", (path: string) => continuation.owner(path))
   methods.handle("mako:thread-continuation-plan", (path: string) => continuation.plan(path))
   methods.handle("mako:thread-restore-plan", (path: string) => conversations.restorePlan(path))

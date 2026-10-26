@@ -1,6 +1,6 @@
 import { SessionSettingsSchema } from "./settings.js"
 import { z } from "zod"
-import { NativeEventSourceSchema, TurnCauseSchema, UsageLimitSchema } from "./events.js"
+import { NativeEventSourceSchema, RetriesSchema, TurnCauseSchema, UsageLimitSchema } from "./events.js"
 import {
   AttachmentContentSchema,
   ToolDetailSchema,
@@ -85,6 +85,8 @@ export const DecodedEntrySchema = z.discriminatedUnion("kind", [
     cause: TurnCauseSchema.optional(),
     /** A usage limit refusing work (`TranscriptEvent.limit`), said once for all it stopped. */
     limit: UsageLimitSchema.optional(),
+    /** A provider's retries, as Mako measured them (`TranscriptEvent.retries`). */
+    retries: RetriesSchema.optional(),
     /**
      * The provider started a turn on its own and this is what it reported as
      * the cause (a background command finishing). It opens the turn the way a

@@ -119,6 +119,13 @@ export interface Interruption {
    * Mako's.
    */
   closed?: string[]
+  /**
+   * The background work the cut stopped (a host exit, a handoff), in the
+   * words the agent is told when the turn continues (`continueTurnPrompt`):
+   * each command line or agent prompt the roster held, and how many more the
+   * harness counted. Absent when nothing was left running.
+   */
+  stopped?: string[]
 }
 
 export const MAX_INTERRUPTED_CALLS = 12

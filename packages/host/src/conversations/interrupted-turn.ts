@@ -1,11 +1,13 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { isTurnStart, liveToolFinished, toolTitle, type LiveUpdate } from "@mako/sessions/live-content"
+import { activeWork } from "../contracts/background-work.js"
 import {
   MAX_INTERRUPTED_CALLS,
   type Interruption,
   type InterruptedCall,
   type LiveRequest,
+  type LiveSnapshot,
 } from "../contracts/live-conversations.js"
 import type { Entry } from "@mako/sessions/entries"
 
@@ -122,6 +124,18 @@ export function recordCutOffCalls(
     calls.push(call)
   }
   return more ? { calls, moreCalls: more } : { calls }
+}
+
+/**
+ * The background work a cut stops (Mako's exit, a handoff), in words the agent knows it by: each active entry of its
+ * roster (`activeWork`; while a turn runs, only what it sent to the background) by its command line or prompt, else its
+ * title; and, where the harness counts more than its roster lists, how many more. The request keeps it
+ * (`Interruption.stopped`) and the continuation names it (`continueTurnPrompt`).
+ */
+export function stoppedWork(snapshot: Pick<LiveSnapshot, "session" | "nativeAgents">, turnRunning: boolean): string[] {
+  const listed = activeWork(snapshot.nativeAgents).filter((agent) => !turnRunning || agent.background === true).map((agent) => agent.detail ?? agent.title)
+  const counted = snapshot.session.backgroundTasks ?? 0
+  return counted > listed.length ? [...listed, `${counted - listed.length} more background task${counted - listed.length === 1 ? "" : "s"} the harness counted`] : listed
 }
 
 function saveResult(directory: string, index: number, block: Extract<Entry, { type: "tool" }>): string | undefined {
