@@ -70,6 +70,15 @@ export async function startHost({ dataRoot, output, env = process.env }) {
  */
 export const SHARED_DAEMONS = ["mako-terminal-daemon", "mako-syncd"]
 
+/**
+ * Whether a process is one of them: by the title each sets, or, where an
+ * x64 image runs emulated on an arm64 Mac and the emulator keeps the command
+ * line in place of the title, by the program it runs.
+ */
+export function sharedDaemon(args) {
+  return SHARED_DAEMONS.includes(args) || /\/(?:@mako\/sessions\/dist\/daemon-main|packages\/host\/dist\/terminals\/daemon)\.js(?: |$)/.test(args)
+}
+
 /** Every other process in this container: all but this one, its parent and its own children such as ps. */
 export async function othersRunning() {
   const { stdout } = await run("ps", ["-eo", "pid=,ppid=,args="])

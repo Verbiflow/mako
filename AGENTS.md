@@ -260,7 +260,12 @@ data root itself for a host isolated outside the application-data folder (a
 test's, a proof's). An isolated host (`HostEnvironment.isolated`) reads its
 catalog in its own worker, takes into its record store only sessions
 written while it runs (never a backfill of the person's rail), and never
-installs or changes the login sync. What it still shares with the person is
+installs or changes the login sync. Nothing sets it but the root's place: a
+cloud machine's agent starts its host on its user's `~/.mako`, so a machine
+is never isolated, and `test:host-linux` starts its host the same way; a
+proof that wants the shared reader with a private `HOME` puts its profile in
+that home's application-data folder (`test-packaged-reader-recovery.mjs`).
+What it still shares with the person is
 what it runs as: their harness logins and stores, and Mako's account
 selections (`~/.mako/accounts`), where it holds a lease while it resolves a
 launch's account. `node scripts/test-isolated-host.mjs` (in
