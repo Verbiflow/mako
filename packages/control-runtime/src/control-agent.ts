@@ -27,6 +27,15 @@ export type ControlAgentRequest = (
  */
 export const JS_REPORT_META = "dev.mako/js"
 
+/**
+ * The `_meta` key under which a result states the media files it made,
+ * `{ via: "produced", files: [{ path }] }`. Mako's transcript reads it
+ * (`MEDIA_META` in `@mako/sessions/turn-media`, which this must equal) and
+ * shows the files to the person, so a recording or a saved screenshot is a
+ * fact of the turn rather than a path in printed text.
+ */
+export const MEDIA_META = "dev.mako/media"
+
 export type JsReport =
   | ({ status: "completed" } & ControlCellReport)
   | {
@@ -54,7 +63,11 @@ export function failedJsReport(error: Error): JsReport {
 }
 
 function reportMeta(report: JsReport): JsonObject {
-  return { [JS_REPORT_META]: report }
+  const files = report.status === "completed" ? report.files : undefined
+  return {
+    [JS_REPORT_META]: report,
+    ...files?.length && { [MEDIA_META]: { via: "produced", files: files.map((path) => ({ path })) } },
+  }
 }
 
 /** The same typed bridge serves embedded MCP and worker/socket hosts. */

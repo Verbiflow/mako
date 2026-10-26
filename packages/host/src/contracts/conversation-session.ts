@@ -1,6 +1,7 @@
 import type { ProposedPlan } from "@mako/sessions/content"
 import type { TranscriptEvent } from "@mako/sessions/events"
 import type { ToolIdentity } from "@mako/sessions/tool-identity"
+import type { MediaCandidate } from "@mako/sessions/turn-media"
 import type { ChildTranscript } from "@mako/sessions/children"
 import type {
   AttachmentContent,
@@ -116,6 +117,8 @@ export type Block =
       streaming?: boolean
       attachments?: AttachmentContent[]
       details?: ToolDetail[]
+      /** The media the call produced or showed (`callMedia`); the exchange's shelf merges them. */
+      media?: MediaCandidate[]
       /**
        * Set when `text` is only the head of the output: the full length and
        * which saved entry holds the rest (`threadEntry`).

@@ -40,6 +40,7 @@
     "./codex-records": "./dist/providers/codex-records.js",
     "./tool-identity": "./dist/tool-identity.js",
     "./tool-effects": "./dist/tool-effects.js",
+    "./turn-media": "./dist/turn-media.js",
     "./tool-effect-reading": "./dist/tool-effect-reading.js",
     "./acp-tool-details": "./dist/acp-tool-details.js",
     "./acp-decoder": "./dist/acp-decoder.js",

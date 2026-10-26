@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react"
+import { Fragment, useCallback, useMemo, useRef, useState, type ReactNode } from "react"
 import { XIcon } from "lucide-react"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import type { FileContents } from "@/lib/types"
@@ -47,7 +47,7 @@ export function AssetPreviewCollection<T extends PreviewAsset>({ items, render, 
       {items.map(item => <div key={item.id} className="group relative min-w-0 max-w-full">
         <button type="button" aria-label={`Show ${item.name}`} aria-pressed={id === item.id} data-copy-file={item.path} data-asset-selected={id === item.id} onClick={() => setSelected(id === item.id ? null : item.id)} className={`asset-surface pressable flex h-11 max-w-full items-center gap-2.5 border px-3 text-left ${id === item.id ? "border-border bg-fill-selected text-foreground" : "border-hairline bg-surface text-muted-foreground hover:bg-fill-hover hover:text-foreground"}`}>
           <FileTypeIcon path={item.name} mimeType={item.mimeType} className="size-4 shrink-0" />
-          <span className="max-w-52 truncate text-label font-medium">{item.name}</span>
+          <span className="max-w-52 truncate text-label font-medium">{item.caption ?? item.name}</span>
         </button>
         {onRemove ? <button type="button" aria-label={`Remove ${item.name}`} onClick={() => onRemove(item.id)} className="asset-surface pressable absolute -right-1 -top-1 grid size-5 place-items-center border border-hairline bg-popover text-faint opacity-0 group-hover:opacity-100 focus-visible:opacity-100"><XIcon className="size-3" /></button> : null}
       </div>)}
@@ -64,7 +64,12 @@ function MediaGrid<T extends PreviewAsset>({ items, render, className }: { items
   const columns = mediaGridColumns(items.length)
   return <OwnMediaGallery>
     <div data-asset-collection data-media-grid={columns} className={cn("not-prose my-3 grid gap-1.5", columns === 2 ? "max-w-[min(100%,30rem)] grid-cols-2" : "max-w-[min(100%,36rem)] grid-cols-3", className)}>
-      {shown.map((item, at) => <MediaTileContext key={item.id} value={more && at === shown.length - 1 ? { kind: "tile", more } : TILE}>{render(item)}</MediaTileContext>)}
+      {shown.map((item, at) => {
+        const tile = <MediaTileContext value={more && at === shown.length - 1 ? { kind: "tile", more } : TILE}>{render(item)}</MediaTileContext>
+        return item.caption
+          ? <figure key={item.id} className="m-0 flex min-w-0 flex-col gap-1">{tile}<figcaption className="line-clamp-2 text-label text-muted-foreground">{item.caption}</figcaption></figure>
+          : <Fragment key={item.id}>{tile}</Fragment>
+      })}
     </div>
     {more ? <div hidden>
       {items.slice(shown.length).map(item => <MediaTileContext key={item.id} value={HIDDEN}>{render(item)}</MediaTileContext>)}

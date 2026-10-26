@@ -3,7 +3,7 @@ import { applyThreadEnvironment } from "../../workspaces/index.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import type { ClaudeSdkConfiguration } from "./sdk-driver.js"
 import { acpMcpServers, MAKO_TOOL_TIMEOUT_MS } from "../../tools/index.js"
-import { conversationServers, type AdmittedStartOptions } from "../live-driver.js"
+import { conversationInstructions, conversationServers, type AdmittedStartOptions } from "../live-driver.js"
 import { ClaudeModeSchema, ClaudeTuningSchema } from "./input.js"
 import { claudeRuntime } from "./runtime.js"
 import type { ProviderLaunchTrace } from "../provider-launch.js"
@@ -57,6 +57,7 @@ export async function claudeSdkOptions(
   if (input.conversationTools)
     for (const { name, url } of conversationServers(input.conversationTools))
       mcpServers[name] = { type: "http", url, headers: { Authorization: `Bearer ${input.conversationTools.token}` }, timeout: MAKO_TOOL_TIMEOUT_MS }
+  const appended = conversationInstructions(input.conversationTools)
   return { account, options: {
     cwd,
     env,
@@ -76,7 +77,7 @@ export async function claudeSdkOptions(
     allowDangerouslySkipPermissions: true,
     settings: tuning.fast === undefined ? undefined : { fastMode: tuning.fast },
     settingSources: ["user", "project", "local"],
-    systemPrompt: { type: "preset", preset: "claude_code" },
+    systemPrompt: { type: "preset", preset: "claude_code", ...appended && { append: appended } },
     mcpServers,
     includePartialMessages: true,
     title: input.title,

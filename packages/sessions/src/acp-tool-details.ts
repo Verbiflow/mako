@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { attachmentFromUrl, ToolDetailSchema, type AttachmentContent, type ToolDetail } from "./content.js"
+import { mediaDetails } from "./turn-media.js"
 
 /** An ACP value as JSON carries it: tool content, raw output, a history line's field. */
 export type AcpContentValue =
@@ -119,6 +120,9 @@ export type AcpToolUpdate = z.infer<typeof AcpToolUpdateSchema>
  */
 const TerminalExitSchema = z.object({ exit_code: z.number().nullish() }).optional().catch(undefined)
 
+/** A `rawOutput` that is an MCP tool's whole result, as far as its `_meta`. */
+const RawMetaSchema = z.object({ _meta: z.json() })
+
 /** What a harness's tool updates mean beyond ACP's own fields. */
 export interface AcpToolReading {
   /** Content the agent sends for its own client's display, which repeats the call and is left out. */
@@ -181,6 +185,8 @@ export function acpToolFields(update: AcpToolUpdate, reading: AcpToolReading = {
   // An empty text part says nothing; the agent's own words for the result (Grok's `output_for_prompt`) do.
   const output = reading.output?.(update) ?? (text.join("\n") || acpText(update.rawOutput) || (text.length ? "" : undefined))
   if (output !== undefined) fields.output = output
+  // An agent that hands on an MCP tool's whole result keeps what it stated of its media.
+  details.push(...mediaDetails(RawMetaSchema.safeParse(update.rawOutput).data?._meta))
   if (details.length) fields.details = details
   if (update.locations) fields.locations = acpLocationDetails(update.locations)
   if (attachments.length) fields.attachments = attachments

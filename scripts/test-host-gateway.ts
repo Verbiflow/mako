@@ -24,7 +24,7 @@ import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host
 import { startWebHost, type HostInvoke } from "@mako/host/transport/server"
 
 /** Strings tried in order for a string slot, until the slot's schema takes one. */
-const STRING_SAMPLES = ["text", "/text", "/tmp/text"]
+const STRING_SAMPLES = ["text", "/text", "/tmp/text", "0".repeat(64)]
 /** Numbers tried in order for a number slot. */
 const NUMBER_SAMPLES = [7, 1, 0]
 
@@ -343,6 +343,7 @@ function sample(schema: z.core.$ZodType, mode: "full" | "minimal", slot = false)
   if (schema instanceof z.ZodNull) return null
   if (schema instanceof z.ZodUndefined) return undefined
   if (schema instanceof z.ZodLiteral) return JsonSchema.parse([...schema.values][0])
+  if (schema instanceof z.ZodEnum) return JsonSchema.parse(mode === "full" ? schema.options[0] : schema.options.at(-1))
   // `minimal` sends no items where the schema allows none, else the fewest it takes.
   if (schema instanceof z.ZodArray) {
     const item = sample(schema.element, mode) ?? null

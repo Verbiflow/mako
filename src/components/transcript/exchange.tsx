@@ -24,6 +24,7 @@ import { AgentGroup } from "./agent-group"
 import { groupAgentCalls } from "@/lib/agent-groups"
 import { FollowingList, LiveRow, TurnClock, type LiveStepData } from "./live-step"
 import { TurnChanges } from "./turn-changes"
+import { MediaShelf, ShownMedia } from "./media-shelf"
 import type { ToolKind } from "@mako/sessions/tool-identity"
 import { ContextItemChip } from "@/components/composer/reference-chip"
 import { Slot } from "@/extend/slot"
@@ -167,6 +168,8 @@ export const Exchange = memo(function Exchange({
       </div>
     ) : section.kind === "prose" ? (
       <Response key={section.id} message={section.message} previewedFiles={section.previewedFiles} showWork />
+    ) : section.kind === "shown" ? (
+      <ShownMedia key={section.id} media={section.media} />
     ) : (
       <WorkSection
         key={section.id}
@@ -197,7 +200,7 @@ export const Exchange = memo(function Exchange({
         stop={fold.part === steers ? interrupted : undefined}
         kept={fold.kept.map((at) => {
           const note = sections[at]!
-          return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline /> : null
+          return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline /> : note.kind === "shown" ? <ShownMedia key={note.id} media={note.media} /> : null
         })}
       >
         {sections.slice(fold.start, fold.end).map((section, offset, hidden) =>
@@ -251,6 +254,7 @@ export const Exchange = memo(function Exchange({
             <ReviewFindings report={review} />
           </div>
         ) : null}
+        <MediaShelf exchange={exchange} />
         {streaming ? null : <TurnChanges requestId={exchange.prompt?.requestId} />}
         <ExchangeFailure requestId={exchange.prompt?.requestId} />
         {exchange.response.length > 0 || interrupted ? (

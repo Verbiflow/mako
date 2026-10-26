@@ -17,6 +17,7 @@ import type { PullRequestSearchRequest, PullRequestSearchResult } from "./pull-r
 import type { ChatFolders } from "./chat-folders.js"
 import type { ChangeUsage, LostVersion, ThreadChangeSummary } from "./thread-changes.js"
 import type { FileReferenceSource, FileResolution } from "./file-references.js"
+import type { MediaChecks, MediaConfirmation } from "./turn-media.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
@@ -187,6 +188,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     changeUsage: () => invokeTrustedHost<ChangeUsage | null>("mako:change-usage"),
     resolveFileReferences: (source: FileReferenceSource, spellings: string[]) =>
       invokeTrustedHost<FileResolution[] | null>("mako:resolve-file-references", source, spellings),
+    resolveTurnMedia: (checks: MediaChecks) => invokeTrustedHost<MediaConfirmation[]>("mako:resolve-turn-media", checks),
     chooseFileReference: (source: FileReferenceSource, spelling: string, path: string) =>
       invokeTrustedHost<void>("mako:choose-file-reference", source, spelling, path),
     lostVersions: (target: { thread: string } | { path: string }) => invokeTrustedHost<LostVersion[]>("mako:lost-versions", target),

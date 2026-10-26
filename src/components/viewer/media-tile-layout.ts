@@ -1,7 +1,8 @@
 import type { CSSProperties } from "react"
 import { filePreviewFormat } from "@mako/host/contracts/file-preview"
 
-export interface PreviewAsset { id: string; name: string; mimeType?: string; path?: string }
+/** One item of a collection: `name` is the file's, `caption` the agent's words for it, drawn under its tile or as its chip. */
+export interface PreviewAsset { id: string; name: string; caption?: string; mimeType?: string; path?: string }
 
 /** Tiles a grid draws; past them the last tile reads "+N" and the rest wait in the gallery. */
 export const MEDIA_GRID_TILES = 6

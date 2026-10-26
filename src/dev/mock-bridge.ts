@@ -826,6 +826,7 @@ export function installMockBridge() {
     threadChanges: async () => null,
     changeUsage: async () => null,
     resolveFileReferences: async () => null,
+    resolveTurnMedia: async (checks) => checks.map(() => ({ kind: "dropped" as const, reason: "The browser mock has no filesystem" })),
     chooseFileReference: async () => undefined,
     lostVersions: async () => [],
     restoreVersion: async () => { throw new Error("The mock bridge keeps no versions") },

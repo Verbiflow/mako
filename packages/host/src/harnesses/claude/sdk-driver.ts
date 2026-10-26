@@ -555,6 +555,7 @@ export function createClaudeSdkDriver(
   return {
     provider: "claude",
     launchEnvironment: { kind: "prepared", via: "SDK configuration consumes AdmittedStartOptions.accountLaunch." },
+    makoInstructions: { via: "`systemPrompt.append` on the claude_code preset, which Claude Code keeps out of its transcript." },
     nativeIdentity: CLAUDE_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,
