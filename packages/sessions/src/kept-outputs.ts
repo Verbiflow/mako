@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
+import { makoUserRoot } from "./mako-root.js"
 import type { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import type { NativeStores } from "./read-only-sqlite.js"
@@ -57,8 +58,14 @@ const EVICT_EVERY = 32
 /** Keys this process already knows are kept as they are, so re-reading a thread writes nothing. */
 const REMEMBERED = 2048
 
+/** The kept outputs of the user whose home this is. */
 export function keptOutputsPath(home: string): string {
-  return join(home, ".mako", "archive", "outputs.sqlite")
+  return keptOutputsIn(makoUserRoot(home))
+}
+
+/** The kept outputs in a user root (`mako-root.ts`): an isolated host keeps its own. */
+export function keptOutputsIn(root: string): string {
+  return join(root, "archive", "outputs.sqlite")
 }
 
 /**

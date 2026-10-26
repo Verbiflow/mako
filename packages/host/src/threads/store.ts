@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, realpathSync, renameSync } from "node:fs"
-import { homedir } from "node:os"
-import { basename, dirname, join, resolve, sep } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { DatabaseSync, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import type { ThreadRef } from "@mako/sessions"
@@ -139,16 +138,12 @@ export class ThreadMoveConflictError extends Error {
 }
 
 /**
- * The shared store, unless the host is a fixture: a data root outside the
- * application-data directory keeps its own copy, so a test never adds
- * Sessions to the user's store (the same rule as `utilityModelDirectory`).
+ * The store in a user root (`HostEnvironment.userRoot`): the one every
+ * profile shares, unless the host is isolated, whose data root keeps its
+ * own copy so a test never adds Sessions to the user's store.
  */
-export function threadStorePath(input: { dataRoot: string; appData: string; home?: string }): string {
-  const root = resolve(input.dataRoot)
-  const appData = resolve(input.appData)
-  const isProfile = root === appData || root.startsWith(appData + sep)
-  if (!isProfile) return join(root, "threads.sqlite")
-  return join(input.home ?? homedir(), ".mako", "threads.sqlite")
+export function threadStorePath(userRoot: string): string {
+  return join(userRoot, "threads.sqlite")
 }
 
 /** SQLite's codes for a file that is damaged or isn't a database at all. */

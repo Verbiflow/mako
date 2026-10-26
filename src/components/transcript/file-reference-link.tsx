@@ -1,10 +1,12 @@
 import { useContext, useState, type ReactElement, type ReactNode } from "react"
 import type { FileCandidate } from "@mako/host/contracts/file-references"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
-import { countedChanges } from "@mako/host/contracts/turn-changes"
+import { countedChanges, type TurnChangeLines } from "@mako/host/contracts/turn-changes"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import type { FileCitation } from "@/lib/file-citations"
+import { UNSURE } from "@/lib/turn-changes"
+import { lineWords } from "@/lib/turn-writers"
 import { cn } from "@/lib/utils"
 import { useAcp } from "@/state/acp"
 import { chooseFileReference, useFileReference } from "@/state/file-references"
@@ -24,14 +26,18 @@ function whereOf(file: FileCandidate): string {
   return file.path.split("/").slice(0, -1).join("/").replace(/^\/Users\/[^/]+/, "~") || "/"
 }
 
-/** What the answer's own turn did to a file, from its recorded changes: "+12 −3"; empty when it changed no lines of it. */
+/**
+ * What the answer's own turn did to a file, from its recorded changes, in
+ * words: "Changed in this answer (+12 −3)", with its lines not sure whose
+ * said apart, as the line under the answer counts them.
+ */
 type ChangedHere = string | undefined
 
 /** Why a file is listed, in plain words. */
 function whyOf(file: FileCandidate, now: number, here?: ChangedHere): string {
   const when = file.touch ? ` · ${formatAgo(file.touch.at, now)}` : ""
   const touched =
-    here !== undefined ? `Changed in this answer${here ? ` (${here})` : ""}`
+    here !== undefined ? here
     : file.touch?.kind === "wrote" ? `Changed by this thread${when}`
     : file.touch?.kind === "read" ? `Read by this thread${when}`
     : file.touch?.kind === "named" ? `Named by this thread${when}`
@@ -57,7 +63,7 @@ function titleOf(file: FileCandidate, now: number, here?: ChangedHere): string {
 /**
  * The file's net lines in the answer's own turn, as its request's record
  * has them: a string, so a token streaming elsewhere moves nothing here.
- * Undefined when the turn didn't change the file for sure.
+ * Undefined when the record doesn't list the file.
  */
 function useChangedHere(liveId: string | undefined, path: string | undefined): ChangedHere {
   const requestId = useContext(AnswerRequestContext)
@@ -68,6 +74,9 @@ function useChangedHere(liveId: string | undefined, path: string | undefined): C
   })
 }
 
+/** "+12 −3": net lines, each side only when it has any. */
+const lineCounts = (lines: TurnChangeLines) => [lines.added ? `+${lines.added.toLocaleString()}` : "", lines.removed ? `−${lines.removed.toLocaleString()}` : ""].filter(Boolean).join(" ")
+
 /** A turn's record as each file's words, made once per record however many links read it. */
 const changedWords = new WeakMap<object, Map<string, string>>()
 function changedFiles(changes: NonNullable<LiveRequest["changes"]>): Map<string, string> {
@@ -75,8 +84,10 @@ function changedFiles(changes: NonNullable<LiveRequest["changes"]>): Map<string,
   if (!words) {
     words = new Map()
     for (const file of countedChanges(changes)?.files ?? []) {
-      if (file.own === undefined) continue
-      words.set(file.path, [file.own?.added ? `+${file.own.added.toLocaleString()}` : "", file.own?.removed ? `−${file.own.removed.toLocaleString()}` : ""].filter(Boolean).join(" "))
+      const own = file.own === undefined ? undefined : file.own ? lineCounts(file.own) : ""
+      const unsure = file.maybe === undefined ? undefined : `${file.maybe ? `${lineWords(file.maybe.added + file.maybe.removed)} ` : ""}${UNSURE}`
+      const said = own !== undefined ? `Changed in this answer${own ? ` (${own})` : ""}` : "Changed while this answer ran"
+      words.set(file.path, [said, unsure].filter(Boolean).join(" · "))
     }
     changedWords.set(changes, words)
   }

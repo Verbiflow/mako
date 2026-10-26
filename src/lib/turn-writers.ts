@@ -1,5 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs"
 import type { TurnWriter, WriterRun } from "@mako/host/contracts/turn-review"
+import { UNSURE_LABEL } from "@/lib/turn-changes"
 
 /** One writer's stretch of a turn's diff, as the row under it names them. */
 export interface WriterNote {
@@ -69,7 +70,7 @@ export function writerLabel(note: Pick<WriterNote, "writer">, threadTitle?: stri
     case "turn":
       return "This thread"
     case "maybe":
-      return "Maybe this thread"
+      return UNSURE_LABEL
     case "thread":
       return "This thread, another turn"
     case "person":

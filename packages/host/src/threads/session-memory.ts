@@ -1,7 +1,7 @@
 import { processIdentityMatches } from "../base/process-liveness.js"
 import { existsSync, mkdirSync } from "node:fs"
-import { homedir } from "node:os"
 import { dirname, join } from "node:path"
+import { makoUserRoot } from "@mako/sessions/mako-root"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import type { ThreadRef } from "@mako/sessions"
@@ -176,8 +176,9 @@ export interface SessionFacts {
   modeId?: string
 }
 
-export function sessionMemoryPath(home = homedir()): string {
-  return join(home, ".mako", "session-memory.sqlite")
+/** The ledger in a user root (`HostEnvironment.userRoot`): the person's `~/.mako` unless a host hands its own. */
+export function sessionMemoryPath(userRoot = makoUserRoot()): string {
+  return join(userRoot, "session-memory.sqlite")
 }
 
 function parseSettings(text: string): SessionSettings | null {

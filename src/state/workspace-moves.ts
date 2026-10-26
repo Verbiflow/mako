@@ -9,6 +9,7 @@ import { applyLiveSnapshot } from "@/state/live-recovery"
 import { createHook, createStore } from "@/state/store"
 import { acknowledgeThread } from "@/state/thread-lifecycle"
 import { refreshWorktrees } from "@/state/worktrees"
+import { UNSURE } from "@/lib/turn-changes"
 
 /**
  * Agents' requests to go on on their Thread's own branch, which the user
@@ -95,7 +96,7 @@ export function stayingLine(shares: Omit<MoveShares, "thread" | "likely" | "spli
   const others = kept(shares)
   const maybe = shares.uncertain.files
   const nobody = shares.unattributed.files
-  const unsureParts = [maybe ? `${files(maybe)} that might be its` : "", nobody ? `${files(nobody)} not attributed` : ""].filter(Boolean).join(" and ")
+  const unsureParts = [maybe ? `${files(maybe)} ${UNSURE}` : "", nobody ? `${files(nobody)} not attributed` : ""].filter(Boolean).join(" and ")
   const staying = [others ? `yours and other threads' changes in ${files(others)}` : "", bring ? "" : unsureParts].filter(Boolean).join("; ")
   return [staying ? `Staying: ${staying}` : "", bring && unsureParts ? `Coming too: ${unsureParts}` : ""].filter(Boolean).join(". ")
 }

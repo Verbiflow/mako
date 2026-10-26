@@ -1,4 +1,5 @@
 import type { MoveOutcome } from "@mako/host/contracts/workspace-moves"
+import { UNSURE_LABEL } from "@/lib/turn-changes"
 
 /** "1 file", "3 files". */
 export const fileCount = (count: number) => `${count} ${count === 1 ? "file" : "files"}`
@@ -7,5 +8,5 @@ export const fileCount = (count: number) => `${count} ${count === 1 ? "file" : "
 export function stayedPaths(outcome: MoveOutcome): string[] {
   const listed = (label: string, share: { files: number; paths: string[] }) =>
     share.files ? [`${label}: ${share.paths.join(", ")}${share.files > share.paths.length ? `, and ${share.files - share.paths.length} more` : ""}`] : []
-  return [...listed("Might be its", outcome.stayed.uncertain), ...listed("Changed before Mako was watching", outcome.stayed.unattributed)]
+  return [...listed(UNSURE_LABEL, outcome.stayed.uncertain), ...listed("Changed before Mako was watching", outcome.stayed.unattributed)]
 }

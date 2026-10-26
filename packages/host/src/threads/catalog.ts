@@ -12,7 +12,7 @@
  * it can inherit the conversation, and that is what this hands over.
  */
 import { makoRuntimeReadings } from "@mako/sessions/record-observed"
-import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE, type KeptRestore } from "@mako/sessions"
+import { contextFreeTitle, keptOutputsIn, makoViews, threadIdentity, VIEWER_PAGE, type KeptRestore } from "@mako/sessions"
 import { makoRecords } from "@mako/sessions/record-streams"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import type { InstalledReading, SessionWriters } from "@mako/sessions/record-writers"
@@ -183,9 +183,9 @@ export async function pagedThread(reader: Pick<DaemonClient, "page" | "open">, p
   return reader.open(path)
 }
 
-/** Where transcripts are written, each in a folder named for its digest. */
-function transcriptsRoot(): string {
-  return join(homedir(), ".mako", "transcripts")
+/** Where transcripts are written in a user root (`HostEnvironment.userRoot`), each in a folder named for its digest. */
+function transcriptsRoot(userRoot: string): string {
+  return join(userRoot, "transcripts")
 }
 /** Beside the transcripts; one links a child as `../children/…`. */
 const CHILDREN_FOLDER = "children"
@@ -198,6 +198,16 @@ export interface ThreadFileHomes {
 export interface ThreadCatalogDeps {
   /** Where this host keeps its catalog cache. */
   dataRoot: string
+  /** What every host of the user shares (`HostEnvironment.userRoot`): the record store, views, archive and transcripts. */
+  userRoot: string
+  /**
+   * A host isolated in a data root of its own (`HostEnvironment.isolated`):
+   * it reads the catalog in its own worker, never the person's sync daemon
+   * or a shared reader, which keep the person's stores, and takes into its
+   * record store only the sessions written while it runs, never the
+   * person's whole rail.
+   */
+  isolated: boolean
   /**
    * Where every profile's data root sits (`appData`) and what the app's
    * are named: the worker's backfill reads every reader's stores before it
@@ -633,6 +643,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     catalogStartup = catalogTask(signal, async () => {
       await lineage.load()
       signal.throwIfAborted()
+      if (deps.isolated) {
+        await runLocalCatalog(signal)
+        return
+      }
       // The installed app enables login capture by default; explicit opt-outs use only an on-demand reader.
       await refreshDaemonLoginJob(app)
       signal.throwIfAborted()
@@ -860,14 +874,16 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       cachePath: join(deps.dataRoot, "threads-catalog.json"),
       // Same archive the daemon reads: Mako's copies of sessions nothing else
       // holds, which this worker's backfill migrates onto the record store.
-      archivePath: join(homedir(), ".mako", "archive"),
-      recordsPath: makoRecords(),
-      viewsPath: makoViews(),
-      runtimeReadings: makoRuntimeReadings(),
+      archivePath: join(deps.userRoot, "archive"),
+      recordsPath: makoRecords(deps.userRoot),
+      viewsPath: makoViews(deps.userRoot),
+      runtimeReadings: makoRuntimeReadings(deps.userRoot),
       readOnly: catalogReadOnly,
+      backfill: !catalogReadOnly && !deps.isolated,
+      kept: keptOutputsIn(deps.userRoot),
       decodeExecutable: headlessNodeExecutable(),
       ...deps.writer && { writer: deps.writer },
-      ...deps.profiles && { profiles: { ...deps.profiles, dataRoot: deps.dataRoot, sessionMemory: sessionMemoryPath(), home: homedir() } },
+      ...deps.profiles && { profiles: { ...deps.profiles, dataRoot: deps.dataRoot, sessionMemory: sessionMemoryPath(deps.userRoot), home: homedir() } },
     }
     const compiled = new URL("./catalog-worker.js", import.meta.url)
     const worker = new Worker(compiled, {
@@ -1036,7 +1052,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   async function runLocalCatalog(signal: AbortSignal): Promise<void> {
     signal.throwIfAborted()
     if (catalog || daemon) return
-    try {
+    if (!deps.isolated) try {
       // A reader this host started would capture into the archive on its behalf.
       const identity = await catalogIdentity()
       signal.throwIfAborted()
@@ -1067,12 +1083,13 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     hostWarn("threads", "catalog running on the host thread")
     const source = defaultCatalog({
       cachePath: join(deps.dataRoot, "threads-catalog.json"),
-      archivePath: join(homedir(), ".mako", "archive"),
-      recordsPath: makoRecords(),
-      viewsPath: makoViews(),
-      runtimeReadings: makoRuntimeReadings(),
+      archivePath: join(deps.userRoot, "archive"),
+      recordsPath: makoRecords(deps.userRoot),
+      viewsPath: makoViews(deps.userRoot),
+      runtimeReadings: makoRuntimeReadings(deps.userRoot),
       readOnly: catalogReadOnly,
       decodeExecutable: headlessNodeExecutable(),
+      kept: keptOutputsIn(deps.userRoot),
       ...deps.writer && { writer: deps.writer },
     })
     const stop = () => void source.stop()
@@ -1331,7 +1348,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
 
   function recordWriters(path: string): SessionWriters | null {
     try {
-      return recordWritersAt(makoRecords(), path)?.writers ?? null
+      return recordWritersAt(makoRecords(deps.userRoot), path)?.writers ?? null
     } catch (error) {
       // A store being made or replaced, or a newer Mako's: nothing is known of its writers.
       hostWarn("records", "a session's writers could not be read", { path, error: error instanceof Error ? error.message : String(error) })
@@ -1359,7 +1376,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   }
 
   const childSource: ChildSource = { children: threadChildren, open: openChild }
-  const sidecars = new ChildSidecars(join(transcriptsRoot(), CHILDREN_FOLDER), (harness) => harnesses.label(harness))
+  const sidecars = new ChildSidecars(join(transcriptsRoot(deps.userRoot), CHILDREN_FOLDER), (harness) => harnesses.label(harness))
 
   /**
    * The child agents `thread` carries, each rendered beside the bundles.
@@ -1417,10 +1434,11 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
 
   async function openThreadDirect(path: string): Promise<Thread | null> {
     const direct = defaultCatalog({
-      archivePath: join(homedir(), ".mako", "archive"),
-      viewsPath: makoViews(),
+      archivePath: join(deps.userRoot, "archive"),
+      viewsPath: makoViews(deps.userRoot),
       readOnly: catalogReadOnly,
       decodeExecutable: headlessNodeExecutable(),
+      kept: keptOutputsIn(deps.userRoot),
     })
     try {
       return await direct.open(path, false)
@@ -1575,7 +1593,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       ...thread.ref.cwd !== undefined && { cwd: thread.ref.cwd },
       children: carried.children,
     })
-    const file = await writeTranscript(transcriptsRoot(), built)
+    const file = await writeTranscript(transcriptsRoot(deps.userRoot), built)
     const artifact: TranscriptArtifact = {
       kind: "file",
       file,

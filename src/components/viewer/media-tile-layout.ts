@@ -25,15 +25,29 @@ const INLINE_MAX_REM = 30
 /**
  * The box a picture or video draws in, before a byte of it loads: its own
  * aspect from the size its header states, no wider than the column, 30rem
- * or its own pixels, and no taller than 30rem. Without a size yet, a
- * screenshot's usual shape holds the place.
+ * or its own pixels (one to a device pixel, `ratio` to a CSS pixel), and no
+ * taller than 30rem. Without a size yet, a screenshot's usual shape holds
+ * the place.
  */
-export function mediaBox(width?: number, height?: number): CSSProperties {
+export function mediaBox(width?: number, height?: number, ratio = 1): CSSProperties {
   if (!width || !height) return { width: `min(100%, ${INLINE_MAX_REM}rem)`, aspectRatio: "16 / 10" }
-  const ratio = width / height
+  const aspect = width / height
   return {
-    width: `min(100%, ${INLINE_MAX_REM}rem, ${(INLINE_MAX_REM * ratio).toFixed(3)}rem, ${width}px)`,
+    width: `min(100%, ${INLINE_MAX_REM}rem, ${(INLINE_MAX_REM * aspect).toFixed(3)}rem, ${cssPixels(width, ratio)}px)`,
     aspectRatio: `${width} / ${height}`,
   }
 }
 
+/**
+ * The most a picture draws at without being enlarged: its own pixels, one
+ * to a device pixel. Fit and a grid's tile shrink a larger one to their box
+ * and leave a smaller one at this; only "Actual size" draws it at exactly
+ * this, whatever the box. Undefined until its size is known.
+ */
+export function naturalSize(width: number | undefined, height: number | undefined, ratio: number): { width: number; height: number } | undefined {
+  if (!width || !height) return undefined
+  return { width: cssPixels(width, ratio), height: cssPixels(height, ratio) }
+}
+
+/** CSS pixels that hold `pixels` device pixels, rounded to a hundredth. */
+const cssPixels = (pixels: number, ratio: number) => Math.round((pixels / (ratio > 0 ? ratio : 1)) * 100) / 100

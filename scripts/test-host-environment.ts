@@ -28,8 +28,11 @@ try {
     development: true,
     profile: "dev",
     userRoot: join(home, ".mako"),
+    isolated: false,
   }, "A checkout's host keeps the dev profile beside the installed app's data")
   assert.equal(mac(checkout, { MAKO_DATA_ROOT: join(root, "isolated") }).userRoot, join(root, "isolated"), "A host isolated outside appData keeps user state in its own root")
+  assert.equal(mac(checkout, { MAKO_DATA_ROOT: join(root, "isolated") }).isolated, true, "and shares nothing of the person's Mako")
+  assert.equal(mac(checkout, { MAKO_DATA_ROOT: join(home, ".mako") }).isolated, false, "A cloud machine's root is its user's own")
   assert.equal(mac(checkout, { MAKO_DATA_ROOT: join(support, "Mako-review") }).userRoot, join(home, ".mako"), "A launcher's profile root still shares the user's state")
   assert.equal(mac(checkout, { MAKO_PROD: "1" }).dataRoot, join(support, "mako"), "MAKO_PROD runs a checkout as the installed app")
   assert.equal(mac(checkout, { MAKO_PROD: "1" }).development, false)

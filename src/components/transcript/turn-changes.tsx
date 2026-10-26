@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react"
 import { FileDiffIcon } from "lucide-react"
-import { LineCounts } from "@/components/inspector/change-marks"
+import { LineCounts, UnsureCount } from "@/components/inspector/change-marks"
+import type { TurnUndone } from "@mako/host/contracts/turn-review"
 import { TurnUndoDialog } from "@/components/inspector/turn-undo"
-import { maybeWords, recordRoots, recordedTurnChanges, turnChangeSummary, turnChangeWords, type TurnChangeSummary } from "@/lib/turn-changes"
+import { anyUnsure, recordRoots, recordedTurnChanges, turnChangeSummary, turnChangeWords, type TurnChangeSummary } from "@/lib/turn-changes"
+import { undoneWords } from "@/lib/turn-undone"
 import { cn } from "@/lib/utils"
 import { acp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
@@ -46,12 +48,14 @@ function readTurn(conversation: string, requestId: string, key: string): Promise
 }
 
 /**
- * What the turn changed, under its answer: "Changed 4 files +120 −33 · 1
- * maybe yours · Review". Its numbers are the request's own record, which
+ * What the turn changed, under its answer: "Changed 4 files +120 −33 · 2
+ * lines not sure whose · Review · Undo". Its numbers are the request's own record, which
  * the attribution journal counted once the turn ended (`LiveRequest.changes`):
  * only this thread's lines, the same live and reopened, and the same record
  * its file links and "changes made" read. Changes that only might be the
- * agent's (a save of the person's while it ran) are counted apart. A turn
+ * agent's (a save of the person's while it ran) are counted apart, "not
+ * sure whose", as Changes › Turn counts them. Once undone it says so, from
+ * the same request (`LiveRequest.undone`), and offers no second undo. A turn
  * from before Mako kept that record falls back to its checkpoints, read
  * once it nears the viewport. Review opens Changes on that turn, from its
  * checkpoints or, without them, from the journal the record was counted
@@ -68,7 +72,7 @@ export function TurnChanges({ requestId }: { requestId: string | undefined }) {
   const saved = before?.kind === "ready" && request?.snapshots?.after?.kind === "ready" ? before.snapshot.scope : null
   if (!liveId || !requestId || !request) return null
   const recorded = recordedTurnChanges(request.changes)
-  if (recorded) return <TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={saved ?? recordRoots(request.changes)[0] ?? null} undoable />
+  if (recorded) return <TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={saved ?? recordRoots(request.changes)[0] ?? null} undoable undone={request.undone} />
   const workspace = saved
   // A count on its way, or none to make: nothing to read from the checkpoints.
   if (request.changes || !workspace) return null
@@ -108,14 +112,15 @@ function promptOf(conversation: string, requestId: string): string {
   return (request ? (request.displayText ?? request.text) : "").replace(/\s+/g, " ").trim()
 }
 
-function TurnChangesRow({ summary, conversation, requestId, workspace, undoable = false }: { summary: TurnChangeSummary; conversation: string; requestId: string; workspace: string | null; undoable?: boolean }) {
+function TurnChangesRow({ summary, conversation, requestId, workspace, undoable = false, undone }: { summary: TurnChangeSummary; conversation: string; requestId: string; workspace: string | null; undoable?: boolean; undone?: TurnUndone }) {
   const [undo, setUndo] = useState<string | null>(null)
-  if (summary.files === 0 && summary.maybe === 0) return null
+  if (summary.files === 0 && !anyUnsure(summary.unsure)) return null
   return (
     <div
       role="note"
       data-turn-changes={summary.files}
-      data-turn-changes-maybe={summary.maybe || undefined}
+      data-turn-changes-unsure={anyUnsure(summary.unsure) || undefined}
+      data-turn-undone={undone ? "" : undefined}
       data-turn-changes-settling={summary.settling || undefined}
       title={summary.settling ? "Still settling: a change heard as the turn ended may yet be counted" : undefined}
       className="flex h-7 min-w-0 max-w-full items-center gap-2 text-ui"
@@ -129,16 +134,10 @@ function TurnChangesRow({ summary, conversation, requestId, workspace, undoable 
       ) : (
         <span className="min-w-0 truncate text-muted-foreground">No changes for sure</span>
       )}
-      {summary.maybe > 0 ? (
+      {anyUnsure(summary.unsure) ? (
         <>
           <span aria-hidden className="shrink-0 text-faint">·</span>
-          <span
-            data-turn-changes-maybe-label=""
-            title="Changed while this turn ran, but nothing ties them to the agent: a save of yours or another app's fits as well. They aren't counted as the turn's."
-            className="shrink-0 cursor-default text-faint"
-          >
-            {maybeWords(summary.maybe)}
-          </span>
+          <UnsureCount unsure={summary.unsure} className="shrink-0" />
         </>
       ) : null}
       {workspace ? (
@@ -155,7 +154,12 @@ function TurnChangesRow({ summary, conversation, requestId, workspace, undoable 
           </button>
         </>
       ) : null}
-      {undoable && summary.files > 0 ? (
+      {undone ? (
+        <>
+          <span aria-hidden className="shrink-0 text-faint">·</span>
+          <span data-undone="" title={undoneWords(undone)} className="shrink-0 cursor-default text-muted-foreground">Undone</span>
+        </>
+      ) : undoable && summary.files > 0 ? (
         <>
           <span aria-hidden className="shrink-0 text-faint">·</span>
           <button

@@ -427,6 +427,45 @@ function echoed(report: ReportedCall, change: ObservedChange): "content" | undef
   return addedBlocks(change).some((block) => commands.some((command) => command.includes(block))) ? "content" : undefined
 }
 
+/**
+ * A command whose text spells out the changed file, where the parsed
+ * command names nothing (`namedPaths` leaves out a script's strings, a
+ * heredoc's body, an option's value): `plt.savefig("tide.png")` in a
+ * heredoc, `--screenshot=shot.png`, `-o out/report.pdf`. Its path from the
+ * folder the command ran in, `./` and all, or its absolute path, as a whole
+ * word: between quotes, spaces, `=`, `:`, `,`, parentheses or redirects,
+ * never inside a longer path. Only a name that reads as a file's (a dot or
+ * a folder in it) counts, so a word that happens to match doesn't. A save
+ * of the person's while the command runs, of a file it doesn't spell, stays
+ * only timing's.
+ */
+function spelled(report: ReportedCall, change: ObservedChange): "command" | undefined {
+  for (const effect of report.effects) {
+    if (effect.kind !== "command") continue
+    const names = [change.path]
+    const cwd = effect.cwd
+    if (cwd && change.path.startsWith(`${cwd}/`)) {
+      const inside = change.path.slice(cwd.length + 1)
+      names.push(inside, `./${inside}`)
+    }
+    if (names.some((name) => /[./]/.test(name) && spells(effect.command, name))) return "command"
+  }
+  return undefined
+}
+
+/** Characters a file's name ends at in a command's text. */
+const WORD_EDGE = /[\s'"`=:,;()<>|&]/
+
+/** Whether `name` stands in `text` as a whole word. */
+function spells(text: string, name: string): boolean {
+  for (let at = text.indexOf(name); at >= 0; at = text.indexOf(name, at + 1)) {
+    const before = at === 0 ? " " : text[at - 1]!
+    const after = text[at + name.length] ?? " "
+    if (WORD_EDGE.test(before) && WORD_EDGE.test(after)) return true
+  }
+  return false
+}
+
 /** A change's added stretches distinct enough to tell writers apart, each as one string; a change is re-attributed often, so this runs once. */
 const blocks = new WeakMap<ObservedChange, string[]>()
 function addedBlocks(change: ObservedChange): string[] {
@@ -498,7 +537,7 @@ export function attribute(change: ObservedChange, evidence: Evidence): Attributi
       if (claimed?.proven) exact.push({ author, effect: claimed.effect, start: span.start })
       else if (claimed) named.push({ author, by: "effect", start: span.start })
       else if (!readOnlyReport(report)) {
-        const by = naming(undefined, report, change) ?? echoed(report, change)
+        const by = naming(undefined, report, change) ?? echoed(report, change) ?? spelled(report, change)
         if (by) named.push({ author, by, start: span.start })
       }
     }

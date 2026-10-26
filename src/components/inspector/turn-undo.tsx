@@ -5,6 +5,7 @@ import { LineCounts } from "@/components/inspector/change-marks"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action, IconAction } from "@/components/ui/kit"
+import { UNSURE } from "@/lib/turn-changes"
 import { lineWords } from "@/lib/turn-writers"
 import { acp } from "@/state/acp"
 
@@ -19,7 +20,7 @@ type State =
  * Undo one turn, or every change of the Thread, keeping everyone else's
  * lines. The preview groups the files three ways: what the undo takes back
  * (the scope's own lines, out; lines it removed, back), what it keeps
- * (yours and other threads' lines), and stretches it can't split, left as
+ * (yours, other threads', and those not sure whose), and stretches it can't split, left as
  * they are and named. Rewind stays the way to put the whole workspace back.
  */
 export function TurnUndoDialog({ conversation, scope, prompt, open, onOpenChange, onUndone }: {
@@ -125,7 +126,7 @@ function Groups({ preview, whose, done }: { preview: TurnUndoPreview; whose: str
         </Group>
       ) : null}
       {preview.kept.length ? (
-        <Group title="Kept" detail="yours and other threads' lines" count={preview.kept.length}>
+        <Group title="Kept" detail={`lines that aren't ${whose} for sure`} count={preview.kept.length}>
           {preview.kept.map((file) => <KeptRow key={file.path} file={file} />)}
         </Group>
       ) : null}
@@ -183,14 +184,14 @@ function keptWords(kept: KeptLines): string {
     kept.person ? `${lineWords(kept.person)} yours` : "",
     kept.other ? `${lineWords(kept.other)} another thread's` : "",
     kept.thread ? `${lineWords(kept.thread)} from another turn` : "",
-    kept.maybe ? `${lineWords(kept.maybe)} maybe yours` : "",
+    kept.maybe ? `${lineWords(kept.maybe)} ${UNSURE}` : "",
     kept.unknown ? `${lineWords(kept.unknown)} nobody's named` : "",
   ].filter(Boolean)
   return parts.join(" · ")
 }
 
 function KeptRow({ file }: { file: TurnUndoKept }) {
-  const why = file.why === "maybe" ? "Only lines that might be this turn's" : file.why === "rewritten" ? "Rewritten since by someone else" : null
+  const why = file.why === "maybe" ? `Only lines ${UNSURE}` : file.why === "rewritten" ? "Rewritten since by someone else" : null
   return (
     <li className="flex h-8 items-center gap-3 px-3" data-kept-file={file.path}>
       <Path path={file.path} />
@@ -208,13 +209,13 @@ const LEFT_REASONS = {
 
 function LeftRow({ left }: { left: TurnUndoLeft }) {
   const lines = left.lines && left.lines.length ? `:${left.lines.start}${left.lines.length > 1 ? `–${left.lines.start + left.lines.length - 1}` : ""}` : undefined
-  const by = left.by.map((writer) => (writer === "person" ? "you" : writer === "other" ? "another thread" : writer === "maybe" ? "maybe this thread" : writer === "thread" ? "another turn" : "someone")).join(", ")
+  const by = left.by.map((writer) => (writer === "person" ? "by you" : writer === "other" ? "by another thread" : writer === "maybe" ? UNSURE : writer === "thread" ? "by another turn" : "by someone")).join(", ")
   return (
     <li className="flex min-h-8 items-center gap-3 px-3 py-1.5" data-left-file={left.path}>
       <Path path={left.path} suffix={lines} />
       <span className="shrink-0 text-right text-label text-muted-foreground">
         {LEFT_REASONS[left.reason]}
-        {by ? <span className="text-faint">{` · by ${by}`}</span> : null}
+        {by ? <span className="text-faint">{` · ${by}`}</span> : null}
       </span>
     </li>
   )

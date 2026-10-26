@@ -241,6 +241,13 @@ export class LiveConversations {
         (checkpointing || snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "dispatching")) &&
         (snapshot.session.cwd === folder || snapshot.session.cwd.startsWith(`${folder}/`) || folder.startsWith(`${snapshot.session.cwd}/`))),
       plans: join(dependencies.root, "undos"),
+      undone: (id, pick, undone) => {
+        const resident = this.records.require(id)
+        const marked = pick(resident.snapshot.requests)
+        if (!marked.size) return
+        resident.snapshot = { ...resident.snapshot, requests: resident.snapshot.requests.map((request) => (marked.has(request.id) ? { ...request, undone } : request)) }
+        access.flush(resident)
+      },
     })
     this.approvals = new LiveApprovals(access)
     this.questions = new LiveQuestions(access, {

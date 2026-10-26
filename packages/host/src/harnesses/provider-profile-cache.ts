@@ -4,7 +4,7 @@ import {
 } from "@mako/sessions/settings"
 import { createHash } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
-import { homedir } from "node:os"
+import { makoUserRoot } from "@mako/sessions/mako-root"
 import { dirname, join } from "node:path"
 import { z } from "zod"
 import type { HarnessProfile } from "../contracts/providers-acp.js"
@@ -34,8 +34,9 @@ type CacheFile = z.infer<typeof fileSchema>
 const EMPTY: CacheFile = { version: 3, entries: {}, snapshots: {} }
 const MAX_ENTRIES = 64
 
-function cachePath(): string {
-  return join(homedir(), ".mako", "provider-profiles.json")
+/** Where the cache is in a user root (`HostEnvironment.userRoot`), one file for every profile of the user. */
+export function providerProfilesPath(userRoot: string): string {
+  return join(userRoot, "provider-profiles.json")
 }
 
 function profileHash(profile: HarnessProfile): string {
@@ -50,7 +51,8 @@ export class ProviderProfileCache {
   private writes: Promise<void> = Promise.resolve()
   private readonly path: string
 
-  constructor(path = cachePath()) {
+  /** The user's own cache unless a host hands its user root's (`providerProfilesPath`). */
+  constructor(path = providerProfilesPath(makoUserRoot())) {
     this.path = path
   }
 

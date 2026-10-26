@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { getSingularPatch, parseDiffFromFile, type CodeViewDiffItem, type DiffLineAnnotation, type FileDiffMetadata, type SelectedLineRange } from "@pierre/diffs"
 import { CodeView, type CodeViewHandle, type CodeViewReactOptions } from "@pierre/diffs/react"
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
-import { countedChanges } from "@mako/host/contracts/turn-changes"
+import { countedChanges, type TurnChangeLines } from "@mako/host/contracts/turn-changes"
 import type { TurnFileWriters, TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { ImageThumbs } from "@/components/inspector/binary-diff"
@@ -11,14 +11,16 @@ import { TurnUndoDialog } from "@/components/inspector/turn-undo"
 import { WriterRow } from "@/components/inspector/turn-writers"
 import { PickedDiffLines } from "@/components/inspector/diff-line-pick"
 import { isPickEnd, pickEnd, workspacePath } from "@/lib/line-comments"
-import { LineCounts, StatusLetter } from "@/components/inspector/change-marks"
+import { LineCounts, StatusLetter, UnsureCount } from "@/components/inspector/change-marks"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import { Action, IconAction, Toggle } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger } from "@/components/ui/menu"
 import { SearchSelect } from "@/components/ui/search-select"
 import { DIFF_THEME } from "@/lib/diff-theme"
 import { binarySizes } from "@/lib/git-binary"
-import { fileRoot } from "@/lib/turn-changes"
+import { anyUnsure, fileRoot, recordedTurnChanges, type Unsure } from "@/lib/turn-changes"
+import { undoneWords } from "@/lib/turn-undone"
+import { formatTime } from "@/lib/format"
 import { noteKey, writerNotes, type WriterNote } from "@/lib/turn-writers"
 import { cn } from "@/lib/utils"
 import type { GitCommitEntry, GitDiff, GitFile } from "@/lib/types"
@@ -259,6 +261,37 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
   return <ReviewFiles key={only ? `${key}:only` : key} files={shown} workspace={workspace} staged={scope.kind === "uncommitted" ? staged : 0} scope={scope} picker={picker} bar={bar} load={load} writers={writers} only={only} onReviewInCenter={onReviewInCenter} />
 }
 
+/** The request a turn scope reviews, as its conversation holds it: its record of changes and its undo. */
+function useTurnRequest(scope: Scope): LiveRequest | undefined {
+  return useAcp((state) => {
+    if (scope.kind !== "turn") return undefined
+    const conversation = state.conversations[scope.conversation]
+    return conversation?.kind === "live" ? conversation.requests?.find((request) => request.id === scope.requestId) : undefined
+  })
+}
+
+/**
+ * A turn's counts in its header, from its request's record as the line
+ * under its answer reads them: the agent's own files and lines, then what
+ * is not sure whose. They don't move with "Only this thread's lines",
+ * which only redraws the diffs to match them; the bar under them says when
+ * the turn was undone.
+ */
+function TurnCounts({ files, insertions, deletions, unsure }: { files: number; insertions: number | null; deletions: number | null; unsure: Unsure }) {
+  return (
+    <span role="status" data-turn-counts={files} className="tabular flex min-w-0 items-center gap-2 text-muted-foreground">
+      <span className="shrink-0">{files ? `${files} ${files === 1 ? "file" : "files"}` : "No files for sure"}</span>
+      <LineCounts insertions={insertions} deletions={deletions} />
+      {anyUnsure(unsure) ? (
+        <>
+          <span aria-hidden className="shrink-0 text-faint">·</span>
+          <UnsureCount unsure={unsure} className="min-w-0 truncate" />
+        </>
+      ) : null}
+    </span>
+  )
+}
+
 /**
  * A turn's bar under the header: "Only this thread's lines", which redraws
  * each diff with every other writer's change on both sides, and undoing the
@@ -266,6 +299,7 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
  */
 function TurnBar({ scope, only, onOnly }: { scope: TurnScope; only: boolean; onOnly: (on: boolean) => void }) {
   const [undo, setUndo] = useState<TurnUndoScope | null>(null)
+  const undone = useTurnRequest(scope)?.undone
   return (
     <div data-turn-bar="" className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline pr-1.5 pl-2.5 text-label">
       <label className="pressable flex min-w-0 cursor-pointer items-center gap-2 text-muted-foreground hover:text-foreground">
@@ -273,10 +307,17 @@ function TurnBar({ scope, only, onOnly }: { scope: TurnScope; only: boolean; onO
         <span className="truncate">Only this thread's lines</span>
       </label>
       <div className="ml-auto flex shrink-0 items-center">
-        <Action size="xs" tone="ghost" data-undo-turn="" onClick={() => setUndo({ kind: "turn", requestId: scope.requestId })}>
-          <Undo2Icon />
-          Undo this turn…
-        </Action>
+        {undone ? (
+          <span data-turn-undone="" title={undoneWords(undone)} className="flex h-6 cursor-default items-center gap-1.5 px-2 text-muted-foreground [&_svg]:size-3.5 [&_svg]:text-faint">
+            <Undo2Icon />
+            {`Undone at ${formatTime(undone.at)}`}
+          </span>
+        ) : (
+          <Action size="xs" tone="ghost" data-undo-turn="" onClick={() => setUndo({ kind: "turn", requestId: scope.requestId })}>
+            <Undo2Icon />
+            Undo this turn…
+          </Action>
+        )}
         <Menu modal={false}>
           <MenuTrigger asChild>
             <IconAction label="More ways to undo" size="xs">
@@ -358,10 +399,12 @@ function ScopeMessage({ picker, text }: { picker: ReactNode; text: string }) {
 interface TurnChoice {
   scope: TurnScope
   number: number
-  /** Files, and net lines, the turn's record counts in this repository; null for a turn read from its checkpoints. */
+  /** Files, and net lines, the turn's record counts as its own in this repository; null for a turn read from its checkpoints. */
   files: number | null
   added: number
   removed: number
+  /** Files not sure whose, counted apart. */
+  unsure: Unsure
 }
 
 /** Each conversation's turns, by its requests and the repository: worked out once per change of its requests, not per streamed token. */
@@ -388,12 +431,12 @@ function useTurns(workspace: string): TurnChoice[] {
       const before = request.snapshots?.before
       const words = (request.displayText ?? request.text).replace(/\s+/g, " ").trim()
       if (counted) {
-        const here = counted.files.filter((file) => fileRoot(file) === workspace)
-        if (!here.length) return
-        const sum = (key: "added" | "removed") => here.reduce((total, file) => total + (file.own?.[key] ?? 0) + (file.maybe?.[key] ?? 0), 0)
-        rows.push([live.key, request.id, index + 1, here.length, sum("added"), sum("removed"), words].join("\t"))
+        if (!counted.files.some((file) => fileRoot(file) === workspace)) return
+        // The turn's own, as its line and its header count them; files not sure whose apart.
+        const here = recordedTurnChanges(request.changes, workspace)!
+        rows.push([live.key, request.id, index + 1, here.files, here.insertions ?? 0, here.deletions ?? 0, here.unsure.lines, here.unsure.files, words].join("\t"))
       } else if (before?.kind === "ready" && request.snapshots?.after?.kind === "ready" && before.snapshot.scope === workspace) {
-        rows.push([live.key, request.id, index + 1, -1, 0, 0, words].join("\t"))
+        rows.push([live.key, request.id, index + 1, -1, 0, 0, 0, 0, words].join("\t"))
       }
     })
     const joined = rows.reverse().join("\n")
@@ -401,8 +444,8 @@ function useTurns(workspace: string): TurnChoice[] {
     return joined
   })
   return useMemo(() => (found ? found.split("\n") : []).map((row): TurnChoice => {
-    const [conversation = "", requestId = "", number = "0", files = "-1", added = "0", removed = "0", ...prompt] = row.split("\t")
-    return { scope: { kind: "turn", conversation, requestId, prompt: prompt.join("\t") }, number: Number(number), files: Number(files) < 0 ? null : Number(files), added: Number(added), removed: Number(removed) }
+    const [conversation = "", requestId = "", number = "0", files = "-1", added = "0", removed = "0", unsureLines = "0", unsureFiles = "0", ...prompt] = row.split("\t")
+    return { scope: { kind: "turn", conversation, requestId, prompt: prompt.join("\t") }, number: Number(number), files: Number(files) < 0 ? null : Number(files), added: Number(added), removed: Number(removed), unsure: { lines: Number(unsureLines), files: Number(unsureFiles) } }
   }), [found])
 }
 
@@ -476,8 +519,9 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
                       <span className="tabular">{`Turn ${turn.number}`}</span>
                       <span aria-hidden>·</span>
                       {turn.files === null ? <span>From its checkpoints</span> : <>
-                        <span className="tabular">{turn.files === 1 ? "1 file" : `${turn.files} files`}</span>
+                        {turn.files ? <span className="tabular">{turn.files === 1 ? "1 file" : `${turn.files} files`}</span> : null}
                         <LineCounts insertions={turn.added} deletions={turn.removed} />
+                        <UnsureCount unsure={turn.unsure} />
                       </>}
                     </span>
                   </span>
@@ -542,6 +586,14 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
     const conversation = scope.kind === "turn" ? state.conversations[scope.conversation] : undefined
     return conversation?.kind === "live" ? conversation.session.harness : undefined
   })
+  const turn = useTurnRequest(scope)
+  // A turn's counts are its record's, as the line under its answer reads them, in this repository.
+  const counts = useMemo(() => recordedTurnChanges(turn?.changes, workspace), [turn?.changes, workspace])
+  const unsure = useMemo(() => {
+    const found = new Map<string, TurnChangeLines | null>()
+    for (const file of countedChanges(turn?.changes)?.files ?? []) if (file.maybe !== undefined && fileRoot(file) === workspace) found.set(file.relative, file.maybe)
+    return found
+  }, [turn?.changes, workspace])
   // Lines picked in one file, once the press that picked them ends; the
   // stream reports every step of a drag, kept here until then.
   const [picked, setPicked] = useState<{ id: string; range: SelectedLineRange } | null>(null)
@@ -715,11 +767,17 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline pr-1.5 pl-1.5 text-label">
         {picker}
-        <span role="status" className="tabular min-w-0 truncate text-muted-foreground">
-          {`${files.length} ${files.length === 1 ? "file" : "files"}`}
-          {staged > 0 ? <span className="text-faint">{` · ${staged} staged`}</span> : null}
-        </span>
-        {counted ? <LineCounts insertions={insertions} deletions={deletions} /> : null}
+        {counts ? (
+          <TurnCounts files={counts.files} insertions={counts.insertions} deletions={counts.deletions} unsure={counts.unsure} />
+        ) : (
+          <>
+            <span role="status" className="tabular min-w-0 truncate text-muted-foreground">
+              {`${files.length} ${files.length === 1 ? "file" : "files"}`}
+              {staged > 0 ? <span className="text-faint">{` · ${staged} staged`}</span> : null}
+            </span>
+            {counted ? <LineCounts insertions={insertions} deletions={deletions} /> : null}
+          </>
+        )}
         <div className="ml-auto flex items-center text-faint">
           <SearchSelect
             value=""
@@ -784,6 +842,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
                 base={base}
                 discardable={scope.kind === "uncommitted"}
                 only={only}
+                unsure={unsure.get(file.path)}
               />
             )
           }}
@@ -845,7 +904,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
  * One file's header. The stream mounts headers only for files in its window,
  * so a header asks for its own diff while it is mounted and the diff is due.
  */
-function FileHeader({ file, entry, open, viewed, root, queue, load, base, discardable, only = false, onToggle, onViewed }: {
+function FileHeader({ file, entry, open, viewed, root, queue, load, base, discardable, only = false, unsure, onToggle, onViewed }: {
   file: GitFile
   entry: Entry | undefined
   open: boolean
@@ -859,6 +918,8 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
   discardable: boolean
   /** The diff shows only a turn's own lines. */
   only?: boolean
+  /** A turn's lines in the file not sure whose (null: not counted by lines); absent when it has none. */
+  unsure?: TurnChangeLines | null
   onToggle: (path: string) => void
   onViewed: (path: string, on: boolean) => void
 }) {
@@ -909,6 +970,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
         {note ? <span className="shrink-0 truncate text-faint" title={loaded?.kind === "unavailable" ? loaded.reason : undefined}>{note}</span> : null}
         <span className="ml-auto flex shrink-0 items-center gap-2">
           <LineCounts insertions={file.insertions} deletions={file.deletions} />
+          {unsure !== undefined ? <UnsureCount unsure={unsure && unsure.added + unsure.removed ? { lines: unsure.added + unsure.removed, files: 0 } : { lines: 0, files: 1 }} /> : null}
           <StatusLetter status={file.status} />
         </span>
       </button>

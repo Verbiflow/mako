@@ -27,7 +27,7 @@ try {
       b.onLoad({ filter: /.*/, namespace: 'fake' }, args => ({ contents: mocks[args.path], loader: 'js' }))
     } }] })
   const login = await import(pathToFileURL(outfile).href)
-  const app = { appRoot: root, version: '0.0.1', build: {}, get packaged() { return state.packaged } }
+  const app = { appRoot: root, version: '0.0.1', build: {}, isolated: false, get packaged() { return state.packaged } }
   await mkdir(join(root, 'node_modules/@mako/sessions/dist'), { recursive: true })
   await writeFile(login.daemonScript(app), '')
   await login.refreshDaemonLoginJob(app)
@@ -50,7 +50,13 @@ try {
   const before = state.calls.length
   await login.refreshDaemonLoginJob(app)
   assert.equal(state.calls.length, before, 'development checkout never registers a job')
-  console.log('Daemon login: default-on, idempotent refresh, unloaded repair, opt-out, development isolation passed')
+  // A packaged build isolated in a data root of its own (a proof's) never takes over the person's login sync, nor opts them out.
+  const isolated = { ...app, packaged: true, isolated: true }
+  await login.refreshDaemonLoginJob(isolated)
+  assert.equal(state.calls.length, before, 'an isolated packaged build never registers a job')
+  await assert.rejects(login.setDaemonLogin(isolated, false), /keeps its data apart/)
+  await assert.rejects(readFile(join(root, '.mako/syncd-login-optout')), 'nor writes the opt-out')
+  console.log('Daemon login: default-on, idempotent refresh, unloaded repair, opt-out, development and isolated builds passed')
 } finally {
   delete globalThis.__makoLoginTest
   await rm(root, { recursive: true, force: true })

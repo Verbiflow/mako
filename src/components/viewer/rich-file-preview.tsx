@@ -13,6 +13,8 @@ import { DiagnosticPreview } from "./diagnostic-preview"
 import { TabularPreview } from "./tabular-preview"
 import { HtmlFrame } from "./html-frame"
 import { MediaVideo } from "./media-video"
+import { naturalSize } from "./media-tile-layout"
+import { useDevicePixelRatio } from "./use-device-pixel-ratio"
 
 /** Shared expanded body for composer, reply cards and the file workbench. */
 export default function RichFilePreview({
@@ -93,6 +95,7 @@ export default function RichFilePreview({
         format={format}
         url={file.previewUrl}
         poster={file.posterUrl}
+        size={file.width && file.height ? { width: file.width, height: file.height } : undefined}
         name={name}
         expanded={expanded}
         onExpand={onExpand}
@@ -146,6 +149,7 @@ function FileMediaPreview({
   format,
   url,
   poster,
+  size,
   name,
   expanded,
   onExpand,
@@ -154,6 +158,8 @@ function FileMediaPreview({
   format: "image" | "video" | "audio"
   url: string
   poster?: string
+  /** The picture's pixels, as its header states them; read from the picture once it loads otherwise. */
+  size?: { width: number; height: number }
   name: string
   expanded: boolean
   onExpand?: () => void
@@ -161,6 +167,10 @@ function FileMediaPreview({
 }) {
   const [failed, setFailed] = useState(false)
   const [actualSize, setActualSize] = useState(false)
+  const [loaded, setLoaded] = useState<{ width: number; height: number }>()
+  const ratio = useDevicePixelRatio()
+  const pixels = size ?? loaded
+  const natural = naturalSize(pixels?.width, pixels?.height, ratio)
   if (failed)
     return (
       <p role="status" className="p-4 text-ui text-muted-foreground">
@@ -176,14 +186,23 @@ function FileMediaPreview({
             {actual ? "Actual size" : "Fit"}
           </button>)}
         </div> : null}
-        <button type="button" aria-label={expanded ? `View ${name} ${actualSize ? "fitted" : "at actual size"}` : `Enlarge ${name}`} onClick={expanded ? () => setActualSize(!actualSize) : onExpand} disabled={!expanded && !onExpand} className={`pressable block w-full overflow-auto ${expanded ? "min-h-0 flex-1" : "cursor-zoom-in"} ${actualSize ? "cursor-zoom-out" : ""}`}>
+        <button type="button" aria-label={expanded ? `View ${name} ${actualSize ? "fitted" : "at actual size"}` : `Enlarge ${name}`} onClick={expanded ? () => setActualSize(!actualSize) : onExpand} disabled={!expanded && !onExpand} className={`pressable flex w-full overflow-auto ${expanded ? "min-h-0 flex-1" : "max-h-[32rem] cursor-zoom-in"} ${actualSize ? "cursor-zoom-out" : ""}`}>
+          {/* Fit shrinks a larger picture to the box and leaves a smaller one at its own pixels; only Actual size draws them one to one, whatever the box. */}
           <img
           loading="lazy"
           decoding="async"
           src={url}
           alt={name}
+          data-image-fit={actualSize ? "actual" : "fit"}
+          onLoad={(event) => {
+            const image = event.currentTarget
+            if (!size && image.naturalWidth) setLoaded({ width: image.naturalWidth, height: image.naturalHeight })
+          }}
           onError={() => { setFailed(true); onPreviewError?.() }}
-          className={actualSize ? "asset-surface max-w-none" : `asset-surface mx-auto block w-full object-contain ${expanded ? "h-full" : "max-h-[32rem]"}`}
+          style={actualSize
+            ? natural && { width: natural.width, height: natural.height }
+            : { maxWidth: natural ? `min(100%, ${natural.width}px)` : "100%", maxHeight: natural ? `min(${expanded ? "100%" : "32rem"}, ${natural.height}px)` : expanded ? "100%" : "32rem" }}
+          className={actualSize ? "asset-surface m-auto block max-w-none shrink-0" : "asset-surface m-auto block min-h-0 min-w-0 object-contain"}
         />
         </button>
       </div>

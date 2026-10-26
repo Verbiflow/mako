@@ -13,7 +13,7 @@ import { RuntimeUpdates } from "./runtime-updates.js"
 import { ReleaseTimelines } from "./release-timelines.js"
 import { nativeHarnesses } from "./native-runner.js"
 import { HarnessProfiles } from "./harness-profiles.js"
-import { ProviderProfileCache } from "./provider-profile-cache.js"
+import { ProviderProfileCache, providerProfilesPath } from "./provider-profile-cache.js"
 import type { HarnessAccounts } from "./accounts.js"
 import type { AccountHarness, AccountProvider } from "../contracts/accounts.js"
 import { accountRemovalSessions, type AccountSessions } from "./account-removal-sessions.js"
@@ -75,6 +75,8 @@ export interface Harnesses {
 export interface HarnessesDeps {
   host: ProviderHost
   appRoot: string
+  /** What the host keeps per user (`HostEnvironment.userRoot`): the models each harness offered, its installed readings, release dates. */
+  userRoot: string
   catalog: ThreadCatalog
   /** The live conversations, made after the harnesses; an account's removal asks them only once one runs. */
   live(): AccountSessions | undefined
@@ -86,12 +88,12 @@ export interface HarnessesDeps {
   makoProcesses?: MakoProcesses
 }
 
-export function openHarnesses({ host, appRoot, catalog, live, emit, jobs, subscribed, makoProcesses }: HarnessesDeps): Harnesses {
-  const profiles = new HarnessProfiles(host, new ProviderProfileCache())
+export function openHarnesses({ host, appRoot, userRoot, catalog, live, emit, jobs, subscribed, makoProcesses }: HarnessesDeps): Harnesses {
+  const profiles = new HarnessProfiles(host, new ProviderProfileCache(providerProfilesPath(userRoot)))
   const updates = new RuntimeUpdates({
     sources: () => host.updateSources.list(),
     processes: host.discovery,
-    path: makoRuntimeReadings(),
+    path: makoRuntimeReadings(userRoot),
     emit: (state) => emit({ type: "runtime-updates", updates: state }),
     // A new binary lists new models: drop the catalog and discover again, so
     // the picker shows what the updated CLI offers without a restart.
@@ -101,7 +103,7 @@ export function openHarnesses({ host, appRoot, catalog, live, emit, jobs, subscr
   })
   host.launchReadings.bind((provider) => updates.launchVersion(provider))
   // When each harness published its releases, for the record store's evidence pass: read hourly at most once a day, never waited on.
-  const releases = new ReleaseTimelines({ evidence: join(makoRecords(), "evidence"), sources: () => host.updateSources.list() })
+  const releases = new ReleaseTimelines({ evidence: join(makoRecords(userRoot), "evidence"), sources: () => host.updateSources.list() })
   jobs.every("release-timelines", 60 * 60_000, () => releases.refresh(), { firstAfterMs: 60_000 })
   const { accounts } = host
   accounts.usage.onChange((harness, name, usage) => emit({ type: "account-usage", harness, name, usage }))

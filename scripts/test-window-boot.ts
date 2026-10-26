@@ -13,7 +13,7 @@ import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 import { childBackend } from "@mako/host/workspaces/watch-backend"
 
 const gitRunner = new Git()
-const services = { git: gitRunner, previews: new ArtifactPreviews(() => []), watch: childBackend() }
+const services = { git: gitRunner, previews: new ArtifactPreviews(() => []), watch: childBackend(), attachments: join(tmpdir(), "mako-test-attachments") }
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-window-boot-")))
 const originalCwd = process.cwd()

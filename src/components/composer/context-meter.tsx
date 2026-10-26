@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils"
 import { acp, useAcp } from "@/state/acp"
 import { descriptorFor } from "@/state/descriptors"
 import { useThreads } from "@/state/threads"
+import { UNSURE, UNSURE_MEANING, unsureWords } from "@/lib/turn-changes"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 
 type Tone = "neutral" | "caution" | "negative"
@@ -407,8 +408,8 @@ function Spent({ spend, declared, harness, sideQuestions, changes }: { spend: Co
       ) : null}
       {changes?.files ? <Row label={changes.scope === "thread" ? "Changes made by the thread" : "Changes made"} value={`${changes.files === 1 ? "1 file" : `${changes.files} files`} · +${changes.added} −${changes.removed}`} title={changes.kinds ? kindsTitle(changes.kinds) : undefined} data-changes /> : null}
       {changes?.maybe ? (
-        <span className="text-label text-faint tabular-nums" data-changes-maybe title="Changed while its turns ran, with nothing tying them to the agent: a save of yours or another app's fits as well. They aren't counted above.">
-          {changes.files ? (changes.maybe === 1 ? "1 more file" : `${changes.maybe} more files`) : changes.maybe === 1 ? "1 file" : `${changes.maybe} files`} maybe yours
+        <span className="text-label text-faint tabular-nums" data-changes-unsure title={`${UNSURE_MEANING} They aren't counted above.`}>
+          {changes.files ? `${changes.maybe === 1 ? "1 more file" : `${changes.maybe} more files`} ${UNSURE}` : unsureWords({ lines: 0, files: changes.maybe })}
         </span>
       ) : null}
       {changes?.commands || changes?.outside ? (

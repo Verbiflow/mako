@@ -5,6 +5,7 @@ import { HarnessIcon } from "@/components/ui/provider-icon"
 import { useHarnessLabels } from "@/lib/harness-label"
 import type { ComposerNotice } from "@/extend/notices"
 import { useAcp } from "@/state/acp"
+import { UNSURE_LABEL } from "@/lib/turn-changes"
 import {
   projectName,
   splitLine,
@@ -106,7 +107,7 @@ function stayingPaths(shares: WorkspaceMoveRequest["shares"]): string[] {
     share.files ? [`${label}: ${share.paths.join(", ")}${share.files > share.paths.length ? `, and ${share.files - share.paths.length} more` : ""}`] : []
   return [
     ...(shares.likely ? listed("Coming on a best guess (only this thread was working)", shares.likely) : []),
-    ...listed("Might be its", shares.uncertain),
+    ...listed(UNSURE_LABEL, shares.uncertain),
     ...listed("Not attributed", shares.unattributed),
     ...listed("Other threads'", shares.others),
     ...listed("Yours", shares.person),

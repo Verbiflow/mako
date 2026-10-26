@@ -37,6 +37,14 @@ export interface HostEnvironment {
   readonly profile: string
   /** What every host of this user shares, like saved keys: see {@link userRootFor}. */
   readonly userRoot: string
+  /**
+   * Its user root is its own data root, apart from the person's `~/.mako`:
+   * a test's or a proof's host. Everything Mako keeps per user stays in it,
+   * and it shares no process of the person's Mako either: no sync daemon at
+   * login, no shared catalog reader. A cloud machine's root is its user's
+   * `~/.mako`, so it isn't isolated.
+   */
+  readonly isolated: boolean
 }
 
 /**
@@ -85,7 +93,7 @@ export function resolveHostEnvironment({ env, appRoot, platform, home }: HostEnv
     ? resolve(env.MAKO_DATA_ROOT)
     : profile ? `${defaultDataRoot}-${profile}` : defaultDataRoot
   const userRoot = userRootFor({ dataRoot, appData, home })
-  return { dataRoot, defaultDataRoot, appData, appRoot, appName, version, build, packaged, development, profile, userRoot }
+  return { dataRoot, defaultDataRoot, appData, appRoot, appName, version, build, packaged, development, profile, userRoot, isolated: userRoot !== join(home, ".mako") }
 }
 
 /** The package a module was built into: the nearest folder above it with a `package.json`, as Node looks a package up. */

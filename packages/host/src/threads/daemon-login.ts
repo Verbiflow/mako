@@ -35,7 +35,7 @@ function plistPath(): string {
 }
 
 /** The app whose sync daemon this is: where its script is, whether it's installed, and which build it is. */
-export type DaemonApp = Pick<HostEnvironment, "appRoot" | "packaged" | "version" | "build">
+export type DaemonApp = Pick<HostEnvironment, "appRoot" | "packaged" | "version" | "build" | "isolated">
 
 export function daemonScript({ appRoot }: Pick<DaemonApp, "appRoot">): string {
   return join(appRoot, "node_modules", "@mako", "sessions", "dist", "daemon-main.js")
@@ -44,10 +44,13 @@ export function daemonScript({ appRoot }: Pick<DaemonApp, "appRoot">): string {
 /**
  * Only the installed app may own the login job. A checkout that wrote one would
  * pin the user's always-on sync to a working tree that changes under it and
- * outlives every window the checkout ever opened.
+ * outlives every window the checkout ever opened. So would a packaged build
+ * isolated in a data root of its own (a proof's, a test's), whose bundle is
+ * deleted after: one such build's daemon still ran the person's login sync
+ * days later, from a scratch folder, with its plist gone.
  */
-export function daemonLoginOwner({ packaged }: Pick<DaemonApp, "packaged">): boolean {
-  return packaged
+export function daemonLoginOwner({ packaged, isolated }: Pick<DaemonApp, "packaged" | "isolated">): boolean {
+  return packaged && !isolated
 }
 
 function daemonPlist(app: DaemonApp, script = daemonScript(app)): string {
@@ -144,6 +147,7 @@ export async function daemonLoginEnabled(): Promise<boolean> {
 }
 
 export async function setDaemonLogin(app: DaemonApp, enabled: boolean): Promise<void> {
+  if (app.isolated) throw new Error("This Mako keeps its data apart from yours, so it doesn't change your login sync.")
   const { mkdir: makeDir, rm: remove, writeFile: write } = await import("node:fs/promises")
   if (enabled) {
     await remove(optOutPath(), { force: true }).catch(() => {})

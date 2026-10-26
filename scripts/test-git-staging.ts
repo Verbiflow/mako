@@ -15,7 +15,7 @@ import { childBackend } from "@mako/host/workspaces/watch-backend"
 
 const gitRunner = new Git()
 
-const services = { git: gitRunner, previews: new ArtifactPreviews(() => []), watch: childBackend() }
+const services = { git: gitRunner, previews: new ArtifactPreviews(() => []), watch: childBackend(), attachments: join(tmpdir(), "mako-test-attachments") }
 
 /** What drafting a commit would send a model, from a model that only records it. */
 async function drafted(root: string, signal: AbortSignal) {

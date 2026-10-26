@@ -4,7 +4,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { MediaActions } from "@/components/viewer/media-actions"
 import { MediaVideo } from "@/components/viewer/media-video"
 import type { MediaTile } from "@/components/viewer/media-tile-context"
-import { mediaBox } from "@/components/viewer/media-tile-layout"
+import { mediaBox, naturalSize } from "@/components/viewer/media-tile-layout"
+import { useDevicePixelRatio } from "@/components/viewer/use-device-pixel-ratio"
 import type { FileContents } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { MediaUnavailable } from "./media-preview"
@@ -13,7 +14,9 @@ import { MediaUnavailable } from "./media-preview"
  * A picture or video drawn as itself: no card, no header. Its name shows on
  * hover and its actions sit in the corner; a click opens the lightbox. In a
  * grid it's a cropped tile drawing the host's thumbnail or poster; the
- * original loads only in the lightbox.
+ * original loads only in the lightbox. Neither ever draws a picture larger
+ * than its own pixels, one to a device pixel: a small one sits at its size
+ * in the middle of its tile or box.
  */
 export function InlineMedia({ hostRef, path, name, format, file, error, tile, onOpen, onRetry, onMediaError, openPath }: {
   hostRef: RefObject<HTMLDivElement | null>
@@ -31,6 +34,9 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, on
   openPath?: string
 }) {
   const [natural, setNatural] = useState<{ width: number; height: number }>()
+  const ratio = useDevicePixelRatio()
+  // The picture's own pixels: its header's, or the drawn one's once it loads.
+  const pixels = naturalSize(file?.width ?? natural?.width, file?.height ?? natural?.height, ratio)
   const url = file?.previewUrl
   if (tile?.kind === "hidden") return <div ref={hostRef} hidden data-inline-file-preview={path} />
   if (tile) {
@@ -41,7 +47,7 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, on
           type="button"
           aria-label={tile.more ? `Open ${name} and ${tile.more} more` : `Open ${name}`}
           onClick={onOpen}
-          className="group/tile pressable relative block aspect-[16/10] w-full cursor-zoom-in overflow-hidden asset-surface border border-hairline bg-shell"
+          className="group/tile pressable relative grid aspect-[16/10] w-full cursor-zoom-in place-items-center overflow-hidden asset-surface border border-hairline bg-shell"
         >
           {error ? (
             <span className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-3 text-label text-faint">
@@ -49,7 +55,20 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, on
               <span className="max-w-full truncate">{name}</span>
             </span>
           ) : picture ? (
-            <img src={picture} alt={name} loading="lazy" decoding="async" onError={onMediaError} className="block size-full object-cover" />
+            <img
+              src={picture}
+              alt={name}
+              loading="lazy"
+              decoding="async"
+              onError={onMediaError}
+              onLoad={(event) => {
+                const image = event.currentTarget
+                if (!file?.width && image.naturalWidth) setNatural({ width: image.naturalWidth, height: image.naturalHeight })
+              }}
+              // Cropped to fill the tile only as far as its pixels reach: past them it stays its size, centred.
+              style={pixels && { maxWidth: pixels.width, maxHeight: pixels.height }}
+              className="block size-full object-cover"
+            />
           ) : format === "image" || !file ? (
             <Skeleton className="block size-full" />
           ) : null}
@@ -75,7 +94,7 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, on
         <MediaUnavailable name={name} reason={error} onRetry={onRetry} />
       </div>
     )
-  const box = mediaBox(file?.width ?? natural?.width, file?.height ?? natural?.height)
+  const box = mediaBox(file?.width ?? natural?.width, file?.height ?? natural?.height, ratio)
   return (
     <div ref={hostRef} data-inline-file-preview={path} data-inline-media={format} className="not-prose my-3 w-full">
       <div className="group/media relative max-w-full" style={box}>

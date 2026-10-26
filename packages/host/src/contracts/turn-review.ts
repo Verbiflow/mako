@@ -1,3 +1,5 @@
+import { z } from "zod"
+
 /*
  * Reviewing and undoing what a turn changed, from its request's record
  * (`LiveRequest.changes`, `turn-changes.ts`) and the attribution journal.
@@ -115,3 +117,33 @@ export interface TurnUndoResult {
   backup: string
   left: TurnUndoLeft[]
 }
+
+/**
+ * A turn's undo, kept on its request (`LiveRequest.undone`) beside the
+ * record of what it changed, so the line under its answer and Changes ›
+ * Turn say it was undone, live and reopened, and offer no second undo. The
+ * record's counts stay what the turn did; this says what happened since.
+ * An undo of every change of the Thread marks each turn of the
+ * conversation whose lines it took out.
+ */
+export interface TurnUndone {
+  /** When it ran (epoch milliseconds). */
+  at: number
+  /** This turn alone, or every change of the Thread. */
+  scope: TurnUndoScope["kind"]
+  /** Files it wrote. */
+  files: number
+  /** Stretches it left as they were, since someone else had edited them. */
+  left: number
+  /** The checkout as it was before, as a Git ref (`TurnUndoResult.backup`). */
+  backup: string
+}
+
+/** A request's undo as its conversation's journal keeps it; one this build can't read is dropped. */
+export const TurnUndoneSchema: z.ZodType<TurnUndone | undefined> = z.object({
+  at: z.number().nonnegative(),
+  scope: z.enum(["turn", "thread"]),
+  files: z.number().int().nonnegative(),
+  left: z.number().int().nonnegative(),
+  backup: z.string(),
+}).optional().catch(undefined)

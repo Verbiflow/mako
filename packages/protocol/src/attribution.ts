@@ -113,8 +113,10 @@ export const AttributionSchema = z.discriminatedUnion("certainty", [
       /**
        * How the Thread's own work had reached this file before: the file
        * itself, or a folder holding it below its repository's root that the
-       * Thread named, ran in or touched a file in. Absent, only timing names
-       * it, and a person's save while the Thread ran fits as well.
+       * Thread named, ran in or touched a file in; or, for a file that didn't
+       * exist before and was made while a call ran, the folder that call ran
+       * in, a repository's root included (`folder`). Absent, only timing
+       * names it, and a person's save while the Thread ran fits as well.
        */
       reached: z.enum(["path", "folder"]).optional(),
     })

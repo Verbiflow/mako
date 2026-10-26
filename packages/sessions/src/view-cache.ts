@@ -1,8 +1,8 @@
 import { constants } from "node:fs"
 import { createHash, randomUUID } from "node:crypto"
 import { copyFile, mkdir, readdir, rename, rm, stat, utimes } from "node:fs/promises"
-import { homedir } from "node:os"
 import { join } from "node:path"
+import { makoUserRoot } from "./mako-root.js"
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite"
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib"
 import { z } from "zod"
@@ -12,9 +12,9 @@ import { entryChars, trimToolOutput, VIEWER_PAGE, type Thread, type ThreadPageOp
 import type { ResumePoint } from "./jsonl.js"
 import { ResumePointSchema, ThreadRefSchema, UnreadRecordSchema } from "./thread-schema.js"
 
-/** Where Mako keeps decoded sessions on this machine, beside the records they're decoded from. */
-export function makoViews(home = homedir()): string {
-  return join(home, ".mako", "views")
+/** Where Mako keeps decoded sessions in a user root (`mako-root.ts`), beside the records they're decoded from. */
+export function makoViews(root = makoUserRoot()): string {
+  return join(root, "views")
 }
 
 /** What the cache holds at most, on disk or in memory; the views read longest ago go first. */

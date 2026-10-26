@@ -1,4 +1,3 @@
-import { homedir } from "node:os"
 import { join } from "node:path"
 import type { MethodTable } from "../base/methods.js"
 import { hostWarn } from "../base/host-log.js"
@@ -74,7 +73,7 @@ export interface Threads {
 
 export interface ThreadsDeps {
   /** Its data root, and `appData`, where a profile's Thread store is shared from. */
-  environment: Pick<HostEnvironment, "dataRoot" | "appData" | "appName" | "development"> & DaemonApp
+  environment: Pick<HostEnvironment, "dataRoot" | "appData" | "appName" | "development" | "userRoot"> & DaemonApp
   /** A fixture desk's Threads read the user's stores and write none. */
   readOnly: boolean
   /** How this host is named in the session ledger every host on this Mac reads. */
@@ -88,22 +87,22 @@ export interface ThreadsDeps {
 }
 
 export function openThreads({ environment, readOnly, ledger, harnesses, readFile, emit, jobs, subscribed }: ThreadsDeps): Threads {
-  const { dataRoot, appData } = environment
+  const { dataRoot, appData, userRoot } = environment
   const catalogCode = loadedCatalogCode()
   // How this build names itself in a store whose format it raises, so an older build can say which Mako changed it.
   const writer = storeWriter(environment)
-  const memory = openSessionMemory(ledger, readOnly, jobs, writer)
-  const threadsPath = threadStorePath({ dataRoot, appData })
+  const memory = openSessionMemory(userRoot, ledger, readOnly, jobs, writer)
+  const threadsPath = threadStorePath(userRoot)
   const { store, problem } = openThreadStore(threadsPath, { readOnly, writer })
   if (problem) hostWarn("threads", "Thread store problem", { problem })
   const formats = () => storeFormats({
     threads: store,
     threadsPath,
     memory,
-    memoryPath: sessionMemoryPath(),
-    records: makoRecords(),
-    views: makoViews(),
-    archive: join(homedir(), ".mako", "archive"),
+    memoryPath: sessionMemoryPath(userRoot),
+    records: makoRecords(userRoot),
+    views: makoViews(userRoot),
+    archive: join(userRoot, "archive"),
   })
   const stopFollowing = store
     ? followOtherHosts(store, emit, {
@@ -116,7 +115,7 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
       },
     })
     : () => {}
-  const origins = new WorktreeOrigins(join(homedir(), ".mako", "worktree-origins.json"))
+  const origins = new WorktreeOrigins(join(userRoot, "worktree-origins.json"))
   const lineage = new Lineage(join(dataRoot, "lineage.json"))
   const archives = new ThreadArchives(join(dataRoot, "thread-archives.sqlite"))
   return {
@@ -127,6 +126,8 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
     lineage,
     catalog: threadCatalog({
       dataRoot,
+      userRoot,
+      isolated: environment.isolated,
       profiles: { appData, app: environment.appName },
       app: environment,
       sessionMemory: memory,
@@ -135,7 +136,7 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
       lineage,
       harnesses,
       readFile,
-      catalogIdentity: () => defaultCatalogIdentity(join(homedir(), ".mako", "archive"), catalogCode),
+      catalogIdentity: () => defaultCatalogIdentity(join(userRoot, "archive"), catalogCode),
       jobs,
       readOnly,
       writer,
@@ -154,9 +155,9 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
   }
 }
 
-function openSessionMemory(ledger: SessionMemoryHost, readOnly: boolean, jobs: HostJobs, writer: string): SessionMemory | null {
+function openSessionMemory(userRoot: string, ledger: SessionMemoryHost, readOnly: boolean, jobs: HostJobs, writer: string): SessionMemory | null {
   try {
-    const memory = new SessionMemory(sessionMemoryPath(), ledger, { readOnly, writer })
+    const memory = new SessionMemory(sessionMemoryPath(userRoot), ledger, { readOnly, writer })
     memory.startHeartbeat(jobs)
     return memory
   } catch (error) {

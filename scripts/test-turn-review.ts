@@ -18,7 +18,7 @@ import type { LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conver
 import type { TurnChanges } from "@mako/host/contracts/turn-changes"
 import type { WriterRun } from "@mako/host/contracts/turn-review"
 import { LiveJournal, storedRequest } from "@mako/host/conversations/live-journal"
-import { LiveTurnReview, type TurnReviewLedger } from "@mako/host/conversations/live-turn-review"
+import { LiveTurnReview, undoneTurns, type TurnReviewLedger } from "@mako/host/conversations/live-turn-review"
 import { rewriteInPlace, type InPlaceFile } from "@mako/host/workspaces/worktree-move"
 
 /*
@@ -228,6 +228,7 @@ test("Changes › Turn reads turn 2 of 3 from a conversation nobody has open", a
     checkpoints: () => undefined,
     busy: () => false,
     plans: join(f.base, "undos"),
+    undone: () => {},
   })
   const files = await review.files(id, R2, f.repo)
   assert.equal(files.root, f.repo)
@@ -250,7 +251,15 @@ test("Changes › Turn reads turn 2 of 3 from a conversation nobody has open", a
 test("undo turn 2 keeps the person's line, the other Thread's and turn 1's", async () => {
   const f = await fixture("undo")
   await turns(f)
-  const review = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: () => false, plans: join(f.base, "undos") })
+  // The conversation's requests, each with its record, as a resident one holds them.
+  let requests: LiveRequest[] = [R1, R2, R3].map((turn, index) => ({ id: turn, text: `Turn ${index + 1}`, attachments: [], status: "completed", changes: turnChanges(f.view, "T1", turn) }))
+  const review = new LiveTurnReview({
+    git: runner, ledger: () => f.ledger, request: (_, requestId) => requests.find((request) => request.id === requestId), cwd: () => f.repo, checkpoints: () => undefined, busy: () => false, plans: join(f.base, "undos"),
+    undone: (_, pick, undone) => {
+      const marked = pick(requests)
+      requests = requests.map((request) => (marked.has(request.id) ? { ...request, undone } : request))
+    },
+  })
   const preview = await review.undoPreview("c", { kind: "turn", requestId: R2 })
   assert.equal(preview.refused, undefined)
   // Kept counts what others wrote inside the turn's span; turn 1's line was there before it, so it's context, and stays.
@@ -266,6 +275,17 @@ test("undo turn 2 keeps the person's line, the other Thread's and turn 1's", asy
   assert.match(result.backup, /^refs\/mako\/moves\//)
   assert.equal(`${f.git("show", `${result.backup}:app.ts`)}\n`, before)
   assert.deepEqual(readdirSync(join(f.base, "undos")).filter((name) => name.endsWith(".json")), [], "no plan left once it's done")
+  // The undo is kept on turn 2's request, beside its record, and on no other turn's.
+  const undone = requests.find((request) => request.id === R2)?.undone
+  assert.ok(undone && undone.scope === "turn" && undone.files === 1 && undone.left === 0 && undone.backup === result.backup, JSON.stringify(undone))
+  assert.deepEqual(requests.filter((request) => request.undone).map((request) => request.id), [R2])
+  // Undoing it again is refused, and says why, rather than finding stretches it "can't split".
+  const again = await review.undoPreview("c", { kind: "turn", requestId: R2 })
+  assert.match(again.refused ?? "", /^This turn was undone already: its lines came out of 1 file, and the checkout from before is kept as refs\/mako\/moves\//)
+  await assert.rejects(review.undo("c", { kind: "turn", requestId: R2 }, again.token), /undone already/)
+  // Every change of the Thread marks the turns whose lines it took out; one undone already keeps its first undo.
+  assert.deepEqual([...undoneTurns(requests, { kind: "thread" }, f.repo)].sort(), [R1, R3].sort())
+  assert.deepEqual([...undoneTurns(requests, { kind: "thread" }, join(f.base, "elsewhere"))], [], "nothing of theirs is in another checkout")
   await f.tracker.close()
   rmSync(f.base, { recursive: true, force: true })
 })
@@ -330,7 +350,7 @@ test("undo puts a line the turn replaced back where it stood, when the person si
 test("undo is refused while a run is on in the checkout", async () => {
   const f = await fixture("busy")
   await turns(f)
-  const review = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: () => false, plans: join(f.base, "undos") })
+  const review = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: () => false, plans: join(f.base, "undos"), undone: () => {} })
   f.mark("turn", "T2", "x9", "start")
   const preview = await review.undoPreview("c", { kind: "turn", requestId: R2 })
   assert.match(preview.refused ?? "", /An agent is working in this checkout/)
@@ -338,11 +358,11 @@ test("undo is refused while a run is on in the checkout", async () => {
   assert.equal(f.read("app.ts"), final, "nothing written")
   f.mark("turn", "T2", "x9", "end")
   // A run of this host's own (the journal hasn't heard it yet) refuses as well.
-  const local = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: (folder) => folder === f.repo, plans: join(f.base, "undos") })
+  const local = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: (folder) => folder === f.repo, plans: join(f.base, "undos"), undone: () => {} })
   await assert.rejects(local.undo("c", { kind: "turn", requestId: R2 }, preview.token), /An agent is working/)
   // A preview read before the files changed doesn't undo what's there now.
   await f.person("app.ts", `${final}tail by you\n`)
-  const free = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: () => false, plans: join(f.base, "undos") })
+  const free = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: () => false, plans: join(f.base, "undos"), undone: () => {} })
   await assert.rejects(free.undo("c", { kind: "turn", requestId: R2 }, preview.token), /changed since this preview/)
   await f.tracker.close()
   rmSync(f.base, { recursive: true, force: true })
@@ -381,11 +401,37 @@ test("the writer rolls back a failure and keeps the backup ref; a process killed
   const child = spawnSync(process.execPath, [...process.execArgv, here, "child", config], { encoding: "utf8" })
   assert.equal(child.signal, "SIGKILL", child.stderr)
   assert.equal(readdirSync(plans).filter((name) => name.endsWith(".json")).length, 1, "its plan is saved")
-  const review = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: () => false, plans })
+  const review = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: () => false, plans, undone: () => {} })
   await review.resume()
   assert.equal(f.read("app.ts"), lines(20, { 8: "line 8 by you", 12: "line 12 by T2" }), "finished: every line of T1's out")
   assert.equal(f.read("util.ts"), lines(10, {}, "util"))
   assert.deepEqual(readdirSync(plans).filter((name) => name.endsWith(".json")), [])
+  await f.tracker.close()
+  rmSync(f.base, { recursive: true, force: true })
+})
+
+test("a save after the turn began, before it first wrote the file, is named on the checkpoints' diff as the journal has it, not nobody's", async () => {
+  const f = await fixture("before-first")
+  const { clock, mark, call, abs, write } = f
+  clock.advance(1_000)
+  mark("turn", "T1", R1, "start")
+  // While the model thinks, the person changes line 1: only the turn was running, so the journal can't say whose.
+  clock.advance(1_500)
+  const saved = lines(20, { 1: "line 1 by you" })
+  write("app.ts", saved)
+  await f.tracker.settled()
+  clock.advance(1_000)
+  const after = lines(20, { 1: "line 1 by you", 4: "line 4 by turn 1" })
+  await call("T1", R1, "c1", [{ kind: "modify", path: abs("app.ts"), edits: [{ old: "line 4\n", new: "line 4 by turn 1\n" }] }], () => write("app.ts", after))
+  mark("turn", "T1", R1, "end")
+  clock.advance(15_000)
+  f.tracker.sweep()
+  const record = turnChanges(f.view, "T1", R1)
+  assert.deepEqual(record.own, { files: 1, added: 1, removed: 1 })
+  const file = appRecord(record)
+  // The checkpoints saw both: the one before the turn holds neither line.
+  const shown = { before: lines(20).split(/(?<=\n)/), after: after.split(/(?<=\n)/) }
+  assert.deepEqual(runsOf(turnWriters(f.view, "T1", R1, file, shown)), ["-1 maybe", "+1 maybe", "-4 turn", "+4 turn"])
   await f.tracker.close()
   rmSync(f.base, { recursive: true, force: true })
 })

@@ -8,7 +8,7 @@ import { hostLog } from "../base/host-log.js"
 import type { GitDiff, GitFile } from "../contracts/git-workspace-search.js"
 import type { LiveRequest } from "../contracts/live-conversations.js"
 import { countedChanges, type TurnChangedFile } from "../contracts/turn-changes.js"
-import type { TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope, WriterRun } from "../contracts/turn-review.js"
+import type { TurnFileWriters, TurnUndone, TurnUndoPreview, TurnUndoResult, TurnUndoScope, WriterRun } from "../contracts/turn-review.js"
 import { treeDiff, treeFiles } from "../git/index.js"
 import { MovePlanSchema, MoveRefused, resumeMove, rewriteInPlace, type CheckpointComparison, type InPlaceFile, type MovePlan } from "../workspaces/index.js"
 
@@ -46,6 +46,8 @@ export interface TurnReviewHost {
   checkpoints(id: string, requestId: string): { scope: string; comparison: CheckpointComparison } | undefined
   /** Whether a conversation of this host is running or about to in `folder`. */
   busy(folder: string): boolean
+  /** Keep an undo on the requests `pick` names, in the conversation's journal, and send them to the windows. */
+  undone(id: string, pick: (requests: readonly LiveRequest[]) => ReadonlySet<string>, undone: TurnUndone): void
   /** Where an undo keeps its plan while it writes, for a start after a crash to finish or undo it. */
   plans: string
 }
@@ -190,7 +192,15 @@ export class LiveTurnReview {
     const target = await this.target(id)
     await target.ledger.settled()
     const plan = target.ledger.undoPlan(target.thread, scope, target.checkout)
-    return { scope, checkout: target.checkout, undo: plan.undo, kept: plan.kept, left: plan.left, token: plan.token, ...(target.refused && { refused: target.refused }) }
+    const refused = this.undoneAlready(id, scope) ?? target.refused
+    return { scope, checkout: target.checkout, undo: plan.undo, kept: plan.kept, left: plan.left, token: plan.token, ...(refused && { refused }) }
+  }
+
+  /** Why a turn can't be undone again: it was, and its record says so. */
+  private undoneAlready(id: string, scope: TurnUndoScope): string | undefined {
+    const undone = scope.kind === "turn" ? this.host.request(id, scope.requestId)?.undone : undefined
+    if (!undone) return undefined
+    return `This turn was undone already: its lines came out of ${undone.files === 1 ? "1 file" : `${undone.files} files`}${undone.backup ? `, and the checkout from before is kept as ${undone.backup}` : ""}. Rewind puts the whole workspace back instead.`
   }
 
   /**
@@ -200,7 +210,8 @@ export class LiveTurnReview {
    */
   async undo(id: string, scope: TurnUndoScope, token: string): Promise<TurnUndoResult> {
     const target = await this.target(id)
-    if (target.refused) throw new MoveRefused(target.refused)
+    const refused = this.undoneAlready(id, scope) ?? target.refused
+    if (refused) throw new MoveRefused(refused)
     const { ledger, thread, checkout, git } = target
     await ledger.settled()
     // The watcher hears a write some milliseconds after it lands: a file the journal hasn't caught up with is read again.
@@ -227,7 +238,9 @@ export class LiveTurnReview {
         log: (message, facts) => hostLog("turn-undo", message, facts),
       })
       hostLog("turn-undo", "undid", { thread, scope: scope.kind, files: done.outcome.came.files, lines: done.outcome.came.lines, left: plan.left.length })
-      return { files: done.outcome.came.files, backup: done.outcome.backup ?? "", left: plan.left }
+      const result = { files: done.outcome.came.files, backup: done.outcome.backup ?? "", left: plan.left }
+      if (result.files) this.host.undone(id, (requests) => undoneTurns(requests, scope, checkout), { at: Date.now(), scope: scope.kind, files: result.files, left: result.left.length, backup: result.backup })
+      return result
     }
     throw new MoveRefused("Files Mako was undoing were still changing, so nothing changed. Try again in a moment.")
   }
@@ -288,20 +301,34 @@ export class LiveTurnReview {
   }
 }
 
+/**
+ * The turns an undo took back: the one it named, or, for every change of
+ * the Thread, each turn of the conversation whose own lines are in the
+ * checkout. A turn undone before keeps its first undo.
+ */
+export function undoneTurns(requests: readonly LiveRequest[], scope: TurnUndoScope, checkout: string): Set<string> {
+  if (scope.kind === "turn") return new Set(requests.some((request) => request.id === scope.requestId) ? [scope.requestId] : [])
+  const inside = (root: string) => root === checkout || root.startsWith(`${checkout}/`) || checkout.startsWith(`${root}/`)
+  return new Set(requests.filter((request) => !request.undone && countedChanges(request.changes)?.files.some((file) => file.own !== undefined && inside(rootOf(file)))).map((request) => request.id))
+}
+
 /** The repository a record's file is in: its path less the path inside the journal's root. */
 const rootOf = (file: TurnChangedFile) => file.path.slice(0, file.path.length - file.relative.length - 1)
 
+/**
+ * A record's file as Changes lists it, counted as the turn's line counts it:
+ * the Thread's own lines. Lines not sure whose aren't in them (a file with
+ * only those counts none); the window names them from the record beside it.
+ */
 function gitFile(file: TurnChangedFile): GitFile {
-  const counts = [file.own, file.maybe].filter((lines) => lines !== undefined)
-  const counted = counts.length > 0 && counts.every((lines) => lines !== null)
-  const sum = (key: "added" | "removed") => counts.reduce((total, lines) => total + (lines?.[key] ?? 0), 0)
+  const own = file.own
   return {
     path: file.relative,
     status: file.kind === "create" ? "added" : file.kind === "delete" ? "deleted" : "modified",
     staged: false,
-    insertions: counted ? sum("added") : null,
-    deletions: counted ? sum("removed") : null,
-    binary: counts.some((lines) => lines === null),
+    insertions: own === null ? null : own?.added ?? 0,
+    deletions: own === null ? null : own?.removed ?? 0,
+    binary: own === null || file.maybe === null,
   }
 }
 

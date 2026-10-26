@@ -70,7 +70,7 @@ const outcome: MoveOutcome = {
 }
 onScreen(lead)
 await workspaceMoved({ type: "workspace-moved", from: lead, to: lead, changed: 3, told: true, branch: "mako/thread", outcome })
-assert.equal(latest()?.description, "Its changes in 3 files came along, 2 on a best guess. Stayed in the project folder: 1 file that might be its. The agent carries on there.")
+assert.equal(latest()?.description, "Its changes in 3 files came along, 2 on a best guess. Stayed in the project folder: 1 file not sure whose. The agent carries on there.")
 assert.equal(moveReviewsStore.get().reviews[lead]?.outcome, outcome, "the card shows what the move did")
 const offScreen = auditId(10)
 await workspaceMoved({ type: "workspace-moved", from: offScreen, to: offScreen, changed: 3, told: true, branch: "mako/other", outcome })

@@ -43,6 +43,7 @@ export function createHarnessHost(context: HarnessContext): ProviderHost {
 export function detachedHarnessContext(stores: NativeStores, dataRoot = join(tmpdir(), "mako-detached-harnesses")): HarnessContext {
   return {
     dataRoot,
+    userRoot: join(dataRoot, "user"),
     stores,
     appRoot: installedAppRoot(dirname(fileURLToPath(import.meta.url))),
     secrets: detachedSecrets(),
