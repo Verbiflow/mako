@@ -1214,6 +1214,34 @@ const inputs = {
       }),
       z.array(z.string().min(1).max(4_096)).max(400),
     ]),
+  "mako:resolve-turn-media": () =>
+    z.tuple([
+      z
+        .array(
+          z.object({
+            callId: z.string().min(1).max(512),
+            path: z.string().min(2).max(4_096).startsWith("/"),
+            evidence: z.enum(["shown", "produced", "wrote", "named"]),
+            startedAt: z
+              .number()
+              .int()
+              .nonnegative()
+              .max(8_640_000_000_000_000)
+              .optional(),
+            endedAt: z
+              .number()
+              .int()
+              .nonnegative()
+              .max(8_640_000_000_000_000)
+              .optional(),
+            digest: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/)
+              .optional(),
+          })
+        )
+        .max(200),
+    ]),
   "mako:restore-version": () => z.tuple([z.string(), z.number()]),
   "mako:reveal": () => z.tuple([z.string()]),
   "mako:reveal-plugins": () => z.tuple([]),
@@ -1628,6 +1656,7 @@ export type HostMethodDomain =
   | "conversations"
   | "git"
   | "harnesses"
+  | "media"
   | "terminals"
   | "threads"
   | "tools"
@@ -1845,6 +1874,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:report-crash", "application"],
   ["mako:rerun-checks", "git"],
   ["mako:resolve-file-references", "attribution"],
+  ["mako:resolve-turn-media", "media"],
   ["mako:restore-version", "attribution"],
   ["mako:reveal", "workspaces"],
   ["mako:reveal-plugins", "tools"],

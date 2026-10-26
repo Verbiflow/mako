@@ -1,4 +1,5 @@
 import type { Block, ChatMessage } from "@/lib/types"
+import { mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
 import { textOf } from "@/lib/format"
 import { causeWords, eventLabel } from "@/lib/transcript-events"
 import { foldUsageLimits } from "@/lib/usage-limit-folds"
@@ -66,6 +67,12 @@ export type ResponseSection =
   | { kind: "work"; id: string; messages: ChatMessage[] }
   | { kind: "steer"; id: string; message: ChatMessage }
   | { kind: "note"; id: string; message: ChatMessage }
+  /**
+   * What the agent put in front of the person with `show`, drawn where the
+   * call stands rather than in its work: the call's row stays in the work,
+   * and `message` (no blocks of its own) is the reply it came in.
+   */
+  | { kind: "shown"; id: string; message: ChatMessage; media: MediaCandidate[] }
 
 /** The provider's own marker for a turn that was stopped. */
 export function isInterruptedNote(message: ChatMessage): boolean {
@@ -160,6 +167,13 @@ export function responseSections(
         sections.push({ kind: "prose", id: prose.id, message: prose, previewedFiles })
       } else {
         workBlocks.push(block)
+        const shown = block.type === "toolResult" ? block.media?.filter((media) => media.evidence === "shown") : undefined
+        if (shown?.length && block.type === "toolResult") {
+          flushMessageWork()
+          flushWork()
+          const at = splitMessage(message, [])
+          sections.push({ kind: "shown", id: `shown-${block.id ?? at.id}`, message: at, media: shown })
+        }
       }
     }
     flushMessageWork()
@@ -380,6 +394,18 @@ export function renamedExchanges(before: readonly Exchange[], after: readonly Ex
     from = to
   }
   return renamed
+}
+
+/**
+ * The media an exchange's calls produced or showed (`callMedia` on each
+ * call, merged as `turnMedia` merges a turn's entries): the same for a live
+ * turn and the saved one, since both are drawn from entries.
+ */
+export function exchangeMedia(exchange: Exchange): MediaCandidate[] {
+  const found: MediaCandidate[] = []
+  for (const message of exchange.response)
+    for (const block of message.blocks) if (block.type === "toolResult" && block.media) found.push(...block.media)
+  return found.length ? mergeMedia(found) : []
 }
 
 /** Everything the agent said in an exchange, as plain text for the clipboard. */

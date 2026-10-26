@@ -46,6 +46,8 @@ import type { MediaHandler } from "@mako/protocol"
 import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
+import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
+import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
 import type { TerminalClients } from "./terminals/index.js"
 import { declareApplicationMethods, Updates, type Application } from "./application/index.js"
 import { devHostBuildDirectories } from "./base/dev-host-build.js"
@@ -507,7 +509,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const launched = workspaces.environments?.launchedWith(conversationId)
       if (launched) void workspaces.processes?.touch(launched.app).catch(() => {})
       const session = control.sessions.get(bindingId)
-      return [session && controlLine(session), launched && threadEnvironmentInstructions(launched), ...(workspaces.worktrees?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
+      // A harness without instructions of its own hears how media reaches the person here (`makoInstructions`).
+      const harness = late.conversations?.live.session(conversationId)?.harness
+      const media = harness && !harnesses.host.liveDrivers.get(harness)?.makoInstructions ? SHOW_MEDIA_LINE : undefined
+      return [session && controlLine(session), launched && threadEnvironmentInstructions(launched), media, ...(workspaces.worktrees?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
     },
     revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
     suspendTools: (bindingId, conversationId) => residency.suspend(bindingId, conversationId),
@@ -662,9 +667,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     store: () => threads.store,
     catalog: threads.catalog,
   })
+  const turnMedia = new TurnMedia(join(environment.dataRoot, "media"))
   late.agentServers = await startConversationMcp(live, (bindingId, operation, signal) => control.sessions.request(bindingId, operation, signal), [
     ...workspaceMovers.agentTools,
     (server, conversationId) => registerThreadHistoryTools(server, history, conversationId),
+    (server, conversationId) => registerShowTool(server, { media: turnMedia, cwd: (id) => live.session(id)?.cwd }, conversationId),
   ])
   trace("conversation tools ready")
   late.controlService = await control.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
@@ -691,6 +698,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     machine,
   })
   declareAttributionMethods(methods, () => late.attribution)
+  declareMediaMethods(methods, turnMedia)
   const helperRuns = new HelperRuns(helperRunsRoot(environment.dataRoot))
   declareGitMethods(methods, { worktrees: workspaces.worktrees, withHost, git, environment, secrets, recordHelperRun: helperRuns.record })
   declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
@@ -930,6 +938,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       late.agentServers?.close()
       threads.close()
       workspaces.close()
+      turnMedia.close()
       void workspaceClients.dispose()
       // Children that exited while stopping have left the registry by now.
       for (const stop of unfollow) stop()

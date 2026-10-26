@@ -7,6 +7,7 @@ import { claudeApiErrorEvent, claudeLocalCommand } from "./providers/claude-even
 import { claudeReviewReport } from "./review.js"
 import { ReportedJson, reportedEffects } from "./tool-effect-reading.js"
 import { todoDetails } from "./tool-plan.js"
+import { mediaDetails } from "./turn-media.js"
 
 function reviewDetails(input: string): ToolDetail[] | undefined {
   const report = claudeReviewReport(input)
@@ -45,6 +46,23 @@ export function claudeAttachment(block: ClaudeAttachmentBlock): AttachmentConten
 }
 
 const PlanInputSchema = z.object({ plan: z.string().trim().min(1) })
+/** A `Read`'s file, which names the image it returned. */
+const ReadInputSchema = z.object({ file_path: z.string().min(1) })
+/**
+ * The MCP result's `_meta` Claude Code passes its SDK host beside a tool's
+ * result and keeps in its transcript as `mcpMeta` (`savedMessage` reads it
+ * into the same field); never the model's.
+ */
+const McpMetaSchema = z.object({ mcp_meta: z.object({ _meta: z.json() }).loose() })
+
+/** The file a `Read` call's input names. */
+function readPath(input: string): string | undefined {
+  try {
+    return ReadInputSchema.safeParse(JSON.parse(input)).data?.file_path
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * What a slash command Claude Code ran itself printed (`/goal`): Claude Code
@@ -329,8 +347,16 @@ export class ClaudeProjection {
           attachments,
         }
         const call = this.calls.get(block.tool_use_id)
+        if (single) {
+          const details = mediaDetails(McpMetaSchema.safeParse(message).data?.mcp_meta._meta)
+          if (details.length) update.details = details
+        }
         if (call) {
           this.calls.delete(block.tool_use_id)
+          // Claude names an image `Read` returned "image"; it is the file it read.
+          const read = call.name === "Read" ? readPath(call.input) : undefined
+          const name = read?.split("/").at(-1)
+          if (name) for (const [index, attachment] of attachments.entries()) if (attachment.name === "image") attachments[index] = { ...attachment, name }
           const result = single ? ReportedJson.safeParse(message.tool_use_result).data : undefined
           const effects = reportedEffects({ harness: "claude", ...call, output, result, cwd: this.cwd })
           if (effects.length) update.effects = effects

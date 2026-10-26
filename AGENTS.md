@@ -1047,6 +1047,30 @@ and so the desktop and local-web transports say the same thing; the error
 object is never replaced, because `host-call-recovery.ts` decides by `instanceof`.
 `scripts/test-file-open.ts` covers both halves.
 
+A turn's media is read from its records, never left to the agent to cite.
+`callMedia` in `@mako/sessions/turn-media` reads each call as
+`entriesToMessages` draws it (so live and saved alike): what `show` on the
+`mako` server stated in its result's `_meta` (`MEDIA_META`, or the call's
+own arguments where a harness drops `_meta`, by `identifyTool` whatever the
+call is wrapped in), image blocks a tool returned, files `mako-computer`
+says it made, create/write effects on media files, and media paths a
+command line named. `mergeMedia` keeps each file once under its strongest
+evidence; an image a call only looked at stays out unless the turn made
+it. Only images, video, audio, HTML and PDF, never text. The host
+confirms paths in one call per turn (`mako:resolve-turn-media`,
+`packages/host/src/media/`): a named file counts only when it changed
+while its command ran, each kept file is copied by content hash so the
+turn keeps its own bytes after an overwrite or a `/tmp` cleanup, and the
+answer is stored by call and path, so a reopened conversation reads no
+disk. `show`'s result draws where it was called (a `shown` section, kept
+in view by a settled fold); the rest sits on the shelf under the answer
+(`MediaShelf`), less what the prose already previews. Every harness is told
+one line (`SHOW_MEDIA_LINE`): Claude in its appended system prompt, Codex
+as turn context, the others in Mako's note before the prompt
+(`makoInstructions` on the live driver says which). The decode pairs draw
+each turn's media, so live and saved must find the same files;
+`scripts/test-turn-media.ts` covers each source and the host.
+
 ## Never lose a paragraph
 
 A draft is the one thing in the desk the user made and cannot get back. Every

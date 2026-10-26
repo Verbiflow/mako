@@ -8,6 +8,7 @@ import { ApprovalEvidenceCapabilitySchema, type ApprovalEvidenceCapability } fro
 import type { PromptDispatch } from "./prompt-dispatch.js"
 import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
+import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
 import type { ProviderBinding } from "../contracts/conversation-control.js"
 import type { NativeResumeEvidence } from "./native-continuation.js"
 import type { LivePermissionResponse, PromptAttachment, LiveSessionState, LiveSessionMode, LiveSteering } from "../contracts/providers-acp.js"
@@ -283,6 +284,16 @@ export function conversationServers(tools: ConversationTools): Array<{ name: str
   return servers
 }
 
+/**
+ * What Mako tells the agent itself, beside the instructions of its servers:
+ * how media reaches the person (`SHOW_MEDIA_LINE`). An adapter whose
+ * harness takes instructions of its own hands it them there and declares
+ * `makoInstructions`; elsewhere Mako's note before each prompt carries it.
+ */
+export function conversationInstructions(tools: ConversationTools | undefined): string | undefined {
+  return tools?.makoUrl ? SHOW_MEDIA_LINE : undefined
+}
+
 /** Why an unattended start (`ProviderStartOptions.unattended`) that needed a person to sign in failed. */
 export const UNATTENDED_SIGN_IN = "It isn't signed in here, and nobody is here to sign it in."
 
@@ -341,6 +352,13 @@ export type PlanFeedback =
 
 export interface ProviderLiveDriver extends ProviderCapability {
   launchEnvironment: LaunchEnvironmentCapability
+  /**
+   * Where the harness takes Mako's own instructions (`conversationInstructions`)
+   * as its own, never as the person's words: Claude's appended system
+   * prompt, Codex's turn context. Absent, Mako's note before each prompt
+   * (`controlNote`) carries them, which every reader of history strips.
+   */
+  makoInstructions?: { via: string }
   /** Native principal evidence, separately from configured account selection. */
   nativeIdentity: NativeIdentityCapability
   nativeExclusion: NativeExclusionCapability

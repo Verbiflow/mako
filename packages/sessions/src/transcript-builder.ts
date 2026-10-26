@@ -892,6 +892,8 @@ class Writer {
         return ["Plan:", ...planLines(detail.entries)]
       case "review":
         return this.labelled("Review:", describeToolDetails([detail]), `${stem}-review.txt`, PAYLOAD_LIMITS, place)
+      case "media":
+        return [`${detail.via === "show" ? "Shown" : "Produced"}:${detail.title ? ` ${oneLine(detail.title)}` : ""}`, ...detail.files.map((file) => `- ${file.path}${file.caption ? ` (${oneLine(file.caption)})` : ""}`)]
     }
   }
 

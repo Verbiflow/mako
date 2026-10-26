@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { eventText } from "@mako/sessions/events"
+import { mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
 import type { AttachmentContent } from "@mako/sessions/content"
 import type { ToolCall } from "@/extend/slots"
 import type { Block, ChatMessage } from "@/lib/types"
@@ -263,7 +264,20 @@ export function drawing(messages: readonly ChatMessage[]): string[] {
     flushTools()
     lines.push(line)
   }
+  // The media each turn produced (`callMedia`, merged as the shelf merges
+  // it): live and saved history must find the same files, under the same evidence.
+  let media: MediaCandidate[] = []
+  const flushMedia = () => {
+    for (const candidate of mergeMedia(media)) lines.push(mediaLine(candidate))
+    media = []
+  }
   for (const message of messages) {
+    for (const block of message.blocks) if (block.type === "toolResult" && block.media) media.push(...block.media)
+    if (message.role === "user" && !message.steeringFor) {
+      flushText()
+      flushTools()
+      flushMedia()
+    }
     if (message.role === "user") {
       const text = message.blocks.flatMap((block) => block.type === "text" ? [block.text] : []).join("").trim()
       // The store keeps the bytes or a path where Mako kept an asset, so an attachment is drawn as the window labels it.
@@ -289,7 +303,14 @@ export function drawing(messages: readonly ChatMessage[]): string[] {
   }
   flushText()
   flushTools()
+  flushMedia()
   return lines.filter((line) => line !== "text: " && line !== "thinking: ")
+}
+
+/** A turn's media as a line: never the call's id, which each side names its own way. */
+function mediaLine(candidate: MediaCandidate): string {
+  const what = candidate.path ?? (candidate.attachment ? `${candidate.attachment.name} ${candidate.attachment.mimeType}` : candidate.key)
+  return `media ${candidate.evidence} ${candidate.kind} ${what}${candidate.caption ? ` "${candidate.caption}"` : ""}${candidate.title ? ` (${candidate.title})` : ""}`
 }
 
 function toolLine(tool: ToolCall, index: number): string {

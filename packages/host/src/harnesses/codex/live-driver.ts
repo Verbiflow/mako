@@ -22,6 +22,7 @@ export function createCodexLiveDriver(probe: ProviderProcessProbe, context: Pick
   return {
     provider: "codex",
     launchEnvironment: { kind: "prepared", via: "app-server spawn consumes AdmittedStartOptions.accountLaunch." },
+    makoInstructions: { via: "`turn/start` additionalContext as an application entry, which Codex gives the model as developer context and records as plumbing, never a user message." },
     nativeIdentity: CODEX_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: NO_NATIVE_PROMPT_IDENTITY,

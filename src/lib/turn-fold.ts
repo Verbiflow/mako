@@ -34,6 +34,8 @@ export interface TurnFold {
  * that settled). Folding those would hide why the answer reads as it does.
  */
 export function stillDrawn(section: ResponseSection): boolean {
+  // What the agent showed the person is part of the answer wherever it stands.
+  if (section.kind === "shown") return true
   if (section.kind !== "note") return false
   const note = section.message.note
   if (!note) return false
@@ -43,8 +45,11 @@ export function stillDrawn(section: ResponseSection): boolean {
 }
 
 function messagesOf(section: ResponseSection): ChatMessage[] {
-  return section.kind === "work" ? section.messages : [section.message]
+  return section.kind === "work" ? section.messages : section.kind === "shown" ? [] : [section.message]
 }
+
+/** A section that answers: the agent's words, or what it showed the person. */
+const answers = (section: ResponseSection) => section.kind === "prose" || section.kind === "shown"
 
 /**
  * The folds of a settled turn's sections, in order. `began` is when the
@@ -62,8 +67,8 @@ export function turnFolds(sections: readonly ResponseSection[], began?: number):
   const close = (end: number) => {
     let answer = end
     while (answer > start && sections[answer - 1]!.kind === "note") answer--
-    if (answer > start && sections[answer - 1]!.kind === "prose") {
-      while (answer > start && sections[answer - 1]!.kind === "prose") answer--
+    if (answer > start && answers(sections[answer - 1]!)) {
+      while (answer > start && answers(sections[answer - 1]!)) answer--
     } else {
       answer = end
     }
