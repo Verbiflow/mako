@@ -16,6 +16,7 @@
     "./record-encoding": "./dist/record-encoding.js",
     "./record-store": "./dist/record-store.js",
     "./record-streams": "./dist/record-streams.js",
+    "./mako-root": "./dist/mako-root.js",
     "./record-carried": "./dist/record-carried.js",
     "./record-backfill": "./dist/record-backfill.js",
     "./attachment-sweep": "./dist/attachment-sweep.js",

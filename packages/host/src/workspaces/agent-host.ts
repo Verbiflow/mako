@@ -40,6 +40,8 @@ export interface TabServices {
   previews: ArtifactPreviews
   /** Hears each tab's folder; one watcher child serves them all. */
   watch: WatchBackend
+  /** Where a prompt's attachments are staged: the user root's (`HostEnvironment.userRoot`), which an isolated host keeps its own. */
+  attachments: string
 }
 
 /** Another host's `mako:git-status`, from this same contract: checked for the fields a window reads it by. */
@@ -50,6 +52,7 @@ export class AgentHost implements GitTab {
   private readonly git: Git
   private emit: (event: HostEvent) => void
   private readonly watch: WatchBackend
+  private readonly attachments: string
   private readonly workspaceGit: WorkspaceGit
   private readonly workspaceFiles: WorkspaceFiles
   private foreground = true
@@ -72,6 +75,7 @@ export class AgentHost implements GitTab {
     this.workspaceGit = new WorkspaceGit(services.git, cwd, () => { if (this.foreground) void this.pushGit() })
     this.workspaceFiles = new WorkspaceFiles(cwd, this.workspaceGit, services.previews)
     this.watch = services.watch
+    this.attachments = services.attachments
   }
 
   get ready(): boolean {
@@ -329,11 +333,11 @@ export class AgentHost implements GitTab {
   }
 
   async stageFile(name: string, base64: string): Promise<StagedFile> {
-    return this.workspaceFiles.stage(name, base64)
+    return this.workspaceFiles.stage(this.attachments, name, base64)
   }
 
   async stageFilePath(sourcePath: string): Promise<StagedFile> {
-    return this.workspaceFiles.stagePath(sourcePath)
+    return this.workspaceFiles.stagePath(this.attachments, sourcePath)
   }
 
   async search(

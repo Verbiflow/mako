@@ -195,13 +195,12 @@ export class WorkspaceFiles {
   }
 
   /**
-   * Write an attachment the model cannot take inline into a scratch directory
-   * inside the agent dir, and return its path. Engine-owned tools can then reach
+   * Write an attachment the model cannot take inline into `dir` (the user
+   * root's `attachments`, `TabServices.attachments`), and return its path. Engine-owned tools can then reach
    * it, which is the difference between "attach anything" and pretending
    * to.
    */
-  async stage(name: string, base64: string): Promise<StagedFile> {
-    const dir = join(homedir(), ".mako", "attachments")
+  async stage(dir: string, name: string, base64: string): Promise<StagedFile> {
     await mkdir(dir, { recursive: true })
     // Keep the original name legible but collision-free, and never let a name
     // escape the directory it is written into.
@@ -219,8 +218,7 @@ export class WorkspaceFiles {
    * this process — a 200MB video costs one clonefile-ish copy, not a
    * 270MB base64 string marshalled across the IPC boundary.
    */
-  async stagePath(sourcePath: string): Promise<StagedFile> {
-    const dir = join(homedir(), ".mako", "attachments")
+  async stagePath(dir: string, sourcePath: string): Promise<StagedFile> {
     await mkdir(dir, { recursive: true })
     const name = sourcePath.split("/").pop() ?? "attachment"
     const safe = name.replace(/[/\\]/g, "_").slice(0, 120) || "attachment"

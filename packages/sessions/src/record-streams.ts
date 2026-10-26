@@ -1,6 +1,6 @@
 import { closeSync, constants, mkdirSync, openSync, unlinkSync } from "node:fs"
 import { open, readdir, stat } from "node:fs/promises"
-import { homedir } from "node:os"
+import { makoUserRoot } from "./mako-root.js"
 import { basename, dirname, join, relative } from "node:path"
 import { z } from "zod"
 import type { SessionRecords } from "./harness-records.js"
@@ -23,9 +23,9 @@ export const STREAMS_ROOT = "mako-streams"
 /** Never in an encoded native id, so it ends one. */
 const BOUND = "@"
 
-/** Where Mako keeps the record store on this machine; the daemon, the catalog worker and the drivers all use it. */
-export function makoRecords(home = homedir()): string {
-  return join(home, ".mako", "records")
+/** Where Mako keeps the record store in a user root (`mako-root.ts`); the daemon, the catalog worker and the drivers all use it. */
+export function makoRecords(root = makoUserRoot()): string {
+  return join(root, "records")
 }
 
 export function streamsRoot(records: string): string {

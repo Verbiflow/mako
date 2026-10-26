@@ -24,6 +24,7 @@ import { DecodedEntrySchema, entriesFromMessages, ThreadRefSchema, type DecodedE
 import { ToolGrowthSchema, changedEntryStart, growTool, type ToolGrowth } from "@mako/sessions/live-content"
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { RequestChangesSchema } from "../contracts/turn-changes.js"
+import { TurnUndoneSchema } from "../contracts/turn-review.js"
 import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "../contracts/provider-failure.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
@@ -87,6 +88,7 @@ export const LiveRequestSchema = z.object({
   targetBindingId: z.string().optional(),
   snapshots: RunSnapshotsSchema.optional(),
   changes: RequestChangesSchema,
+  undone: TurnUndoneSchema,
   tuning: SessionSettingsSchema.optional(),
   inputDigest: z.string().optional(),
   nativeRun: z

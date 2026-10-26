@@ -15,7 +15,7 @@ import { ChildCalls } from "@mako/host/attribution/child-calls"
 import { outsideFolders } from "@mako/host/attribution/index"
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
 import { readOnlyCommand } from "@mako/host/attribution/read-only"
-import { partition, type JournalView } from "@mako/host/attribution/queries"
+import { partition, side, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 
 /*
@@ -1028,5 +1028,129 @@ test("a change inside a submodule doesn't lose the other changes heard with it",
   await w.tracker.settled()
   const paths = w.tracker.changes(0).map((entry) => entry.path)
   assert.ok(paths.includes("src/new.ts"), `the repository's own change is journaled: ${JSON.stringify(paths)}`)
+  await w.tracker.close()
+})
+
+/*
+ * A turn's own command writes, the person's save during a turn, and two
+ * Threads in one checkout, as a Codex turn showed them: one command at the
+ * repository's root drew a page, its stylesheet and a picture, a second took
+ * a screenshot, and the turn read "3 maybe yours" though the person touched
+ * nothing. The page and the stylesheet were redirect targets, which name
+ * them; the picture's name was only in the heredoc's script and the
+ * screenshot's in an option's value, which the parsed command leaves out.
+ */
+test("files a command's own text spells out are its turn's; a new file it doesn't spell stays unsure", async () => {
+  const w = await world({ "README.md": "# Tides\n" })
+  const make = (path: string, bytes: string | Uint8Array) => {
+    const absolute = join(w.repo, path)
+    writeFileSync(absolute, bytes)
+    utimesSync(absolute, w.clock.now() / 1000, w.clock.now() / 1000)
+    w.events.changed(absolute)
+  }
+  // As the live stream reports a call: under its turn.
+  const report = (call: string, command: string, startedAt: number, named?: string[]) =>
+    w.tracker.reported({ thread: "T1", session: "T1-session", turn: "t1", call, status: "completed", startedAt, endedAt: w.clock.now(), checkout: w.project, effects: [{ kind: "command", command, cwd: w.repo, ...named && { named } }] })
+  const png = (tail: number[]) => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...tail])
+  const draw = [
+    "cat > tides.html <<'EOF'\n<!doctype html>\n<link rel=stylesheet href=tides.css>\n<img src=tide.png>\nEOF",
+    "cat > tides.css <<'EOF'\nbody { font: 16px serif }\nEOF",
+    "python3 - <<'PY'\nimport matplotlib.pyplot as plt\nplt.plot([1, 3, 2])\nplt.savefig('tide.png', dpi=80)\nPY",
+  ].join("\n")
+  w.mark("turn", "T1", "t1", "start")
+  w.clock.advance(800)
+  const started = w.clock.now()
+  w.mark("call", "T1", "c1", "start", { turn: "t1", cwd: w.repo, label: "cat > tides.html" })
+  w.clock.advance(300)
+  make("tides.html", "<!doctype html>\n<link rel=stylesheet href=tides.css>\n<img src=tide.png>\n")
+  make("tides.css", "body { font: 16px serif }\n")
+  make("tide.png", png([0, 0, 0, 13]))
+  // The person, meanwhile, starts a note of their own beside them.
+  make("notes.md", "ask about the harbour\n")
+  await w.tracker.settled()
+  w.clock.advance(200)
+  report("c1", draw, started, [join(w.repo, "tides.html"), join(w.repo, "tides.css")])
+  w.mark("call", "T1", "c1", "end", { turn: "t1", cwd: w.repo })
+  w.clock.advance(1_500)
+  const shot = w.clock.now()
+  w.mark("call", "T1", "c2", "start", { turn: "t1", cwd: w.repo, label: "chrome --headless" })
+  w.clock.advance(900)
+  make("shot.png", png([1, 2, 3, 4]))
+  await w.tracker.settled()
+  report("c2", `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --screenshot=shot.png --window-size=800,600 "file://$PWD/tides.html"`, shot)
+  w.mark("call", "T1", "c2", "end", { turn: "t1", cwd: w.repo })
+  w.mark("turn", "T1", "t1", "end")
+  await w.tracker.settled()
+  w.clock.advance(15_000)
+  w.tracker.sweep()
+  const author = (path: string) => w.tracker.changes(0).filter((entry) => entry.path === path).at(-1)!.author
+  // The redirect targets the parsed command names; the others only its text spells.
+  for (const [path, by] of [["tides.html", "target"], ["tides.css", "target"], ["tide.png", "command"], ["shot.png", "command"]] as const) {
+    const found = author(path)
+    assert.ok(found.certainty === "named" && found.author.thread === "T1" && found.by === by, `${path}: ${JSON.stringify(found)}`)
+  }
+  const note = author("notes.md")
+  assert.ok(note.certainty === "window" && note.reached === undefined, JSON.stringify(note))
+  assert.equal(side(note, "T1"), "uncertain", "a new file the command didn't spell is as much a save of the person's")
+  const turn = turnChanges(w.view, "T1", "t1")
+  assert.deepEqual([turn.own.files, turn.maybe.files], [4, 1], "the line: four files the turn's, one not sure whose")
+  await w.tracker.close()
+})
+
+test("the person's save during a turn stays unsure: a file that was there, or a new one while no call runs", async () => {
+  const w = await world({ "config.txt": "retries = 2\n" })
+  w.mark("turn", "T1", "t1", "start")
+  w.clock.advance(500)
+  w.mark("call", "T1", "c1", "start", { turn: "t1", cwd: w.repo, label: "npm test" })
+  w.clock.advance(1_000)
+  // The person saves a file they had open while the agent's command runs at the root.
+  w.write("config.txt", "retries = 3\n")
+  await w.tracker.settled()
+  const saved = w.last().author
+  assert.ok(saved.certainty === "window" && saved.during === "call" && saved.reached === undefined, JSON.stringify(saved))
+  assert.equal(side(saved, "T1"), "uncertain", "changing a file that was there is a save as much as a command's write")
+  w.mark("call", "T1", "c1", "end", { turn: "t1", cwd: w.repo })
+  // Between calls, while the model writes its next one, the person makes a new note.
+  w.clock.advance(5_000)
+  w.write("notes.md", "call the harbour\n")
+  await w.tracker.settled()
+  const note = w.last().author
+  assert.ok(note.certainty === "window" && note.during === "turn", JSON.stringify(note))
+  assert.equal(side(note, "T1"), "uncertain", "no call ran to make it")
+  w.mark("turn", "T1", "t1", "end")
+  w.clock.advance(15_000)
+  w.tracker.sweep()
+  const turn = turnChanges(w.view, "T1", "t1")
+  assert.deepEqual([turn.own.files, turn.maybe.files], [0, 2])
+  await w.tracker.close()
+})
+
+test("two Threads in one checkout: a file made while both work there is neither's for sure", async () => {
+  const w = await world({ "src/a.ts": "export const a = 1\n" })
+  const inRepo = { cwd: w.repo, checkout: w.repo }
+  w.mark("turn", "T1", "t1", "start", inRepo)
+  w.mark("turn", "T2", "t2", "start", inRepo)
+  w.clock.advance(500)
+  w.mark("call", "T1", "c1", "start", { turn: "t1", ...inRepo })
+  w.clock.advance(400)
+  w.write("out.json", "{\"made\": true}\n")
+  await w.tracker.settled()
+  const author = w.last().author
+  assert.ok(author.certainty === "ambiguous" && author.reason === "several-threads", JSON.stringify(author))
+  assert.deepEqual([side(author, "T1"), side(author, "T2")], ["uncertain", "uncertain"])
+  w.mark("call", "T1", "c1", "end", { turn: "t1", ...inRepo })
+  w.mark("turn", "T2", "t2", "end", inRepo)
+  // A third Thread works from the project folder above the repository, with no work in it yet: timing gives T1 the file, but not for sure.
+  w.clock.advance(5_000)
+  w.mark("turn", "T3", "t3", "start")
+  w.clock.advance(1_000)
+  w.mark("call", "T1", "c2", "start", { turn: "t1", ...inRepo })
+  w.clock.advance(400)
+  w.write("out2.json", "{}\n")
+  await w.tracker.settled()
+  const shared = w.last().author
+  assert.ok(shared.certainty === "window" && shared.reached === undefined, JSON.stringify(shared))
+  assert.equal(side(shared, "T1"), "uncertain", "another Thread works where the file is")
+  w.mark("call", "T1", "c2", "end", { turn: "t1", ...inRepo })
   await w.tracker.close()
 })

@@ -8,7 +8,9 @@ import { LiveJournal, LiveRequestSchema } from "@mako/host/conversations/live-jo
 import { residentOf } from "@mako/host/conversations/live-runtime"
 import { LiveTurnChanges, type TurnLedger } from "@mako/host/conversations/live-turn-changes"
 import { changeCounts } from "../src/state/thread-changes.ts"
-import { maybeWords, recordedTurnChanges, turnChangeSummary, turnChangeWords } from "../src/lib/turn-changes.ts"
+import { recordedTurnChanges, turnChangeSummary, turnChangeWords, UNSURE_LABEL, unsureWords } from "../src/lib/turn-changes.ts"
+import { writerLabel } from "../src/lib/turn-writers.ts"
+import { undoneWords } from "../src/lib/turn-undone.ts"
 import { requestedTurn, type TurnReviewRequest } from "../src/state/review-scope.ts"
 
 // The line's words carry their noun, one file or many.
@@ -23,11 +25,11 @@ assert.deepEqual(
     { insertions: 41, deletions: 3 },
     { insertions: null, deletions: null },
   ]),
-  { files: 3, insertions: 53, deletions: 12, maybe: 0, settling: false }
+  { files: 3, insertions: 53, deletions: 12, unsure: { lines: 0, files: 0 }, settling: false }
 )
-assert.deepEqual(turnChangeSummary([{ insertions: 5, deletions: null }]), { files: 1, insertions: 5, deletions: null, maybe: 0, settling: false })
-assert.deepEqual(turnChangeSummary([{ insertions: null, deletions: null }]), { files: 1, insertions: null, deletions: null, maybe: 0, settling: false })
-assert.deepEqual(turnChangeSummary([]), { files: 0, insertions: null, deletions: null, maybe: 0, settling: false })
+assert.deepEqual(turnChangeSummary([{ insertions: 5, deletions: null }]), { files: 1, insertions: 5, deletions: null, unsure: { lines: 0, files: 0 }, settling: false })
+assert.deepEqual(turnChangeSummary([{ insertions: null, deletions: null }]), { files: 1, insertions: null, deletions: null, unsure: { lines: 0, files: 0 }, settling: false })
+assert.deepEqual(turnChangeSummary([]), { files: 0, insertions: null, deletions: null, unsure: { lines: 0, files: 0 }, settling: false })
 
 // A requested turn is the scope only in the repository its checkpoints saved.
 const request: TurnReviewRequest = { workspace: "/repo", turn: { kind: "turn", conversation: "c", requestId: "r", prompt: "Fix it" } }
@@ -57,12 +59,32 @@ const summary: TurnChanges = {
   through: 9,
   at: 1_790_000_000_000,
 }
-// The agent's own files and lines; what might be the person's is counted apart.
-assert.deepEqual(recordedTurnChanges(summary), { files: 2, insertions: 14, deletions: 3, maybe: 1, settling: false })
+// The agent's own files and lines; what is not sure whose is counted apart.
+assert.deepEqual(recordedTurnChanges(summary), { files: 2, insertions: 14, deletions: 3, unsure: { lines: 2, files: 0 }, settling: false })
+// Changes › Turn in the turn's repository reads the same as the line under the answer.
+assert.deepEqual(recordedTurnChanges(summary, "/repo"), recordedTurnChanges(summary), "one count, the header's and the line's")
+// A turn across two repositories: each one's header counts its own files, and the two add up to the line.
+const across: TurnChanges = {
+  ...summary,
+  own: { files: 3, added: 15, removed: 3 },
+  files: [...summary.files, { path: "/api/x.ts", root: "r-2", relative: "x.ts", kind: "modify", own: { added: 1, removed: 0 }, maybe: { added: 0, removed: 1 }, before: `sha256:${"f".repeat(64)}`, after: `sha256:${"0".repeat(64)}`, entries: { first: 8, last: 8 } }],
+  maybe: { files: 2, added: 2, removed: 1 },
+}
+assert.deepEqual(recordedTurnChanges(across, "/repo"), { files: 2, insertions: 14, deletions: 3, unsure: { lines: 2, files: 0 }, settling: false })
+assert.deepEqual(recordedTurnChanges(across, "/api"), { files: 1, insertions: 1, deletions: 0, unsure: { lines: 1, files: 0 }, settling: false })
 assert.equal(recordedTurnChanges({ version: TURN_CHANGES_VERSION, state: "pending" }), undefined, "nothing drawn while the count is on its way")
 assert.equal(recordedTurnChanges(undefined), undefined, "a turn from before the record falls back to its checkpoints")
 assert.equal(recordedTurnChanges({ ...summary, state: "settling" })?.settling, true)
-assert.equal(maybeWords(1), "1 maybe yours")
+// One name for it everywhere: the line, the header, the writer rows.
+assert.equal(unsureWords({ lines: 2, files: 0 }), "2 lines not sure whose")
+assert.equal(unsureWords({ lines: 1, files: 0 }), "1 line not sure whose")
+assert.equal(unsureWords({ lines: 0, files: 1 }), "1 file not sure whose", "a picture counts whole")
+assert.equal(unsureWords({ lines: 3, files: 2 }), "3 lines and 2 files not sure whose")
+// A picture the turn may or may not have made counts as a file, never as no lines.
+const picture: TurnChanges = { ...summary, maybe: { files: 1, added: 0, removed: 0 }, files: [...summary.files.slice(0, 2), { path: "/repo/shot.png", root: "r-1", relative: "shot.png", kind: "create", maybe: null, before: null, after: `sha256:${"9".repeat(64)}`, entries: { first: 8, last: 8 } }] }
+assert.deepEqual(recordedTurnChanges(picture)?.unsure, { lines: 0, files: 1 })
+assert.equal(writerLabel({ writer: "maybe" }), UNSURE_LABEL)
+assert.match(undoneWords({ at: 1_790_000_000_000, scope: "turn", files: 2, left: 1, backup: "refs/mako/moves/x" }), /^Undone at .+: this turn's lines came out of 2 files\. 1 stretch someone had edited since was left as it was\. The checkout from before is kept as refs\/mako\/moves\/x\.$/)
 
 // The record as the conversation's journal keeps it is the record the live line drew: reopened, the line is the same.
 const root = mkdtempSync(join(tmpdir(), "mako-turn-changes-"))
@@ -86,6 +108,17 @@ try {
   reopened.close()
   assert.deepEqual(saved?.changes, summary, "stored whole")
   assert.deepEqual(recordedTurnChanges(saved?.changes), recordedTurnChanges(live.changes), "the reopened line is the live one")
+  // An undo is kept on the request beside its record, and reads back the same.
+  const undone = { at: 1_790_000_100_000, scope: "turn" as const, files: 1, left: 0, backup: "refs/mako/moves/undo" }
+  const keptRoot = mkdtempSync(join(tmpdir(), "mako-turn-undone-"))
+  const kept = new LiveJournal(keptRoot, id)
+  kept.commit(snapshotOf([{ ...live, undone }]))
+  kept.close()
+  const again = new LiveJournal(keptRoot, id)
+  assert.deepEqual(again.read()?.requests[0]?.undone, undone, "the undo survives a reopen")
+  again.close()
+  rmSync(keptRoot, { recursive: true, force: true })
+  assert.equal(LiveRequestSchema.parse({ ...live, undone: { at: "soon" } }).undone, undefined, "an undo this build can't read is dropped")
   // A record of a version this build doesn't read is dropped, never misread.
   assert.equal(LiveRequestSchema.parse({ ...live, changes: { ...summary, version: 99 } }).changes, undefined)
 } finally {

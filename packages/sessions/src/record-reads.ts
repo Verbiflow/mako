@@ -21,6 +21,8 @@ const MarkSchema = z.object({ capturedAt: z.number(), deferred: z.array(z.string
 export interface ReadBack {
   readers: readonly SavedHistoryReader[]
   stores: NativeStores
+  /** Where a reader keeps the command outputs it reads (`keptOutputsIn`); the user's by default. */
+  kept?: string
 }
 
 /** A session's records restored where a reader can read them: its path there, the reader, and the home they were restored into. */
@@ -55,7 +57,8 @@ export class RecordReads {
     private readonly folder: string,
     private readonly readers: readonly SavedHistoryReader[],
     private readonly stores: NativeStores,
-    private readonly home: string
+    private readonly home: string,
+    private readonly kept = keptOutputsPath(home)
   ) {}
 
   /** Whether the store holds any of the session's records. */
@@ -205,7 +208,7 @@ export class RecordReads {
     let providers = this.readersAt.get(home)
     if (providers) this.readersAt.delete(home)
     else {
-      const place = { home, kept: keptOutputsPath(this.home) }
+      const place = { home, kept: this.kept }
       providers = this.readers.map((reader) => reader(this.stores, place))
     }
     this.readersAt.set(home, providers)

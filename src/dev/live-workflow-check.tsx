@@ -570,7 +570,7 @@ export function Fixture() {
             <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="background" onClick={publishBackground}>Background work</button>
             {(["tools", "agents", "settled", "stopped", "table", "changed", "changed-maybe", "reopened"] as const).map((scene) => (
               <button key={scene} className="pressable rounded border border-hairline px-2 py-1" data-fixture={`turn-${scene}`} onClick={() => publishTurn(scene)}>
-                {{ tools: "Several tools", agents: "Agents together", settled: "Settled turn", stopped: "Stopped turn", table: "Writing a table", changed: "Turn's changes", "changed-maybe": "Changes, maybe yours", reopened: "Reopened turn" }[scene]}
+                {{ tools: "Several tools", agents: "Agents together", settled: "Settled turn", stopped: "Stopped turn", table: "Writing a table", changed: "Turn's changes", "changed-maybe": "Changes, some not sure whose", reopened: "Reopened turn" }[scene]}
               </button>
             ))}
             <span data-fixture="status-marks" className="flex items-center gap-3">

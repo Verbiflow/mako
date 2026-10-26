@@ -500,7 +500,7 @@ export class SessionCatalog {
       const store = new RecordStore(folder, new NativeStores(true, join(folder, RESTORED)), { writer: this.writer })
       if (readBack) {
         this.recordStore = store
-        this.recordReads = new RecordReads(store, join(folder, RESTORED), readBack.readers, readBack.stores, home ?? homedir())
+        this.recordReads = new RecordReads(store, join(folder, RESTORED), readBack.readers, readBack.stores, home ?? homedir(), readBack.kept)
       }
       if (store.access === "read") {
         // A newer Mako's format this build may read: it lists and restores what the store holds, and writes nothing to it.

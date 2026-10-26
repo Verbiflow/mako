@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { userRootFor } from "@mako/host/base/host-environment"
 import { randomUUID } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -66,8 +67,8 @@ function identityAndVersion(): void {
   assert.throws(() => new ThreadStore(path, { now }), ThreadStoreVersionError, "a newer format no build of this one's reads is refused")
   assert.deepEqual(readFileSync(path), before, "a refused store is not written")
 
-  assert.equal(threadStorePath({ dataRoot: "/tmp/fixture", appData: "/Users/me/Library/Application Support", home: "/Users/me" }), "/tmp/fixture/threads.sqlite", "a fixture root keeps its own store")
-  assert.equal(threadStorePath({ dataRoot: "/Users/me/Library/Application Support/mako-dev", appData: "/Users/me/Library/Application Support", home: "/Users/me" }), "/Users/me/.mako/threads.sqlite", "every profile shares the per-user store")
+  assert.equal(threadStorePath(userRootFor({ dataRoot: "/tmp/fixture", appData: "/Users/me/Library/Application Support", home: "/Users/me" })), "/tmp/fixture/threads.sqlite", "a fixture root keeps its own store")
+  assert.equal(threadStorePath(userRootFor({ dataRoot: "/Users/me/Library/Application Support/mako-dev", appData: "/Users/me/Library/Application Support", home: "/Users/me" })), "/Users/me/.mako/threads.sqlite", "every profile shares the per-user store")
 }
 
 function startedJournals(): void {

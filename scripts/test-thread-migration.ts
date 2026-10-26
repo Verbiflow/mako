@@ -43,7 +43,7 @@ const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-migration-")))
 const home = join(root, "home")
 const dataRoot = join(root, "data")
 const conversations = join(dataRoot, "conversations")
-const storePath = threadStorePath({ dataRoot, appData: join(root, "application-support") })
+const storePath = threadStorePath(dataRoot)
 const CWD = "/tmp/thread-migration-project"
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 

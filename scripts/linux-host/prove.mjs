@@ -11,7 +11,7 @@ import { BrowserService, BrowserVideo } from "@mako/control-runtime/browser"
 import { BrowserCommandSchema, BrowserTargetSchema, decodeControlVideo } from "@mako/control-runtime/contracts"
 import { MACHINE_BROWSER_ID, MachineBrowser } from "@mako/control-runtime/desktop"
 import { classifyStartFailure } from "@mako/host/contracts/provider-failure"
-import { othersRunning, SHARED_DAEMONS, startHost, until } from "./host-process.mjs"
+import { othersRunning, sharedDaemon, startHost, until } from "./host-process.mjs"
 
 /**
  * Item 1.1's proof, inside the Linux image (`runtime/host/Dockerfile`): the
@@ -44,7 +44,9 @@ const failed = (failure) => {
   console.error(`FAIL ${failure}`)
 }
 
-const dataRoot = join(homedir(), "proof-data")
+// Where a machine's agent starts the host: its user's own `~/.mako`, so this host is a machine's, not one
+// isolated in a scratch root (`HostEnvironment.isolated`), and serves its catalog through the shared reader.
+const dataRoot = join(homedir(), ".mako")
 let host
 try {
   // No Electron to find, from the host's install or from the host package itself.
@@ -190,7 +192,7 @@ try {
     for (const line of report.warnings) console.log(`log  ${line}`)
     await delay(500)
     const stayed = await othersRunning()
-    const unexpected = stayed.filter(({ args }) => !SHARED_DAEMONS.includes(args))
+    const unexpected = stayed.filter(({ args }) => !sharedDaemon(args))
     for (const { args } of unexpected) failed(`still running after the host stopped: ${args}`)
     if (!unexpected.length) passed("only Mako's shared daemons outlive the host", { note: stayed.map(({ args }) => args).join(", ") || "none" })
     await rm(dataRoot, { recursive: true, force: true })

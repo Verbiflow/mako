@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs"
-import { homedir } from "node:os"
 import { join } from "node:path"
+import { makoUserRoot } from "./mako-root.js"
 import { z } from "zod"
 import { statedVersion } from "./record-writers.js"
 
@@ -10,9 +10,9 @@ import { statedVersion } from "./record-writers.js"
  * version of their own (`record-writers.ts`).
  */
 
-/** Where the host keeps its installed readings (`RuntimeUpdates`), one file for every profile on the machine. */
-export function makoRuntimeReadings(): string {
-  return join(homedir(), ".mako", "runtime-updates.json")
+/** Where the host keeps its installed readings (`RuntimeUpdates`) in a user root (`mako-root.ts`), one file for every profile on the machine. */
+export function makoRuntimeReadings(root = makoUserRoot()): string {
+  return join(root, "runtime-updates.json")
 }
 
 /** The parts of the host's `runtime-updates.json` a capture reads: each installation's binary and the version read off it, by provider. */

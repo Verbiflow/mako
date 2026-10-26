@@ -20,6 +20,7 @@ import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { NativeActivity, NativeActivityObservation } from "./native-activity.js"
 import type { RunSnapshots } from "./workspace-snapshots.js"
 import type { RequestChanges } from "./turn-changes.js"
+import type { TurnUndone } from "./turn-review.js"
 import type { ProviderFailureKind } from "./provider-failure.js"
 import type { LiveSessionUsage } from "./providers-acp.js"
 import type { Actor } from "./thread-identity.js"
@@ -202,6 +203,8 @@ export interface LiveRequest {
    * Mako counted them, which only its checkpoints can say.
    */
   changes?: RequestChanges
+  /** Its turn was undone (`TurnUndone`): when, how much, and the ref the checkout before it is kept under. */
+  undone?: TurnUndone
   tuning?: SessionSettings
   inputDigest?: string
   nativeRun?: { bindingId: string; runId: string; forkId?: string }

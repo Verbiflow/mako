@@ -128,10 +128,11 @@ export { GrokProvider, grokErrorLabel, grokHome, grokTurnCause, grokUpdateMarker
 export { ClaudeProvider } from "./providers/claude.js"
 export { claudeTaskOutput, claudeTaskOutputTail, type TaskOutput } from "./providers/claude-task-output.js"
 export { cursorTerminalEnd, type CursorTerminalEnd } from "./providers/cursor-terminal.js"
-export { KEPT_OUTPUTS_BUDGET, KeptOutputs, keptOutputsPath, keptOutputsStanding, type KeptOutput, type OutputKey, type OutputOrigin } from "./kept-outputs.js"
+export { KEPT_OUTPUTS_BUDGET, KeptOutputs, keptOutputsIn, keptOutputsPath, keptOutputsStanding, type KeptOutput, type OutputKey, type OutputOrigin } from "./kept-outputs.js"
 export { claudeApiErrorEvent } from "./providers/claude-events.js"
 export { OpenCodeProvider } from "./providers/opencode.js"
 import type { AttachmentReaders } from "./attachment-sweep.js"
+import { homedir } from "node:os"
 import { SessionCatalog } from "./catalog.js"
 import type { BackfillLog } from "./record-backfill.js"
 import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
@@ -200,12 +201,15 @@ export function defaultCatalog(
     writer?: string
     /** Every reader's stores on this machine, for the backfill's sweep of Mako's attachment files (`AttachmentSweep`). */
     attachmentReaders?: () => Promise<AttachmentReaders>
+    /** Where readers keep the command outputs they read (`keptOutputsIn`): the user's, unless a host hands its user root's. */
+    kept?: string
   } = {}
 ): SessionCatalog {
-  const { readers = SAVED_HISTORY_READERS, decodeExecutable, ...rest } = options
+  const { readers = SAVED_HISTORY_READERS, decodeExecutable, kept, ...rest } = options
   const stores = new NativeStores(rest.readOnly ?? false)
   const decodeAside = readers === SAVED_HISTORY_READERS ? new DecodeAside(decodeExecutable) : undefined
-  return new SessionCatalog(readers.map((reader) => reader(stores)), { ...rest, readBack: { readers, stores }, decodeAside })
+  const place = kept ? { home: homedir(), kept } : undefined
+  return new SessionCatalog(readers.map((reader) => reader(stores, place)), { ...rest, readBack: { readers, stores, ...kept && { kept } }, decodeAside })
 }
 
 export { AttachmentContentSchema, AttachmentSourceSchema } from "./content.js"

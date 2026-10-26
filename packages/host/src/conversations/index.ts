@@ -179,7 +179,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
     holdHistory: catalog.hold,
     historyAsOf: (path, asOf, before) => catalog.page(path, before, undefined, { asOf }),
-    noteCarried: (harness, nativeId, folder) => noteCarried(makoRecords(), harness, nativeId, folder),
+    noteCarried: (harness, nativeId, folder) => noteCarried(makoRecords(environment.userRoot), harness, nativeId, folder),
     emit,
     planBuilt: (planId, build) => {
       try { workspaces.planBuilds.record(planId, build) } catch (error) {

@@ -9,15 +9,14 @@ import { prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeSettingsReader } from "./approval-settings.js"
 import { approvalRoot, type HarnessContext } from "../host.js"
 import { heavy } from "../../base/heavy-packages.js"
-import { homedir } from "node:os"
-import { KeptOutputs, keptOutputsPath } from "@mako/sessions"
+import { KeptOutputs, keptOutputsIn } from "@mako/sessions"
 
 /** The SDK's stream-JSON mode, which its sessions run in, and its first control request. */
 const CLAUDE_SDK_ARGS = ["--output-format", "stream-json", "--verbose", "--input-format", "stream-json"]
 const CLAUDE_INITIALIZE = JSON.stringify({ type: "control_request", request_id: "prefetch", request: { subtype: "initialize" } })
 const ControlResponse = z.object({ type: z.literal("control_response") }).loose()
 
-export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" | "stores" | "streams">): ProviderLiveDriver {
+export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" | "userRoot" | "stores" | "streams">): ProviderLiveDriver {
   const settings = new ClaudeSettingsReader()
   const driver = createClaudeSdkDriver({
     available: () => claudeRuntime() !== null,
@@ -28,7 +27,7 @@ export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" 
       prepareClaudePermissionObserver({ ...input, root: approvalRoot(context), settings }),
     streams: context.streams,
     // Per user beside the session archive, as the history reader keeps them.
-    outputs: new KeptOutputs(keptOutputsPath(homedir()), context.stores),
+    outputs: new KeptOutputs(keptOutputsIn(context.userRoot), context.stores),
   })
   return {
     ...driver,

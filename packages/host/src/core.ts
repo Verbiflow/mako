@@ -152,9 +152,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const git = hostGit(config.gitTrace ?? false)
   const admission = new Admission()
   const machine = processMachine()
-  const streams = streamsRoot(makoRecords())
+  // The record store, and every stream a driver writes into it, are the user root's: an isolated host keeps its own.
+  const records = makoRecords(environment.userRoot)
+  const views = makoViews(environment.userRoot)
+  const streams = streamsRoot(records)
   const providerHost = createHarnessHost({
     dataRoot: environment.dataRoot,
+    userRoot: environment.userRoot,
     appRoot: environment.appRoot,
     secrets,
     stores: new NativeStores(fixtureDesk),
@@ -216,7 +220,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
   const conversationFiles = new ConversationFiles(git, previews)
   const watchBackend = childBackend()
-  const workspaceClients = new WorkspaceClients(emit, { git, previews, watch: watchBackend })
+  const workspaceClients = new WorkspaceClients(emit, { git, previews, watch: watchBackend, attachments: join(environment.userRoot, "attachments") })
   /** Start the first tab once, however many callers race for it. */
   const ready = (): Promise<HostPool> => workspaceClients.ready(hostClient())
   /**
@@ -273,7 +277,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   late.updates = appUpdates
   // Every host's record of the agents it starts, found through the session ledger, this host's own root always.
   const makoProcesses = () => readMakoProcesses([environment.dataRoot, ...threads.memory?.hostDataRoots() ?? []])
-  const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed, makoProcesses })
+  const harnesses = openHarnesses({ host: providerHost, appRoot: environment.appRoot, userRoot: environment.userRoot, catalog, live: () => late.conversations?.live, emit, jobs: shell.jobs, subscribed: shell.subscribed, makoProcesses })
   const tools = openTools(harnesses.tools, environment.dataRoot, () => shell.foreground.idle())
   const conversationsIn = (path: string, status: (value: string) => boolean) => (late.conversations?.live.summaries() ?? [])
     .filter(({ session }) => status(session.status) && (session.cwd === path || session.cwd.startsWith(`${path}/`)))
@@ -343,7 +347,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     crashes,
     unknown,
     mismatches,
-    unread: () => unreadCounts({ views: makoViews(), records: makoRecords() }).groups,
+    unread: () => unreadCounts({ views, records }).groups,
     fixture: fixtureDesk,
     token: () => late.cloud?.token() ?? Promise.resolve(undefined),
     account: () => late.cloud?.id() ?? Promise.resolve(undefined),
@@ -354,7 +358,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       threads: catalog.list().length,
     }),
   })
-  declareUnreadRecordMethods(methods, { views: makoViews(), records: makoRecords(), live: () => unknown.kinds(), since: Date.now(), streams })
+  declareUnreadRecordMethods(methods, { views, records, live: () => unknown.kinds(), since: Date.now(), streams })
   // This host's Sessions on the account's list, and a watched conversation's live updates to another device.
   // The rail's rows, read again only once the catalog says its list changed: a sweep finds nothing new otherwise, and a
   // session being written (a terminal's at work) changes its own row in place rather than the whole rail being read.

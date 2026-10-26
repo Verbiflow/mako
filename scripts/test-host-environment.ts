@@ -28,8 +28,11 @@ try {
     development: true,
     profile: "dev",
     userRoot: join(home, ".mako"),
+    isolated: false,
   }, "A checkout's host keeps the dev profile beside the installed app's data")
   assert.equal(mac(checkout, { MAKO_DATA_ROOT: join(root, "isolated") }).userRoot, join(root, "isolated"), "A host isolated outside appData keeps user state in its own root")
+  assert.equal(mac(checkout, { MAKO_DATA_ROOT: join(root, "isolated") }).isolated, true, "and shares nothing of the person's Mako")
+  assert.equal(mac(checkout, { MAKO_DATA_ROOT: join(home, ".mako") }).isolated, false, "A cloud machine's root is its user's own")
   assert.equal(mac(checkout, { MAKO_DATA_ROOT: join(support, "Mako-review") }).userRoot, join(home, ".mako"), "A launcher's profile root still shares the user's state")
   assert.equal(mac(checkout, { MAKO_PROD: "1" }).dataRoot, join(support, "mako"), "MAKO_PROD runs a checkout as the installed app")
   assert.equal(mac(checkout, { MAKO_PROD: "1" }).development, false)
@@ -48,6 +51,11 @@ try {
   const linux = resolveHostEnvironment({ env: { XDG_CONFIG_HOME: "/config" }, appRoot: checkout, platform: "linux", home })
   assert.equal(linux.appData, "/config", "Linux keeps data under XDG_CONFIG_HOME")
   assert.equal(resolveHostEnvironment({ env: {}, appRoot: checkout, platform: "linux", home }).appData, join(home, ".config"))
+  // A cloud machine's agent starts the host on its user's ~/.mako with MAKO_PROD: a machine, never isolated.
+  const machine = resolveHostEnvironment({ env: { MAKO_DATA_ROOT: join(home, ".mako"), MAKO_PROD: "1" }, appRoot: checkout, platform: "linux", home })
+  assert.deepEqual([machine.userRoot, machine.isolated], [join(home, ".mako"), false], "a machine shares its user's state and daemons")
+  // A proof or test elsewhere is isolated on Linux too.
+  assert.equal(resolveHostEnvironment({ env: { MAKO_DATA_ROOT: join(root, "proof"), MAKO_PROD: "1" }, appRoot: checkout, platform: "linux", home }).isolated, true)
 
   await mkdir(join(checkout, "dist-electron", "chunks"), { recursive: true })
   assert.equal(appRootOf(join(checkout, "dist-electron")), checkout, "The desktop's build finds the checkout above it")

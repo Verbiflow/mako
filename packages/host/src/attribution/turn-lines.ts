@@ -59,10 +59,22 @@ function recordGroup(file: TurnChangedFile): Pick<TurnFile, "root" | "paths" | "
   return { root: file.root, paths: new Set([file.relative, was]), first: file.entries.first, last: file.entries.last }
 }
 
-/** One file of a turn, walked from before the turn's first entry on it to after its last. */
-function walkTurnFile(view: JournalView, thread: string, turn: string, file: TurnChangedFile): Walk<Hand> | undefined {
+/**
+ * One file of a turn, walked from before the turn's first entry on it to
+ * after its last; with `fromStart`, from the turn's own start instead, so a
+ * save of someone else's on the file after the turn began and before the
+ * turn first wrote it is walked too, and named theirs. The turn's
+ * checkpoints, which its review draws when both were saved, hold that save.
+ */
+function walkTurnFile(view: JournalView, thread: string, turn: string, file: TurnChangedFile, fromStart = false): Walk<Hand> | undefined {
   const scope = new Set(turnEntries(view, thread, turn).map((entry) => entry.seq))
-  return walkLines(turnChain(view, recordGroup(file)), (ref) => linesOf(view, ref), (entry) => handOf(view, thread, scope, entry), UNKNOWN)
+  const group = recordGroup(file)
+  const began = fromStart ? view.store.turn(thread, turn)?.start : undefined
+  if (began !== undefined) {
+    const earlier = view.store.entriesBetween(began, Number.MAX_SAFE_INTEGER).find((entry) => entry.root === group.root && group.paths.has(entry.path) && entry.seq < group.first)
+    if (earlier) group.first = earlier.seq
+  }
+  return walkLines(turnChain(view, group), (ref) => linesOf(view, ref), (entry) => handOf(view, thread, scope, entry), UNKNOWN)
 }
 
 /** The two sides a diff shows: lines with their endings, null for no file. */
@@ -75,14 +87,15 @@ export interface ShownPair {
  * Who wrote each changed line of a turn's diff of `file`, as runs on the
  * diff's sides. Without `shown`, the diff is the journal's: before the turn's
  * first entry on the file to after its last. With it (the turn's
- * checkpoints), each shown line takes the writer of the journal's line it
+ * checkpoints, saved as it started), the journal is walked from the turn's
+ * start and each shown line takes the writer of the journal's line it
  * matches; a changed line the journal's span doesn't explain (written before
- * the turn's first entry on the file, or after its last) takes its
+ * the turn began, or after its last entry on the file) takes its
  * neighbour's in the hunk, or `unknown`. Undefined when a version isn't kept
  * or the file isn't text.
  */
 export function turnWriters(view: JournalView, thread: string, turn: string, file: TurnChangedFile, shown?: ShownPair): WriterRun[] | undefined {
-  const walk = walkTurnFile(view, thread, turn, file)
+  const walk = walkTurnFile(view, thread, turn, file, shown !== undefined)
   return walk && runsOn(walk, shown)
 }
 

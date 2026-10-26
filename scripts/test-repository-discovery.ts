@@ -15,7 +15,7 @@ import { childBackend } from "@mako/host/workspaces/watch-backend"
 const gitRunner = new Git()
 
 const noPreviews = new ArtifactPreviews(() => [])
-const services = { git: gitRunner, previews: noPreviews, watch: childBackend() }
+const services = { git: gitRunner, previews: noPreviews, watch: childBackend(), attachments: join(tmpdir(), "mako-test-attachments") }
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "mako-repositories-")))
 try {

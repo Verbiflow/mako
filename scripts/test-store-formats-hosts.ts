@@ -38,7 +38,7 @@ import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-store-formats-hosts-")))
 const dataRoot = join(root, "data")
-const threadsPath = threadStorePath({ dataRoot, appData: join(root, "application-support") })
+const threadsPath = threadStorePath(dataRoot)
 const ledgerPath = join(dataRoot, "session-memory.sqlite")
 const journals = join(dataRoot, "conversations")
 mkdirSync(journals, { recursive: true })

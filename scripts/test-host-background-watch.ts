@@ -19,6 +19,7 @@ const services = {
     subscriptions.push(watcher)
     return { unsubscribe: async () => { watcher.closed += 1 } }
   }),
+  attachments: join(tmpdir(), "mako-test-attachments"),
 }
 const platform = Object.getOwnPropertyDescriptor(process, "platform") ?? { value: process.platform, configurable: true }
 const settled = () => new Promise((resolve) => setTimeout(resolve, 20))

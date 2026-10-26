@@ -58,6 +58,8 @@ export interface ProviderHost {
 export interface HarnessContext {
   /** The host's data root; a launch keeps the native approvals it observed under `approval-evidence`. */
   readonly dataRoot: string
+  /** What the host keeps per user (`HostEnvironment.userRoot`): a driver's kept outputs. */
+  readonly userRoot: string
   /** The app's own files, where a harness's bundled adapter is found. */
   readonly appRoot: string
   /** The host's secrets, which a harness keeps its keys in. */

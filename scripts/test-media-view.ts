@@ -7,7 +7,7 @@ import { plainMediaPaths } from "../src/lib/file-citations"
 import { inlineFileLinks, inlineFileSpellings } from "../src/lib/inline-file-links"
 import { rehypeAssetGroups } from "../src/lib/markdown-asset-groups"
 import { VideoPlayback, type PlaybackDocument, type PlayableVideo } from "../src/lib/video-playback"
-import { MEDIA_GRID_TILES, mediaGridColumns, visualAsset } from "../src/components/viewer/media-tile-layout"
+import { MEDIA_GRID_TILES, mediaBox, mediaGridColumns, naturalSize, visualAsset } from "../src/components/viewer/media-tile-layout"
 
 /**
  * What the transcript decides about media without a window: which paths in
@@ -129,3 +129,15 @@ two.release()
 assert.equal(page.listeners.size, 0, "the last player gone, nothing listens")
 
 console.log("Media view: plain and bare media paths preview through the host, list items like paragraphs, grids for media only, and videos load late and pause off screen, hidden and unmounted, one at a time")
+
+// A picture never draws larger than its own pixels, one to a device pixel: a
+// 320×160 chart is 320 CSS pixels wide on a 1x display and 160 on a 2x one,
+// in the lightbox's Fit, inline and in a tile alike. Only Actual size draws
+// exactly this, whatever the box.
+assert.deepEqual(naturalSize(320, 160, 1), { width: 320, height: 160 })
+assert.deepEqual(naturalSize(320, 160, 2), { width: 160, height: 80 })
+assert.deepEqual(naturalSize(2704, 1694, 2), { width: 1352, height: 847 })
+assert.deepEqual(naturalSize(100, 100, 1.5), { width: 66.67, height: 66.67 })
+assert.equal(naturalSize(undefined, 160, 2), undefined, "unknown until its size is")
+assert.equal(mediaBox(320, 160, 2).width, "min(100%, 30rem, 60.000rem, 160px)", "inline: no wider than its device pixels")
+assert.equal(mediaBox(320, 160).width, "min(100%, 30rem, 60.000rem, 320px)")

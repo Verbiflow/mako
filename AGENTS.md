@@ -251,6 +251,28 @@ captured says so in its `source`, until a capture confirms it, as Devin's
 captured `plan-approved.json` corrected the request shape `plan-mode.json` had
 assumed.
 
+Everything Mako keeps per user (the record store and the streams its
+drivers write, decoded views, session memory, the Thread store, kept
+outputs, model catalogs, installed readings, transcripts, staged
+attachments) is in the host's user root (`HostEnvironment.userRoot`):
+`~/.mako` for the installed app, every profile and a cloud machine, and the
+data root itself for a host isolated outside the application-data folder (a
+test's, a proof's). An isolated host (`HostEnvironment.isolated`) reads its
+catalog in its own worker, takes into its record store only sessions
+written while it runs (never a backfill of the person's rail), and never
+installs or changes the login sync. Nothing sets it but the root's place: a
+cloud machine's agent starts its host on its user's `~/.mako`, so a machine
+is never isolated, and `test:host-linux` starts its host the same way; a
+proof that wants the shared reader with a private `HOME` puts its profile in
+that home's application-data folder (`test-packaged-reader-recovery.mjs`).
+What it still shares with the person is
+what it runs as: their harness logins and stores, and Mako's account
+selections (`~/.mako/accounts`), where it holds a lease while it resolves a
+launch's account. `node scripts/test-isolated-host.mjs` (in
+`test:application`, after `npx tsgo -b packages/host`) starts a built host
+on a scratch home and root and checks that nothing else reaches the home's
+`.mako`.
+
 The record store (`~/.mako/records`) holds every session in the rail, not
 only those written since Mako started. Each capture keeps the session's
 stamp (the catalog's bytes, mtime and revision of its records, plus its

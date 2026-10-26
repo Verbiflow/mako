@@ -24,6 +24,7 @@ import { buildTag } from "../base/build-identity.js"
 import { storeWriter } from "@mako/sessions/store-format"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import type { HostEnvironment } from "../base/host-environment.js"
+import { hostLog } from "../base/host-log.js"
 import { onMac } from "../base/platform.js"
 
 const run = promisify(execFile)
@@ -35,7 +36,7 @@ function plistPath(): string {
 }
 
 /** The app whose sync daemon this is: where its script is, whether it's installed, and which build it is. */
-export type DaemonApp = Pick<HostEnvironment, "appRoot" | "packaged" | "version" | "build">
+export type DaemonApp = Pick<HostEnvironment, "appRoot" | "packaged" | "version" | "build" | "isolated">
 
 export function daemonScript({ appRoot }: Pick<DaemonApp, "appRoot">): string {
   return join(appRoot, "node_modules", "@mako", "sessions", "dist", "daemon-main.js")
@@ -44,10 +45,13 @@ export function daemonScript({ appRoot }: Pick<DaemonApp, "appRoot">): string {
 /**
  * Only the installed app may own the login job. A checkout that wrote one would
  * pin the user's always-on sync to a working tree that changes under it and
- * outlives every window the checkout ever opened.
+ * outlives every window the checkout ever opened. So would a packaged build
+ * isolated in a data root of its own (a proof's, a test's), whose bundle is
+ * deleted after: one such build's daemon still ran the person's login sync
+ * days later, from a scratch folder, with its plist gone.
  */
-export function daemonLoginOwner({ packaged }: Pick<DaemonApp, "packaged">): boolean {
-  return packaged
+export function daemonLoginOwner({ packaged, isolated }: Pick<DaemonApp, "packaged" | "isolated">): boolean {
+  return packaged && !isolated
 }
 
 function daemonPlist(app: DaemonApp, script = daemonScript(app)): string {
@@ -85,11 +89,25 @@ function optOutPath(): string {
 
 /**
  * Install the default login job on first packaged launch; preserve explicit
- * opt-outs and refresh existing jobs when their command changes.
+ * opt-outs and refresh existing jobs when their command changes. First, a
+ * job another build left loaded (a program, script or build that isn't this
+ * app's) is unloaded: launchd keeps it alive and starts it again whenever
+ * this app retires its daemon, so the app could never take the socket back.
+ * An older scratch build once ran the person's login sync for five days
+ * from a folder since deleted. Its plist, where it sits at this app's path,
+ * goes too, or the next login would load it again.
  */
 export async function refreshDaemonLoginJob(app: DaemonApp): Promise<void> {
   if (!onMac() || !daemonLoginOwner(app)) return
   try {
+    const job = await daemonLoginJob()
+    const differs = job.loaded ? foreignDaemonJob(job, app) : []
+    if (differs.length) {
+      hostLog("threads", "another build's login sync was unloaded", { differs: differs.join(","), program: job.program ?? null, version: job.version ?? null })
+      await stopDaemonLoginJob()
+      const left = await readFile(plistPath(), "utf8").catch(() => null)
+      if (left !== null && left !== daemonPlist(app)) await rm(plistPath(), { force: true })
+    }
     if (existsSync(optOutPath())) return
     const current = await readFile(plistPath(), "utf8").catch(() => null)
     if (current === daemonPlist(app) && (await daemonLoginJob()).loaded) return
@@ -99,24 +117,64 @@ export async function refreshDaemonLoginJob(app: DaemonApp): Promise<void> {
   }
 }
 
+/**
+ * What of a loaded job isn't this app's: its program, the daemon script it
+ * runs, or the build it says it is (`MAKO_DAEMON_VERSION`). A field launchd
+ * didn't show proves nothing, so a job is never taken for another's on what
+ * can't be read.
+ */
+export function foreignDaemonJob(job: DaemonLoginJob, app: DaemonApp): ("program" | "script" | "version")[] {
+  const differs: ("program" | "script" | "version")[] = []
+  if (job.program !== undefined && job.program !== headlessNodeExecutable()) differs.push("program")
+  if (job.arguments !== undefined && !job.arguments.includes(daemonScript(app))) differs.push("script")
+  if (job.version !== undefined && job.version !== buildTag(app)) differs.push("version")
+  return differs
+}
+
 function launchdUid(): number {
   return process.getuid?.() ?? 501
 }
 
+/** What launchd holds for the job: whether it's loaded, its pid while it runs, and what it runs, as `launchctl print` shows it. */
+export interface DaemonLoginJob {
+  loaded: boolean
+  pid: number | null
+  program?: string
+  arguments?: string[]
+  /** The build the job says its daemon is (`MAKO_DAEMON_VERSION` in its environment). */
+  version?: string
+}
+
 /**
- * Whether launchd currently holds the job, and under which pid if it runs.
- * `launchctl print` is the only honest source: `bootstrap` and `bootout`
- * report errors for jobs they did in fact load or unload, which once left a
- * job running for days with its plist deleted and no host able to see it.
+ * Whether launchd currently holds the job, under which pid if it runs, and
+ * the program, arguments and environment it runs with. `launchctl print` is
+ * the only honest source: `bootstrap` and `bootout` report errors for jobs
+ * they did in fact load or unload, which once left a job running for days
+ * with its plist deleted and no host able to see it.
  */
-export async function daemonLoginJob(): Promise<{ loaded: boolean; pid: number | null }> {
+export async function daemonLoginJob(): Promise<DaemonLoginJob> {
   if (!onMac()) return { loaded: false, pid: null }
   try {
     const { stdout } = await run("launchctl", ["print", `gui/${launchdUid()}/${LABEL}`])
-    const match = /\bpid = (\d+)/.exec(stdout)
-    return { loaded: true, pid: match ? Number(match[1]) : null }
+    return { loaded: true, ...printedJob(stdout) }
   } catch {
     return { loaded: false, pid: null }
+  }
+}
+
+/** The pid, program, arguments and daemon build in `launchctl print`'s output; what it doesn't show stays unknown. */
+export function printedJob(stdout: string): Omit<DaemonLoginJob, "loaded"> {
+  const pid = /\bpid = (\d+)/.exec(stdout)
+  const program = /^\tprogram = (.+)$/m.exec(stdout)?.[1]
+  const block = (name: string) => new RegExp(`^\\t${name} = \\{\\n((?:\\t\\t.*\\n)*)\\t\\}`, "m").exec(stdout)?.[1]?.split("\n").filter(Boolean).map((line) => line.slice(2))
+  const args = block("arguments")
+  const VERSION = "MAKO_DAEMON_VERSION => "
+  const version = block("environment")?.find((line) => line.startsWith(VERSION))?.slice(VERSION.length)
+  return {
+    pid: pid ? Number(pid[1]) : null,
+    ...program !== undefined && { program },
+    ...args && { arguments: args },
+    ...version !== undefined && { version },
   }
 }
 
@@ -144,6 +202,7 @@ export async function daemonLoginEnabled(): Promise<boolean> {
 }
 
 export async function setDaemonLogin(app: DaemonApp, enabled: boolean): Promise<void> {
+  if (app.isolated) throw new Error("This Mako keeps its data apart from yours, so it doesn't change your login sync.")
   const { mkdir: makeDir, rm: remove, writeFile: write } = await import("node:fs/promises")
   if (enabled) {
     await remove(optOutPath(), { force: true }).catch(() => {})
