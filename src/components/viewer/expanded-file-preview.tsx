@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useRef } from "react"
+import { lazy, Suspense, useState, useRef, type ReactNode } from "react"
 import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react"
 import { Dialog, DialogClose, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
@@ -7,7 +7,7 @@ import type { FileContents } from "@/lib/types"
 const RichFilePreview = lazy(() => import("./rich-file-preview"))
 
 /** A single expanded renderer; callers suspend the inline body while it is open. */
-export function ExpandedFilePreview({ file, name, mode, open, onOpenChange, focusTarget, navigation, error, identity = name }: {
+export function ExpandedFilePreview({ file, name, mode, open, onOpenChange, focusTarget, navigation, error, identity = name, actions }: {
   file?: FileContents
   name: string
   identity?: string
@@ -17,6 +17,8 @@ export function ExpandedFilePreview({ file, name, mode, open, onOpenChange, focu
   onOpenChange(open: boolean): void
   focusTarget?(): HTMLElement | null
   navigation?: { index: number; count: number; previous(): void; next(): void }
+  /** Controls for the file shown, beside the close button: a media actions menu. */
+  actions?: ReactNode
 }) {
   const returnFocus = useRef<HTMLElement>(null)
   const [view, setView] = useState({ open, identity, mode: mode ?? "preview" })
@@ -50,6 +52,7 @@ export function ExpandedFilePreview({ file, name, mode, open, onOpenChange, focu
           <span className="px-1 tabular-nums text-faint">{navigation.index + 1} / {navigation.count}</span>
           <button type="button" aria-label="Next attachment" disabled={navigation.index + 1 === navigation.count} onClick={navigation.next} className="pressable p-1.5 text-muted-foreground hover:bg-fill-hover disabled:opacity-30"><ChevronRightIcon className="size-4" /></button>
         </div> : null}
+        {actions}
         <DialogClose aria-label="Close preview" className="pressable rounded-md p-1.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground">
           <XIcon className="size-4" />
         </DialogClose>

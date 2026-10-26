@@ -202,6 +202,13 @@ export interface ExternalEditor {
   available: boolean
 }
 
+/**
+ * Why a conversation reads a file. `preview`: for a preview the transcript
+ * shows unasked; outside the Thread's folders only pictures, video, audio,
+ * pages and PDFs are read, anything else comes back `withheld`.
+ */
+export type FileReadPurpose = "preview"
+
 /** One workspace file, opened for reading. */
 export interface FileContents {
   /**
@@ -215,8 +222,21 @@ export interface FileContents {
   diagnostic?: import("./file-preview.js").DiagnosticFormat
   media?: "image" | "pdf" | "audio" | "video" | "spreadsheet"
   mimeType?: string
+  /**
+   * A signed URL the renderer loads the file by, for media, pages, PDFs and
+   * other binaries. It names this version of the file and expires; a page's
+   * also serves the styles, scripts and pictures beside it.
+   */
   previewUrl?: string
+  /** A smaller picture: a spreadsheet's first sheet, or a large image's grid-tile rendition. */
   thumbnailUrl?: string
+  /** A video's poster frame, made on the host the first time it is asked for. */
+  posterUrl?: string
+  /** A picture's or video's size in pixels, as its header states it, so its box is reserved before it loads. */
+  width?: number
+  height?: number
+  /** Why a preview read returned nothing: the file isn't one a transcript shows unasked. Open it to read it. */
+  withheld?: string
   /** Sandboxed document from the harness's artifact preview, named as the harness names these files. */
   artifactPreview?:
     { kind: "html"; name: string; html: string } | { kind: "unavailable"; name: string; reason: string }

@@ -5,20 +5,19 @@ import { markdownMedia } from "@/lib/transcript-media"
 import { markdownFileTarget } from "@/lib/file-citations"
 import type { AttachmentContent } from "@mako/sessions"
 import { FilePreviewCollection } from "./attachment-collection"
-import { inlineFileLinks } from "@/lib/inline-file-links"
+import { inlineFileSpellings, type InlineFileSpelling } from "@/lib/inline-file-links"
 import { useContext, useEffect, useRef, type ComponentProps, type ReactNode } from "react"
 import type { ExtraProps } from "react-markdown"
-import { useResolvedPaths } from "@/state/file-references"
+import { useResolvedPreviews } from "./use-resolved-previews"
 import { ProseStreamingContext } from "./prose-layout-context"
-import { useReferenceSource } from "./source-context"
 
 /**
  * Previews of the files a paragraph links, only for files the host found,
  * at their paths now. A paragraph that's only a link gives way to its
  * preview, and comes back when there's none to show.
  */
-function InlinePreviews({ spellings, lone, className, children }: { spellings: string[]; lone: boolean; className?: string; children: ReactNode }) {
-  const paths = useResolvedPaths(useReferenceSource(), spellings)
+function InlinePreviews({ spellings, lone, className, children }: { spellings: InlineFileSpelling[]; lone: boolean; className?: string; children: ReactNode }) {
+  const paths = useResolvedPreviews(spellings)
   return (
     <div className={className}>
       {lone && paths?.length ? null : <p>{children}</p>}
@@ -120,7 +119,7 @@ export function Paragraph({
     }
     return <TranscriptAttachments attachments={attachments} />
   }
-  const targets = inlineFileLinks(node)
+  const targets = inlineFileSpellings(node)
   if (targets.length)
     return (
       <InlinePreviews spellings={targets} lone={child?.type === "element" && child.tagName === "a"} className={props.className}>

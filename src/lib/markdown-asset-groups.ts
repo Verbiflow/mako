@@ -44,13 +44,38 @@ function assetParagraph(node: RootContent): boolean {
   )
 }
 
-/** Adjacent asset-only paragraphs form a local gallery. Prose breaks the group. */
+/**
+ * A list whose every item is one file and nothing else (`- /tmp/a.png`),
+ * as the asset paragraph it stands for: a list of screenshots is a
+ * gallery, not nine full-size pictures each under its bullet. An item with
+ * words beside its file keeps the list.
+ */
+function assetList(node: RootContent): Element | null {
+  if (node.type !== "element" || (node.tagName !== "ul" && node.tagName !== "ol")) return null
+  const items = node.children.filter((child): child is Element => child.type === "element")
+  if (items.length < 2 || node.children.some((child) => child.type === "text" && child.value.trim())) return null
+  const assets: Element["children"] = []
+  for (const item of items) {
+    if (item.tagName !== "li") return null
+    const inner = item.children.filter((child) => !(child.type === "text" && !child.value.trim()))
+    const only = inner.length === 1 ? inner[0] : undefined
+    const content = only?.type === "element" && only.tagName === "p" ? only.children : item.children
+    const paragraph: Element = { type: "element", tagName: "p", properties: {}, children: content }
+    if (!assetParagraph(paragraph)) return null
+    assets.push(...paragraph.children.filter((child) => child.type === "element"))
+  }
+  return { type: "element", tagName: "p", properties: { dataAssetGroup: true }, children: assets }
+}
+
+/** Adjacent asset-only paragraphs form a local gallery, as does a list of files alone. Prose breaks the group. */
 export const rehypeAssetGroups: Plugin<[AssetGroupOptions?], Root> = options => tree => {
   omitRedundantPreviews(tree, options)
   const visit = (parent: Root | Element) => {
     const children = parent.children
     for (let at = 0; at < children.length; at++) {
       const first = children[at]
+      const list = assetList(first)
+      if (list) { children.splice(at, 1, list); continue }
       if (first.type !== "element" || !assetParagraph(first)) { if (first.type === "element") visit(first); continue }
       let end = at + 1
       const paragraphs = [first]

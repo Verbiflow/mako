@@ -23,7 +23,7 @@ export function TranscriptAttachment({
 
   if (source.kind === "file")
     return (
-      <InlineFilePreview path={source.path} name={name} mimeType={mimeType} />
+      <InlineFilePreview path={source.path} name={name} mimeType={mimeType} purpose="preview" />
     )
 
   if (/^(?:image|audio|video)\//i.test(mimeType))

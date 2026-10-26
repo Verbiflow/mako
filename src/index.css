@@ -2196,12 +2196,39 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   [data-sonner-toaster] [data-sonner-toast] { transition: none; }
 }
 
+/*
+ * Pictures and videos the agent made draw as themselves. What floats over
+ * one (its name, its controls, a grid's "+N", a video tile's play mark)
+ * is a small plate of the popover, so it reads on any picture in either theme.
+ */
+.media-control {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--popover) 88%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--hairline);
+}
+.media-control:hover { background: var(--popover); }
+.media-play {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--popover) 86%, transparent);
+  box-shadow: inset 0 0 0 0.5px var(--border);
+}
+.media-more {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--shell) 64%, transparent);
+}
+/* A page that sets no background was made to be read on white, in either theme. */
+.html-frame {
+  color-scheme: light;
+  background: Canvas;
+}
+
+/* A picture sizes itself against the column, so what holds it spans the column. */
 .transcript-media {
-  display: inline-flex;
+  display: flex;
   flex-direction: column;
-  max-width: 100%;
+  align-items: flex-start;
+  width: 100%;
   min-height: 2rem;
-  vertical-align: middle;
 }
 
 :root {

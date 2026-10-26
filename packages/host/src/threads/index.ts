@@ -24,6 +24,7 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import type { ThreadHarnesses } from "./harnesses.js"
 import type { ThreadChildContext, ThreadContextOptions } from "../contracts/conversation-session.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { FileReadPurpose } from "../contracts/git-workspace-search.js"
 import { defaultCatalogIdentity, loadedCatalogCode, makoViews } from "@mako/sessions"
 
 export type { ThreadCatalog, ThreadFileHomes } from "./catalog.js"
@@ -183,8 +184,8 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
     activity: catalog.activity(),
   }))
   methods.handle("mako:thread-open", (path: string) => catalog.open(path))
-  methods.handle("mako:thread-file", (threadPath: string, filePath: string) =>
-    catalog.readFile(threadPath, filePath, homes ?? undefined)
+  methods.handle("mako:thread-file", (threadPath: string, filePath: string, purpose?: FileReadPurpose) =>
+    catalog.readFile(threadPath, filePath, homes ?? undefined, purpose)
   )
   methods.handle("mako:thread-page", (path: string, before?: number, limit?: number) => catalog.viewPage(path, before, limit))
   methods.handle("mako:thread-preview", (path: string) => catalog.viewPreview(path))

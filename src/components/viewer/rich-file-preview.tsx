@@ -11,6 +11,8 @@ import { ArtifactPreview } from "./artifact-preview"
 import { PdfPreview } from "./pdf-preview"
 import { DiagnosticPreview } from "./diagnostic-preview"
 import { TabularPreview } from "./tabular-preview"
+import { HtmlFrame } from "./html-frame"
+import { MediaVideo } from "./media-video"
 
 /** Shared expanded body for composer, reply cards and the file workbench. */
 export default function RichFilePreview({
@@ -90,6 +92,7 @@ export default function RichFilePreview({
         key={file.previewUrl}
         format={format}
         url={file.previewUrl}
+        poster={file.posterUrl}
         name={name}
         expanded={expanded}
         onExpand={onExpand}
@@ -107,11 +110,14 @@ export default function RichFilePreview({
         ) : null}
       </div>
     )
+  // A page on disk loads by URL, beside its own files; one held in memory (an attachment's bytes) draws from them.
+  if (format === "html" && file.previewUrl && !file.previewUrl.startsWith("data:"))
+    return <HtmlFrame url={file.previewUrl} name={name} expanded={expanded} />
   if (format === "html")
-    return file.truncated || file.contents.length > 200_000 ? (
+    return file.truncated ? (
       <p className="p-4 text-ui text-faint">
-        This document exceeds the inline HTML preview limit. Open the original
-        to inspect it.
+        Only the start of this page was read. Open the original to see it
+        whole.
       </p>
     ) : (
       <div className={`${expanded ? "h-full" : "max-h-96"} overflow-auto`}>
@@ -139,6 +145,7 @@ export default function RichFilePreview({
 function FileMediaPreview({
   format,
   url,
+  poster,
   name,
   expanded,
   onExpand,
@@ -146,6 +153,7 @@ function FileMediaPreview({
 }: {
   format: "image" | "video" | "audio"
   url: string
+  poster?: string
   name: string
   expanded: boolean
   onExpand?: () => void
@@ -182,12 +190,10 @@ function FileMediaPreview({
     )
   if (format === "video")
     return (
-      <video
-        controls
-        playsInline
-        preload="none"
-        src={url}
-        aria-label={name}
+      <MediaVideo
+        url={url}
+        poster={poster}
+        name={name}
         onError={() => { setFailed(true); onPreviewError?.() }}
         className={`${expanded ? "h-full" : "max-h-[32rem]"} w-full bg-shell object-contain`}
       />

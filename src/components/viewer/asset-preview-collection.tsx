@@ -2,12 +2,24 @@ import { useCallback, useMemo, useRef, useState, type ReactNode } from "react"
 import { XIcon } from "lucide-react"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import type { FileContents } from "@/lib/types"
+import { cn } from "@/lib/utils"
 import { AssetPreviewContext, type AssetView } from "./asset-preview-context"
 import { ExpandedFilePreview } from "./expanded-file-preview"
+import { OwnMediaGallery } from "./media-gallery"
+import { MediaTileContext, type MediaTile } from "./media-tile-context"
+import { MEDIA_GRID_TILES, mediaGridColumns, visualAsset, type PreviewAsset } from "./media-tile-layout"
 
-export interface PreviewAsset { id: string; name: string; mimeType?: string; path?: string }
+export type { PreviewAsset }
 
-/** Groups only related assets at their place in the conversation. Closed tiles do no file reads. */
+const TILE: MediaTile = { kind: "tile" }
+const HIDDEN: MediaTile = { kind: "hidden" }
+
+/**
+ * Groups only related assets at their place in the conversation. Pictures
+ * and videos alone form a thumbnail grid whose tiles open the gallery;
+ * anything mixed is a row of chips, the selected one drawn below. Closed
+ * chips and tiles past the grid do no file reads.
+ */
 export function AssetPreviewCollection<T extends PreviewAsset>({ items, render, className, onRemove }: {
   items: readonly T[]
   render(item: T): ReactNode
@@ -29,6 +41,7 @@ export function AssetPreviewCollection<T extends PreviewAsset>({ items, render, 
   const select = (at: number) => { if (items[at]) setSelected(items[at].id) }
   const focusSelected = () => host.current?.querySelector<HTMLButtonElement>('[data-asset-selected="true"]') ?? null
   if (!items.length) return null
+  if (items.length > 1 && items.every(visualAsset)) return <MediaGrid items={items} render={render} className={className} />
   return <div ref={host} data-asset-collection className={`not-prose my-3 min-w-0 text-ui ${className ?? ""}`}>
     <div className="flex flex-wrap gap-2" aria-label="Attachments">
       {items.map(item => <div key={item.id} className="group relative min-w-0 max-w-full">
@@ -42,4 +55,19 @@ export function AssetPreviewCollection<T extends PreviewAsset>({ items, render, 
     {asset ? <AssetPreviewContext value={owner}><div key={asset.id} className="mt-2 [&>[data-inline-file-preview]]:my-0 [&>[data-inline-document]]:my-0">{render(asset)}</div></AssetPreviewContext> : null}
     <ExpandedFilePreview file={current?.file} error={current?.error} identity={id} name={asset?.name ?? "Attachment"} mode={current?.mode} open={enlarged && !!asset} onOpenChange={setEnlarged} focusTarget={focusSelected} navigation={asset ? { index, count: items.length, previous: () => select(index - 1), next: () => select(index + 1) } : undefined} />
   </div>
+}
+
+/** Pictures and videos as tiles; the item's own renderer draws each as a tile through `MediaTileContext`. */
+function MediaGrid<T extends PreviewAsset>({ items, render, className }: { items: readonly T[]; render(item: T): ReactNode; className?: string }) {
+  const shown = items.slice(0, MEDIA_GRID_TILES)
+  const more = items.length - shown.length
+  const columns = mediaGridColumns(items.length)
+  return <OwnMediaGallery>
+    <div data-asset-collection data-media-grid={columns} className={cn("not-prose my-3 grid gap-1.5", columns === 2 ? "max-w-[min(100%,30rem)] grid-cols-2" : "max-w-[min(100%,36rem)] grid-cols-3", className)}>
+      {shown.map((item, at) => <MediaTileContext key={item.id} value={more && at === shown.length - 1 ? { kind: "tile", more } : TILE}>{render(item)}</MediaTileContext>)}
+    </div>
+    {more ? <div hidden>
+      {items.slice(shown.length).map(item => <MediaTileContext key={item.id} value={HIDDEN}>{render(item)}</MediaTileContext>)}
+    </div> : null}
+  </OwnMediaGallery>
 }

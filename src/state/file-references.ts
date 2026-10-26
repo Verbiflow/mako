@@ -113,9 +113,10 @@ export function useFileReference(source: FileReferenceSource, spelling: string |
  * The files to preview for these spellings, once each is answered: a found
  * file at its path now, a spelling the host can't check as written, and
  * nothing for a spelling with no file or a tie. Undefined while asking, so
- * previews appear once instead of one by one.
+ * previews appear once instead of one by one. A `bare` name (`shot.png`)
+ * previews only as a file the Thread touched: never unchecked.
  */
-export function useResolvedPaths(source: FileReferenceSource, spellings: readonly string[]): string[] | undefined {
+export function useResolvedPaths(source: FileReferenceSource, spellings: readonly string[], bare?: ReadonlySet<string>): string[] | undefined {
   const keys = spellings.map((spelling) => keyOf(source, spelling))
   const signature = useSyncExternalStore(
     (listener) => {
@@ -135,7 +136,9 @@ export function useResolvedPaths(source: FileReferenceSource, spellings: readonl
         if (!fresh(own, now)) ask(source, spelling, keys[i]!)
         const entry = own ?? (source.asOf === undefined ? undefined : kept.get(streamedKey(source, spelling)))
         if (!entry) return ASKING
-        if (entry.answer === null) paths.push(spelling)
+        if (bare?.has(spelling)) {
+          if (entry.answer?.kind === "file" && entry.answer.file.touch) paths.push(entry.answer.file.path)
+        } else if (entry.answer === null) paths.push(spelling)
         else if (entry.answer.kind === "file") paths.push(entry.answer.file.path)
       }
       return paths.join("\u0000")

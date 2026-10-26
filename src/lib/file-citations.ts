@@ -166,3 +166,26 @@ export function inlineFileTarget(text: string): FileCitation | null {
   if (!/^(?:\.{0,2}\/|~\/|[A-Za-z]:[\\/])/.test(target.path) && /\s/.test(target.path)) return null
   return target
 }
+
+/**
+ * A path written as plain prose, not in backticks or a link: absolute,
+ * from home (`~/`) or from the working folder (`./`, `../`). Spaces end
+ * it, and so does anything a URL would carry.
+ */
+const PLAIN_PATH = /(?<![\w./~:@%+=-])(?:~|\.{1,2})?\/(?:[\w@%+=.~-]+\/)*[\w@%+=~-][\w@%+=.~-]*\.[A-Za-z0-9]+(?![\w/])/g
+
+/**
+ * The paths in a run of prose that name a picture, a video, audio or a
+ * page: "Saved to /tmp/shots/home.png." links the file, so it previews as
+ * if the agent had written it in backticks. Other paths stay prose: a
+ * plain `/etc/hosts` in a sentence is no reason to show a file.
+ */
+export function plainMediaPaths(text: string): { index: number; path: string }[] {
+  if (!text.includes("/")) return []
+  const found: { index: number; path: string }[] = []
+  for (const match of text.matchAll(PLAIN_PATH)) {
+    const format = filePreviewFormat(match[0])
+    if (format === "image" || format === "video" || format === "audio" || format === "html") found.push({ index: match.index, path: match[0] })
+  }
+  return found
+}

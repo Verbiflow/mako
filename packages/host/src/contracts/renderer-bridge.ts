@@ -1,4 +1,4 @@
-import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
+import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
 import type { AuthoringApplied, AuthoringCatalog, AuthoringChange, AuthoringPlan, AuthoringTarget, AuthoringView } from "./native-authoring.js"
 import type {
   ThreadTarget,
@@ -219,8 +219,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<Thread | null>("mako:thread-open", path),
     transcriptDocument: (source: TranscriptSource, depth: TranscriptDepth) =>
       invokeTrustedHost<TranscriptDocument>("mako:transcript-document", source, depth),
-    readThreadFile: (threadPath: string, filePath: string) =>
-      invokeTrustedHost<FileContents>("mako:thread-file", threadPath, filePath),
+    readThreadFile: (threadPath: string, filePath: string, purpose?: FileReadPurpose) =>
+      invokeTrustedHost<FileContents>("mako:thread-file", threadPath, filePath, purpose),
     pageThread: (path: string, before?: number, limit?: number) =>
       invokeTrustedHost<ThreadPage | null>(
         "mako:thread-page",
@@ -349,8 +349,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<LiveSnapshot>("mako:live-earlier", id),
     liveBind: (id: string, path: string) =>
       invokeTrustedHost<LiveSnapshot>("mako:live-bind", id, path),
-    readLiveFile: (id: string, path: string) =>
-      invokeTrustedHost<FileContents>("mako:read-live-file", id, path),
+    readLiveFile: (id: string, path: string, purpose?: FileReadPurpose) =>
+      invokeTrustedHost<FileContents>("mako:read-live-file", id, path, purpose),
     liveAttach: (path: string) =>
       invokeTrustedHost<LiveSnapshot | null>("mako:live-attach", path),
     liveSnapshot: (id: string) =>

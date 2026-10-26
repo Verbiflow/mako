@@ -1,6 +1,6 @@
 import "./lib/scratch-git.mjs"
 import { Git } from "@mako/git"
-import { resolveFilePreview } from "@mako/host/workspaces/file-previews"
+import { verifyFilePreview } from "@mako/host/workspaces/file-previews"
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
@@ -179,11 +179,11 @@ try {
   const image = await workspaceFiles.read("preview.png")
   assert.equal(image.media, "image")
   assert.equal(image.mimeType, "image/png")
-  assert.equal(
-    resolveFilePreview(image.previewUrl!),
-    join(await realpath(firstRepo), "preview.png")
+  assert.deepEqual(
+    await verifyFilePreview(image.previewUrl!),
+    { kind: "file", path: join(await realpath(firstRepo), "preview.png"), entry: true }
   )
-  assert.equal(resolveFilePreview(image.previewUrl! + "tampered"), null)
+  assert.deepEqual(await verifyFilePreview(image.previewUrl!.replace(/\/[a-f0-9]{64}\//, (signature) => signature.replace(/[a-f]/, "0"))), { kind: "invalid" })
   // An agent writes reports and scripts outside the project and links them
   // from its answer; the viewer opens them by relative, absolute, or symlinked
   // path alike.

@@ -14,6 +14,7 @@ import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRunti
 import { encodeRuntimeEvent, runtimeEventLine, runtimeSuccessBody, type EncodedValue, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { filePolicyHeaders } from "../base/file-policy.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
 import { HostJobs, type JobDemand } from "../base/host-jobs.js"
 import { DESKTOP_PATH } from "../contracts/desktop-channel.js"
@@ -175,11 +176,11 @@ export async function startWebHost(
       void Promise.resolve()
         .then(() => file(new Request(url, { headers, signal: abort.signal }), clientId))
         .then(async (result) => {
+          // What a file may do is decided here by its type, for every answer; one its owner says nothing about keeping is never kept.
           response.writeHead(result.status, {
-            ...Object.fromEntries(result.headers),
-            "content-security-policy": "sandbox; default-src 'none'",
-            "x-content-type-options": "nosniff",
             "cache-control": "no-store",
+            ...Object.fromEntries(result.headers),
+            ...filePolicyHeaders(result.headers.get("content-type") ?? undefined),
           })
           if (result.body)
             for await (const chunk of result.body) {
