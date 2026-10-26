@@ -250,6 +250,18 @@ class EntryDrawing {
   }
 }
 
+/**
+ * The harness's own id for the call a transcript row draws: what `toolBlocks`
+ * made the row's id from (a live turn's number or a saved message's id, then
+ * the entry's). A roster entry names its call by this id (`toolId`).
+ */
+export function callEntryId(callId: string): string {
+  const live = /^\d+:/.exec(callId)
+  if (live) return callId.slice(live[0].length)
+  const saved = callId.indexOf("-tool-")
+  return saved >= 0 ? callId.slice(saved + "-tool-".length) : callId
+}
+
 /** A call and, once it returned or is shown cut short, its result. */
 function toolBlocks(entry: EntryOf<"tool">, turn: number, provider: string | undefined, source: EntrySource, message: string): Block[] {
   const live = source.kind === "live"

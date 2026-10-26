@@ -5,12 +5,13 @@ import { Ending, Output } from "@/components/transcript/tool-row"
 import type { ToolKind } from "@mako/sessions/tool-identity"
 import {
   argAt,
-  booleanArgAt,
   editsOf,
   normalizeToolOutput,
   parseToolExecutionOutput,
   subagentResultId,
   subagentResultText,
+  subagentStanding,
+  type SubagentStanding,
   writtenText,
 } from "@/lib/tools"
 import { cn } from "@/lib/utils"
@@ -207,6 +208,28 @@ export function WriteBody({ call }: ToolViewProps) {
   )
 }
 
+/** A subagent's standing in the words its row and its group say. */
+const STANDING_WORDS = {
+  working: "Running",
+  waiting: "Waiting",
+  done: "Completed",
+  failed: "Failed",
+  stopped: "Stopped",
+  "cut off": "Cut off",
+  canceled: "Canceled",
+} as const satisfies Record<SubagentStanding, string>
+
+/** The dot beside it: ember only while it works, the diff hues once it has an outcome. */
+const STANDING_DOTS = {
+  working: "animate-live bg-ember",
+  waiting: "bg-caution",
+  done: "bg-added",
+  failed: "bg-removed",
+  stopped: "bg-foreground/25",
+  "cut off": "bg-foreground/25",
+  canceled: "bg-foreground/25",
+} as const satisfies Record<SubagentStanding, string>
+
 export function SubagentBody({ call }: ToolViewProps) {
   const task =
     argAt(call.arguments, "task") ??
@@ -222,24 +245,9 @@ export function SubagentBody({ call }: ToolViewProps) {
     argAt(call.arguments, "task_id") ??
     subagentResultId(call.result)
   const result = subagentResultText(call.result)
-  const background =
-    booleanArgAt(call.arguments, "background") === true ||
-    booleanArgAt(call.arguments, "run_in_background") === true
-  const stillRunning =
-    call.pending ||
-    (background &&
-      /(?:working|running) in the background|state="running"/i.test(
-        call.result ?? ""
-      ))
-  const status = call.isError
-    ? "Failed"
-    : call.isCutOff
-      ? call.isCanceled ? "Stopped" : "Cut off"
-      : call.isCanceled
-        ? "Canceled"
-        : stillRunning
-        ? "Running"
-        : "Completed"
+  const standing = subagentStanding(call)
+  const stillRunning = standing === "working"
+  const status = STANDING_WORDS[standing]
 
   return (
     <div className="flex flex-col gap-2">
@@ -247,13 +255,7 @@ export function SubagentBody({ call }: ToolViewProps) {
         <span
           className={cn(
             "size-1.5 rounded-full",
-            call.isError
-              ? "bg-removed"
-              : call.isCanceled || call.isCutOff
-                ? "bg-foreground/25"
-                : stillRunning
-                  ? "animate-live bg-ember"
-                  : "bg-added"
+            STANDING_DOTS[standing]
           )}
         />
         <span className="text-muted-foreground">{status}</span>

@@ -1321,31 +1321,46 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 .ref-token .ref-bracket { color: transparent; }
 
 /*
- * Loading text. A crest of light runs through the glyphs, rests, and runs
- * again; delays are negative so the first frame is already mid-wave. Each
- * glyph animates only its opacity, so the compositor carries the whole label.
+ * Loading text. A crest of light sweeps through the words, rests, and sweeps
+ * again: one gradient clipped to the text, so a label is one element however
+ * long it is. It moves in 30 steps a cycle, which reads as motion at a
+ * fraction of the repaints, and only while `observeVisibleAnimation` says the
+ * label is on screen (`src/lib/visible-animation.ts`).
  */
 
-.shimmer-chars {
-  color: var(--foreground);
+.shimmer-text {
+  color: var(--muted-foreground);
 }
 
-.shimmer-chars > span {
-  display: inline-block;
-  white-space: pre;
-  opacity: 0.45;
-  animation: mako-glyph 2.2s ease-in-out infinite;
-  animation-delay: calc(sibling-index() * 38ms - 2.2s);
-}
-
-@keyframes mako-glyph {
-  0%,
-  36%,
-  100% {
-    opacity: 0.45;
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .shimmer-text {
+    color: transparent;
+    background-image:
+      linear-gradient(to right, transparent, var(--foreground), transparent),
+      linear-gradient(color-mix(in oklab, var(--foreground) 45%, transparent), color-mix(in oklab, var(--foreground) 45%, transparent));
+    background-size:
+      4.5rem 100%,
+      100% 100%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: shimmer-sweep 2.2s steps(30) infinite;
+    animation-play-state: var(--visible-animation-state, paused);
+    will-change: var(--visible-animation-will-change, auto);
   }
-  18% {
-    opacity: 1;
+}
+
+@keyframes shimmer-sweep {
+  from {
+    background-position:
+      -4.5rem 0,
+      0 0;
+  }
+  64%,
+  to {
+    background-position:
+      calc(100% + 4.5rem) 0,
+      0 0;
   }
 }
 
@@ -1672,12 +1687,6 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 
   .pressable:active:not(:disabled) {
     transform: none;
-  }
-
-  .shimmer-chars > span {
-    animation: none;
-    opacity: 1;
-    color: var(--muted-foreground);
   }
 
   .skeleton::after {

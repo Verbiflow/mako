@@ -218,6 +218,18 @@ export function limitWords(note: TranscriptEvent, refused: readonly TurnCause[])
   return words
 }
 
+/**
+ * The events that mark a boundary in the conversation rather than a step in
+ * the work: the context was compacted, the model changed, the turn stopped.
+ * They are drawn as a divider across the column, and a folded turn keeps
+ * them in view.
+ */
+const BOUNDARY_GLYPHS: ReadonlySet<EventGlyph> = new Set(["compaction", "model", "stop"])
+
+export function isBoundary(words: Pick<EventWords, "glyph">): boolean {
+  return BOUNDARY_GLYPHS.has(words.glyph)
+}
+
 /** One line for a navigator or a label: the words without their glyph. */
 export function eventLabel(words: EventWords): string {
   return [words.title, words.detail, words.aside].filter(Boolean).join(" · ")

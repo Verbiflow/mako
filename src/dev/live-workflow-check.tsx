@@ -249,6 +249,106 @@ function publishQueue(phase: "starting" | "reasoning" | "responding" | keyof typ
   applyLiveSnapshot(next)
 }
 /**
+ * One more turn after the fixture's own, in the states a turn's work is
+ * drawn in: running several tools, running agents started together,
+ * settled behind its fold, cut short when Mako quit, and writing a table.
+ * Each is shaped the way a live Claude conversation reports it.
+ */
+const turnId = "66666666-6666-4666-8666-666666666666"
+type TurnScene = "tools" | "agents" | "settled" | "stopped" | "table"
+function turnScene(scene: TurnScene, now: number): Pick<LiveSnapshot, "blocks" | "requests" | "session" | "nativeAgents"> {
+  const tool = (id: string, name: string, input: Record<string, string>, status: string, at: number, output = "") => ({ type: "tool" as const, id, name, input: JSON.stringify(input), output, status, at, endedAt: status === "pending" ? undefined : at + 2_000 })
+  const prompt = { type: "user" as const, text: "Fix the expired-session redirect and run the router tests.", requestId: turnId, at: now - (scene === "settled" ? 192_000 : scene === "stopped" ? 100_000 : 74_000) }
+  const working = [
+    { type: "thinking" as const, text: "**Finding the guard**\n\nThe redirect is decided in the route guard; the refresh path is where `returnTo` gets lost.", at: now - 70_000 },
+    tool("read-guard", "Read", { file_path: `${cwd}/src/router/guard.ts` }, "completed", now - 66_000, "export function guard(route) { … }"),
+    tool("grep-return", "Grep", { pattern: "returnTo", path: "src" }, "completed", now - 60_000, "src/router/guard.ts:14\nsrc/session/refresh.ts:31"),
+    tool("read-refresh", "Read", { file_path: `${cwd}/src/session/refresh.ts` }, "completed", now - 52_000, "export async function refresh() { … }"),
+    tool("edit-guard", "Edit", { file_path: `${cwd}/src/router/guard.ts`, old_string: "redirect(signIn)", new_string: "redirect(signIn, { returnTo })" }, "completed", now - 40_000),
+    { type: "thinking" as const, text: "Now the router suite, to see the expired-session case pass.", at: now - 31_000 },
+  ]
+  const request = (status: LiveSnapshot["requests"][number]["status"], extra: Partial<LiveSnapshot["requests"][number]> = {}) => ({ id: turnId, text: prompt.text, attachments: [], status, ...extra })
+  const running = { ...snapshot.session, status: "running" as const, connection: "connected" as const }
+  const idle = { ...snapshot.session, status: "ready" as const, connection: "connected" as const }
+  switch (scene) {
+    case "tools":
+      return {
+        session: running,
+        blocks: [...snapshot.blocks, prompt, ...working, tool("test-router", "Bash", { command: "npm test -- src/router" }, "pending", now - 28_000)],
+        requests: [...snapshot.requests, request("dispatching")],
+        nativeAgents: undefined,
+      }
+    case "agents": {
+      const agent = (id: string, description: string, subagent_type: string, status: string, at: number, output = "") => tool(id, "Task", { description, prompt: `${description}. Report what you find.`, subagent_type }, status, at, output)
+      type Agent = NonNullable<LiveSnapshot["nativeAgents"]>["agents"][number]
+      const entry = (toolId: string, title: string, state: Agent["state"], startedAt: number, settledAt?: number): Agent => {
+        const agent: Agent = { bindingId: id, provider: "claude", nativeId: `native-${toolId}`, toolId, title, role: "Explore", work: "agent", observedAt: now, startedAt, state }
+        if (settledAt !== undefined) agent.settledAt = settledAt
+        return agent
+      }
+      return {
+        session: running,
+        blocks: [
+          ...snapshot.blocks,
+          prompt,
+          tool("read-routes", "Read", { file_path: `${cwd}/src/router/routes.ts` }, "completed", now - 72_000, "export const routes = [ … ]"),
+          { type: "thinking" as const, text: "Four independent questions: split them across agents.", at: now - 70_000 },
+          agent("agent-routes", "Map every protected route", "Explore", "pending", now - 66_000),
+          agent("agent-refresh", "Trace the session refresh", "Explore", "pending", now - 66_000),
+          agent("agent-tests", "Find the redirect tests", "Explore", "completed", now - 66_000, "src/router/guard.test.ts covers sign-in and sign-out; nothing expires a session."),
+          agent("agent-links", "Check deep link parsing", "Explore", "pending", now - 66_000),
+        ],
+        requests: [...snapshot.requests, request("dispatching")],
+        nativeAgents: {
+          limited: false,
+          agents: [
+            entry("agent-routes", "Map every protected route", { kind: "working", activity: "Reading src/router/routes.ts" }, now - 66_000),
+            entry("agent-refresh", "Trace the session refresh", { kind: "working", activity: "Reading src/session/refresh.ts" }, now - 66_000),
+            entry("agent-tests", "Find the redirect tests", { kind: "completed", summary: "guard.test.ts covers sign-in and sign-out" }, now - 66_000, now - 21_000),
+            entry("agent-links", "Check deep link parsing", { kind: "working", activity: "Searching for parseDeepLink" }, now - 66_000),
+          ],
+        },
+      }
+    }
+    case "settled":
+      return {
+        session: idle,
+        blocks: [
+          ...snapshot.blocks,
+          prompt,
+          ...working,
+          tool("test-router", "Bash", { command: "npm test -- src/router" }, "completed", now - 28_000, "PASS src/router/guard.test.ts (12 tests)"),
+          { type: "text" as const, text: "The guard now keeps `returnTo` when the session refresh fails, so signing in returns to the deep link. The router suite passes, including a new expired-session case.", at: now }
+        ],
+        requests: [...snapshot.requests, request("completed", { snapshots: { before: { kind: "ready", snapshot: { id: crypto.randomUUID(), scope: cwd, createdAt: now - 192_000, files: 2 } }, after: { kind: "ready", snapshot: { id: crypto.randomUUID(), scope: cwd, createdAt: now, files: 2 } } } })],
+        nativeAgents: undefined,
+      }
+    case "stopped":
+      return {
+        session: idle,
+        blocks: [...snapshot.blocks, prompt, ...working, { ...tool("test-router", "Bash", { command: "npm test -- src/router" }, "canceled", now - 28_000, "RUNS src/router/guard.test.ts"), unfinished: true as const }],
+        requests: [...snapshot.requests, request("interrupted", { interruption: { reason: "host-quit", at: now, stopped: ["npm run dev -- --port 5173", "npm run test:watch -- src/router"] } })],
+        nativeAgents: undefined,
+      }
+    case "table":
+      return {
+        session: running,
+        blocks: [
+          ...snapshot.blocks,
+          prompt,
+          { type: "text" as const, text: "Here is where each path stands:\n\n| Path | Covered | Result |\n| --- | --- | --- |\n| Sign-in | Yes | Returns to the link |\n| Sign-out | Yes | Clears the session |\n| Expired sess", at: now },
+        ],
+        requests: [...snapshot.requests, request("dispatching")],
+        nativeAgents: undefined,
+      }
+  }
+}
+function publishTurn(scene: TurnScene) {
+  const next: LiveSnapshot = { ...snapshot, revision: (acpStore.get().conversations[id]?.revision ?? 0) + 1, activityAt: Date.now(), nativeActivity: undefined, ...turnScene(scene, Date.now()) }
+  mock.setLiveSnapshot(next)
+  applyLiveSnapshot(next)
+}
+/**
  * The turn ended and the provider still runs work it will wake on: a
  * background command, a subagent, a monitor, a housekeeping watcher, and a
  * command that already settled, shaped like Claude Code's own task events.
@@ -405,6 +505,11 @@ export function Fixture() {
               </button>
             ))}
             <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="background" onClick={publishBackground}>Background work</button>
+            {(["tools", "agents", "settled", "stopped", "table"] as const).map((scene) => (
+              <button key={scene} className="pressable rounded border border-hairline px-2 py-1" data-fixture={`turn-${scene}`} onClick={() => publishTurn(scene)}>
+                {{ tools: "Several tools", agents: "Agents together", settled: "Settled turn", stopped: "Stopped turn", table: "Writing a table" }[scene]}
+              </button>
+            ))}
             <span data-fixture="status-marks" className="flex items-center gap-3">
               {statusMarks.map(({ label, status }) => (
                 <span key={label} className="flex items-center gap-1 rounded-md bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">

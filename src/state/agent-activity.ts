@@ -1,6 +1,6 @@
 import type { Entry } from "@mako/sessions/entries"
 import { entryToolIdentity } from "@/lib/tools"
-import { toolKindActivity } from "@mako/sessions/tool-identity"
+import { toolKindActivity, type ToolKind } from "@mako/sessions/tool-identity"
 import type { NativeActivity } from "@/lib/types"
 import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
 import type { CloudStartStep } from "@mako/host/contracts/cloud-threads"
@@ -43,6 +43,51 @@ export function startLabel(harnessName: string | undefined, cloudStep?: { step: 
   return harnessName ? `Starting ${harnessName}` : "Starting"
 }
 
+/**
+ * What a running step is doing, as the verb its live row sweeps: "Running"
+ * a command, "Reading" a file. What it acts on follows in the row's own
+ * words, as the step's row would show it.
+ */
+const LIVE_VERBS = {
+  shell: "Running",
+  "shell-output": "Reading output",
+  "shell-input": "Typing into",
+  "shell-stop": "Stopping",
+  read: "Reading",
+  edit: "Editing",
+  write: "Writing",
+  delete: "Deleting",
+  move: "Moving",
+  list: "Listing",
+  search: "Searching",
+  find: "Finding",
+  "web-fetch": "Fetching",
+  "web-search": "Searching the web",
+  code: "Running a script",
+  computer: "Using",
+  agent: "Running an agent",
+  "agent-message": "Messaging an agent",
+  "agent-wait": "Waiting for an agent",
+  agents: "Checking agents",
+  todo: "Updating the plan",
+  plan: "Planning",
+  "plan-exit": "Proposing a plan",
+  question: "Asking",
+  review: "Reviewing",
+  "tool-search": "Finding a tool",
+  skill: "Using",
+  mcp: "Using",
+  mode: "Switching mode",
+  think: "Thinking",
+  image: "Generating an image",
+  wait: "Waiting",
+  other: "Using",
+} as const satisfies Record<ToolKind, string>
+
+export function liveVerb(kind: ToolKind): string {
+  return LIVE_VERBS[kind]
+}
+
 export function agentActivity({ blocks, waiting, connecting, starting, makingWorktree = false, worktreeStep, preparing, switchingAccount = false, quietForMs = 0, native, harness }: { blocks: readonly Entry[]; waiting: boolean; connecting: boolean; /** What a start says while `connecting`. */ starting?: string; makingWorktree?: boolean; worktreeStep?: WorktreeStep; preparing: boolean; switchingAccount?: boolean; quietForMs?: number; native?: NativeActivity; harness?: string }): AgentActivity {
   if (waiting) return { kind: "waiting", label: "Waiting for your approval" }
   if (connecting) return { kind: "connecting", label: makingWorktree ? WORKTREE_STEPS[worktreeStep ?? "checkout"] : (starting ?? "Starting") }
@@ -78,7 +123,8 @@ function nativeAgentActivity(activity: NativeActivity): AgentActivity {
   }
 }
 
-function quietDuration(milliseconds: number): string {
+/** How long a turn has gone without output, at the minute: "3m", "1h 5m". */
+export function quietDuration(milliseconds: number): string {
   const minutes = Math.floor(milliseconds / 60_000)
   if (minutes < 60) return `${minutes}m`
   const hours = Math.floor(minutes / 60)

@@ -2490,6 +2490,7 @@ export function installMockBridge() {
         ? { ...snapshot.session.settings, ...tuning, options: { ...snapshot.session.settings?.options, ...tuning.options } }
         : snapshot.session.settings
       const reply = mockReply({ ...snapshot.session, settings }, request, settings)
+      if (reply.changed) request.snapshots = mockTurnSnapshots(GIT.root ?? snapshot.session.cwd)
       const { permission } = reply
       const updates = framed(id, snapshot.session.harness, [...openingNotices(snapshot), ...reply.updates])
       if (streamsScene && snapshot.blocks.length) {
@@ -3217,6 +3218,14 @@ let mockPlans = 0
 interface MockReply {
   updates: LiveUpdate[]
   permission?: LivePermissionRequest
+  /** The reply edited files: its request gets checkpoints either side, as the host saves them, for `liveTurnChanges`. */
+  changed?: boolean
+}
+
+/** Checkpoints either side of a turn in `scope`, both saved. */
+function mockTurnSnapshots(scope: string): NonNullable<LiveRequest["snapshots"]> {
+  const snapshot = (createdAt: number) => ({ kind: "ready" as const, snapshot: { id: crypto.randomUUID(), scope, createdAt, files: 2 } })
+  return { before: snapshot(Date.now() - 1_000), after: snapshot(Date.now()) }
 }
 
 /** A planning turn answers with a Markdown plan, and waits on the harness's own plan approval where it has one. */
@@ -3297,7 +3306,7 @@ function mockReply(
     "```",
     "",
     "I changed it to select only `state.sessions`. The status bar reads five scalars the same way; I'll look at it next.",
-  ].join("\n") }] }
+  ].join("\n") }], changed: true }
   if (!planning) return { updates: [user, { kind: "text", text: `Finished: ${request.text}` }] }
   const id = `mock-plan-${++mockPlans}`
   const subject = request.text.replace(/\s+/g, " ").trim().slice(0, 60) || "the change"
