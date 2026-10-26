@@ -137,11 +137,12 @@ import { SessionCatalog } from "./catalog.js"
 import type { BackfillLog } from "./record-backfill.js"
 import { catalogCodeIdentity, catalogSharingIdentity } from "./catalog-identity.js"
 import { DecodeAside } from "./decode-aside.js"
+import { keptOutputsIn } from "./kept-outputs.js"
 import { NativeStores } from "./read-only-sqlite.js"
 import type { SessionProvider } from "./providers/types.js"
 import { SAVED_HISTORY_READERS, type SavedHistoryReader } from "./readers.js"
 
-export { SAVED_HISTORY_READERS, type ReaderPlace, type SavedHistoryReader } from "./readers.js"
+export { homePlace, SAVED_HISTORY_READERS, type ReaderPlace, type SavedHistoryReader } from "./readers.js"
 export { makoViews, pageOf, ThreadView, View, ViewCache, VIEW_CACHE_BYTES, type SessionView, type ViewCacheStats, type ViewMeta, type ViewPage, type ViewSummary } from "./view-cache.js"
 export { RecordReads, RESTORED } from "./record-reads.js"
 
@@ -201,15 +202,19 @@ export function defaultCatalog(
     writer?: string
     /** Every reader's stores on this machine, for the backfill's sweep of Mako's attachment files (`AttachmentSweep`). */
     attachmentReaders?: () => Promise<AttachmentReaders>
-    /** Where readers keep the command outputs they read (`keptOutputsIn`): the user's, unless a host hands its user root's. */
-    kept?: string
+    /**
+     * The host's user root (`HostEnvironment.userRoot`): where readers keep
+     * the command outputs they read and find the stores Mako places for a
+     * harness (Cursor's SDK agents). The person's `~/.mako` unless given.
+     */
+    userRoot?: string
   } = {}
 ): SessionCatalog {
-  const { readers = SAVED_HISTORY_READERS, decodeExecutable, kept, ...rest } = options
+  const { readers = SAVED_HISTORY_READERS, decodeExecutable, userRoot, ...rest } = options
   const stores = new NativeStores(rest.readOnly ?? false)
   const decodeAside = readers === SAVED_HISTORY_READERS ? new DecodeAside(decodeExecutable) : undefined
-  const place = kept ? { home: homedir(), kept } : undefined
-  return new SessionCatalog(readers.map((reader) => reader(stores, place)), { ...rest, readBack: { readers, stores, ...kept && { kept } }, decodeAside })
+  const place = userRoot ? { home: homedir(), userRoot, kept: keptOutputsIn(userRoot) } : undefined
+  return new SessionCatalog(readers.map((reader) => reader(stores, place)), { ...rest, readBack: { readers, stores, ...place && { place } }, decodeAside })
 }
 
 export { AttachmentContentSchema, AttachmentSourceSchema } from "./content.js"

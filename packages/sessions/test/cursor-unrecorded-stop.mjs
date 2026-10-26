@@ -104,7 +104,7 @@ try {
   ]
   stream.forEach((message, seq) => log.run(seq + 1, event("run-2", { agent_id: id, run_id: "run-2", ...message })))
 
-  const provider = new CursorProvider(nativeStores, home, {})
+  const provider = new CursorProvider(nativeStores, home)
   const follower = provider.createFollower(path, 0)
   const running = await follower.next()
   assert.equal(running.entries.length, 2, "a running run adds nothing to history before it stops")
@@ -137,7 +137,7 @@ try {
   run.run("run-5", id, 5, "FINISHED", checkpoint(blob("root-c")), checkpoint(blob("root-d")), "2026-09-25T00:00:08.500Z", null)
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint(blob("root-d")), id)
 
-  const thread = await new CursorProvider(nativeStores, home, {}).read(path)
+  const thread = await new CursorProvider(nativeStores, home).read(path)
   const shape = thread.entries.map((entry) => entry.type === "user" ? `user:${entry.text}`
     : entry.type === "event" ? `event:${entry.label}@${new Date(entry.at).toISOString()}` : entry.type)
   assert.deepEqual(shape, [
@@ -150,7 +150,7 @@ try {
 
   // A run stopped before it wrote anything at all leaves no trace.
   run.run("run-6", id, 6, "CANCELLED", checkpoint(blob("root-d")), checkpoint(blob("root-d")), "2026-09-25T00:00:10.000Z", "2026-09-25T00:00:10.500Z")
-  const quiet = await new CursorProvider(nativeStores, home, {}).read(path)
+  const quiet = await new CursorProvider(nativeStores, home).read(path)
   assert.equal(quiet.entries.length, thread.entries.length, "a stop that recorded no prompt and no stream adds nothing")
   index.close()
   console.log("Cursor early stops: a run stopped before its first checkpoint keeps its prompt and output in history, and stops survive a model switch")
@@ -192,7 +192,7 @@ try {
     const latest = build(put)
     store.close()
     index.prepare("INSERT INTO agents VALUES (?, ?, 'IDLE', NULL, ?, NULL, '{}', '2026-10-17T00:00:00.000Z', '2026-10-17T00:00:09.000Z')").run(agentId, later, checkpoint(latest))
-    return async () => (await new CursorProvider(nativeStores, later, {}).read(path)).entries
+    return async () => (await new CursorProvider(nativeStores, later).read(path)).entries
   }
   const shape = (entries) => entries.map((entry) => entry.type === "user" ? `user:${entry.text}`
     : entry.type === "event" ? `event:${entry.label}${entry.detail ? ` — ${entry.detail}` : ""}`

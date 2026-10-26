@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { userRootFor } from "@mako/host/base/host-environment"
+import { cursorSdkStateRoot } from "@mako/sessions/cursor-sdk-paths"
 import { cloudLegacyFiles, cloudSignInName } from "@mako/host/usage/cloud-account"
 import { openHostSecrets } from "@mako/host/base/host-secrets"
 import { CursorAccountKeys, CursorCredentialStore, cursorLegacyFiles } from "@mako/host/harnesses/cursor/sdk/credentials"
@@ -31,7 +32,7 @@ try {
   const appData = join(home, "Library", "Application Support")
   const dataRoot = join(appData, "Mako-dev")
   const userRoot = userRootFor({ dataRoot, appData, home })
-  const cursorRoot = join(userRoot, "cursor-sdk")
+  const cursorRoot = cursorSdkStateRoot(userRoot)
   assert.equal(userRoot, join(home, ".mako"), "a profile's host shares the user's secrets")
   assert.equal(cloudSignInName(dataRoot), "cloud/mako-dev")
   assert.equal(cloudSignInName(join(appData, "Mako")), "cloud/mako", "the installed app's sign-in is its own")

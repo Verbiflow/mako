@@ -9,7 +9,6 @@ import { pinnedBy } from "./record-pins.js"
 import { npmTimelineKey, readReleaseTimelines, releaseBound, type ReleaseTimelines } from "./record-releases.js"
 import { EVIDENCE_RULES, statedVersion, type WriterEvidence } from "./record-writers.js"
 import { compareVersions } from "./runtime-version.js"
-import { cursorStoreOrigin } from "./providers/cursor-sdk-paths.js"
 import type { SessionProvider } from "./providers/types.js"
 
 /**
@@ -83,6 +82,8 @@ export interface WriterEvidenceLookups {
   devinApp(path: string): Promise<WriterEvidence | null>
   grokSession(path: string): Promise<WriterEvidence | null>
   cursorStore(path: string): Promise<WriterEvidence | null>
+  /** One of Mako's own SDK agents, under the state root its reader keeps (`cursorSdkStateRoot`). */
+  cursorSdkAgent(path: string): Promise<WriterEvidence | null>
 }
 
 /**
@@ -184,12 +185,11 @@ export class WriterEvidenceReader implements WriterEvidenceLookups {
     }
   }
 
-  /** A `cursor-agent` store, a Cursor editor chat or one of Mako's own SDK agents: their installs or launches, else the day bound, else Mako's pins. */
+  /** A `cursor-agent` store or a Cursor editor chat: their installs or launches, else the day bound. */
   async cursorStore(path: string): Promise<WriterEvidence | null> {
     const composer = path.indexOf("#composer:")
     if (composer > 0) return this.cursorEditor(path.slice(0, composer), path.slice(composer + "#composer:".length))
     if (basename(path) !== "store.db") return null
-    if (cursorStoreOrigin(path, { home: this.context.home })?.origin === "sdk") return makoSdkAgent(path)
     const cursor = join(this.context.home, ".cursor")
     if (!path.startsWith(join(cursor, "chats") + sep) && !path.startsWith(join(cursor, "acp-sessions") + sep)) return null
     const writes = cursorWrites(path)
@@ -200,6 +200,11 @@ export class WriterEvidenceReader implements WriterEvidenceLookups {
     // `cursor-agent` names each build by its date: nothing built after the day it was last written (a day's margin for time zones) wrote it.
     const upTo = cursorAgentDay(writes.last + DAY_MS)
     return { source: "range", bound: "build-day", line: "cursor-agent", upTo, writes, why: `cursor-agent names each build by the day it was built (${versions}), and the session was last written ${new Date(writes.last).toISOString().slice(0, 10)}; ${installed.why}`, at: Date.now() }
+  }
+
+  /** One of Mako's own SDK agents: Mako's pins of the SDK. */
+  async cursorSdkAgent(path: string): Promise<WriterEvidence | null> {
+    return basename(path) === "store.db" ? makoSdkAgent(path) : null
   }
 
   /** A Cursor editor chat: the version each launch ran, from its launch logs, over the chat's writes. */

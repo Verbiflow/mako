@@ -29,7 +29,7 @@ try {
   setup.prepare("INSERT INTO meta VALUES ('0', ?)").run(meta("Before"))
   setup.close()
 
-  const provider = new CursorProvider(nativeStores, home, {})
+  const provider = new CursorProvider(nativeStores, home)
   const catalog = new SessionCatalog([provider])
   const events = []
   catalog.onEvent((event) => events.push(event))

@@ -4,7 +4,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
-import { keptOutputsPath, SAVED_HISTORY_READERS, SessionCatalog, type KeptRestore } from "@mako/sessions"
+import { homePlace, SAVED_HISTORY_READERS, SessionCatalog, type KeptRestore } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import { newestWriter } from "@mako/sessions/record-writers"
@@ -98,7 +98,7 @@ for (const harness of chosen) {
   const note = (ok: boolean, what: string) => lines.push(`${harness.padEnd(8)} ${ok ? "PASS" : "FAIL"} ${what}`)
   const word = `VERSION-${harness.toUpperCase()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`
   const readings = join(root, `${harness}-runtime-updates.json`)
-  const catalog = new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores, { home, kept: keptOutputsPath(home) })), {
+  const catalog = new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores, homePlace(home))), {
     recordsPath: join(root, "records"), recordsHome: home, cachePath: join(root, `${harness}-cache.json`), runtimeReadings: readings,
     readBack: { readers: SAVED_HISTORY_READERS, stores },
   })

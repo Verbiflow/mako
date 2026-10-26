@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { appRootOf, installedAppRoot, processHostEnvironment, resolveHostEnvironment } from "@mako/host/base/host-environment"
+import { cursorSdkStateRoot } from "@mako/sessions/cursor-sdk-paths"
 
 const root = await mkdtemp(join(tmpdir(), "mako-environment-"))
 const home = join(root, "home")
@@ -56,6 +57,12 @@ try {
   assert.deepEqual([machine.userRoot, machine.isolated], [join(home, ".mako"), false], "a machine shares its user's state and daemons")
   // A proof or test elsewhere is isolated on Linux too.
   assert.equal(resolveHostEnvironment({ env: { MAKO_DATA_ROOT: join(root, "proof"), MAKO_PROD: "1" }, appRoot: checkout, platform: "linux", home }).isolated, true)
+
+  // Cursor's SDK agents follow the user root: the installed app, a profile and a machine keep `~/.mako/cursor-sdk` exactly, as every build before; an isolated host its own.
+  const cursorAgents = (environment: { userRoot: string }) => cursorSdkStateRoot(environment.userRoot)
+  for (const [shared, why] of [[installed, "the installed app"], [mac(checkout), "the dev profile"], [mac(checkout, { MAKO_DATA_ROOT: join(support, "Mako-review") }), "a launcher's profile"], [machine, "a cloud machine"]] as const)
+    assert.equal(cursorAgents(shared), join(home, ".mako", "cursor-sdk"), `${why} keeps Cursor's agents where they were`)
+  assert.equal(cursorAgents(mac(checkout, { MAKO_DATA_ROOT: join(root, "isolated") })), join(root, "isolated", "cursor-sdk"), "an isolated host keeps its own")
 
   await mkdir(join(checkout, "dist-electron", "chunks"), { recursive: true })
   assert.equal(appRootOf(join(checkout, "dist-electron")), checkout, "The desktop's build finds the checkout above it")

@@ -36,7 +36,7 @@ try {
   db.prepare("INSERT INTO meta VALUES ('0', ?)").run(JSON.stringify({ agentId: "recent-agent", name: "Recent", latestRootBlobId: "root" }))
   db.close()
 
-  const provider = new CursorProvider(nativeStores, home, {})
+  const provider = new CursorProvider(nativeStores, home)
   const whole = await provider.read(path)
   assert.ok(whole)
   const prompts = (entries) => entries.filter((entry) => entry.type === "user").map((entry) => entry.text)

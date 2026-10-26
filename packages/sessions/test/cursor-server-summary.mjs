@@ -106,7 +106,7 @@ try {
   assert.deepEqual(cursorCompactionReadings(read, [{ rootId: stale }], new Set([window])).get(window), { tokensBefore: 188_331, after: ["two"] }, "a run that ended on the stale root never measured what the summary left")
   read.close()
 
-  const thread = await new CursorProvider(nativeStores, home, {}).read(path)
+  const thread = await new CursorProvider(nativeStores, home).read(path)
   assert.ok(thread, "the store reads")
   const drawn = thread.entries.flatMap((entry) => entry.type === "tool" ? [`call ${entry.id ?? entry.name}`] : entry.type === "event" ? [entry] : [])
   const marker = drawn.find((entry) => typeof entry !== "string")

@@ -481,7 +481,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   /** What `open` should copy first, when the thread being reopened is a `cursor-agent` store. */
   function importSource(options: ProviderStartOptions, cwd: string): SdkImportSource | undefined {
     if (!options.resume || !options.threadPath) return undefined
-    const origin = cursorStoreOrigin(options.threadPath, { home: dependencies.home })
+    const origin = cursorStoreOrigin(options.threadPath, { stateRoot: dependencies.stateRoot(), home: dependencies.home })
     if (!origin || origin.origin === "sdk") return undefined
     const source: SdkImportSource = {
       path: options.threadPath,
@@ -493,7 +493,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   }
 
   const checkpoint = async (path: string): Promise<string | undefined> => {
-    const origin = cursorStoreOrigin(path, { home: dependencies.home })
+    const origin = cursorStoreOrigin(path, { stateRoot: dependencies.stateRoot(), home: dependencies.home })
     if (!origin) return undefined
     if (origin.origin === "sdk") return cursorSdkCheckpoint(dependencies.stores, dependencies.stateRoot(), origin.directoryName)
     return cursorLegacyCheckpoint(dependencies.stores, path, origin.sessionId)
@@ -507,7 +507,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   const inspectNativeSession = async (binding: ProviderBinding): Promise<NativeResumeEvidence> => {
     if (!binding.nativeId || !binding.path)
       return { kind: "unavailable", reason: "The saved binding does not name a Cursor session store." }
-    const origin = cursorStoreOrigin(binding.path, { home: dependencies.home })
+    const origin = cursorStoreOrigin(binding.path, { stateRoot: dependencies.stateRoot(), home: dependencies.home })
     if (!origin)
       return { kind: "unavailable", reason: "The saved binding does not point at a Cursor session store." }
     const sourcePath = binding.path

@@ -5,7 +5,8 @@ export const UsageWorkerDataSchema = z.object({
   ledgerPath: z.string().min(1),
   /** The host's `NativeStores` mode: the fixture desk's worker opens every store strictly too. */
   strictStores: z.boolean(),
-  sessionsRoot: z.string().min(1),
+  /** `HostEnvironment.userRoot` (`usageSummary`). */
+  userRoot: z.string().min(1),
   homeRoot: z.string().min(1),
   conversationsRoot: z.string().optional(),
   /** `helperRunsRoot(dataRoot)`: the model calls Mako made on its own behalf. */

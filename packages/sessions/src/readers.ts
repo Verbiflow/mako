@@ -8,19 +8,31 @@ import { GrokProvider } from "./providers/grok.js"
 import { OpenCodeProvider } from "./providers/opencode.js"
 import type { SessionProvider } from "./providers/types.js"
 import type { NativeStores } from "./read-only-sqlite.js"
+import { keptOutputsIn } from "./kept-outputs.js"
+import { makoUserRoot } from "./mako-root.js"
 
 /** Where Devin.app keeps its user data under a home, as `DevinLocalProvider` defaults to. */
 export const DEVIN_APP_USER = join("Library", "Application Support", "Devin", "User")
 
 /**
- * A home other than the machine's for a reader to read under, as a session
- * restored from the record store into a folder of Mako's own is. `kept` is
- * the machine's kept outputs (`keptOutputsPath`), which aren't the session's
- * records and stay where they are.
+ * Where a reader reads: the home a harness keeps its own stores under, and
+ * Mako's per-user folder (`HostEnvironment.userRoot`), which holds the
+ * stores Mako places for a harness (Cursor's SDK agents, `cursorSdkStateRoot`).
+ * A host hands its own, so an isolated host reads its root's and not the
+ * person's; a session restored from the record store reads in a home of
+ * Mako's own, with that home's `.mako`. `kept` is the host's kept outputs
+ * (`keptOutputsIn`), which aren't a session's records and stay where they are.
  */
 export interface ReaderPlace {
   home: string
+  userRoot: string
   kept: string
+}
+
+/** A place wholly under one home: its `.mako` is the user root, as the person's Mako keeps it. */
+export function homePlace(home: string): ReaderPlace {
+  const userRoot = makoUserRoot(home)
+  return { home, userRoot, kept: keptOutputsIn(userRoot) }
 }
 
 /**
@@ -41,7 +53,7 @@ export type SavedHistoryReader = (stores: NativeStores, place?: ReaderPlace) => 
 export const SAVED_HISTORY_READERS: readonly SavedHistoryReader[] = [
   (stores, place) => new CodexProvider(stores, place?.home),
   (stores, place) => place ? new ClaudeProvider(place.home, stores, place.kept) : new ClaudeProvider(undefined, stores),
-  (stores, place) => place ? new CursorProvider(stores, place.home, {}, place.kept) : new CursorProvider(stores),
+  (stores, place) => place ? new CursorProvider(stores, place.home, place.userRoot, place.kept) : new CursorProvider(stores),
   (_stores, place) => new GrokProvider(place?.home),
   (stores, place) => new OpenCodeProvider(stores, place?.home),
   (stores, place) => new DevinLocalProvider(stores, place && join(place.home, DEVIN_APP_USER)),

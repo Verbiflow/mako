@@ -78,7 +78,8 @@ import { todoDetails } from "../tool-plan.js"
 import { CURSOR_RUN_LOST, CURSOR_TODO_WRITES } from "../harnesses/cursor.js"
 import { isBusy, READ_BUSY_TIMEOUT_MS, SqliteFailure } from "./sqlite-busy.js"
 import type { NativeStores } from "../read-only-sqlite.js"
-import { KeptOutputs, keptOutputsPath } from "../kept-outputs.js"
+import { KeptOutputs, keptOutputsIn } from "../kept-outputs.js"
+import { makoUserRoot } from "../mako-root.js"
 import { filesUnder, tableColumns, type RecordDatabase, type RecordRoot, type SessionRecords } from "../harness-records.js"
 import type { ChildTranscript } from "../children.js"
 import { CursorChildren, CursorTranscriptTranslator } from "./cursor-children.js"
@@ -378,9 +379,9 @@ async function nativeFiles(paths: string[]): Promise<NativeFile[]> {
 }
 
 export class CursorProvider implements SessionProvider {
-  /** Its records state no version: what its harness leaves beside them says (`record-evidence.ts`). */
+  /** Its records state no version: what its harness leaves beside them says (`record-evidence.ts`); Mako's own SDK agents are known by its state root. */
   writerEvidence(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null> {
-    return reader.cursorStore(path)
+    return this.isSdkStore(path) ? reader.cursorSdkAgent(path) : reader.cursorStore(path)
   }
 
   harness = "cursor" as const
@@ -430,13 +431,19 @@ export class CursorProvider implements SessionProvider {
   /** What background shells printed, kept for when Cursor's terminal files are gone. */
   private readonly outputs: KeptOutputs
 
-  constructor(stores: NativeStores, home = homedir(), env: NodeJS.ProcessEnv = process.env, kept = keptOutputsPath(home)) {
+  /**
+   * `home` holds Cursor's own stores (`~/.cursor`, the editor's folder);
+   * `userRoot` is Mako's per-user folder, which holds the SDK agents Mako
+   * runs (`cursorSdkStateRoot`) and the outputs readers keep: the person's
+   * `~/.mako` unless a host hands its own.
+   */
+  constructor(stores: NativeStores, home = homedir(), userRoot = makoUserRoot(home), kept = keptOutputsIn(userRoot)) {
     this.stores = stores
     this.outputs = new KeptOutputs(kept, stores)
     this.desktop = new CursorDesktopStore(stores, home, this.outputs)
     this.chatRoot = join(home, ".cursor", "chats")
     this.acpRoot = join(home, ".cursor", "acp-sessions")
-    this.sdkStateRoot = cursorSdkStateRoot(env, home)
+    this.sdkStateRoot = cursorSdkStateRoot(userRoot)
     this.sdkRoot = join(this.sdkStateRoot, "agents")
     this.projectsRoot = join(home, ".cursor", "projects")
     this.childLinks = new CursorChildren(stores, {

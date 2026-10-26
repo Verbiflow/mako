@@ -24,7 +24,7 @@ const conversation = randomUUID()
 const client = randomUUID()
 const marker = `SHARED_${randomUUID()}`
 const call = (channel, ...args) => invokeRuntime(location.socket, client, channel, args)
-const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_CURSOR_SDK_ROOT: join(root, "cursor"), MAKO_WEB_SOCKET: location.socket }
+const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: location.socket }
 for (const key of ["VITE_DEV_SERVER_URL", "MAKO_PROFILE"]) delete env[key]
 let host
 let browser

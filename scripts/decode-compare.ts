@@ -57,7 +57,7 @@ export function storeReader(reader: string, home: string): SessionProvider {
   switch (reader) {
     case "claude": return new ClaudeProvider(home)
     case "codex": return new CodexProvider(nativeStores, home)
-    case "cursor": return new CursorProvider(nativeStores, home, {})
+    case "cursor": return new CursorProvider(nativeStores, home)
     case "devin": return new DevinCliProvider(nativeStores, home)
     case "devin-ide": return new DevinLocalProvider(nativeStores, join(home, DEVIN_APP_USER))
     case "grok": return new GrokProvider(home)

@@ -151,7 +151,7 @@ try {
   assert.ok(journalRead.entries.some((entry) => entry.type === "text" && entry.text.includes("freezes on Friday")))
 
   // Cursor: a cursor-agent child kept as its own store; an SDK child kept only as a plain transcript.
-  const cursor = new CursorProvider(stores, home("cursor"), {})
+  const cursor = new CursorProvider(stores, home("cursor"))
   const acp = await only(cursor, (path) => path.includes("acp-sessions"))
   const [storeChild] = await cursor.children(acp)
   assert.deepEqual(ids([storeChild]), [["22222222-2222-4222-8222-2222222222b2", "complete", "toolu_01FixtureTaskCall0000001", null]])

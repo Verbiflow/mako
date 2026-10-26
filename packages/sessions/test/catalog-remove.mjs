@@ -105,7 +105,7 @@ try {
     index.prepare("INSERT INTO run_events (run_id, seq, event_type, created_at) VALUES (?, 1, 'x', 't')").run(`run-${agentId}`)
   }
   index.close()
-  const sdkCursor = new CursorProvider(nativeStores, home, {})
+  const sdkCursor = new CursorProvider(nativeStores, home)
   assert.equal(await sdkCursor.remove(join(sdkAgent("sdk-gone"), "store.db")), true)
   assert.equal(await exists(sdkAgent("sdk-gone")), false)
   const after = new DatabaseSync(join(sdkRoot, "index.db"), { readOnly: true })

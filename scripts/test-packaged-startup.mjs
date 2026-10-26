@@ -29,7 +29,6 @@ const { socket } = runtimeLocation(dataRoot)
 const env = {
   ...process.env,
   MAKO_DATA_ROOT: dataRoot,
-  MAKO_CURSOR_SDK_ROOT: join(root, "cursor"),
   MAKO_CLIENT_ID: "package-startup",
 }
 for (const key of [

@@ -52,10 +52,11 @@ export interface UsageSummaryOptions {
   helperRuns?: string
 }
 
-/** Where the harnesses' stores are: the home, and the variables that move a store from it. */
+/** Where the harnesses' stores are: the home, the variables that move a store from it, and Mako's user root. */
 interface UsageHome {
   homeRoot: string
   env: NodeJS.ProcessEnv
+  userRoot: string
 }
 
 /** A record some reader could not read. */
@@ -65,9 +66,14 @@ interface Unread {
   reason: string
 }
 
+/**
+ * `userRoot` is the host's (`HostEnvironment.userRoot`): it holds the
+ * built-in runtime's old sessions and the stores Mako places for a harness
+ * (Cursor's SDK agents); `homeRoot` holds each harness's own.
+ */
 export async function usageSummary(
   harnesses: readonly UsageHarness[],
-  sessionsRoot: string,
+  userRoot: string,
   homeRoot = homedir(),
   conversationsRoot?: string,
   options: UsageSummaryOptions = {}
@@ -75,7 +81,7 @@ export async function usageSummary(
   const ledger = options.ledger ?? new UsageLedger()
   try {
     const env = options.env ?? (homeRoot === homedir() ? process.env : {})
-    return await ledger.exclusive(() => summarize(ledger, harnesses, sessionsRoot, { homeRoot, env }, conversationsRoot, options.helperRuns, options.now ?? Date.now()))
+    return await ledger.exclusive(() => summarize(ledger, harnesses, { homeRoot, env, userRoot }, conversationsRoot, options.helperRuns, options.now ?? Date.now()))
   } finally {
     if (!options.ledger) ledger.close()
   }
@@ -84,7 +90,6 @@ export async function usageSummary(
 async function summarize(
   ledger: UsageLedger,
   harnesses: readonly UsageHarness[],
-  sessionsRoot: string,
   home: UsageHome,
   conversationsRoot: string | undefined,
   helperRuns: string | undefined,
@@ -94,7 +99,7 @@ async function summarize(
   const unread: Unread[] = []
   const recorded = new Map(harnesses.flatMap((harness) => harness.history ? [] : [[harness.provider, harness.label] as const]))
   await Promise.all([
-    scanSource(ledger, "Mako", home, since, unread, (scan) => scan.jsonl([sessionsRoot], BUILT_IN)),
+    scanSource(ledger, "Mako", home, since, unread, (scan) => scan.jsonl([join(home.userRoot, "sessions")], BUILT_IN)),
     ...harnesses.flatMap(({ label, history }) => history ? [scanSource(ledger, label, home, since, unread, (scan) => history.scan(scan))] : []),
     conversationsRoot && recorded.size
       ? scanSource(ledger, "Mako journals", home, since, unread, (scan) => scanRecorded(scan, conversationsRoot, recorded))
@@ -131,6 +136,7 @@ async function scanSource(
   const scan: UsageScan = {
     homeRoot: home.homeRoot,
     env: home.env,
+    userRoot: home.userRoot,
     source,
     since,
     record: (event) => {

@@ -143,7 +143,7 @@ async function writeNativeStores(): Promise<void> {
   // A `cursor-agent --resume` continuation of an ACP session: the same agent
   // ID in a second store under chats/.
   const chats = await emitCursorSession(nativeStores, conversation("cursor-a"), { cwd: CWD, home })
-  const agent = (await rows(new CursorProvider(nativeStores, home, {}))).find((ref) => ref.path === chats.path)
+  const agent = (await rows(new CursorProvider(nativeStores, home))).find((ref) => ref.path === chats.path)
   assert.ok(agent, "the Cursor reader lists the emitted store")
   const acp = join(home, ".cursor", "acp-sessions", agent.nativeId, "store.db")
   mkdirSync(dirname(acp), { recursive: true })
@@ -158,7 +158,7 @@ async function readNative(): Promise<{ all: ThreadRef[]; named: Native }> {
   const claude = await rows(new ClaudeProvider(home))
   const codex = await rows(new CodexProvider(nativeStores, home))
   const grok = await rows(new GrokProvider(home))
-  const cursor = await rows(new CursorProvider(nativeStores, home, {}))
+  const cursor = await rows(new CursorProvider(nativeStores, home))
   const devin = await rows(new DevinCliProvider(nativeStores, home))
   const openCode = await rows(new OpenCodeProvider(nativeStores, home))
   const titled = (list: ThreadRef[], title: string) => {

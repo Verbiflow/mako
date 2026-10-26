@@ -5,7 +5,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { promisify } from "node:util"
 import { z } from "zod"
-import { keptOutputsPath, SAVED_HISTORY_READERS, SessionCatalog, type KeptRestore, type Thread } from "@mako/sessions"
+import { homePlace, SAVED_HISTORY_READERS, SessionCatalog, type KeptRestore, type Thread } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { RecordStore, recordWritersAt } from "@mako/sessions/record-store"
 import { createContinuationPlanner } from "@mako/host/conversations/continuation"
@@ -86,7 +86,7 @@ for (const name of chosen) {
   const note = (ok: boolean, what: string) => lines.push(`${name.padEnd(12)} ${ok ? "PASS" : "FAIL"} ${what}`)
   const word = `CHILD-${harness.toUpperCase()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`
   const reader = () => storeReader(harness, home)
-  const catalog = new SessionCatalog(SAVED_HISTORY_READERS.map((each) => each(stores, { home, kept: keptOutputsPath(home) })), {
+  const catalog = new SessionCatalog(SAVED_HISTORY_READERS.map((each) => each(stores, homePlace(home))), {
     recordsPath: records, recordsHome: home, cachePath: join(scratchRoot, `${name}-cache.json`),
     readBack: { readers: SAVED_HISTORY_READERS, stores },
   })

@@ -8,9 +8,8 @@ import { DatabaseSync } from "node:sqlite"
 import { fileURLToPath } from "node:url"
 import { SessionCatalog } from "../dist/catalog.js"
 import { ChildSidecars, toolIdsOf } from "../dist/child-sidecars.js"
-import { keptOutputsPath } from "../dist/kept-outputs.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
-import { SAVED_HISTORY_READERS } from "../dist/readers.js"
+import { homePlace, SAVED_HISTORY_READERS } from "../dist/readers.js"
 import { RecordStore } from "../dist/record-store.js"
 
 /**
@@ -93,7 +92,7 @@ for (const harness of HARNESSES) {
     const home = join(root, "home")
     const recordsPath = join(root, "records")
     const review = harness === "codex" ? await addCodexReview(home) : null
-    const place = { home, kept: keptOutputsPath(home) }
+    const place = homePlace(home)
     const providers = SAVED_HISTORY_READERS.map((reader) => reader(stores, place))
     const catalogOver = () => new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores, place)), { recordsPath, recordsHome: home, readBack: { readers: SAVED_HISTORY_READERS, stores } })
     const homeOf = new RegExp(`${home.replaceAll("/", "\\/")}|${join(recordsPath, "restored").replaceAll("/", "\\/")}\\/[^/]+\\/[0-9a-f]{32}`, "g")

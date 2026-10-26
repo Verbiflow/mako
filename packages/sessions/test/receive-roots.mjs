@@ -8,23 +8,25 @@ import { fileURLToPath } from "node:url"
 import { encodeChunkPack } from "@mako/protocol/records"
 import { SessionCatalog } from "../dist/catalog.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
+import { cursorSdkStateRoot } from "../dist/providers/cursor-sdk-paths.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 import { RecordStore } from "../dist/record-store.js"
 
 /**
  * A receive writes each session where the harness here keeps it (`SessionProvider.recordRoots`), not at the place
- * under this home its root had under the sender's. A Mac whose Cursor SDK root was moved inside its home
- * (`MAKO_CURSOR_SDK_ROOT`, as the moves proof's packaged app sets it) once restored onto a machine under
- * `.mako/thread-data/…/cursor`, which the machine's reader never looks at, and the move was refused with "the harness
- * doesn't list it".
+ * under this home its root had under the sender's. A Mac host isolated in a data root inside its home (the moves
+ * proof's, under `~/.mako/moves-e2e`) keeps its Cursor SDK agents in that root (`cursorSdkStateRoot`); a root kept so
+ * once restored onto a machine under `.mako/thread-data/…/cursor`, which the machine's reader never looks at, and the
+ * move was refused with "the harness doesn't list it". Coming back, an isolated host takes the agent into its own
+ * root, never the person's `~/.mako/cursor-sdk`.
  */
 const stores = new NativeStores(false)
 const fixture = join(dirname(fileURLToPath(import.meta.url)), "../../../scripts/fixtures/native-decoding/cursor/pairs/stopped-shell/home/.mako/cursor-sdk")
 const root = await mkdtemp(join(tmpdir(), "mako-receive-roots-"))
 const macHome = join(root, "mac-home")
-const macSdk = join(macHome, ".mako", "thread-data", "proof", "cursor")
-await cp(fixture, macSdk, { recursive: true })
-const source = new CursorProvider(stores, macHome, { MAKO_CURSOR_SDK_ROOT: macSdk })
+const macRoot = join(macHome, ".mako", "moves-e2e", "run-1", "host")
+await cp(fixture, cursorSdkStateRoot(macRoot), { recursive: true })
+const source = new CursorProvider(stores, macHome, macRoot)
 const [file] = await source.discover()
 const ref = await source.peek(file)
 const mac = new RecordStore(join(root, "mac-records"), stores)
@@ -56,16 +58,30 @@ const base = `http://127.0.0.1:${server.address().port}/v1/threads/t-1/records`
 // The machine's host names no SDK root: its reader keeps agents at <home>/.mako/cursor-sdk.
 const machineHome = join(root, "machine-home")
 await mkdir(machineHome, { recursive: true })
-const machine = new SessionCatalog([new CursorProvider(stores, machineHome, {})], { recordsPath: join(root, "machine-records"), recordsHome: machineHome, readBack: { readers: [], stores } })
+const machine = new SessionCatalog([new CursorProvider(stores, machineHome)], { recordsPath: join(root, "machine-records"), recordsHome: machineHome, readBack: { readers: [], stores } })
 try {
   const [received] = await machine.receiveRecords({ id: base, base, authorization: "Bearer test" }, [{ harness: "cursor", nativeId: ref.nativeId }], {})
   assert.equal(received.restored.kind, "restored", JSON.stringify(received.restored))
   assert.ok(received.restored.path.startsWith(join(machineHome, ".mako", "cursor-sdk", "agents")), received.restored.path)
-  assert.equal(existsSync(join(machineHome, ".mako", "thread-data")), false, "nothing written where the Mac kept its root")
-  const listed = new CursorProvider(stores, machineHome, {})
+  assert.equal(existsSync(join(machineHome, ".mako", "moves-e2e")), false, "nothing written where the Mac kept its root")
+  const listed = new CursorProvider(stores, machineHome)
   const [here] = await listed.discover()
   assert.equal((await listed.peek(here)).nativeId, ref.nativeId)
-  console.log("PASS: a receive writes a Cursor SDK agent into the SDK root the machine's reader keeps, wherever the sender kept its own")
+
+  // An isolated host receives into its own root: under its data root, outside its home, and nothing under the home's `.mako`.
+  const isolatedHome = join(root, "isolated-home")
+  const isolatedRoot = join(root, "isolated-data")
+  await mkdir(isolatedHome, { recursive: true })
+  const isolated = new SessionCatalog([new CursorProvider(stores, isolatedHome, isolatedRoot)], { recordsPath: join(isolatedRoot, "records"), recordsHome: isolatedHome, readBack: { readers: [], stores } })
+  try {
+    const [back] = await isolated.receiveRecords({ id: base, base, authorization: "Bearer test" }, [{ harness: "cursor", nativeId: ref.nativeId }], {})
+    assert.equal(back.restored.kind, "restored", JSON.stringify(back.restored))
+    assert.ok(back.restored.path.startsWith(join(cursorSdkStateRoot(isolatedRoot), "agents")), back.restored.path)
+    assert.equal(existsSync(join(isolatedHome, ".mako")), false, "nothing written in the isolated host's home")
+  } finally {
+    await isolated.stop()
+  }
+  console.log("PASS: a receive writes a Cursor SDK agent into the SDK root the receiving host's reader keeps (a machine's ~/.mako, an isolated host's data root), wherever the sender kept its own")
 } finally {
   await machine.stop()
   await mac.close()

@@ -131,7 +131,7 @@ try {
     assert.deepEqual(listed.map((entry) => entry.id), ["older", "later", "failed", "check", "draft"])
     assert.equal(listed.find((entry) => entry.id === "draft")?.estimate?.table, CURRENT_PRICE_TABLE.id, "priced from the table current when it was written")
     assert.equal(listed.find((entry) => entry.id === "failed")?.estimate, undefined, "a run with no tokens reported has no price")
-    const summary = await usageSummary([], join(root, "sessions"), join(root, "home"), undefined, { helperRuns: join(root, "usage", "helper-runs"), env: {} })
+    const summary = await usageSummary([], join(root, "mako"), join(root, "home"), undefined, { helperRuns: join(root, "usage", "helper-runs"), env: {} })
     assert.deepEqual(summary.sources?.map((source) => source.source).sort(), ["Mako: Commit messages", "Mako: Model connection checks"])
     assert.equal(summary.sessions, 0, "helper runs are no sessions")
     assert.equal(summary.total.messages, 4, "a run with no tokens adds no event")

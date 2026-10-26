@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { MessageChannel } from "node:worker_threads"
-import { connectDaemonPort, keptOutputsPath, SAVED_HISTORY_READERS, serveCatalogOnPort, SessionCatalog, type KeptRestore, type ThreadRef } from "@mako/sessions"
+import { connectDaemonPort, homePlace, SAVED_HISTORY_READERS, serveCatalogOnPort, SessionCatalog, type KeptRestore, type ThreadRef } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { createContinuationPlanner } from "@mako/host/conversations/continuation"
 import { restorePlan, restoringResume, type InstalledRuntime } from "@mako/host/conversations/kept-resume"
@@ -65,7 +65,7 @@ try {
 
   // The catalog worker's catalog over that home: every reader Mako ships, read where the fixture is.
   const stores = new NativeStores(false)
-  const place = { home, kept: keptOutputsPath(home) }
+  const place = homePlace(home)
   const catalog = new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores, place)), {
     recordsPath: join(root, "records"), recordsHome: home, cachePath: join(root, "cache.json"),
     readBack: { readers: SAVED_HISTORY_READERS, stores },

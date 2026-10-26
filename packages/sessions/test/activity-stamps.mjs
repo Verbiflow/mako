@@ -214,7 +214,7 @@ try {
     const insert = database.prepare("INSERT INTO blobs VALUES (?, ?)")
     insert.run("binary", Buffer.concat([Buffer.alloc(120_000, 65), varint(now - 60_000), Buffer.from([0, 128])]))
     insert.run("future", Buffer.concat([Buffer.from([8]), varint(now + 86_400_000)]))
-    const cursor = new CursorProvider(nativeStores, home, {})
+    const cursor = new CursorProvider(nativeStores, home)
     const file = await cursor.stat(cursorPath)
     assert.equal((await cursor.peek(file)).updatedAt, iso(-60_000))
     insert.run("json", Buffer.from(JSON.stringify({ timestamp: now - 30_000 })))

@@ -13,7 +13,7 @@ import { join } from "node:path"
 async function decode(job: AsideJob): Promise<AsideReply> {
   const reader = SAVED_HISTORY_READERS[job.reader]
   if (!reader) return { ok: false, error: `no reader ${job.reader}` }
-  const provider = reader(new NativeStores(job.strict))
+  const provider = reader(new NativeStores(job.strict), job.place)
   try {
     const started = performance.now()
     const thread = await provider.read(job.path)

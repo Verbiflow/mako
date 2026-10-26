@@ -56,7 +56,7 @@ try {
   run.run("run-1", id, 1, "FINISHED", null, checkpoint("root-1"), null)
   run.run("run-2", id, 2, "RUNNING", checkpoint("root-1"), checkpoint("root-2"), null)
 
-  const provider = new CursorProvider(nativeStores, home, {})
+  const provider = new CursorProvider(nativeStores, home)
   const follower = provider.createFollower(path, 0)
   const running = await follower.next()
   assert.equal(running.entries.some((entry) => entry.type === "event"), false, "a running turn has no stop marker")
@@ -73,7 +73,7 @@ try {
   run.run("run-4", id, 4, "CANCELLED", checkpoint("root-3"), checkpoint("root-3"), "2026-09-25T00:00:08.000Z")
   run.run("run-5", id, 5, "CANCELLED", checkpoint("root-3"), checkpoint("rewritten"), "2026-09-25T00:00:09.000Z")
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint("root-3"), id)
-  const thread = await new CursorProvider(nativeStores, home, {}).read(path)
+  const thread = await new CursorProvider(nativeStores, home).read(path)
   const shape = thread.entries.map((entry) => entry.type === "tool"
     ? `${entry.id}${entry.status === "canceled" ? ":canceled" : ""}`
     : entry.type === "user" ? `user:${entry.text}` : entry.type === "event" ? `event:${entry.label}` : entry.type)
@@ -84,7 +84,7 @@ try {
   // An index from before runs recorded checkpoints still reads, without stops.
   index.exec("DROP TABLE runs; CREATE TABLE runs (run_id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, turn_number INTEGER NOT NULL, status TEXT NOT NULL, model TEXT, model_params_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);")
   index.close()
-  const legacy = await new CursorProvider(nativeStores, home, {}).read(path)
+  const legacy = await new CursorProvider(nativeStores, home).read(path)
   assert.equal(legacy.entries.length, 8)
   assert.equal(legacy.entries.some((entry) => entry.type === "event"), false)
   console.log("Cursor stops: a CANCELLED run is marked where its checkpoint ended, live and in history, and nowhere else, citing the run")

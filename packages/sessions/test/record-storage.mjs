@@ -285,7 +285,7 @@ try {
     db.prepare("INSERT INTO meta VALUES ('0', ?)").run(JSON.stringify({ agentId: id, latestRootBlobId: "latest" }))
     db.close()
     await writeFile(join(folder, "meta.json"), JSON.stringify({ cwd: home, updatedAtMs: 1_000 }))
-    const after = await shown(new CursorProvider(nativeStores, home, {}), path)
+    const after = await shown(new CursorProvider(nativeStores, home), path)
     assert.ok(after.includes("Kept prompt") && after.includes("After the edit"))
     assert.ok(!after.includes("Abandoned"), "an earlier root's turns are an earlier state, not the conversation")
     console.log("PASS: Cursor reads the root its meta names")

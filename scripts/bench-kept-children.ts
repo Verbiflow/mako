@@ -6,10 +6,9 @@ import { parseArgs } from "node:util"
 import type { ChildTranscript } from "../packages/sessions/src/children.ts"
 import type { ThreadRef } from "../packages/sessions/src/format.ts"
 import type { SessionRecords } from "../packages/sessions/src/harness-records.ts"
-import { keptOutputsPath } from "../packages/sessions/src/kept-outputs.ts"
 import type { SessionProvider } from "../packages/sessions/src/providers/types.ts"
 import { NativeStores } from "../packages/sessions/src/read-only-sqlite.ts"
-import { SAVED_HISTORY_READERS } from "../packages/sessions/src/readers.ts"
+import { homePlace, SAVED_HISTORY_READERS } from "../packages/sessions/src/readers.ts"
 import { SessionCatalog } from "../packages/sessions/src/catalog.ts"
 import { RecordStore } from "../packages/sessions/src/record-store.ts"
 
@@ -116,7 +115,7 @@ const benchHome = join(scratch, "home")
 for (const parent of parents) await withStore.restore({ harness: parent.ref.harness, nativeId: parent.ref.nativeId, home: benchHome, stores: writable })
 await withStore.close()
 await withoutStore.close()
-const place = { home: benchHome, kept: keptOutputsPath(benchHome) }
+const place = homePlace(benchHome)
 const catalogOver = () => new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(writable, place)), { recordsPath: join(scratch, "kept"), recordsHome: benchHome, readBack: { readers: SAVED_HISTORY_READERS, stores: writable } })
 const live = catalogOver()
 await live.scan()

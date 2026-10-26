@@ -74,6 +74,8 @@ export interface UsageScan {
   homeRoot: string
   /** The environment Mako launches harnesses with: a store moved by the harness's own variable is read where it moved. */
   env: NodeJS.ProcessEnv
+  /** Mako's own folder for the user (`HostEnvironment.userRoot`), where Mako places a harness's store: Cursor's SDK agents. An isolated host's is its data root. */
+  userRoot: string
   /** The harness's name as the usage table shows it; keys start with it. */
   source: string
   /** Epoch ms of the summary's first day: older records are not read. */

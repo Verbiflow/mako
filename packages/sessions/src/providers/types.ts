@@ -192,7 +192,7 @@ export interface SessionProvider {
    * captured in another home writes into (`RestoreInput.roots`). Without it a
    * root goes to the place under this home it had under the source's, which
    * is where this reader looks only while neither side moved the root
-   * (`MAKO_CURSOR_SDK_ROOT`, `CODEX_HOME`, an editor's per-platform folder).
+   * (an isolated host's Cursor SDK root, `CODEX_HOME`, an editor's per-platform folder).
    */
   recordRoots?(): RecordRoot[]
 

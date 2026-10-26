@@ -325,7 +325,7 @@ try {
   const composer = "12345678-1234-1234-1234-123456789abc"
   const header = { composerId: composer, name: "Architecture review", createdAt: 1700000000000, lastUpdatedAt: 1700000001000, workspaceIdentifier: { uri: { fsPath: home } } }
   cursorDb.prepare("INSERT INTO composerHeaders (composerId, lastUpdatedAt, isArchived, isSubagent, checkpointAt, value) VALUES (?, ?, 0, 0, 1, ?)").run(composer, header.lastUpdatedAt, JSON.stringify(header))
-  const cursor = new CursorProvider(nativeStores, home, {})
+  const cursor = new CursorProvider(nativeStores, home)
   const [desk] = await cursor.discover()
   assert.equal((await cursor.peek(desk)).nativeArchived, undefined)
   cursorDb.exec("UPDATE composerHeaders SET isArchived = 1")

@@ -62,6 +62,7 @@ import { readReleaseTimelines } from "./record-releases.js"
 import { EVIDENCE_RULES, type WriterEvidence } from "./record-writers.js"
 import { RecordCapture } from "./record-capture.js"
 import { RecordReads, RESTORED, type ReadBack, type RestoredSession } from "./record-reads.js"
+import type { ReaderPlace } from "./readers.js"
 import { RecordStore, type RestoreInput } from "./record-store.js"
 import type { RecordRoot } from "./harness-records.js"
 import { ReadingCopies, ReceivedCopies, type CopyPage, type CopyScope } from "./reading-copies.js"
@@ -380,6 +381,8 @@ export class SessionCatalog {
   private viewsPath: string | null = null
   /** Whether the harness stores are read strictly (`NativeStores.strict`), as a decode aside reads them too; strictly when no `readBack` says. */
   private readonly strictStores: boolean
+  /** Where the providers were made to read (`ReadBack.place`), so a decode aside makes its reader there too. */
+  private readonly readerPlace: ReaderPlace | undefined
   /** Decodes of large records, each in a child process that writes its view. */
   private aside: DecodeAside | null = null
   /** Sessions decoded too fast to keep on disk, or decoded by a catalog that writes nothing. */
@@ -467,6 +470,7 @@ export class SessionCatalog {
     this.cachePath = options.cachePath
     this.readOnly = options.readOnly ?? false
     this.strictStores = options.readBack?.stores.strict ?? true
+    this.readerPlace = options.readBack?.place
     this.translator = options.translator
     if (options.archivePath)
       this.archive = new SessionArchive(options.archivePath, { readOnly: this.readOnly })
@@ -500,7 +504,7 @@ export class SessionCatalog {
       const store = new RecordStore(folder, new NativeStores(true, join(folder, RESTORED)), { writer: this.writer })
       if (readBack) {
         this.recordStore = store
-        this.recordReads = new RecordReads(store, join(folder, RESTORED), readBack.readers, readBack.stores, home ?? homedir(), readBack.kept)
+        this.recordReads = new RecordReads(store, join(folder, RESTORED), readBack.readers, readBack.stores, home ?? homedir(), readBack.place?.kept)
       }
       if (store.access === "read") {
         // A newer Mako's format this build may read: it lists and restores what the store holds, and writes nothing to it.
@@ -1152,7 +1156,7 @@ export class SessionCatalog {
   private async decodedAside(provider: SessionProvider, path: string, stamp: NativeFile): Promise<{ view: SessionView } | null | undefined> {
     const reader = this.providers.indexOf(provider)
     if (!this.aside || !this.views || !this.viewsPath || this.readOnly || reader < 0 || !(await this.decodesLarge(provider, path, stamp))) return undefined
-    const job: AsideJob = { reader, path, stamp: { bytes: stamp.bytes, mtimeMs: stamp.mtimeMs }, viewsPath: this.viewsPath, translator: this.translator ??= translatorBuild(), strict: this.strictStores }
+    const job: AsideJob = { reader, path, stamp: { bytes: stamp.bytes, mtimeMs: stamp.mtimeMs }, viewsPath: this.viewsPath, translator: this.translator ??= translatorBuild(), strict: this.strictStores, ...this.readerPlace && { place: this.readerPlace } }
     if (stamp.revision !== undefined) job.stamp.revision = stamp.revision
     const decoded = await this.aside.decode(job)
     if (!decoded.ok) {
