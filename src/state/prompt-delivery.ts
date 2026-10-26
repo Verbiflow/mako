@@ -139,28 +139,39 @@ export function autoContinuePending(requests: readonly LiveRequest[] | undefined
 /** The footer's words for a turn Mako is about to pick up itself. */
 export const AUTO_CONTINUE_NOTE = "continuing automatically"
 
+/** Each reason's word, given the provider's display name. */
+const TURN_STOP_LABELS = {
+  stopped: () => "Stopped",
+  "host-quit": () => "Interrupted when Mako quit",
+  "host-crashed": () => "Interrupted when Mako closed unexpectedly",
+  "connection-lost": (provider) => `The connection to ${provider} dropped`,
+  "provider-exited": (provider) => `${provider} stopped unexpectedly`,
+  "signed-out": (provider) => `${provider} signed out`,
+  "handed-off": () => "Paused to move to the cloud",
+  "not-saved": () => "Stopped when Mako couldn't save",
+} satisfies Record<InterruptionReason, (provider: string) => string>
+
 /**
  * The footer's word for why a turn ended early. `provider` is the display
  * name of the harness that ran it; a dropped connection is that provider's
- * connection, and the label says so.
+ * connection, and the label says so. A reason this build doesn't know (a
+ * newer host's, relayed from the cloud) reads as an interruption.
  */
 export function turnStopLabel(reason: InterruptionReason, provider: string): string {
-  switch (reason) {
-    case "stopped":
-      return "Stopped"
-    case "host-quit":
-      return "Interrupted when Mako quit"
-    case "host-crashed":
-      return "Interrupted when Mako closed unexpectedly"
-    case "connection-lost":
-      return `The connection to ${provider} dropped`
-    case "provider-exited":
-      return `${provider} stopped unexpectedly`
-    case "signed-out":
-      return `${provider} signed out`
-    case "handed-off":
-      return "Paused to move to the cloud"
-  }
+  return Object.hasOwn(TURN_STOP_LABELS, reason) ? TURN_STOP_LABELS[reason](provider) : "Interrupted"
+}
+
+/**
+ * Whether a request's turn ends on a failure row (`FailureRow`): a message
+ * that failed, one whose outcome is unconfirmed with no stopped turn to say
+ * so, or a turn Mako stopped because it couldn't save the conversation, which
+ * says what happened, that the work stands and what to do. Every other turn
+ * cut short says so in its footer (`turnStops`).
+ */
+export function endsOnFailureRow(request: Pick<LiveRequest, "status" | "interruption">): boolean {
+  return request.status === "failed" ||
+    (request.status === "uncertain" && !request.interruption) ||
+    (request.status === "interrupted" && request.interruption?.reason === "not-saved")
 }
 
 /** A command or task, as the harness listed it, short enough for a footer. */
@@ -225,11 +236,12 @@ function transcribedRequests(input: Pick<DeliveryInput, "blocks" | "history">): 
 export function recoverableRequests(input: Pick<DeliveryInput, "blocks" | "history" | "requests">): LiveRequest[] {
   const visible = transcribedRequests(input)
   // A turn the transcript shows carries its own stopped marker (`turnStops`);
-  // only a stopped or unconfirmed message with no turn on screen needs a panel.
+  // only a stopped or unconfirmed message with no turn on screen needs a panel,
+  // and a turn Mako couldn't save its failure row.
   return (input.requests ?? []).filter(
     (request) =>
-      request.status === "failed" ||
-      (request.status === "uncertain" && !(request.interruption && visible.has(request.id))) ||
+      endsOnFailureRow(request) ||
+      (request.status === "uncertain" && !visible.has(request.id)) ||
       (request.status === "interrupted" && !visible.has(request.id))
   )
 }
@@ -252,7 +264,7 @@ export function recoveriesByPlace(input: Pick<DeliveryInput, "blocks" | "history
   for (const request of recoverableRequests(input)) {
     if (!visible.has(request.id)) {
       if (recent.has(request.id)) apart.push(request)
-    } else if (request.status === "failed" || (request.status === "uncertain" && !request.interruption)) onTurns.set(request.id, request)
+    } else if (endsOnFailureRow(request)) onTurns.set(request.id, request)
   }
   return { onTurns, apart }
 }

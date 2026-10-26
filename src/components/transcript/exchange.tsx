@@ -14,11 +14,12 @@ import { acpStore } from "@/state/acp-state"
 import { PlanSummary } from "./tool-details"
 import { ReviewFindings, ReviewRequest } from "./review-card"
 import { TranscriptAttachments } from "./attachment-collection"
-import { memo, useMemo, useState, type ReactNode } from "react"
+import { memo, useContext, useMemo, useState, type ReactNode } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { ToolRow } from "@/components/transcript/tool-row"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { ExchangeFailure, TurnError } from "@/components/transcript/failure-row"
+import { FailedRequestsContext } from "@/components/transcript/failed-requests"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { AgentGroup } from "./agent-group"
 import { groupAgentCalls } from "@/lib/agent-groups"
@@ -125,6 +126,7 @@ export const Exchange = memo(function Exchange({
     [sentByMako, exchange.prompt]
   )
   const mako = sentByMako ?? savedByMako
+  const failureRow = useContext(FailedRequestsContext).has(exchange.prompt?.requestId ?? "")
   const stopShown = Boolean(interrupted) && !streaming
   const notes = useMemo(
     () => (stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system),
@@ -264,7 +266,8 @@ export const Exchange = memo(function Exchange({
         {streaming ? null : <TurnChanges requestId={exchange.prompt?.requestId} />}
         <ExchangeFailure requestId={exchange.prompt?.requestId} />
         {exchange.response.length > 0 || interrupted ? (
-          <Footer exchange={exchange} streaming={streaming} interrupted={interrupted} />
+          // A turn that ends on its failure row says there why it stopped, and what to do; the footer doesn't repeat it.
+          <Footer exchange={exchange} streaming={streaming} interrupted={failureRow ? undefined : interrupted} />
         ) : null}
       </article>
       </AnswerRequestContext.Provider>
@@ -310,6 +313,8 @@ function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): 
       return `${who} after Mako closed`
     case "handed-off":
       return sender === "mako" ? "Mako continued the turn it paused to move" : sender === "person" ? "You continued the turn Mako paused to move" : "The turn Mako paused to move continued"
+    case "not-saved":
+      return sender === "mako" ? "Mako continued the turn it stopped when it couldn't save" : sender === "person" ? "You continued the turn Mako stopped when it couldn't save" : "The turn Mako stopped when it couldn't save continued"
   }
 }
 

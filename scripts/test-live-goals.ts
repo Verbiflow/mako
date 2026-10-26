@@ -10,7 +10,9 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { mock } from "node:test"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
+import { JournalWriteError, LiveJournal } from "@mako/host/conversations/live-journal"
 import { goalContinuePrompt, goalStartPrompt, goalTokens, observeGoal, readGoalReport, readTokenCount, type ConversationGoal, type GoalObservation, type StartGoal } from "@mako/host/contracts/live-goals"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
@@ -190,6 +192,34 @@ async function stopPausesMakosLoop() {
     await waitFor(() => host.sent.length === 2, "resuming an idle goal did not continue it")
     assert.equal(host.sent[1], goalContinuePrompt(OBJECTIVE))
   } finally {
+    host.cleanup()
+  }
+}
+
+/** A turn Mako stops because it can't save the conversation pauses the goal, as a Stop does, and says why. */
+async function anUnsavedTurnPausesTheGoal() {
+  const host = goalHost(MAKO, () => ({ text: "Still working", hold: true }))
+  const commit = LiveJournal.prototype.commit
+  let full = false
+  const disk = mock.method(LiveJournal.prototype, "commit", function (this: LiveJournal, ...args: Parameters<LiveJournal["commit"]>) {
+    if (full) throw new JournalWriteError(new Error("database or disk is full"))
+    return commit.apply(this, args)
+  })
+  try {
+    await host.start()
+    await host.owner.goal(host.id, { kind: "set", objective: OBJECTIVE })
+    await waitFor(() => host.owner.snapshot(host.id)?.session.status === "running", "the goal's first turn never ran")
+    full = true
+    host.owner.observe({ type: "live-update", id: host.id, update: { kind: "text", id: "more", text: "More work" } })
+    await waitFor(() => host.order.includes("cancel"), "the unsaved turn was not stopped")
+    full = false
+    await waitFor(() => host.goal()?.status === "paused", "the unsaved turn did not pause the goal")
+    assert.equal(host.goal()?.note, "Mako couldn't save the conversation, so it stopped the last turn.")
+    assert.equal(host.requests()[0]?.interruption?.reason, "not-saved")
+    await settle()
+    assert.equal(host.sent.length, 1, "nothing continues the goal on its own")
+  } finally {
+    disk.mock.restore()
     host.cleanup()
   }
 }
@@ -560,6 +590,7 @@ await claudeTranscript()
 await makosLoopRunsToCompletion()
 await makosLoopStopsWhenBlockedOrQuiet()
 await stopPausesMakosLoop()
+await anUnsavedTurnPausesTheGoal()
 await aUserMessageGoesFirst()
 await aHarnessGoalByMessages()
 await stopPausesAHarnessGoalAfterTheTurn()

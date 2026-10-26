@@ -374,7 +374,7 @@ assert.match(text(pressed), /You continued the turn after Mako closed \d{1,2}:40
 assert.doesNotMatch(pressed, /Copy question/, "not drawn as the person's bubble")
 
 // Who sent a continuation is in its words, so a saved one says who, as live does; one saved before the words said so claims no one.
-for (const reason of ["connection-lost", "provider-exited", "signed-out", "host-quit"] as const)
+for (const reason of ["connection-lost", "provider-exited", "signed-out", "host-quit", "not-saved"] as const)
   for (const sender of ["mako", "person"] as const)
     assert.deepEqual(savedContinuation(continueTurnPrompt(reason, sender)), { reason, sender }, `${reason} by ${sender} reads back`)
 assert.deepEqual(savedMakoPrompt(`  ${continueTurnPrompt("signed-out", "mako")}\n`), { kind: "continued", reason: "signed-out", sender: "mako" })
@@ -414,6 +414,8 @@ assert.match(text(draw(sentLive)), /You continued the turn after the connection 
 const yours = draw([prompted("s", "Refactor the store")], { stops: { s: { reason: "stopped", continuable: false, automatic: false } } })
 assert.match(yours, /data-turn-stopped="stopped"[^>]*>[^]*?lucide-circle-stop/)
 assert.doesNotMatch(yours, /text-caution/, "your own Stop is not an alarm")
+// The person's Continue on a turn Mako stopped unsaved says so, in the words it sent.
+assert.match(text(draw([prompted("n", continueTurnPrompt("not-saved", "person"))])), /You continued the turn Mako stopped when it couldn't save/)
 const quit = draw([prompted("q", "Refactor the store")], { stops: { q: { reason: "host-quit", continuable: true, automatic: false } } })
 assert.match(quit, /data-turn-stopped="host-quit"[^>]*>[^]*?lucide-triangle-alert[^"]*text-caution/)
 assert.match(quit, /Continue turn/)

@@ -174,6 +174,8 @@ function cause(reason: Interruption["reason"]): string {
       return "the user stopped it"
     case "handed-off":
       return "Mako paused it to move this conversation to another machine"
+    case "not-saved":
+      return "Mako couldn't save the conversation, so it stopped you"
   }
 }
 
@@ -202,7 +204,8 @@ export function pendingInterruption(
 
 function interruptionAccount(request: LiveRequest, interruption: Interruption, now: number): string {
   const calls = interruption.calls ?? []
-  const why = request.error?.replace(/[.\s]+$/, "") || cause(interruption.reason)
+  // A turn Mako stopped unsaved keeps Mako's storage error, which tells the agent nothing it can use.
+  const why = (interruption.reason !== "not-saved" && request.error?.replace(/[.\s]+$/, "")) || cause(interruption.reason)
   const lines = [
     `Your previous turn was cut short at ${moment(interruption.at, now)}: ${why}. Work you did before then is in place.`,
   ]

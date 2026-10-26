@@ -6,6 +6,7 @@ import { holdUntil } from "@/state/acp-queue"
 import { failureKey, revealFailure, useFailureVisibility } from "@/state/failure-visibility"
 import { useLimitReset } from "@/state/limit-reset"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
+import { endsOnFailureRow } from "@/state/prompt-delivery"
 import { requestRecovery } from "@/state/request-recovery"
 import { shallowEqual } from "@/state/store"
 
@@ -22,13 +23,13 @@ const NONE: never[] = []
 export function useFailureNotice(): ComposerNotice | null {
   useHarnessIdentity()
   // Read from the requests alone, so a streamed token doesn't run it: the newest message since the last answer
-  // that failed, or whose delivery is unconfirmed with no stopped turn to say so.
+  // whose turn ends on a failure row (`endsOnFailureRow`).
   const live = useAcp((state) => {
     const current = activeLiveAcp(state)
     if (!current) return null
     const requests = current.requests ?? NONE
     const answered = requests.findLastIndex((request) => request.status === "completed")
-    const latest = requests.slice(answered + 1).findLast((request) => request.status === "failed" || (request.status === "uncertain" && !request.interruption))
+    const latest = requests.slice(answered + 1).findLast(endsOnFailureRow)
     const waiting = latest !== undefined && requests.some((request) => request.status === "held" && request.wake?.after === latest.id)
     return { key: current.key, harness: current.harness, latest, waiting }
   }, shallowEqual)

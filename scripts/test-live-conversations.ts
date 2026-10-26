@@ -2,15 +2,14 @@ import type { SessionSettings } from "@mako/sessions/settings"
 import { Git } from "@mako/git"
 import assert from "node:assert/strict"
 import { mock } from "node:test"
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { randomUUID } from "node:crypto"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
-import { LiveJournal } from "@mako/host/conversations/live-journal"
-import { LiveAssets } from "@mako/host/conversations/live-assets"
+import { JournalWriteError, LiveJournal } from "@mako/host/conversations/live-journal"
 import { followHostLog, type HostLogLine } from "@mako/host/base/host-log"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
@@ -61,6 +60,8 @@ function deferred<Value>() {
 }
 
 function fixture(options: { autoContinueDelayMs?: number } = {}) {
+  /** A conversation Mako couldn't save is tried again this soon (`SAVE_AGAIN_MS`). */
+  const saveAgainMs = 20
   const root = mkdtempSync(join(tmpdir(), "mako-live-test-"))
   const id = randomUUID()
   const state: LiveSessionState = {
@@ -112,6 +113,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
     history: async () => null,
     emit: (event: HostEvent) => events.push(event),
     autoContinueDelayMs: options.autoContinueDelayMs,
+    saveAgainMs,
   }
   const owner = new LiveConversations(dependencies)
   return {
@@ -1453,22 +1455,192 @@ async function makoStopsAreSaid() {
     assert.match(source?.kind === "unavailable" ? source.reason : "", /tide-report\.png could not be read \(ENOENT\)/)
     assert.equal(said.length, 0, "nothing was stopped")
 
-    // A conversation Mako can't save does stop the turn, and says so.
-    const fault = mock.method(LiveAssets.prototype, "prepare", () => { throw new Error("disk unavailable") })
-    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool", id: "read-1", title: "Read notes.md", status: "completed", output: "notes" } })
-    fault.mock.restore()
-    await waitFor(() => f.cancels() === 1, "the unsaved conversation's turn was not stopped")
-    assert.deepEqual(said.map((line) => [line.level, line.fields?.why, line.fields?.request, line.fields?.error]), [["warn", "not-saved", request, "disk unavailable"]])
-
     // The person's Stop is said as theirs.
     await f.owner.cancel(f.id)
-    assert.equal(f.cancels(), 2)
-    assert.deepEqual(said.slice(1).map((line) => [line.level, line.fields?.why, line.fields?.provider, line.fields?.request]), [["info", "person", "test-provider", request]])
+    assert.equal(f.cancels(), 1)
+    assert.deepEqual(said.map((line) => [line.level, line.fields?.why, line.fields?.provider, line.fields?.request]), [["info", "person", "test-provider", request]])
   } finally {
     stopHearing()
     f.cleanup()
   }
   console.log("PASS: Mako stops a turn only for a reason its log names; a file the agent named that can't be read is an unavailable attachment, not a stop")
+}
+
+/** SQLite's own error for a full disk, as node:sqlite reports it. */
+function diskFull(): Error {
+  return Object.assign(new Error("database or disk is full"), { code: "ERR_SQLITE_ERROR", errcode: 13, errstr: "database or disk is full" })
+}
+
+/** A full disk under every journal while `full` is set: each commit fails as LiveJournal reports SQLite's refusal. */
+function fillDisk() {
+  const commit = LiveJournal.prototype.commit
+  const disk = { full: true, restore: () => fault.mock.restore() }
+  const fault = mock.method(LiveJournal.prototype, "commit", function (this: LiveJournal, ...args: Parameters<LiveJournal["commit"]>) {
+    if (disk.full) throw new JournalWriteError(diskFull())
+    return commit.apply(this, args)
+  })
+  return disk
+}
+
+/**
+ * A journal that can't be written is the one save failure that stops a turn, and the turn says it was Mako's:
+ * `not-saved`, with what failed, live once Mako can write again and reopened, never the person's "Stopped". A Stop the
+ * person presses after doesn't make it theirs. On disk the reason is one every build reads (`stopped`) with the exact
+ * one beside it, so a build before this one, which refuses a journal with a reason it doesn't know, still opens it.
+ */
+async function unsavedTurnIsMakos() {
+  const f = fixture()
+  const said: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => { if (line.message === "Mako stops the provider's turn") said.push(line) })
+  let disk: ReturnType<typeof fillDisk> | undefined
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    const request = randomUUID()
+    f.owner.submit(f.id, request, "make the page")
+    await waitFor(() => f.sent.length === 1, "the prompt was not sent")
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", id: "a1", text: "Writing the page" } })
+    await waitFor(() => f.events.some((event) => event.type === "live-batch" && event.batch.updates.some((update) => update.kind === "text")), "the answer was not saved")
+    disk = fillDisk()
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", id: "a1", text: " and its styles" } })
+    await waitFor(() => f.cancels() === 1, "the unsaved conversation's turn was not stopped")
+    assert.deepEqual(said.map((line) => [line.level, line.fields?.why, line.fields?.request, line.fields?.error]), [["warn", "not-saved", request, "database or disk is full"]])
+    const notice = f.events.find((event) => event.type === "notice")
+    assert.match(notice?.type === "notice" ? notice.message : "", /^Mako couldn't save this conversation, so it stopped the agent's turn\. .*database or disk is full$/)
+    // The person presses Stop too, which can't be saved yet either; the provider reports the end while the disk is full.
+    await assert.rejects(f.owner.cancel(f.id), /database or disk is full/)
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready", lastStop: "cancelled" } })
+    await new Promise((resolve) => setTimeout(resolve, 40))
+    const told = () => f.events.flatMap((event) => event.type === "live-batch" ? [...event.batch.requests ?? [], ...event.batch.requestChanges ?? []] : []).findLast((each) => each.id === request)
+    assert.equal(told()?.status, "dispatching", "nothing unsaved reaches a window")
+    // Space comes back, and nothing else happens: Mako saves it on its own and every window is told.
+    disk.full = false
+    await waitFor(() => told()?.status === "interrupted", "the stopped turn was not saved once space came back")
+    assert.equal(told()?.interruption?.reason, "not-saved", "the turn is Mako's, not the person's Stop")
+    assert.equal(told()?.error, "database or disk is full", "the turn keeps what failed")
+
+    // A Stop the person presses once Mako can save again, before the provider reports the end, doesn't make it theirs.
+    const second = randomUUID()
+    f.owner.submit(f.id, second, "now the footer")
+    await waitFor(() => f.sent.length === 2, "the second prompt was not sent")
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+    disk.full = true
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", id: "a2", text: "Adding the footer" } })
+    await waitFor(() => f.cancels() === 2, "the second unsaved turn was not stopped")
+    disk.full = false
+    await f.owner.cancel(f.id)
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "ready", lastStop: "cancelled" } })
+    assert.equal(f.owner.snapshot(f.id)?.requests.find((each) => each.id === second)?.interruption?.reason, "not-saved")
+
+    // On disk, older builds read it as the Stop every build before this one recorded; this build reads it exactly.
+    const db = new DatabaseSync(join(f.root, `${f.id}.sqlite`), { readOnly: true })
+    const row = JSON.parse(z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM requests WHERE id=?").get(request)).value)
+    db.close()
+    assert.deepEqual([row.interruption.reason, row.interruption.exactReason], ["stopped", "not-saved"])
+    assert.equal(OlderRequestSchema.parse(row).interruption?.reason, "stopped", "a build before not-saved opens the journal")
+    await f.owner.stop()
+    const reopened = new LiveConversations(f.dependencies)
+    try {
+      const saved = reopened.snapshot(f.id)?.requests.find((each) => each.id === request)
+      assert.equal(saved?.interruption?.reason, "not-saved", "reopened, the turn still says Mako stopped it")
+      assert.equal(saved?.error, "database or disk is full")
+    } finally {
+      await reopened.stop()
+    }
+  } finally {
+    disk?.restore()
+    stopHearing()
+    f.cleanup()
+  }
+  console.log("PASS: a journal Mako can't write stops the turn as Mako's (not-saved), live and reopened, and older builds still open it")
+}
+
+/**
+ * How a build before `not-saved` reads a request: `reason` against the seven reasons it knew, the whole journal refused
+ * for any other (measured on main a8314eb8: `journal.read` threw a ZodError and the conversation wouldn't open).
+ */
+const OLDER_REASONS = ["stopped", "host-quit", "host-crashed", "connection-lost", "provider-exited", "signed-out", "handed-off"] as const
+const OlderRequestSchema = z.object({
+  interruption: z.object({ reason: z.enum(OLDER_REASONS), at: z.number() }).optional(),
+  continues: z.object({ requestId: z.string(), reason: z.enum(OLDER_REASONS), auto: z.boolean() }).optional(),
+})
+
+/**
+ * Only a journal write is a save that stops a turn. Mako's copy of a long output it can't write keeps the output as
+ * the agent gave it, which the journal saves; an event Mako can't read is said in the host log and left out. Neither
+ * stops the turn, and the turn's next words are saved.
+ */
+async function otherFailuresDontStop() {
+  const f = fixture()
+  const warned: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => { if (line.level === "warn" && line.scope === "live") warned.push(line) })
+  const assets = join(f.root, "assets")
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.submit(f.id, randomUUID(), "read the log")
+    await waitFor(() => f.sent.length === 1, "the prompt was not sent")
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+
+    // Mako's store can't be written: a long output stays whole in the update.
+    mkdirSync(assets, { recursive: true })
+    chmodSync(assets, 0o500)
+    const long = "line of the build log\n".repeat(4_000)
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool", id: "log-1", title: "Read build.log", status: "completed", output: long } })
+    chmodSync(assets, 0o700)
+    // A roster entry no schema reads: the decoder's fault, not a save.
+    // SAFETY: deliberately malformed, as a decoder bug would send it; the host must parse and refuse it.
+    f.owner.observe({ type: "live-agent", id: f.id, agent: { nativeId: 7 } as never })
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", id: "a1", text: "The build failed on a missing import." } })
+    await tick()
+    assert.equal(f.cancels(), 0, "neither failure stops the turn")
+    assert.ok(!f.events.some((event) => event.type === "notice"), "nothing says the conversation wasn't saved")
+    assert.deepEqual(warned.map((line) => [line.message, line.fields?.kind ?? line.fields?.event]), [
+      ["an update's file or long output couldn't be copied into Mako's store; kept as the agent gave it", "tool"],
+      ["an event from the provider couldn't be taken in", "live-agent"],
+    ])
+    assert.match(String(warned[0]?.fields?.error), /EACCES/)
+    await f.owner.stop()
+    const reopened = new LiveConversations(f.dependencies)
+    try {
+      const blocks = reopened.snapshot(f.id)?.blocks ?? []
+      assert.equal(blocks.find((block) => block.type === "tool")?.output, long, "the journal kept the whole output")
+      assert.equal(blocks.find((block) => block.type === "text")?.text, "The build failed on a missing import.", "the next words were saved")
+    } finally {
+      await reopened.stop()
+    }
+  } finally {
+    chmodSync(assets, 0o700)
+    stopHearing()
+    f.cleanup()
+  }
+  console.log("PASS: a store copy Mako can't write and an event it can't read don't stop the turn; the journal keeps the output whole")
+}
+
+/** Mako stopping with a conversation it can't save still stops, and says which; the others are left as they were. */
+async function unsavedConversationDoesntBlockStop() {
+  const f = fixture()
+  const warned: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => { if (line.message === "a conversation couldn't be saved as Mako stopped") warned.push(line) })
+  let disk: ReturnType<typeof fillDisk> | undefined
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.submit(f.id, randomUUID(), "make the page")
+    await waitFor(() => f.sent.length === 1, "the prompt was not sent")
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+    disk = fillDisk()
+    await f.owner.stop()
+    assert.deepEqual(warned.map((line) => [line.fields?.conversation, line.fields?.error]), [[f.id, "database or disk is full"]])
+  } finally {
+    disk?.restore()
+    stopHearing()
+    f.cleanup()
+  }
 }
 
 async function quietTurnsCarryLastActivity() {
@@ -2385,6 +2557,9 @@ await quietTurnsCarryLastActivity()
 await nativeActivityLastsItsTurn()
 await failureIsolationAndAssets()
 await makoStopsAreSaid()
+await unsavedTurnIsMakos()
+await otherFailuresDontStop()
+await unsavedConversationDoesntBlockStop()
 
 await queuedSettings()
 await acceptanceAndRaces()

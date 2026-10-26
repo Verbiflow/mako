@@ -121,6 +121,11 @@ try {
     assert.equal(pendingInterruption([older, next], "n"), undefined, "a journal from before this record says nothing")
     const later: LiveRequest = { ...base, id: "l", status: "completed" }
     assert.equal(pendingInterruption([interrupted, later, next], "n"), undefined, "a later turn already moved on")
+    // A turn Mako stopped unsaved: the agent is told why in words it can use, not Mako's storage error, and that the person didn't stop it.
+    const unsaved = { ...interrupted, error: "database or disk is full", interruption: { ...interrupted.interruption!, reason: "not-saved" as const } }
+    const unsavedAccount = pendingInterruption([unsaved, next], "n", at + 60_000)!.account
+    assert.match(unsavedAccount, /^Your previous turn was cut short at 22:25:35: Mako couldn't save the conversation, so it stopped you\. Work you did before then is in place\./)
+    assert.match(unsavedAccount, /the user did not stop it/)
     const quit = { ...interrupted, interruption: { ...interrupted.interruption!, reason: "host-quit" as const } }
     assert.doesNotMatch(pendingInterruption([quit, next], "n")!.account, /did not stop it/, "quitting Mako was the user's doing")
   }

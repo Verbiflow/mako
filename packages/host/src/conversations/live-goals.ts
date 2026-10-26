@@ -121,6 +121,8 @@ export class LiveGoals {
       case "interrupted":
         // A dropped connection is auto-continue's; the goal goes on after that turn.
         if (request.interruption?.reason === "stopped") this.update(resident, { status: "paused" })
+        // Mako stopped it because it couldn't save the conversation: the goal waits for the person, like a Stop.
+        else if (request.interruption?.reason === "not-saved") this.update(resident, { status: "paused", note: "Mako couldn't save the conversation, so it stopped the last turn." })
         return
       case "uncertain":
         this.update(resident, { status: "paused", note: "Mako couldn't tell whether the last turn ran." })

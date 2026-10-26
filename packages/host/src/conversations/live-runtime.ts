@@ -83,6 +83,8 @@ export interface Resident {
   journal: LiveJournal
   driver: AdmittedLiveDriver | null
   storageFault?: boolean
+  /** The next try at a journal it couldn't write, while `storageFault` holds (`saveAgain`). */
+  savingAgain?: ReturnType<typeof setTimeout>
   generation: number
   opening: boolean
   openingOperation?: Promise<void>
@@ -132,8 +134,12 @@ export interface Resident {
    * result), it settles stopped and is never continued automatically.
    */
   stopping?: string
-  /** Why `stopping` was stopped: the user's Stop, or Mako handing the Thread to another machine. */
-  stoppingFor?: "stopped" | "handed-off"
+  /**
+   * Why `stopping` was stopped: the user's Stop, Mako handing the Thread to another machine, or Mako stopping a turn
+   * it couldn't save (`stoppingError` says what failed).
+   */
+  stoppingFor?: "stopped" | "handed-off" | "not-saved"
+  stoppingError?: string
   /** The background work a handoff stops with the turn (`Interruption.stopped`), until the turn settles. */
   stoppingWork?: string[]
   /** The running turn's steps and results in the order they arrived; see `TurnSteps`. */
@@ -240,6 +246,8 @@ export interface Dependencies {
   autoContinueDelayMs?: number
   /** Test override for `GOAL_CONTINUE_DELAY_MS`, the wait before Mako's goal loop continues. */
   goalContinueDelayMs?: number
+  /** Test override for `SAVE_AGAIN_MS`, how often Mako tries again to save a conversation it couldn't. */
+  saveAgainMs?: number
   /** Test override for ready provider residency. */
   providerIdleMs?: number
   /** Test override for the number of ready transports retained for fast reuse. */
@@ -277,6 +285,12 @@ export interface LiveAccess {
   add(resident: Resident): void
   control(resident: Resident): ConversationControl
   flush(resident: Resident): void
+  /**
+   * A flush of what the conversation observed, which goes on whether or not the journal takes it: when it can't, memory
+   * keeps it for the next commit that works (`storageFailed`). A flush that must be saved before Mako acts (a prompt
+   * sent, an answer given) is `flush`, which throws.
+   */
+  keep(resident: Resident): void
   /** A flush within the frame, so a burst of text shares one write. */
   schedule(resident: Resident): void
   storageFailed(resident: Resident, boundary: FailureBoundary): void

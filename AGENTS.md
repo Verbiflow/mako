@@ -2805,6 +2805,39 @@ code cell's `view_image` names its image by a `file://` URL in the rollout
 (`codexLocalPath`), and reading that as a path once stopped Codex turns with
 nothing in the log (`makoStopsAreSaid`, the `cell-image` decode pair).
 
+Only a journal write that fails is a conversation Mako can't save
+(`JournalWriteError`, `storageFailed`). Its turn is stopped and settles as
+`not-saved`, Mako's own interruption with what failed as the request's error,
+however the driver reports the end and whoever presses Stop after; the
+transcript ends that turn on its failure row ("Mako couldn't save this
+conversation", the work stands, Continue turn), never the person's "Stopped".
+What isn't saved stays in memory and `saveAgain` tries the journal every
+`SAVE_AGAIN_MS` until a commit works, which tells every window: a stopped
+provider says nothing more, and space coming back is no event. Saving what an
+event observed (`keep`) carries on when the journal refuses it, so the fault
+doesn't cut a turn's settlement short (its reason, a goal's pause); a save that
+must land before Mako acts (a prompt sent, an answer given) is `flush`, which
+throws and is rolled back. Anything else is
+not a save: a copy into Mako's store that fails keeps the update as the agent
+gave it, which the journal saves, and an event Mako can't read or take in is a
+host-log warning (`an event from the provider couldn't be taken in`); neither
+stops the turn. A host stopping with a conversation it can't save logs it and
+saves the rest. SQLite rolls a full disk, an I/O error or a busy lock back on
+its own, so the journal rolls back only an open transaction (`isTransaction`).
+`unsavedTurnIsMakos`, `otherFailuresDontStop` and
+`unsavedConversationDoesntBlockStop` cover it.
+
+A journal keeps every interruption reason so a build before it still opens
+it: builds through `handed-off` parse `reason` against the seven they know and
+refuse the whole conversation for any other (a `ZodError` on open). So
+`reason` is always one of `SAVED_REASONS`, and a newer reason is saved as the
+one `OLDER_READING` names for it, with the exact one in `exactReason`, which
+older builds pass over and this build reads back (`requestRow`, `controlRow`,
+`readStoredReason`). A reason added later must name its older reading, or the
+contract doesn't compile; `not-saved` reads as `stopped`, which is how every
+build before it recorded that stop. The window reads a reason it doesn't know
+(a newer host's, relayed from the cloud) as "Interrupted" (`turnStopLabel`).
+
 The fourth reason, `connection-lost`, is a turn the agent ended on its own
 dropped backend connection. It was found on `cursor-agent acp`, which ran
 its agent loop without the transport retries its TUI and SDK paths use, so

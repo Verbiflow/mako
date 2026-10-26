@@ -6,12 +6,14 @@ import { disconnectNativeAgents, NativeAgentObservationSchema, observeNativeAgen
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { hostWarn } from "../base/host-log.js"
-import { drawnWhileOpening, queueLiveUpdate } from "@mako/sessions/live-content"
+import { errorMessage } from "../base/error-message.js"
+import { drawnWhileOpening, liveUpdateWeight, queueLiveUpdate } from "@mako/sessions/live-content"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveApprovals } from "./live-approvals.js"
 import type { LiveAssets } from "./live-assets.js"
 import { recordCutOff } from "./live-auto-continue.js"
 import type { LiveCheckpoints } from "./live-checkpoints.js"
+import { JournalWriteError } from "./live-journal.js"
 import { releaseExited } from "./live-launches.js"
 import type { LiveQuestions } from "./live-questions.js"
 import { revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
@@ -19,7 +21,7 @@ import { settleRequest, turnSpendAt, usageMark } from "./live-settlement.js"
 import { updateBinding } from "./live-sources.js"
 
 type EventsAccess = Pick<LiveAccess,
-  "dependencies" | "bindingOwners" | "resident" | "control" | "flush" | "schedule" | "drain" | "storageFailed" | "signInHold" |
+  "dependencies" | "bindingOwners" | "resident" | "control" | "flush" | "keep" | "schedule" | "drain" | "storageFailed" | "signInHold" |
   "scheduleAutoContinue" | "goalSettled" | "goalObserved" | "goalSpent" | "nativeRewound" | "scheduleHibernation" | "clearHibernationTimer">
 
 /** The parts a driver's events land in. */
@@ -41,6 +43,11 @@ export class LiveEvents {
     this.parts = parts
   }
 
+  /**
+   * Takes one event in. Only a journal write that fails stops the turn, as a conversation Mako can't save
+   * (`storageFailed`); an event Mako can't read or take in is said in the host log and left out, and the turn goes on:
+   * stopping it would cost the person the agent's work for a fault of Mako's, and the next event is saved as usual.
+   */
   observe(event: LiveDriverEvent): void {
     try {
       this.accept(event)
@@ -52,7 +59,9 @@ export class LiveEvents {
             ? event.request.sessionId
             : event.id
       const resident = this.access.resident(this.access.bindingOwners.get(id) ?? id)
-      if (resident) this.access.storageFailed(resident, { error })
+      if (!resident) return
+      if (error instanceof JournalWriteError) this.access.storageFailed(resident, { error })
+      else hostWarn("live", "an event from the provider couldn't be taken in", { conversation: resident.snapshot.session.id, event: event.type, error: errorMessage({ error }) })
     }
   }
 
@@ -189,7 +198,8 @@ export class LiveEvents {
             request.status === "dispatching" && (gone || handedOver(request))
               ? settleRequest(
                   request,
-                  outcome,
+                  // A stop of Mako's own keeps why as the turn's error: a conversation it couldn't save says what failed.
+                  resident.stopping === request.id && resident.stoppingError ? { ...outcome, error: resident.stoppingError } : outcome,
                   resident.closing || resident.stopping === request.id,
                   resident.stopping === request.id ? resident.stoppingFor : undefined,
                   resident.stopping === request.id ? resident.stoppingWork : undefined
@@ -200,6 +210,7 @@ export class LiveEvents {
         resident.stopping = undefined
         resident.stoppingFor = undefined
         resident.stoppingWork = undefined
+        resident.stoppingError = undefined
         if (previousStatus === "running")
           resident.snapshot = { ...resident.snapshot, ...turnSpendAt(resident.snapshot, bindingId, { ended: true, ownTurn: !finishedRequest, gone }) }
         if (settling) {
@@ -265,7 +276,7 @@ export class LiveEvents {
     // Control and terminal changes flush ahead of the next turn. Text bursts share one frame.
     // A roster entry's progress (a tool count, a status line) shares the frame too; its start and end flush.
     if (event.type === "live-session" || event.type === "live-question-answered" || event.type === "live-question" || event.type === "live-permission" || event.type === "live-permission-ended" || event.type === "live-approval-decision" || (event.type === "live-agent" && !progressOnly) || event.type === "live-activity" || event.type === "live-goal")
-      this.access.flush(resident)
+      this.access.keep(resident)
     else this.access.schedule(resident)
     if (event.type === "live-session" || event.type === "live-agent") {
       if (
@@ -288,9 +299,12 @@ export class LiveEvents {
       try {
         return this.parts.assets.prepare(item)
       } catch (error) {
-        resident.updates.push(item)
-        this.access.storageFailed(resident, { error })
-        return []
+        // Mako's copy of a file or a long output failed to write: the update keeps them as the agent gave them, and
+        // the journal saves that, so the conversation is saved and the turn goes on.
+        hostWarn("live", "an update's file or long output couldn't be copied into Mako's store; kept as the agent gave it", {
+          conversation: resident.snapshot.session.id, kind: item.kind, error: errorMessage({ error }),
+        })
+        return [item]
       }
     })
     // The model answering again is the end of a retry's wait.
@@ -300,8 +314,12 @@ export class LiveEvents {
       if (dispatching && update.kind === "user") continue
       resident.steps?.observe(update)
       if (queueLiveUpdate(resident, update) === "full") {
-        this.access.flush(resident)
-        queueLiveUpdate(resident, update)
+        this.access.keep(resident)
+        // Unsaved, the batch stays whole in memory and this update joins it.
+        if (queueLiveUpdate(resident, update) === "full") {
+          resident.updates.push(update)
+          resident.pendingCharacters += liveUpdateWeight(update)
+        }
       }
     }
   }
