@@ -160,8 +160,11 @@ function ConversationUsageDetails(props: { usage: LiveSessionUsage; harness: str
   const requests = useAcp((state) => scopedLiveAcp(state, scope)?.requests) ?? NO_REQUESTS
   const sideQuestions = useAcp((state) => scopedLiveAcp(state, scope)?.side?.exchanges.length ?? 0)
   const thread = useAcp((state) => scopedLiveAcp(state, scope)?.threadId)
+  const harnessTurns = useAcp((state) => scopedLiveAcp(state, scope)?.harnessTurns)
+  const spentThrough = useAcp((state) => scopedLiveAcp(state, scope)?.spentThrough)
+  const running = useAcp((state) => scopedLiveAcp(state, scope)?.session.status === "running")
   const changes = useThreadChanges(thread, requests.length)
-  return <UsageDetails {...props} requests={requests} sideQuestions={sideQuestions} changes={changes} />
+  return <UsageDetails {...props} requests={requests} outside={{ harnessTurns, spentThrough, running }} sideQuestions={sideQuestions} changes={changes} />
 }
 
 /**
@@ -174,6 +177,7 @@ export function UsageDetails({
   harness,
   conversationId,
   requests,
+  outside,
   sideQuestions = 0,
   changes,
   onCompact,
@@ -182,6 +186,8 @@ export function UsageDetails({
   harness: string
   conversationId: string
   requests: readonly LiveRequest[]
+  /** The turns the harness ran without a request, and where the next turn counts from (`conversationSpend`). */
+  outside?: Parameters<typeof conversationSpend>[3]
   /** Side questions asked beside the conversation: their spend is the harness's, outside its turns. */
   sideQuestions?: number
   /** What the conversation's turns changed, once the attribution journal counts it; nothing is shown without it. */
@@ -196,7 +202,7 @@ export function UsageDetails({
   const measures = reports(declared.context)
   const fraction = measures ? fractionOf(usage) : undefined
   const before = measures ? compactedFrom(usage) : undefined
-  const spend = conversationSpend(requests, usage, harness)
+  const spend = conversationSpend(requests, usage, harness, outside)
   return (
     <div className="flex flex-col" data-usage-details>
       <section className="flex flex-col gap-2 px-3 pt-3 pb-2.5">
@@ -367,7 +373,7 @@ function Spent({ spend, declared, harness, sideQuestions, changes }: { spend: Co
     <section className="flex flex-col gap-1 border-t border-hairline px-3 py-2.5" data-session-spend>
       <div className="flex items-baseline justify-between gap-2">
         <span className="text-label text-faint">Spent in this conversation</span>
-        {spend.turns ? <span className="text-label text-faint tabular-nums">{spend.running ? `${turns}, one running` : turns}</span> : null}
+        {spend.turns ? <span className="text-label text-faint tabular-nums">{spend.running ? `${turns}, one running` : spend.since ? `${turns}, plus work since` : turns}</span> : null}
       </div>
       {tokens ? (
         <>
@@ -393,6 +399,11 @@ function Spent({ spend, declared, harness, sideQuestions, changes }: { spend: Co
         />
       ) : null}
       {spend.last && spend.turns > 1 ? <LastTurn spend={spend.last} declared={declared} /> : null}
+      {spend.since?.tokens && tokens ? (
+        <span className="mt-0.5 text-label text-faint" data-spend-since>
+          Includes {formatTokens(total(spend.since.tokens))} tokens a subagent or background work spent since the last turn; the next turn counts them.
+        </span>
+      ) : null}
       {changes ? <Row label={changes.scope === "thread" ? "Changes made by the thread" : "Changes made"} value={`${changes.files === 1 ? "1 file" : `${changes.files} files`} · +${changes.added} −${changes.removed}`} title={changes.kinds ? kindsTitle(changes.kinds) : undefined} data-changes /> : null}
       {changes?.commands || changes?.outside ? (
         <span className="text-label text-faint tabular-nums" data-changes-beyond>

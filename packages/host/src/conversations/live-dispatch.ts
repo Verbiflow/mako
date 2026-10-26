@@ -15,6 +15,7 @@ import { contextPrompt } from "./live-context.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { LiveTransfers } from "./live-transfers.js"
 import { baseUnread } from "./base-source.js"
+import { turnStart, usageMark } from "./live-settlement.js"
 
 /** How often in a row a message the harness refused for a turn of its own is sent again at once (`turnInProgress`). */
 const TURN_IN_PROGRESS_RETRIES = 3
@@ -142,14 +143,14 @@ export class LiveDispatch {
     const nativeDelivery: PromptDelivery = { attemptId, bindingId, ownerEpoch: this.access.epoch, evidence: { kind: "prepared" } }
     const ownerGeneration = this.access.moves.generation(resident)
     if (ownerGeneration !== undefined) nativeDelivery.ownerGeneration = ownerGeneration
-    const usage = resident.snapshot.session.usage
+    // Its spend counts from the last turn's end in this process: what was spent since, by work between turns, is this turn's.
+    const spentThrough = bindingId ? turnStart(resident.snapshot, bindingId) : undefined
+    const usageFrom = spentThrough ? spentThrough.usage : usageMark(resident.snapshot.session.usage)
     const current = {
       ...request,
       nativePrompt: undefined,
       nativeDelivery,
-      usageFrom: usage?.tokens || usage?.cost || usage?.unrecorded
-        ? { ...(usage.tokens && { tokens: usage.tokens }), ...(usage.cost && { cost: usage.cost }), ...(usage.unrecorded && { unrecorded: usage.unrecorded }) }
-        : undefined,
+      usageFrom: usageFrom && (usageFrom.tokens || usageFrom.cost || usageFrom.unrecorded) ? usageFrom : undefined,
       status: "dispatching" as const,
       context: [
         ...(request.context ?? []),
@@ -160,6 +161,7 @@ export class LiveDispatch {
     const toldAt = Date.now()
     resident.snapshot = {
       ...resident.snapshot,
+      ...spentThrough && { spentThrough },
       control: {
         ...(request.continues?.auto ? control : retireQuestionsForInput(control, request.id)),
         merges: asWritten ? control.merges : control.merges.map((merge) =>
