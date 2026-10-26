@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#stylish-fastball",
+      "path": ".local/share/devin/cli/sessions.db#ambiguous-chinchilla",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/86c91e9c-e083-4a99-a82a-217794785adf.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/6dae83fb-0950-4ce0-a03f-9f502d309081.db",
       "known": []
     }
   ]

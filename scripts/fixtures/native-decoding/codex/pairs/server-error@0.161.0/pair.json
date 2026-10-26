@@ -13,6 +13,11 @@
           "side": "-",
           "line": "note: Warning — Falling back from WebSockets to HTTPS transport. We’re currently experiencing high demand, which may cause temporary errors.",
           "reason": "Codex 0.161.0 keeps no warning in its rollout, as this recording's rollout shows: should_persist_event_msg (codex-rs/rollout/src/policy.rs) lists Warning among the transient events 0.159.3 drops too. Codex warns when it gives up on the scripted model's failing WebSocket for HTTPS, so whether a recording has the warning depends on its retry timing."
+        },
+        {
+          "side": "-",
+          "line": "note: Retried 9 times",
+          "reason": "Mako sums up the retries it watched on the wire (Codex's `error` notifications with willRetry) in one marker; Codex keeps none of those notifications in its rollout, so only the live drawing has the measure (RETRY_MARKERS, declared stream-only)."
         }
       ]
     }

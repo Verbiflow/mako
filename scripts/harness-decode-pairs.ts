@@ -21,10 +21,10 @@ import type { JsonObject, JsonValue } from "@mako/host/contracts/json"
 import type { LiveActionResult } from "@mako/host/contracts/live-actions"
 import { resolveExecutable } from "@mako/host/base/executable"
 import { ProviderLaunchTrace } from "@mako/host/harnesses/provider-launch"
-import { claudeAcknowledged } from "@mako/host/harnesses/claude/sdk-message-kinds"
+import { claudeAcknowledged, claudeTurnGoesOn } from "@mako/host/harnesses/claude/sdk-message-kinds"
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { ClaudeTranscript } from "@mako/host/harnesses/claude/sdk-transcript"
-import { ClaudeRequests, ClaudeTranscriptTail, takenIn, type TranscriptNotification } from "@mako/host/harnesses/claude/transcript-tail"
+import { ClaudeRequests, ClaudeTranscriptTail, openedTurnLines, takenIn, TASK_PROMPT_WAIT_MS, type TranscriptNotification } from "@mako/host/harnesses/claude/transcript-tail"
 import { parseClaudeTaskNotification } from "@mako/sessions/harnesses"
 import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
 import { codexReadsBefore, CodexRolloutTail } from "@mako/host/harnesses/codex/rollout-tail"
@@ -40,17 +40,19 @@ import { CursorSdkClient } from "@mako/host/harnesses/cursor/sdk/client"
 import type { SdkEvent, SdkImage } from "@mako/host/harnesses/cursor/sdk/wire"
 import { startOpenCodeApi } from "@mako/host/harnesses/opencode/native-api"
 import { awaitOpenCodePlugins } from "@mako/host/harnesses/opencode/catalog"
-import { openCodePluginsActivated } from "@mako/host/harnesses/opencode/decoder"
+import { openCodeNotice, openCodePluginsActivated } from "@mako/host/harnesses/opencode/decoder"
+import { UNNAMED_TURN } from "@mako/sessions/provider-turn"
 import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/permissions"
 import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
-import { acpClientCapabilities, type ProviderAcpSource } from "@mako/host/harnesses/acp-source"
+import { acpClientCapabilities, midTurnMarker, TURN_CONTENT, type AcpProviderTurnObserver, type ProviderAcpSource } from "@mako/host/harnesses/acp-source"
 import { describeLeaks, literally, machineIdentity, rewriteDatabase, scrubJsonLines, scrubTree, treeLeaks, type Substitution } from "./fixture-privacy.ts"
 import { DEVIN_APP_USER, differences, liveDrawing, PairSchema, PAIRS_FOLDER, replayDrawings, storeDrawing, storeReader, drawing, type Difference, type Known, type Pair } from "./decode-compare.ts"
 import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
 import { FIXTURE_ROOT, readRecording, type Frame, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
-import { scriptedModel } from "./scripted-model.ts"
+import { scriptedModel, type ScriptedRequest } from "./scripted-model.ts"
+import { scriptedWindsurf } from "./scripted-windsurf.ts"
 import { planFile, SCENARIOS, script, STOP_AFTER_MS, type Call, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
@@ -72,10 +74,11 @@ const servers = new OpenCodeServers()
  *   npm run harness:decode-pairs -- grok --write      keep what was recorded
  *   npm run harness:decode-pairs -- codex --native <binary> --write
  *                                                     another build of one harness, kept as <scenario>@<version>
- *   npm run harness:decode-pairs -- devin --sealed    only harnesses the scripted model drives; one
+ *   npm run harness:decode-pairs -- cursor --sealed   only harnesses the scripted model drives; one
  *                                                     whose pairs run on its own model is skipped
  *
- * The harness launches as Mako launches it; its model is `scripted-model.ts`,
+ * The harness launches as Mako launches it; its model is `scripted-model.ts`
+ * (Devin's, behind a stand-in for Windsurf's API server: `scripted-windsurf.ts`),
  * so no account is used and nothing is sent anywhere. `--write` keeps each
  * pair under `fixtures/native-decoding/<harness>/pairs/<scenario>/` with the
  * sandbox's paths replaced by `PAIR_ROOT` and the recording machine's identity
@@ -147,7 +150,7 @@ const GROK_DASHBOARD_ASK = `"role":"user","content":"<system-reminder>Write an u
 
 const GROK_TOOLS: ToolVocabulary = {
   // Grok 1.0.70 starts a subagent in the background unless told not to.
-  subagent: { start: ({ description, prompt }) => ({ name: "spawn_subagent", arguments: { description, prompt, background: false } }) },
+  subagent: { start: ({ description, prompt, background }) => ({ name: "spawn_subagent", arguments: { description, prompt, background: background ?? false } }) },
   monitor: (command, description) => ({ name: "monitor", arguments: { command, description } }),
   read: (path, lines) => ({ name: "read_file", arguments: { target_file: path, ...lines } }),
   shell: (command, description) => ({ name: "run_terminal_command", arguments: { command, description } }),
@@ -221,13 +224,13 @@ const grok: Recorder = {
       const launch = await grokAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: grokAcpSource.access?.default })
       if (!launch) throw new Error("Grok's ACP source declined to launch")
       launch.configureEnvironment?.(env)
-      const { messages, prompts, openings } = await acpSession({ command: launch.command, args: launch.args, env, cwd: sandbox.project, source: grokAcpSource, rewind: grokRewind }, scenario.turns)
+      const { messages, prompts, openings, drawn } = await acpSession({ command: launch.command, args: launch.args, env, cwd: sandbox.project, source: grokAcpSource, rewind: grokRewind, scriptDone: steps.done }, scenario.turns)
       scripted("Grok", scenario, model.requests, steps)
       const [file] = await storeReader("grok", sandbox.home).discover()
       if (!file) throw new Error("Grok wrote no session to its store")
       return {
         version,
-        recording: { harness: "grok", session: { settings: { model: null } }, native: { version, origin: "captured" }, messages, prompts, openings },
+        recording: { harness: "grok", session: { settings: { model: null } }, native: { version, origin: "captured" }, messages, prompts, openings, ...drawn && { drawn } },
         store: file.path,
       }
     } finally {
@@ -238,7 +241,7 @@ const grok: Recorder = {
 
 const CLAUDE_TOOLS: ToolVocabulary = {
   // Claude Code 2.1.310 starts a subagent in the background unless told not to.
-  subagent: { start: ({ description, prompt }) => ({ name: "Agent", arguments: { description, prompt, subagent_type: "general-purpose", run_in_background: false } }) },
+  subagent: { start: ({ description, prompt, background }) => ({ name: "Agent", arguments: { description, prompt, subagent_type: "general-purpose", run_in_background: background ?? false } }) },
   monitor: (command, description) => ({ name: "Monitor", arguments: { command, description, timeout_ms: 60_000 } }),
   read: (path, lines) => ({ name: "Read", arguments: { file_path: path, ...lines } }),
   shell: (command, description) => ({ name: "Bash", arguments: { command, description } }),
@@ -283,6 +286,10 @@ const claude: Recorder = {
     const openings: Opening[] = []
     let version: string | undefined
     let settled = () => {}
+    /** The last turn ended and none was sent since: an `init` now opens a turn Claude started itself, as the driver tells them apart. */
+    let settledTurn = false
+    /** A steer joined the running turn: a result its landing aborted doesn't end the turn (`claudeTurnGoesOn`). */
+    let steeredTurn = false
     let stopping: Turn | undefined
     let steering: { text: string; uuid: ReturnType<typeof randomUUID>; due: () => void } | undefined
     let conversation: Query | undefined
@@ -297,12 +304,15 @@ const claude: Recorder = {
         prompts.push(turn.compact ? { at: messages.length } : prompted(messages.length, turn.prompt, attachments))
         // As Mako sends each: a compaction as the bare command, a prompt as content blocks.
         const content = turn.compact ? turn.prompt : await claudeInputContent(turn.prompt, attachments)
+        // As Mako marks its own turn running before sending it.
+        settledTurn = false
         yield { type: "user", message: { role: "user", content }, parent_tool_use_id: null }
         if (turn.steer) {
           const text = turn.steer
           const due = await Promise.race([new Promise<boolean>((resolve) => { steering = { text, uuid: randomUUID(), due: () => resolve(true) } }), done.then(() => false)])
           if (!due || !steering) throw new Error(`Claude Code ran no tool to steer ${JSON.stringify(text)} into`)
           // As Mako steers Claude: a message joining the running query, read at its next step.
+          steeredTurn = true
           yield { type: "user", uuid: steering.uuid, priority: "now", message: { role: "user", content: text }, parent_tool_use_id: null }
         }
         await done
@@ -329,6 +339,10 @@ const claude: Recorder = {
       const told = new Set<string>()
       const foreground = new Set<string>()
       const waited = { queued: 0 }
+      /** Prompt lines read at a turn's end, for the turn Claude opens on them (`openProviderTurn` in the driver). */
+      const held: TranscriptNotification[] = []
+      let drawnPrompt: string | undefined
+      settledTurn = false
       const armed = () => background > 0 || told.size > 0 || (tail?.waiting() ?? 0) > 0
       const drawn = (found: TranscriptNotification[]) => {
         for (const item of found) told.delete(parseClaudeTaskNotification(item.text)?.taskId ?? "")
@@ -358,6 +372,15 @@ const claude: Recorder = {
           if (message.type === "system" && message.subtype === "task_started" && message.is_backgrounded === false) foreground.add(message.task_id)
           if (message.type === "system" && message.subtype === "task_notification" && !message.ambient && !foreground.delete(message.task_id)) told.add(message.task_id)
           if (message.type === "system" && message.subtype === "init") version = message.claude_code_version
+          // As the driver opens a turn Claude started itself after a notification: an `init` once the last turn settled, drawn from its prompt's line.
+          if (message.type === "system" && message.subtype === "init" && settledTurn) {
+            const fresh = (item: TranscriptNotification) => item.kind === "prompt" && item.record !== drawnPrompt
+            const opened = await openedTurnLines(held, fresh, tail && (() => tail!.read()), Date.now() + TASK_PROMPT_WAIT_MS, () => false)
+            if (!opened) throw new Error("Claude Code opened a turn of its own whose prompt line the transcript never showed")
+            drawnPrompt = opened.at(-1)?.record
+            drawn(opened)
+          }
+          if (message.type === "system" && message.subtype === "init") settledTurn = false
           // Claude Code runs a command it deems harmless without asking, so the stop follows the call, not the permission.
           const calling = message.type === "assistant" && message.message.content.some((block) => block.type === "tool_use")
           if (stopping && calling) {
@@ -375,9 +398,15 @@ const claude: Recorder = {
             // What the turn took in after its last request, once Claude Code's writer has flushed it.
             if (tail && armed()) {
               await delay(300)
-              drawn(tail.read().filter((item) => item.kind === "queued"))
+              const found = tail.read()
+              drawn(found.filter((item) => item.kind === "queued"))
+              held.push(...found.filter((item) => item.kind === "prompt"))
             }
             results++
+            if (!claudeTurnGoesOn(message, steeredTurn)) {
+              settledTurn = true
+              steeredTurn = false
+            }
             settled()
           }
         }
@@ -419,7 +448,7 @@ function claudeMode(turn: Turn | undefined): "plan" | "default" {
 }
 
 /** The harness asked the model once per step: no fewer, as a turn it never asked for; no more, as an unscripted request. */
-function scripted(harness: string, scenario: Scenario, requests: Awaited<ReturnType<typeof scriptedModel>>["requests"], steps: Script): void {
+function scripted(harness: string, scenario: Scenario, requests: readonly ScriptedRequest[], steps: Script): void {
   let turn = 0
   const listed = () => requests.map((request) => `${request.path}${request.conversation ? ` (turn: ${steps.taken[turn++] ?? "?"})` : ""}${request.unscripted ? " (unscripted)" : ""}`).join(", ")
   const unscripted = requests.filter((request) => request.unscripted).length
@@ -519,6 +548,7 @@ const codex: Recorder = {
     const prompts: Prompt[] = []
     const openings: Opening[] = []
     let turnDone = () => {}
+    let agentsMoved = () => {}
     let stopTurn: (() => void) | undefined
     let rollout: CodexRolloutTail | undefined
     // As Mako's driver reads the rollout (`drawRollout` in `codex-app-protocol.ts`).
@@ -540,6 +570,7 @@ const codex: Recorder = {
         messages.push({ method: message.method, params })
         if (!before) readRollout()
         if (message.method === "turn/completed") turnDone()
+        agentsMoved()
         if (message.method === "item/started" && CodexToolStarted.safeParse(message.params).success) {
           const stopping = stopTurn
           stopTurn = undefined
@@ -616,6 +647,17 @@ const codex: Recorder = {
         if (text && !steered) throw new Error(`Codex ran no tool to steer ${JSON.stringify(text)} into`)
         await steered
       }
+      // Agents left running in the background go on after the last turn, until each took its steps; Codex runs no turn of its own on their reports.
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`Codex's agents didn't finish within ${TURN_MS / 1000}s: ${steps.unfinished().join("; ")}`)), TURN_MS)
+        agentsMoved = () => {
+          if (steps.unfinished().length) return
+          clearTimeout(timer)
+          resolve()
+        }
+        agentsMoved()
+      })
+      await settled()
       scripted("Codex", scenario, model.requests, steps)
       const file = (await storeReader("codex", sandbox.home).discover()).find((candidate) => candidate.path.includes(thread.thread.id))
       if (!file) throw new Error("Codex wrote no session to its store")
@@ -629,7 +671,7 @@ const codex: Recorder = {
 }
 
 const OPENCODE_TOOLS: ToolVocabulary = {
-  subagent: { start: ({ description, prompt }) => ({ name: "subagent", arguments: { agent: "general", description, prompt } }) },
+  subagent: { start: ({ description, prompt, background }) => ({ name: "subagent", arguments: { agent: "general", description, prompt, ...background && { background } } }) },
   monitor: { absent: "OpenCode 2.1.4 defines no tool that watches a command and reports what it prints (native-tools/opencode-2.1.4.json)" },
   read: (path, lines) => ({ name: "read", arguments: { path, ...lines } }),
   shell: (command) => ({ name: "shell", arguments: { command } }),
@@ -684,6 +726,14 @@ const opencode: Recorder = {
     let steering: (() => void) | undefined
     const location = { directory: sandbox.project }
     let pluginsActivated = () => {}
+    /** The sessions OpenCode started under the root, its subagents and theirs, and whether each one's execution ended. */
+    const subagents = new Map<string, boolean>()
+    let ownMoved = () => {}
+    /** A Mako turn is in flight; outside one, an execution of the root is a turn OpenCode started on a notice. */
+    let prompting = false
+    let rootRunning = false
+    /** What the last notice enqueued while no turn ran says of the turn OpenCode may start on it (`observeNotice` in the driver). */
+    let noticeCause: NonNullable<Prompt["turn"]> | undefined
     /** One native API, following its event stream before any session exists, as Mako's driver does. */
     const launch = async () => {
       const api = await startOpenCodeApi({ servers, command: installation.command, cwd: sandbox.project, env, conversationId: randomUUID(), trace: new ProviderLaunchTrace({ provider: "opencode", conversation: "decode-pairs" }) })
@@ -703,8 +753,23 @@ const opencode: Recorder = {
             const form = OpenCodeForm.parse(event.data.form)
             void api.client.session.form.reply({ sessionID: root, formID: form.id, answer: Object.fromEntries(form.fields.map((field) => [field.key, field.options?.[0]?.value ?? ""])) })
           }
+          if (event.type === "session.created" && event.data.parentID && (event.data.parentID === root || subagents.has(event.data.parentID))) subagents.set(event.data.sessionID, false)
+          const ending = OPENCODE_TURN_ENDS.has(event.type) ? OpenCodeSessionEvent.safeParse(event).data?.data.sessionID : undefined
+          if (ending && subagents.has(ending)) subagents.set(ending, true)
+          if (event.type === "session.inbox.enqueued" && event.data.sessionID === root && !prompting && !rootRunning) {
+            const cause = openCodeNotice(event.data.item)?.cause
+            if (cause) noticeCause = JSON.parse(JSON.stringify({ ...cause, source: { harness: "opencode", record: event.data.inboxID } }))
+          }
+          // As the driver opens a turn OpenCode started itself (`openProviderTurn`): drawn from the notice it started on.
+          if (event.type === "session.execution.started" && event.data.sessionID === root) {
+            if (!prompting && !rootRunning) prompts.push({ at: messages.length, turn: noticeCause ?? UNNAMED_TURN })
+            noticeCause = undefined
+            rootRunning = true
+          }
+          if (ending === root) rootRunning = false
+          ownMoved()
           // A compaction is an execution too, and ends after `session.compaction.ended`.
-          if (OPENCODE_TURN_ENDS.has(event.type) && OpenCodeSessionEvent.safeParse(event).data?.data.sessionID === root) turnEnded()
+          if (ending === root) turnEnded()
           if (event.type === "session.revert.committed" && event.data.sessionID === root) reverted()
           if (event.type === "session.tool.called" && stopping && event.data.sessionID === root) {
             const session = root
@@ -778,6 +843,8 @@ const opencode: Recorder = {
             .then(() => void prompts.push({ at: messages.length, text, steered: true }))
           steered.catch(() => undefined)
         }
+        // A compaction Mako asks for is its turn too, as the driver binds it.
+        prompting = true
         if (turn.compact) await api.client.session.compact({ sessionID: root, id: messageIds.next() }).catch(() => undefined)
         else {
           const id = messageIds.next()
@@ -787,9 +854,20 @@ const opencode: Recorder = {
           await api.client.session.prompt({ sessionID: root, id, text: turn.prompt, files: promptFiles(attachments) }).catch(() => undefined)
         }
         await ended
+        prompting = false
         if (text && !steered) throw new Error(`OpenCode ran no tool to steer ${JSON.stringify(text)} into`)
         await steered
       }
+      // Its own work goes on after the last turn: subagents left running in the background, until every step was asked for and each one's execution ended.
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`OpenCode's subagents didn't finish within ${TURN_MS / 1000}s (every step asked for: ${steps.done()}, a turn of its own running: ${rootRunning}, ended: ${[...subagents.values()].filter(Boolean).length} of ${subagents.size})`)), TURN_MS)
+        ownMoved = () => {
+          if (!steps.done() || rootRunning || [...subagents.values()].some((ended) => !ended)) return
+          clearTimeout(timer)
+          resolve()
+        }
+        ownMoved()
+      })
       scripted("OpenCode", scenario, model.requests, steps)
       const version = api.info.version
       // Closed first, so the store is whole when it is read.
@@ -839,21 +917,37 @@ function devinPromptRuns(wire: Pick<Recording, "messages" | "prompts">): void {
   })
 }
 
-/** The person's Devin sign-in, which a pair's sandbox links, as Mako's account profiles do (`linkDataHome`), and never copies. */
-const DEVIN_CREDENTIALS = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "devin", "credentials.toml")
+const DEVIN_TOOLS: ToolVocabulary = {
+  // A read-only subagent, as Devin's own model starts one to read files (`subagent_explore`).
+  subagent: { start: ({ description, prompt, background }) => ({ name: "run_subagent", arguments: { title: description, task: prompt, profile: "subagent_explore", ...background && { is_background: true } } }) },
+  monitor: { absent: "Devin 3000.11.205 defines no tool that reports what a command prints as it comes; its model reads a background shell's output only by asking (`get_output`, native-tools/devin-3000.11.205.json)" },
+  read: (path, lines) => ({ name: "read", arguments: { file_path: path, ...lines } }),
+  shell: (command) => ({ name: "exec", arguments: { command } }),
+  edit: (path, from, to) => ({ name: "edit", arguments: { file_path: path, old_string: from, new_string: to } }),
+  viewImage: (path) => ({ name: "read", arguments: { file_path: path } }),
+  // Its todo items have no id.
+  todos: (items) => ({ name: "todo_write", arguments: { todos: items.map(({ content, status }) => ({ content, status })) } }),
+  search: (pattern) => ({ name: "grep", arguments: { pattern } }),
+  codeMode: { absent: "Devin 3000.11.205 names no tool that runs code calling its other tools (native-tools/devin-3000.11.205.json); on 3000.10.23 its model ran the code-mode prompt as one chained `exec`" },
+  ask: (question) => ({ name: "ask_user_question", arguments: { questions: [question] } }),
+  // Its model marks a cited line up for its client to link, as Devin 3000.10.23's own model did.
+  cite: (path, line) => `<ref_snippet file="${path}" lines="${line}" />`,
+  // Devin renders the plan file from `write_plan`; `exit_plan_mode` asks for its approval, after which the turn goes on in Code mode.
+  plan: (plan) => [
+    { call: () => ({ name: "write_plan", arguments: { title: "Plan", summary: "The steps, in order.", plan } }) },
+    { call: () => ({ name: "exit_plan_mode", arguments: { plan } }) },
+    { text: "The plan is approved." },
+  ],
+}
 
 /**
- * Devin over ACP, as Mako's ACP source launches it, in Mako's default mode.
- * The sandbox's data home links the person's `credentials.toml`, so Devin
- * signs in as them and writes its `sessions.db` in the sandbox, not in
- * their store. Its model answers for real, which spends usage.
+ * Devin over ACP, as Mako's ACP source launches it, in Mako's default mode,
+ * its model the scripted one behind a stand-in for Windsurf's API server
+ * (`scripted-windsurf.ts`). Its data home holds no `credentials.toml`, so
+ * it signs in with `WINDSURF_API_KEY`, to the stand-in only.
  */
 const devin: Recorder = {
-  model: {
-    kind: "own",
-    why: "Devin's model is behind Windsurf's API server, whose protocol the scripted model doesn't speak",
-    lacks: { codeMode: "Devin 3000.11.205 names no tool that runs code calling its other tools (native-tools/devin-3000.11.205.json); on 3000.10.23 its model ran the code-mode prompt as one chained `exec`" },
-  },
+  model: { kind: "scripted", tools: DEVIN_TOOLS },
   controls: {
     steer: "driven",
     // Mako's conversation process doesn't advertise `cognition.ai/revert` (only its fork process does, `devin/fork.ts`); the pair turns it on to read what a revert writes.
@@ -865,34 +959,44 @@ const devin: Recorder = {
   },
   keeps: (file) => file.endsWith("/devin/cli/sessions.db") || /\/Devin\/User\/(acp-messages\/[^/]+\.db|globalStorage\/state\.vscdb)$/.test(file),
   storeFolder: (store) => store.includes(`/${DEVIN_APP_USER}/`) ? store.slice(0, store.indexOf(`/${DEVIN_APP_USER}/`) + DEVIN_APP_USER.length + 1) : dirname(store),
-  secrets: async () => credentialValues(await readFile(DEVIN_CREDENTIALS, "utf8")),
   async record(sandbox, scenario) {
-    if (!existsSync(DEVIN_CREDENTIALS)) throw new Error("Devin isn't signed in; run `devin` once and sign in")
-    const data = sandbox.env.XDG_DATA_HOME
-    if (!data) throw new Error("The sandbox has no data home")
-    await mkdir(join(data, "devin"), { recursive: true })
-    await symlink(DEVIN_CREDENTIALS, join(data, "devin", "credentials.toml"))
-    const env: NodeJS.ProcessEnv = { ...sandbox.env, ...scenario.env }
-    const launch = await devinAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: devinAcpSource.access?.default })
-    if (!launch) throw new Error("Devin's ACP source declined to launch")
-    launch.configureEnvironment(env)
-    const version = await versionOf(launch.command)
-    const stillRunning = scenario.controls?.includes("still-running")
-    const { loads, ...wire } = await acpSession({
-      command: launch.command, args: launch.args, env, cwd: sandbox.project,
-      mode: devinAcpSource.access?.native?.edits, source: devinAcpSource, rewind: devinRewind,
-      meta: {
-        ...scenario.turns.some((turn) => turn.rewind !== undefined) && { "cognition.ai/revert": true },
-        // Devin.app 3.10.23 advertises it, and sends each prompt with a `clientMessageId`; Devin 3000.10.23 still sends no prompt back.
-        ...stillRunning && { "cognition.ai/messageGrouping": true },
-      },
-      promptMeta: stillRunning ? () => ({ "cognition.ai/clientMessageId": randomUUID() }) : undefined,
-    }, stillRunning ? scenario.turns : [...scenario.turns, DEVIN_APP_REOPENS])
-    devinPromptRuns(wire)
-    const [file] = await storeReader("devin", sandbox.home).discover()
-    if (!file) throw new Error("Devin wrote no session to its store")
-    const recording: Recording = { harness: "devin", session: { settings: { model: null } }, native: { version, origin: "captured" }, ...wire }
-    return { version, recording, store: file.path, others: [{ reader: "devin-ide", path: await devinAppJournal(sandbox.home, recording, loads) }] }
+    if (!existsSync(DEVIN_APP)) throw new Error(`A Devin pair keeps Devin.app's journal of the session, which only Devin.app's own message store writes, and ${DEVIN_APP} isn't installed`)
+    const config = sandbox.env.XDG_CONFIG_HOME
+    if (!config) throw new Error("The sandbox has no config home")
+    const steps = script(scenario, DEVIN_TOOLS, sandbox.project)
+    const model = await scriptedWindsurf({ reply: steps.reply, waits: steps.waits })
+    // Devin checks its update manifest at startup unless told not to, as Mako's host image tells it.
+    await mkdir(join(config, "devin"), { recursive: true })
+    await writeFile(join(config, "devin", "config.json"), JSON.stringify({ auto_update: false }))
+    const env: NodeJS.ProcessEnv = {
+      ...sandbox.env, ...scenario.env, WINDSURF_API_KEY: "mako-decode-pair",
+      WINDSURF_API_SERVER_URL: model.url, DEVIN_API_URL: model.url, WINDSURF_WEBSITE_URL: model.url, DEVIN_WEBAPP_URL: model.url,
+    }
+    try {
+      const launch = await devinAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: devinAcpSource.access?.default })
+      if (!launch) throw new Error("Devin's ACP source declined to launch")
+      launch.configureEnvironment(env)
+      const version = await versionOf(launch.command)
+      const stillRunning = scenario.controls?.includes("still-running")
+      const { loads, ...wire } = await acpSession({
+        command: launch.command, args: launch.args, env, cwd: sandbox.project,
+        mode: devinAcpSource.access?.native?.edits, source: devinAcpSource, rewind: devinRewind, scriptDone: steps.done,
+        meta: {
+          ...scenario.turns.some((turn) => turn.rewind !== undefined) && { "cognition.ai/revert": true },
+          // Devin.app 3.10.23 advertises it, and sends each prompt with a `clientMessageId`; Devin 3000.10.23 still sends no prompt back.
+          ...stillRunning && { "cognition.ai/messageGrouping": true },
+        },
+        promptMeta: stillRunning ? () => ({ "cognition.ai/clientMessageId": randomUUID() }) : undefined,
+      }, stillRunning ? scenario.turns : [...scenario.turns, DEVIN_APP_REOPENS])
+      scripted("Devin", scenario, model.requests, steps)
+      devinPromptRuns(wire)
+      const [file] = await storeReader("devin", sandbox.home).discover()
+      if (!file) throw new Error("Devin wrote no session to its store")
+      const recording: Recording = { harness: "devin", session: { settings: { model: null } }, native: { version, origin: "captured" }, ...wire }
+      return { version, recording, store: file.path, others: [{ reader: "devin-ide", path: await devinAppJournal(sandbox.home, recording, loads) }] }
+    } finally {
+      await model.close()
+    }
   },
 }
 
@@ -1093,11 +1197,6 @@ const cursor: Recorder = {
   },
 }
 
-/** Every quoted value in a TOML credentials file that could be a secret: long, and not a URL. */
-function credentialValues(toml: string): string[] {
-  return [...toml.matchAll(/^\s*[\w-]+\s*=\s*"([^"]{16,})"\s*$/gm)].flatMap(([, value]) => value && !/^https?:/.test(value) ? [value] : [])
-}
-
 /** Fails, without saying what matched, when a recording or the store it names holds one of `secrets`. */
 async function credentialFree(pair: RecordedPair, secrets: readonly string[]): Promise<void> {
   if (!secrets.length) return
@@ -1124,6 +1223,7 @@ const CodexToolStarted = z.object({ item: z.object({ type: z.enum(["commandExecu
 /** An ACP update that starts a tool. */
 const AcpToolStarted = z.object({ update: z.object({ sessionUpdate: z.literal("tool_call") }).loose() }).loose()
 const AcpNotified = z.object({ sessionId: z.string() }).loose()
+const AcpUpdateKind = z.object({ update: z.object({ sessionUpdate: z.string() }).loose() }).loose()
 
 const RECORDERS = new Map<string, Recorder>([["claude", claude], ["codex", codex], ["cursor", cursor], ["devin", devin], ["grok", grok], ["opencode", opencode]])
 
@@ -1191,7 +1291,7 @@ function prompted(at: number, text: string, attachments: readonly PromptAttachme
 }
 
 /** An ACP session as recorded, and the reply to each `session/load` a resume sent, in order. */
-type AcpWire = Pick<Recording, "messages" | "prompts" | "openings"> & { loads: JsonObject[] }
+type AcpWire = Pick<Recording, "messages" | "prompts" | "openings" | "drawn"> & { loads: JsonObject[] }
 
 /**
  * Prompts over ACP in one session, every message the agent sends recorded as
@@ -1201,6 +1301,19 @@ type AcpWire = Pick<Recording, "messages" | "prompts" | "openings"> & { loads: J
  * Mako doesn't drive, as `rewind` does it. A resume stops the agent and loads
  * the session in a new one, as Mako does after an idle process closed.
  */
+/** The agent's own work after the prompts, as an ACP recording follows it (`acpSession`). */
+interface AgentWork {
+  /** Background work the source reports running. */
+  background: number
+  /** The agent announced a turn of its own that hasn't ended. */
+  announced: boolean
+  /** A turn the agent started on its own runs: the client opened it, and the agent hasn't ended it. */
+  running: boolean
+  observer?: AcpProviderTurnObserver
+  /** What the turn it opens next is drawn with, as the client opens it. */
+  opening?: NonNullable<Prompt["turn"]>
+}
+
 async function acpSession(
   input: {
     command: string; args: string[]; env: NodeJS.ProcessEnv; cwd: string; mode?: string; source: ProviderAcpSource
@@ -1209,6 +1322,8 @@ async function acpSession(
     meta?: JsonObject
     /** Each prompt's `_meta`, for a scenario sending prompts as another client does; Mako sends none. */
     promptMeta?: () => JsonObject
+    /** The scripted model has answered every step, the agent's own turn's included: its own work after the prompts is over once that turn ends. */
+    scriptDone?: () => boolean
   },
   turns: readonly Turn[],
 ): Promise<AcpWire> {
@@ -1225,6 +1340,46 @@ async function acpSession(
   let compaction: AcpCompaction | undefined
   /** The session Mako opened: another's updates, a subagent's own, Mako's client drops unrecorded (`sessionUpdate` in `acp.ts`). */
   let opened: string | undefined
+  /**
+   * The agent's own work after the prompts, which Mako's client follows
+   * (`acp.ts`): background work the source reports running, and a turn the
+   * agent announced it starts on its own until the agent ends it.
+   */
+  const agentWork: AgentWork = { background: 0, announced: false, running: false, observer: input.source.providerTurns?.() }
+  const drawn: NonNullable<Recording["drawn"]> = []
+  const background = input.source.observeBackground?.()
+  let ownMoved = () => {}
+  /** A resume's `session/load` replays history, whose causes and ends the client reads as no session's yet (`acp.ts` sets its id once the load returns). */
+  let loading = false
+  const observeOwn = (method: string, values: JsonObject) => {
+    if (loading) return
+    let report = method === "session/update" ? undefined : background?.extension?.(method, values)
+    let cause = method === "session/update" ? undefined : agentWork.observer?.cause?.(method, values)
+    if (method === "session/update") {
+      const parsed = updates?.safeParse(values)
+      // SAFETY: the SDK's own `session/update` schema accepted it.
+      const notification = parsed?.success ? parsed.data as SessionNotification : undefined
+      report = notification && background?.sessionUpdate?.(notification)
+      cause = notification && agentWork.observer?.updateCause?.(notification)
+    }
+    if (report && report.sessionId === opened) agentWork.background = report.running
+    if (cause && cause.sessionId === opened) {
+      // As the client takes it (`announceProviderTurn` in `acp.ts`): a turn the agent opens now, or one it opens once the running turn ends
+      // (`wakes`); otherwise, for an agent that takes it into the running turn, a marker drawn there.
+      if (!(waitingOn || agentWork.running) || cause.wakes) {
+        agentWork.announced = true
+        agentWork.opening = { reason: cause.reason, ...cause.cause && { cause: cause.cause }, ...cause.body && { body: cause.body } }
+      } else if (agentWork.observer?.midTurn === "marker") drawn.push({ at: messages.length, update: z.record(z.string(), z.json()).parse(JSON.parse(JSON.stringify({ kind: "event", ...midTurnMarker(cause) }))) })
+    }
+    const ended = agentWork.observer?.ended(method, values)
+    if (ended && ended.sessionId === opened && !waitingOn) {
+      agentWork.announced = false
+      agentWork.running = false
+    }
+    ownMoved()
+  }
+  /** A prompt in flight: its turn's end is the prompt's, not the agent's own. */
+  let waitingOn = false
   let child = spawn(executable, input.args, { cwd: input.cwd, env: input.env, stdio: ["pipe", "pipe", "pipe"] })
   const connect = () => rpcPeer(child, {
     jsonrpc: true,
@@ -1233,6 +1388,15 @@ async function acpSession(
     received: (message) => {
       if (!message.method) return
       if (message.method === "session/update" && opened && AcpNotified.safeParse(message.params).data?.sessionId !== opened) return
+      // Recorded after what the client drew for it (a turn it opens, a marker), as `acp.ts` records it.
+      if (message.id === undefined) observeOwn(message.method, params(message))
+      // As the client opens a turn the agent announced: at its first content while no turn runs, the cause drawn before it.
+      const kind = message.method === "session/update" ? AcpUpdateKind.safeParse(message.params).data?.update.sessionUpdate : undefined
+      if (kind && TURN_CONTENT.has(kind) && agentWork.opening && !waitingOn && !agentWork.running) {
+        sent.push({ at: messages.length, turn: agentWork.opening })
+        agentWork.opening = undefined
+        agentWork.running = true
+      }
       messages.push(message.id === undefined ? { method: message.method, params: params(message) } : { request: message.method, params: params(message) })
       if (message.method === "session/update" && AcpToolStarted.safeParse(message.params).success) {
         const stopping = stopTurn
@@ -1317,7 +1481,8 @@ async function acpSession(
       reads = await initialize()
       const opening: Opening = { at: messages.length }
       openings.push(opening)
-      const reply = await peer.call("session/load", { sessionId: session.sessionId, cwd: input.cwd, mcpServers: [] })
+      loading = true
+      const reply = await peer.call("session/load", { sessionId: session.sessionId, cwd: input.cwd, mcpServers: [] }).finally(() => { loading = false })
       messages.push({ response: "session/load", result: z.record(z.string(), z.json()).parse(reply) })
       const loaded = AcpLoadedSession.parse(reply)
       opening.opened = messages.length
@@ -1343,7 +1508,22 @@ async function acpSession(
       }
       sent.push({ at: messages.length, text, steered: true })
     }
-    for (const turn of turns) {
+    // The agent's own work goes on after the last prompt: its background work, and the turn it runs on what that reports.
+    // Followed on the scripted model, which says when every step was asked for; a recording on the harness's own model ends with its last prompt.
+    let settling: Promise<void> | undefined
+    const ownWork = () => settling ??= !input.scriptDone ? Promise.resolve() : new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${input.command}'s own work after the last prompt didn't settle within ${TURN_MS / 1000}s (running ${agentWork.background}, a turn announced: ${agentWork.announced}, every step asked for: ${input.scriptDone?.() ?? "unscripted"})`)), TURN_MS)
+      ownMoved = () => {
+        if (agentWork.background > 0 || agentWork.announced || input.scriptDone?.() === false) return
+        clearTimeout(timer)
+        resolve()
+      }
+      ownMoved()
+    })
+    const lastPrompted = turns.findLastIndex((turn) => !turn.resume && turn.rewind === undefined)
+    for (const [index, turn] of turns.entries()) {
+      // A resume after the last prompt (Devin.app opening the session again) waits for that work, as an idle agent ends only once it's done.
+      if (index > lastPrompted) await ownWork()
       if (turn.rewind !== undefined) {
         if (!input.rewind) throw new Error(`decode-pairs doesn't rewind ${input.command}`)
         await input.rewind(call, session.sessionId, turn.rewind)
@@ -1377,12 +1557,15 @@ async function acpSession(
         continue
       }
       // A failed turn is the prompt's error; the next prompt goes on, as it does in Mako.
+      waitingOn = true
       await prompt(turn.prompt, attachments).catch(() => undefined)
+      waitingOn = false
       if (text && !steered) throw new Error(`${input.command} ran no tool to steer ${JSON.stringify(text)} into`)
       await steered
       steered = undefined
     }
-    return { messages, prompts: sent, openings, loads }
+    await ownWork()
+    return { messages, prompts: sent, openings, loads, ...drawn.length && { drawn } }
   } finally {
     peer.close()
     await stop(child)

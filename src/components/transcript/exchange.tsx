@@ -747,7 +747,7 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
         ) : null}
         <span className="shrink-0">{title}</span>
         {detail ? <span className="min-w-0 truncate text-faint">{detail}</span> : null}
-        {work.failed > 0 ? <span className="shrink-0 text-negative">{work.failed} failed</span> : null}
+        <WorkEndings work={work} />
         <ChevronRightIcon
           aria-hidden
           className={cn(
@@ -763,6 +763,17 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
       </Collapse>
       {!open && kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
     </div>
+  )
+}
+
+/** How the calls under a summary ended other than well: "2 failed", "3 stopped", "1 cut off". */
+function WorkEndings({ work }: { work: Pick<WorkSummaryData, "failed" | "stopped" | "cutOff"> }) {
+  return (
+    <>
+      {work.failed > 0 ? <span className="shrink-0 text-negative">{work.failed} failed</span> : null}
+      {work.stopped > 0 ? <span className="shrink-0 text-faint">{work.stopped} stopped</span> : null}
+      {work.cutOff > 0 ? <span className="shrink-0 text-faint">{work.cutOff} cut off</span> : null}
+    </>
   )
 }
 
@@ -860,15 +871,7 @@ function WorkSummary({
           <ChangingLabel text={text.charAt(0).toUpperCase() + text.slice(1)} />
         )}
       </span>
-      {work.failed > 0 ? (
-        <span className="shrink-0 text-negative">{work.failed} failed</span>
-      ) : null}
-      {work.stopped > 0 ? (
-        <span className="shrink-0 text-faint">{work.stopped} stopped</span>
-      ) : null}
-      {work.cutOff > 0 ? (
-        <span className="shrink-0 text-faint">{work.cutOff} cut off</span>
-      ) : null}
+      <WorkEndings work={work} />
       {elapsed && !troubled ? (
         <span className="shrink-0 text-label text-faint tabular">{elapsed}</span>
       ) : null}

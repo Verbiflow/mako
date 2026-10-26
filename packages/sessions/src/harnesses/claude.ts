@@ -3,7 +3,7 @@ import { event, namesUsageLimit, type TranscriptEvent, type TurnCause } from "..
 import { causeBody, outputBody, PROVIDER_TURN_FALLBACK, type ProviderTurnCause } from "../provider-turn.js"
 import { exclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
-import { cutOffTurn, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
+import { cutOffTurn, RETRY_MARKERS, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 
 /** Claude Code's hook events, held to the SDK's `HOOK_EVENTS` by `packages/host/src/harnesses/claude/vocabulary-check.ts`. */
 export const CLAUDE_HOOK_EVENTS = [
@@ -206,6 +206,7 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
     },
     stream: [
       SETUP_NOTICES,
+      RETRY_MARKERS,
       STOP_MARKER,
       ...cutOffTurn(["tool", "text", "thinking"], "Claude Code 2.1.283 writes no tool_use whose turn was stopped or killed before its result, nor the words streamed before it; the flows of 2026-10-16 stream them in a stopped turn (71eaf23a) and a killed one (fb9a6b64) whose transcripts lack them."),
       {

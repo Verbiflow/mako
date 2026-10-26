@@ -43,7 +43,7 @@ import { ClaudePermissions } from "./sdk-permissions.js"
 import { ClaudeApprovalObserver, claudeApprovalAnswerDigest, readClaudeApprovalDecisions } from "./approval-observer.js"
 import type { ClaudePermissionObserver, prepareClaudePermissionObserver } from "./permission-observer.js"
 import { ClaudeTranscript } from "./sdk-transcript.js"
-import { ClaudeRequests, ClaudeTranscriptTail, takenIn, transcriptNotification, type TranscriptNotification, type TranscriptTailStats } from "./transcript-tail.js"
+import { ClaudeRequests, ClaudeTranscriptTail, openedTurnLines, takenIn, TASK_PROMPT_WAIT_MS, transcriptNotification, type TranscriptNotification, type TranscriptTailStats } from "./transcript-tail.js"
 import { claudeGoalFeedback, claudeGoalLine, readClaudeGoal } from "./goals.js"
 import { claudeReviewCommand } from "./review.js"
 import { askClaudeSideQuestion } from "./side-questions.js"
@@ -53,7 +53,7 @@ import { hostLog, hostWarn } from "../../base/host-log.js"
 import { CLAUDE_AUTH_LOG, claudeAuthDiagnostics } from "./auth-diagnostics.js"
 import { claudeConfigDir, type ClaudeCredentialState } from "./accounts.js"
 import { claudeStopReason } from "./sdk-notices.js"
-import { claudeAcknowledged, claudeCommandLifecycle, claudeOwnTurnEnded } from "./sdk-message-kinds.js"
+import { claudeAcknowledged, claudeCommandLifecycle, claudeOwnTurnEnded, claudeTurnGoesOn } from "./sdk-message-kinds.js"
 import { fileResumeEvidence } from "../native-continuation.js"
 import { claudeSessionCheckpoint } from "./session-checkpoint.js"
 import { claudeProcessProbe } from "./process-probe.js"
@@ -245,7 +245,6 @@ function sdkTaskTurn(message: SDKTaskNotificationMessage, agent: NativeAgentObse
 }
 
 /** How long a turn Claude started waits for its prompt to reach the transcript: Claude Code writes it within a tenth of a second. */
-const TASK_PROMPT_WAIT_MS = 1_500
 /** Settled tasks remembered for their notification; a turn sees a few. */
 const MAX_TOLD = 64
 
@@ -298,33 +297,18 @@ function drawTranscript(engine: Engine, live: Live, found: readonly TranscriptNo
  */
 async function providerTurnLines(live: Live, openedAt: number): Promise<TranscriptNotification[]> {
   const fresh = (item: TranscriptNotification) => item.kind === "prompt" && item.record !== live.providerTurnPrompt
-  const found: TranscriptNotification[] = []
-  const take = () => {
-    const index = live.prompts.findIndex(fresh)
-    if (index < 0) return false
-    found.push(...live.prompts.splice(0, index + 1))
-    return true
-  }
-  if (take()) return found
+  const closed = () => live.closed
+  const held = await openedTurnLines(live.prompts, fresh, undefined, 0, closed)
+  if (held) return held
   // Without a fresh prompt among them, only what was taken in mid-turn is still to draw.
-  const leftover = () => found.push(...live.prompts.splice(0).filter((item) => item.kind === "queued"))
-  if (!(await live.transcript.locate(live.state.nativeId).catch(() => undefined))) {
-    leftover()
-    return found
-  }
+  const leftover = () => live.prompts.splice(0).filter((item) => item.kind === "queued")
+  if (!(await live.transcript.locate(live.state.nativeId).catch(() => undefined))) return leftover()
   const tail = live.tail?.path === live.transcript.path ? live.tail : undefined
+  if (tail) return (await openedTurnLines(live.prompts, fresh, () => tail.read(), openedAt + TASK_PROMPT_WAIT_MS, closed)) ?? leftover()
   for (const deadline = openedAt + TASK_PROMPT_WAIT_MS; ;) {
-    if (tail) {
-      live.prompts.push(...tail.read())
-      if (take()) return found
-    } else {
-      const prompt = await live.transcript.taskNotification(live.state.nativeId, openedAt - 10_000).catch(() => undefined)
-      if (prompt && prompt.id !== live.providerTurnPrompt) return [...found, transcriptNotification("prompt", prompt.id, new Date(prompt.at).toISOString(), prompt.text, live.outputs)]
-    }
-    if (live.closed || Date.now() >= deadline) {
-      leftover()
-      return found
-    }
+    const prompt = await live.transcript.taskNotification(live.state.nativeId, openedAt - 10_000).catch(() => undefined)
+    if (prompt && prompt.id !== live.providerTurnPrompt) return [transcriptNotification("prompt", prompt.id, new Date(prompt.at).toISOString(), prompt.text, live.outputs)]
+    if (live.closed || Date.now() >= deadline) return leftover()
     await delay(50)
   }
 }
@@ -448,12 +432,7 @@ async function pump(engine: Engine, live: Live): Promise<void> {
       if (live.compaction && message.user_message_uuid &&
         message.user_message_uuid !== live.compaction.runId &&
         !message.user_message_uuids?.includes(live.compaction.runId)) continue
-      // A steer aborts the step it lands in, a reply streaming or a command
-      // running, and Claude opens a query for it after this result (Claude
-      // Code 2.1.278 and 2.1.293, `steered-shell` pairs).
-      if (live.steered && (message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools"))
-        continue
-      if ((message.queued_turn_count ?? 0) > 0) continue
+      if (claudeTurnGoesOn(message, live.steered)) continue
       // A turn Claude started on a notification ended while Mako's message waited behind it (its notice of background
       // work it found stopped, as a session reopens, makes no model call): Mako's turn is still to come, and its own
       // result ends it.

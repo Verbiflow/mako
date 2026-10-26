@@ -94,6 +94,19 @@ export const TurnCauseSchema = z.discriminatedUnion("kind", [
 ])
 export type TurnCause = z.infer<typeof TurnCauseSchema>
 
+/**
+ * A provider's retries of the model, measured by Mako as they streamed: how
+ * many it made, from its first retry notice to the answer that ended them
+ * (`recovered`) or the failure it gave up on. Mako draws one marker for them
+ * (`retriesEvent`); no harness's record keeps that measure.
+ */
+export const RetriesSchema = z.object({
+  count: z.number().int().positive(),
+  outcome: z.enum(["recovered", "gave-up"]),
+  durationMs,
+})
+export type Retries = z.infer<typeof RetriesSchema>
+
 export interface TranscriptEvent {
   /** Native identity, when the source provides one. Never a generated replay ID. */
   source?: z.infer<typeof NativeEventSourceSchema>
@@ -116,6 +129,8 @@ export interface TranscriptEvent {
   cause?: TurnCause
   /** The marker reports a usage limit refusing work (`usageLimitEvent`). */
   limit?: UsageLimit
+  /** The marker sums up a provider's retries (`retriesEvent`). */
+  retries?: Retries
 }
 
 /** `marker` as the report of a usage limit, with what the harness said of it. */
@@ -291,6 +306,25 @@ export function turnFailedEvent(
   body?: string
 ): TranscriptEvent {
   return { ...event(TURN_FAILED, reason, body), tone: "error" }
+}
+
+/**
+ * The marker for a provider's retries once they end, a quiet line either way:
+ * "Recovered after 3 retries", or "Retried 5 times" before the failure the
+ * provider gave up on, which says the failure itself. `reason` is the
+ * provider's own words for what failed, as it gave them while it retried; the
+ * label says the outcome on every harness alike.
+ */
+export function retriesEvent(retries: Retries, reason?: string): TranscriptEvent {
+  const marker = event(retriesLabel(retries), reason)
+  marker.retries = retries
+  return marker
+}
+
+/** "Recovered after 3 retries", or, before a failure, "Retried 5 times", "Retried once". */
+export function retriesLabel({ count, outcome }: Pick<Retries, "count" | "outcome">): string {
+  if (outcome === "gave-up") return `Retried ${count === 1 ? "once" : `${count} times`}`
+  return `Recovered after ${count} ${count === 1 ? "retry" : "retries"}`
 }
 
 /** A marker whose empty detail and body are left out, so saved entries stay small. */

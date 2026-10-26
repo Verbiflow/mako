@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url"
 import type { OpenCodeEvent } from "@opencode/client"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { OPENCODE_PLAN_AGENT, UNNAMED_TURN, type ProviderTurnCause } from "@mako/sessions"
-import { compactionFailedEvent, type TranscriptEvent } from "@mako/sessions/events"
+import { compactionFailedEvent, type NativeEventSource, type TranscriptEvent } from "@mako/sessions/events"
 import { applyControlEnvironment } from "../../control/index.js"
 import { launchContext, reportedRuntime } from "../../base/execution-context.js"
 import { NO_NATIVE_EXCLUSION } from "../../contracts/execution-context.js"
@@ -112,7 +112,7 @@ interface Live {
   /** Waiting for a subagent session's execution to settle, by its session. */
   childSettling: Map<string, Array<() => void>>
   /** The latest notice OpenCode enqueued while no turn ran: the cause of the turn it starts on it. */
-  providerTurnCause?: ProviderTurnCause
+  providerTurnCause?: ProviderTurnCause & { source?: NativeEventSource }
   /** Shells and subagent sessions Stop ended. OpenCode notifies the root of each end. */
   stopped: Set<string>
   /** Those notices, by inbox item. A turn OpenCode starts on one is stopped too. */
@@ -414,7 +414,8 @@ export function createOpenCodeDriver(dependencies: OpenCodeDriverDependencies): 
 
   function observeNotice(live: Live, inbox: string, notice: OpenCodeNotice): void {
     if (notice.ended && live.stopped.delete(notice.ended)) live.stopNotices.add(inbox)
-    if (!live.turn && notice.cause) live.providerTurnCause = notice.cause
+    // The notice is the inbox item OpenCode saves as the line that opens the turn: the turn cites it, as saved history does.
+    if (!live.turn && notice.cause) live.providerTurnCause = { ...notice.cause, source: { harness: "opencode", record: inbox } }
   }
 
   function mark(live: Live, markers: readonly TranscriptEvent[]): void {

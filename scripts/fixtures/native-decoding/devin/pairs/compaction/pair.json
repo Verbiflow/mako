@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#patch-kick",
+      "path": ".local/share/devin/cli/sessions.db#cord-anger",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/0e7467ae-f348-4872-bbd1-c3980faf6b29.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/10948a32-cdd8-40f5-a2b2-3307925a8957.db",
       "known": [
         {
           "side": "-",

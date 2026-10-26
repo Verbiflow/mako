@@ -8,13 +8,13 @@ import { SHUTDOWN_GRACE_MS, conversationServers, type AdmittedStartOptions, type
 import { createLiveEngine } from "./live-engine.js"
 import { AcpPromptTurn } from "./acp-prompt-turn.js"
 import { AcpCompaction, compactionOutcome } from "./acp-compaction.js"
-import { event, manualCompaction } from "@mako/sessions/events"
+import { manualCompaction } from "@mako/sessions/events"
 import type { ProviderTurnCause } from "@mako/sessions/provider-turn"
 import type { NativeNotice } from "../contracts/native-activity.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
 import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "./acp-access.js"
-import { acpClientCapabilities, type AcpLaunchOptions, type AcpAgentObserver } from "./acp-source.js"
+import { acpClientCapabilities, midTurnMarker, TURN_CONTENT, type AcpLaunchOptions, type AcpAgentObserver } from "./acp-source.js"
 import { accessModeId, accessTierOfModeId, type AccessTier } from "../contracts/access.js"
 import { heavy } from "../base/heavy-packages.js"
 import { adapters } from "./heavy.js"
@@ -170,8 +170,6 @@ interface Live {
   sideListener?: (update: SessionNotification) => void
 }
 
-/** Output that begins a turn. A tool update can still belong to the turn before. */
-const TURN_CONTENT = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "plan"])
 
 function newSessionRequest(
   cwd: string,
@@ -657,7 +655,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       }
       if (providerTurns?.midTurn !== "marker") return
       // Taken into the running turn, where saved history draws it. The observer timed it by the host's clock, which a replay can't.
-      const marker = { ...event(cause.reason, undefined, cause.body), ...cause.cause && { cause: cause.cause } }
+      const marker = midTurnMarker(cause)
       const frame = live.stream?.drawn(JSON.parse(JSON.stringify({ kind: "event", ...marker })))
       withFrame(frame, () => engine.event(live, marker))
     }

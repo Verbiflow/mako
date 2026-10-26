@@ -6,6 +6,7 @@ import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-cont
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import type { ConversationSettings } from "@mako/host/contracts/turn-continuation"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
@@ -119,6 +120,9 @@ const STAGED_MEDIA = new Map<string, string>()
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 /** Whether a fixture hands agents to the cloud as the Mac sleeps. */
 const mockHandOffOnSleep = { value: true }
+/** The fixture's conversation settings, off as on a new Mac. */
+interface MockConversationSettings { value: ConversationSettings }
+const mockConversationSettings: MockConversationSettings = { value: { continueAfterRestart: false } }
 /** `?return=outdated`: the first way back stays, Codex here being older than the one that wrote it in the cloud. */
 const mockReturnOutdated = { value: new URLSearchParams(globalThis.location?.search).get("return") === "outdated" }
 const MOCK_PROVIDERS: UtilityProviderInfo[] = [
@@ -2714,6 +2718,12 @@ export function installMockBridge() {
     handOff: async (handOff: string): Promise<HandOffResult[]> => {
       const candidates = (await window.mako!.handOffCandidates()).filter((candidate) => !candidate.refusal)
       return Promise.all(candidates.map(async (candidate) => ({ conversationId: candidate.conversationId, outcome: await window.mako!.threadMove(candidate.conversationId, `${handOff}:${candidate.thread}`, { why: "quit" }) })))
+    },
+    conversationSettings: async (): Promise<ConversationSettings> => mockConversationSettings.value,
+    setConversationSettings: async (settings: ConversationSettings): Promise<ConversationSettings> => {
+      mockConversationSettings.value = settings
+      emit({ type: "conversation-settings", settings })
+      return settings
     },
     handOffSettings: async (): Promise<HandOffSettings> => ({ onSleep: mockHandOffOnSleep.value }),
     setHandOffOnSleep: async (onSleep: boolean): Promise<HandOffSettings> => {

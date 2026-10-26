@@ -314,6 +314,13 @@ function parseResponseItem(root: CodexJsonObject, payload: CodexJsonObject, at: 
           return { kind: "ignored", at, unread: { kind: `response_item message ${stringValue(payload["role"]) ?? "(no role)"}`, reason: "unknown", record: root } }
       }
     }
+    case "agent_message": {
+      // The task an agent was spawned on, which its spawner sends it as its first message: the agent's own prompt.
+      // Its payload is the spawn call's plain `message` (`AgentMessage::Encrypted` names content that may be encrypted, not content that is).
+      const task = NewTask.safeParse(payload["content"]).data
+      if (!task) return { kind: "ignored", at }
+      return { kind: "user_response", id: stringValue(payload["id"]), at, text: task, attachments: [] }
+    }
     case "reasoning":
       // Codex joins summary parts with a blank line, as the app-server streams them.
       return { kind: "reasoning_response", id: stringValue(payload["id"]), at, text: textOf(payload["summary"], "\n\n") || textOf(payload["content"]) }
@@ -427,6 +434,15 @@ const CollabItem = z.object({
   agents_states: z.record(z.string(), AgentState.nullable()).catch({}),
 })
 const ImageViewItem = z.object({ id: z.string(), path: z.string() })
+/** An agent message's parts when it is a new task: the header, then the task's text. */
+const NewTask = z.array(z.object({ type: z.string(), text: z.string().optional(), encrypted_content: z.string().optional() }).loose())
+  .transform((parts, context) => {
+    const header = parts.find((part) => part.type === "input_text")?.text
+    const task = parts.flatMap((part) => part.type === "encrypted_content" && part.encrypted_content ? [part.encrypted_content] : part.type === "input_text" && part.text && part !== parts[0] ? [part.text] : []).join("\n")
+    if (header?.startsWith("Message Type: NEW_TASK") && task) return task
+    context.addIssue({ code: "custom", message: "not a new task" })
+    return z.NEVER
+  })
 const SpawnActivity = z.object({ id: z.string(), kind: z.literal("started"), agent_path: z.string() })
 /** The model's name for each agent tool, where the item names it otherwise. */
 const AGENT_TOOLS = new Map([["wait", "wait_agent"]])

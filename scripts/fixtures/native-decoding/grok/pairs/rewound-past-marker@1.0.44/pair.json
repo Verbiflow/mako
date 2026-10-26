@@ -18,6 +18,11 @@
           "side": "-",
           "line": "note: Turn failed — Server error",
           "reason": "The rewind took this turn and its failure marker back out: Grok 1.0.44 appends a `rewind_marker` to updates.jsonl and sends the client nothing, so the store drops the turn where Grok's own replay does while the live drawing, which never hears of the rewind, keeps it. Mako declares no rewind for Grok."
+        },
+        {
+          "side": "-",
+          "line": "note: Retried 3 times",
+          "reason": "Mako sums up the retries it watched on the wire (Grok's `retry_state` updates) in one marker, measured by the frames' clock; the store keeps each retry's update, never Mako's measure, so only the live drawing has it (RETRY_MARKERS, declared stream-only)."
         }
       ]
     }

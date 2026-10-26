@@ -15,7 +15,7 @@ import type { LiveCheckpoints } from "./live-checkpoints.js"
 import { releaseExited } from "./live-launches.js"
 import type { LiveQuestions } from "./live-questions.js"
 import { revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
-import { settleRequest } from "./live-settlement.js"
+import { settleRequest, turnSpendAt, usageMark } from "./live-settlement.js"
 import { updateBinding } from "./live-sources.js"
 
 type EventsAccess = Pick<LiveAccess,
@@ -109,6 +109,7 @@ export class LiveEvents {
       resident.activityAt = Date.now()
     if (event.type === "live-session") {
       const previousStatus = resident.snapshot.session.status
+      const usageBefore = usageMark(resident.snapshot.session.usage)
       const finishedRequest = resident.snapshot.requests.find(
         (request) => request.status === "dispatching"
       )
@@ -152,6 +153,9 @@ export class LiveEvents {
         void revokeTools(dependencies, bindingId, id)
         if (exited && !resident.closing && !resident.hibernating) releaseExited(resident, exited, id, bindingId)
       }
+      // A turn the harness starts on its own counts from the last turn's end in this process, else from the meter before it.
+      if (previousStatus !== "running" && event.session.status === "running" && !finishedRequest && resident.snapshot.spentThrough?.bindingId !== bindingId)
+        resident.snapshot = { ...resident.snapshot, spentThrough: { bindingId, usage: usageBefore ?? {} } }
       if (event.session.status === "running") this.access.goalSpent(resident)
       const gone = event.session.connection === "disconnected" || event.session.status === "closed"
       // The request this turn's end settles: only one the harness was given (`handedOver`), unless its process went.
@@ -180,13 +184,17 @@ export class LiveEvents {
                   request,
                   outcome,
                   resident.closing || resident.stopping === request.id,
-                  resident.stopping === request.id ? resident.stoppingFor : undefined
+                  resident.stopping === request.id ? resident.stoppingFor : undefined,
+                  resident.stopping === request.id ? resident.stoppingWork : undefined
                 )
               : request
           ),
         }
         resident.stopping = undefined
         resident.stoppingFor = undefined
+        resident.stoppingWork = undefined
+        if (previousStatus === "running")
+          resident.snapshot = { ...resident.snapshot, ...turnSpendAt(resident.snapshot, bindingId, { ended: true, ownTurn: !finishedRequest, gone }) }
         if (settling) {
           if (resident.snapshot.requests.find((request) => request.id === settling.id)?.failure === "auth")
             resident.snapshot = {
@@ -201,6 +209,9 @@ export class LiveEvents {
           this.access.goalSettled(resident, settling.id)
         }
       }
+      // The process went between turns: what it spent after the last one is kept, and its meter is counted no more.
+      if (gone && previousStatus !== "running")
+        resident.snapshot = { ...resident.snapshot, ...turnSpendAt(resident.snapshot, bindingId, { ended: false, ownTurn: false, gone }) }
     } else if (event.type === "live-rewound") {
       this.access.nativeRewound(resident, event.run)
     } else if (event.type === "live-goal") {

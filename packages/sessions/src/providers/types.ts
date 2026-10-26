@@ -220,6 +220,16 @@ export interface SessionProvider {
   readonly fork?: RecordFork
 
   /**
+   * The session's own history counts what its child agents spent, in the
+   * turns they ran in: Grok's store does (its `turn_completed`, and a woken
+   * subagent's turns read beside it), and Devin's reader does from the
+   * store's chains. Unset, a child's spend is in its own history alone
+   * (`children`), and a conversation's history totals the session's and
+   * its children's. Their live meters count both either way.
+   */
+  readonly subagentSpendInParent?: true
+
+  /**
    * The child agents this session started, as the store links them to it,
    * nested ones included (`spawnedBy`). Reads what links them (sidecars,
    * index rows, the session's own lines that name a child) and never a

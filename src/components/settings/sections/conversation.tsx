@@ -17,6 +17,10 @@ export const section = {
     "steer",
     "queue",
     "enter",
+    "continue",
+    "restart",
+    "update",
+    "interrupted",
   ],
   Component: ConversationSection,
 } as const satisfies SettingsSection

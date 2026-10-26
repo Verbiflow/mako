@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { inclusiveTokens, tokenCount, type HarnessTokens } from "./tokens.js"
 import { defineVocabulary } from "./vocabulary.js"
-import { cutOffTurn, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
+import { cutOffTurn, RETRY_MARKERS, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 
 /**
  * The app server reports no tool list. Rollouts record `function_call`
@@ -106,6 +106,7 @@ export const CODEX_VOCABULARY = defineVocabulary({
     },
     stream: [
       SETUP_NOTICES,
+      RETRY_MARKERS,
       STOP_MARKER,
       ...cutOffTurn(["tool"], "Codex 0.159.3 writes a call's function_call to the rollout with its output, so a call its process died under is never kept; the flows of 2026-10-16 stream one in a killed turn (01a144cf-05cb) whose rollout lacks it."),
       {
@@ -232,8 +233,8 @@ export const CODEX_RESPONSE_ITEMS = {
   configuration_update: "skipped",
   // The tools a turn offered the model beyond the session's own, for the next request.
   additional_tools: "skipped",
-  // A message between agents; each agent call is drawn from its own call.
-  agent_message: "skipped",
+  // A message between agents: the task an agent was spawned on is its prompt; the rest are drawn from each agent call.
+  agent_message: "read",
   image_generation_call: "undrawn",
 } as const satisfies Record<string, CodexRecordReading>
 
