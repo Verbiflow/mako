@@ -106,7 +106,7 @@ for (const harness of harnesses) {
   assert.ok(existsSync(fixtures) && readdirSync(fixtures).some((name) => name.endsWith(".json")), `${harness.provider} has decoding fixtures in ${fixtures}`)
 }
 
-const host = createProviderHost()
+const host = createProviderHost(detachedHarnessContext(new NativeStores(false)))
 /** Mako's own where it has one, and a lack everywhere else: what a harness with none of its own declares. */
 // SAFETY: the entries cover every HARNESS_FEATURE_KEYS key.
 const ownless = Object.fromEntries(HARNESS_FEATURE_KEYS.map((key) =>

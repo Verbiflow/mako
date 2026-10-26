@@ -12,8 +12,8 @@ import { z } from "zod"
 import { AccountLogins } from "@mako/host/harnesses/account-login"
 import { HostJobs } from "@mako/host/base/host-jobs"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
-import { accountDir } from "@mako/host/harnesses/accounts-common"
-import { claudeAccountCapability as claude } from "@mako/host/harnesses/claude/accounts"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
+import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
 import { codexAccountCapability } from "@mako/host/harnesses/codex/accounts"
 import { grokAccountCapability } from "@mako/host/harnesses/grok/accounts"
 import { createDevinAccountCapability } from "@mako/host/harnesses/devin/accounts"
@@ -29,15 +29,21 @@ import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
 
-const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+// Real facade/adapters, private homes and fake OS credential store. No native login or network.
+const root = await mkdtemp(join(os.tmpdir(), "mako-account 'profiles-"))
+// The accounts are where the installed app keeps them, `~/.mako/accounts` in this scratch home.
+const accountRoot = new AccountRoot(join(root, ".mako"))
+const accountDir = (provider: string, name: string) => accountRoot.dir(provider, name)
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores, join(root, "data"), join(root, ".mako")))
 
 const { accounts } = providerHost
 const logins = new AccountLogins(accounts, new HostJobs())
 
 const processes = new DiscoveryProcesses()
-const codex = codexAccountCapability(processes)
-const grok = grokAccountCapability(processes)
-const devin = createDevinAccountCapability()
+const claude = claudeAccountCapability(accountRoot)
+const codex = codexAccountCapability(accountRoot, processes)
+const grok = grokAccountCapability(accountRoot, processes)
+const devin = createDevinAccountCapability(accountRoot)
 const opencode = openCodeAccountCapability(nativeStores)
 
 const securityStandIn = fileURLToPath(new URL("./fixtures/security-stand-in.cjs", import.meta.url))
@@ -45,8 +51,6 @@ const securityStandIn = fileURLToPath(new URL("./fixtures/security-stand-in.cjs"
 /** The fake Cursor SDK child's reply per method; an unlisted method is a test failure. */
 type CursorAnswers = { [Method in SdkMethod]?: () => SdkResult<Method> }
 
-// Real facade/adapters, private homes and fake OS credential store. No native login or network.
-const root = await mkdtemp(join(os.tmpdir(), "mako-account 'profiles-"))
 const original = { ...process.env }
 mock.method(os, "homedir", () => root)
 syncBuiltinESMExports()

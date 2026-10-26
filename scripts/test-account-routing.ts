@@ -5,26 +5,24 @@ import os from "node:os"
 import { join } from "node:path"
 import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
-import {
-  accountDir,
-  accountsRoot,
-  readSelection,
-  writeSelection,
-} from "@mako/host/harnesses/accounts-common"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
 import { codexAccountCapability } from "@mako/host/harnesses/codex/accounts"
 import { openCodeAccountCapability } from "@mako/host/harnesses/opencode/accounts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 
-const codexAccounts = codexAccountCapability(new DiscoveryProcesses())
+const sandbox = await mkdtemp(join(os.tmpdir(), "mako-account-routing-"))
+const accounts = new AccountRoot(join(sandbox, ".mako"))
+const accountDir = (provider: string, name: string) => accounts.dir(provider, name)
+const codexAccounts = codexAccountCapability(accounts, new DiscoveryProcesses())
+const claudeAccounts = claudeAccountCapability(accounts)
 const openCodeAccounts = openCodeAccountCapability(new NativeStores(false))
 
-const sandbox = await mkdtemp(join(os.tmpdir(), "mako-account-routing-"))
 mock.method(os, "homedir", () => sandbox)
 syncBuiltinESMExports()
 try {
-  for (const capability of [codexAccounts, claudeAccountCapability]) {
+  for (const capability of [codexAccounts, claudeAccounts]) {
     const base = {
       OPENAI_API_KEY: "fixture",
       ANTHROPIC_API_KEY: "fixture",
@@ -125,7 +123,7 @@ try {
   await mkdir(claudeDir, { recursive: true })
   await writeFile(join(claudeDir, ".credentials.json"), "{}")
   await assert.rejects(
-    claudeAccountCapability.accountEnv("ready", {}),
+    claudeAccounts.accountEnv("ready", {}),
     /signed out\. Sign in again/
   )
   await writeFile(
@@ -133,21 +131,21 @@ try {
     JSON.stringify({ claudeAiOauth: { accessToken: "fixture" } })
   )
   assert.deepEqual(
-    await claudeAccountCapability.accountEnv("ready", {
+    await claudeAccounts.accountEnv("ready", {
       ANTHROPIC_API_KEY: "other",
     }),
     { CLAUDE_CONFIG_DIR: claudeDir }
   )
   await Promise.all([
-    writeSelection("codex", "ready"),
-    writeSelection("claude", "saved"),
+    accounts.writeSelection("codex", "ready"),
+    accounts.writeSelection("claude", "saved"),
   ])
-  assert.equal(await readSelection("codex"), "ready")
-  assert.equal(await readSelection("claude"), "saved")
-  await writeFile(join(accountsRoot(), "selection", "codex.json"), "broken")
-  await assert.rejects(readSelection("codex"), /selection is invalid/)
-  await writeSelection("codex", null)
-  assert.equal(await readSelection("codex"), null)
+  assert.equal(await accounts.readSelection("codex"), "ready")
+  assert.equal(await accounts.readSelection("claude"), "saved")
+  await writeFile(join(sandbox, ".mako", "accounts", "selection", "codex.json"), "broken")
+  await assert.rejects(accounts.readSelection("codex"), /selection is invalid/)
+  await accounts.writeSelection("codex", null)
+  assert.equal(await accounts.readSelection("codex"), null)
   const savedHomes = {
     CODEX_HOME: process.env.CODEX_HOME,
     CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
@@ -172,7 +170,7 @@ try {
       "an exported CODEX_HOME does not move the default account"
     )
     assert.equal(
-      (await claudeAccountCapability.listAccounts(null)).find(
+      (await claudeAccounts.listAccounts(null)).find(
         (account) => account.name === "default"
       )?.dir,
       join(sandbox, ".claude"),
@@ -184,7 +182,7 @@ try {
     )
     for (const capability of [
       codexAccounts,
-      claudeAccountCapability,
+      claudeAccounts,
       openCodeAccounts,
     ]) {
       assert.ok(capability.label)

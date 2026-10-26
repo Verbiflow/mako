@@ -16,6 +16,7 @@ import { LiveDrivers } from "./live-drivers.js"
 import { LaunchReadings, runtimeFloor } from "./runtime-floor.js"
 import { accountAdmission } from "./execution-admission.js"
 import { HarnessAccounts } from "./accounts.js"
+import { AccountRoot } from "./accounts-common.js"
 import { join } from "node:path"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import type { DomainSecrets } from "../base/host-secrets.js"
@@ -58,7 +59,7 @@ export interface ProviderHost {
 export interface HarnessContext {
   /** The host's data root; a launch keeps the native approvals it observed under `approval-evidence`. */
   readonly dataRoot: string
-  /** What the host keeps per user (`HostEnvironment.userRoot`): a driver's kept outputs. */
+  /** What the host keeps per user (`HostEnvironment.userRoot`): a driver's kept outputs, and the accounts Mako keeps (`AccountRoot`). */
   readonly userRoot: string
   /** The app's own files, where a harness's bundled adapter is found. */
   readonly appRoot: string
@@ -81,9 +82,10 @@ export function approvalRoot(context: Pick<HarnessContext, "dataRoot">): string 
 
 export type ProviderModule = (host: ProviderHost, context: HarnessContext) => void
 
-export function createProviderHost(work: HostWork = unwatchedWork): ProviderHost {
+/** A host with no harness installed yet, keeping its accounts in its user root's (`AccountRoot`). */
+export function createProviderHost({ userRoot, work = unwatchedWork }: Pick<HarnessContext, "userRoot"> & { work?: HostWork }): ProviderHost {
   const accountCapabilities = new ProviderRegistry<ProviderAccountCapability>()
-  const accounts = new HarnessAccounts(accountCapabilities)
+  const accounts = new HarnessAccounts(accountCapabilities, new AccountRoot(userRoot))
   const harnesses = new ProviderRegistry<HarnessRecord>()
   const profiles = new ProviderRegistry<ProviderProfileLoader>()
   const updateSources = new ProviderRegistry<ProviderUpdateSource>()

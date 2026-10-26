@@ -98,8 +98,9 @@ const seventh: HarnessDefinition = {
   ],
 }
 
-const host = createProviderHost()
-installClaude(host, detachedHarnessContext(nativeStores))
+const detached = detachedHarnessContext(nativeStores)
+const host = createProviderHost(detached)
+installClaude(host, detached)
 installHarness(host, seventh)
 
 // Its name, wherever Mako shows one: transcripts and the usage table.
@@ -115,36 +116,36 @@ const reported = host.harnesses.get("seventh")!.usage
 assert.deepEqual(reported.cost, { state: "absent", by: "harness", reason: "Seven reports no cost." })
 assert.deepEqual(reported.contextBreakdown, capabilities.contextBreakdown)
 assert.deepEqual(reported.outsideMako, { state: "absent", by: "harness", reason: "Its store keeps no token counts, so only its sessions in Mako are counted." })
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, usage: { ...seventh.usage, window: harnessLacks("no window") } }), /context fill without its window/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, usage: { ...seventh.usage, resetCredits: implemented("credits") } }), /reset credits its accounts can't spend/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, usage: { ...seventh.usage, limitSwitch: implemented("switches") } }), /another account at a limit, but its accounts can't be switched/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, usage: { ...seventh.usage, cost: byDefault("later") } }), /only after compaction/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, profile: { ...seventh.profile, defaults: { work: [] } } }), /picks no model for new conversations and doesn't say why/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, usage: { ...seventh.usage, window: harnessLacks("no window") } }), /context fill without its window/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, usage: { ...seventh.usage, resetCredits: implemented("credits") } }), /reset credits its accounts can't spend/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, usage: { ...seventh.usage, limitSwitch: implemented("switches") } }), /another account at a limit, but its accounts can't be switched/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, usage: { ...seventh.usage, cost: byDefault("later") } }), /only after compaction/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, profile: { ...seventh.profile, defaults: { work: [] } } }), /picks no model for new conversations and doesn't say why/)
 
 // Its shared features under Mako's names, each with what Seven calls it.
 const resolved = host.harnesses.get("seventh")!.features
 assert.deepEqual(resolved.imageGeneration, { native: { name: "/draw", where: "its `/draw` command" }, mako: { state: "implemented", through: "harness", via: "The picture, in the transcript." } })
 assert.deepEqual(resolved.worktrees.mako, { state: "implemented", through: "mako", via: HARNESS_FEATURES.worktrees.mako })
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, worktrees: { mako: harnessLacks("Seven can't") } } }), /says it lacks Worktrees, but Mako's own serves every harness/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, review: { mako: shownAs("Its review.") } } }), /shows its own Code review without naming it/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, features: { ...features, worktrees: { mako: harnessLacks("Seven can't") } } }), /says it lacks Worktrees, but Mako's own serves every harness/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, features: { ...features, review: { mako: shownAs("Its review.") } } }), /shows its own Code review without naming it/)
 // Every harness has a goal: its own, which its driver sets, or Mako's loop.
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, goals: { native: native("/aim", "its `/aim` command"), mako: makoLacks("later") } } }), /declares its goals as absent, but its live driver keeps them natively/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, goals: { mako: makosOwn() } } }), /declares its goals as mako, but its live driver keeps them natively/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, sideQuestions: { mako: makosOwn() } } }), /declares its side questions as mako, but its live driver answers them natively/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, sideQuestions: { native: native("/aside", "its `/aside` command"), mako: makoLacks("later") } } }), /declares its side questions as absent, but its live driver answers them natively/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, live: { ...seventh.live, sideQuestions: { kind: "not-built", reason: "later" } } }), /declares its side questions as harness, but its live driver answers them not at all/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, features: { ...features, goals: { native: native("/aim", "its `/aim` command"), mako: makoLacks("later") } } }), /declares its goals as absent, but its live driver keeps them natively/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, features: { ...features, goals: { mako: makosOwn() } } }), /declares its goals as mako, but its live driver keeps them natively/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, features: { ...features, sideQuestions: { mako: makosOwn() } } }), /declares its side questions as mako, but its live driver answers them natively/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, features: { ...features, sideQuestions: { native: native("/aside", "its `/aside` command"), mako: makoLacks("later") } } }), /declares its side questions as absent, but its live driver answers them natively/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, live: { ...seventh.live, sideQuestions: { kind: "not-built", reason: "later" } } }), /declares its side questions as harness, but its live driver answers them not at all/)
 // Every harness has a review: its own, or Mako's prompt.
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, features: { ...features, review: { mako: makosOwn() } } }), /declares its review as mako, but its live driver starts the harness's own review/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, live: { ...seventh.live, review: { kind: "mako", reason: "Seven has none." } } }), /declares its review as harness, but its live driver starts Mako's review prompt/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, features: { ...features, review: { mako: makosOwn() } } }), /declares its review as mako, but its live driver starts the harness's own review/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, live: { ...seventh.live, review: { kind: "mako", reason: "Seven has none." } } }), /declares its review as harness, but its live driver starts Mako's review prompt/)
 
 // What only it has: no name a shared declaration uses, and an artifact preview names its files.
-const own = (unique: HarnessDefinition["unique"]) => () => installHarness(createProviderHost(), { ...seventh, unique })
+const own = (unique: HarnessDefinition["unique"]) => () => installHarness(createProviderHost(detached), { ...seventh, unique })
 assert.throws(own([{ name: "Artifact previews", native: "Seven's boards", mako: makoLacks("later") }]), /lists Artifact previews as its own, but it's the shared `artifactPreview` family/)
 assert.throws(own([{ name: "Image generation", native: "/draw", mako: makoLacks("later") }]), /lists Image generation as its own, but it's Mako's shared Image generation; declare it in `features`/)
 assert.throws(own([{ name: "Tools", native: "Seven's own tools", mako: shownInTools(["seven_search"]) }]), /tool rows for seven_search, which its vocabulary doesn't declare/)
 assert.throws(own([seventh.unique[0]!, seventh.unique[0]!]), /lists its own feature Dreams twice/)
 assert.throws(own([{ name: "Teleport", native: "none", mako: harnessLacks("Seven can't") }]), /as its own feature and as one it lacks/)
-assert.throws(() => installHarness(createProviderHost(), { ...seventh, artifactPreview: { ...boards, files: [] } }), /must name its artifacts/)
+assert.throws(() => installHarness(createProviderHost(detached), { ...seventh, artifactPreview: { ...boards, files: [] } }), /must name its artifacts/)
 assert.equal(host.harnesses.list().length, 2, "a refused declaration installs nothing")
 assert.ok(previewsFile(host.artifactPreviews.get("seventh")!, "plans/q3.board.html"))
 assert.ok(!previewsFile(host.artifactPreviews.get("seventh")!, "plans/q3.html"))
@@ -181,7 +182,7 @@ assert.match(declared, /kept after the turn and through a restart/)
 assert.match(declared, /Only in Seventh Agent/)
 assert.match(declared, /data-capability="unique\.Dreams" data-standing="gap" title="`\/dream`, between turns"/)
 assert.match(declared, /data-capability="contextBreakdown" data-standing="gap".*?Not in Mako yet\. .*?Seven itemizes its context; Mako does not read it yet/s)
-const bare = createProviderHost()
+const bare = createProviderHost(detached)
 installHarness(bare, {
   ...seventh,
   live: { ...seventh.live, questions: { kind: "unavailable", reason: "Seven never asks you anything." } },

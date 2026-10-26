@@ -63,7 +63,7 @@ export const installDevin: ProviderModule = (host, context) => {
     live: createAcpLiveDriver(acp, host, context),
     decoder: acpDecoderSource(acp),
     profile: devinProfileLoader(context.stores, host.discovery),
-    accounts: createDevinAccountCapability(),
+    accounts: createDevinAccountCapability(host.accounts.root),
     acp,
     nativeRunner: devinNativeRunner,
     processProbe: createDevinProcessProbe(),

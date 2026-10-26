@@ -12,6 +12,7 @@ import { HostJobs } from "@mako/host/base/host-jobs"
 import { observeProcessIdentity } from "@mako/host/base/process-liveness"
 import { LiveThreads } from "@mako/host/conversations/live-threads"
 import { AccountHolds } from "@mako/host/harnesses/account-holds"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
 import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
 import { followOtherHosts } from "@mako/host/threads/groups-follow"
 import { SESSION_MEMORY_SCHEMA, SessionHeldError, SessionMemory } from "@mako/host/threads/session-memory"
@@ -291,9 +292,9 @@ async function sharedFiles(): Promise<void> {
   mkdirSync(holds, { recursive: true })
   const { startedAt } = await observeProcessIdentity(process.ppid, AbortSignal.timeout(2_000))
   writeFileSync(join(holds, `${process.ppid}.json`), JSON.stringify({ version: 2, pid: process.ppid, startedAt, held: [{ account: "claude/work" }] }))
-  assert.equal(await new AccountHolds().heldElsewhere("claude", "work"), true, "a live host's newer lease counts as holding the account")
+  assert.equal(await new AccountHolds(new AccountRoot(join(root, "home", ".mako"))).heldElsewhere("claude", "work"), true, "a live host's newer lease counts as holding the account")
   writeFileSync(join(holds, `${process.ppid}.json`), JSON.stringify({ version: 2, pid: process.ppid, startedAt, accounts: ["claude/other"] }))
-  assert.equal(await new AccountHolds().heldElsewhere("claude", "work"), false, "one whose accounts it reads is read as they say")
+  assert.equal(await new AccountHolds(new AccountRoot(join(root, "home", ".mako"))).heldElsewhere("claude", "work"), false, "one whose accounts it reads is read as they say")
   console.log("PASS: shared files a newer Mako wrote are left to it, and its leases hold")
 }
 

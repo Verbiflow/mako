@@ -29,8 +29,6 @@ import {
   credentialFingerprint,
   principalFingerprint,
   readOptionalFile,
-  accountDir,
-  accountsRoot,
   cleanAccountName,
   deleteKeychain,
   ensureSharedLinks,
@@ -42,6 +40,7 @@ import {
   stringValue,
   valueFields,
   writeKeychain,
+  type AccountRoot,
 } from "../accounts-common.js"
 import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
@@ -75,8 +74,8 @@ function defaultHome(env: NodeJS.ProcessEnv = process.env) {
   return env.CLAUDE_CONFIG_DIR || join(homedir(), HOME)
 }
 /** The config folder an account's sessions are kept under: the CLI's ordinary one for `default`. */
-export function claudeConfigDir(account: string): string {
-  return account === "default" ? join(homedir(), HOME) : accountDir("claude", account)
+export function claudeConfigDir(root: AccountRoot, account: string): string {
+  return account === "default" ? join(homedir(), HOME) : root.dir("claude", account)
 }
 async function homeSettings(home: string): Promise<string | null> {
   try { return await readFile(join(home, "settings.json"), "utf8") }
@@ -258,6 +257,7 @@ async function accountEmail(dir: string): Promise<string | undefined> {
 }
 
 async function listAccounts(
+  root: AccountRoot,
   selection: string | null
 ): Promise<HarnessAccount[]> {
   const accounts: HarnessAccount[] = []
@@ -272,9 +272,9 @@ async function listAccounts(
     route: "native",
   })
   try {
-    for (const name of await readdir(join(accountsRoot(), "claude"))) {
+    for (const name of await readdir(root.provider("claude"))) {
       if (name.startsWith(".")) continue
-      const dir = accountDir("claude", name)
+      const dir = root.dir("claude", name)
       if (loginPending(dir)) continue
       accounts.push({
         harness: "claude",
@@ -403,13 +403,13 @@ export async function claudeCredentialState(env: NodeJS.ProcessEnv): Promise<Cla
  * Capture the CLI's current login as a named account. Credentials are copied,
  * never invented; browser OAuth remains the CLI's job.
  */
-async function captureAccount(name: string): Promise<void> {
+async function captureAccount(root: AccountRoot, name: string): Promise<void> {
   const clean = cleanAccountName(name)
   const env = nativeEnv(process.env)
   const realHome = join(homedir(), HOME)
   await assertProfileSettings(realHome)
-  const dir = accountDir("claude", clean)
-  await mkdir(join(accountsRoot(), "claude"), { recursive: true, mode: 0o700 })
+  const dir = root.dir("claude", clean)
+  await mkdir(root.provider("claude"), { recursive: true, mode: 0o700 })
   await mkdir(dir, { mode: 0o700 })
   let scopedLoginSaved = false
 
@@ -456,7 +456,7 @@ async function captureAccount(name: string): Promise<void> {
  * The runtime's own subscription sign-in: into an empty profile, or over the
  * expired login of one Mako keeps, which Claude replaces in place.
  */
-async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
+async function prepareAccountLogin(root: AccountRoot, { name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
   const runtime = claudeRuntime()
   if (!runtime) throw new Error("Claude Code isn't installed. Install it, then sign in.")
   const command = (dir: string): AccountLoginLaunch => {
@@ -473,14 +473,14 @@ async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise
     }
   }
   if (renew) {
-    const dir = accountDir("claude", name)
+    const dir = root.dir("claude", name)
     if (!existsSync(dir)) throw new Error("That Claude Code account is gone. Refresh to see your accounts.")
     return command(dir)
   }
-  const dir = accountDir("claude", cleanAccountName(name))
+  const dir = root.dir("claude", cleanAccountName(name))
   const home = join(homedir(), HOME)
   await assertProfileSettings(home)
-  await mkdir(join(accountsRoot(), "claude"), { recursive: true, mode: 0o700 })
+  await mkdir(root.provider("claude"), { recursive: true, mode: 0o700 })
   await mkdir(dir, { mode: 0o700 })
   try {
     await markLoginPending(dir)
@@ -490,22 +490,23 @@ async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error }
 }
 
-async function removeAccount(name: string): Promise<AccountRemoval> {
+async function removeAccount(root: AccountRoot, name: string): Promise<AccountRemoval> {
   if (name === "default")
     throw new Error("The default account is the CLI's own login")
-  const dir = accountDir("claude", name)
+  const dir = root.dir("claude", name)
   await deleteKeychain(scopedService(dir))
   await rm(dir, { recursive: true, force: true })
   return {}
 }
 
 async function accountEnv(
+  root: AccountRoot,
   selection: string | null,
   base: NodeJS.ProcessEnv
 ): Promise<NodeJS.ProcessEnv> {
   if (!selection) return nativeEnv(base)
   const env = nativeEnv(base)
-  const dir = accountDir("claude", selection)
+  const dir = root.dir("claude", selection)
   if (!existsSync(dir))
     throw new Error(
       "The selected Claude Code account no longer exists. Choose another account in Settings → Agents."
@@ -573,14 +574,10 @@ export async function claudeOAuthUsage(
   }
 }
 
-async function usageEnv(name: string, base: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
+async function usageEnv(root: AccountRoot, name: string, base: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
   const env = nativeEnv(base)
-  if (name !== "default") env.CLAUDE_CONFIG_DIR = accountDir("claude", name)
+  if (name !== "default") env.CLAUDE_CONFIG_DIR = root.dir("claude", name)
   return env
-}
-
-async function accountUsage(name: string): Promise<AccountUsage> {
-  return usageForEnv(await usageEnv(name))
 }
 
 function claudeState(env: NodeJS.ProcessEnv): string {
@@ -688,34 +685,37 @@ export const claudeCloudSignIn: CloudSignInCapability = {
   },
 }
 
-export const claudeAccountCapability: SelectableAccountCapability = {
-  provider: "claude",
-  mode: "selectable",
-  nativeLogin: true,
-  label: "Claude Code",
-  loginCommand: "claude auth login",
-  listAccounts,
-  captureAccount,
-  prepareAccountLogin,
-  removeAccount,
-  accountEnv,
-  selectedAccount: (selection, env) =>
-    ({ name: selection ?? "default", dir: defaultHome(env) }),
-  accountUsage,
-  usedElsewhere: {
-    everyMs: 5 * 60_000,
-    reason: "Claude on the web, the desktop app and the phone spend the same plan limits and leave nothing on this Mac.",
-    read: async (name) => usageForEnv(await usageEnv(name), false),
-  },
-  cloudSignIn: claudeCloudSignIn,
-  credentialRevision: async (name, base = process.env) => {
-    const env = await usageEnv(name, base)
-    const state = await readOptionalFile(claudeState(env))
-    return credentialFingerprint([defaultHome(env), env.USER ?? null,
-      principalFingerprint(await readCredentials(env), ClaudePrincipal),
-      principalFingerprint(state, ClaudeAccount),
-      await homeSettings(defaultHome(env))])
-  },
+/** Claude Code's accounts: its own login, and those Mako keeps in `root`. */
+export function claudeAccountCapability(root: AccountRoot): SelectableAccountCapability {
+  return {
+    provider: "claude",
+    mode: "selectable",
+    nativeLogin: true,
+    label: "Claude Code",
+    loginCommand: "claude auth login",
+    listAccounts: (selection) => listAccounts(root, selection),
+    captureAccount: (name) => captureAccount(root, name),
+    prepareAccountLogin: (target) => prepareAccountLogin(root, target),
+    removeAccount: (name) => removeAccount(root, name),
+    accountEnv: (selection, base) => accountEnv(root, selection, base),
+    selectedAccount: (selection, env) =>
+      ({ name: selection ?? "default", dir: defaultHome(env) }),
+    accountUsage: async (name) => usageForEnv(await usageEnv(root, name)),
+    usedElsewhere: {
+      everyMs: 5 * 60_000,
+      reason: "Claude on the web, the desktop app and the phone spend the same plan limits and leave nothing on this Mac.",
+      read: async (name) => usageForEnv(await usageEnv(root, name), false),
+    },
+    cloudSignIn: claudeCloudSignIn,
+    credentialRevision: async (name, base = process.env) => {
+      const env = await usageEnv(root, name, base)
+      const state = await readOptionalFile(claudeState(env))
+      return credentialFingerprint([defaultHome(env), env.USER ?? null,
+        principalFingerprint(await readCredentials(env), ClaudePrincipal),
+        principalFingerprint(state, ClaudeAccount),
+        await homeSettings(defaultHome(env))])
+    },
+  }
 }
 
 /**

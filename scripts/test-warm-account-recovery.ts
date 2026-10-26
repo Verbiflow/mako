@@ -49,7 +49,7 @@ try {
     let closeEntered = false
     let deliveryFailure: "accepted" | "uncertain" | undefined
     let expected: string | undefined
-    const host = createProviderHost()
+    const host = createProviderHost({ userRoot: join(root, ".mako") })
     const unregister = host.accountCapabilities.register({
       provider, mode: "selectable", label: provider, loginCommand: "fixture",
       listAccounts: async () => expected ? [{ harness: provider, name: "mismatch", email: expected, dir: root, active: true }] : [], accountEnv: async (name, base) => ({ ...base, FIXTURE_ACCOUNT: name ?? "default" }),

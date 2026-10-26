@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { query } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
-import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
+import { makoUserRoot } from "@mako/sessions/mako-root"
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { spawnClaudeProcess } from "@mako/host/harnesses/claude/sdk-process"
 import { ClaudeInput } from "@mako/host/harnesses/claude/input"
@@ -14,7 +14,8 @@ import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
 
-const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
+// The person's own accounts and their selection, as their Mako launches Claude.
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores, undefined, makoUserRoot()))
 
 // Opt-in native initialization, not a test gate. --authenticated submits one
 // bounded nonce question; the default submits nothing. Only our child closes.
@@ -40,7 +41,7 @@ const timer = setTimeout(() => abortController.abort(), authenticated ? 60_000 :
 let receipt: IdentityReceipt | undefined
 try {
   const launch = await providerHost.accounts.launch("claude", process.env)
-  const accounts = await claudeAccountCapability.listAccounts(launch.selection.kind === "selectable" ? launch.selection.name : null)
+  const accounts = await providerHost.accountCapabilities.get("claude")!.listAccounts(launch.selection.kind === "selectable" ? launch.selection.name : null)
   const selected = accounts.find(account => account.active)
   const configuration = await traceProviderLaunch("claude", id, trace => claudeSdkOptions(cwd, {
     conversationId: id, accountLaunch: launch,

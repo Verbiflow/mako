@@ -743,6 +743,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine })
   const usage = declareUsageMethods(methods, {
     dataRoot: environment.dataRoot,
+    userRoot: environment.userRoot,
     worker: new URL("./usage-worker.js", import.meta.url),
     strictStores: fixtureDesk,
   })

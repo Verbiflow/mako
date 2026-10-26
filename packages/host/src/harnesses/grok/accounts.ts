@@ -9,8 +9,6 @@ import type {
   UsageWindow,
 } from "../../contracts/accounts.js"
 import {
-  accountDir,
-  accountsRoot,
   cleanAccountName,
   principalFingerprint,
   readOptionalFile,
@@ -20,6 +18,7 @@ import {
   parseUsageReset,
   stringValue,
   valueFields,
+  type AccountRoot,
 } from "../accounts-common.js"
 import { childProcessEnv } from "../../base/child-environment.js"
 import { acpReadable, acpWritable } from "../acp-stream.js"
@@ -172,8 +171,8 @@ const AUTH_ENV = ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY", "GROK_AUTH"]
  * file beside itself, so two accounts never share a lock. Sessions, config
  * and skills stay in `~/.grok`, shared by every account.
  */
-function accountAuthPath(name: string): string {
-  return join(accountDir("grok", name), "auth.json")
+function accountAuthPath(root: AccountRoot, name: string): string {
+  return join(root.dir("grok", name), "auth.json")
 }
 
 /**
@@ -181,8 +180,8 @@ function accountAuthPath(name: string): string {
  * was is kept beside it, without any token.
  */
 const IdentitySchema = z.object({ email: z.string() })
-function identityPath(name: string): string {
-  return join(accountDir("grok", name), "identity.json")
+function identityPath(root: AccountRoot, name: string): string {
+  return join(root.dir("grok", name), "identity.json")
 }
 
 async function fileEmail(path: string): Promise<string | undefined> {
@@ -193,19 +192,18 @@ async function fileEmail(path: string): Promise<string | undefined> {
   }
 }
 
-async function managedAccounts(selection: string | null): Promise<HarnessAccount[]> {
-  const root = join(accountsRoot(), "grok")
+async function managedAccounts(root: AccountRoot, selection: string | null): Promise<HarnessAccount[]> {
   const accounts: HarnessAccount[] = []
-  for (const name of await readdir(root).catch(() => [])) {
-    if (name.startsWith(".") || loginPending(accountDir("grok", name))) continue
-    const signedIn = await fileEmail(accountAuthPath(name))
-    const email = signedIn ?? await readFile(identityPath(name), "utf8")
+  for (const name of await readdir(root.provider("grok")).catch(() => [])) {
+    if (name.startsWith(".") || loginPending(root.dir("grok", name))) continue
+    const signedIn = await fileEmail(accountAuthPath(root, name))
+    const email = signedIn ?? await readFile(identityPath(root, name), "utf8")
       .then((contents) => IdentitySchema.parse(JSON.parse(contents)).email)
       .catch(() => undefined)
     const account: HarnessAccount = {
       harness: "grok",
       name,
-      dir: accountAuthPath(name),
+      dir: accountAuthPath(root, name),
       active: selection === name,
       source: "mako",
       route: "managed",
@@ -217,28 +215,28 @@ async function managedAccounts(selection: string | null): Promise<HarnessAccount
   return accounts
 }
 
-async function accountEnv(selection: string | null, base: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
+async function accountEnv(root: AccountRoot, selection: string | null, base: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
   const env = { ...base }
   if (!selection || selection === "default") return env
-  if (!existsSync(accountDir("grok", selection)))
+  if (!existsSync(root.dir("grok", selection)))
     throw new Error("The selected Grok account no longer exists. Choose another account in Settings → Agents.")
-  if (!existsSync(accountAuthPath(selection)))
+  if (!existsSync(accountAuthPath(root, selection)))
     throw new Error("The selected Grok account is signed out. Sign in again in Settings → Agents.")
   for (const key of AUTH_ENV) delete env[key]
-  env.GROK_AUTH_PATH = accountAuthPath(selection)
+  env.GROK_AUTH_PATH = accountAuthPath(root, selection)
   return env
 }
 
 /** Grok's own browser sign-in, written to the account's file; a new folder, or the file of an account whose login lapsed. */
-async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
+async function prepareAccountLogin(root: AccountRoot, { name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
   const base = childProcessEnv(process.env)
   const executable = resolveExecutable("grok", base)
   if (!executable) throw new Error("Grok isn't installed. Install it, then sign in.")
-  const dir = accountDir("grok", renew ? name : cleanAccountName(name))
+  const dir = root.dir("grok", renew ? name : cleanAccountName(name))
   if (renew) {
     if (!existsSync(dir)) throw new Error("That Grok account is gone. Refresh to see your accounts.")
   } else {
-    await mkdir(join(accountsRoot(), "grok"), { recursive: true, mode: 0o700 })
+    await mkdir(root.provider("grok"), { recursive: true, mode: 0o700 })
     await mkdir(dir, { mode: 0o700 })
     await markLoginPending(dir).catch(async (error) => {
       await rm(dir, { recursive: true, force: true })
@@ -251,13 +249,13 @@ async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise
 }
 
 /** Grok has no status command: the file it wrote, naming who signed in, is the proof. */
-async function confirmAccountLogin({ name }: AccountLoginTarget): Promise<void> {
-  const email = await fileEmail(accountAuthPath(name))
+async function confirmAccountLogin(root: AccountRoot, { name }: AccountLoginTarget): Promise<void> {
+  const email = await fileEmail(accountAuthPath(root, name))
   if (email === undefined) throw new Error("Grok finished, but no login was saved. Try again.")
-  await writeFile(identityPath(name), JSON.stringify({ email }), { mode: 0o600 })
+  await writeFile(identityPath(root, name), JSON.stringify({ email }), { mode: 0o600 })
 }
 
-async function accountUsage(processes: DiscoveryProcesses, name: string): Promise<AccountUsage> {
+async function accountUsage(root: AccountRoot, processes: DiscoveryProcesses, name: string): Promise<AccountUsage> {
   const base = childProcessEnv(process.env)
   if (!resolveExecutable("grok", base))
     return { status: "unavailable", detail: "Install Grok to see its usage" }
@@ -266,8 +264,8 @@ async function accountUsage(processes: DiscoveryProcesses, name: string): Promis
     if ((await fileEmail(authPath(process.env))) === undefined) return { status: "missing-credentials" }
     env = base
   } else {
-    if (!existsSync(accountAuthPath(name))) return { status: "missing-credentials" }
-    env = await accountEnv(name, base)
+    if (!existsSync(accountAuthPath(root, name))) return { status: "missing-credentials" }
+    env = await accountEnv(root, name, base)
   }
   try {
     return parseGrokBilling(await readGrokBilling(processes, env))
@@ -377,7 +375,8 @@ export const grokCloudSignIn: CloudSignInCapability = {
   },
 }
 
-export function grokAccountCapability(processes: DiscoveryProcesses): SelectableAccountCapability {
+/** Grok's accounts: its own login, and those Mako keeps in `root`. */
+export function grokAccountCapability(root: AccountRoot, processes: DiscoveryProcesses): SelectableAccountCapability {
   return {
     provider: "grok",
     mode: "selectable",
@@ -391,21 +390,21 @@ export function grokAccountCapability(processes: DiscoveryProcesses): Selectable
         .catch(() => [])
       return [
         ...own.map((account) => ({ ...account, active: !selection })),
-        ...await managedAccounts(selection),
+        ...await managedAccounts(root, selection),
       ]
     },
-    accountEnv,
-    prepareAccountLogin,
-    confirmAccountLogin,
+    accountEnv: (selection, base) => accountEnv(root, selection, base),
+    prepareAccountLogin: (target) => prepareAccountLogin(root, target),
+    confirmAccountLogin: (target) => confirmAccountLogin(root, target),
     removeAccount: async (name) => {
       if (name === "default") throw new Error("The default account is Grok's own login")
-      await rm(accountDir("grok", name), { recursive: true, force: true })
+      await rm(root.dir("grok", name), { recursive: true, force: true })
       return {}
     },
     selectedAccount: (selection, env) => ({ name: selection ?? "default", dir: authPath(env) }),
     credentialRevision: async (name, env = process.env) =>
-      principalFingerprint(await readOptionalFile(name === "default" ? authPath(env) : accountAuthPath(name)), GrokPrincipal),
-    accountUsage: (name) => accountUsage(processes, name),
+      principalFingerprint(await readOptionalFile(name === "default" ? authPath(env) : accountAuthPath(root, name)), GrokPrincipal),
+    accountUsage: (name) => accountUsage(root, processes, name),
     cloudSignIn: grokCloudSignIn,
   }
 }

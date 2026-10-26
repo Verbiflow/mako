@@ -54,7 +54,7 @@ const driver: ProviderLiveDriver = {
   close: async () => { closes++; if (cleanupFailure) throw new Error("Native child cleanup failed") },
 }
 assert.throws(() => validateLiveDriver({ ...driver, nativeExclusion: { kind: "unavailable", reason: "not built" } }), /declared together/)
-const host = createProviderHost()
+const host = createProviderHost(detachedHarnessContext(new NativeStores(false)))
 const unregister = host.liveDrivers.register(driver)
 const guarded = host.liveDrivers.get(driver.provider)!
 const options: ProviderStartOptions = { conversationId: "owner-a", emit: () => {} }

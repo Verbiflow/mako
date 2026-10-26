@@ -63,7 +63,7 @@ export const installCodex: ProviderModule = (host, context) => {
     live: createCodexLiveDriver(probe, context),
     decoder: codexDecoderSource,
     profile: codexProfileLoader(host.discovery),
-    accounts: codexAccountCapability(host.discovery),
+    accounts: codexAccountCapability(host.accounts.root, host.discovery),
     acp: lacks("Runs on Codex’s app-server"),
     nativeRunner: codexNativeRunner,
     processProbe: probe,

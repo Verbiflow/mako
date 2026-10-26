@@ -120,6 +120,8 @@ let closed = false
 const dependencies: ClaudeSdkDependencies = {
   available: () => true,
   configure: async () => ({ options: {}, account: { name: "fixture-launch" } }),
+  // No account's folder holds a session here; the locator's case gives its own.
+  configDir: () => "/missing",
   receiptTimeoutMs: 20,
   interruptTimeoutMs: 20,
   inspectCredentials: async () => clearedStore,

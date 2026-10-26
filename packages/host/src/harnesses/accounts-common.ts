@@ -13,7 +13,7 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises"
-import { homedir, userInfo } from "node:os"
+import { userInfo } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { promisify } from "node:util"
 import type { JsonValue } from "../contracts/json.js"
@@ -62,26 +62,6 @@ export async function credentialFileFingerprint(path: string): Promise<string> {
   }
 }
 
-export function accountsRoot(): string {
-  return join(homedir(), ".mako", "accounts")
-}
-
-export function accountDir(provider: string, name: string): string {
-  if (!/^[a-z0-9-]+$/.test(provider))
-    throw new Error("Invalid account provider")
-  if (
-    !/^[a-z0-9][a-z0-9@._+-]{0,159}$/i.test(name) ||
-    name === "." ||
-    name === ".."
-  )
-    throw new Error("Invalid account name")
-  return join(accountsRoot(), provider, name)
-}
-
-function statePath(): string {
-  return join(accountsRoot(), "state.json")
-}
-
 export function valueFields(
   value: JsonValue | undefined
 ): Map<string, JsonValue> | null {
@@ -112,89 +92,139 @@ function parseSelectionState(contents: string): Map<string, string | null> {
   return new Map(Object.entries(selectionState.parse(JSON.parse(contents))))
 }
 
-function selectionPath(provider: string): string {
+function providerName(provider: string): string {
   if (!/^[a-z0-9-]+$/.test(provider))
     throw new Error("Invalid account provider")
-  return join(accountsRoot(), "selection", `${provider}.json`)
+  return provider
 }
 
-export async function readSelection(provider: string): Promise<string | null> {
-  let contents: string
-  try {
-    contents = await readFile(selectionPath(provider), "utf8")
-  } catch (error) {
-    if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
-      throw new Error(
-        "Account selection could not be read. Select the account again.",
-        { cause: error }
-      )
-    // Existing installations migrate each provider on its next explicit selection.
+/**
+ * Where Mako keeps accounts: `accounts` in the host's user root
+ * (`HostEnvironment.userRoot`), so `~/.mako/accounts` for the installed app,
+ * every profile and a cloud machine, and the data root's own for a host
+ * isolated outside the application-data folder (a test's, a proof's). It
+ * holds each account Mako added (`<provider>/<name>`, the folder its harness
+ * signs into), which one each harness launches on (`selection/`), the lease
+ * every launch takes while it resolves its account, which accounts running
+ * work holds (`holds/`) and removals waiting on them (`removing/`). Hosts
+ * sharing a root share all of it; a host with its own shares none of it, and
+ * runs each harness on its default login, the one a terminal uses.
+ */
+export class AccountRoot {
+  readonly path: string
+
+  constructor(userRoot: string) {
+    this.path = join(userRoot, "accounts")
+  }
+
+  /** The folder a provider's accounts are kept in. */
+  provider(provider: string): string {
+    return join(this.path, providerName(provider))
+  }
+
+  /** One account's folder. Throws on a name that could leave it. */
+  dir(provider: string, name: string): string {
+    if (
+      !/^[a-z0-9][a-z0-9@._+-]{0,159}$/i.test(name) ||
+      name === "." ||
+      name === ".."
+    )
+      throw new Error("Invalid account name")
+    return join(this.provider(provider), name)
+  }
+
+  /** Where running work's leases are, one file per host. */
+  get holds(): string {
+    return join(this.path, "holds")
+  }
+
+  /** Where a provider's removals wait, or every provider's without one. */
+  removing(provider?: string): string {
+    return provider === undefined ? join(this.path, "removing") : join(this.path, "removing", providerName(provider))
+  }
+
+  private selectionPath(provider: string): string {
+    return join(this.path, "selection", `${providerName(provider)}.json`)
+  }
+
+  async readSelection(provider: string): Promise<string | null> {
+    let contents: string
     try {
-      contents = await readFile(statePath(), "utf8")
-    } catch (legacyError) {
-      if (
-        legacyError instanceof Error &&
-        "code" in legacyError &&
-        legacyError.code === "ENOENT"
-      )
-        return null
-      throw new Error(
-        "Account selection could not be read. Select the account again.",
-        { cause: legacyError }
-      )
+      contents = await readFile(this.selectionPath(provider), "utf8")
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && error.code === "ENOENT"))
+        throw new Error(
+          "Account selection could not be read. Select the account again.",
+          { cause: error }
+        )
+      // Existing installations migrate each provider on its next explicit selection.
+      try {
+        contents = await readFile(join(this.path, "state.json"), "utf8")
+      } catch (legacyError) {
+        if (
+          legacyError instanceof Error &&
+          "code" in legacyError &&
+          legacyError.code === "ENOENT"
+        )
+          return null
+        throw new Error(
+          "Account selection could not be read. Select the account again.",
+          { cause: legacyError }
+        )
+      }
+    }
+    try {
+      return parseSelectionState(contents).get(provider) ?? null
+    } catch {
+      throw new Error("Account selection is invalid. Select the account again.")
     }
   }
-  try {
-    return parseSelectionState(contents).get(provider) ?? null
-  } catch {
-    throw new Error("Account selection is invalid. Select the account again.")
-  }
-}
 
-/** Identity writers in separate app profiles share the same provider lease. */
-export async function withAccountMutation<T>(
-  provider: string,
-  operation: () => Promise<T>
-): Promise<T> {
-  const path = selectionPath(provider)
-  await mkdir(join(accountsRoot(), "selection"), {
-    recursive: true,
-    mode: 0o700,
-  })
-  // SAFETY: All profile hosts use identical lease timing. A compromised lease
-  // must fail closed; the library's default handler terminates the writer.
-  const release = await lock(path, {
-    realpath: false,
-    stale: 60_000,
-    update: 5_000,
-    retries: { retries: 20, minTimeout: 100, maxTimeout: 500, factor: 1.2 },
-  })
-  try {
-    return await operation()
-  } finally {
-    await release()
-  }
-}
-
-export async function writeSelection(
-  provider: string,
-  name: string | null
-): Promise<void> {
-  if (name !== null) accountDir(provider, name)
-  const destination = selectionPath(provider)
-  await mkdir(join(accountsRoot(), "selection"), {
-    recursive: true,
-    mode: 0o700,
-  })
-  const temporary = `${destination}.${randomUUID()}.tmp`
-  try {
-    await writeFile(temporary, JSON.stringify({ [provider]: name }), {
-      mode: 0o600,
-      flag: "wx",
+  /** Identity writers in every host sharing this root take the same provider lease. */
+  async withMutation<T>(
+    provider: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const path = this.selectionPath(provider)
+    await mkdir(join(this.path, "selection"), {
+      recursive: true,
+      mode: 0o700,
     })
-    await rename(temporary, destination)
-  } finally {
-    await rm(temporary, { force: true })
+    // SAFETY: All profile hosts use identical lease timing. A compromised lease
+    // must fail closed; the library's default handler terminates the writer.
+    const release = await lock(path, {
+      realpath: false,
+      stale: 60_000,
+      update: 5_000,
+      retries: { retries: 20, minTimeout: 100, maxTimeout: 500, factor: 1.2 },
+    })
+    try {
+      return await operation()
+    } finally {
+      await release()
+    }
+  }
+
+  async writeSelection(
+    provider: string,
+    name: string | null
+  ): Promise<void> {
+    if (name !== null) this.dir(provider, name)
+    const destination = this.selectionPath(provider)
+    await mkdir(join(this.path, "selection"), {
+      recursive: true,
+      mode: 0o700,
+    })
+    const temporary = `${destination}.${randomUUID()}.tmp`
+    try {
+      await writeFile(temporary, JSON.stringify({ [provider]: name }), {
+        mode: 0o600,
+        flag: "wx",
+      })
+      await rename(temporary, destination)
+    } finally {
+      await rm(temporary, { force: true })
+    }
   }
 }
 

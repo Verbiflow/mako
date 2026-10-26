@@ -42,6 +42,7 @@ import { HostMethods } from "@mako/host/transport/methods"
 import { unwatchedWork } from "@mako/host/base/event-loop"
 import { CloudSignInSync } from "@mako/host/harnesses/cloud-sign-ins"
 import { HarnessAccounts } from "@mako/host/harnesses/accounts"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
 import { ProviderRegistry } from "@mako/host/harnesses/registry"
 import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
 import type { Machine } from "@mako/host/base/machine"
@@ -1033,7 +1034,7 @@ test("a grant or a revoke while signed in reads the sign-ins again, with nothing
       },
       fixture: false,
       // Sharing is on by default; with no harnesses here, there's nothing of this Mac's to read.
-      harnessSignIns: (options) => new CloudSignInSync({ ...options, accounts: new HarnessAccounts(registry), capabilities: registry }),
+      harnessSignIns: (options) => new CloudSignInSync({ ...options, accounts: new HarnessAccounts(registry, new AccountRoot(join(scratch, "user"))), capabilities: registry }),
     }
   )
   after(() => account.stop())
