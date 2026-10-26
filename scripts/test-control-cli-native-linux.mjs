@@ -206,8 +206,16 @@ try {
   await command(["session", "stop"])
   stopped = true
   const launcher = await until(() => read(join(output, "launcher.json")))
-  assert.equal(launcher.runtimeRemoved, true)
-  assert.equal((await read(join(output, "worker.json"))).reason, "session-stop")
+  // The launcher's receipt says how the worker ended, so a worker that died
+  // before writing its own receipt fails here with what was recorded.
+  assert.deepEqual(
+    { reason: launcher.reason, clean: launcher.clean, workerExit: launcher.workerExit, runtimeRemoved: launcher.runtimeRemoved },
+    { reason: "session-stop", clean: true, workerExit: { code: 0, signal: null }, runtimeRemoved: true },
+    `launcher.json ${JSON.stringify(launcher)}; worker.log ${await readFile(join(output, "worker.log"), "utf8").catch(() => "(empty)")}`
+  )
+  const worker = await read(join(output, "worker.json"))
+  assert.equal(worker.reason, "session-stop")
+  assert.equal(worker.clean, true, JSON.stringify(worker))
   for (const pid of [
     ready.pid,
     ...ready.backends.map((backend) => backend.pid),

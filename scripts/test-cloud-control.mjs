@@ -81,9 +81,10 @@ async function start(name, options = {}) {
     await until(async () => (await Promise.all([ready.pid, ...ready.backends.map(b => b.pid)].map(alive))).every(v => !v) && (await groupProcesses(ready.pid)).length === 0)
     const worker = await read(join(output, "worker.json")).catch(() => null)
     const launcher = await read(join(output, "launcher.json")).catch(() => null)
+    const workerLog = await readFile(join(output, "worker.log"), "utf8").catch(() => null)
     if (kind !== "SIGKILL") assert.ok(launcher.runtimeRemoved)
-    results.push({ name, kind, exit, worker, launcher })
-    return { worker, launcher, exit }
+    results.push({ name, kind, exit, worker, launcher, workerLog })
+    return { worker, launcher, exit, workerLog }
   } }
 }
 const html = 'data:text/html,' + encodeURIComponent(`<!doctype html><title>Cloud fixture</title><label>Name<input aria-label="Name"></label><button>Save</button><output>0</output><script>window.saves=0;document.querySelector('button').onclick=()=>{document.querySelector('output').textContent=++window.saves};setInterval(()=>document.body.style.backgroundColor=window.saves%2?'#f7f7f7':'#ffffff',100)</script>`)
@@ -115,8 +116,21 @@ try {
     await form(job, kind)
     const result = await job.end(kind)
     if (kind !== "SIGKILL") assert.notEqual(result.exit.code, 0)
-    else assert.equal(result.worker.reason, "launcher-disconnected")
+    else assert.equal(result.worker?.reason, "launcher-disconnected", JSON.stringify(result))
   }
+  // A backend's own processes outlive it and keep writing into the runtime
+  // directory; a stop ends them before removing it, and still reports cleanly.
+  const writer = await start("descendant-writer")
+  const writing = await writer.cell(`return await control.command({language:'shell',source:'(i=0; while :; do i=$((i+1)); mkdir -p "$TMPDIR/churn/$i"; done) >/dev/null 2>&1 & echo "$TMPDIR"'})`)
+  const runtime = writing.result.stdout.trim()
+  await until(async () => (await readdir(join(runtime, "churn"))).length > 20)
+  const stopped = await writer.end()
+  assert.deepEqual(
+    { exit: stopped.exit, worker: [stopped.worker?.reason, stopped.worker?.clean], launcher: [stopped.launcher.reason, stopped.launcher.clean] },
+    { exit: { code: 0, signal: null }, worker: ["session-stop", true], launcher: ["session-stop", true] },
+    JSON.stringify(stopped)
+  )
+  await assert.rejects(readdir(runtime), { code: "ENOENT" })
   const cancelled = await start("cancelled")
   await form(cancelled, "one write")
   const cancel = new AbortController()

@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto"
 import {
   access,
   mkdir,
+  readdir,
   readFile,
   rename,
   rm,
@@ -24,8 +25,9 @@ import {
   type ComputerDriverProcess,
 } from "./computer-driver-client.js"
 
-// Every child inherits this worker's process group. The outer launcher owns the
-// group; this worker watches its IPC lifetime in return, including parent SIGKILL.
+// Every child, and every process a child starts, inherits this worker's process
+// group. The outer launcher owns the group; this worker watches its IPC lifetime
+// in return, including parent SIGKILL.
 const children: Array<{ name: string; child: ChildProcess }> = []
 let config: CloudControlConfig | undefined
 let runtime: string | undefined = process.env.TMPDIR
@@ -44,9 +46,10 @@ const events: Array<{
   at: number
   backend?: string
   pid?: number
+  detail?: string
 }> = []
-const record = (event: string, backend?: string, pid?: number) =>
-  events.push({ event, at: Date.now(), backend, pid })
+const record = (event: string, backend?: string, pid?: number, detail?: string) =>
+  events.push({ event, at: Date.now(), backend, pid, detail })
 const send = (message: CloudParentMessage) => {
   if (process.connected) process.send?.(message, () => {})
 }
@@ -103,6 +106,36 @@ async function textFrom(child: ChildProcess, fd: number): Promise<string> {
   return until(async () =>
     text.includes("\n") ? text.split("\n")[0].trim() : undefined
   )
+}
+/** Live processes in this worker's group other than itself: backends and whatever they started. */
+async function groupMembers(): Promise<number[]> {
+  const members: number[] = []
+  for (const name of await readdir("/proc")) {
+    if (!/^\d+$/.test(name) || Number(name) === process.pid) continue
+    const stat = await readFile(`/proc/${name}/stat`, "utf8").catch(() => "")
+    // After the parenthesized command name: state, parent, group.
+    const [state, , group] = stat.slice(stat.lastIndexOf(")") + 2).split(" ")
+    if (Number(group) === process.pid && state !== "Z") members.push(Number(name))
+  }
+  return members
+}
+/**
+ * A backend's own processes outlive it: Chromium's network, storage, GPU and
+ * renderer services are still writing its profile after the browser exits.
+ * End every one before removing the directory they write into.
+ */
+async function endGroup() {
+  for (let members = await groupMembers(); members.length; members = await groupMembers()) {
+    for (const pid of members)
+      try {
+        process.kill(pid, "SIGKILL")
+      } catch (error) {
+        if (!(error instanceof Error && "code" in error && error.code === "ESRCH"))
+          throw error
+      }
+    // Nothing signals a non-child's exit; a killed process is gone within milliseconds.
+    await delay(25)
+  }
 }
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 async function initialize(current: CloudControlConfig, directory: string) {
@@ -341,8 +374,15 @@ function shutdown(reason: string): Promise<void> {
           child.kill("SIGKILL")
       })
     )
-    record("stopped")
-    if (runtime) await rm(runtime, { recursive: true, force: true })
+    try {
+      await endGroup()
+      record("stopped")
+      if (runtime) await rm(runtime, { recursive: true, force: true })
+    } catch (error) {
+      // The receipt below still reports the stop; the launcher reaps and removes what remains.
+      clean = false
+      record("cleanup-failed", undefined, undefined, error instanceof Error ? error.message : String(error))
+    }
     if (config) {
       const path = join(config.output, "worker.json")
       await writeFile(
