@@ -16,6 +16,7 @@ import { workspaceWrites, type WorkspaceWrite } from "../base/workspace-writes.j
 import type { LiveBatch } from "../contracts/live-conversations.js"
 import { HISTORY_SCRATCH } from "../contracts/watcher-child.js"
 import type { ChangeUsage, LostVersion, ThreadChangeSummary } from "../contracts/thread-changes.js"
+import type { TurnChangedFile, TurnChanges } from "../contracts/turn-changes.js"
 import { JournalStore, type MoveRecord } from "./journal-store.js"
 import { PlacedSessionSchema, SharedJournal, sharedJournalFolder, type JournalWrites, type OwnedJournal, type SharingStatus } from "./shared-journal.js"
 import type { ChosenFile, FileReferenceSource, FileResolution, FileSpelling, FileSpellings, MovedPaths } from "../contracts/file-references.js"
@@ -28,14 +29,15 @@ import { ChildCalls } from "./child-calls.js"
 import { LiveActivity, reportedEffect } from "./live-activity.js"
 import { within } from "./paths.js"
 import { gitRepository, nodeFileSystem, watcherEvents, type SystemHistory, type TreeWatcher } from "./ports.js"
-import { changes, hunks, partition, restorable, shares, storedView, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
+import { changes, hunks, partition, restorable, shares, storedView, turnChanges, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
 import { lostVersions, restoreVersion } from "./recovery.js"
 import { threadTrees, type ThreadTree } from "./thread-tree.js"
-import { LaptopTracker } from "./tracker.js"
+import { LaptopTracker, SETTLE_MS } from "./tracker.js"
+import { TRAIL_MS } from "./evidence.js"
 
 export { JournalStore } from "./journal-store.js"
 export { LaptopTracker, type TrackerOptions, type TrackerRepository } from "./tracker.js"
-export { changes, classOf, hunks, partition, restorable, shares, side, storedView, unattributed, writerOf, type ChangeClass, type CheckoutHunk, type CheckoutShares, type FileVersion, type JournalView, type Partition, type PartitionFile, type PartitionOptions, type Restorable, type Share, type ThreadChanges, type UncertainChange, type WholeHunk } from "./queries.js"
+export { changes, classOf, hunks, partition, restorable, shares, side, storedView, turnChanges, unattributed, writerOf, type ChangeClass, type CheckoutHunk, type CheckoutShares, type FileVersion, type JournalView, type Partition, type PartitionFile, type PartitionOptions, type Restorable, type Share, type ThreadChanges, type UncertainChange, type WholeHunk } from "./queries.js"
 export { threadTrees, type ThreadTree } from "./thread-tree.js"
 export { LOST_LISTED, lostVersions, restoreVersion } from "./recovery.js"
 export { contentRef } from "./content.js"
@@ -46,17 +48,64 @@ export { attributionStatus, type AttributionStatus } from "./status.js"
 export { carryHistory, threadHistory, type CarryResult } from "./thread-history.js"
 import { attributionStatus, type AttributionStatus } from "./status.js"
 
+/** How long after a change the journal may still give it another author: a turn is counted for good once this has passed since it ended. */
+export const ATTRIBUTION_SETTLE_MS = SETTLE_MS
+
 /** A day of retention, the unit Settings will offer. */
 const DAY_MS = 86_400_000
-/** `changes` as counts, for "changes made" beside spend; the weak footprint is a count, never a list. */
+/** `changes` as counts, for the debugging script; the weak footprint is a count, never a list. */
 export function changeSummary(found: ThreadChanges): ThreadChangeSummary {
   return {
     files: { created: found.files.created.length, changed: found.files.modified.length, deleted: found.files.deleted.length, renamed: found.files.renamed.length },
     lines: found.lines,
     commands: found.commands.length,
-    outside: { named: new Set(found.outside.filter((entry) => entry.evidence === "strong").map((entry) => entry.path)).size, maybe: new Set(found.outside.filter((entry) => entry.evidence === "weak").map((entry) => entry.path)).size },
+    outside: outsideCounts(found),
     maybe: found.maybe,
   }
+}
+
+const outsideCounts = (found: Pick<ThreadChanges, "outside">) => ({
+  named: new Set(found.outside.filter((entry) => entry.evidence === "strong").map((entry) => entry.path)).size,
+  maybe: new Set(found.outside.filter((entry) => entry.evidence === "weak").map((entry) => entry.path)).size,
+})
+
+/**
+ * "Changes made" by a Thread: the sum of its turns' summaries, the same
+ * records each turn's line under its answer draws. Its own lines only, each
+ * file once at what its turns did to it in all; files that might be its
+ * are counted apart. Commands and paths outside its checkouts come from
+ * its calls, as before.
+ */
+export function threadTotals(turns: readonly TurnChanges[], found: Pick<ThreadChanges, "commands" | "outside">): ThreadChangeSummary {
+  const files = new Map<string, { first: TurnChangedFile["kind"]; last: TurnChangedFile["kind"] }>()
+  const maybe = new Set<string>()
+  const lines = { added: 0, removed: 0 }
+  let unlisted = 0
+  for (const turn of turns) {
+    lines.added += turn.own.added
+    lines.removed += turn.own.removed
+    unlisted += turn.more
+    for (const file of turn.files) {
+      if (file.own === undefined) {
+        maybe.add(file.path)
+        continue
+      }
+      const seen = files.get(file.from ?? file.path)
+      if (seen && file.from) files.delete(file.from)
+      files.set(file.path, { first: seen?.first ?? file.kind, last: file.kind })
+    }
+  }
+  const kinds = { created: 0, changed: 0, deleted: 0, renamed: 0 }
+  for (const { first, last } of files.values()) {
+    if (first === "create" && last === "delete") continue
+    if (first === "create") kinds.created++
+    else if (last === "delete") kinds.deleted++
+    else if (first === "rename" || last === "rename") kinds.renamed++
+    else kinds.changed++
+  }
+  kinds.changed += unlisted
+  for (const path of files.keys()) maybe.delete(path)
+  return { files: kinds, lines, commands: found.commands.length, outside: outsideCounts(found), maybe: maybe.size }
 }
 
 /** The journal kept this long: its retention, and the window "changes made" covers. */
@@ -173,8 +222,20 @@ export interface Attribution {
    * asks first, so it takes what's the Thread's without asking the person.
    */
   readBack(checkout: string, budgetMs?: number): Promise<BackfillResult | undefined>
-  /** "Changes made" by a Thread, in counts. */
+  /** "Changes made" by a Thread, in counts: the sum of its turns' summaries. */
   threadChanges(thread: string): ThreadChangeSummary
+  /**
+   * Count what a Thread's turn changed, from the journal as it stands
+   * (`turnChanges`); `settling` while its entries may still be given
+   * another author. Undefined while the journal isn't open.
+   */
+  countTurn(thread: string, turn: string, state: TurnChanges["state"]): TurnChanges | undefined
+  /** Whether every change by `at` has its author for good, so a turn that ended then can be counted once and for all. */
+  settledThrough(at: number): boolean
+  /** Keep a turn's summary beside the entries, for "changes made" to sum. */
+  counted(summary: TurnChanges, session: string): void
+  /** The Thread's turns with entries after `after`, each with its newest: a summary counted through less is behind. */
+  turnsChangedAfter(thread: string, after: number): Map<string, number>
   /** "Changes made" by every Thread on this device over the journal's window, for Settings › Usage. */
   changeUsage(): ChangeUsage
   /** Which file each spelling in a message means, from its Thread's touches, folders, places and renames. */
@@ -533,6 +594,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       makoWrote: (write, startedAt, endedAt) => tracker.makoWrote(write, startedAt, endedAt),
       moved: (move) => tracker.store.saveMove(move),
       chose: (choice) => tracker.store.saveChoice(choice),
+      counted: (summary, session) => tracker.store.saveTurnChanges(summary, session),
       async carry(history, map) {
         const result = carryHistory(tracker.store, history, map, Date.now())
         hostLog("attribution", "carried a Thread's file history in", { thread: result.thread, taken: result.taken.length, left: result.left.length, choices: result.choices })
@@ -725,7 +787,17 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       return threadTrees(deps.git, view(), partition(view(), checkout, thread))
     },
     restorable: (target) => restorable(view(), target),
-    threadChanges: (thread) => changeSummary(changes(view(), thread)),
+    threadChanges: (thread) => {
+      const current = view()
+      return threadTotals(current.store.turnChangesOf(thread), changes(current, thread))
+    },
+    countTurn: (thread, turn, state) => {
+      if (!local && !reader) return undefined
+      return turnChanges(view(), thread, turn, state)
+    },
+    settledThrough: (at) => !view().store.unsettledThrough(at + TRAIL_MS),
+    counted: (summary, session) => journal.writes.counted(summary, session),
+    turnsChangedAfter: (thread, after) => view().store.turnsChangedAfter(thread, after),
     changeUsage: () => changeUsage(view().store, Date.now() - RETENTION_DAYS * DAY_MS),
     resolveFiles: (source, spellings) => files.resolve(view().store, referenceSource(source), spellings.slice(0, MAX_SPELLINGS)),
     chooseFile(source, spelling, path) {

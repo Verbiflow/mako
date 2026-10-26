@@ -46,6 +46,7 @@ import { LiveAssets, promptFingerprint } from "./live-assets.js"
 import { LiveAutoContinue } from "./live-auto-continue.js"
 import { stoppedWork } from "./interrupted-turn.js"
 import { LiveCheckpoints } from "./live-checkpoints.js"
+import { LiveTurnChanges } from "./live-turn-changes.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch } from "./live-dispatch.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
@@ -84,6 +85,7 @@ export class LiveConversations {
   private readonly threads: LiveThreads
   private readonly records: LiveRecords
   private readonly checkpoints: LiveCheckpoints
+  private readonly counts: LiveTurnChanges
   private readonly questions: LiveQuestions
   private readonly approvals: LiveApprovals
   private readonly actions: LiveActions
@@ -124,7 +126,10 @@ export class LiveConversations {
       },
       flush: (resident) => this.flush(resident),
       storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
-      loaded: (resident) => { void this.sources.readBase(resident) },
+      loaded: (resident) => {
+        void this.sources.readBase(resident)
+        this.counts.loaded(resident)
+      },
       compact: (path) => { void this.reclaims.reclaim(path) },
     })
     this.moves = new LiveMoves({
@@ -213,7 +218,8 @@ export class LiveConversations {
       goalObserved: (resident, goal) => this.goals.observe(resident, goal),
       goalSpent: (resident) => this.goals.spent(resident),
     }
-    this.checkpoints = new LiveCheckpoints(access, (id, input) => this.fork(id, input))
+    this.counts = new LiveTurnChanges({ ledger: () => dependencies.turnLedger?.(), flush: (resident) => access.flush(resident) })
+    this.checkpoints = new LiveCheckpoints(access, (id, input) => this.fork(id, input), this.counts)
     this.approvals = new LiveApprovals(access)
     this.questions = new LiveQuestions(access, {
       continue: (id, bindingId, requestId, text, displayText) => { this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText) },

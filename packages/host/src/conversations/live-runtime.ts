@@ -45,6 +45,7 @@ import type { ContextBundles } from "./live-context.js"
 import type { PlanBuild } from "../contracts/plan-builds.js"
 import type { ResidencyBudget } from "../contracts/residency.js"
 import type { GoalObservation } from "../contracts/live-goals.js"
+import type { TurnLedger } from "./live-turn-changes.js"
 
 export interface ProviderConnection {
   driver: AdmittedLiveDriver
@@ -55,6 +56,8 @@ export interface Resident {
   closing?: boolean
   closeOperation?: Promise<void>
   checkpointing?: boolean
+  /** Turns whose changes the attribution journal is still settling: the conversation stays in memory to keep their count. */
+  counting?: number
   rewinding?: boolean
   connections: Map<string, ProviderConnection>
   bindingGenerations: Map<string, number>
@@ -165,6 +168,8 @@ export interface Dependencies {
   projectFolderOfRemoved?(cwd: string): string | undefined
   /** The conversation changed in a way that may let a waiting move go ahead (`LiveConversations.relocation`); called on the write path. */
   settled?(conversationId: string): void
+  /** The attribution journal, which counts what each turn changed (`LiveTurnChanges`); undefined until it opens. */
+  turnLedger?(): TurnLedger | undefined
   driver(provider: string): AdmittedLiveDriver | undefined
   /**
    * The catalog's listing and reader of native sessions: a handoff carries

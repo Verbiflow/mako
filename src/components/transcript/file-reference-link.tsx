@@ -1,12 +1,16 @@
-import { useState, type ReactNode } from "react"
+import { useContext, useState, type ReactElement, type ReactNode } from "react"
 import type { FileCandidate } from "@mako/host/contracts/file-references"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
+import { countedChanges } from "@mako/host/contracts/turn-changes"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import type { FileCitation } from "@/lib/file-citations"
 import { cn } from "@/lib/utils"
+import { useAcp } from "@/state/acp"
 import { chooseFileReference, useFileReference } from "@/state/file-references"
 import { formatAgo } from "@/state/thread-app"
 import { viewer } from "@/state/viewer"
-import { useReferenceSource } from "./source-context"
+import { AnswerRequestContext, useReferenceSource } from "./source-context"
 
 const linkClass = "font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
 /** Past this many candidates, a filter narrows them, as branch search does. */
@@ -20,11 +24,15 @@ function whereOf(file: FileCandidate): string {
   return file.path.split("/").slice(0, -1).join("/").replace(/^\/Users\/[^/]+/, "~") || "/"
 }
 
+/** What the answer's own turn did to a file, from its recorded changes: "+12 −3"; empty when it changed no lines of it. */
+type ChangedHere = string | undefined
+
 /** Why a file is listed, in plain words. */
-function whyOf(file: FileCandidate, now: number): string {
+function whyOf(file: FileCandidate, now: number, here?: ChangedHere): string {
   const when = file.touch ? ` · ${formatAgo(file.touch.at, now)}` : ""
   const touched =
-    file.touch?.kind === "wrote" ? `Changed by this thread${when}`
+    here !== undefined ? `Changed in this answer${here ? ` (${here})` : ""}`
+    : file.touch?.kind === "wrote" ? `Changed by this thread${when}`
     : file.touch?.kind === "read" ? `Read by this thread${when}`
     : file.touch?.kind === "named" ? `Named by this thread${when}`
     : "Not touched by this thread"
@@ -34,9 +42,45 @@ function whyOf(file: FileCandidate, now: number): string {
   return touched
 }
 
-/** A hover line for a found file: where it is, and why this file. */
-function titleOf(file: FileCandidate, now: number): string {
-  return `${whereOf(file)}/${nameOf(file.path)}\n${whyOf(file, now)}`
+/** Where the line the answer named is now, when the file changed since: "Line 120 then, 134 now". */
+function movedLine(file: FileCandidate): string | undefined {
+  const line = file.line
+  if (!line || line.now === line.was) return undefined
+  return line.now === null ? `Line ${line.was} was removed since` : `Line ${line.was} then, ${line.now} now`
+}
+
+/** A hover line for a found file: where it is, why this file, and where its line went. */
+function titleOf(file: FileCandidate, now: number, here?: ChangedHere): string {
+  return [`${whereOf(file)}/${nameOf(file.path)}`, whyOf(file, now, here), movedLine(file)].filter(Boolean).join("\n")
+}
+
+/**
+ * The file's net lines in the answer's own turn, as its request's record
+ * has them: a string, so a token streaming elsewhere moves nothing here.
+ * Undefined when the turn didn't change the file for sure.
+ */
+function useChangedHere(liveId: string | undefined, path: string | undefined): ChangedHere {
+  const requestId = useContext(AnswerRequestContext)
+  return useAcp((state) => {
+    const live = liveId && requestId && path ? state.conversations[liveId] : undefined
+    const request = live?.kind === "live" ? live.requests?.find((each) => each.id === requestId) : undefined
+    return path && request?.changes ? changedFiles(request.changes).get(path) : undefined
+  })
+}
+
+/** A turn's record as each file's words, made once per record however many links read it. */
+const changedWords = new WeakMap<object, Map<string, string>>()
+function changedFiles(changes: NonNullable<LiveRequest["changes"]>): Map<string, string> {
+  let words = changedWords.get(changes)
+  if (!words) {
+    words = new Map()
+    for (const file of countedChanges(changes)?.files ?? []) {
+      if (file.own === undefined) continue
+      words.set(file.path, [file.own?.added ? `+${file.own.added.toLocaleString()}` : "", file.own?.removed ? `−${file.own.removed.toLocaleString()}` : ""].filter(Boolean).join(" "))
+    }
+    changedWords.set(changes, words)
+  }
+  return words
 }
 
 /**
@@ -47,10 +91,13 @@ function titleOf(file: FileCandidate, now: number): string {
  */
 export function FileReferenceLink({ href, target, bare, children }: { href: string; target: FileCitation; bare: boolean; children: ReactNode }) {
   const source = useReferenceSource()
-  const answer = useFileReference(source, target.path)
+  // With its line, so the host says where that line is now.
+  const spelling = target.line ? `${target.path}:${target.line}` : target.path
+  const answer = useFileReference(source, spelling)
+  const here = useChangedHere(source.liveId, answer?.kind === "file" ? answer.file.path : undefined)
   // "3 min ago" as of when the answer was drawn; the chooser takes its own time when it opens.
   const [drawn] = useState(() => Date.now())
-  const open = (path: string) => void viewer.open(path, target.line, source.threadPath, source.liveId, target.anchor)
+  const open = (path: string, line = target.line) => void viewer.open(path, line, source.threadPath, source.liveId, target.anchor)
   if (answer === undefined || answer?.kind === "none" || (answer === null && bare)) return <span data-file-reference={answer === undefined ? "asking" : "none"}>{children}</span>
   if (answer === null)
     return (
@@ -59,7 +106,7 @@ export function FileReferenceLink({ href, target, bare, children }: { href: stri
       </a>
     )
   const choose = (file: FileCandidate, candidates: readonly FileCandidate[]) => {
-    chooseFileReference(source, target.path, { kind: "file", file: { ...file, reason: "chosen" }, others: candidates.filter((other) => other.path !== file.path) })
+    chooseFileReference(source, spelling, { kind: "file", file: { ...file, reason: "chosen" }, others: candidates.filter((other) => other.path !== file.path) })
     open(file.path)
   }
   if (answer.kind === "file" && answer.others?.length) {
@@ -70,23 +117,58 @@ export function FileReferenceLink({ href, target, bare, children }: { href: stri
       </FileChooser>
     )
   }
-  if (answer.kind === "file")
+  if (answer.kind === "file") {
+    const file = answer.file
+    const line = file.line
+    const tip = [target.purpose, `${whereOf(file)}/${nameOf(file.path)}`, whyOf(file, drawn, here), movedLine(file)].filter((part) => part !== undefined)
+    // The line it named is gone: plain text that says so, not a link to wherever the file is now.
+    if (line?.now === null)
+      return (
+        <LinkTip lines={tip}>
+          <span data-file-reference="line-gone" data-file-tip={tip.join("\n")} className="cursor-default underline decoration-border decoration-dotted underline-offset-2">{children}</span>
+        </LinkTip>
+      )
     return (
-      <a
-        href={href}
-        title={target.purpose ? `${target.purpose}\n${titleOf(answer.file, drawn)}` : titleOf(answer.file, drawn)}
-        data-file-reference="file"
-        data-file-reason={answer.file.reason}
-        onClick={(event) => { event.preventDefault(); open(answer.file.path) }}
-        className={linkClass}
-      >
-        {children}
-      </a>
+      <LinkTip lines={tip}>
+        <a
+          href={href}
+          data-file-reference="file"
+          data-file-reason={file.reason}
+          data-file-line={line ? `${line.was}:${line.now}` : undefined}
+          data-file-tip={tip.join("\n")}
+          onClick={(event) => { event.preventDefault(); open(file.path, line?.now ?? target.line) }}
+          className={linkClass}
+        >
+          {children}
+        </a>
+      </LinkTip>
     )
+  }
   return (
     <FileChooser spelling={target.path} candidates={answer.candidates} drawn={drawn} onOpen={open} onChoose={(file) => choose(file, answer.candidates)}>
       {children}
     </FileChooser>
+  )
+}
+
+/**
+ * What a found file is, on hover: where it is, why this file, and where the
+ * line the answer named went. The first line is the file, the rest quieter.
+ */
+function LinkTip({ lines, children }: { lines: readonly string[]; children: ReactElement }) {
+  return (
+    <TooltipProvider delayDuration={350}>
+      <Tooltip>
+        <TooltipTrigger asChild>{children}</TooltipTrigger>
+        <TooltipContent side="top" sideOffset={4} className="max-w-sm flex-col items-start gap-0.5 text-left" data-file-tip-card="">
+          {lines.map((text, i) => (
+            <span key={i} className={cn("break-words", i > 0 && "text-background/70")}>
+              {text}
+            </span>
+          ))}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 

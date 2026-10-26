@@ -1,10 +1,12 @@
 /**
  * What a Thread changed, from the attribution journal: "changes made",
- * shown beside what it spent. Each file counts once, at its latest change.
+ * shown beside what it spent. The sum of its turns' summaries
+ * (`TurnChanges`), the same records the line under each answer draws: its
+ * own changes only, each file once at what its turns did to it in all.
  */
 export interface ThreadChangeSummary {
   files: { created: number; changed: number; deleted: number; renamed: number }
-  /** Lines added and removed by its changes, summed over every change it made. */
+  /** Net lines its turns added and removed, summed over its turns. */
   lines: { added: number; removed: number }
   /** Commands its tool calls ran, as its harness reported them. */
   commands: number
@@ -14,7 +16,7 @@ export interface ThreadChangeSummary {
    * app could have, which on a busy Mac is most of them.
    */
   outside: { named: number; maybe: number }
-  /** Changes that might be its too: several Threads ran at once. */
+  /** Files that might be its too, never counted in `files`: changed while it ran with nothing tying them to it. */
   maybe: number
 }
 

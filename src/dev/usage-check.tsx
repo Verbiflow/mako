@@ -14,8 +14,9 @@ import { threadsStore } from "@/state/thread-store"
 import { accountsStore } from "@/state/accounts"
 import { acpStore, type LiveAcpConversation } from "@/state/acp"
 import type { ContextBreakdown, LiveRequest, LiveSessionUsage, UsageSummary } from "@/lib/types"
-import type { TurnSpend } from "@mako/host/contracts/usage-ledger"
 import type { ChangeUsage } from "@mako/host/contracts/thread-changes"
+import type { ChangeCounts, TurnSpend } from "@mako/host/contracts/usage-ledger"
+import { changeCounts } from "@/state/thread-changes"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
 import "../index.css"
@@ -65,16 +66,25 @@ const tokens = (input: number, cacheRead: number, cacheWrite: number, output: nu
 const turn = (spend: TurnSpend, index: number): LiveRequest => ({ id: `turn-${index}`, text: "", attachments: [], status: "completed", spend })
 
 /** The popover's body for one harness's reading, in a card the popover's width. */
-function Popover({ title, usage, harness, requests, sideQuestions }: { title: string; usage: LiveSessionUsage; harness: string; requests: LiveRequest[]; sideQuestions?: number }) {
+function Popover({ title, usage, harness, requests, sideQuestions, changes }: { title: string; usage: LiveSessionUsage; harness: string; requests: LiveRequest[]; sideQuestions?: number; changes?: ChangeCounts }) {
   return (
     <figure className="flex w-80 flex-col gap-2" data-fixture={harness}>
       <figcaption className="text-label text-faint">{title}</figcaption>
       <div className="rounded-lg bg-popover ring-1 ring-hairline shadow-md">
-        <UsageDetails usage={usage} harness={harness} conversationId={`fixture-${harness}`} requests={requests} sideQuestions={sideQuestions} />
+        <UsageDetails usage={usage} harness={harness} conversationId={`fixture-${harness}`} requests={requests} sideQuestions={sideQuestions} changes={changes} />
       </div>
     </figure>
   )
 }
+
+// The Thread's changes made: its turns' records summed, its own lines only, and two files that might be the person's apart.
+const threadChanges = changeCounts({
+  files: { created: 1, changed: 3, deleted: 0, renamed: 0 },
+  lines: { added: 86, removed: 21 },
+  commands: 4,
+  outside: { named: 0, maybe: 0 },
+  maybe: 2,
+})
 
 const claudeTurns = [
   turn({ provider: "claude", model: "claude-opus-5-5", at: now - 3_600_000, tokens: tokens(1_200, 1_310_000, 41_000, 18_400, 6_100), cost: 1.94 }, 1),
@@ -136,7 +146,7 @@ function Fixture() {
     <TooltipProvider>
       <main className="flex min-h-screen flex-col gap-8 bg-background p-8 text-foreground">
         <section className="flex flex-wrap items-start gap-6" data-fixture-meters>
-          <Popover title="Claude Code: the fill, what each turn spent and its own count" harness="claude" requests={claudeTurns} sideQuestions={1}
+          <Popover title="Claude Code: the fill, what each turn spent and its own count" harness="claude" requests={claudeTurns} sideQuestions={1} changes={threadChanges}
             usage={{ used: 124_000, size: 200_000, native: { tokens: tokens(4_100, 3_900_000, 120_000, 61_000), cost: 5.82 } }} />
           <Popover title="Devin right after a compaction it didn't measure" harness="devin" requests={devinTurns}
             usage={{ compactedFrom: 15_856, size: 262_000 }} />

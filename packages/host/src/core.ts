@@ -24,7 +24,7 @@ import { NativeUnknown } from "./base/native-unknown.js"
 import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
-import { declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
+import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
 import { verifyFilePreview, fileIdentity, MediaRenditions, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
@@ -519,6 +519,19 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     settled: (id) => {
       late.movers?.moves.settled(id)
       late.movers?.leaves.settled(id)
+    },
+    // Each turn's changes, counted by the attribution journal once it opens.
+    turnLedger: () => {
+      const attribution = late.attribution
+      return attribution && {
+        placement: (conversation) => threads.store?.journalPlacement(conversation),
+        flushed: () => attribution.settled(),
+        countTurn: (thread, turn, state) => attribution.countTurn(thread, turn, state),
+        settledThrough: (at) => attribution.settledThrough(at),
+        counted: (summary, session) => attribution.counted(summary, session),
+        turnsChangedAfter: (thread, after) => attribution.turnsChangedAfter(thread, after),
+        settleMs: ATTRIBUTION_SETTLE_MS,
+      }
     },
     admission,
   })

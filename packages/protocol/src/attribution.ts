@@ -227,8 +227,14 @@ export const ActivityMarkSchema = z
     at: InstantSchema,
     thread: ThreadIdSchema,
     session: SessionRefSchema,
-    /** The turn a call or background work belongs to. */
+    /**
+     * The turn a call or background work belongs to. Mako's turns are its
+     * requests: the id of the request the turn answers, the same id
+     * checkpoints, rewind and Changes use.
+     */
     turn: z.string().min(1).max(200).optional(),
+    /** The harness's own id for the run, where it reports one: metadata, never the turn's key. */
+    run: z.string().min(1).max(200).optional(),
     /** The Thread's checkout: the folder its paths are in. */
     checkout: AbsolutePathSchema.optional(),
     /** The folder a call ran in. */

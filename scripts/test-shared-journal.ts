@@ -242,6 +242,7 @@ if (process.argv[2] === "owner-child") {
       makoWrote: () => heard.push("mako wrote"),
       moved: (move) => heard.push(`moved ${move.kind}`),
       chose: (choice) => heard.push(`chose ${choice.spelling} ${choice.path}`),
+      counted: (summary) => heard.push(`counted ${summary.turn}`),
       sessions: (sessions) => heard.push(`sessions ${sessions.length}`),
       track: async () => undefined,
       settled: async () => undefined,

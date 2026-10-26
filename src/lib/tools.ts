@@ -222,7 +222,12 @@ export function pairTools(blocks: Block[]): ToolCall[] {
 
 export interface ToolWorkSummary {
   tools: number
-  changedFiles: number
+  /**
+   * Edits that went through: calls that change a file, less those that
+   * failed. Steps, not files: which files a turn changed, and by how much,
+   * is the attribution journal's to say, on the line under the answer.
+   */
+  edits: number
   commands: number
   reads: number
   searches: number
@@ -238,8 +243,7 @@ export interface ToolWorkSummary {
 }
 
 export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
-  const changedFiles = new Set<string>()
-  let unlocatedChanges = 0
+  let edits = 0
   const counts = { command: 0, read: 0, search: 0, skill: 0, agent: 0, plan: 0, other: 0 }
   let failed = 0
   let stopped = 0
@@ -250,15 +254,14 @@ export function summarizeToolWork(calls: ToolCall[]): ToolWorkSummary {
     else if (call.isCutOff) cutOff += 1
     const work = toolKindWork(call.tool.kind)
     if (work === "change") {
-      if (call.tool.path) changedFiles.add(call.tool.path)
-      else unlocatedChanges += 1
+      if (!call.isError) edits += 1
     } else {
       counts[work] += 1
     }
   }
   return {
     tools: calls.length,
-    changedFiles: changedFiles.size + unlocatedChanges,
+    edits,
     commands: counts.command,
     reads: counts.read,
     searches: counts.search,

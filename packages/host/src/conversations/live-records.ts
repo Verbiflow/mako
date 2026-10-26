@@ -293,7 +293,7 @@ export class LiveRecords {
     return Boolean(
       resident.driver || resident.connections.size || resident.starting || resident.exited?.size ||
         resident.opening || resident.closing || resident.hibernating || resident.waking ||
-        resident.transferring || resident.checkpointing || resident.rewinding ||
+        resident.transferring || resident.checkpointing || resident.counting || resident.rewinding ||
         resident.accountSwitching || resident.signInResume || resident.autoContinue || resident.goalContinue || resident.stopping ||
         resident.sideAnswer || snapshot.side ||
         resident.storageFault || resident.timer || resident.updates.length ||

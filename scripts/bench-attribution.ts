@@ -9,9 +9,11 @@ import { fileURLToPath } from "node:url"
 import { Git } from "@mako/git"
 import type { TrackerPorts } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
+import { JournalStore } from "@mako/host/attribution/journal-store"
 import { gitRepository, nodeFileSystem, watcherEvents } from "@mako/host/attribution/ports"
 import { partition, type JournalView } from "@mako/host/attribution/queries"
 import { threadTrees } from "@mako/host/attribution/thread-tree"
+import { ThreadFiles } from "@mako/host/attribution/thread-files"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { watchTree } from "@mako/host/workspaces/tree-watcher"
 import { childBackend, childHistory } from "@mako/host/workspaces/watch-backend"
@@ -24,13 +26,18 @@ import { childBackend, childHistory } from "@mako/host/workspaces/watch-backend"
  *     catch-up from the FSEvents id;
  *   - idle CPU on a tracked repository nothing changes;
  *   - a change heard to journaled, on the real watcher, editing a 5,000-line file;
- *   - partition of 100 changed files between two Threads, and its Git tree.
- * Pass `--checkout <path>` to measure another checkout than this one.
+ *   - partition of 100 changed files between two Threads, and its Git tree;
+ *   - file links: one answer's spellings resolved against a journal that
+ *     knows 60 roots and 50,000 entries, cold, warm, and after more entries.
+ * Pass `--checkout <path>` to measure another checkout than this one, and
+ * `--only files` to measure file links alone.
  */
 
 const here = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const checkoutAt = process.argv.indexOf("--checkout")
 const checkout = realpathSync(checkoutAt > 0 ? process.argv[checkoutAt + 1]! : here)
+const onlyAt = process.argv.indexOf("--only")
+const only = onlyAt > 0 ? process.argv[onlyAt + 1] : undefined
 const runner = new Git()
 const backend = childBackend()
 const history = process.platform === "darwin" ? childHistory() : undefined
@@ -50,7 +57,73 @@ const say = (line: string) => {
   console.log(line)
 }
 
+/**
+ * One answer's file links, resolved as the transcript asks: 30 spellings, a
+ * Thread with 3,000 entries and 2,000 calls in one checkout, beside 59 other
+ * roots the journal knows with 2,000 files each and 50,000 entries of other
+ * Threads. Cold builds the indexes; warm asks again as the next answer does;
+ * then 500 entries land across every root and one more answer is resolved.
+ */
+async function fileLinks(): Promise<void> {
+  const base = scratch("file-links")
+  const store = JournalStore.open(join(base, "journal.sqlite"), { device: "bench" })
+  const files = new ThreadFiles({ git: runner, home: base })
+  const now = Date.now()
+  const ROOTS = 60
+  const FILES = 2_000
+  const rootPath = (root: number) => join(base, `root-${root}`)
+  const pathOf = (file: number) => `src/module-${file % 40}/file-${file}.ts`
+  const stat = { dev: 1, ino: 1, size: 10, mode: 0o100644, mtimeNs: 1n, ctimeNs: 1n, ref: null, checkedNs: 1n }
+  store.transaction(() => {
+    for (let root = 0; root < ROOTS; root++) {
+      store.saveRoot({ id: `r${root}`, path: rootPath(root), kind: "workspace", repository: false, head: null, mark: null, seenAt: now, trackedAt: now + root, active: true })
+      for (let file = 0; file < FILES; file++) store.saveStat(`r${root}`, pathOf(file), stat)
+    }
+  })
+  // The Thread's checkout has its files on disk, so a link finds them.
+  for (let file = 0; file < 200; file++) {
+    execFileSync("mkdir", ["-p", join(rootPath(0), `src/module-${file % 40}`)])
+    writeFileSync(join(rootPath(0), pathOf(file)), "x\n")
+  }
+  const entry = (root: number, file: number, thread: string | undefined, at: number) => ({
+    at, changedAt: at, root: `r${root}`, path: pathOf(file), kind: "modify" as const, before: null, after: null, text: true, added: 1, removed: 1, stored: false, observed: "event" as const,
+    author: thread ? { certainty: "exact" as const, author: { thread, session: `${thread}-s`, turn: "t1", call: `c${file}` }, effect: "modify" as const } : { certainty: "person" as const, via: "no-activity" as const },
+    settled: true,
+  })
+  store.transaction(() => {
+    for (let i = 0; i < 50_000; i++) store.insertEntry(entry(1 + (i % (ROOTS - 1)), i % FILES, i % 3 ? `other-${i % 7}` : undefined, now - 1_000_000 + i))
+    for (let i = 0; i < 3_000; i++) store.insertEntry(entry(0, i % 200, "T", now - 500_000 + i))
+    for (let i = 0; i < 2_000; i++)
+      store.saveActivity({ kind: "call", id: `c${i}`, session: "T-s", thread: "T", turn: "t1", checkout: rootPath(0), cwd: rootPath(0), named: [join(rootPath(0), pathOf(i % 200))], start: now - 400_000 + i, end: now - 400_000 + i + 50, effects: [{ kind: "modify", path: join(rootPath(0), pathOf(i % 200)) }] })
+  })
+  const spellings = Array.from({ length: 30 }, (_, i) => (i % 3 === 0 ? `file-${i * 5}.ts` : i % 3 === 1 ? `src/module-${(i * 5) % 40}/file-${i * 5}.ts:12` : `module-${(i * 7) % 40}/file-${i * 7}.ts`))
+  const source = { thread: "T", cwd: rootPath(0), current: [rootPath(0)], asOf: now }
+  let started = performance.now()
+  const first = await files.resolve(store, source, spellings)
+  const cold = performance.now() - started
+  assert.ok(first.filter((answer) => answer.kind === "file").length >= 20, "most spellings link")
+  const warm: number[] = []
+  for (let i = 0; i < 20; i++) {
+    started = performance.now()
+    await files.resolve(store, source, spellings)
+    warm.push(performance.now() - started)
+  }
+  store.transaction(() => {
+    for (let i = 0; i < 500; i++) store.insertEntry(entry(i % ROOTS, (i * 13) % FILES, i % 2 ? "T" : "other-1", now + i))
+  })
+  started = performance.now()
+  await files.resolve(store, source, spellings)
+  const caught = performance.now() - started
+  store.close()
+  say(`file links, 30 spellings, ${ROOTS} roots, 53,000 entries: cold ${cold.toFixed(1)} ms; warm p50 ${percentile(warm, 0.5).toFixed(1)} ms, max ${Math.max(...warm).toFixed(1)} ms; after 500 more entries ${caught.toFixed(1)} ms`)
+}
+
 try {
+  if (only === "files") {
+    await fileLinks()
+    for (const path of temporary) rmSync(path, { recursive: true, force: true })
+    process.exit(0)
+  }
   // Hashing.
   const buffer = Buffer.alloc(16 * 1024 * 1024, 7)
   let started = performance.now()
@@ -183,6 +256,7 @@ try {
   say(`partition of 100 changed files (two Threads, one shared hunk each): p50 ${percentile(times, 0.5).toFixed(1)} ms, max ${Math.max(...times).toFixed(1)} ms; the Thread's side as a Git tree ${Math.round(treeMs)} ms`)
   await tracker.close()
   say(`5,000-line blame per change: see test-attribution-lines (diff and line map p50 under 1 ms)`)
+  await fileLinks()
 } finally {
   for (const path of temporary) rmSync(path, { recursive: true, force: true })
 }

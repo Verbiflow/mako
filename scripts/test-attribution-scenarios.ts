@@ -9,11 +9,12 @@ import { Git } from "@mako/git"
 import type { ActivityMark, ReportedEffect } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
-import { changes, hunks, partition, restorable, type JournalView } from "@mako/host/attribution/queries"
+import { changes, hunks, partition, restorable, turnChanges, type JournalView } from "@mako/host/attribution/queries"
+import { lineNow, ThreadFiles } from "@mako/host/attribution/thread-files"
 import { threadTrees } from "@mako/host/attribution/thread-tree"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { LiveActivity } from "@mako/host/attribution/live-activity"
-import type { LiveBatch } from "@mako/host/contracts/live-conversations"
+import type { LiveBatch, LiveRequest } from "@mako/host/contracts/live-conversations"
 
 /*
  * Two Threads and the person in one checkout, on a real repository: the same
@@ -316,7 +317,8 @@ test("the live conversations' batches become turns, calls, background work and r
     })
     const batch = (fields: Partial<LiveBatch>): LiveBatch => ({ id: "conversation-1", revision: 1, updates: [], ...fields })
     const path = join(folder, "page.ts")
-    adapter.observe(batch({ sessionChanges: { status: "running" } }))
+    const request: LiveRequest = { id: "8f0c2a4e-3b1d-4c55-9e0a-1d2b3c4d5e6f", text: "Retitle the page", attachments: [], status: "dispatching" }
+    adapter.observe(batch({ requestChanges: [request], sessionChanges: { status: "running" } }))
     liveClock.advance(10)
     adapter.observe(batch({ updates: [{ kind: "tool", id: "toolu_1", title: "Edit", name: "Edit", status: "in_progress", input: JSON.stringify({ file_path: path, old_string: "'old'", new_string: "'new'" }) }] }))
     liveClock.advance(10)
@@ -332,15 +334,200 @@ test("the live conversations' batches become turns, calls, background work and r
     adapter.observe(batch({ nativeAgents: { agents: [], limited: false } }))
     await live.settled()
     const [entry] = live.changes(0)
-    assert.deepEqual(entry?.author, { certainty: "exact", author: { thread: "T9", session: "session-1", turn: "1", call: "toolu_1" }, effect: "modify" })
+    assert.deepEqual(entry?.author, { certainty: "exact", author: { thread: "T9", session: "session-1", turn: request.id, call: "toolu_1" }, effect: "modify" }, "the turn is the request it answers")
     assert.deepEqual(tracked, [folder], "the turn's folder is tracked")
     const activity = live.store.activityOfThread("T9").map((item) => [item.kind, item.id, item.end !== null, item.record !== undefined || item.kind !== "turn"])
-    assert.deepEqual(activity.sort(), [["background", "bg-1", true, true], ["call", "toolu_1", true, true], ["turn", "1", true, true]])
+    assert.deepEqual(activity.sort(), [["background", "bg-1", true, true], ["call", "toolu_1", true, true], ["turn", request.id, true, true]])
     assert.ok(live.store.activityOfThread("T9").find((item) => item.kind === "background")?.named.includes(join(folder, "web")))
   } finally {
     await live.close()
     rmSync(folder, { recursive: true, force: true })
     rmSync(liveStorage, { recursive: true, force: true })
+  }
+})
+
+/**
+ * A Thread's conversation as the live engine reports it, on a real tracker:
+ * requests dispatching and settling, tool calls with their effects, the
+ * person's own saves, and a host restart that reopens the journal and
+ * starts the live adapter over.
+ */
+async function liveWorld() {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-turns-")))
+  const store = mkdtempSync(join(tmpdir(), "mako-attribution-turns-journal-"))
+  const events = new FakeEventSource()
+  const clock = new FakeClock(Date.now())
+  const ports = { fs: nodeFileSystem(), events, clock, storage: store, device: "scenario" }
+  let tracker = await LaptopTracker.open(ports)
+  await tracker.track({ id: "turns", path: folder, kind: "attached" })
+  const adapterOf = (open: LaptopTracker) => new LiveActivity({
+    tracker: open,
+    placement: () => ({ thread: "T7", session: "session-7" }),
+    session: () => ({ cwd: folder, harness: "claude" }),
+    checkout: () => folder,
+    working: () => undefined,
+    now: () => clock.now(),
+  })
+  let adapter = adapterOf(tracker)
+  let revision = 0
+  const batch = (fields: Partial<LiveBatch>) => adapter.observe({ id: "conversation-7", revision: ++revision, updates: [], ...fields })
+  const write = (name: string, text: string) => {
+    const path = join(folder, name)
+    writeFileSync(path, text)
+    utimesSync(path, clock.now() / 1000, clock.now() / 1000)
+    events.changed(path)
+  }
+  const world = {
+    folder,
+    clock,
+    get tracker() {
+      return tracker
+    },
+    view: (): JournalView => ({ store: tracker.store, roots: () => tracker.rootStates().values(), author: (seq) => tracker.authorOf(seq) }),
+    batch,
+    write,
+    /** One call that edits a file and reports it, ending as `status` says. */
+    async edit(id: string, name: string, text: string, status: "completed" | "failed" = "completed") {
+      const path = join(folder, name)
+      batch({ updates: [{ kind: "tool", id, title: "Write", name: "Write", status: "in_progress", input: JSON.stringify({ file_path: path, content: text }) }] })
+      clock.advance(20)
+      if (status === "completed") write(name, text)
+      clock.advance(20)
+      batch({ updates: [{ kind: "tool-update", id, status, output: status === "completed" ? "ok" : "Error: the file was changed since it was read", effects: [{ kind: "write", path, content: text }] }] })
+      await tracker.settled()
+    },
+    /** Every change so far settled, as the journal settles them once nothing can reach them. */
+    async settle() {
+      clock.advance(15_000)
+      tracker.sweep()
+      await tracker.settled()
+    },
+    /** The host stops and starts again: the journal reopens, and the live adapter starts over with nothing of the last one. */
+    async restart() {
+      await tracker.close()
+      tracker = await LaptopTracker.open(ports)
+      await tracker.settled()
+      adapter = adapterOf(tracker)
+    },
+    async close() {
+      await tracker.close()
+      rmSync(folder, { recursive: true, force: true })
+      rmSync(store, { recursive: true, force: true })
+    },
+  }
+  return world
+}
+
+const request = (id: string, status: LiveRequest["status"], nativeRun?: string): LiveRequest =>
+  ({ id, text: "Do the thing", attachments: [], status, ...(nativeRun && { nativeRun: { bindingId: "binding-7", runId: nativeRun } }) })
+const TURN_ONE = "11111111-1111-4111-8111-111111111111"
+const TURN_TWO = "22222222-2222-4222-8222-222222222222"
+const TURN_THREE = "33333333-3333-4333-8333-333333333333"
+const TURN_FOUR = "44444444-4444-4444-8444-444444444444"
+
+test("a turn is the request it answers: two turns, a restart between them, and a stale run id", async () => {
+  const world = await liveWorld()
+  try {
+    world.write("app.ts", lines(30))
+    world.write("util.ts", "export const util = 1\n")
+    await world.settle()
+    // Turn one: the harness names its run while it runs.
+    world.batch({ requestChanges: [request(TURN_ONE, "dispatching")], sessionChanges: { status: "running", nativeRunId: "run-A" } })
+    await world.edit("toolu_a1", "app.ts", lines(30, { 4: "line 4 by turn one", 5: "line 5 by turn one" }))
+    world.batch({ requestChanges: [request(TURN_ONE, "completed")], sessionChanges: { status: "ready" } })
+    await world.settle()
+
+    // The host restarts. The session comes back whole, still carrying turn one's run id, as the next turn starts.
+    await world.restart()
+    world.batch({ requests: [request(TURN_ONE, "completed"), request(TURN_TWO, "dispatching")], session: { connection: "connected", id: "conversation-7", harness: "claude", cwd: world.folder, status: "running", nativeRunId: "run-A", modes: [], currentMode: null, configOptions: [] } })
+    await world.edit("toolu_b1", "util.ts", "export const util = 2\nexport const more = 3\n")
+    world.batch({ sessionChanges: { nativeRunId: "run-B" } })
+    await world.edit("toolu_b2", "app.ts", lines(30, { 4: "line 4 by turn one", 5: "line 5 by turn one", 20: "line 20 by turn two" }))
+    world.batch({ requestChanges: [request(TURN_TWO, "completed")], sessionChanges: { status: "ready" } })
+    await world.settle()
+
+    const turns = world.tracker.store.activityOfThread("T7").filter((item) => item.kind === "turn")
+    assert.deepEqual(turns.map((turn) => [turn.id, turn.run]), [[TURN_ONE, "run-A"], [TURN_TWO, "run-B"]], "each turn is its request; the stale run id named neither")
+    const one = turnChanges(world.view(), "T7", TURN_ONE)
+    const two = turnChanges(world.view(), "T7", TURN_TWO)
+    assert.deepEqual(one.files.map((file) => [file.relative, file.own]), [["app.ts", { added: 2, removed: 2 }]])
+    assert.deepEqual(two.files.map((file) => [file.relative, file.own]), [["app.ts", { added: 1, removed: 1 }], ["util.ts", { added: 2, removed: 1 }]])
+    assert.deepEqual(two.own, { files: 2, added: 3, removed: 2 })
+    assert.deepEqual([one.state, one.maybe.files, two.maybe.files], ["settled", 0, 0])
+    // The file's chain spans both turns; each counts only its own entries, first before to last after.
+    assert.ok(two.files[0]!.entries.first > one.files[0]!.entries.last)
+  } finally {
+    await world.close()
+  }
+})
+
+test("a turn's lines are net, a failed edit changes nothing, and the person's save while it ran is only maybe", async () => {
+  const world = await liveWorld()
+  try {
+    world.write("list.ts", lines(10))
+    await world.settle()
+    world.batch({ requestChanges: [request(TURN_THREE, "dispatching")], sessionChanges: { status: "running" } })
+    // Five lines added, then taken back, then one line changed: the turn changed one line.
+    await world.edit("toolu_c1", "list.ts", lines(10) + "a\nb\nc\nd\ne\n")
+    await world.edit("toolu_c2", "list.ts", lines(10))
+    await world.edit("toolu_c3", "list.ts", lines(10, { 7: "line 7 changed" }))
+    // An edit the harness refused: it reported the write, but the file never changed.
+    await world.edit("toolu_c4", "refused.ts", "never written\n", "failed")
+    // A long command runs, naming nothing; meanwhile the person saves a file the agent never went near.
+    world.batch({ updates: [{ kind: "tool", id: "toolu_c5", title: "Bash", name: "Bash", status: "in_progress", input: JSON.stringify({ command: "npm test" }) }] })
+    world.clock.advance(500)
+    world.write("notes.md", "the person's own note\n")
+    await world.tracker.settled()
+    world.clock.advance(500)
+    world.batch({ updates: [{ kind: "tool-update", id: "toolu_c5", status: "completed", output: "ok" }] })
+    world.batch({ requestChanges: [request(TURN_THREE, "completed")], sessionChanges: { status: "ready" } })
+    await world.settle()
+
+    const counted = turnChanges(world.view(), "T7", TURN_THREE)
+    assert.deepEqual(counted.own, { files: 1, added: 1, removed: 1 }, "net lines: the five added and removed count for nothing")
+    assert.deepEqual(counted.maybe, { files: 1, added: 1, removed: 0 }, "the person's save while it ran is maybe")
+    const note = counted.files.find((file) => file.relative === "notes.md")
+    assert.ok(note && note.own === undefined && note.maybe, "never the turn's own")
+    assert.ok(!counted.files.some((file) => file.relative === "refused.ts"))
+
+    // A file link to the refused edit's file says the Thread named it, never that it changed it.
+    const refused = join(world.folder, "refused.ts")
+    writeFileSync(refused, "the person made it later\n")
+    const call = world.tracker.store.activityOfThread("T7").find((item) => item.id === "toolu_c4")
+    assert.equal(call?.status, "failed", "the call's status is kept with its effects")
+    const context = await new ThreadFiles({ git: runner, home: world.folder }).context(world.tracker.store, { thread: "T7", cwd: world.folder, current: [world.folder] })
+    assert.equal(context.touched.get(refused)?.kind, "named")
+    assert.equal(context.touched.get(join(world.folder, "list.ts"))?.kind, "wrote")
+  } finally {
+    await world.close()
+  }
+})
+
+test("a line an answer named is followed to where it is now, and is gone once removed", async () => {
+  const world = await liveWorld()
+  try {
+    world.write("long.ts", lines(40))
+    await world.settle()
+    world.batch({ requestChanges: [request(TURN_FOUR, "dispatching")], sessionChanges: { status: "running" } })
+    await world.edit("toolu_d1", "long.ts", lines(40, { 20: "line 20, the one the answer names" }))
+    world.batch({ requestChanges: [request(TURN_FOUR, "completed")], sessionChanges: { status: "ready" } })
+    const answered = world.clock.now()
+    world.clock.advance(60_000)
+    // Later, someone adds three lines at the top and removes line 30.
+    const later = ["// a\n", "// b\n", "// c\n", ...lines(40, { 20: "line 20, the one the answer names" }).split(/(?<=\n)/).filter((_line, i) => i !== 29)].join("")
+    world.write("long.ts", later)
+    await world.tracker.settled()
+    const roots = world.tracker.store.roots()
+    const path = join(world.folder, "long.ts")
+    assert.equal(lineNow(world.tracker.store, roots, path, 20, answered), 23, "three lines above it moved it down")
+    assert.equal(lineNow(world.tracker.store, roots, path, 30, answered), null, "the line was removed")
+    assert.equal(lineNow(world.tracker.store, roots, path, 5, world.clock.now()), 5, "nothing changed since")
+    const files = new ThreadFiles({ git: runner, home: world.folder })
+    const [found] = await files.resolve(world.tracker.store, { thread: "T7", cwd: world.folder, current: [world.folder], asOf: answered }, ["long.ts:20"])
+    assert.ok(found?.kind === "file")
+    assert.deepEqual(found.file.line, { was: 20, now: 23 })
+  } finally {
+    await world.close()
   }
 })
 

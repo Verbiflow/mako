@@ -6,7 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { formatCost, formatTokens } from "@/lib/format"
 import { harnessLabel } from "@/lib/harness-label"
 import type { Capability, ContextBreakdown, ContextCategory, HarnessUsage, LiveRequest, LiveSessionUsage, TokenCounts } from "@/lib/types"
-import { useThreadChanges } from "@/state/thread-changes"
+import { settledTurns, useThreadChanges } from "@/state/thread-changes"
 import { conversationSpend, PRICE_TABLES, type ChangeCounts, type ConversationSpend, type TurnSpend } from "@mako/host/contracts/usage-ledger"
 import { cn } from "@/lib/utils"
 import { acp, useAcp } from "@/state/acp"
@@ -163,7 +163,8 @@ function ConversationUsageDetails(props: { usage: LiveSessionUsage; harness: str
   const harnessTurns = useAcp((state) => scopedLiveAcp(state, scope)?.harnessTurns)
   const spentThrough = useAcp((state) => scopedLiveAcp(state, scope)?.spentThrough)
   const running = useAcp((state) => scopedLiveAcp(state, scope)?.session.status === "running")
-  const changes = useThreadChanges(thread, requests.length)
+  const settled = useAcp((state) => settledTurns(scopedLiveAcp(state, scope)?.requests))
+  const changes = useThreadChanges(thread, settled)
   return <UsageDetails {...props} requests={requests} outside={{ harnessTurns, spentThrough, running }} sideQuestions={sideQuestions} changes={changes} />
 }
 
@@ -404,7 +405,12 @@ function Spent({ spend, declared, harness, sideQuestions, changes }: { spend: Co
           Includes {formatTokens(total(spend.since.tokens))} tokens a subagent or background work spent since the last turn; the next turn counts them.
         </span>
       ) : null}
-      {changes ? <Row label={changes.scope === "thread" ? "Changes made by the thread" : "Changes made"} value={`${changes.files === 1 ? "1 file" : `${changes.files} files`} · +${changes.added} −${changes.removed}`} title={changes.kinds ? kindsTitle(changes.kinds) : undefined} data-changes /> : null}
+      {changes?.files ? <Row label={changes.scope === "thread" ? "Changes made by the thread" : "Changes made"} value={`${changes.files === 1 ? "1 file" : `${changes.files} files`} · +${changes.added} −${changes.removed}`} title={changes.kinds ? kindsTitle(changes.kinds) : undefined} data-changes /> : null}
+      {changes?.maybe ? (
+        <span className="text-label text-faint tabular-nums" data-changes-maybe title="Changed while its turns ran, with nothing tying them to the agent: a save of yours or another app's fits as well. They aren't counted above.">
+          {changes.files ? (changes.maybe === 1 ? "1 more file" : `${changes.maybe} more files`) : changes.maybe === 1 ? "1 file" : `${changes.maybe} files`} maybe yours
+        </span>
+      ) : null}
       {changes?.commands || changes?.outside ? (
         <span className="text-label text-faint tabular-nums" data-changes-beyond>
           {[changes.commands ? `${changes.commands} ${changes.commands === 1 ? "command" : "commands"} run` : "", changes.outside ? `${changes.outside} ${changes.outside === 1 ? "path" : "paths"} touched outside its checkouts` : ""].filter(Boolean).join(" · ")}

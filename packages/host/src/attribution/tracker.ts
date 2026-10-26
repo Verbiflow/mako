@@ -76,7 +76,7 @@ const MAX_DELAY_MS = 30
 /** Files stat-ed and read at once. */
 const PARALLEL = 32
 /** A change stays open to new evidence this long, and until every call that spans it has ended. */
-const SETTLE_MS = 10_000
+export const SETTLE_MS = 10_000
 /** A stat cached within this of the file's own modification can't tell a later write in the same tick. */
 const RACY_NS = 2_000_000_000n
 /** The system's history position is saved this often while changes come in. */
@@ -927,7 +927,7 @@ export class LaptopTracker implements AttributionTracker {
   activity(input: ActivityMark): void {
     const mark = ActivityMarkSchema.parse(input)
     const interval = this.evidence.mark(mark)
-    this.store.saveActivity(storedActivity(interval))
+    this.store.saveActivity({ ...storedActivity(interval), ...(mark.run && { run: mark.run }) })
     this.footprints?.activity(mark)
     this.reattribute()
   }
@@ -947,6 +947,7 @@ export class LaptopTracker implements AttributionTracker {
       named: [],
       start: span?.start ?? this.now(),
       end: span?.end ?? null,
+      status: call.status,
       // A file the harness only saw change while the call ran is no work of its own.
       effects: call.effects.filter((effect) => !("seen" in effect && effect.seen)).map((effect) =>
         effect.kind === "rename" ? { kind: "rename", from: effect.from, to: effect.to }

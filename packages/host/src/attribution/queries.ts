@@ -1,7 +1,8 @@
 import type { Attribution, Certainty, ContentRef, FootprintEntry } from "@mako/protocol"
+import { TURN_CHANGES_VERSION, type TurnChangedFile, type TurnChangeLines, type TurnChanges, type TurnChangeShare } from "../contracts/turn-changes.js"
 import { decodeText } from "./content.js"
 import { wholeChange, type FileState, type JournalStore, type StatRow, type StoredEntry, type StoredRoot } from "./journal-store.js"
-import { splitLines } from "./line-diff.js"
+import { diffLines, splitLines } from "./line-diff.js"
 import { BASE, type Run } from "./line-map.js"
 import { within } from "./paths.js"
 
@@ -481,11 +482,11 @@ export interface ThreadChanges {
   outside: FootprintEntry[]
   /** Entries by certainty: how much of this is sure. */
   certainty: Partial<Record<Certainty, number>>
-  /** Entries that might be this Thread's (`ambiguous` with it among the candidates). */
+  /** Entries that might be this Thread's: a `window` only its turn spans, or `ambiguous` with it among the candidates. */
   maybe: number
 }
 
-/** What a Thread changed: files, lines, commands and paths outside its checkout, with how sure each is. */
+/** What a Thread changed for sure, entry by entry: files, lines, commands and paths outside its checkout, with how sure each is. */
 export function changes(view: JournalView, thread: string): ThreadChanges {
   const entries = view.store.entriesBy("thread", thread)
   const result: ThreadChanges = {
@@ -500,8 +501,14 @@ export function changes(view: JournalView, thread: string): ThreadChanges {
   const roots = new Map([...view.store.roots()].map((root) => [root.id, root.path]))
   const latest = new Map<string, StoredEntry>()
   const first = new Map<string, StoredEntry>()
+  let uncertain = 0
   for (const entry of entries) {
     result.certainty[entry.author.certainty] = (result.certainty[entry.author.certainty] ?? 0) + 1
+    // Only its own: a window only its turn spans is a maybe, as an ambiguous change naming it is.
+    if (side(view.author(entry.seq), thread) !== "thread") {
+      uncertain++
+      continue
+    }
     result.lines.added += entry.added ?? 0
     result.lines.removed += entry.removed ?? 0
     const key = `${roots.get(entry.root) ?? entry.root}/${entry.path}`
@@ -519,7 +526,7 @@ export function changes(view: JournalView, thread: string): ThreadChanges {
   for (const activity of view.store.activityOfThread(thread))
     for (const effect of activity.effects ?? [])
       if (effect.kind === "command") result.commands.push({ command: effect.command, cwd: effect.cwd, exitCode: effect.exitCode, at: activity.start })
-  result.maybe = view.store.ambiguousWith(thread)
+  result.maybe = uncertain + view.store.ambiguousWith(thread)
   return result
 }
 
@@ -553,5 +560,194 @@ export function restorable(view: JournalView, target: { root: string; path: stri
     }
     out.push({ root: entry.root, path: entry.path, entry: entry.seq, at: entry.at, ref: entry.after, size: entry.size, author: entry.author })
   }
+  return out
+}
+
+/** Files a turn's summary lists, at most; the rest are counted (`more`). */
+export const TURN_FILES = 500
+
+/** Whose a line is in a turn's count: the Thread's, possibly its, someone else's, or there before the turn. */
+type Tag = "own" | "maybe" | "other" | "pre"
+
+/** One file's net change over a turn, line by line: who added the lines there now, and who removed the lines that were there. */
+interface FileCount {
+  own: { added: number; removed: number }
+  maybe: { added: number; removed: number }
+}
+
+/**
+ * The lines of one file across a stretch of its entries, each tagged with
+ * whoever last wrote it in the stretch; undefined when some version's
+ * content isn't kept. Each entry's change is the journal's own line diff of
+ * its two sides, so the count agrees with the line maps.
+ */
+function countLines(view: JournalView, chain: readonly StoredEntry[], tagOf: (seq: number) => Tag): FileCount | undefined {
+  const count: FileCount = { own: { added: 0, removed: 0 }, maybe: { added: 0, removed: 0 } }
+  let lines: string[] = []
+  let tags: Tag[] = []
+  let at: ContentRef | null | undefined
+  /** Lines of `next` in place of the current ones, written by `by`. */
+  const apply = (next: string[], by: Tag) => {
+    const out: Tag[] = []
+    let from = 0
+    for (const hunk of diffLines(lines, next)) {
+      for (; from < hunk.a; from++) out.push(tags[from]!)
+      for (let i = 0; i < hunk.removed; i++, from++) if (tags[from] === "pre" && (by === "own" || by === "maybe")) count[by].removed++
+      // A line there before the turn that someone else removes stays theirs; one the turn wrote and took back counts for nobody.
+      for (let i = 0; i < hunk.added; i++) out.push(by)
+    }
+    for (; from < lines.length; from++) out.push(tags[from]!)
+    lines = next
+    tags = out
+  }
+  for (const [index, entry] of chain.entries()) {
+    if (!entry.text && (entry.before !== null || entry.after !== null)) return undefined
+    if (index === 0) {
+      const first = linesOf(view, entry.before)
+      if (!first) return undefined
+      lines = first
+      tags = first.map(() => "pre")
+    } else if (entry.before !== at) {
+      // Something between two entries the journal kept apart: whoever it was, it wasn't the turn.
+      const between = linesOf(view, entry.before)
+      if (!between) return undefined
+      apply(between, "other")
+    }
+    const after = linesOf(view, entry.after)
+    if (!after) return undefined
+    apply(after, tagOf(entry.seq))
+    at = entry.after
+  }
+  for (const tag of tags) if (tag === "own" || tag === "maybe") count[tag].added++
+  return count
+}
+
+/**
+ * What a Thread's turn changed, counted from the journal: each file the
+ * turn's entries touched, from the content before its first entry on it to
+ * the content after its last, every line counted for whoever wrote it last
+ * in between (`TurnChanges`). The turn's entries are the Thread's in that
+ * turn and the ambiguous ones naming it with that turn; `others` counts
+ * the rest of the checkout's entries while the turn ran.
+ */
+export function turnChanges(view: JournalView, thread: string, turn: string, state: TurnChanges["state"] = "settled", now = Date.now()): TurnChanges {
+  const store = view.store
+  const roots = new Map(store.roots().map((root) => [root.id, root.path]))
+  const tags = new Map<number, Tag>()
+  const entries: StoredEntry[] = []
+  for (const entry of store.entriesOfTurn(thread, turn)) {
+    const at = side(view.author(entry.seq), thread)
+    if (at === "other") continue
+    tags.set(entry.seq, at === "thread" ? "own" : "maybe")
+    entries.push(entry)
+  }
+  // The turn's entries by file, a rename carrying the file's earlier entries to its new path.
+  const groups = new Map<string, TurnFile>()
+  for (const entry of entries) {
+    const from = entry.kind === "rename" ? entry.from : undefined
+    const moved = from !== undefined ? groups.get(`${entry.root}\u0000${from}`) : undefined
+    if (moved) groups.delete(`${entry.root}\u0000${from}`)
+    const key = `${entry.root}\u0000${entry.path}`
+    const group = moved ?? groups.get(key) ?? { root: entry.root, path: entry.path, was: from ?? entry.path, paths: new Set([entry.path]), first: entry.seq, last: entry.seq, seqs: [] }
+    group.path = entry.path
+    group.paths.add(entry.path)
+    if (from !== undefined) group.paths.add(from)
+    group.last = entry.seq
+    group.seqs.push(entry.seq)
+    groups.set(key, group)
+  }
+  const tagOf = (seq: number): Tag => tags.get(seq) ?? "other"
+  const counted: TurnChangedFile[] = []
+  for (const group of groups.values()) {
+    const file = countFile(view, group, tagOf, roots.get(group.root) ?? group.root)
+    if (file) counted.push(file)
+  }
+  counted.sort((a, b) => a.path.localeCompare(b.path))
+  const share = (pick: (file: TurnChangedFile) => TurnChangeLines | null | undefined): TurnChangeShare => {
+    const out = { files: 0, added: 0, removed: 0 }
+    for (const file of counted) {
+      const lines = pick(file)
+      if (lines === undefined) continue
+      out.files++
+      out.added += lines?.added ?? 0
+      out.removed += lines?.removed ?? 0
+    }
+    return out
+  }
+  return {
+    version: TURN_CHANGES_VERSION,
+    state,
+    thread,
+    turn,
+    own: share((file) => file.own),
+    maybe: share((file) => file.maybe),
+    others: othersDuring(view, thread, turn, tags),
+    files: counted.slice(0, TURN_FILES),
+    more: Math.max(0, counted.length - TURN_FILES),
+    journal: store.id,
+    through: store.lastSeq(),
+    at: now,
+  }
+}
+
+/** One file's entries in a turn: where it is after them, where it was before, and the entries that span it. */
+interface TurnFile {
+  root: string
+  path: string
+  was: string
+  /** Every path its entries were at, to read its chain under each. */
+  paths: Set<string>
+  first: number
+  last: number
+  seqs: number[]
+}
+
+/** One file of a turn, counted; undefined when the turn made it and took it away again, or none of it is the Thread's. */
+function countFile(view: JournalView, group: TurnFile, tagOf: (seq: number) => Tag, base: string): TurnChangedFile | undefined {
+  // Every entry on the file from the turn's first to its last, others' among them.
+  const chain = [...new Map([...group.paths].flatMap((path) => view.store.chain(group.root, path, group.first - 1)).filter((entry) => entry.seq <= group.last).map((entry) => [entry.seq, entry])).values()]
+    .sort((a, b) => a.seq - b.seq)
+  const first = chain[0]
+  const last = chain.at(-1)
+  if (!first || !last || (first.before === null && last.after === null)) return undefined
+  const renamed = group.was !== group.path
+  const kind: TurnChangedFile["kind"] = first.before === null ? "create" : last.after === null ? "delete" : renamed ? "rename" : "modify"
+  const lines = countLines(view, chain, tagOf)
+  // A whole-file change is its maker's: the entry that created, deleted or renamed it.
+  const maker = kind === "create" ? first : kind === "delete" ? last : kind === "rename" ? chain.find((entry) => entry.kind === "rename") : undefined
+  const madeBy = maker && tagOf(maker.seq)
+  const has = (tag: "own" | "maybe") => (lines ? lines[tag].added + lines[tag].removed > 0 || madeBy === tag : group.seqs.some((seq) => tagOf(seq) === tag))
+  const owns = has("own")
+  const maybes = has("maybe")
+  if (!owns && !maybes) return undefined
+  return {
+    path: `${base}/${group.path}`,
+    root: group.root,
+    relative: group.path,
+    kind,
+    ...(renamed && { from: `${base}/${group.was}` }),
+    ...(owns && { own: lines ? lines.own : null }),
+    ...(maybes && { maybe: lines ? lines.maybe : null }),
+    before: first.before,
+    after: last.after,
+    entries: { first: group.first, last: group.last },
+  }
+}
+
+/** What others changed in the turn's checkout while it ran: files and lines as each entry stated them, never the Thread's. */
+function othersDuring(view: JournalView, thread: string, turn: string, tags: ReadonlyMap<number, Tag>): TurnChangeShare {
+  const span = view.store.turn(thread, turn)
+  const out = { files: 0, added: 0, removed: 0 }
+  if (!span?.checkout) return out
+  const inside = new Set(rootsIn(view, span.checkout).map((root) => root.root.id))
+  const files = new Set<string>()
+  for (const entry of view.store.entriesBetween(span.start, span.end ?? Number.MAX_SAFE_INTEGER)) {
+    if (!inside.has(entry.root) || tags.has(entry.seq) || entry.author.certainty === "mako") continue
+    if ("author" in entry.author && entry.author.author.thread === thread) continue
+    files.add(`${entry.root}\u0000${entry.path}`)
+    out.added += entry.added ?? 0
+    out.removed += entry.removed ?? 0
+  }
+  out.files = files.size
   return out
 }

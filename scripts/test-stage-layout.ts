@@ -480,6 +480,8 @@ assert.deepEqual(
   summarizeToolWork([
     workCall("edit-a", "edit", { arguments: { file_path: "src/a.ts" } }),
     workCall("edit-a-2", "write", { arguments: { path: "src/a.ts" } }),
+    // A failed edit changed nothing: a step that failed, not an edit.
+    workCall("edit-b", "edit", { arguments: { file_path: "src/b.ts" }, isError: true }),
     workCall("shell", "exec_command"),
     workCall("read", "read"),
     workCall("search", "grep"),
@@ -490,8 +492,8 @@ assert.deepEqual(
     workCall("survey", "task", { isCutOff: true, isCanceled: true }),
   ]),
   {
-    tools: 10,
-    changedFiles: 1,
+    tools: 11,
+    edits: 2,
     commands: 1,
     reads: 1,
     searches: 1,
@@ -499,7 +501,7 @@ assert.deepEqual(
     agents: 3,
     plans: 1,
     other: 0,
-    failed: 1,
+    failed: 2,
     stopped: 1,
     cutOff: 1,
   }

@@ -12,6 +12,7 @@ import type { GitDiff, GitFile } from "../contracts/git-workspace-search.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
+import type { LiveTurnChanges } from "./live-turn-changes.js"
 
 /** Turns kept open for reading their files; each holds one object reader. */
 const OPEN_TURNS = 4
@@ -24,12 +25,15 @@ export class LiveCheckpoints {
   private readonly turns = new Map<string, TreeComparison>()
   private readonly host: LiveAccess
   private readonly fork: (id: string, input: ForkInput) => LiveSnapshot
+  private readonly changes: LiveTurnChanges
   constructor(
     host: LiveAccess,
-    fork: (id: string, input: ForkInput) => LiveSnapshot
+    fork: (id: string, input: ForkInput) => LiveSnapshot,
+    changes: LiveTurnChanges
   ) {
     this.host = host
     this.fork = fork
+    this.changes = changes
   }
 
   prompt(
@@ -117,7 +121,9 @@ export class LiveCheckpoints {
     return true
   }
 
+  /** A request's turn ended: its "after" checkpoint is captured, and the journal counts what it changed. */
   settle(resident: Resident, requestId: string): void {
+    this.changes.ended(resident, requestId)
     const snapshots = this.host.dependencies.workspaceSnapshots
     if (!snapshots) return
     const generation = resident.generation

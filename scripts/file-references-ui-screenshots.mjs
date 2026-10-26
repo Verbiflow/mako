@@ -85,7 +85,7 @@ async function shoot() {
       ["src/app.ts", "none", "SPAN", ""],
       ["notes.md", "none", "SPAN", ""],
     ])
-    assert.match(await evaluate(`document.querySelector("[data-file-reason='renamed']").title`), /Renamed since from acp\.ts/)
+    assert.match(await evaluate(`document.querySelector("[data-file-reason='renamed']").dataset.fileTip`), /Renamed since from acp\.ts/)
     await capture(`answer-${theme}.png`, "[data-fixture-answer]")
 
     // A real tie: the question in the agent's words, ranked rows that say where and why, the keyboard.
