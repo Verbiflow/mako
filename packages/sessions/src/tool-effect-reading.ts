@@ -668,6 +668,239 @@ function inPlaceFiles(name: string, words: readonly Word[]): Word[] {
   return script ? operands : operands.slice(1)
 }
 
+/**
+ * A file a command line runs whose text says what the command does, read
+ * where it ran: a script an interpreter runs, a program run by its path
+ * (its first line names what runs it), a package's script, or a Makefile's
+ * rules. `cwd` is the folder it runs in, unknown after a `cd` that can't be
+ * placed; `shell` says a shell runs the file, so its lines are commands too.
+ */
+export type ScriptRun =
+  /** `shell` is undefined for a program run by its path, whose first line says what runs it. */
+  | { kind: "file"; path: string; cwd?: string; shell?: boolean }
+  | { kind: "package"; manager: "npm" | "pnpm" | "yarn" | "bun"; script: string; cwd: string }
+  | { kind: "make"; cwd: string; makefile?: string; targets: string[] }
+
+/** Runs read from one command line, at most. */
+const MAX_RUNS = 16
+
+/** Of an interpreter, the options that take the next word as their value, and those that give it code, a module or standard input instead of a file. */
+interface Interpreter {
+  values: ReadonlySet<string>
+  inline: ReadonlySet<string>
+  shell?: true
+}
+const NODE: Interpreter = {
+  values: new Set(["-r", "--require", "--import", "--loader", "--experimental-loader", "--env-file", "-C", "--conditions", "--input-type", "--title", "--watch-path", "--tsconfig", "-P", "--project"]),
+  inline: new Set(["-e", "--eval", "-p", "--print", "-"]),
+}
+const SHELL: Interpreter = { values: new Set(["-o", "+o", "-O", "+O", "--rcfile", "--init-file"]), inline: new Set(["-s", "-"]), shell: true }
+const INTERPRETERS = new Map<string, Interpreter>([
+  ["python", { values: new Set(["-W", "-X", "--check-hash-based-pycs"]), inline: new Set(["-c", "-m", "-"]) }],
+  ["node", NODE],
+  ["tsx", NODE],
+  ["ts-node", NODE],
+  ["ruby", { values: new Set(["-I", "-r", "-C", "-E"]), inline: new Set(["-e", "-"]) }],
+  ["perl", { values: new Set(["-I", "-M", "-m"]), inline: new Set(["-e", "-E", "-"]) }],
+  ["php", { values: new Set(["-c", "-d", "-z"]), inline: new Set(["-r", "-a", "-"]) }],
+  ["Rscript", { values: new Set([]), inline: new Set(["-e"]) }],
+  ["deno", { values: new Set(["-c", "--config", "--import-map", "--lock", "--env-file", "--location", "--cert"]), inline: new Set(["-"]) }],
+  ["bun", { values: new Set(["--config", "-c", "--preload", "-r", "--tsconfig-override", "--env-file"]), inline: new Set(["-e", "--eval", "-p", "--print", "-", "--cwd"]) }],
+  ["sh", SHELL],
+  ["bash", SHELL],
+  ["zsh", SHELL],
+  ["dash", SHELL],
+  ["ksh", SHELL],
+])
+/** Programs that run the program after them (`npx tsx x.ts`, `poetry run python x.py`); `python`: or a Python file itself (`uv run x.py`). */
+const RUNNERS = new Map<string, { sub?: string; values: ReadonlySet<string>; elsewhere: ReadonlySet<string>; python?: true }>([
+  ["npx", { values: new Set(["-p", "--package", "--cache"]), elsewhere: new Set(["-c", "--call", "-w", "--workspace", "--prefix"]) }],
+  ["pnpx", { values: new Set(["--package"]), elsewhere: new Set(["-c"]) }],
+  ["bunx", { values: new Set(["-p", "--package"]), elsewhere: new Set([]) }],
+  ["uv", { sub: "run", values: new Set(["--with", "--with-requirements", "--python", "-p", "--group", "--extra", "--env-file", "--index", "--package"]), elsewhere: new Set(["--directory", "--project"]), python: true }],
+  ["poetry", { sub: "run", values: new Set([]), elsewhere: new Set(["-C", "--directory", "-P", "--project"]), python: true }],
+  ["pipenv", { sub: "run", values: new Set([]), elsewhere: new Set([]), python: true }],
+  ["pdm", { sub: "run", values: new Set([]), elsewhere: new Set(["-p", "--project"]), python: true }],
+])
+/** Package managers' commands that aren't a package's scripts, for those that run a script by its bare name. */
+const MANAGER_COMMANDS = {
+  pnpm: new Set(["add", "install", "i", "update", "up", "upgrade", "remove", "rm", "uninstall", "un", "link", "ln", "unlink", "import", "rebuild", "rb", "prune", "fetch", "patch", "patch-commit", "dlx", "create", "publish", "pack", "list", "ls", "ll", "la", "outdated", "why", "audit", "store", "env", "setup", "init", "config", "c", "get", "set", "root", "bin", "licenses", "deploy", "doctor", "server", "recursive", "self-update", "help", "cat-file", "cat-index", "find-hash", "approve-builds", "ignored-builds"]),
+  yarn: new Set(["add", "install", "remove", "upgrade", "up", "upgrade-interactive", "why", "info", "init", "create", "dlx", "workspaces", "global", "cache", "config", "link", "unlink", "pack", "publish", "version", "versions", "set", "plugin", "bin", "constraints", "npm", "check", "import", "licenses", "list", "login", "logout", "outdated", "owner", "policies", "tag", "team", "audit", "autoclean", "generate-lock-entry", "help", "dedupe", "explain", "patch", "patch-commit", "rebuild", "search", "stage", "unplug"]),
+  bun: new Set(["install", "i", "add", "a", "remove", "rm", "update", "outdated", "link", "unlink", "pm", "build", "test", "x", "create", "init", "upgrade", "repl", "publish", "patch", "patch-commit", "audit", "info", "why", "completions", "discord", "help"]),
+}
+/** A file a package manager runs itself rather than a script of that name. */
+const SCRIPT_FILE = /[/\\]|\.(?:[cm]?[jt]sx?|sh)$/
+/** `npm` commands that run the package script of the same name. */
+const NPM_SCRIPTS = new Map([["test", "test"], ["t", "test"], ["tst", "test"], ["start", "start"], ["stop", "stop"], ["restart", "restart"]])
+/** Options that make a package manager or Make work in another package or folder, which the command line alone doesn't place. */
+const ELSEWHERE = new Set(["-w", "--workspace", "-ws", "--workspaces", "--prefix", "-C", "--dir", "--cwd", "-F", "--filter", "-r", "--recursive", "--workspace-root"])
+/** Make's options that take the next word as their value, and those that run no recipe. */
+const MAKE_VALUES = new Set(["-f", "--file", "--makefile", "-C", "--directory", "-I", "--include-dir", "-o", "--old-file", "--assume-old", "-W", "--what-if", "--new-file", "--assume-new", "-l", "--load-average", "-j", "--jobs"])
+const MAKE_DRY = new Set(["-n", "--just-print", "--dry-run", "--recon", "-q", "--question"])
+
+/**
+ * The files a command line runs whose text the command then follows, each
+ * with the folder it runs in: `python3 draw.py`, `node build.mjs`, `npx tsx
+ * gen.ts`, `uv run plot.py`, `bash gen.sh` (and `bash -c '…'`'s own line),
+ * `source env.sh`, `./gen.sh`; `npm run gen`, `npm test`, `pnpm gen`, `yarn
+ * gen` and `bun run gen` for the package's script; `make` and `make docs`
+ * for the Makefile's rules. Conservative like `namedPaths`: a program or
+ * file the shell would expand, a module (`python3 -m`), code given inline
+ * (`-c`, `-e`, a heredoc), and a package or folder the line doesn't place
+ * (`--workspace`, `--filter`, `--prefix`) are left out.
+ */
+export function scriptRuns(command: string, cwd: string | undefined): ScriptRun[] {
+  const runs: ScriptRun[] = []
+  if (command.length > MAX_PARSED_COMMAND) return runs
+  let folder = cwd
+  for (const words of simpleCommands(commandWords(command))) {
+    const operands: Word[] = []
+    for (let index = 0; index < words.length; index++) {
+      const word = words[index]!
+      if (word.operator && REDIRECTS.has(word.text)) index++
+      else if (!word.operator) operands.push(word)
+    }
+    const [program, ...rest] = withoutPrefixes(operands)
+    if (!program || program.expands) continue
+    if (program.text === "cd") {
+      const target = rest[0]
+      folder = target && !target.expands ? absolutePath(target.text, folder) : undefined
+      continue
+    }
+    runs.push(...runsOf(program, rest, folder, 0))
+    if (runs.length >= MAX_RUNS) break
+  }
+  return runs.slice(0, MAX_RUNS)
+}
+
+/** Assignments and words that run the command after them: `sudo`, `env A=1`, `timeout 60`, `nice -n 5`. */
+function withoutPrefixes(operands: readonly Word[]): Word[] {
+  let words = [...operands]
+  for (;;) {
+    const first = words[0]?.text
+    if (first === undefined) return words
+    if (/^\w+=/.test(first) || PREFIXES.has(first)) words = words.slice(1)
+    else if (first === "env") {
+      words = words.slice(1)
+      while (words.length && (words[0]!.text.startsWith("-") || /^\w+=/.test(words[0]!.text))) words = words.slice(words[0]!.text === "-u" ? 2 : 1)
+    } else if (first === "timeout") words = words.slice(words.findIndex((word, at) => at > 0 && !word.text.startsWith("-")) + 1 || words.length)
+    else if (first === "nice") words = words.slice(words[1]?.text === "-n" ? 3 : 1)
+    else return words
+  }
+}
+
+/** What one simple command runs: its program and the words after it. */
+function runsOf(program: Word, rest: readonly Word[], folder: string | undefined, depth: number): ScriptRun[] {
+  if (program.expands || depth > 2) return []
+  const name = program.text.replace(/^.*\//, "")
+  const runner = RUNNERS.get(name)
+  if (runner) {
+    let words = rest
+    if (runner.sub) {
+      if (words[0]?.text !== runner.sub) return []
+      words = words.slice(1)
+    }
+    const at = firstOperand(words, runner.values, runner.elsewhere)
+    if (at === undefined) return []
+    const next = words[at]!
+    if (runner.python && next.text.endsWith(".py")) return runsOf({ text: "python", expands: false }, words.slice(at), folder, depth + 1)
+    return runsOf(next, words.slice(at + 1), folder, depth + 1)
+  }
+  if ((name === "npm" || name === "pnpm" || name === "yarn") && rest[0]?.text === "exec") {
+    const words = rest.slice(1)
+    const at = firstOperand(words, new Set(["-p", "--package"]), ELSEWHERE)
+    return at === undefined ? [] : runsOf(words[at]!, words.slice(at + 1), folder, depth + 1)
+  }
+  if (name === "npm" || name === "pnpm" || name === "yarn" || (name === "bun" && !rest.some((word) => word.text.startsWith("-")))) {
+    const run = packageRun(name, rest, folder)
+    if (run !== null) return run ? [run] : []
+  }
+  if (name === "make" || name === "gmake") return makeRun(rest, folder)
+  if (name === "source" || name === ".") {
+    const script = rest[0]
+    const path = script && !script.expands ? absolutePath(script.text, folder) : undefined
+    return path ? [{ kind: "file", path, ...(folder && { cwd: folder }), shell: true }] : []
+  }
+  const interpreter = INTERPRETERS.get(/^(?:python[\d.]*|pypy\d*)$/.test(name) ? "python" : name)
+  if (interpreter) {
+    let words = rest
+    if (name === "deno" || name === "bun") words = words[0]?.text === "run" ? words.slice(1) : name === "deno" ? [] : words
+    else if (name === "tsx" && words[0]?.text === "watch") words = words.slice(1)
+    if (interpreter.shell) {
+      const inline = words.findIndex((word) => /^-[a-z]*c[a-z]*$/.test(word.text))
+      if (inline >= 0) {
+        const line = words.slice(inline + 1).find((word) => !word.text.startsWith("-"))
+        return line && !line.expands ? scriptRuns(line.text, folder).slice(0, MAX_RUNS) : []
+      }
+    }
+    const at = firstOperand(words, interpreter.values, interpreter.inline)
+    const script = at === undefined ? undefined : words[at]!
+    const path = script && !script.expands ? absolutePath(script.text, folder) : undefined
+    return path ? [{ kind: "file", path, ...(folder && { cwd: folder }), shell: interpreter.shell === true }] : []
+  }
+  // A program run by its path, not looked up on PATH: its first line says what runs it.
+  if (!program.text.includes("/")) return []
+  const path = absolutePath(program.text, folder)
+  return path ? [{ kind: "file", path, ...(folder && { cwd: folder }) }] : []
+}
+
+/** The index of the first word that isn't an option or an option's value; undefined when an option in `stop` comes first. */
+function firstOperand(words: readonly Word[], values: ReadonlySet<string>, stop: ReadonlySet<string>): number | undefined {
+  for (let index = 0; index < words.length; index++) {
+    const text = words[index]!.text
+    if (text === "--") return index + 1 < words.length ? index + 1 : undefined
+    if (stop.has(text) || stop.has(text.split("=")[0]!)) return undefined
+    if (values.has(text)) index++
+    else if (text === "-" || !text.startsWith("-")) return stop.has(text) ? undefined : index
+  }
+  return undefined
+}
+
+/** A package manager's run of a script: undefined when it runs none, null when the words name a file to run instead (`bun x.ts`). */
+function packageRun(manager: "npm" | "pnpm" | "yarn" | "bun", words: readonly Word[], folder: string | undefined): ScriptRun | undefined | null {
+  if (!folder || words.some((word) => ELSEWHERE.has(word.text.split("=")[0]!))) return undefined
+  const at = words.findIndex((word) => !word.text.startsWith("-"))
+  const command = words[at]
+  if (!command || command.expands) return undefined
+  let script: Word | undefined
+  if (command.text === "run" || command.text === "run-script" || command.text === "rum" || command.text === "urn") script = words.slice(at + 1).find((word) => !word.text.startsWith("-"))
+  else if (manager === "npm") {
+    const named = NPM_SCRIPTS.get(command.text)
+    return named ? { kind: "package", manager, script: named, cwd: folder } : undefined
+  } else if (!MANAGER_COMMANDS[manager].has(command.text)) script = command
+  if (!script || script.expands) return undefined
+  if (manager === "bun" && SCRIPT_FILE.test(script.text)) return null
+  return { kind: "package", manager, script: script.text, cwd: folder }
+}
+
+/** Make's run: the Makefile it reads and the goals asked for, the first rule's when none is. */
+function makeRun(words: readonly Word[], folder: string | undefined): ScriptRun[] {
+  let cwd = folder
+  let makefile: string | undefined
+  const targets: string[] = []
+  for (let index = 0; index < words.length; index++) {
+    const word = words[index]!
+    if (word.expands) return []
+    if (MAKE_DRY.has(word.text)) return []
+    if (MAKE_VALUES.has(word.text)) {
+      const value = words[++index]
+      if (word.text === "-j" || word.text === "--jobs" || word.text === "-l" || word.text === "--load-average") {
+        // Their value is optional: a word that isn't a number is a goal.
+        if (value && !/^\d+(?:\.\d+)?$/.test(value.text)) index--
+        continue
+      }
+      if (!value || value.expands) return []
+      if (word.text === "-C" || word.text === "--directory") cwd = absolutePath(value.text, cwd)
+      else if (word.text === "-f" || word.text === "--file" || word.text === "--makefile") makefile = value.text
+    } else if (/^-[a-zA-Z]*n[a-zA-Z]*$/.test(word.text) && !word.text.startsWith("--")) return []
+    else if (!word.text.startsWith("-") && !word.text.includes("=")) targets.push(word.text)
+  }
+  if (!cwd) return []
+  const file = makefile === undefined ? undefined : absolutePath(makefile, cwd)
+  if (makefile !== undefined && !file) return []
+  return [{ kind: "make", cwd, ...(file && { makefile: file }), targets }]
+}
+
 /** Words split into simple commands at `;`, `&&`, `||`, `|`, `&`, parentheses and newlines. */
 function simpleCommands(words: readonly Word[]): Word[][] {
   const commands: Word[][] = [[]]

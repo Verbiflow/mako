@@ -15,7 +15,7 @@ import { CursorSdkMessageSchema, CursorSdkProjection, cursorUnfinishedToolNote, 
 import { DEVIN_ACP_HOOKS, GROK_ACP_HOOKS } from "@mako/sessions/harnesses"
 import { deliverLiveUpdates, reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { OpenCodeContent } from "@mako/sessions/opencode-content"
-import { absolutePath, liveEffectsStatus, namedPaths, reportedEffects, savedToolEffects, wholePatch } from "@mako/sessions/tool-effect-reading"
+import { absolutePath, liveEffectsStatus, namedPaths, reportedEffects, savedToolEffects, scriptRuns, wholePatch } from "@mako/sessions/tool-effect-reading"
 import type { ToolEffect, ToolEffects } from "@mako/sessions/tool-effects"
 import { liveUpdates, PairSchema, PAIRS_FOLDER, storeReader } from "./decode-compare.ts"
 import { FIXTURE_ROOT, readRecording } from "./native-decoding.ts"
@@ -233,6 +233,29 @@ assert.deepEqual(namedPaths("cat > notes.md <<'EOF'\nrm -rf /\n> not a redirect\
 assert.deepEqual(namedPaths("sudo FOO=1 rm -- -weird", cwd), ["/Users/me/project/-weird"], "prefixes and assignments go; after -- an operand may start with a dash")
 assert.deepEqual(namedPaths("touch a # rm b", cwd), ["/Users/me/project/a"], "a comment is not a command")
 assert.deepEqual(namedPaths("touch notes.md", undefined), [], "a relative path without a folder is left out")
+
+const file = (path: string, shell?: boolean, folder = cwd) => ({ kind: "file", path, cwd: folder, ...(shell !== undefined && { shell }) })
+assert.deepEqual(scriptRuns("python3 draw.py", cwd), [file("/Users/me/project/draw.py", false)], "an interpreter runs the file its first operand names")
+assert.deepEqual(scriptRuns("cd tools && .venv/bin/python -u -W ignore plot.py > plot.log 2>&1", cwd), [file("/Users/me/project/tools/plot.py", false, "/Users/me/project/tools")], "options and their values, redirects, a cd and an interpreter by its path")
+assert.deepEqual(scriptRuns("npx tsx --tsconfig tsconfig.app.json scripts/gen.ts && uv run report.py && poetry run python a.py", cwd), [file("/Users/me/project/scripts/gen.ts", false), file("/Users/me/project/report.py", false), file("/Users/me/project/a.py", false)], "runners that run a program, or a Python file")
+assert.deepEqual(scriptRuns("timeout 60 env DEBUG=1 node --import tsx build.mjs; bash gen.sh; source env.sh", cwd), [file("/Users/me/project/build.mjs", false), file("/Users/me/project/gen.sh", true), file("/Users/me/project/env.sh", true)], "prefixes go; a shell's script is commands too")
+assert.deepEqual(scriptRuns("bash -lc 'python3 draw.py' && ./gen.sh --fast && scripts/x", cwd), [file("/Users/me/project/draw.py", false), file("/Users/me/project/gen.sh"), file("/Users/me/project/scripts/x")], "a shell's own line, and programs run by their path, whose first line says what runs them")
+assert.deepEqual(scriptRuns("npm run -s gen -- --x && npm test && pnpm gen && yarn gen && bun run gen && bun x.ts", cwd), [
+  { kind: "package", manager: "npm", script: "gen", cwd },
+  { kind: "package", manager: "npm", script: "test", cwd },
+  { kind: "package", manager: "pnpm", script: "gen", cwd },
+  { kind: "package", manager: "yarn", script: "gen", cwd },
+  { kind: "package", manager: "bun", script: "gen", cwd },
+  file("/Users/me/project/x.ts", false),
+], "package scripts by each manager, and a file bun runs itself")
+assert.deepEqual(scriptRuns("make && make -C docs -j 4 html && make -f build.mk tide.png", cwd), [
+  { kind: "make", cwd, targets: [] },
+  { kind: "make", cwd: "/Users/me/project/docs", targets: ["html"] },
+  { kind: "make", cwd, makefile: "/Users/me/project/build.mk", targets: ["tide.png"] },
+], "Make's folder, Makefile and goals")
+for (const command of ["python3 -m http.server", "python3 - <<'EOF'\nopen('a.txt', 'w')\nEOF", "python3 -c 'print(1)'", "node -e 1", "python3 $SCRIPT", "cd \"$DIR\" && python3 x.py", "npm install", "npm run gen -w app", "pnpm --filter app gen", "yarn add left-pad", "bun test", "make -n all", "npx eslint .", "gen.sh", "deno task gen"])
+  assert.deepEqual(scriptRuns(command, cwd), [], `runs no file it can place: ${command}`)
+assert.deepEqual(scriptRuns("python3 draw.py", undefined), [], "a relative script without a folder is left out")
 
 assert.equal(absolutePath("file:///Users/me/a%20b.md", undefined), "/Users/me/a b.md")
 assert.equal(absolutePath("https://example.com/a", cwd), undefined)

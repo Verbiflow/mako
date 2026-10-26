@@ -1,13 +1,13 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import { Git } from "@mako/git"
 import type { ActivityMark, Attribution, ReportedEffect } from "@mako/protocol"
-import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
+import { FakeClock, FakeEventSource, FakeFileSystem } from "@mako/protocol/attribution-conformance"
 import type { ChildSource } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
 import { Backfill } from "@mako/host/attribution/backfill"
@@ -15,6 +15,7 @@ import { ChildCalls } from "@mako/host/attribution/child-calls"
 import { outsideFolders } from "@mako/host/attribution/index"
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
 import { readOnlyCommand } from "@mako/host/attribution/read-only"
+import { ranTexts, SCRIPT_LIMIT } from "@mako/host/attribution/scripts"
 import { partition, side, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 
@@ -1153,4 +1154,376 @@ test("two Threads in one checkout: a file made while both work there is neither'
   assert.equal(side(shared, "T1"), "uncertain", "another Thread works where the file is")
   w.mark("call", "T1", "c2", "end", { turn: "t1", ...inRepo })
   await w.tracker.close()
+})
+
+/*
+ * A turn that writes a script and then runs it, as agents most often make
+ * files: `python3 draw.py` draws `tide.png`, named only inside `draw.py`, so
+ * the turn read "not sure whose" for its own picture. What a command runs
+ * (the script, a package script, a Makefile's rules) is read as it was when
+ * the command started, and names files as the command's own text does.
+ *
+ * The file system stamps a file's status change with the real clock, so
+ * these worlds run their scripted clock a minute ahead of it: every file
+ * written before a command started reads as written before it.
+ */
+const AHEAD_MS = 60_000
+const png = (tail: number[]) => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...tail])
+
+async function scripted(files: Record<string, string>) {
+  const w = await world(files)
+  w.clock.advance(AHEAD_MS)
+  const inRepo = { cwd: w.repo, checkout: w.repo }
+  /** A file written now, at an absolute path or one in the repository. */
+  const make = (path: string, content: string | Uint8Array) => {
+    const absolute = path.startsWith("/") ? path : join(w.repo, path)
+    mkdirSync(join(absolute, ".."), { recursive: true })
+    writeFileSync(absolute, content)
+    utimesSync(absolute, w.clock.now() / 1000, w.clock.now() / 1000)
+    w.events.changed(absolute)
+  }
+  /** One call of `thread`'s turn: it starts, `act` writes as it runs, then its effects are reported and it ends. */
+  const call = async (thread: string, id: string, effects: ReportedEffect[], act: () => void) => {
+    const turn = `${thread}-turn`
+    w.mark("call", thread, id, "start", { turn, ...inRepo })
+    const started = w.clock.now()
+    w.clock.advance(300)
+    act()
+    await w.tracker.settled()
+    w.clock.advance(200)
+    w.tracker.reported({ thread, session: `${thread}-session`, turn, call: id, status: "completed", startedAt: started, endedAt: w.clock.now(), checkout: w.repo, effects })
+    w.mark("call", thread, id, "end", { turn, ...inRepo })
+    await w.tracker.settled()
+    w.clock.advance(1_000)
+  }
+  const wrote = (thread: string, id: string, path: string, content: string) => call(thread, id, [{ kind: "create", path: join(w.repo, path), content }], () => make(path, content))
+  const ran = (thread: string, id: string, command: string, act: () => void, cwd = w.repo) => call(thread, id, [{ kind: "command", command, cwd }], act)
+  const turn = (thread: string, edge: "start" | "end") => w.mark("turn", thread, `${thread}-turn`, edge, inRepo)
+  const author = (path: string) => w.tracker.changes(0).filter((entry) => entry.path === path).at(-1)!.author
+  const byCommand = (path: string, thread = "T1") => {
+    const found = author(path)
+    assert.ok(found.certainty === "named" && found.author.thread === thread && found.by === "command", `${path}: ${JSON.stringify(found)}`)
+  }
+  const finish = () => {
+    w.clock.advance(15_000)
+    w.tracker.sweep()
+  }
+  return { ...w, make, wrote, ran, turn, author, byCommand, finish }
+}
+
+const DRAW = 'import matplotlib.pyplot as plt\nplt.plot([1, 3, 2])\nplt.savefig("tide.png", dpi=80)\nwith open("results/summary.txt", "w") as f:\n    f.write("high 3\\n")\n'
+
+test("a script the turn wrote and ran names the files its text spells; a file it doesn't spell stays unsure", async () => {
+  const w = await scripted({ "README.md": "# Tides\n" })
+  w.turn("T1", "start")
+  w.clock.advance(500)
+  await w.wrote("T1", "c1", "draw.py", DRAW)
+  await w.ran("T1", "c2", "python3 draw.py", () => {
+    w.make("tide.png", png([0, 0, 0, 13]))
+    w.make("results/summary.txt", "high 3\n")
+    // The person, meanwhile, starts a note of their own beside them.
+    w.make("notes.md", "ask about the harbour\n")
+  })
+  w.turn("T1", "end")
+  w.finish()
+  w.byCommand("tide.png")
+  w.byCommand("results/summary.txt")
+  const note = w.author("notes.md")
+  assert.ok(note.certainty === "window" && note.reached === undefined, JSON.stringify(note))
+  assert.equal(side(note, "T1"), "uncertain", "a new file the script doesn't spell is as much a save of the person's")
+  const turn = turnChanges(w.view, "T1", "T1-turn")
+  assert.deepEqual([turn.own.files, turn.maybe.files], [3, 1], "the line: the script and the two files it drew, and the note not sure whose")
+  await w.tracker.close()
+})
+
+test("the person's saves of a file the script names, before and after the command ran it, stay theirs", async () => {
+  const w = await scripted({ "README.md": "# Tides\n" })
+  // Before the turn: the person's own picture.
+  w.make("tide.png", png([9, 9, 9, 9]))
+  await w.tracker.settled()
+  assert.deepEqual(w.author("tide.png"), { certainty: "person", via: "no-activity" })
+  w.clock.advance(2_000)
+  w.turn("T1", "start")
+  w.clock.advance(500)
+  await w.wrote("T1", "c1", "draw.py", DRAW)
+  // Between the calls, while the model writes its next one, the person saves it again.
+  w.make("tide.png", png([8, 8, 8, 8]))
+  await w.tracker.settled()
+  const between = w.author("tide.png")
+  assert.equal(side(between, "T1"), "uncertain", `no call ran to make it: ${JSON.stringify(between)}`)
+  w.clock.advance(1_000)
+  await w.ran("T1", "c2", "python3 draw.py", () => w.make("tide.png", png([0, 0, 0, 13])))
+  w.byCommand("tide.png")
+  w.turn("T1", "end")
+  // After the turn, the person draws over it.
+  w.clock.advance(5_000)
+  w.make("tide.png", png([7, 7, 7, 7]))
+  await w.tracker.settled()
+  assert.deepEqual(w.author("tide.png"), { certainty: "person", via: "no-activity" })
+  w.finish()
+  await w.tracker.close()
+})
+
+test("npm run resolves the package's script and the script file it runs, which the turn didn't write", async () => {
+  const pkg = JSON.stringify({ name: "tides", scripts: { pregen: "mkdir -p public", gen: "node scripts/gen.mjs", postgen: "touch public/stamp.txt" } }, null, 2)
+  const gen = 'import { writeFileSync } from "node:fs"\nwriteFileSync("public/feed.json", JSON.stringify({ high: 3 }))\n'
+  const plot = 'from pathlib import Path\nhere = Path(__file__).parent\n(here / "charts/tide.svg").write_text("<svg/>")\n'
+  const w = await scripted({ "package.json": pkg, "scripts/gen.mjs": gen, "tools/plot.py": plot })
+  w.turn("T1", "start")
+  w.clock.advance(500)
+  await w.ran("T1", "c1", "npm run gen", () => {
+    w.make("public/feed.json", '{"high":3}')
+    w.make("public/stamp.txt", "")
+  })
+  // Named by the script the package script runs, and by the package script itself.
+  w.byCommand("public/feed.json")
+  w.byCommand("public/stamp.txt")
+  // A script in the repository, its output named from the script's own folder.
+  await w.ran("T1", "c2", "python3 tools/plot.py", () => w.make("tools/charts/tide.svg", "<svg/>"))
+  w.byCommand("tools/charts/tide.svg")
+  w.turn("T1", "end")
+  w.finish()
+  await w.tracker.close()
+})
+
+test("make follows the goal's rules and the scripts their recipes run", async () => {
+  const makefile = "OUT = site\n\n.PHONY: docs clean\n\ndocs: docs/index.html\n\tcp docs/index.html $(OUT)/index.html\n\tcp docs/index.html site/latest.html\n\ndocs/index.html: tools/build_docs.py\n\t@python3 tools/build_docs.py\n\nclean:\n\trm -f stale.html\n"
+  const builder = 'open("docs/index.html", "w").write("<h1>Tides</h1>")\nopen("docs/search.json", "w").write("[]")\n'
+  const w = await scripted({ Makefile: makefile, "tools/build_docs.py": builder })
+  w.turn("T1", "start")
+  w.clock.advance(500)
+  await w.ran("T1", "c1", "make docs", () => {
+    w.make("docs/index.html", "<h1>Tides</h1>\n")
+    w.make("docs/search.json", "[]")
+    w.make("site/latest.html", "<h1>Tides</h1>\n")
+    w.make("site/index.html", "<h1>Tides</h1>\n")
+    w.make("stale.html", "old\n")
+  })
+  // Named by a recipe, and by the script a prerequisite's recipe runs.
+  w.byCommand("site/latest.html")
+  w.byCommand("docs/search.json")
+  // Built from a variable, and named only by a rule the goal doesn't reach.
+  for (const path of ["site/index.html", "stale.html"]) assert.equal(side(w.author(path), "T1"), "uncertain", `${path}: ${JSON.stringify(w.author(path))}`)
+  w.turn("T1", "end")
+  w.finish()
+  await w.tracker.close()
+})
+
+test("a script edited before the command runs as edited; one edited while it runs names nothing", async () => {
+  const w = await scripted({ "README.md": "# Tides\n" })
+  w.turn("T1", "start")
+  w.clock.advance(500)
+  await w.wrote("T1", "c1", "draw.py", DRAW)
+  // The person changes what the script draws before the agent runs it.
+  w.make("draw.py", DRAW.replace("tide.png", "harbour.png"))
+  await w.tracker.settled()
+  w.clock.advance(1_000)
+  await w.ran("T1", "c2", "python3 draw.py", () => w.make("harbour.png", png([1, 1, 1, 1])))
+  w.byCommand("harbour.png")
+  // Run again, the person edits it while it runs: what ran can't be known, so its text names nothing.
+  await w.ran("T1", "c3", "python3 draw.py", () => {
+    w.make("draw.py", DRAW.replace("tide.png", "wind.png"))
+    w.make("wind.png", png([2, 2, 2, 2]))
+  })
+  const wind = w.author("wind.png")
+  assert.ok(wind.certainty === "window", JSON.stringify(wind))
+  assert.equal(side(wind, "T1"), "uncertain")
+  w.turn("T1", "end")
+  w.finish()
+  await w.tracker.close()
+})
+
+test("two Threads in one checkout: a script names its own Thread's files, and a file both Threads' scripts name is neither's for sure", async () => {
+  const w = await scripted({ "README.md": "# Tides\n", "render.mjs": 'import { writeFileSync } from "node:fs"\nwriteFileSync("tide.png", "")\nwriteFileSync("render.log", "ok")\n' })
+  w.turn("T1", "start")
+  w.turn("T2", "start")
+  w.clock.advance(500)
+  await w.wrote("T1", "c1", "draw.py", DRAW)
+  // T2's long test run is running the whole time T1's script draws.
+  w.mark("call", "T2", "d1", "start", { turn: "T2-turn", cwd: w.repo, checkout: w.repo })
+  const testing = w.clock.now()
+  w.clock.advance(200)
+  await w.ran("T1", "c2", "python3 draw.py", () => {
+    w.make("results/summary.txt", "high 3\n")
+    w.make("out.json", "{}\n")
+  })
+  w.tracker.reported({ thread: "T2", session: "T2-session", turn: "T2-turn", call: "d1", status: "completed", startedAt: testing, endedAt: w.clock.now(), checkout: w.repo, effects: [{ kind: "command", command: "npm test", cwd: w.repo }] })
+  w.mark("call", "T2", "d1", "end", { turn: "T2-turn", cwd: w.repo, checkout: w.repo })
+  await w.tracker.settled()
+  w.byCommand("results/summary.txt")
+  const neither = w.author("out.json")
+  assert.ok(neither.certainty === "ambiguous" && neither.reason === "several-threads", JSON.stringify(neither))
+  // Both Threads run a script that draws tide.png at once.
+  w.mark("call", "T2", "d2", "start", { turn: "T2-turn", cwd: w.repo, checkout: w.repo })
+  const rendering = w.clock.now()
+  w.clock.advance(100)
+  await w.ran("T1", "c3", "python3 draw.py", () => w.make("tide.png", png([3, 3, 3, 3])))
+  w.tracker.reported({ thread: "T2", session: "T2-session", turn: "T2-turn", call: "d2", status: "completed", startedAt: rendering, endedAt: w.clock.now(), checkout: w.repo, effects: [{ kind: "command", command: "node render.mjs", cwd: w.repo }] })
+  w.mark("call", "T2", "d2", "end", { turn: "T2-turn", cwd: w.repo, checkout: w.repo })
+  await w.tracker.settled()
+  const both = w.author("tide.png")
+  assert.ok(both.certainty === "ambiguous" && both.reason === "several-threads", JSON.stringify(both))
+  assert.deepEqual([side(both, "T1"), side(both, "T2")], ["uncertain", "uncertain"])
+  w.turn("T1", "end")
+  w.turn("T2", "end")
+  w.finish()
+  await w.tracker.close()
+})
+
+/*
+ * As a Codex turn ran it in a packaged build: one code cell wrote draw.py
+ * and ran it within 90 ms, and the run's start was heard after its
+ * pictures were written. A start is heard up to `LEAD_MS` late, so a script
+ * written in those moments counts only as the session's own call's write.
+ */
+test("a script written just before the run counts when the session's own call wrote it, and a chmod in the same command moves no content", async () => {
+  const w = await scripted({ "README.md": "# Tides\n" })
+  const at = (id: string, edge: "start" | "end") => w.mark("call", "T1", id, edge, { turn: "T1-turn", cwd: w.repo, checkout: w.repo })
+  const report = (id: string, started: number, effects: ReportedEffect[]) =>
+    w.tracker.reported({ thread: "T1", session: "T1-session", turn: "T1-turn", call: id, status: "completed", startedAt: started, endedAt: w.clock.now(), checkout: w.repo, effects })
+  w.turn("T1", "start")
+  w.clock.advance(500)
+  at("c1", "start")
+  let started = w.clock.now()
+  w.clock.advance(10)
+  w.make("draw.py", DRAW)
+  await w.tracker.settled()
+  w.clock.advance(10)
+  report("c1", started, [{ kind: "create", path: join(w.repo, "draw.py"), content: DRAW }])
+  at("c1", "end")
+  w.clock.advance(30)
+  // The run started before its start was heard: its picture lands before that.
+  w.make("tide.png", png([5, 5, 5, 5]))
+  w.clock.advance(30)
+  at("c2", "start")
+  started = w.clock.now()
+  await w.tracker.settled()
+  w.clock.advance(20)
+  report("c2", started, [{ kind: "command", command: "python3 draw.py", cwd: w.repo }])
+  at("c2", "end")
+  await w.tracker.settled()
+  w.byCommand("tide.png")
+  // The person saves the script in those moments instead: nothing says which version ran.
+  w.clock.advance(5_000)
+  w.make("draw.py", DRAW.replace("tide.png", "wind.png"))
+  w.clock.advance(40)
+  at("c3", "start")
+  started = w.clock.now()
+  w.clock.advance(20)
+  w.make("wind.png", png([6, 6, 6, 6]))
+  await w.tracker.settled()
+  report("c3", started, [{ kind: "command", command: "python3 draw.py", cwd: w.repo }])
+  at("c3", "end")
+  await w.tracker.settled()
+  assert.equal(w.author("wind.png").certainty, "window", JSON.stringify(w.author("wind.png")))
+  // A shell script made executable in the command that runs it.
+  w.clock.advance(5_000)
+  await w.wrote("T1", "c4", "gen.sh", "#!/bin/sh\necho 'high 3' > results/high.txt\n")
+  await w.ran("T1", "c5", "chmod +x gen.sh && ./gen.sh", () => {
+    chmodSync(join(w.repo, "gen.sh"), 0o755)
+    w.events.changed(join(w.repo, "gen.sh"))
+    w.make("results/high.txt", "high 3\n")
+  })
+  w.byCommand("results/high.txt")
+  w.turn("T1", "end")
+  w.finish()
+  await w.tracker.close()
+})
+
+test("a script that builds its files' names, or globs them, names none of them", async () => {
+  const dynamic = 'import matplotlib.pyplot as plt\nfor name in ["tide", "wind"]:\n    plt.savefig(f"{name}.png")\nimport glob, os\nfor old in glob.glob("charts/*.svg"):\n    os.utime(old)\n'
+  const w = await scripted({ "README.md": "# Tides\n", "charts/a.svg": "<svg/>\n" })
+  w.turn("T1", "start")
+  w.clock.advance(500)
+  await w.wrote("T1", "c1", "plot.py", dynamic)
+  await w.ran("T1", "c2", "python3 plot.py", () => {
+    w.make("tide.png", png([4, 4, 4, 4]))
+    w.make("charts/a.svg", "<svg>2</svg>\n")
+  })
+  for (const path of ["tide.png", "charts/a.svg"]) {
+    const found = w.author(path)
+    assert.ok(found.certainty === "window", `${path}: ${JSON.stringify(found)}`)
+  }
+  assert.equal(side(w.author("tide.png"), "T1"), "uncertain")
+  w.turn("T1", "end")
+  w.finish()
+  await w.tracker.close()
+})
+
+test("a script too large to be one the turn wrote names nothing", async () => {
+  const w = await scripted({ "README.md": "# Tides\n" })
+  const big = `${"# a long generated table\n".repeat(SCRIPT_LIMIT / 24)}open("tide.txt", "w").write("3")\n`
+  w.turn("T1", "start")
+  w.clock.advance(500)
+  await w.wrote("T1", "c1", "big.py", big)
+  await w.ran("T1", "c2", "python3 big.py", () => w.make("tide.txt", "3"))
+  assert.equal(w.author("tide.txt").certainty, "window", JSON.stringify(w.author("tide.txt")))
+  w.turn("T1", "end")
+  w.finish()
+  await w.tracker.close()
+})
+
+test("what a command ran: a package script found up the tree, the scripts it leads to as far as three runs, Make's goal, and a program's first line", async () => {
+  const files = new Map(Object.entries({
+    "/p/package.json": JSON.stringify({ scripts: { pregen: "echo pre", gen: "bash tools/gen.sh", postgen: "echo post" } }),
+    "/p/tools/gen.sh": "#!/bin/sh\nbash tools/more.sh\n",
+    "/p/tools/more.sh": "python3 tools/draw.py\n",
+    "/p/tools/draw.py": "savefig('tide.png')\n",
+    "/p/run.sh": "#!/usr/bin/env bash\nnode deep.mjs\n",
+    "/p/deep.mjs": "writeFileSync('deep.txt', '')\n",
+    "/p/notes": "not a script\n",
+    "/p/Makefile": "all: tide\n\ntide:\n\t@python3 tools/draw.py\n\nclean:\n\trm -f tide.png\n",
+  }))
+  const read = async (path: string) => files.get(path) ?? null
+  const texts = (found: Awaited<ReturnType<typeof ranTexts>>) => found.map((item) => [item.text.split("\n")[0], item.folders])
+  assert.deepEqual(texts(await ranTexts("cd sub && npm run gen", "/p", read)), [
+    ["echo pre", ["/p"]],
+    ["bash tools/gen.sh", ["/p"]],
+    ["echo post", ["/p"]],
+    ["#!/bin/sh", ["/p/tools", "/p"]],
+    ["python3 tools/draw.py", ["/p/tools", "/p"]],
+  ], "npm's pre and post scripts, then the shell scripts the script leads to, and no further than three runs")
+  assert.deepEqual(texts(await ranTexts("pnpm gen", "/p", read)).map(([text]) => text), ["bash tools/gen.sh", "#!/bin/sh", "python3 tools/draw.py"], "pnpm runs no pre or post script")
+  assert.deepEqual(texts(await ranTexts("./run.sh && ./notes", "/p", read)), [["#!/usr/bin/env bash", ["/p"]], ["writeFileSync('deep.txt', '')", ["/p"]]], "a program by its path is a script by its first line")
+  assert.deepEqual(texts(await ranTexts("make", "/p", read)), [["all: tide", ["/p"]], ["savefig('tide.png')", ["/p/tools", "/p"]]], "Make's first goal and the rules it reaches, not the others")
+  assert.deepEqual(await ranTexts("npm run gen", "/p/sub", async (path) => (path === "/p/sub/package.json" ? undefined : read(path))), [], "a package.json that can't be read as it was stops the search")
+})
+
+test("a script outside the checkout counts only as it was when the command started: one moved into place while it runs names nothing", async () => {
+  const clock = new FakeClock(1_800_000_000_000)
+  const events = new FakeEventSource()
+  const fs = new FakeFileSystem(clock, events)
+  const tracker = await LaptopTracker.open({ fs, events, clock, storage: mkdtempSync(join(tmpdir(), "mako-attribution-scripts-")), device: "scripts" }, {})
+  fs.write("/w/README.md", "# Tides\n")
+  await tracker.track({ id: "w", path: "/w", kind: "attached" })
+  const draw = (target: string) => `import matplotlib.pyplot as plt\nplt.savefig("/w/${target}")\n`
+  const run = async (id: string, act: () => void) => {
+    tracker.activity({ kind: "call", id, edge: "start", at: clock.now(), thread: "T1", session: "T1-session", turn: "t1", cwd: "/w", checkout: "/w" })
+    const started = clock.now()
+    clock.advance(300)
+    act()
+    await tracker.settled()
+    clock.advance(200)
+    tracker.reported({ thread: "T1", session: "T1-session", turn: "t1", call: id, status: "completed", startedAt: started, endedAt: clock.now(), checkout: "/w", effects: [{ kind: "command", command: "python3 /tmp/draw.py", cwd: "/w" }] })
+    tracker.activity({ kind: "call", id, edge: "end", at: clock.now(), thread: "T1", session: "T1-session", turn: "t1", cwd: "/w", checkout: "/w" })
+    await tracker.settled()
+    clock.advance(1_000)
+  }
+  const author = (path: string) => tracker.changes(0).filter((entry) => entry.path === path).at(-1)!.author
+  tracker.activity({ kind: "turn", id: "t1", edge: "start", at: clock.now(), thread: "T1", session: "T1-session", cwd: "/w", checkout: "/w" })
+  clock.advance(500)
+  fs.write("/tmp/draw.py", draw("tide.png"))
+  fs.write("/tmp/draft.py", draw("wind.png"))
+  clock.advance(1_000)
+  await run("c1", () => fs.write("/w/tide.png", "png 1"))
+  const tide = author("tide.png")
+  assert.ok(tide.certainty === "named" && tide.by === "command", JSON.stringify(tide))
+  // The draft is moved over the script while it runs: its text is old, but it was put there after the command began.
+  await run("c2", () => {
+    fs.rename("/tmp/draft.py", "/tmp/draw.py")
+    fs.write("/w/wind.png", "png 2")
+  })
+  const wind = author("wind.png")
+  assert.ok(wind.certainty === "window", JSON.stringify(wind))
+  await tracker.close()
 })
