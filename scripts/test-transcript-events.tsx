@@ -420,8 +420,11 @@ assert.match(quit, /Continue turn/)
 
 const errored = draw([{ id: "e", prompt: { id: "e", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
   response: [{ id: "e-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Request failed: 529 Overloaded\nTry again in a moment." }], system: [] }])
-assert.match(errored, /role="alert" data-event-error/)
-assert.match(errored, /Request failed: 529 Overloaded\nTry again in a moment\./, "the whole failure shows")
+assert.match(errored, /role="alert" data-event-error="rate-limited"/)
+assert.match(text(errored), /Cursor is over its rate limit or capacity\s*Wait for capacity to return or choose another model\./, "a recorded failure is named by the rules a live one is")
+const unnamed = draw([{ id: "u", prompt: { id: "u", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
+  response: [{ id: "u-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Tool schema mismatch in step 4\nat validate (schema.ts:12)" }], system: [] }])
+assert.match(text(unnamed), /Tool schema mismatch in step 4\s*Details/, "a failure no rule knows says the provider's own first line")
 assert.doesNotMatch(errored, /rounded-lg border border-negative/, "no tinted card")
 
 const separator = draw([{ id: "x", prompt: { id: "x", role: "user", blocks: [{ type: "text", text: "Go" }] }, response: [],

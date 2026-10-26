@@ -2,19 +2,9 @@ import { AgentsPanel } from "@/components/inspector/agents-panel"
 import { ControlPreviewOverlay } from "@/components/inspector/control-preview-overlay"
 import { AppshotButton } from "@/components/composer/appshot-button"
 import { AppshotShortcutHost } from "@/components/composer/appshot-flight"
-import { ElementPickButton, ElementPickDialog, ElementPickNotice } from "@/components/composer/element-pick-button"
+import { ElementPickButton, ElementPickDialog } from "@/components/composer/element-pick-button"
+import { installComposerNotices } from "@/desk/notices"
 import { elementPicks, elementPicksStore } from "@/state/element-picks"
-import { ProviderConnectionNotice } from "@/components/composer/connection-notice"
-import { AccountLimitNotice, AccountSwitchNotice } from "@/components/composer/account-notice"
-import { ModelChoiceNotice } from "@/components/composer/model-notice"
-import { RuntimeVersionNotice } from "@/components/composer/runtime-version-notice"
-import { RestoreVersionNotice } from "@/components/composer/restore-version-notice"
-import { LedgerNotice } from "@/components/composer/ledger-notice"
-import { CopyNotice } from "@/components/composer/copy-notice"
-import { ThreadMoveNotice } from "@/components/composer/thread-move-notice"
-import { SignInRecovery } from "@/components/composer/sign-in-recovery"
-import { MovedReviewCard } from "@/components/composer/moved-review-card"
-import { WorkspaceMoveCard } from "@/components/composer/workspace-move-card"
 import { ControlPreviewPanel } from "@/components/inspector/control-preview-panel"
 import {
   GitBranchIcon,
@@ -108,7 +98,6 @@ export function installBuiltins(): () => void {
     // Pointing at an element in a browser tab: the + menu's row, the line
     // while a pick runs, and the palette's chooser.
     registerSlot("element-pick", "composer.controls", ElementPickButton, -9),
-    registerSlot("element-pick", "composer.above", ElementPickNotice),
     registerSlot("element-pick-dialog", "titlebar.trailing", ElementPickDialog),
     registerCommand({
       id: "element-pick.choose",
@@ -124,19 +113,7 @@ export function installBuiltins(): () => void {
       when: () => Boolean(elementPicksStore.get().active),
       run: () => elementPicks.cancel(),
     }),
-    // Before sign-in: a harness too old to run says so first, since signing in won't help it.
-    registerSlot("runtime-version", "composer.above", RuntimeVersionNotice),
-    registerSlot("restore-version", "composer.above", RestoreVersionNotice),
-    registerSlot("newer-ledger", "composer.above", LedgerNotice),
-    registerSlot("device-copy", "composer.above", CopyNotice),
-    registerSlot("provider-connection", "composer.above", ProviderConnectionNotice),
-    registerSlot("sign-in-recovery", "composer.above", SignInRecovery),
-    registerSlot("account-switch", "composer.above", AccountSwitchNotice),
-    registerSlot("account-limit", "composer.above", AccountLimitNotice),
-    registerSlot("model-choice", "composer.above", ModelChoiceNotice),
-    registerSlot("workspace-move", "composer.above", WorkspaceMoveCard),
-    registerSlot("thread-move", "composer.above", ThreadMoveNotice),
-    registerSlot("moved-review", "composer.above", MovedReviewCard),
+    ...installComposerNotices(),
 
     // Views by the shared kind (packages/sessions/src/tool-identity.ts), so
     // every harness's shell, edit and agent draws the same row. The row's

@@ -116,6 +116,7 @@ export const LiveRequestSchema = z.object({
   // What it waits for is read again whenever the wait is checked; one this build doesn't know is its current step.
   accountSwitch: z.object({ reason: z.enum(["selection", "credentials"]), waitingFor: z.enum(ACCOUNT_SWITCH_WAITS).catch("operation") }).optional(),
   signIn: z.object({ harness: z.string(), account: z.string(), credential: z.string(), at: z.number() }).optional(),
+  wake: z.object({ at: z.number(), after: z.string() }).optional(),
   interruption: z
     .object({
       reason: z.enum(INTERRUPTION_REASONS),
@@ -233,6 +234,7 @@ const MetadataSchema = z.object({
       questions: z.array(LiveInputQuestionSchema).optional(),
       implementsPlan: z.object({ plan: z.string(), approve: z.string() }).optional(),
       feedbackOption: z.string().optional(),
+      gone: z.literal(true).optional(),
     })
   ),
 })
@@ -303,10 +305,11 @@ const LogValueSchema = z.record(z.string(), z.json())
 export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLogEvent
 
 /**
- * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves. `elsewhere` and
+ * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves; `wakeAt` is
+ * read from `requests`. `elsewhere` and
  * `copy` are a cloud router's word on a conversation it relays or reads from the account's copy, never a journal's.
  */
-type UnstoredMetadata = "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "copy"
+type UnstoredMetadata = "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "copy" | "wakeAt"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -442,7 +445,18 @@ export class LiveJournal {
     const metadata = this.metadata()
     if (!metadata) return null
     const summary = journalSummary(metadata)
-    return { ...summary, revision: Math.max(summary.revision, this.revision()) }
+    const wakeAt = this.wakeAt()
+    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt } }
+  }
+
+  /** The soonest a held request here sends itself (`LiveRequest.wake`); only rows that name a wake are parsed. */
+  private wakeAt(): number | undefined {
+    let soonest: number | undefined
+    for (const row of this.db.prepare("SELECT value FROM requests WHERE value LIKE '%\"wake\"%'").all()) {
+      const request = LiveRequestSchema.safeParse(JSON.parse(RowSchema.parse(row).value)).data
+      if (request?.status === "held" && request.wake && (soonest === undefined || request.wake.at < soonest)) soonest = request.wake.at
+    }
+    return soonest
   }
 
   /** The revision of the last commit; the metadata row keeps the one it was last written at. */

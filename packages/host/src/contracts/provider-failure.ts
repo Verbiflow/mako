@@ -210,14 +210,14 @@ export function describeProviderFailure(
         kind,
         retriable: true,
         title: `${providerLabel}'s service failed on its side`,
-        guidance: "Wait for the service to recover before making another attempt.",
+        guidance: "It usually recovers within minutes; the same message works then.",
       }
     case "network":
       return {
         kind,
         retriable: true,
         title: `The connection to ${providerLabel} failed or ended`,
-        guidance: "Review the conversation and connection before making another attempt.",
+        guidance: `The same message usually works once ${providerLabel} is reachable again.`,
       }
     case "transport-limit":
       return {
@@ -231,7 +231,7 @@ export function describeProviderFailure(
         kind,
         retriable: false,
         title: `Mako could not reopen this ${providerLabel} session`,
-        guidance: "The transcript and your message are saved. Review the error below before retrying.",
+        guidance: "The transcript and your message are kept; a new thread can carry on from here.",
       }
     case "rejected-input":
       return {
@@ -266,7 +266,7 @@ export function describeProviderFailure(
         kind,
         retriable: true,
         title: `${providerLabel} did not finish this turn`,
-        guidance: "Review the error and conversation before making another attempt.",
+        guidance: `${providerLabel} ended the turn without saying why; what it did is in the conversation.`,
       }
   }
 }

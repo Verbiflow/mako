@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AccountLimitNotice, AccountSwitchNotice } from "../src/components/composer/account-notice"
+import { useAccountLimitNotice, useAccountSwitchNotice } from "../src/components/composer/account-notice"
+import { ProducedNotice } from "../src/components/composer/composer-notices"
 import { accountReading, stopSwitches, waitText } from "../src/lib/account-switch"
 import { accountsStore, type ProviderAccount } from "../src/state/accounts"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp-state"
@@ -85,16 +86,16 @@ accountsStore.set({
 })
 function render(conversation: LiveAcpConversation): string {
   acpStore.set({ activeKey: conversation.key, conversations: { [conversation.key]: conversation } })
-  return renderToStaticMarkup(<AccountSwitchNotice />)
+  return renderToStaticMarkup(<ProducedNotice use={useAccountSwitchNotice} />)
 }
 assert.equal(render(live(session(onPersonal))), "")
-assert.match(render(live(session(onDefault))), /This session runs as codex@example\.com\. Your next message switches it to personal@work\.dev\./)
-assert.match(render(live(session(onDefault, { status: "running" }))), /This turn runs as codex@example\.com\. The next message switches to personal@work\.dev\./)
+assert.match(render(live(session(onDefault))), /This session runs as codex@example\.com · your next message switches it to personal@work\.dev/)
+assert.match(render(live(session(onDefault, { status: "running" }))), /This turn runs as codex@example\.com · the next message switches to personal@work\.dev/)
 const held = render(live(session(onDefault, { backgroundTasks: 1 }), [waiting]))
-assert.match(held, /Switches to personal@work\.dev when its background work finishes\. Your message is waiting\./)
+assert.match(held, /Switches to personal@work\.dev when its background work finishes · your message is waiting/)
 assert.match(held, />Stop and switch</)
 assert.match(render(live(session(onDefault, { backgroundTasks: 1 }))),
-  /Background work runs as codex@example\.com\. A new message waits for it, then switches to personal@work\.dev\./,
+  /Background work runs as codex@example\.com · a new message waits for it, then switches to personal@work\.dev/,
   "background work holds the old account until it finishes, so the line doesn't promise the next message switches")
 
 // The session's account is being removed: the line says when it goes.
@@ -107,15 +108,15 @@ accountsStore.set({
   loadedAt: Date.now(),
 })
 assert.match(render(live(session(onPersonal, { status: "running" }))),
-  /This turn runs as personal@work\.dev, which Mako removes when the turn ends\. The next message uses codex@example\.com\./)
+  /This turn runs as personal@work\.dev · Mako removes it when the turn ends; the next message uses codex@example\.com/)
 assert.match(render(live(session(onPersonal, { backgroundTasks: 2 }))),
-  /Background work runs as personal@work\.dev, which Mako removes when it finishes\. A new message waits for it, then uses codex@example\.com\./)
-assert.match(render(live(session(onPersonal))), /This session runs as personal@work\.dev\. Your next message switches it to codex@example\.com\./)
+  /Background work runs as personal@work\.dev · Mako removes it when it finishes; a new message waits for it, then uses codex@example\.com/)
+assert.match(render(live(session(onPersonal))), /This session runs as personal@work\.dev · your next message switches it to codex@example\.com/)
 
 const mismatch = render(live(session(wrong)))
-assert.match(mismatch, /Codex is signed in as someone@example\.com, not personal@work\.dev\./)
+assert.match(mismatch, /Codex is signed in as someone@example\.com, not personal@work\.dev · messages won’t send until that’s fixed/)
 assert.match(mismatch, />Settings</)
-assert.match(mismatch, /text-caution/)
+assert.match(mismatch, /data-notice-tone="caution"/)
 
 // At a plan limit the host offers another account; the line names both limits and switches only on a click.
 {
@@ -132,15 +133,15 @@ assert.match(mismatch, /text-caution/)
   })
   const limit = (conversation: LiveAcpConversation) => {
     acpStore.set({ activeKey: conversation.key, conversations: { [conversation.key]: conversation } })
-    return renderToStaticMarkup(<AccountLimitNotice />)
+    return renderToStaticMarkup(<ProducedNotice use={useAccountLimitNotice} />)
   }
   const near = limit(live(session(onDefault)))
   assert.match(near, /data-account-limit="near-limit"/)
-  assert.match(near, /codex@example\.com is at 96% of its weekly limit; personal@work\.dev is at 12%\./)
-  assert.match(near, /title="Every Codex session switches to personal@work\.dev"[^>]*>Switch</)
+  assert.match(near, /codex@example\.com is at 96% of its weekly limit · personal@work\.dev is at 12%/)
+  assert.match(near, /title="Every Codex session switches to personal@work\.dev"[^>]*>Switch to personal@work\.dev</)
   assert.match(near, />Not now</)
   accountsStore.set((state) => ({ limitOffers: { codex: { ...state.limitOffers.codex!, because: "refused" } } }))
-  assert.match(limit(live(session(onDefault))), /Codex stopped the last turn on codex@example\.com&#x27;s limits; personal@work\.dev is at 12%\./)
+  assert.match(limit(live(session(onDefault))), /Codex stopped the last turn on codex@example\.com&#x27;s limits · personal@work\.dev is at 12%/)
   accountsStore.set((state) => ({ accounts: state.accounts.map((account) => ({ ...account, active: account.name === "personal" })) }))
   assert.equal(limit(live(session(onDefault))), "", "gone once the account in use isn't the one the offer is about")
   accountsStore.set({ limitOffers: {} })

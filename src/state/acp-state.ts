@@ -255,7 +255,8 @@ export function acpForThread(
       (ownsIdentity ||
         ((!identity || conversation.harness === identity.harness) &&
           conversation.threadPath === path) ||
-        conversation.nativePaths?.includes(path) ||
+        // Its stores' paths, without their providers: the bindings below say whose each is once they're known.
+        (!(identity && conversation.control) && conversation.nativePaths?.includes(path)) ||
         conversation.control?.bindings.some(
           (binding) =>
             (!identity || binding.provider === identity.harness) &&
