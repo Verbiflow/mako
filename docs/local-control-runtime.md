@@ -140,8 +140,12 @@ cloud credentials, the host display or a person's browser profile into the job.
 The launcher creates an owner-only runtime directory. It clears inherited provider
 credentials, starts only requested backends, waits for readiness and preserves
 artifacts outside the runtime directory. `ready.json`, `worker.json` and
-`launcher.json` report readiness, interruption and cleanup. Explicit session stop/SIGTERM/interrupt
-start bounded finalization; hard failure kills the job's process group. A worker
+`launcher.json` report readiness, interruption and cleanup; `worker.log` keeps
+what the worker printed, which is how a worker that died before writing
+`worker.json` explains itself. Explicit session stop/SIGTERM/interrupt
+start bounded finalization, which ends every process in the job's process group,
+including those a backend started, before removing the runtime directory they
+write into; hard failure kills the job's process group. A worker
 observes parent IPC loss too, so a killed launcher does not strand its children.
 A VM/container lifetime is still the boundary for untrusted agent code and a final
 cleanup backstop. This runtime does not claim to sandbox arbitrary JavaScript.

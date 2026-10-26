@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { fork } from "node:child_process"
+import { once } from "node:events"
 import {
   mkdir,
   readFile,
@@ -85,7 +86,11 @@ async function main() {
   process.once("SIGINT", () => stop("SIGINT"))
   process.stdout.once("error", () => stop("stdout-closed"))
   child.stdout!.resume()
-  child.stderr!.on("data", () => {}) // Worker writes bounded diagnostics to its private result directory.
+  // The worker reports through worker.json; what it prints is how it died if it never wrote that.
+  let diagnostics = ""
+  child.stderr!.on("data", (data: Buffer) => {
+    diagnostics = (diagnostics + data.toString()).slice(-8192)
+  })
   child.on("message", (raw) => {
     const message = CloudParentMessageSchema.safeParse(raw)
     if (!message.success) return
@@ -120,6 +125,10 @@ async function main() {
   // after an abrupt worker crash, including encoder and browser subprocesses.
   killGroup()
   await rm(runtime, { recursive: true, force: true })
+  // The group is gone, so nothing else holds the pipe: whatever it printed has arrived.
+  if (!child.stderr!.closed) await once(child.stderr!, "close")
+  if (diagnostics)
+    await writeFile(join(config.output, "worker.log"), diagnostics, { mode: 0o600 })
   const receipt = {
     version: 1,
     ready,
