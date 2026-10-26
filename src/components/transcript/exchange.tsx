@@ -24,7 +24,9 @@ import { AgentGroup } from "./agent-group"
 import { groupAgentCalls } from "@/lib/agent-groups"
 import { FollowingList, LiveRow, TurnClock, type LiveStepData } from "./live-step"
 import { TurnChanges } from "./turn-changes"
-import { MediaShelf, ShownMedia } from "./media-shelf"
+import { TurnMedia } from "./media-shelf"
+import { useShelfMedia } from "./use-shelf-media"
+import { placeMadeMedia } from "@/lib/media-shelf"
 import type { ToolKind } from "@mako/sessions/tool-identity"
 import { ContextItemChip } from "@/components/composer/reference-chip"
 import { Slot } from "@/extend/slot"
@@ -46,7 +48,7 @@ import {
   responseSections,
   responseText,
   type Exchange as ExchangeData,
-  type ResponseSection,
+  type PlacedSection,
 } from "@/lib/exchanges"
 import { EventNotes } from "./event-notes"
 import { EventLine } from "./event-line"
@@ -128,11 +130,14 @@ export const Exchange = memo(function Exchange({
     () => (stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system),
     [exchange.system, exchange.response.length, stopShown]
   )
-  const sections = useMemo(
+  const answered = useMemo(
     () => responseSections(exchange.response, notes),
     [exchange.response, notes]
   )
-  const lastWork = sections.findLastIndex((section) => section.kind !== "note")
+  // What the turn made, drawn where it made it: the same sections live and saved.
+  const made = useShelfMedia(exchange)
+  const sections = useMemo(() => placeMadeMedia(answered, made), [answered, made])
+  const lastWork = sections.findLastIndex((section) => section.kind !== "note" && section.kind !== "made")
   const details = exchange.response.flatMap((message) =>
     message.blocks.flatMap((block) => (block.type === "toolResult" ? (block.details ?? []) : []))
   )
@@ -149,12 +154,13 @@ export const Exchange = memo(function Exchange({
   // view; a failed one keeps everything, since its failure is the answer.
   const foldable = !streaming && !failed && Boolean(exchange.prompt || exchange.opener) && !exchange.response.some((message) => message.error)
   const folds = useMemo(() => (foldable ? turnFolds(sections, began) : []), [foldable, sections, began])
-  const lastSection = sections.at(-1)
+  // The answer's own last section: what it made may be drawn after it, but the turn is still at work there.
+  const lastSection = answered.at(-1)
   // The newest step of a running turn: the trailing work section's own row,
   // or a row of its own under prose or a note, or under the prompt alone.
   const liveTail = streaming && lastSection?.kind !== "work"
   const steers = sections.filter((section) => section.kind === "steer").length
-  const renderSection = (section: ResponseSection, index: number, whole = false): ReactNode =>
+  const renderSection = (section: PlacedSection, index: number, whole = false): ReactNode =>
     section.kind === "note" ? (
       sections[index - 1]?.kind === "note" ? null : (
         <SystemNotes key={section.id} messages={noteRun(sections, index)} refused={exchange.refused} inline />
@@ -168,14 +174,14 @@ export const Exchange = memo(function Exchange({
       </div>
     ) : section.kind === "prose" ? (
       <Response key={section.id} message={section.message} previewedFiles={section.previewedFiles} showWork />
-    ) : section.kind === "shown" ? (
-      <ShownMedia key={section.id} media={section.media} />
+    ) : section.kind === "shown" || section.kind === "made" ? (
+      <TurnMedia key={section.id} media={section.media} shown={section.kind === "shown"} />
     ) : (
       <WorkSection
         key={section.id}
         messages={section.messages}
         startedAt={index === 0 ? began : undefined}
-        live={Boolean(streaming && index === sections.length - 1)}
+        live={Boolean(streaming && section === lastSection)}
         whole={whole}
         interrupted={Boolean(interrupted) && index === lastWork}
         failed={Boolean(failed && index === lastWork)}
@@ -200,7 +206,7 @@ export const Exchange = memo(function Exchange({
         stop={fold.part === steers ? interrupted : undefined}
         kept={fold.kept.map((at) => {
           const note = sections[at]!
-          return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline /> : note.kind === "shown" ? <ShownMedia key={note.id} media={note.media} /> : null
+          return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline /> : note.kind === "shown" || note.kind === "made" ? <TurnMedia key={note.id} media={note.media} shown={note.kind === "shown"} /> : null
         })}
       >
         {sections.slice(fold.start, fold.end).map((section, offset, hidden) =>
@@ -255,7 +261,6 @@ export const Exchange = memo(function Exchange({
             <ReviewFindings report={review} />
           </div>
         ) : null}
-        <MediaShelf exchange={exchange} />
         {streaming ? null : <TurnChanges requestId={exchange.prompt?.requestId} />}
         <ExchangeFailure requestId={exchange.prompt?.requestId} />
         {exchange.response.length > 0 || interrupted ? (
@@ -1016,7 +1021,7 @@ function Thinking({ text, live }: { text: string; live: boolean }) {
 }
 
 /** The note sections that run on from `start`, drawn together. */
-function noteRun(sections: readonly ResponseSection[], start: number): ChatMessage[] {
+function noteRun(sections: readonly PlacedSection[], start: number): ChatMessage[] {
   const run: ChatMessage[] = []
   for (let index = start; sections[index]?.kind === "note"; index++) {
     const section = sections[index]

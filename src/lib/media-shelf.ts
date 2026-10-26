@@ -2,7 +2,8 @@ import type { AttachmentContent } from "@mako/sessions"
 import type { MediaConfirmation } from "@mako/host/contracts/turn-media"
 import { countedChanges, type RequestChanges } from "@mako/host/contracts/turn-changes"
 import { mediaKind, mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
-import { exchangeMedia, type Exchange } from "@/lib/exchanges"
+import { exchangeMedia, type Exchange, type PlacedSection, type ResponseSection } from "@/lib/exchanges"
+import type { ChatMessage } from "@/lib/types"
 import { textOf } from "@/lib/format"
 import { inlineFileTarget, markdownFileTarget } from "@/lib/file-citations"
 import { filePreviewIdentity } from "@/lib/inline-file-links"
@@ -70,8 +71,57 @@ export function shelfMedia(exchange: Exchange, changes?: RequestChanges): MediaC
     ? mergeMedia([...called, ...changed]).map((candidate) => (candidate.evidence === "wrote" && recorded.get(candidate.key)) || candidate)
     : called
   if (!media.length) return media
-  const spellings = exchange.response.flatMap((message) => (message.role === "assistant" ? proseMediaSpellings(textOf(message.blocks)) : []))
+  const spellings = exchange.response.flatMap(messageSpellings)
   return media.filter((candidate) => candidate.evidence !== "shown" && !(candidate.path && spelled(candidate.path, spellings)))
+}
+
+/** A finished message's spellings, read once: messages keep their identity (`reconcile.ts`), so a streaming turn re-reads only the one that grew. */
+const spelledBy = new WeakMap<ChatMessage, string[]>()
+function messageSpellings(message: ChatMessage): string[] {
+  if (message.role !== "assistant") return []
+  let spellings = spelledBy.get(message)
+  if (!spellings) spelledBy.set(message, (spellings = proseMediaSpellings(textOf(message.blocks))))
+  return spellings
+}
+
+/**
+ * The answer's sections with what the turn made (`shelfMedia`) drawn where
+ * it was made: after the stretch of work holding the call that made it
+ * (the call its strongest evidence names, else the first that names the
+ * file), each stretch's files together. A file only the turn's record of
+ * changes names, whatever wrote it, ends the answer. Pure, and the same
+ * live and saved, since both build the same sections from the same calls.
+ */
+export function placeMadeMedia(sections: readonly ResponseSection[], media: readonly MediaCandidate[]): readonly PlacedSection[] {
+  if (!media.length) return sections
+  const byCall = new Map<string, number>()
+  const byKey = new Map<string, number>()
+  sections.forEach((section, index) => {
+    if (section.kind !== "work") return
+    for (const message of section.messages)
+      for (const block of message.blocks) {
+        if (block.type !== "toolResult" || !block.media) continue
+        for (const candidate of block.media) {
+          byCall.set(`${candidate.callId}\u0000${candidate.key}`, index)
+          if (!byKey.has(candidate.key)) byKey.set(candidate.key, index)
+        }
+      }
+  })
+  const after = new Map<number, MediaCandidate[]>()
+  const end: MediaCandidate[] = []
+  for (const candidate of media) {
+    const at = byCall.get(`${candidate.callId}\u0000${candidate.key}`) ?? byKey.get(candidate.key)
+    if (at === undefined) end.push(candidate)
+    else after.set(at, [...after.get(at) ?? [], candidate])
+  }
+  const placed: PlacedSection[] = []
+  sections.forEach((section, index) => {
+    placed.push(section)
+    const made = after.get(index)
+    if (made) placed.push({ kind: "made", id: `made-${section.id}`, media: made })
+  })
+  if (end.length) placed.push({ kind: "made", id: "made-end", media: end })
+  return placed
 }
 
 /**
@@ -88,4 +138,9 @@ export function mediaAttachment(candidate: MediaCandidate, answer: MediaConfirma
   if (answer?.kind !== "kept" || !name) return undefined
   const { media } = answer
   return { type: "attachment", id: `${candidate.callId}:${candidate.key}`, name, mimeType: media.mimeType, source: { kind: "file", path: media.file, ...media.file !== media.path && { originalPath: media.path } } }
+}
+
+/** The size the host read from a kept picture's or video's header: what holds its place before a byte of it loads. */
+export function mediaSize(answer: MediaConfirmation | undefined): { width: number; height: number } | undefined {
+  return answer?.kind === "kept" && answer.media.width && answer.media.height ? { width: answer.media.width, height: answer.media.height } : undefined
 }

@@ -39,7 +39,7 @@ function fresh(entry: { answer: MediaConfirmation; at: number } | undefined, now
   return Boolean(entry) && (entry!.answer.kind !== "pending" || now - entry!.at < PENDING_MS)
 }
 
-function ask(check: MediaCheck, key: string): void {
+function request(check: MediaCheck, key: string): void {
   if (inFlight.has(key)) return
   inFlight.add(key)
   asking.set(key, check)
@@ -72,9 +72,10 @@ async function send(batch: [string, MediaCheck][]): Promise<void> {
 
 /**
  * Each check's answer, in order; undefined while it is first asked. The
- * same array comes back while no answer changes.
+ * same array comes back while no answer changes. With `ask` false it only
+ * reads what the host already answered, asking nothing.
  */
-export function useMediaAnswers(checks: readonly (MediaCheck | undefined)[]): readonly MediaAnswer[] {
+export function useMediaAnswers(checks: readonly (MediaCheck | undefined)[], ask = true): readonly MediaAnswer[] {
   const keys = checks.map((check) => (check ? keyOf(check) : ""))
   const signature = keys.join("\u0001")
   const answers = useSyncExternalStore(
@@ -92,7 +93,7 @@ export function useMediaAnswers(checks: readonly (MediaCheck | undefined)[]): re
       const found: MediaAnswer[] = keys.map((key, index) => {
         if (!key) return undefined
         const entry = kept.get(key)
-        if (!fresh(entry, now)) ask(checks[index]!, key)
+        if (ask && !fresh(entry, now)) request(checks[index]!, key)
         return entry?.answer
       })
       return remembered(signature, found)

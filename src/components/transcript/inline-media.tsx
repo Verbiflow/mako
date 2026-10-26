@@ -4,21 +4,22 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { MediaActions } from "@/components/viewer/media-actions"
 import { MediaVideo } from "@/components/viewer/media-video"
 import type { MediaTile } from "@/components/viewer/media-tile-context"
-import { mediaBox, naturalSize } from "@/components/viewer/media-tile-layout"
+import { mediaBox, naturalSize, type MediaSize } from "@/components/viewer/media-tile-layout"
 import { useDevicePixelRatio } from "@/components/viewer/use-device-pixel-ratio"
 import type { FileContents } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { MediaUnavailable } from "./media-preview"
 
 /**
- * A picture or video drawn as itself: no card, no header. Its name shows on
- * hover and its actions sit in the corner; a click opens the lightbox. In a
- * grid it's a cropped tile drawing the host's thumbnail or poster; the
- * original loads only in the lightbox. Neither ever draws a picture larger
+ * A picture or video drawn as itself: no card, no header, a hairline and a
+ * soft corner. Its name shows on hover and its actions sit in the corner;
+ * a click opens the lightbox. In a grid it's a tile of its own shape
+ * drawing the host's thumbnail or poster; the original loads only in the
+ * lightbox. Neither ever draws a picture larger
  * than its own pixels, one to a device pixel: a small one sits at its size
  * in the middle of its tile or box.
  */
-export function InlineMedia({ hostRef, path, name, format, file, error, tile, onOpen, onRetry, onMediaError, openPath }: {
+export function InlineMedia({ hostRef, path, name, format, file, error, tile, size, onOpen, onRetry, onMediaError, openPath }: {
   hostRef: RefObject<HTMLDivElement | null>
   /** What `data-inline-file-preview` names: the spelling the answer used. */
   path: string
@@ -27,6 +28,8 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, on
   file?: FileContents
   error?: string
   tile: MediaTile | null
+  /** Its pixels as known before it is read: the box holds its shape from the first frame. */
+  size?: MediaSize
   onOpen?(): void
   onRetry(): void
   onMediaError(): void
@@ -35,8 +38,9 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, on
 }) {
   const [natural, setNatural] = useState<{ width: number; height: number }>()
   const ratio = useDevicePixelRatio()
-  // The picture's own pixels: its header's, or the drawn one's once it loads.
-  const pixels = naturalSize(file?.width ?? natural?.width, file?.height ?? natural?.height, ratio)
+  // The picture's own pixels: its header's, as read or as the host kept it, or the drawn one's once it loads.
+  const known = file?.width && file.height ? file : size ?? natural
+  const pixels = naturalSize(known?.width, known?.height, ratio)
   const url = file?.previewUrl
   if (tile?.kind === "hidden") return <div ref={hostRef} hidden data-inline-file-preview={path} />
   if (tile) {
@@ -47,7 +51,8 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, on
           type="button"
           aria-label={tile.more ? `Open ${name} and ${tile.more} more` : `Open ${name}`}
           onClick={onOpen}
-          className="group/tile pressable relative grid aspect-[16/10] w-full cursor-zoom-in place-items-center overflow-hidden asset-surface border border-hairline bg-shell"
+          style={{ aspectRatio: tile.aspect ?? 16 / 10 }}
+          className="group/tile pressable relative grid w-full cursor-zoom-in place-items-center overflow-hidden media-surface border border-hairline bg-shell"
         >
           {error ? (
             <span className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-3 text-label text-faint">
@@ -94,12 +99,12 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, on
         <MediaUnavailable name={name} reason={error} onRetry={onRetry} />
       </div>
     )
-  const box = mediaBox(file?.width ?? natural?.width, file?.height ?? natural?.height, ratio)
+  const box = mediaBox(known?.width, known?.height, ratio)
   return (
     <div ref={hostRef} data-inline-file-preview={path} data-inline-media={format} className="not-prose my-3 w-full">
       <div className="group/media relative max-w-full" style={box}>
         {format === "image" ? (
-          <button type="button" aria-label={`Open ${name}`} onClick={onOpen} className="pressable block size-full cursor-zoom-in overflow-hidden asset-surface border border-hairline bg-shell/40">
+          <button type="button" aria-label={`Open ${name}`} onClick={onOpen} className="pressable block size-full cursor-zoom-in overflow-hidden media-surface border border-hairline bg-shell/40">
             {url ? (
               <img
                 src={url}
@@ -118,9 +123,9 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, on
             )}
           </button>
         ) : url ? (
-          <MediaVideo url={url} poster={file?.posterUrl} name={name} onError={onMediaError} className="block size-full asset-surface border border-hairline bg-shell object-contain" />
+          <MediaVideo url={url} poster={file?.posterUrl} name={name} onError={onMediaError} className="block size-full media-surface border border-hairline bg-shell object-contain" />
         ) : (
-          <div className="size-full asset-surface border border-hairline bg-shell"><Skeleton className="block size-full" /></div>
+          <div className="size-full overflow-hidden media-surface border border-hairline bg-shell"><Skeleton className="block size-full rounded-none" /></div>
         )}
         <span className={cn("media-control pointer-events-none absolute left-1.5 max-w-[calc(100%-6rem)] truncate rounded-md px-2 py-1 text-label opacity-0 transition-opacity duration-150 group-hover/media:opacity-100", format === "image" ? "bottom-1.5" : "top-1.5")}>{name}</span>
         {file ? (

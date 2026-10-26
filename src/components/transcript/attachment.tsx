@@ -10,14 +10,18 @@ import {
 } from "@mako/host/contracts/file-preview"
 import type { AttachmentContent } from "@mako/sessions"
 import { MediaPreview, MediaUnavailable } from "./media-preview"
+import type { MediaSize } from "@/components/viewer/media-tile-layout"
 
 export function TranscriptAttachment({
   attachment,
   open = false,
+  size,
 }: {
   attachment: AttachmentContent
   /** Drawn open from the start, a page or document included: what the turn made, shown rather than offered. */
   open?: boolean
+  /** A picture's pixels, known before it loads: its place is held at its shape. */
+  size?: MediaSize
 }) {
   const { source, name, mimeType } = attachment
   const binaryFile = useMemo(() => ({ path: name, contents: "", previewUrl: source.kind === "inline" ? `data:${mimeType};base64,${source.data}` : source.kind === "url" ? source.url : undefined, mimeType, binary: true, truncated: false, size: 0 }), [source, name, mimeType])
@@ -26,7 +30,7 @@ export function TranscriptAttachment({
 
   if (source.kind === "file")
     return (
-      <InlineFilePreview path={source.path} name={name} mimeType={mimeType} purpose="preview" initiallyOpen={open} />
+      <InlineFilePreview path={source.path} name={name} mimeType={mimeType} purpose="preview" initiallyOpen={open} size={size} />
     )
 
   if (/^(?:image|audio|video)\//i.test(mimeType))

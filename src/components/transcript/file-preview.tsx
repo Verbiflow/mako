@@ -13,6 +13,8 @@ import { MediaTileContext } from "@/components/viewer/media-tile-context"
 import type { FileReadPurpose } from "@mako/host/contracts/git-workspace-search"
 import { useTranscriptSource } from "./source-context"
 import { InlineMedia } from "./inline-media"
+import { InlinePage } from "./inline-page"
+import type { MediaSize } from "@/components/viewer/media-tile-layout"
 
 const RichFilePreview = lazy(
   () => import("@/components/viewer/rich-file-preview")
@@ -21,7 +23,8 @@ const RichFilePreview = lazy(
 /**
  * File ownership is resolved through the conversation, never guessed by MIME.
  * A picture or video draws as itself (`InlineMedia`), in a grid as a tile,
- * and opens in the enclosing gallery; anything else is a card that expands.
+ * and opens in the enclosing gallery; a page served by URL draws as the
+ * page (`InlinePage`); anything else is a card that expands.
  * `purpose: "preview"`: the transcript shows it unasked, so a file outside
  * the Thread's folders that isn't media, a page or a PDF stays a link.
  */
@@ -34,6 +37,7 @@ export function InlineFilePreview({
   sizeKnown = true,
   onPreviewError,
   purpose,
+  size,
 }: {
   path: string
   name: string
@@ -43,6 +47,8 @@ export function InlineFilePreview({
   sizeKnown?: boolean
   onPreviewError?: () => void
   purpose?: FileReadPurpose
+  /** A picture's pixels, known before it is read: its place is held at its shape. */
+  size?: MediaSize
 }) {
   const context = useTranscriptSource()
   const tile = useContext(MediaTileContext)
@@ -152,6 +158,7 @@ export function InlineFilePreview({
           file={file}
           error={failure}
           tile={tile}
+          size={size}
           openPath={openPath}
           onOpen={collection ? () => changeEnlarged(true) : openInGallery ?? (() => changeEnlarged(true))}
           onRetry={() => { setMediaFailed(undefined); setAttempt(attempt + 1) }}
@@ -163,6 +170,24 @@ export function InlineFilePreview({
           }}
         />
         {file && !collection && !openInGallery ? <ExpandedFilePreview file={file} name={name} mode={mode} open={enlarged} onOpenChange={changeEnlarged} focusTarget={() => host.current?.querySelector<HTMLButtonElement>("button") ?? null} /> : null}
+      </>
+    )
+  // A page by URL, or one about to be read from a path: the page itself, never a card first.
+  if (format === "html" && (file ? Boolean(file.previewUrl && !file.previewUrl.startsWith("data:")) : !resolvedFile))
+    return (
+      <>
+        <InlinePage
+          hostRef={host}
+          path={path}
+          name={name}
+          file={file}
+          error={result?.error}
+          openPath={openPath}
+          onExpand={() => changeEnlarged(true)}
+          onOpen={() => void viewer.open(path, undefined, context.threadPath, context.liveId)}
+          onRetry={() => setAttempt(attempt + 1)}
+        />
+        {file && !collection ? <ExpandedFilePreview file={file} name={name} mode="preview" open={enlarged} onOpenChange={changeEnlarged} focusTarget={() => host.current?.querySelector<HTMLButtonElement>('button[title="Full screen"]') ?? null} /> : null}
       </>
     )
   if (file?.withheld)

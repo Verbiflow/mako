@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useMemo, useRef, useState, type ReactNode } from "react"
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react"
 import { XIcon } from "lucide-react"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
 import type { FileContents } from "@/lib/types"
@@ -7,11 +7,11 @@ import { AssetPreviewContext, type AssetView } from "./asset-preview-context"
 import { ExpandedFilePreview } from "./expanded-file-preview"
 import { OwnMediaGallery } from "./media-gallery"
 import { MediaTileContext, type MediaTile } from "./media-tile-context"
-import { MEDIA_GRID_TILES, mediaGridColumns, visualAsset, type PreviewAsset } from "./media-tile-layout"
+import { MEDIA_GRID_TILES, mediaGridColumns, mediaRows, naturalSize, visualAsset, type PreviewAsset } from "./media-tile-layout"
+import { useDevicePixelRatio } from "./use-device-pixel-ratio"
 
 export type { PreviewAsset }
 
-const TILE: MediaTile = { kind: "tile" }
 const HIDDEN: MediaTile = { kind: "hidden" }
 
 /**
@@ -57,19 +57,32 @@ export function AssetPreviewCollection<T extends PreviewAsset>({ items, render, 
   </div>
 }
 
-/** Pictures and videos as tiles; the item's own renderer draws each as a tile through `MediaTileContext`. */
+/**
+ * Pictures and videos as tiles, in rows that share a height, each tile its
+ * picture's own shape (`mediaRows`); the item's own renderer draws each as
+ * a tile through `MediaTileContext`, its caption under it. A tile is never
+ * wider than a picture drawn alone or than its own pixels, so a small chart
+ * beside a screenshot stays its size instead of floating in an empty tile.
+ */
 function MediaGrid<T extends PreviewAsset>({ items, render, className }: { items: readonly T[]; render(item: T): ReactNode; className?: string }) {
   const shown = items.slice(0, MEDIA_GRID_TILES)
   const more = items.length - shown.length
-  const columns = mediaGridColumns(items.length)
+  const last = shown.at(-1)
+  const ratio = useDevicePixelRatio()
+  // No tile wider than a picture drawn alone (30rem), nor than its own pixels.
+  const widest = (item: T, aspect: number) => {
+    const pixels = naturalSize(item.size?.width, item.size?.height, ratio)
+    return pixels ? `min(30rem, ${Math.min(pixels.width, pixels.height * aspect)}px)` : "30rem"
+  }
   return <OwnMediaGallery>
-    <div data-asset-collection data-media-grid={columns} className={cn("not-prose my-3 grid gap-1.5", columns === 2 ? "max-w-[min(100%,30rem)] grid-cols-2" : "max-w-[min(100%,36rem)] grid-cols-3", className)}>
-      {shown.map((item, at) => {
-        const tile = <MediaTileContext value={more && at === shown.length - 1 ? { kind: "tile", more } : TILE}>{render(item)}</MediaTileContext>
-        return item.caption
-          ? <figure key={item.id} className="m-0 flex min-w-0 flex-col gap-1">{tile}<figcaption className="line-clamp-2 text-label text-muted-foreground">{item.caption}</figcaption></figure>
-          : <Fragment key={item.id}>{tile}</Fragment>
-      })}
+    <div data-asset-collection data-media-grid={mediaGridColumns(items.length)} className={cn("not-prose my-3 flex w-full flex-col gap-1.5", className)}>
+      {mediaRows(shown).map((row) => <div key={row.tiles[0]!.item.id} className="flex items-start gap-1.5">
+        {row.tiles.map(({ item, aspect }) => <figure key={item.id} className="m-0 flex min-w-0 flex-col gap-1.5" style={{ flex: `${aspect} 1 0%`, maxWidth: widest(item, aspect) }}>
+          <MediaTileContext value={{ kind: "tile", aspect, ...more && item === last && { more } }}>{render(item)}</MediaTileContext>
+          {item.caption ? <figcaption className="line-clamp-2 text-label text-muted-foreground">{item.caption}</figcaption> : null}
+        </figure>)}
+        {row.filler ? <div aria-hidden style={{ flex: `${row.filler} 1 0%` }} /> : null}
+      </div>)}
     </div>
     {more ? <div hidden>
       {items.slice(shown.length).map(item => <MediaTileContext key={item.id} value={HIDDEN}>{render(item)}</MediaTileContext>)}
