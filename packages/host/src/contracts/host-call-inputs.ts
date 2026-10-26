@@ -161,6 +161,9 @@ const inputs = {
       z.string(),
       z.object({ width: z.number(), height: z.number() }).optional(),
     ]),
+  "mako:conversation-settings": () => z.tuple([]),
+  "mako:conversation-settings-set": () =>
+    z.tuple([z.object({ continueAfterRestart: z.boolean() })]),
   "mako:copy": () => z.tuple([z.string()]),
   "mako:crashes": () => z.tuple([]),
   "mako:crashes-dir": () => z.tuple([]),
@@ -1688,6 +1691,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:control-preview-source", "control"],
   ["mako:control-preview-viewers", "control"],
   ["mako:control-video", "conversations"],
+  ["mako:conversation-settings", "conversations"],
+  ["mako:conversation-settings-set", "conversations"],
   ["mako:crashes", "application"],
   ["mako:crashes-dir", "application"],
   ["mako:create-pull", "git"],

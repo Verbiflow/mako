@@ -469,6 +469,7 @@ function flatItems(message: DecodedEntry): FlatItem[] {
     if (message.setup) entry.setup = message.setup
     if (message.cause) entry.cause = message.cause
     if (message.limit) entry.limit = message.limit
+    if (message.retries) entry.retries = message.retries
     if (when !== undefined) entry.at = when
     return [{ entry, native: message.id ?? message.source?.record, source: message }]
   }

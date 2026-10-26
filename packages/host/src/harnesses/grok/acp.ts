@@ -81,6 +81,8 @@ const GrokTaskCompletedSchema = z.object({
   update: z.object({
     sessionUpdate: z.literal("task_completed"),
     task_snapshot: GrokTaskSnapshot,
+    /** Grok runs a turn on the end once the running one ends (1.0.70), as it says of a subagent's finish. */
+    will_wake: z.boolean().optional(),
   }),
 })
 
@@ -218,7 +220,7 @@ export function createGrokAcpSource(): ProviderAcpSource {
           if (method !== "_x.ai/task_completed") return undefined
           const parsed = GrokTaskCompletedSchema.safeParse(params)
           if (!parsed.success) return undefined
-          return { sessionId: parsed.data.sessionId, ...grokTaskTurn(parsed.data.update.task_snapshot) }
+          return { sessionId: parsed.data.sessionId, ...parsed.data.update.will_wake && { wakes: true as const }, ...grokTaskTurn(parsed.data.update.task_snapshot) }
         },
         ended(method, params) {
           if (method !== "_x.ai/session_notification") return undefined

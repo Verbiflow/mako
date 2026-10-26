@@ -36,6 +36,7 @@ export function liveEvent(block: Extract<Entry, { type: "event" }>): TranscriptE
   if (block.setup) event.setup = true
   if (block.cause !== undefined) event.cause = block.cause
   if (block.limit !== undefined) event.limit = block.limit
+  if (block.retries !== undefined) event.retries = block.retries
   return event
 }
 

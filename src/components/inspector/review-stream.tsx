@@ -22,6 +22,7 @@ import { discardFiles } from "@/state/git-discard"
 import { useGitHub } from "@/state/github"
 import { setPref, usePrefs } from "@/state/prefs"
 import { review, useReview } from "@/state/review"
+import { releaseReviewTurn, requestedTurn, useReviewScope, type TurnScope } from "@/state/review-scope"
 import { actions, store, useSession } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { viewer } from "@/state/viewer"
@@ -41,12 +42,12 @@ type Loaded =
 
 /**
  * Which changes the stream shows: what isn't committed, everything since the
- * branch left its base, what the agent's last turn changed, or one commit.
+ * branch left its base, what one of the agent's turns changed, or one commit.
  */
 type Scope =
   | { kind: "uncommitted" }
   | { kind: "since"; ref: string; label: string }
-  | { kind: "turn"; conversation: string; requestId: string; prompt: string }
+  | TurnScope
   | { kind: "commit"; hash: string; shortHash: string; subject: string }
 
 const UNCOMMITTED: Scope = { kind: "uncommitted" }
@@ -195,13 +196,19 @@ function sameLoaded(left: Loaded, right: Loaded): boolean {
 /**
  * Every changed file in one scroll, the Review layout of Changes, for the
  * scope chosen in its header: what isn't committed (the default), everything
- * since the branch left its base, or one commit.
+ * since the branch left its base, a turn, or one commit. A turn the
+ * transcript asked to review (`reviewTurn`) is the scope until the person
+ * picks another one here.
  */
 export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { files: readonly GitFile[]; workspace: string; staged: number; onReviewInCenter: () => void }) {
   // A scope belongs to the repository it was chosen in.
   const [chosen, setChosen] = useState<{ workspace: string; scope: Scope }>({ workspace, scope: UNCOMMITTED })
-  const scope = chosen.workspace === workspace ? chosen.scope : UNCOMMITTED
-  const choose = useCallback((next: Scope) => setChosen({ workspace, scope: next }), [workspace])
+  const requested = useReviewScope((state) => requestedTurn(state.requested, workspace))
+  const scope = requested ?? (chosen.workspace === workspace ? chosen.scope : UNCOMMITTED)
+  const choose = useCallback((next: Scope) => {
+    if (next.kind !== "turn" || next.requestId !== requested?.requestId) releaseReviewTurn()
+    setChosen({ workspace, scope: next })
+  }, [workspace, requested])
   const [read, setRead] = useState<{ key: string; files: readonly GitFile[] | null; base?: string }>()
   const key = scopeKey(scope)
   // A since scope changes with every edit too, so it is read again with the status; a turn or a commit is fixed.
@@ -223,7 +230,7 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
   const picker = <ScopePicker scope={scope} workspace={workspace} onChoose={choose} />
   if (shown === undefined || (scope.kind === "since" && shown && !base)) return <ScopeMessage picker={picker} text="Reading…" />
   if (shown === null) return <ScopeMessage picker={picker} text={unreadScope(scope)} />
-  if (shown.length === 0 && scope.kind === "turn") return <ScopeMessage picker={picker} text="The last turn changed no files." />
+  if (shown.length === 0 && scope.kind === "turn") return <ScopeMessage picker={picker} text="That turn changed no files." />
   return <ReviewFiles key={key} files={shown} workspace={workspace} staged={scope.kind === "uncommitted" ? staged : 0} scope={scope} picker={picker} load={load} onReviewInCenter={onReviewInCenter} />
 }
 
@@ -248,7 +255,7 @@ async function readScope(scope: Exclude<Scope, { kind: "uncommitted" }>, workspa
 
 function unreadScope(scope: Scope): string {
   if (scope.kind === "since") return `This branch shares no history with ${scope.label.replace(/^Since /, "")}.`
-  if (scope.kind === "turn") return "The last turn's checkpoints couldn't be read."
+  if (scope.kind === "turn") return "That turn's checkpoints couldn't be read."
   return "This commit couldn't be read."
 }
 
@@ -256,7 +263,7 @@ function unreadScope(scope: Scope): string {
 function scopeBase(scope: Scope): string {
   if (scope.kind === "commit") return `${scope.shortHash}^`
   if (scope.kind === "since") return scope.ref
-  if (scope.kind === "turn") return "the start of the last turn"
+  if (scope.kind === "turn") return "the start of that turn"
   return "HEAD"
 }
 
@@ -326,12 +333,14 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
     if (hosted) offer(hosted)
     else void gitActions.defaultBranch().then(offer, () => setSince(null))
   }
-  const label = scope.kind === "uncommitted" ? "Uncommitted" : scope.kind === "since" ? scope.label : scope.kind === "turn" ? "Last turn" : scope.shortHash
   const turnOn = scope.kind === "turn" && lastTurn?.requestId === scope.requestId
+  // A turn the transcript asked for that isn't the last one is offered by its words, checked, above the last.
+  const otherTurn = scope.kind === "turn" && !turnOn ? scope : null
+  const label = scope.kind === "uncommitted" ? "Uncommitted" : scope.kind === "since" ? scope.label : scope.kind === "turn" ? turnOn ? "Last turn" : "Turn" : scope.shortHash
   return (
     <Menu modal={false} onOpenChange={open}>
       <MenuTrigger asChild>
-        <Action size="xs" tone="quiet" aria-label={`Showing: ${scope.kind === "commit" ? `commit ${scope.shortHash}` : label}. Choose what to review`} title={scope.kind === "commit" ? scope.subject : undefined} className="max-w-40 gap-1 px-1.5 font-medium">
+        <Action size="xs" tone="quiet" aria-label={`Showing: ${scope.kind === "commit" ? `commit ${scope.shortHash}` : label}. Choose what to review`} title={scope.kind === "commit" ? scope.subject : scope.kind === "turn" ? scope.prompt || undefined : undefined} className="max-w-40 gap-1 px-1.5 font-medium">
           {scope.kind === "commit" ? <GitCommitHorizontalIcon /> : scope.kind === "since" ? <GitBranchIcon /> : scope.kind === "turn" ? turnHarness ? <HarnessIcon harness={turnHarness} /> : <MessageSquareIcon /> : <PencilIcon />}
           <span className="truncate">{label}</span>
           <ChevronDownIcon className="size-3! text-faint/70" />
@@ -340,6 +349,7 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
       <MenuContent align="start" className="max-h-96 w-72 overflow-y-auto">
         <ScopeItem on={scope.kind === "uncommitted"} onSelect={() => onChoose(UNCOMMITTED)} title="Uncommitted" detail="What isn't committed yet, staged or not" />
         {since ? <ScopeItem on={scope.kind === "since" && scope.ref === since.ref} onSelect={() => onChoose({ kind: "since", ...since })} title={since.label} detail="Every commit on this branch and what isn't committed" /> : null}
+        {otherTurn ? <ScopeItem on onSelect={() => onChoose(otherTurn)} title="Turn" detail={otherTurn.prompt || "What the agent changed in that answer"} /> : null}
         {lastTurn ? <ScopeItem on={turnOn} onSelect={() => onChoose(lastTurn)} title="Last turn" detail={lastTurn.prompt || "What the agent changed in its last answer"} /> : null}
         <MenuSeparator />
         <MenuLabel>A commit</MenuLabel>

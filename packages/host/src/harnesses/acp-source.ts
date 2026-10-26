@@ -13,7 +13,7 @@ import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { NativeNotice } from "../contracts/native-activity.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import type { LiveUpdate } from "@mako/sessions/live-content"
-import type { TranscriptEvent } from "@mako/sessions/events"
+import { event, type TranscriptEvent } from "@mako/sessions/events"
 import type { ProviderTurnCause } from "@mako/sessions/provider-turn"
 import type { UsageObservation } from "./session-usage.js"
 
@@ -375,6 +375,9 @@ export interface AcpVendorRequest {
   ask: AcpAsk
 }
 
+/** Output that begins a turn: a turn the agent announced opens at the first of it while the session is idle. A tool update can still belong to the turn before. */
+export const TURN_CONTENT: ReadonlySet<string> = new Set(["agent_message_chunk", "agent_thought_chunk", "tool_call", "plan"])
+
 /** Vendor notifications about turns the agent started itself. */
 /**
  * A turn the agent says it starts on its own, and why. `wakes`: the agent
@@ -399,6 +402,11 @@ export interface AcpProviderTurnObserver {
    * Absent: it draws nothing, unless the cause says the agent `wakes` on it.
    */
   midTurn?: "marker"
+}
+
+/** The marker a cause reported while a turn runs draws in that turn, for an agent whose `midTurn` is `marker`. */
+export function midTurnMarker(cause: ProviderTurnCause): TranscriptEvent {
+  return { ...event(cause.reason, undefined, cause.body), ...cause.cause && { cause: cause.cause } }
 }
 
 export interface AcpAgentObserver {

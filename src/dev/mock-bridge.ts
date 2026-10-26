@@ -6,6 +6,7 @@ import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-cont
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import type { ConversationSettings } from "@mako/host/contracts/turn-continuation"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
@@ -120,6 +121,9 @@ const STAGED_MEDIA = new Map<string, string>()
 const utilityChoices: UtilityWorkChoices = { commit: "auto" }
 /** Whether a fixture hands agents to the cloud as the Mac sleeps. */
 const mockHandOffOnSleep = { value: true }
+/** The fixture's conversation settings, off as on a new Mac. */
+interface MockConversationSettings { value: ConversationSettings }
+const mockConversationSettings: MockConversationSettings = { value: { continueAfterRestart: false } }
 /** `?return=outdated`: the first way back stays, Codex here being older than the one that wrote it in the cloud. */
 const mockReturnOutdated = { value: new URLSearchParams(globalThis.location?.search).get("return") === "outdated" }
 const MOCK_PROVIDERS: UtilityProviderInfo[] = [
@@ -2536,6 +2540,7 @@ export function installMockBridge() {
         ? { ...snapshot.session.settings, ...tuning, options: { ...snapshot.session.settings?.options, ...tuning.options } }
         : snapshot.session.settings
       const reply = mockReply({ ...snapshot.session, settings }, request, settings)
+      if (reply.changed) request.snapshots = mockTurnSnapshots(GIT.root ?? snapshot.session.cwd)
       const { permission } = reply
       const updates = framed(id, snapshot.session.harness, [...openingNotices(snapshot), ...reply.updates])
       if (streamsScene && snapshot.blocks.length) {
@@ -2763,6 +2768,12 @@ export function installMockBridge() {
     handOff: async (handOff: string): Promise<HandOffResult[]> => {
       const candidates = (await window.mako!.handOffCandidates()).filter((candidate) => !candidate.refusal)
       return Promise.all(candidates.map(async (candidate) => ({ conversationId: candidate.conversationId, outcome: await window.mako!.threadMove(candidate.conversationId, `${handOff}:${candidate.thread}`, { why: "quit" }) })))
+    },
+    conversationSettings: async (): Promise<ConversationSettings> => mockConversationSettings.value,
+    setConversationSettings: async (settings: ConversationSettings): Promise<ConversationSettings> => {
+      mockConversationSettings.value = settings
+      emit({ type: "conversation-settings", settings })
+      return settings
     },
     handOffSettings: async (): Promise<HandOffSettings> => ({ onSleep: mockHandOffOnSleep.value }),
     setHandOffOnSleep: async (onSleep: boolean): Promise<HandOffSettings> => {
@@ -3257,6 +3268,14 @@ let mockPlans = 0
 interface MockReply {
   updates: LiveUpdate[]
   permission?: LivePermissionRequest
+  /** The reply edited files: its request gets checkpoints either side, as the host saves them, for `liveTurnChanges`. */
+  changed?: boolean
+}
+
+/** Checkpoints either side of a turn in `scope`, both saved. */
+function mockTurnSnapshots(scope: string): NonNullable<LiveRequest["snapshots"]> {
+  const snapshot = (createdAt: number) => ({ kind: "ready" as const, snapshot: { id: crypto.randomUUID(), scope, createdAt, files: 2 } })
+  return { before: snapshot(Date.now() - 1_000), after: snapshot(Date.now()) }
 }
 
 /** A planning turn answers with a Markdown plan, and waits on the harness's own plan approval where it has one. */
@@ -3337,7 +3356,7 @@ function mockReply(
     "```",
     "",
     "I changed it to select only `state.sessions`. The status bar reads five scalars the same way; I'll look at it next.",
-  ].join("\n") }] }
+  ].join("\n") }], changed: true }
   if (!planning) return { updates: [user, { kind: "text", text: `Finished: ${request.text}` }] }
   const id = `mock-plan-${++mockPlans}`
   const subject = request.text.replace(/\s+/g, " ").trim().slice(0, 60) || "the change"

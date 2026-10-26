@@ -125,9 +125,16 @@ export interface ScriptedModelOptions {
   refuses?: (bearer: string) => boolean
 }
 
+/** A request a stand-in model received: a conversation's takes a step of the script, and is unscripted when none was left. */
+export interface ScriptedRequest {
+  path: string
+  conversation: boolean
+  unscripted?: true
+}
+
 export async function scriptedModel(options: ScriptedModelOptions) {
   /** Every request, and whether the script had a step for it. */
-  const requests: { path: string; conversation: boolean; unscripted?: boolean }[] = []
+  const requests: ScriptedRequest[] = []
   /** The bearer token each request carried, in order: which sign-in a harness ran on. */
   const bearers: string[] = []
   const server = createServer((request, response) => {
@@ -183,7 +190,7 @@ export async function scriptedModel(options: ScriptedModelOptions) {
     const forced = forcedReply(body.tool_choice, body.tools, aside)
     const conversation = Boolean(body.tools?.length) && !forced && !options.side?.(heard)
     const scripted = conversation ? options.reply(heard) : forced ?? { text: aside }
-    requests.push({ path, conversation, unscripted: scripted ? undefined : true })
+    requests.push({ path, conversation, ...!scripted && { unscripted: true } })
     return scripted ? namespaced(scripted, body.tools) : { text: "The script has no more steps." }
   }
   /** Upgraded sockets, which `closeAllConnections` leaves open. */
@@ -299,7 +306,8 @@ function safeJson(text: string): JsonValue | undefined {
 
 /** The model a reply names when its request names none; a request that names one is answered by it, as a provider answers. */
 const MODEL = "scripted"
-const USAGE = { input: 1200, output: 40 }
+/** What every scripted reply spent, on whichever wire it went. */
+export const USAGE = { input: 1200, output: 40 }
 
 function failure(wire: Wire, message: string): JsonObject {
   return wire === "messages" ? { type: "error", error: { type: "api_error", message } } : { error: { type: "server_error", message } }
@@ -489,7 +497,7 @@ const STREAMED = { chat: chatStreamed, messages: messagesStreamed, responses: re
 const WHOLE = { chat: chatWhole, messages: messagesWhole, responses: responsesWhole } satisfies Record<Wire, (reply: ScriptedReply) => JsonObject>
 
 /** Text in a few deltas, the way a model streams it. */
-function words(text: string | undefined): string[] {
+export function words(text: string | undefined): string[] {
   if (!text) return []
   return text.match(/\S+\s*/g) ?? [text]
 }

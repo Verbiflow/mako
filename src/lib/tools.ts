@@ -1,5 +1,5 @@
 import { normalizeToolOutput } from "@mako/sessions/tool-output"
-import { identifyTool, toolKindWork, type ToolIdentity, type ToolSource } from "@mako/sessions/tool-identity"
+import { identifyTool, toolKindWork, type ToolIdentity, type ToolKind, type ToolSource } from "@mako/sessions/tool-identity"
 import type { Block, ChatMessage } from "@/lib/types"
 import type { ToolCall } from "@/extend/slots"
 import type { Entry } from "@mako/sessions/entries"
@@ -351,6 +351,22 @@ export function reportedSubagentCount(call: ToolCall): number {
   }
 }
 
+/**
+ * Where one subagent call stands, from the call alone: a background agent's
+ * call returns at once while the agent works on, so its result's words are
+ * what say it still runs. The roster's word, where it has one, comes first.
+ */
+export type SubagentStanding = "working" | "waiting" | "done" | "failed" | "stopped" | "cut off" | "canceled"
+
+export function subagentStanding(call: ToolCall): SubagentStanding {
+  if (call.isError) return "failed"
+  if (call.isCutOff) return call.isCanceled ? "stopped" : "cut off"
+  if (call.isCanceled) return "canceled"
+  const background = booleanArgAt(call.arguments, "background") === true || booleanArgAt(call.arguments, "run_in_background") === true
+  if (call.pending || (background && /(?:working|running) in the background|state="running"/i.test(call.result ?? ""))) return "working"
+  return "done"
+}
+
 export function subagentResultId(
   result: string | undefined
 ): string | undefined {
@@ -396,4 +412,24 @@ export function editsOf(call: ToolCall): ToolEdit[] {
   return oldText === undefined || newText === undefined
     ? []
     : [{ oldText, newText }]
+}
+
+/** Kinds whose target is something you could paste into a terminal or editor. */
+export const CODE_KINDS: ReadonlySet<ToolKind> = new Set<ToolKind>([
+  "shell", "shell-input", "read", "edit", "write", "delete", "move",
+  "list", "search", "find", "code", "web-fetch",
+])
+
+/** An MCP tool's label without the server, which sits at the row's far end. */
+export function toolLabel(tool: ToolIdentity): string {
+  const prefix = tool.server ? `${tool.server}: ` : ""
+  if (!prefix || !tool.label.startsWith(prefix)) return tool.label
+  const name = tool.label.slice(prefix.length)
+  return name.charAt(0).toUpperCase() + name.slice(1)
+}
+
+/** The target, unless it only repeats the tool's own name. */
+export function toolTarget(tool: ToolIdentity): string {
+  const target = tool.target ?? ""
+  return tool.server && tool.tool && target === `${tool.server}: ${tool.tool}` ? "" : target
 }

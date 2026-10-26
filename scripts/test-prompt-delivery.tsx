@@ -213,6 +213,24 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   assert.equal(autoContinueCandidate([dropped, { ...request, status: "canceled" }]), dropped, "a canceled request after it does not change the candidate")
   assert.equal(autoContinueCandidate([dropped, { ...request, status: "queued" }]), undefined, "a queued prompt behind it is the user's next word")
   assert.equal(autoContinueCandidate([quit]), undefined, "only a dropped connection or an exited provider earns an automatic continuation")
+  // After Mako's own restart, with the person's choice on, Mako's exit earns one too; a crash never does.
+  const now = 10 * 60_000
+  const cut = (id: string, at: number, continues?: string): LiveRequest => ({
+    ...request, id, status: "interrupted", interruption: { reason: "host-quit", at },
+    ...continues && { continues: { requestId: continues, reason: "host-quit" as const, auto: true } },
+  })
+  const quitAt = cut("11111111-1111-4111-8111-000000000001", now - 1_000)
+  assert.equal(autoContinueCandidate([quitAt], true, now), quitAt, "a turn Mako's exit cut short is continued after the restart")
+  assert.equal(autoContinueCandidate([{ ...quitAt, status: "uncertain", interruption: { reason: "host-crashed", at: now } }], true, now), undefined, "a crash waits for the person")
+  assert.equal(autoContinueCandidate([dropped], true, now), dropped, "the restart flag adds to the dropped turns, it doesn't replace them")
+  const chain = [quitAt]
+  for (let index = 2; index <= 4; index++) chain.push(cut(`11111111-1111-4111-8111-00000000000${index}`, now - 60_000 + index, chain.at(-1)!.id))
+  assert.equal(autoContinueCandidate(chain.slice(0, 2), true, now), chain[1], "Mako's continuation cut by the next restart goes on")
+  assert.equal(autoContinueCandidate(chain.slice(0, 3), true, now), chain[2], "and the next")
+  assert.equal(autoContinueCandidate(chain, true, now), undefined, "three in a row in five minutes is the loop guard: the fourth is the person's")
+  assert.equal(autoContinueCandidate(chain, true, now + 5 * 60_000), chain[3], "continuations cut longer ago than five minutes no longer count")
+  assert.equal(autoContinueCandidate([dropped, { ...droppedAgain }], true, now), undefined, "a dropped continuation stays the person's after a restart too")
+  assert.equal(autoContinueCandidate(chain.slice(0, 2), false, now), undefined, "without the restart, Mako's exit is the person's")
   const exited: LiveRequest = { ...dropped, interruption: { reason: "provider-exited", at: 4 }, failure: "unknown", error: "Cursor's SDK process exited (code 70)" }
   assert.equal(autoContinueCandidate([exited]), exited, "a turn whose provider process died is Mako's to continue")
   assert.equal(turnStopLabel("provider-exited", "Cursor"), "Cursor stopped unexpectedly")

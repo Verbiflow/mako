@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#citrine-catamaran",
+      "path": ".local/share/devin/cli/sessions.db#bustling-juniper",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/9bc65d42-2bec-427c-8f20-5062da90860f.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/e0085dee-165a-4e76-96ea-02260e03da3c.db",
       "known": [
         {
           "side": "-",

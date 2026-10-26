@@ -25,6 +25,16 @@ export function devinReferences(text: string): string {
     .join("")
 }
 
+/**
+ * What history calls an image a prompt carried: its file's name, unless the
+ * file is Devin's own copy of an image a client sent it inline, which Devin
+ * 3000.11.205 names for when and which process pasted it
+ * (`devin-pasted-images/<time>-<pid>-<n>-pasted.png`), not for the image.
+ */
+export function devinImageName(path: string): string {
+  return path.split("/").at(-2) === "devin-pasted-images" ? "Image" : path.split("/").at(-1) || "Image"
+}
+
 export function devinPromptImages(text: string) {
   const attachments: AttachmentContent[] = []
   const body = text
@@ -37,7 +47,7 @@ export function devinPromptImages(text: string) {
             (_match, path: string, extension: string) => {
               attachments.push({
                 type: "attachment",
-                name: path.split("/").at(-1) ?? "Image",
+                name: devinImageName(path),
                 mimeType: `image/${/^jpe?g$/i.test(extension) ? "jpeg" : extension.toLowerCase()}`,
                 source: { kind: "file", path },
               })

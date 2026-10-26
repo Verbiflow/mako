@@ -58,6 +58,7 @@ import { TurnUsageSchema, type Entry, type RecordRef } from "../entries.js"
 import type { LiveUpdate } from "../live-content.js"
 import { EntrySink, type TurnState } from "../entry-sink.js"
 import { grokFork } from "./grok-fork.js"
+import { addTurnUsage } from "../turn-usage.js"
 
 const USER_QUERY = /<user_query>([\s\S]*?)<\/user_query>/
 const UPDATE_METHODS = new Set(["session/update", "_x.ai/session/update"])
@@ -552,6 +553,7 @@ export function grokWorkspaceCwd(folder: string): string | undefined {
 }
 
 export class GrokProvider implements SessionProvider {
+  readonly subagentSpendInParent = true
   /** Its records state no version: what its harness leaves beside them says (`record-evidence.ts`). */
   writerEvidence(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null> {
     return reader.grokSession(path)
@@ -853,14 +855,7 @@ function childTurnsBeside(path: string): ChildTurns {
 
 /** A turn's own spend with the subagent turns that woke it, field by field. */
 function withWoken(usage: TurnUsage | undefined, woken: readonly TurnUsage[]): TurnUsage | undefined {
-  if (!woken.length) return usage
-  const total: TurnUsage = {}
-  for (const part of [usage, ...woken])
-    for (const key of ["input", "output", "cacheRead", "cacheWrite", "costUsd"] as const) {
-      const value = part?.[key]
-      if (value !== undefined) total[key] = (total[key] ?? 0) + value
-    }
-  return total
+  return woken.reduce<TurnUsage | undefined>((total, part) => addTurnUsage(total, part), usage)
 }
 
 /**

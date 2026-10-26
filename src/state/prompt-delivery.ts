@@ -20,6 +20,8 @@ export interface TurnStop {
   continuable: boolean
   /** Mako has scheduled its own continuation of this turn; the footer says so instead of offering the button. */
   automatic: boolean
+  /** The background work stopping the turn also stopped, as the agent is told of it (`Interruption.stopped`). */
+  stopped?: readonly string[]
 }
 
 /**
@@ -41,11 +43,14 @@ export function turnStops(requests: readonly LiveRequest[], running: boolean): M
           : undefined
     if (!reason) continue
     const automatic = request.interruption?.autoContinue !== undefined
-    stops.set(request.id, {
+    const stop: TurnStop = {
       reason,
       continuable: !running && !automatic && !request.signIn && reason !== "stopped" && request === newest,
       automatic,
-    })
+    }
+    const stopped = request.interruption?.stopped
+    if (stopped?.length) stop.stopped = stopped
+    stops.set(request.id, stop)
   }
   return stops
 }
@@ -156,6 +161,23 @@ export function turnStopLabel(reason: InterruptionReason, provider: string): str
     case "handed-off":
       return "Paused to move to the cloud"
   }
+}
+
+/** A command or task, as the harness listed it, short enough for a footer. */
+const STOPPED_SHOWN = 48
+
+/**
+ * What a stop also stopped, as the turn's footer says it: the one command by
+ * name ("and stopped `npm run dev`"), or how many ("and stopped 3
+ * background tasks"). The whole list is what the agent is told; `all` is
+ * that list, one per line, for the line's tooltip.
+ */
+export function stoppedWorkWords(stopped: readonly string[]): { text: string; all: string } | undefined {
+  const first = stopped[0]?.replace(/\s+/g, " ").trim()
+  if (!first) return undefined
+  const all = stopped.map((each) => each.replace(/\s+/g, " ").trim()).join("\n")
+  if (stopped.length > 1) return { text: `and stopped ${stopped.length} background tasks`, all }
+  return { text: `and stopped ${first.length > STOPPED_SHOWN ? `${first.slice(0, STOPPED_SHOWN - 1)}…` : first}`, all }
 }
 
 export interface PendingPrompt {

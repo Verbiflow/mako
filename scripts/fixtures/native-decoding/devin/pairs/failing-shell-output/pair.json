@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#deep-hockey",
+      "path": ".local/share/devin/cli/sessions.db#aromatic-tarragon",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/c54403a5-dcf1-4a84-999d-b797f096df45.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/2333e2d3-adee-4067-9e92-6ef55c3407ef.db",
       "known": []
     }
   ],

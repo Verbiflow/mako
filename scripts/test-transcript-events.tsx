@@ -7,7 +7,7 @@ import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import { entriesFromMessages, type DecodedEntry as ThreadEntry, type Entry, type RecordRef } from "@mako/sessions"
 import { backgroundReminderTurn, claudeTaskTurn, grokSubagentTurn, grokTaskTurn, parseClaudeTaskNotification } from "@mako/sessions/harnesses"
-import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, type TranscriptEvent, type TurnCause } from "@mako/sessions/events"
+import { compactionEvent, mcpServerFailedEvent, modelChangedEvent, retriesEvent, type TranscriptEvent, type TurnCause } from "@mako/sessions/events"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { backgroundCommandTurn, CODEX_GOAL, codexGoalTurn, outputTail, subagentTurn } from "@mako/sessions/provider-turn"
 import { Exchange } from "../src/components/transcript/exchange"
@@ -25,6 +25,7 @@ import { continueTurnPrompt, makoPrompts, savedMakoPrompt, type MakoPrompt, type
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
 import { setPref } from "@/state/prefs"
+import { setTurnFoldOpen, turnFoldKey } from "@/state/turn-folds"
 
 threadsStore.set({ descriptors: fixtureHarnesses })
 const LIVE = "21111111-1111-4111-8111-111111111111"
@@ -281,6 +282,19 @@ const failure = draw(streamed([go, marker({ label: "Turn failed", detail: "strea
 assert.match(failure, /lucide-circle-alert[^"]*text-negative/)
 assert.match(failure, /class="[^"]*text-negative">Turn failed</)
 
+// A provider's retries, quiet either way: the count, its words and how long; the failure after them says itself.
+const recoveredWords = eventWords(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)"))
+assert.deepEqual(recoveredWords, { glyph: "retry", title: "Recovered after 3 retries", detail: "Overloaded (529)", aside: "41s" })
+assert.deepEqual(eventWords(retriesEvent({ count: 1, outcome: "gave-up", durationMs: 62_000 }, "Overloaded (529)")),
+  { glyph: "retry", title: "Retried once", detail: "Overloaded (529)", aside: "1m 02s" })
+const retries = draw(streamed([go, marker(retriesEvent({ count: 3, outcome: "recovered", durationMs: 41_000 }, "Overloaded (529)")), { kind: "text", id: "a3", text: "Here it is." },
+  marker(retriesEvent({ count: 5, outcome: "gave-up", durationMs: 62_000 }))]))
+assert.match(text(retries), /Recovered after 3 retries Overloaded \(529\) 41s/)
+assert.match(text(retries), /Retried 5 times 1m 02s/)
+assert.doesNotMatch(retries, /text-negative|text-caution/, "retries are ambient whichever way they ended: the failure after them owns the attention")
+assert.deepEqual(entriesToMessages(reduceLiveUpdates([], [{ kind: "event", ...retriesEvent({ count: 2, outcome: "recovered", durationMs: 3_000 }) }]), { kind: "live", running: false, provider: "claude" }).messages[0]?.note?.retries,
+  { count: 2, outcome: "recovered", durationMs: 3_000 }, "the measure reaches the window from the blocks the journal keeps")
+
 const long = draw(streamed([go, marker({ label: "Warning", detail: "Codex is ignoring 2 unrecognized configuration settings. Check for typos or deprecated settings in config.toml.", tone: "warning" })]))
 assert.match(long, /<button[^>]*data-event-line[^>]*aria-expanded="false"/, "a line too long to fit opens onto the whole of it")
 
@@ -368,6 +382,12 @@ const legacy = continueTurnPrompt("connection-lost", "mako").replace(/ Mako sent
 assert.deepEqual(savedContinuation(legacy), { reason: "connection-lost" }, "an older build's words name no sender")
 assert.equal(savedContinuation(`${continueTurnPrompt("connection-lost", "person")} Also fix the footer.`), undefined, "an edited continuation is the person's own message")
 assert.equal(savedContinuation("Continue where you left off."), undefined)
+// What Mako's exit or a handoff stopped is named between the two, in words that still read back.
+const stoppedWords = continueTurnPrompt("host-quit", "mako", ["npm run dev", "tail -f build.log"])
+assert.match(stoppedWords, /Mako's exit stopped what you had left running in the background: `npm run dev`; `tail -f build.log`\. Start again whatever of it you still need\./)
+assert.match(continueTurnPrompt("handed-off", "person", ["npm test"]), /The handoff stopped what you had left running in the background: `npm test`\./)
+for (const [reason, words] of [["host-quit", stoppedWords], ["handed-off", continueTurnPrompt("handed-off", "mako", ["npm test"])], ["host-quit", continueTurnPrompt("host-quit", "person", ["npm run dev"])]] as const)
+  assert.equal(savedContinuation(words)?.reason, reason, `a continuation naming stopped work reads back: ${words}`)
 const savedOne = (words: string) => draw(saved([{ kind: "user", at: at(43), text: words }, { kind: "assistant", blocks: [{ type: "text", text: "Picking up." }] }], "cursor"))
 assert.match(text(savedOne(continueTurnPrompt("provider-exited", "mako"))), /Mako restarted Cursor and continued the turn \d{1,2}:43 [AP]M/, "saved history names the harness from the answer")
 assert.match(text(savedOne(continueTurnPrompt("connection-lost", "person"))), /You continued the turn after the connection to Cursor dropped/)
@@ -400,8 +420,11 @@ assert.match(quit, /Continue turn/)
 
 const errored = draw([{ id: "e", prompt: { id: "e", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
   response: [{ id: "e-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Request failed: 529 Overloaded\nTry again in a moment." }], system: [] }])
-assert.match(errored, /role="alert" data-event-error/)
-assert.match(errored, /Request failed: 529 Overloaded\nTry again in a moment\./, "the whole failure shows")
+assert.match(errored, /role="alert" data-event-error="rate-limited"/)
+assert.match(text(errored), /Cursor is over its rate limit or capacity\s*Wait for capacity to return or choose another model\./, "a recorded failure is named by the rules a live one is")
+const unnamed = draw([{ id: "u", prompt: { id: "u", role: "user", blocks: [{ type: "text", text: "Summarize" }] },
+  response: [{ id: "u-a", role: "assistant", blocks: [{ type: "text", text: "Reading." }], error: "Tool schema mismatch in step 4\nat validate (schema.ts:12)" }], system: [] }])
+assert.match(text(unnamed), /Tool schema mismatch in step 4\s*Details/, "a failure no rule knows says the provider's own first line")
 assert.doesNotMatch(errored, /rounded-lg border border-negative/, "no tinted card")
 
 const separator = draw([{ id: "x", prompt: { id: "x", role: "user", blocks: [{ type: "text", text: "Go" }] }, response: [],
@@ -441,6 +464,8 @@ console.log("Mako's lines, stops, errors and system lines: one line where a prom
   try {
     assert.doesNotMatch(draw(toExchanges(messages)), /data-show-original/, "a debugging aid: nothing offers Original until Settings › Diagnostics turns it on")
     setPref("showOriginals", true)
+    // The record is a step of a settled turn, so it is drawn inside the turn's fold: opened, as a reader would.
+    setTurnFoldOpen(turnFoldKey(LIVE, "native-user-u1", 0), true)
     const html = draw(toExchanges(messages))
     assert.equal(html.match(/data-show-original/g)?.length, 2, "the prompt's and the answer's footers offer Original; the unread line's opens with its record")
     assert.match(html, /data-event="Unread record: response_item\/telepathy"[^]*?aria-expanded="false"/, "the unread record starts collapsed")

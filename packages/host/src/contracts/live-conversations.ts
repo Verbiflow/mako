@@ -119,6 +119,14 @@ export interface Interruption {
    * Mako's.
    */
   closed?: string[]
+  /**
+   * The background work the cut stopped (a host exit, a handoff), in the
+   * words the agent is told when the turn continues (`continueTurnPrompt`)
+   * and the turn's footer names to the person: each command line or agent
+   * prompt the roster held, and how many more the harness counted. Absent
+   * when nothing was left running.
+   */
+  stopped?: string[]
 }
 
 export const MAX_INTERRUPTED_CALLS = 12
@@ -236,8 +244,8 @@ export interface LiveRequest {
    * retriability alone does not establish safe replay.
    */
   failure?: ProviderFailureKind
-  /** The session's usage reading when this request was dispatched; `spend` is measured from it. */
-  usageFrom?: Pick<LiveSessionUsage, "tokens" | "cost" | "unrecorded">
+  /** Where this request's spend counts from: the meter at the last turn's end (`spentThrough`), else when it was dispatched. */
+  usageFrom?: UsageMark
   /**
    * What answering this request spent, as Mako measured it between the
    * harness's readings. Every harness's turns keep one; for harnesses whose
@@ -322,6 +330,25 @@ export interface BaseSpan {
   heldAt: number
 }
 
+/** A meter reading, as a turn's spend is measured between two. */
+export type UsageMark = Pick<LiveSessionUsage, "tokens" | "cost" | "unrecorded">
+
+export interface SpentThrough {
+  bindingId: string
+  usage: UsageMark
+}
+
+/**
+ * Spend no request of Mako's holds: a turn the harness ran without one (on
+ * a subagent's report, a finished command, a compaction), or, `after`,
+ * what the session spent after its last turn before its process ended.
+ */
+export interface HarnessTurn {
+  id: string
+  kind: "turn" | "after"
+  spend: import("./usage-ledger.js").TurnSpend
+}
+
 export interface LiveSnapshot extends LiveSummary {
   /** Renderer-only retained-history window; never persisted in the journal. */
   history?: import("./live-history.js").LiveHistoryWindow
@@ -356,6 +383,16 @@ export interface LiveSnapshot extends LiveSummary {
   baseSupplied?: number
   permissions: LivePermissionRequest[]
   requests: LiveRequest[]
+  /** The turns Mako didn't send, and what was spent after the last turn, each with its spend; see `HarnessTurn`. */
+  harnessTurns?: HarnessTurn[]
+  /**
+   * Where the next turn's spend counts from: the meter at the last turn's
+   * end, in the process that read it. Spend between turns, a background
+   * subagent working while its parent is idle, counts in the next turn,
+   * Mako's or the harness's own. Held by this host only; a new process's
+   * meter starts over, so it goes with the process.
+   */
+  spentThrough?: SpentThrough
   /**
    * When the provider last showed it was working, in host epoch milliseconds:
    * a turn starting, streamed content or tool output, a question, a child
@@ -391,6 +428,10 @@ export interface LiveBatch {
   side?: import("./live-side-questions.js").SideConversation | null
   /** `null` when the history was read after all; absent when it did not change. */
   historyFailure?: string | null
+  /** Every turn Mako didn't send, when one was added; absent when none was. */
+  harnessTurns?: HarnessTurn[]
+  /** `null` when the process went; absent when it did not change. */
+  spentThrough?: SpentThrough | null
   control?: ConversationControl
   base?: ThreadPage | null
   baseCoveredBlocks?: number

@@ -23,6 +23,7 @@ import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { projectLive } from "../src/state/live-projection.js"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
+import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const gitRunner = new Git()
@@ -1791,6 +1792,127 @@ async function autoContinuedTurn() {
  * outcome to the user, a turn that fails on a dropped connection continues
  * in the same process, and any other failure stays a failure.
  */
+/**
+ * With "Continue interrupted turns after Mako restarts" on, a turn Mako's own
+ * exit cut short goes on once the next host starts: its session reopens on
+ * its native id and Mako sends the continuation, naming the background work
+ * the exit stopped, which the request keeps for the window. A continuation
+ * cut by the next restart goes on too, three times in five minutes; the
+ * fourth is the person's. Off, the turn waits for Continue turn.
+ */
+async function restartContinued() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-restart-"))
+  const id = randomUUID()
+  const starts: Array<string | undefined> = []
+  const prompts: string[] = []
+  const events: HostEvent[] = []
+  const emitters: Array<{ binding: string; emit: (event: LiveDriverEvent) => void }> = []
+  const session = (bindingId: string, patch: Partial<LiveSessionState> = {}): LiveSessionState => ({
+    id: bindingId, nativeId: "native-restart", nativePath: join(root, "native-restart"), harness: "test-provider", cwd: root,
+    status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [], ...patch,
+  })
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => {
+      starts.push(options.resume)
+      if (options.emit) emitters.push({ binding: options.conversationId, emit: options.emit })
+      return session(options.conversationId)
+    },
+    prompt: async (bindingId, text, _attachments, _settings, dispatch) => {
+      prompts.push(text)
+      dispatch.report({ kind: "submitted", source: "transport-call" })
+      emitters.at(-1)?.emit({ type: "live-session", session: session(bindingId, { status: "running" }) })
+      dispatch.report({ kind: "accepted", source: "native-echo" })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: async () => {},
+    setMode: async () => {},
+  }
+  const open = () => new LiveConversations({
+    appPath: root, root: join(root, "journals"), driver: () => driver, history: async () => null,
+    emit: (event) => events.push(event), autoContinueDelayMs: 20,
+    resumeVerdict: async () => ({ kind: "resumable", record: "moved" }),
+  })
+  const dispatched = (owner: LiveConversations, index: number) =>
+    waitFor(() => owner.snapshot(id)?.requests[index]?.status === "dispatching", `request ${index} was not dispatched`)
+  const server = { nativeId: "dev-server", title: "Dev server", work: "command" as const, detail: "npm run dev", background: true, state: { kind: "working" as const } }
+  let owner = open()
+  try {
+    assert.deepEqual(owner.conversationSettings(), { continueAfterRestart: false }, "off unless the person turns it on")
+    assert.deepEqual(owner.setConversationSettings({ continueAfterRestart: true }), { continueAfterRestart: true })
+    assert.deepEqual(events.at(-1), { type: "conversation-settings", settings: { continueAfterRestart: true } }, "every window hears the choice")
+    await owner.start("test-provider", root, { conversationId: id })
+    const first = randomUUID()
+    owner.submit(id, first, "first")
+    await dispatched(owner, 0)
+    const binding = emitters.at(-1)!
+    binding.emit({ type: "live-agent", id: binding.binding, agent: server })
+    await waitFor(() => owner.snapshot(id)?.nativeAgents?.agents.length === 1, "the dev server was not on the roster")
+    owner.stop()
+
+    owner = open()
+    assert.deepEqual(owner.conversationSettings(), { continueAfterRestart: true }, "the choice outlives the host")
+    let requests = owner.snapshot(id)!.requests
+    assert.equal(requests[0]?.interruption?.reason, "host-quit")
+    assert.deepEqual(requests[0]?.interruption?.stopped, ["npm run dev"], "the request keeps the background work the exit stopped, for the window")
+    owner.continueRestarted()
+    assert.ok(owner.snapshot(id)!.requests[0]?.interruption?.autoContinue, "the footer says Mako is continuing it")
+    await waitFor(() => prompts.length === 2, "the continuation was not sent after the restart")
+    assert.deepEqual(starts, [undefined, "native-restart"], "the session reopened on its native id")
+    requests = owner.snapshot(id)!.requests
+    assert.deepEqual(requests[1]?.continues, { requestId: first, reason: "host-quit", auto: true })
+    assert.deepEqual(requests[1]?.actor, { kind: "service", name: "auto-continue" })
+    assert.equal(requests[1]?.text, continueTurnPrompt("host-quit", "mako", ["npm run dev"]), "the agent is told what the exit stopped, in the request's own list")
+    assert.deepEqual(savedContinuation(requests[1]!.text), { reason: "host-quit", sender: "mako" })
+
+    // Restarted again and again: Mako's continuations go on three times in a row, then the turn is the person's.
+    for (const index of [1, 2, 3]) {
+      await dispatched(owner, index)
+      owner.stop()
+      owner = open()
+      owner.continueRestarted()
+      if (index < 3) await waitFor(() => prompts.length === index + 2, `continuation ${index + 1} was not sent`)
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 60))
+    requests = owner.snapshot(id)!.requests
+    assert.equal(prompts.length, 4, "the loop guard: three continuations in a row within five minutes, then none")
+    assert.equal(requests.at(-1)?.interruption?.reason, "host-quit")
+    assert.equal(requests.at(-1)?.interruption?.autoContinue, undefined, "the last cut turn waits for Continue turn")
+
+    // Off, Mako's exit leaves the turn to the person.
+    owner.setConversationSettings({ continueAfterRestart: false })
+    owner.submit(id, randomUUID(), "again")
+    await dispatched(owner, requests.length)
+    owner.stop()
+    owner = open()
+    owner.continueRestarted()
+    await new Promise<void>((resolve) => setTimeout(resolve, 60))
+    assert.equal(prompts.length, 5, "nothing is continued with the choice off")
+    assert.equal(owner.snapshot(id)!.requests.at(-1)?.interruption?.autoContinue, undefined)
+
+    // A handoff stops the turn and what it left running; the request keeps the same list the move's continuation names.
+    owner.submit(id, randomUUID(), "handed")
+    await dispatched(owner, owner.snapshot(id)!.requests.length - 1)
+    const handing = emitters.at(-1)!
+    handing.emit({ type: "live-agent", id: handing.binding, agent: server })
+    const paused = await owner.handOff(id)
+    assert.deepEqual(paused?.stopped, ["npm run dev"])
+    handing.emit({ type: "live-session", session: session(handing.binding, { status: "ready", lastStop: "cancelled" }) })
+    await waitFor(() => owner.snapshot(id)?.requests.at(-1)?.status === "interrupted", "the handed-off turn did not settle")
+    const handed = owner.snapshot(id)!.requests.at(-1)?.interruption
+    assert.equal(handed?.reason, "handed-off")
+    assert.deepEqual(handed?.stopped, paused?.stopped, "one list: what the request keeps is what the continuation names")
+  } finally {
+    owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+  console.log("PASS: after Mako restarts, a turn its exit cut short continues if the person chose so, naming what stopped, at most three times in five minutes; a handoff keeps the same list")
+}
+
 /** What the fixture driver does when the host cancels or closes it, set per case. */
 interface DriverHooks {
   cancel?: () => void
@@ -2198,6 +2320,7 @@ await refusedStartup()
 await settledVerdicts()
 await autoContinuedTurn()
 await providerExitContinued()
+await restartContinued()
 await coalescedToolBursts()
 await quietTurnsCarryLastActivity()
 await nativeActivityLastsItsTurn()

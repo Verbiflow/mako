@@ -29,11 +29,11 @@ import {
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
 import { latestPendingQuestion, retireQuestionsForInput } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyNativeAgent } from "../contracts/native-agents.js"
-import { activeWork } from "../contracts/background-work.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
 import type { ContextBreakdown, LivePermissionResponse, LiveSessionState, PromptAttachment } from "../contracts/providers-acp.js"
 import { signInPause } from "../contracts/sign-in-hold.js"
 import type { Actor } from "../contracts/thread-identity.js"
+import type { ConversationSettings } from "../contracts/turn-continuation.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
@@ -44,6 +44,7 @@ import { LiveActions } from "./live-actions.js"
 import { LiveApprovals } from "./live-approvals.js"
 import { LiveAssets, promptFingerprint } from "./live-assets.js"
 import { LiveAutoContinue } from "./live-auto-continue.js"
+import { stoppedWork } from "./interrupted-turn.js"
 import { LiveCheckpoints } from "./live-checkpoints.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch } from "./live-dispatch.js"
@@ -60,6 +61,7 @@ import { LiveMoves } from "./live-moves.js"
 import { LiveQuestions } from "./live-questions.js"
 import { LiveRecords } from "./live-records.js"
 import { LiveRelocations } from "./live-relocations.js"
+import { LiveRestarts } from "./live-restarts.js"
 import { ContextBundles } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
@@ -98,6 +100,7 @@ export class LiveConversations {
   private readonly events: LiveEvents
   private readonly dispatch: LiveDispatch
   private readonly closing: LiveClosing
+  private readonly restarts: LiveRestarts
   /** Which Sessions this environment may run, and moving Threads to another. */
   readonly moves: LiveMoves
   /**
@@ -112,6 +115,7 @@ export class LiveConversations {
     this.dependencies = dependencies
     this.admission = dependencies.admission ?? new Admission()
     this.assets = new LiveAssets(join(dependencies.root, "assets"))
+    this.restarts = new LiveRestarts(dependencies.root, dependencies.emit)
     this.threads = new LiveThreads(dependencies)
     this.records = new LiveRecords(dependencies, {
       busy: (resident) => {
@@ -232,7 +236,7 @@ export class LiveConversations {
     const { actions, approvals, questions, checkpoints, assets, transfers, records } = this
     this.events = new LiveEvents(access, { actions, approvals, questions, checkpoints, assets })
     this.dispatch = new LiveDispatch(access, { actions, checkpoints, transfers })
-    this.closing = new LiveClosing(access, { records, actions, approvals, transfers })
+    this.closing = new LiveClosing(access, { records, actions, approvals, transfers, restarts: this.restarts })
     this.threads.registerJournals(records.open())
     if (dependencies.holdHistory) this.scheduleSettle(SETTLE_AFTER_START_MS)
   }
@@ -838,7 +842,7 @@ export class LiveConversations {
     const active = this.activeRequest(id)
     const stopped = resident ? stoppedWork(resident.snapshot, active !== undefined) : []
     if (active) {
-      await this.stopRequest(id, active, "handed-off")
+      await this.stopRequest(id, active, "handed-off", stopped)
       return { requestId: active, stopped }
     }
     if (!resident || !stopped.length) return undefined
@@ -846,6 +850,33 @@ export class LiveConversations {
     const left = [...resident.snapshot.requests].reverse().find((request) => request.status !== "canceled" && request.status !== "queued" && request.status !== "held")
     await this.cancel(id)
     return left ? { requestId: left.id, stopped } : undefined
+  }
+
+  conversationSettings(): ConversationSettings {
+    return this.restarts.settings()
+  }
+
+  setConversationSettings(settings: ConversationSettings): ConversationSettings {
+    return this.restarts.set(settings)
+  }
+
+  /**
+   * Continues the turns the host before this one cut short as it quit,
+   * restarted or updated, when the person chose so (`LiveRestarts`): each
+   * is scheduled as a dropped connection's is (`LiveAutoContinue.schedule`),
+   * reopening its session, so its footer says Mako is continuing it.
+   */
+  continueRestarted(): void {
+    for (const { conversationId, requestId } of this.restarts.take()) {
+      try {
+        const resident = this.records.load(conversationId)
+        if (!resident) continue
+        this.autoContinue.schedule(resident, requestId, true)
+        if (resident.autoContinue) this.flush(resident)
+      } catch (error) {
+        hostWarn("live", "a turn Mako's exit cut short wasn't continued; it waits for Continue turn", { conversation: conversationId, error: errorMessage({ error }) })
+      }
+    }
   }
 
   /** Continues a turn cut short, as Mako, now; see `LiveAutoContinue.continueNow`. */
@@ -925,9 +956,10 @@ export class LiveConversations {
 
   /**
    * Stops the running request. `handed-off`: Mako stops it to hand the Thread to another machine, which continues it
-   * (`continueTurn`); its queued messages are held, to go with it.
+   * (`continueTurn`); its queued messages are held, to go with it, and the interruption keeps the background work
+   * that stops with it (`stopped`).
    */
-  stopRequest(id: string, requestId: string, reason: "stopped" | "handed-off" = "stopped"): Promise<boolean> {
+  stopRequest(id: string, requestId: string, reason: "stopped" | "handed-off" = "stopped", stopped: string[] = []): Promise<boolean> {
     const previous = this.stops.get(id)
     if (previous?.requestId === requestId) return previous.result
     if (this.activeRequest(id) !== requestId) return Promise.resolve(false)
@@ -938,6 +970,7 @@ export class LiveConversations {
     const opening = resident.opening
     resident.stopping = requestId
     resident.stoppingFor = reason
+    resident.stoppingWork = stopped.length ? stopped : undefined
     const result = this.cancelRequest(id, requestId).then(async () => { if (opening) await this.close(id); return true }).catch((error) => { this.stops.delete(id); throw error })
     this.stops.set(id, { requestId, result })
     return result
@@ -1191,6 +1224,8 @@ export class LiveConversations {
         goal: previous.goal !== snapshot.goal ? (snapshot.goal ?? null) : undefined,
         side: previous.side !== snapshot.side ? (snapshot.side ?? null) : undefined,
         historyFailure: previous.historyFailure !== snapshot.historyFailure ? (snapshot.historyFailure ?? null) : undefined,
+        harnessTurns: previous.harnessTurns !== snapshot.harnessTurns ? snapshot.harnessTurns : undefined,
+        spentThrough: previous.spentThrough !== snapshot.spentThrough ? (snapshot.spentThrough ?? null) : undefined,
         control:
           previous.control !== snapshot.control ? snapshot.control : undefined,
         base: previous.base !== snapshot.base ? snapshot.base : undefined,
@@ -1236,13 +1271,3 @@ export class LiveConversations {
   }
 }
 
-/**
- * The background work a handoff stops, in words the agent knows it by: each active entry of its roster
- * (`activeWork`; while a turn runs, only what it sent to the background) by its command line or prompt, else its
- * title; and, where the harness counts more than its roster lists, how many more.
- */
-function stoppedWork(snapshot: Pick<LiveSnapshot, "session" | "nativeAgents">, turnRunning: boolean): string[] {
-  const listed = activeWork(snapshot.nativeAgents).filter((agent) => !turnRunning || agent.background === true).map((agent) => agent.detail ?? agent.title)
-  const counted = snapshot.session.backgroundTasks ?? 0
-  return counted > listed.length ? [...listed, `${counted - listed.length} more background task${counted - listed.length === 1 ? "" : "s"} the harness counted`] : listed
-}

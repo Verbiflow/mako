@@ -144,7 +144,7 @@ class EntryDrawing {
           this.marker(entry, at, { label: entry.reason, ...entry.detail !== undefined && { detail: entry.detail }, ...entry.cause && { cause: entry.cause }, ...entry.body && { body: entry.body }, ...entry.tone && { tone: entry.tone }, ...entry.source && { source: entry.source } }, true)
           break
         case "event":
-          this.marker(entry, at, { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, setup: entry.setup, source: entry.source, cause: entry.cause, limit: entry.limit }, false)
+          this.marker(entry, at, { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, setup: entry.setup, source: entry.source, cause: entry.cause, limit: entry.limit, retries: entry.retries }, false)
           break
         case "unread":
           this.marker(entry, at, unreadNote(entry), false)
@@ -248,6 +248,18 @@ class EntryDrawing {
     this.messages.push(message)
     this.starts.push(at)
   }
+}
+
+/**
+ * The harness's own id for the call a transcript row draws: what `toolBlocks`
+ * made the row's id from (a live turn's number or a saved message's id, then
+ * the entry's). A roster entry names its call by this id (`toolId`).
+ */
+export function callEntryId(callId: string): string {
+  const live = /^\d+:/.exec(callId)
+  if (live) return callId.slice(live[0].length)
+  const saved = callId.indexOf("-tool-")
+  return saved >= 0 ? callId.slice(saved + "-tool-".length) : callId
 }
 
 /** A call and, once it returned or is shown cut short, its result. */

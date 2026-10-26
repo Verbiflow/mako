@@ -121,6 +121,8 @@ export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: strin
     goal: snapshot.goal,
     side: snapshot.side,
     requests: snapshot.requests,
+    harnessTurns: snapshot.harnessTurns,
+    spentThrough: snapshot.spentThrough,
     pendingPrompts,
     base: snapshot.base,
     baseSource: snapshot.baseSource,
@@ -334,6 +336,8 @@ export function applyLiveBatch(batch: LiveBatch): void {
       goal: batchGoal(batch, current),
       side: batchSide(batch, current),
       historyFailure: batchHistoryFailure(batch, current),
+      harnessTurns: batch.harnessTurns ?? current.harnessTurns,
+      spentThrough: batch.spentThrough === undefined ? current.spentThrough : (batch.spentThrough ?? undefined),
       requests: requests ?? current.requests,
       permission: batch.permissions
         ? (batch.permissions[0] ?? null)
@@ -399,6 +403,8 @@ export function applyLiveBatch(batch: LiveBatch): void {
     goal: batchGoal(batch, current),
     side: batchSide(batch, current),
     historyFailure: batchHistoryFailure(batch, current),
+    harnessTurns: batch.harnessTurns ?? current.harnessTurns,
+    spentThrough: batch.spentThrough === undefined ? current.spentThrough : (batch.spentThrough ?? undefined),
     nativePaths: batch.control
       ? batch.control.bindings.flatMap((binding) =>
           binding.path ? [binding.path] : []

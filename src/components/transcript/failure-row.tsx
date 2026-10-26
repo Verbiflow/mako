@@ -3,6 +3,7 @@ import { FailedRequestsContext } from "./failed-requests"
 import { ChevronRightIcon, CircleAlertIcon, MoreHorizontalIcon } from "lucide-react"
 import { recoveryGlyph } from "./recovery-glyph"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
+import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
 import { Collapse } from "@/components/ui/collapse"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { useCopy } from "@/components/ui/use-copy"
@@ -32,17 +33,28 @@ export function ExchangeFailure({ requestId }: { requestId?: string }) {
 }
 
 /**
- * A turn that ended on an error a saved transcript recorded, with no live
- * request behind it to recover: the outcome in one line, the words the
- * provider gave behind Details.
+ * A turn that ended on an error a transcript recorded, with no live request
+ * behind it to recover: the outcome in one line, named by the same rules a
+ * live failure is (`classifyProviderFailure`), or the provider's own first
+ * line when no rule knows it; what to do, when a rule says; the provider's
+ * whole words behind Details.
  */
 export function TurnError({ error }: { error: string }) {
   const [open, setOpen] = useState(false)
+  const { liveId } = useTranscriptSource()
+  useHarnessIdentity()
+  const harness = useAcp((state) => {
+    const conversation = liveId ? state.conversations[liveId] : undefined
+    return conversation?.kind === "live" ? conversation.session.harness : undefined
+  })
+  const failure = classifyProviderFailure(error, harness ? harnessLabel(harness) : "The agent")
+  const known = failure.kind !== "unknown"
   return (
-    <div role="alert" data-event-error className="flex items-start gap-2 text-ui">
+    <div role="alert" data-event-error={failure.kind} className="flex items-start gap-2 text-ui">
       <CircleAlertIcon aria-hidden className="mt-[3px] size-3.5 shrink-0 text-negative" />
       <div className="min-w-0 flex-1">
-        <p className="text-foreground">This turn ended with an error</p>
+        <p className="text-foreground">{known ? failure.title : error.trim().split("\n", 1)[0]}</p>
+        {known ? <p className="text-muted-foreground">{failure.guidance}</p> : null}
         <DetailsToggle className="-ml-1.5" open={open} onToggle={() => setOpen((value) => !value)} />
         <Collapse open={open}>
           <p data-provider-error className="mt-1.5 max-h-40 overflow-y-auto border-l border-hairline pl-3 font-mono text-code break-words whitespace-pre-wrap text-faint">{error}</p>

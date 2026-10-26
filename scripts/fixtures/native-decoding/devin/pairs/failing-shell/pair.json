@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#incredible-bream",
+      "path": ".local/share/devin/cli/sessions.db#joyous-nation",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/fc7de7d3-a24e-40f4-b589-95fbc781e5cc.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/ac2c0631-ac5d-41d3-b7b0-b8bf941ff1cd.db",
       "known": []
     }
   ],

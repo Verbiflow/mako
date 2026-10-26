@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#fortune-wednesday",
+      "path": ".local/share/devin/cli/sessions.db#flint-cookie",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/140b8494-05a8-4f1e-a917-709f8801d6ec.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/62249014-bf58-4805-84bd-e3eb5914aa5e.db",
       "known": []
     }
   ],

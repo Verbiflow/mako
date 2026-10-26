@@ -4,6 +4,7 @@ import {
   durationText,
   INTERRUPTED,
   MCP_SERVER_FAILED,
+  retriesLabel,
   TURN_ENDED,
   TURN_FAILED,
   type EventTone,
@@ -21,7 +22,8 @@ import {
  * - a cause: background work settled and the provider started a turn on it,
  *   drawn where a prompt would stand;
  * - Mako's own line: a turn Mako started (a continuation, a move, a goal);
- * - ambient: a state change inside a turn (compaction, model, review mode);
+ * - ambient: a state change inside a turn (compaction, model, review mode,
+ *   a provider's retries, recovered or not: a failure after them says itself);
  * - attention: something failed or wants a person (`tone`).
  */
 export type EventGlyph =
@@ -41,6 +43,7 @@ export type EventGlyph =
   | "hook"
   | "key"
   | "limit"
+  | "retry"
   | "notice"
   | "warning"
   | "error"
@@ -155,6 +158,8 @@ export function eventWords(note: TranscriptEvent): EventWords {
     if (note.tone && !words.tone) words.tone = note.tone
     return words
   }
+  // A provider's retries, quiet either way: the outcome and how many, the provider's words for what failed, and how long they took.
+  if (note.retries) return timed(said("retry", retriesLabel(note.retries), note.detail), note.retries.durationMs)
   if (note.label === MCP_SERVER_FAILED) {
     const { server, reason } = mcpServer(note)
     return said("mcp", server ? `MCP server ${server} didn't start` : "An MCP server didn't start", reason, note.tone)
@@ -211,6 +216,18 @@ export function limitWords(note: TranscriptEvent, refused: readonly TurnCause[])
   const detail = [words.detail, ...folded].filter(Boolean).join(" · ")
   if (detail) words.detail = detail
   return words
+}
+
+/**
+ * The events that mark a boundary in the conversation rather than a step in
+ * the work: the context was compacted, the model changed, the turn stopped.
+ * They are drawn as a divider across the column, and a folded turn keeps
+ * them in view.
+ */
+const BOUNDARY_GLYPHS: ReadonlySet<EventGlyph> = new Set(["compaction", "model", "stop"])
+
+export function isBoundary(words: Pick<EventWords, "glyph">): boolean {
+  return BOUNDARY_GLYPHS.has(words.glyph)
 }
 
 /** One line for a navigator or a label: the words without their glyph. */

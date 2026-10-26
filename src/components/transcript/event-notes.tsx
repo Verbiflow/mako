@@ -1,6 +1,6 @@
 import { MCP_SERVER_FAILED, type TranscriptEvent, type TurnCause } from "@mako/sessions/events"
 import { Prose } from "@/components/transcript/markdown"
-import { eventWords, limitWords, setupWords } from "@/lib/transcript-events"
+import { eventWords, isBoundary, limitWords, setupWords } from "@/lib/transcript-events"
 import { textOf } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { Exchange } from "@/lib/exchanges"
@@ -44,14 +44,18 @@ export function EventNotes({ messages, inline, refused }: { messages: readonly C
 
 type Origins = (MessageOrigin | undefined)[]
 
-/** The words a marker reads as, and what opens under it: its body, or its own words when the line may not fit them. */
+/**
+ * The words a marker reads as, and what opens under it: its body, or its own
+ * words when the line may not fit them. A boundary in the conversation (a
+ * compaction, a model change, a stop) is a divider across the column.
+ */
 function EventNote({ note, origins }: { note: TranscriptEvent; origins: Origins }) {
   const words = eventWords(note)
   // A long line may not fit, so its whole opens under it. A cause words the
   // line from what settled, and the provider's sentence would only repeat it.
   const quoted = note.cause === undefined && words.title.length + (words.detail?.length ?? 0) > LONG_LINE
   return (
-    <EventLine words={words} data-event={note.label} action={<ShowOriginal origins={origins} />}>
+    <EventLine words={words} variant={isBoundary(words) ? "divider" : "line"} data-event={note.label} action={<ShowOriginal origins={origins} />}>
       {note.body || quoted ? <NoteBody note={note} quoted={quoted} /> : null}
     </EventLine>
   )
