@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#blend-forgery",
+      "path": ".local/share/devin/cli/sessions.db#atlantic-writing",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/4f0ca1bb-d6ac-4713-87f9-a47c24ee3c34.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/14af10e8-d095-42d1-a11b-5ca0fc4956fc.db",
       "known": [
         {
           "side": "-",

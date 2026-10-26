@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#eggplant-climb",
+      "path": ".local/share/devin/cli/sessions.db#cosmic-tenor",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/a02ee0fb-f088-4c04-a6ca-5d4a5f80d03f.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/d96b3a21-7c86-44ba-bb62-d8f2d11548a2.db",
       "known": []
     }
   ],

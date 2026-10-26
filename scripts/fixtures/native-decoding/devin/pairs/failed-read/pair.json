@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#gleaming-ferret",
+      "path": ".local/share/devin/cli/sessions.db#saber-target",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/ed52fd33-9c90-4dae-b123-24b0bd58229a.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/54150396-e6cc-4d1a-ab0a-5e77a42c31a6.db",
       "known": []
     }
   ],

@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#working-coaster",
+      "path": ".local/share/devin/cli/sessions.db#colossal-rabbit",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/e7da3e36-9f57-405a-880b-495874ced503.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/19d00965-06f8-4ab1-b63a-766449cfcf02.db",
       "known": [
         {
           "side": "-",

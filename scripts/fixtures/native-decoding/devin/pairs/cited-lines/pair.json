@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#comet-knee",
+      "path": ".local/share/devin/cli/sessions.db#awake-makemake",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/59316026-3437-4707-8d3f-ddb0b9ce031b.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/b6972a5d-29cd-4373-a0ee-3ac3584ad1fb.db",
       "known": [
         {
           "side": "-",

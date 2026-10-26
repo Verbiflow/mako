@@ -95,14 +95,9 @@ export const DEVIN_VOCABULARY = defineVocabulary({
       SETUP_NOTICES,
       ...cutOffTurn(["tool", "text", "thinking"], "Devin resumes without a call cut off before its result (history.branches), and sessions.db keeps none of the node it began: the flows of 2026-10-16 stream a killed turn's call and the words before it (bead-night) that the record lacks."),
       {
-        holds: "stream",
-        entry: { type: "event", label: /^(Subagent ".*"|A subagent) / },
-        why: "The host draws a background subagent's end mid-turn from Devin's own notifications, by its clock (acp.ts announceProviderTurn); sessions.db keeps the subagent's call, not the marker, as the flows of 2026-10-15 show.",
-      },
-      {
         holds: "order",
         entry: { type: "tool" },
-        why: "Calls the model asked for together: Devin sends the one it started first first live, and keeps them in the order the model wrote them, as the decode pairs' plan-mode recording shows.",
+        why: "Calls the model asked for together: Devin sends the one it started first first live, and keeps them in the order the model wrote them, as the plan-mode decode pair recorded on Devin's own model (3000.11.205, 2026-10-25) showed; the sealed pairs' model makes one call a step.",
       },
     ],
   },

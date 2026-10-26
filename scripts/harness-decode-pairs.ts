@@ -46,12 +46,13 @@ import { OpenCodeServers } from "@mako/host/harnesses/opencode/servers"
 import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/permissions"
 import { createDevinAcpSource } from "@mako/host/harnesses/devin/acp"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
-import { acpClientCapabilities, TURN_CONTENT, type AcpProviderTurnObserver, type ProviderAcpSource } from "@mako/host/harnesses/acp-source"
+import { acpClientCapabilities, midTurnMarker, TURN_CONTENT, type AcpProviderTurnObserver, type ProviderAcpSource } from "@mako/host/harnesses/acp-source"
 import { describeLeaks, literally, machineIdentity, rewriteDatabase, scrubJsonLines, scrubTree, treeLeaks, type Substitution } from "./fixture-privacy.ts"
 import { DEVIN_APP_USER, differences, liveDrawing, PairSchema, PAIRS_FOLDER, replayDrawings, storeDrawing, storeReader, drawing, type Difference, type Known, type Pair } from "./decode-compare.ts"
 import { RpcMessage, rpcPeer, sandboxed, stop, strayStores, type Sandbox } from "./harness-sandbox.ts"
 import { FIXTURE_ROOT, readRecording, type Frame, type Opening, type Prompt, type PromptFile, type Recording } from "./native-decoding.ts"
-import { scriptedModel } from "./scripted-model.ts"
+import { scriptedModel, type ScriptedRequest } from "./scripted-model.ts"
+import { scriptedWindsurf } from "./scripted-windsurf.ts"
 import { planFile, SCENARIOS, script, STOP_AFTER_MS, type Call, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
@@ -73,10 +74,11 @@ const servers = new OpenCodeServers()
  *   npm run harness:decode-pairs -- grok --write      keep what was recorded
  *   npm run harness:decode-pairs -- codex --native <binary> --write
  *                                                     another build of one harness, kept as <scenario>@<version>
- *   npm run harness:decode-pairs -- devin --sealed    only harnesses the scripted model drives; one
+ *   npm run harness:decode-pairs -- cursor --sealed   only harnesses the scripted model drives; one
  *                                                     whose pairs run on its own model is skipped
  *
- * The harness launches as Mako launches it; its model is `scripted-model.ts`,
+ * The harness launches as Mako launches it; its model is `scripted-model.ts`
+ * (Devin's, behind a stand-in for Windsurf's API server: `scripted-windsurf.ts`),
  * so no account is used and nothing is sent anywhere. `--write` keeps each
  * pair under `fixtures/native-decoding/<harness>/pairs/<scenario>/` with the
  * sandbox's paths replaced by `PAIR_ROOT` and the recording machine's identity
@@ -222,13 +224,13 @@ const grok: Recorder = {
       const launch = await grokAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: grokAcpSource.access?.default })
       if (!launch) throw new Error("Grok's ACP source declined to launch")
       launch.configureEnvironment?.(env)
-      const { messages, prompts, openings } = await acpSession({ command: launch.command, args: launch.args, env, cwd: sandbox.project, source: grokAcpSource, rewind: grokRewind, scriptDone: steps.done }, scenario.turns)
+      const { messages, prompts, openings, drawn } = await acpSession({ command: launch.command, args: launch.args, env, cwd: sandbox.project, source: grokAcpSource, rewind: grokRewind, scriptDone: steps.done }, scenario.turns)
       scripted("Grok", scenario, model.requests, steps)
       const [file] = await storeReader("grok", sandbox.home).discover()
       if (!file) throw new Error("Grok wrote no session to its store")
       return {
         version,
-        recording: { harness: "grok", session: { settings: { model: null } }, native: { version, origin: "captured" }, messages, prompts, openings },
+        recording: { harness: "grok", session: { settings: { model: null } }, native: { version, origin: "captured" }, messages, prompts, openings, ...drawn && { drawn } },
         store: file.path,
       }
     } finally {
@@ -446,7 +448,7 @@ function claudeMode(turn: Turn | undefined): "plan" | "default" {
 }
 
 /** The harness asked the model once per step: no fewer, as a turn it never asked for; no more, as an unscripted request. */
-function scripted(harness: string, scenario: Scenario, requests: Awaited<ReturnType<typeof scriptedModel>>["requests"], steps: Script): void {
+function scripted(harness: string, scenario: Scenario, requests: readonly ScriptedRequest[], steps: Script): void {
   let turn = 0
   const listed = () => requests.map((request) => `${request.path}${request.conversation ? ` (turn: ${steps.taken[turn++] ?? "?"})` : ""}${request.unscripted ? " (unscripted)" : ""}`).join(", ")
   const unscripted = requests.filter((request) => request.unscripted).length
@@ -915,21 +917,37 @@ function devinPromptRuns(wire: Pick<Recording, "messages" | "prompts">): void {
   })
 }
 
-/** The person's Devin sign-in, which a pair's sandbox links, as Mako's account profiles do (`linkDataHome`), and never copies. */
-const DEVIN_CREDENTIALS = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "devin", "credentials.toml")
+const DEVIN_TOOLS: ToolVocabulary = {
+  // A read-only subagent, as Devin's own model starts one to read files (`subagent_explore`).
+  subagent: { start: ({ description, prompt, background }) => ({ name: "run_subagent", arguments: { title: description, task: prompt, profile: "subagent_explore", ...background && { is_background: true } } }) },
+  monitor: { absent: "Devin 3000.11.205 defines no tool that reports what a command prints as it comes; its model reads a background shell's output only by asking (`get_output`, native-tools/devin-3000.11.205.json)" },
+  read: (path, lines) => ({ name: "read", arguments: { file_path: path, ...lines } }),
+  shell: (command) => ({ name: "exec", arguments: { command } }),
+  edit: (path, from, to) => ({ name: "edit", arguments: { file_path: path, old_string: from, new_string: to } }),
+  viewImage: (path) => ({ name: "read", arguments: { file_path: path } }),
+  // Its todo items have no id.
+  todos: (items) => ({ name: "todo_write", arguments: { todos: items.map(({ content, status }) => ({ content, status })) } }),
+  search: (pattern) => ({ name: "grep", arguments: { pattern } }),
+  codeMode: { absent: "Devin 3000.11.205 names no tool that runs code calling its other tools (native-tools/devin-3000.11.205.json); on 3000.10.23 its model ran the code-mode prompt as one chained `exec`" },
+  ask: (question) => ({ name: "ask_user_question", arguments: { questions: [question] } }),
+  // Its model marks a cited line up for its client to link, as Devin 3000.10.23's own model did.
+  cite: (path, line) => `<ref_snippet file="${path}" lines="${line}" />`,
+  // Devin renders the plan file from `write_plan`; `exit_plan_mode` asks for its approval, after which the turn goes on in Code mode.
+  plan: (plan) => [
+    { call: () => ({ name: "write_plan", arguments: { title: "Plan", summary: "The steps, in order.", plan } }) },
+    { call: () => ({ name: "exit_plan_mode", arguments: { plan } }) },
+    { text: "The plan is approved." },
+  ],
+}
 
 /**
- * Devin over ACP, as Mako's ACP source launches it, in Mako's default mode.
- * The sandbox's data home links the person's `credentials.toml`, so Devin
- * signs in as them and writes its `sessions.db` in the sandbox, not in
- * their store. Its model answers for real, which spends usage.
+ * Devin over ACP, as Mako's ACP source launches it, in Mako's default mode,
+ * its model the scripted one behind a stand-in for Windsurf's API server
+ * (`scripted-windsurf.ts`). Its data home holds no `credentials.toml`, so
+ * it signs in with `WINDSURF_API_KEY`, to the stand-in only.
  */
 const devin: Recorder = {
-  model: {
-    kind: "own",
-    why: "Devin's model is behind Windsurf's API server, whose protocol the scripted model doesn't speak",
-    lacks: { codeMode: "Devin 3000.11.205 names no tool that runs code calling its other tools (native-tools/devin-3000.11.205.json); on 3000.10.23 its model ran the code-mode prompt as one chained `exec`" },
-  },
+  model: { kind: "scripted", tools: DEVIN_TOOLS },
   controls: {
     steer: "driven",
     // Mako's conversation process doesn't advertise `cognition.ai/revert` (only its fork process does, `devin/fork.ts`); the pair turns it on to read what a revert writes.
@@ -941,34 +959,44 @@ const devin: Recorder = {
   },
   keeps: (file) => file.endsWith("/devin/cli/sessions.db") || /\/Devin\/User\/(acp-messages\/[^/]+\.db|globalStorage\/state\.vscdb)$/.test(file),
   storeFolder: (store) => store.includes(`/${DEVIN_APP_USER}/`) ? store.slice(0, store.indexOf(`/${DEVIN_APP_USER}/`) + DEVIN_APP_USER.length + 1) : dirname(store),
-  secrets: async () => credentialValues(await readFile(DEVIN_CREDENTIALS, "utf8")),
   async record(sandbox, scenario) {
-    if (!existsSync(DEVIN_CREDENTIALS)) throw new Error("Devin isn't signed in; run `devin` once and sign in")
-    const data = sandbox.env.XDG_DATA_HOME
-    if (!data) throw new Error("The sandbox has no data home")
-    await mkdir(join(data, "devin"), { recursive: true })
-    await symlink(DEVIN_CREDENTIALS, join(data, "devin", "credentials.toml"))
-    const env: NodeJS.ProcessEnv = { ...sandbox.env, ...scenario.env }
-    const launch = await devinAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: devinAcpSource.access?.default })
-    if (!launch) throw new Error("Devin's ACP source declined to launch")
-    launch.configureEnvironment(env)
-    const version = await versionOf(launch.command)
-    const stillRunning = scenario.controls?.includes("still-running")
-    const { loads, ...wire } = await acpSession({
-      command: launch.command, args: launch.args, env, cwd: sandbox.project,
-      mode: devinAcpSource.access?.native?.edits, source: devinAcpSource, rewind: devinRewind,
-      meta: {
-        ...scenario.turns.some((turn) => turn.rewind !== undefined) && { "cognition.ai/revert": true },
-        // Devin.app 3.10.23 advertises it, and sends each prompt with a `clientMessageId`; Devin 3000.10.23 still sends no prompt back.
-        ...stillRunning && { "cognition.ai/messageGrouping": true },
-      },
-      promptMeta: stillRunning ? () => ({ "cognition.ai/clientMessageId": randomUUID() }) : undefined,
-    }, stillRunning ? scenario.turns : [...scenario.turns, DEVIN_APP_REOPENS])
-    devinPromptRuns(wire)
-    const [file] = await storeReader("devin", sandbox.home).discover()
-    if (!file) throw new Error("Devin wrote no session to its store")
-    const recording: Recording = { harness: "devin", session: { settings: { model: null } }, native: { version, origin: "captured" }, ...wire }
-    return { version, recording, store: file.path, others: [{ reader: "devin-ide", path: await devinAppJournal(sandbox.home, recording, loads) }] }
+    if (!existsSync(DEVIN_APP)) throw new Error(`A Devin pair keeps Devin.app's journal of the session, which only Devin.app's own message store writes, and ${DEVIN_APP} isn't installed`)
+    const config = sandbox.env.XDG_CONFIG_HOME
+    if (!config) throw new Error("The sandbox has no config home")
+    const steps = script(scenario, DEVIN_TOOLS, sandbox.project)
+    const model = await scriptedWindsurf({ reply: steps.reply, waits: steps.waits })
+    // Devin checks its update manifest at startup unless told not to, as Mako's host image tells it.
+    await mkdir(join(config, "devin"), { recursive: true })
+    await writeFile(join(config, "devin", "config.json"), JSON.stringify({ auto_update: false }))
+    const env: NodeJS.ProcessEnv = {
+      ...sandbox.env, ...scenario.env, WINDSURF_API_KEY: "mako-decode-pair",
+      WINDSURF_API_SERVER_URL: model.url, DEVIN_API_URL: model.url, WINDSURF_WEBSITE_URL: model.url, DEVIN_WEBAPP_URL: model.url,
+    }
+    try {
+      const launch = await devinAcpSource.launch({ appPath: process.cwd(), execPath: process.execPath, cwd: sandbox.project, env, access: devinAcpSource.access?.default })
+      if (!launch) throw new Error("Devin's ACP source declined to launch")
+      launch.configureEnvironment(env)
+      const version = await versionOf(launch.command)
+      const stillRunning = scenario.controls?.includes("still-running")
+      const { loads, ...wire } = await acpSession({
+        command: launch.command, args: launch.args, env, cwd: sandbox.project,
+        mode: devinAcpSource.access?.native?.edits, source: devinAcpSource, rewind: devinRewind, scriptDone: steps.done,
+        meta: {
+          ...scenario.turns.some((turn) => turn.rewind !== undefined) && { "cognition.ai/revert": true },
+          // Devin.app 3.10.23 advertises it, and sends each prompt with a `clientMessageId`; Devin 3000.10.23 still sends no prompt back.
+          ...stillRunning && { "cognition.ai/messageGrouping": true },
+        },
+        promptMeta: stillRunning ? () => ({ "cognition.ai/clientMessageId": randomUUID() }) : undefined,
+      }, stillRunning ? scenario.turns : [...scenario.turns, DEVIN_APP_REOPENS])
+      scripted("Devin", scenario, model.requests, steps)
+      devinPromptRuns(wire)
+      const [file] = await storeReader("devin", sandbox.home).discover()
+      if (!file) throw new Error("Devin wrote no session to its store")
+      const recording: Recording = { harness: "devin", session: { settings: { model: null } }, native: { version, origin: "captured" }, ...wire }
+      return { version, recording, store: file.path, others: [{ reader: "devin-ide", path: await devinAppJournal(sandbox.home, recording, loads) }] }
+    } finally {
+      await model.close()
+    }
   },
 }
 
@@ -1169,11 +1197,6 @@ const cursor: Recorder = {
   },
 }
 
-/** Every quoted value in a TOML credentials file that could be a secret: long, and not a URL. */
-function credentialValues(toml: string): string[] {
-  return [...toml.matchAll(/^\s*[\w-]+\s*=\s*"([^"]{16,})"\s*$/gm)].flatMap(([, value]) => value && !/^https?:/.test(value) ? [value] : [])
-}
-
 /** Fails, without saying what matched, when a recording or the store it names holds one of `secrets`. */
 async function credentialFree(pair: RecordedPair, secrets: readonly string[]): Promise<void> {
   if (!secrets.length) return
@@ -1268,7 +1291,7 @@ function prompted(at: number, text: string, attachments: readonly PromptAttachme
 }
 
 /** An ACP session as recorded, and the reply to each `session/load` a resume sent, in order. */
-type AcpWire = Pick<Recording, "messages" | "prompts" | "openings"> & { loads: JsonObject[] }
+type AcpWire = Pick<Recording, "messages" | "prompts" | "openings" | "drawn"> & { loads: JsonObject[] }
 
 /**
  * Prompts over ACP in one session, every message the agent sends recorded as
@@ -1281,9 +1304,11 @@ type AcpWire = Pick<Recording, "messages" | "prompts" | "openings"> & { loads: J
 /** The agent's own work after the prompts, as an ACP recording follows it (`acpSession`). */
 interface AgentWork {
   /** Background work the source reports running. */
-  running: number
+  background: number
   /** The agent announced a turn of its own that hasn't ended. */
   announced: boolean
+  /** A turn the agent started on its own runs: the client opened it, and the agent hasn't ended it. */
+  running: boolean
   observer?: AcpProviderTurnObserver
   /** What the turn it opens next is drawn with, as the client opens it. */
   opening?: NonNullable<Prompt["turn"]>
@@ -1320,10 +1345,14 @@ async function acpSession(
    * (`acp.ts`): background work the source reports running, and a turn the
    * agent announced it starts on its own until the agent ends it.
    */
-  const agentWork: AgentWork = { running: 0, announced: false, observer: input.source.providerTurns?.() }
+  const agentWork: AgentWork = { background: 0, announced: false, running: false, observer: input.source.providerTurns?.() }
+  const drawn: NonNullable<Recording["drawn"]> = []
   const background = input.source.observeBackground?.()
   let ownMoved = () => {}
+  /** A resume's `session/load` replays history, whose causes and ends the client reads as no session's yet (`acp.ts` sets its id once the load returns). */
+  let loading = false
   const observeOwn = (method: string, values: JsonObject) => {
+    if (loading) return
     let report = method === "session/update" ? undefined : background?.extension?.(method, values)
     let cause = method === "session/update" ? undefined : agentWork.observer?.cause?.(method, values)
     if (method === "session/update") {
@@ -1333,14 +1362,20 @@ async function acpSession(
       report = notification && background?.sessionUpdate?.(notification)
       cause = notification && agentWork.observer?.updateCause?.(notification)
     }
-    if (report && report.sessionId === opened) agentWork.running = report.running
+    if (report && report.sessionId === opened) agentWork.background = report.running
     if (cause && cause.sessionId === opened) {
-      agentWork.announced = true
-      // As the client takes it: a turn the agent opens now, or, said during a prompt's turn, one it opens once that ends (`wakes`).
-      if (!waitingOn || cause.wakes) agentWork.opening = { reason: cause.reason, ...cause.cause && { cause: cause.cause }, ...cause.body && { body: cause.body } }
+      // As the client takes it (`announceProviderTurn` in `acp.ts`): a turn the agent opens now, or one it opens once the running turn ends
+      // (`wakes`); otherwise, for an agent that takes it into the running turn, a marker drawn there.
+      if (!(waitingOn || agentWork.running) || cause.wakes) {
+        agentWork.announced = true
+        agentWork.opening = { reason: cause.reason, ...cause.cause && { cause: cause.cause }, ...cause.body && { body: cause.body } }
+      } else if (agentWork.observer?.midTurn === "marker") drawn.push({ at: messages.length, update: z.record(z.string(), z.json()).parse(JSON.parse(JSON.stringify({ kind: "event", ...midTurnMarker(cause) }))) })
     }
     const ended = agentWork.observer?.ended(method, values)
-    if (ended && ended.sessionId === opened && !waitingOn) agentWork.announced = false
+    if (ended && ended.sessionId === opened && !waitingOn) {
+      agentWork.announced = false
+      agentWork.running = false
+    }
     ownMoved()
   }
   /** A prompt in flight: its turn's end is the prompt's, not the agent's own. */
@@ -1353,14 +1388,16 @@ async function acpSession(
     received: (message) => {
       if (!message.method) return
       if (message.method === "session/update" && opened && AcpNotified.safeParse(message.params).data?.sessionId !== opened) return
-      // As the client opens a turn the agent announced: at its first content while no prompt's turn runs, the cause drawn before it (`acp.ts`).
+      // Recorded after what the client drew for it (a turn it opens, a marker), as `acp.ts` records it.
+      if (message.id === undefined) observeOwn(message.method, params(message))
+      // As the client opens a turn the agent announced: at its first content while no turn runs, the cause drawn before it.
       const kind = message.method === "session/update" ? AcpUpdateKind.safeParse(message.params).data?.update.sessionUpdate : undefined
-      if (kind && TURN_CONTENT.has(kind) && agentWork.opening && !waitingOn) {
+      if (kind && TURN_CONTENT.has(kind) && agentWork.opening && !waitingOn && !agentWork.running) {
         sent.push({ at: messages.length, turn: agentWork.opening })
         agentWork.opening = undefined
+        agentWork.running = true
       }
       messages.push(message.id === undefined ? { method: message.method, params: params(message) } : { request: message.method, params: params(message) })
-      if (message.id === undefined) observeOwn(message.method, params(message))
       if (message.method === "session/update" && AcpToolStarted.safeParse(message.params).success) {
         const stopping = stopTurn
         stopTurn = undefined
@@ -1444,7 +1481,8 @@ async function acpSession(
       reads = await initialize()
       const opening: Opening = { at: messages.length }
       openings.push(opening)
-      const reply = await peer.call("session/load", { sessionId: session.sessionId, cwd: input.cwd, mcpServers: [] })
+      loading = true
+      const reply = await peer.call("session/load", { sessionId: session.sessionId, cwd: input.cwd, mcpServers: [] }).finally(() => { loading = false })
       messages.push({ response: "session/load", result: z.record(z.string(), z.json()).parse(reply) })
       const loaded = AcpLoadedSession.parse(reply)
       opening.opened = messages.length
@@ -1470,7 +1508,22 @@ async function acpSession(
       }
       sent.push({ at: messages.length, text, steered: true })
     }
-    for (const turn of turns) {
+    // The agent's own work goes on after the last prompt: its background work, and the turn it runs on what that reports.
+    // Followed on the scripted model, which says when every step was asked for; a recording on the harness's own model ends with its last prompt.
+    let settling: Promise<void> | undefined
+    const ownWork = () => settling ??= !input.scriptDone ? Promise.resolve() : new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`${input.command}'s own work after the last prompt didn't settle within ${TURN_MS / 1000}s (running ${agentWork.background}, a turn announced: ${agentWork.announced}, every step asked for: ${input.scriptDone?.() ?? "unscripted"})`)), TURN_MS)
+      ownMoved = () => {
+        if (agentWork.background > 0 || agentWork.announced || input.scriptDone?.() === false) return
+        clearTimeout(timer)
+        resolve()
+      }
+      ownMoved()
+    })
+    const lastPrompted = turns.findLastIndex((turn) => !turn.resume && turn.rewind === undefined)
+    for (const [index, turn] of turns.entries()) {
+      // A resume after the last prompt (Devin.app opening the session again) waits for that work, as an idle agent ends only once it's done.
+      if (index > lastPrompted) await ownWork()
       if (turn.rewind !== undefined) {
         if (!input.rewind) throw new Error(`decode-pairs doesn't rewind ${input.command}`)
         await input.rewind(call, session.sessionId, turn.rewind)
@@ -1511,18 +1564,8 @@ async function acpSession(
       await steered
       steered = undefined
     }
-    // The agent's own work goes on after the last prompt: its background work, and the turn it runs on what that reports.
-    // Followed on the scripted model, which says when every step was asked for; a recording on the harness's own model ends with its last prompt.
-    if (input.scriptDone) await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`${input.command}'s own work after the last prompt didn't settle within ${TURN_MS / 1000}s (running ${agentWork.running}, a turn announced: ${agentWork.announced}, every step asked for: ${input.scriptDone?.() ?? "unscripted"})`)), TURN_MS)
-      ownMoved = () => {
-        if (agentWork.running > 0 || agentWork.announced || input.scriptDone?.() === false) return
-        clearTimeout(timer)
-        resolve()
-      }
-      ownMoved()
-    })
-    return { messages, prompts: sent, openings, loads }
+    await ownWork()
+    return { messages, prompts: sent, openings, loads, ...drawn.length && { drawn } }
   } finally {
     peer.close()
     await stop(child)

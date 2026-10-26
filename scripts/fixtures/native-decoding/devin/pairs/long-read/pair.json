@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#obsidian-ballcap",
+      "path": ".local/share/devin/cli/sessions.db#rainy-tabletop",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/9d6d5294-3d6e-4ad1-93ed-046303848443.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/55b4bf87-3419-423e-9c84-27212838f8c4.db",
       "known": [
         {
           "side": "-",

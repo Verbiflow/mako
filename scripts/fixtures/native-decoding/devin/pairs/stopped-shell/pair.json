@@ -7,32 +7,32 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#berry-clover",
+      "path": ".local/share/devin/cli/sessions.db#glamorous-peach",
       "known": [
         {
           "side": "-",
-          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"tty\":true} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
+          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
           "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
         },
         {
           "side": "+",
-          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"tty\":true} canceled -> Canceled due to user interrupt",
+          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> Canceled due to user interrupt",
           "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
         }
       ]
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/0a6ba0a2-8a7f-458a-a148-5c3cc042b4bc.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/1c750a96-74c8-4390-94ef-5e4d10713e52.db",
       "known": [
         {
           "side": "-",
-          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"tty\":true} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
+          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
           "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
         },
         {
           "side": "+",
-          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"tty\":true} canceled -> Canceled due to user interrupt",
+          "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> Canceled due to user interrupt",
           "reason": "Devin 3000.11.205 records a call the person stopped with the result \"Canceled due to user interrupt\", not the output it had streamed before (the file's two lines, which live shows)."
         }
       ]
@@ -42,12 +42,12 @@
     "known": [
       {
         "side": "-",
-        "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"tty\":true} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
+        "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> The release ships on Friday.\\nQA signs off on Thursday.",
         "reason": "Devin 3000.11.205 replays a call the person stopped, when the session loads again, with the result it recorded, \"Canceled due to user interrupt\", not the output it had streamed live (the file's two lines)."
       },
       {
         "side": "+",
-        "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\",\"tty\":true} canceled -> Canceled due to user interrupt",
+        "line": "tool #1 shell exec {\"command\":\"tail -f notes.md\"} canceled -> Canceled due to user interrupt",
         "reason": "Devin 3000.11.205 replays a call the person stopped, when the session loads again, with the result it recorded, \"Canceled due to user interrupt\", not the output it had streamed live (the file's two lines)."
       }
     ]

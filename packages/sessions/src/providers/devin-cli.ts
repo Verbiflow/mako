@@ -3,6 +3,7 @@ import type { WriterEvidenceLookups } from "../record-evidence.js"
 import type { WriterEvidence } from "../record-writers.js"
 import {
   devinReferences,
+  devinImageName,
   devinPromptImages,
   devinMcpCall,
 } from "./devin-presentation.js"
@@ -716,18 +717,22 @@ const ReadRange = z.object({ offset: z.number().optional(), limit: z.number().op
 
 /** A subagent's report as the model read it (devin 3000.11.205): this header, then the report. */
 const SUBAGENT_REPORT = /^Subagent agent_id=\S+ completed successfully:\n\n/
+/** A background subagent's start as the model read it (devin 3000.11.205), its id and how to wait on it after. */
+const BACKGROUND_STARTED = /^Background subagent started with agent_id=/
 
 /**
  * A result Devin showed its client but didn't keep in its stored update
  * (devin 3000.10.23): a read was "N lines", and "N lines (truncated)" when
  * Devin cut it short of both the file's end and the lines asked for (about
  * 30 KB of a file read whole); the file itself stays the model's. A
- * subagent's was its report under `Subagent completed:` (3000.11.205). Any
- * other such result showed no words.
+ * subagent's was its report under `Subagent completed:`, and a background
+ * one's start only `Background subagent started.` (3000.11.205). Any other
+ * such result showed no words.
  */
 function devinClientResult(name: string, output: string, input: string | undefined): string {
   const report = name === "run_subagent" ? SUBAGENT_REPORT.exec(output) : null
   if (report) return `Subagent completed:\n${output.slice(report[0].length)}`
+  if (name === "run_subagent" && BACKGROUND_STARTED.test(output)) return "Background subagent started."
   const view = FILE_VIEW.exec(output)
   if (!view) return ""
   const [start, end, total] = [Number(view[1]), Number(view[2]), Number(view[3])]
@@ -794,6 +799,12 @@ const DEVIN_STOP_NOTICE = "[Response interrupted by user]"
  * that failed carries `chisel/tool_failure` with its reason.
  */
 const DEVIN_SUMMARY = "devin-rs/summary"
+/**
+ * The subagent a completion notification reports, which Devin 3000.10.23
+ * and 3000.11.205 tag it with; the 3000.6.14 notifications this reader also
+ * reads carry no tag.
+ */
+const DEVIN_REPORTING_AGENT = "subagent/agent_id"
 const DEVIN_TOOL_FAILURE = "chisel/tool_failure"
 /** Why a tool failed; a call the person stopped failed `Canceled`. */
 const DevinToolFailure = z.object({ reason: z.string() }).loose()
@@ -873,8 +884,8 @@ function translator(
   const withCall = (record: RecordRef, id: string): RecordRef | undefined =>
     acp.has(id) ? joined(record, { rows: [{ table: "tool_call_state", key: { session_id: sessionId, tool_call_id: id } }] }) : record
   const subagentCalls = new Map<string, string>()
-  /** Each background subagent's title, and when its call said it started. */
-  const subagentTitles = new Map<string, { title: string; at?: string }>()
+  /** Each background subagent's title, when its call said it started, and the prompt whose turn started it. */
+  const subagentTitles = new Map<string, { title: string; at?: string; turn?: string }>()
 
   return {
     push(row) {
@@ -895,6 +906,8 @@ function translator(
         const text = contentText(message.content)
         if (text.trim() === DEVIN_STOP_NOTICE) {
           running = false
+          // A stop ends the turn, which no longer waits on the subagents it started.
+          for (const started of subagentTitles.values()) if (started.turn === opener) started.turn = undefined
           turns.close()
           turns.queue({ kind: "event", source, label: "Interrupted" }, at)
           commit()
@@ -912,36 +925,48 @@ function translator(
         }
         const completion = parseSubagentCompletion(text)
         if (!completion) return
-        const state = completion.status === "completed" ? "completed" : "failed"
-        // Devin runs a turn on a completion that arrives while it is idle,
-        // and the subagent's report is what the turn opens on, as it is live.
-        if (!running) {
-          commit()
-          const started = subagentTitles.get(completion.id)
-          const from = Date.parse(started?.at ?? "")
-          const to = Date.parse(at ?? "")
-          const { reason, cause, body } = subagentTurn({
-            description: started?.title,
-            id: completion.id,
-            state,
-            durationMs: Number.isFinite(from) && to >= from ? to - from : undefined,
-            result: completion.output,
-          })
-          turns.sink.push({ kind: "event", id: source.record, at, label: reason, ...cause && { cause }, ...body && { body }, opensTurn: true })
+        const started = subagentTitles.get(completion.id)
+        subagentTitles.delete(completion.id)
+        const from = Date.parse(started?.at ?? "")
+        const to = Date.parse(at ?? "")
+        const { reason, cause, body } = subagentTurn({
+          description: started?.title,
+          id: completion.id,
+          state: completion.status === "completed" ? "completed" : "failed",
+          durationMs: Number.isFinite(from) && to >= from ? to - from : undefined,
+          result: completion.output,
+        })
+        // Devin 3000.10.23 and 3000.11.205 hold the turn that started a
+        // background subagent open until it reports, and take the report
+        // into that turn, where live draws it as a marker (`midTurn`), from
+        // an update that names no record of this one, so it cites none.
+        const held = started?.turn !== undefined && started.turn === opener
+        if (message.extensions?.[DEVIN_REPORTING_AGENT] !== undefined && (running || held)) {
           running = true
           turns.close()
+          turns.queue({ kind: "event", label: reason, ...cause && { cause }, ...body && { body } }, at)
           return
         }
+        // An untagged report that came mid-turn is the subagent's own entry in it.
+        if (running) {
+          turns.close()
+          turns.queue({
+            kind: "tool",
+            id: `subagent:${row.rowId}`,
+            title: "subagent",
+            name: "subagent",
+            status: completion.status === "completed" ? "completed" : "failed",
+            input: JSON.stringify({ agent_id: completion.id, status: completion.status }),
+            output: completion.output,
+          }, at)
+          return
+        }
+        // Devin runs a turn of its own on a report that comes while it is
+        // idle, opening on the report, as it is live.
+        commit()
+        turns.sink.push({ kind: "event", id: source.record, at, label: reason, ...cause && { cause }, ...body && { body }, opensTurn: true })
+        running = true
         turns.close()
-        turns.queue({
-          kind: "tool",
-          id: `subagent:${row.rowId}`,
-          title: "subagent",
-          name: "subagent",
-          status: state,
-          input: JSON.stringify({ agent_id: completion.id, status: completion.status }),
-          output: completion.output,
-        }, at)
         return
       }
       if (message.role === "user") {
@@ -1006,7 +1031,7 @@ function translator(
         const output = contentText(message.content)
         const title = subagentCalls.get(id)
         const agent = title ? /^Background subagent started with agent_id=([^\s.]+)/.exec(output)?.[1] : undefined
-        if (title && agent) subagentTitles.set(agent, { title, at })
+        if (title && agent) subagentTitles.set(agent, { title, at, turn: opener })
         turns.sink.reading(withCall(record, id))
         send(toolEnd(id, call, acp.get(id), message, output, cwd), at)
         const attachments = devinAttachments(message.content)
@@ -1351,7 +1376,7 @@ function storedImages(value: JsonValue | undefined): NativeStoredImage[] {
     else return []
     const attachment: AttachmentContent = {
       type: "attachment",
-      name: image.source_path ? basename(image.source_path) : "Image",
+      name: image.source_path ? devinImageName(image.source_path) : "Image",
       mimeType: image.mime_type,
       source,
     }
