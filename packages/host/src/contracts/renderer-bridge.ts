@@ -64,6 +64,7 @@ import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
+import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
@@ -452,6 +453,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     /* Whether this Mac's harness sign-ins are shared with the account's cloud machines; `cloud-sign-ins` events follow it. */
     cloudSignIns: () => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins"),
     cloudSignInsShare: (sharing: boolean) => invokeTrustedHost<CloudSignInsState>("mako:cloud-sign-ins-share", sharing),
+    /* A project's carried files (its recipe's `carry`) in Mako Cloud: what goes, the person's word, a file kept on this Mac. */
+    cloudCarriedFiles: (folder: string) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files", folder),
+    cloudCarriedFilesDecide: (folder: string, allowed: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-decide", folder, allowed),
+    cloudCarriedFilesKeep: (folder: string, path: string, keep: boolean) => invokeTrustedHost<CarriedFilesView>("mako:cloud-carried-files-keep", folder, path, keep),
     /** Starts the harness's own sign-in for Mako Cloud to keep; wait, paste and cancel as an account sign-in. */
 
     /* What this install reports to Mako, and what the person allows. */

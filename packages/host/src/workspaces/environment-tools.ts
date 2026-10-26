@@ -135,7 +135,7 @@ interface Deps {
   where?: RecipeWhere
   /** The account's authority for projects it keeps the recipes of, and each store's mirror of it. */
   recipes?: RecipeAccounts
-  /** Whether this host's environment has a value for a secret the recipe names, checked before a cloud start. */
+  /** Whether a named secret has a value here: the host's environment, or a carried file the account's store gave a cloud machine. */
   hasSecret?(name: string): boolean
   /** Whose app it is, in words, such as `the Thread "Fix login"`, to name whose app was stopped to make room. */
   whose?(app: AppKey): string | undefined
@@ -646,10 +646,11 @@ export function environmentTools(deps: Deps): EnvironmentTools {
   const startIn = async (current: Ready, names: string[] | undefined, again: () => Promise<StartOutcome>, anyway = false): Promise<StartOutcome> => {
     const picked = chosen(current.recipe, current.read, names)
     if (!picked.length) return { kind: "nothing" }
-    // On a cloud machine no carried file meets a named secret: one its environment lacks is said now, not as a crash midway.
+    // On a cloud machine a named secret comes from the account's secret store, in a carried file, or from the
+    // machine's environment: one neither has is said now, not as a crash midway.
     if (current.read.where?.place === "cloud") {
       const missing = (current.recipe.secretNames ?? []).filter((name) => !deps.hasSecret?.(name))
-      if (missing.length) throw new Error(`This cloud machine has no value for ${missing.join(", ")}, which the recipe names as ${missing.length === 1 ? "a secret" : "secrets"} the app reads, so nothing was started. A cloud machine gets a named secret from the account it works for; on this computer, the files carry copies meet it.`)
+      if (missing.length) throw new Error(`This cloud machine has no value for ${missing.join(", ")}, which the recipe names as ${missing.length === 1 ? "a secret" : "secrets"} the app reads, so nothing was started. A cloud machine gets the files the recipe carries from the person's account, once they copy them to the cloud in Settings › Apps; until then, or after they removed one there, it isn't here. Never ask for a value or write one yourself: tell the person what's missing.`)
     }
     const { app } = current.environment
     const before = await deps.processes.status(app)

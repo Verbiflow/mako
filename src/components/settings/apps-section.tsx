@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react"
+import type { CarriedFilesView, CarriedFileView } from "@mako/host/contracts/cloud-carried-files"
 import type { ProjectAppSetup, RecipeProofSummary, RecipeVersionView, RecipeView } from "@mako/host/contracts/project-app"
 import { environmentRepairPrompt } from "@mako/host/contracts/thread-environments"
 import { Action, Blank, Chip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
@@ -8,6 +9,8 @@ import { recipeChangeContext } from "@/lib/app-setup-context"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { cn } from "@/lib/utils"
 import { appSetupStore, useAppSetup } from "@/state/app-setup"
+import { decideCarriedFiles, keepCarriedFile, readCarriedFiles, useCarriedFiles } from "@/state/carried-files"
+import { useCloudAccount } from "@/state/cloud-account"
 import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { setupAgentLabel, startProjectSetup, useSetupAgent } from "@/state/project-setup"
@@ -198,7 +201,7 @@ function ProjectApp({ root, onBack }: { root: string; onBack: () => void }) {
       {!setup && !error ? <p className="text-ui text-faint"><Shimmer text="Reading the recipe…" /></p> : null}
       {setup?.recipe.kind === "none" ? <NotSetUp setup={setup} /> : null}
       {setup?.recipe.kind === "invalid" ? <Broken setup={setup} message={setup.recipe.message} file={setup.recipe.file} /> : null}
-      {setup?.recipe.kind === "ready" ? <Recipe state={setup.recipe} /> : null}
+      {setup?.recipe.kind === "ready" ? <Recipe state={setup.recipe} root={setup.root} /> : null}
     </div>
   )
 }
@@ -275,7 +278,7 @@ function Broken({ setup, message, file }: { setup: ProjectAppSetup; message: str
 
 type ReadyRecipe = Extract<ProjectAppSetup["recipe"], { kind: "ready" }>
 
-function Recipe({ state }: { state: ReadyRecipe }) {
+function Recipe({ state, root }: { state: ReadyRecipe; root: string }) {
   const { recipe } = state
   const checks = (["quick", "full"] as const).flatMap((tier) => (recipe.checks[tier] ? [{ tier, command: recipe.checks[tier] }] : []))
   const values = Object.entries(recipe.values)
@@ -334,6 +337,7 @@ function Recipe({ state }: { state: ReadyRecipe }) {
       ) : null}
 
       {recipe.carry.length ? <Carried carry={recipe.carry} /> : null}
+      {recipe.carry.some((entry) => !entry.link) ? <InTheCloud root={root} /> : null}
 
       {values.length ? (
         <Part title="Values" hint="Set in every process’s and agent’s environment, for each Thread.">
@@ -430,6 +434,103 @@ function Carried({ carry }: { carry: RecipeView["carry"] }) {
       ) : null}
     </Part>
   )
+}
+
+/**
+ * The project's carried files in Mako Cloud, for an account with the cloud: off until the person copies them, then
+ * each file with where it stands, removable one at a time or all at once. What's carried is the recipe's `carry`, the
+ * same list a new worktree here gets.
+ */
+function InTheCloud({ root }: { root: string }) {
+  const invited = useCloudAccount((state) => state.account?.state.status === "signed-in" && state.account.state.account.entitlements.includes("cloud"))
+  const view = useCarriedFiles((state) => state.byFolder[root])
+  const busy = useCarriedFiles((state) => state.busy[root])
+  const failed = useCarriedFiles((state) => state.failed[root])
+  useEffect(() => {
+    if (invited) void readCarriedFiles(root)
+  }, [invited, root])
+  if (!invited) return null
+  return (
+    <Part title="In Mako Cloud" hint="For this project’s Threads in the cloud.">
+      {!view ? (
+        <Line name={failed ? "Couldn’t read" : <Shimmer text="Reading…" />} muted>{failed}</Line>
+      ) : !view.repository ? (
+        <Line name="Not available" muted>This project has no GitHub repository, so its Threads can’t run in the cloud.</Line>
+      ) : view.decision !== "allowed" ? (
+        <CloudOff view={view} busy={busy} />
+      ) : (
+        <CloudOn view={view} busy={busy} />
+      )}
+      {view?.staying.length ? (
+        <Line name="Stay on this Mac" muted>
+          {view.staying.map((entry) => `${entry.path} (${entry.why})`).join(", ")}.
+        </Line>
+      ) : null}
+      {view && failed ? <Line name="That didn’t go through" muted><span className="text-caution">{failed}</span></Line> : null}
+      {view?.problem ? <Line name="Not up to date" muted><span className="text-caution">{view.problem}</span></Line> : null}
+    </Part>
+  )
+}
+
+function CloudOff({ view, busy }: { view: CarriedFilesView; busy: string | undefined }) {
+  const paths = view.files.map((file) => file.path)
+  return (
+    <ListCardRow>
+      <div className="flex items-start gap-4">
+        <div className="min-w-0 flex-1">
+          <p className="text-ui font-medium text-foreground">{view.decision === "declined" ? "Kept on this Mac" : "Not copied yet"}</p>
+          <p className="mt-1 text-label leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
+            {paths.length
+              ? <>Git leaves out {list(paths)}, so a Thread moved to the cloud starts without {paths.length === 1 ? "it" : "them"}. Mako can keep an encrypted copy in your account and give {paths.length === 1 ? "it" : "them"} to each cloud Thread of this project as it starts. Agents never see the values.</>
+              : "The main folder has none of the files the recipe carries yet."}
+          </p>
+        </div>
+        {paths.length ? (
+          <Action tone="outline" data-carried-files-action="copy" disabled={busy !== undefined} onClick={() => void decideCarriedFiles(view.project, true)}>
+            {busy === "copying" ? "Copying…" : "Copy to Mako Cloud"}
+          </Action>
+        ) : null}
+      </div>
+    </ListCardRow>
+  )
+}
+
+function CloudOn({ view, busy }: { view: CarriedFilesView; busy: string | undefined }) {
+  return (
+    <>
+      {view.files.map((file) => {
+        const keeping = busy === `keeping:${file.path}` || busy === `copying:${file.path}`
+        return (
+          <ListCardRow key={file.path} className="py-2.5 first:pt-3 last:pb-3">
+            <div className="flex items-center gap-3" data-carried-file={file.path}>
+              <span className="min-w-0 flex-1"><FileName>{file.path}</FileName></span>
+              <span className="shrink-0 text-label text-faint tabular-nums">{cloudState(file)}</span>
+              <Action size="xs" className="shrink-0 text-muted-foreground" data-carried-file-action={file.kept ? "copy" : "remove"} disabled={busy !== undefined} onClick={() => void keepCarriedFile(view.project, file.path, !file.kept)}>
+                {keeping ? "…" : file.kept ? "Copy again" : "Remove"}
+              </Action>
+            </div>
+          </ListCardRow>
+        )
+      })}
+      <ListCardRow>
+        <div className="flex items-center gap-3">
+        <p className="min-w-0 flex-1 text-label leading-relaxed text-faint">
+          Encrypted in your account. Each cloud Thread of this project gets them as it starts, and a move sends what changed here first. Agents never see the values.
+        </p>
+        <Action size="xs" className="shrink-0 text-muted-foreground" data-carried-files-action="stop" disabled={busy !== undefined} onClick={() => void decideCarriedFiles(view.project, false)}>
+          {busy === "stopping" ? "Removing…" : "Remove all"}
+        </Action>
+        </div>
+      </ListCardRow>
+    </>
+  )
+}
+
+function cloudState(file: CarriedFileView): string {
+  if (file.kept) return "Kept on this Mac"
+  if (!file.cloud) return "Goes with the next move"
+  if (!file.cloud.current) return "Changed here · goes with the next move"
+  return `In the cloud · ${ago(Date.parse(file.cloud.savedAt))}`
 }
 
 function Files({ entries }: { entries: RecipeView["carry"] }) {

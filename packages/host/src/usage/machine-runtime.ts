@@ -24,7 +24,7 @@ import { followHostLog, hostLog, hostWarn, type HostLogLine } from "../base/host
 import { cpuBetween, describeCpu, describeThreads, sampleCpu, type CpuSample } from "./process-cpu.js"
 import { HostProfiler } from "./host-profile.js"
 import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
-import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
+import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type CarriedFile, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { runtimeEventRouting } from "../contracts/runtime.js"
 import { type HostInvoke, serveHostThroughGateway } from "../transport/index.js"
@@ -49,6 +49,8 @@ export type MachineRuntimeOptions = {
   installSignIns(signIns: readonly CloudSignIn[], secrets: string): Promise<CloudSignInInstall[]>
   /** Makes the folder the agent prepared the one every caller's tabs open in. */
   openWorkspace(path: string): Promise<void>
+  /** The project's carried files the agent placed in the checkout, each with the variables it defines; never a value. */
+  carriedFiles?(files: readonly CarriedFile[]): void
   /** The agent couldn't make the Thread's folder: why, said by whatever needs the folder later. */
   workspaceFailed?(problem: string): void
   /** What a start does first in a folder, done ahead: a project base's, before its snapshot. */
@@ -91,6 +93,8 @@ const MEDIA_FRAMES: ReadonlySet<GatewayFrame["type"]> = new Set(["media-watch", 
  */
 const MACHINE_ONLY_EVENTS: ReadonlySet<string> = new Set(["account-usage", "harness-profile", "runtime-updates"])
 
+/** How long a move's arrival waits for the agent to place the store's carried files again before it goes on without. */
+const CARRIED_REFRESH_MS = 20_000
 /** A clock that moved this much more than the timer that read it was asleep: the machine was paused, or copied. */
 const RESUMED_GAP_MS = 3_000
 const TICK_MS = 1_000
@@ -135,6 +139,8 @@ export class MachineRuntime {
   #lastTick: number
   #stopped = false
   #unfollow: (() => void) | undefined
+  /** A move's arrival waiting for the agent to place the carried files again, by its request's id. */
+  readonly #carriedAsked = new Map<string, (answer: { files: CarriedFile[]; problem?: string } | undefined) => void>()
   /** One install at a time; sign-ins that arrive during one are installed after it, the newest only. */
   #installing: Promise<void> | undefined
   /** The harness the machine was asked to run a start ahead for, and the installs its signed-in stage last ran after. */
@@ -263,6 +269,8 @@ export class MachineRuntime {
         return void this.#prepare(message.path)
       case "prefetch":
         return void this.#prefetch(message.harness)
+      case "carried-files":
+        return this.#carried(message)
     }
   }
 
@@ -565,6 +573,39 @@ export class MachineRuntime {
   warmed(ms: number, loaded: string[]): void {
     hostLog("machine", "warm: what every start loads is loaded", { ms, loaded: loaded.join(",") })
     this.#send({ type: "warm", ms, loaded })
+  }
+
+  #carried(message: Extract<AgentMessage, { type: "carried-files" }>): void {
+    this.#state.carried = { files: message.files, at: this.#iso(), ...message.problem !== undefined && { problem: message.problem } }
+    hostLog("machine", "carried files placed by the agent", { paths: message.files.map((file) => file.path).join(",") || "none", ...message.problem !== undefined && { problem: message.problem } })
+    this.#options.carriedFiles?.(message.files)
+    if (message.answers === undefined) return
+    const answer = this.#carriedAsked.get(message.answers)
+    this.#carriedAsked.delete(message.answers)
+    answer?.({ files: message.files, ...message.problem !== undefined && { problem: message.problem } })
+  }
+
+  /**
+   * Asks the agent to place the project's carried files from the account's store again, as a move arrives, and waits
+   * for it: the files then are what the person's Mac last sent. Undefined from an agent that can't be asked, or past
+   * `CARRIED_REFRESH_MS`, when the checkout keeps what the machine started with.
+   */
+  refreshCarried(): Promise<{ files: CarriedFile[]; problem?: string } | undefined> {
+    if (this.#stopped || !this.#options.agent.writable) return Promise.resolve(undefined)
+    const id = randomUUID()
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.#carriedAsked.delete(id)
+        hostWarn("machine", "the agent didn't place the carried files again in time; the checkout keeps what it has", { waitedMs: CARRIED_REFRESH_MS })
+        resolve(undefined)
+      }, CARRIED_REFRESH_MS)
+      timer.unref()
+      this.#carriedAsked.set(id, (answer) => {
+        clearTimeout(timer)
+        resolve(answer)
+      })
+      this.#send({ type: "carried-files-refresh", id })
+    })
   }
 
   /** Asks the agent to make the Thread's folder again, after it said it couldn't; false while the agent can't hear. */

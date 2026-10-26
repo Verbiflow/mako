@@ -49,6 +49,8 @@ export { Automations } from "./automations.js"
 export { checkoutConversations } from "./checkout-conversations.js"
 export { WorkspaceClients } from "./clients.js"
 export { applyMoveCheckpoint, captureMoveCheckpoint, verifyMoveCheckpoint } from "./move-checkpoint.js"
+export { CloudCarriedFiles, declareCarriedFilesMethods } from "./cloud-carried-files.js"
+export { projectRecipe } from "./thread-recipe.js"
 export { answeredElsewhere, elsewhereRefusal, type ElsewhereFolder } from "./elsewhere.js"
 export type { Relocation, WorkspaceConversations } from "./conversations.js"
 export { verifyFilePreview, fileIdentity } from "./file-previews.js"
@@ -219,7 +221,10 @@ export interface WorkspaceMovers {
 }
 
 export interface WorkspaceMoversDeps {
-  /** Whether this host's environment has a value for a secret a recipe names (`secretNames`), checked before a cloud start. */
+  /**
+   * Whether a secret a recipe names (`secretNames`) has a value here, checked before a cloud start: in this host's
+   * environment, or on a cloud machine in a carried file the account's secret store gave its checkout.
+   */
   hasSecret?(name: string): boolean
   /** The account's authority for projects it keeps the recipes of. */
   recipes?: RecipeAccounts

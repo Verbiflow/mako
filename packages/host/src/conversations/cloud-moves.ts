@@ -192,6 +192,11 @@ export type CloudMovesOptions = {
   remembered(harness: string, nativeId: string): { modeId?: string; settings?: SessionSettings } | null | undefined
   step(conversationId: string, move: string, step: ThreadMoveStep): void
   newCloudThread(): string
+  /**
+   * Brings the account's copy of the project's carried files (its recipe's `carry`) up to date, if the person allowed
+   * it (`CloudCarriedFiles.sync`): the machine places them as it starts and again as the move arrives.
+   */
+  carried?(folder: string, why: string): Promise<void>
   /** A cloud Thread kept ready for this Thread (`CloudReadiness.take`), which the move takes in place of a new one. */
   ready?: { take(thread: string, folder: string, repository: CloudRepository): Promise<string | undefined> }
 }
@@ -450,6 +455,9 @@ export class CloudMoves {
    */
   async #ahead(plan: Plan): Promise<void> {
     const account = this.#account()
+    // Before the machine is made, so it starts with them; a failure is said, and the Thread moves without the newest.
+    await this.#options.carried?.(plan.folder, "a move").catch((error: Error) => hostWarn("moves", "the project's carried files weren't brought up to date in the cloud", { move: plan.move, error: error.message }))
+    plan.timings.carried = Date.now() - plan.began
     await account.createThread(plan.cloudThread, plan.repository, { folder: plan.folder, harness: plan.sessions[0]?.harness ?? "" })
     plan.timings.made = Date.now() - plan.began
     // Each failure says which step it stopped, which a bare one ("file closed") doesn't.

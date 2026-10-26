@@ -11,6 +11,7 @@ import type { SessionPublishing } from "./machine-runtime.js"
 import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState, ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
+import type { CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import type { HostEnvironment } from "../base/host-environment.js"
@@ -88,6 +89,12 @@ export interface CloudAccount {
   tookWaiting?(session: string, id: string): Promise<void>
   /** The account's devices, by ID and name, and which is this one. */
   devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
+  /** A project's carried files in the account's secret store, by its repository: listed, put and removed, never read. */
+  carriedFiles?: {
+    list(repository: string): Promise<CloudCarriedFile[]>
+    put(repository: string, file: { path: string; data: Buffer; names: string[] }): Promise<CloudCarriedFile>
+    remove(repository: string, path?: string): Promise<string[]>
+  }
   /**
    * Hears each change to the account's list of Sessions, in the stream's order, as it comes, and `account-changed` when
    * this Mac signs in, out or to another account, after which the list is another's; returns how to stop.
@@ -276,6 +283,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     tookWaiting: (session, id) => cloud.tookWaiting(session, id),
     reportSessions: () => cloud.reportSessions(),
     devices: () => cloud.devices(),
+    carriedFiles: {
+      list: (repository) => cloud.carriedFiles(repository),
+      put: (repository, file) => cloud.putCarriedFile(repository, file),
+      remove: (repository, path) => cloud.removeCarriedFiles(repository, path),
+    },
     onThreadListings: (listener) => {
       threadListeners.add(listener)
       return () => threadListeners.delete(listener)

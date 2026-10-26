@@ -25,7 +25,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { verifyFilePreview, fileIdentity, MediaRenditions, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { verifyFilePreview, fileIdentity, MediaRenditions, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, projectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -36,6 +36,7 @@ import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
 import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
+import type { CarriedFile } from "./contracts/machine-agent.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
 import { hostPlatform, nodePlatform, onMac } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
@@ -63,6 +64,8 @@ export interface CoreShell {
   config: HostConfig
   /** On a cloud machine: asks its agent to make the Thread's folder again, false where it can't be asked. */
   retryMachineWorkspace?(): boolean
+  /** On a cloud machine: asks its agent to place the project's carried files from the account's store again, and waits. */
+  refreshMachineCarried?(): Promise<void>
   owner: HostOwner
   methods: HostMethods
   jobs: HostJobs
@@ -96,6 +99,8 @@ export interface Core {
   openMachineWorkspace(path: string): Promise<void>
   /** On a cloud machine: why its agent couldn't make the Thread's folder, for whatever needs it to say. */
   machineWorkspaceFailed(problem: string): void
+  /** On a cloud machine: the project's carried files its agent placed in the checkout, with the variables each defines. */
+  machineCarriedFiles(files: readonly CarriedFile[]): void
   /** On a cloud machine: the live video of its previews its Threads' clients watch. */
   media: MediaHandler
   /**
@@ -175,6 +180,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const machineWorkspace = new MachineWorkspace(() => shell.retryMachineWorkspace?.() ?? false)
   /** On a cloud machine: the account's sign-ins as last installed here; undefined until the agent gave a set. */
   let machineSignIns: readonly CloudSignInInstall[] | undefined
+  /** On a cloud machine: what the account's store gave its checkout, which meets a recipe's named secrets there. */
+  let machineCarried: readonly CarriedFile[] = []
   /**
    * The account's authority for a project's recipe versions: a machine's Thread's repository, under its credential;
    * on a laptop, the checkout's GitHub repository, as its signed-in device. None for a project the account can't
@@ -443,6 +450,23 @@ export async function openCore(shell: CoreShell): Promise<Core> {
             return sync
           },
   })
+  // A project's carried files (its recipe's `carry`) kept in the account's secret store, with its person's word, for its
+  // cloud Threads: brought up to date before one is made or a Thread moves there. Only a person's own Mac sends them.
+  const carriedFiles = fixtureDesk || config.machineAgentFd !== undefined
+    ? undefined
+    : new CloudCarriedFiles({
+        file: join(environment.dataRoot, "cloud", "carried-files.json"),
+        git,
+        account: async () => {
+          const cloud = late.cloud
+          const id = await cloud?.id().catch(() => undefined)
+          if (!cloud?.carriedFiles || !id || (await cloud.cloudBlocked?.().catch(() => "signed-out" as const))) return undefined
+          return { id, store: cloud.carriedFiles }
+        },
+        repositoryOf: async (folder) => (await folderRepository(git, folder)).url,
+        recipe: (checkout) => projectRecipe(git, checkout, workspaces.recipes),
+      })
+  declareCarriedFilesMethods(methods, carriedFiles)
   // A cloud machine runs its conversations itself; only a person's own Mac starts them on one.
   const cloudConversations = fixtureDesk || config.machineAgentFd !== undefined
     ? undefined
@@ -453,6 +477,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           if (!shell.closing()) web()?.conversationEvent(event)
         },
         repositoryOf: (cwd) => folderRepository(git, cwd),
+        carried: async (folder, why) => void (await carriedFiles?.sync(folder, why)),
         // Every tab showing that conversation's folder reads its Git again, on the machine.
         changed: (conversationId) => {
           for (const tab of workspaceClients.everyTab()) tab.elsewhereChanged(conversationId)
@@ -586,6 +611,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     step: (conversationId, move, step) => emit({ type: "thread-move-step", conversationId, move, step }),
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
     ready: { take: (thread, folder, repository) => readinessOnce?.take(thread, folder, repository) ?? Promise.resolve(undefined) },
+    carried: async (folder, why) => void (await carriedFiles?.sync(folder, why)),
   })
   void cloudMoves?.settle().catch((error: Error) => hostWarn("moves", "moves a stopped host left couldn't be settled", { error: error.message }))
   // And brings them back (`mako:thread-return`): a machine sends them (`mako:move-depart`).
@@ -684,7 +710,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     git,
     dataRoot: environment.dataRoot,
     workspaces,
-    hasSecret: (name) => process.env[name] !== undefined,
+    // On a cloud machine a named secret is met by its environment or by a file the account's store gave the checkout.
+    hasSecret: (name) => process.env[name] !== undefined || machineCarried.some((file) => file.names.includes(name)),
     recipes,
     live,
     store,
@@ -790,6 +817,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           await harnesses.profiles.resolveLaunch(harness, folder, tuning)
         },
         signedIn: (harness) => machineSignIns?.some((install) => install.harness === harness && install.status === "installed"),
+        refreshCarried: async () => shell.refreshMachineCarried?.(),
         label: (harness) => opened.harnessLabel(harness),
         scratch: join(environment.dataRoot, "moves"),
         ahead: new Map(),
@@ -937,6 +965,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       await catalog.syncRecords(machineRecords(link) ?? null)
     },
     machineWorkspaceFailed: (problem) => machineWorkspace.failed(problem),
+    machineCarriedFiles: (files) => {
+      machineCarried = files
+    },
     openMachineWorkspace: async (path) => {
       await workspaceClients.home(path)
       await workspaceAutomations.watch(path)

@@ -188,6 +188,11 @@ export type CloudConversationsOptions = {
   emit(event: RuntimeEvent): void
   /** The GitHub repository a folder of this Mac's works in, for a start that names none. */
   repositoryOf(cwd: string): Promise<CloudRepository>
+  /**
+   * Brings the account's copy of the folder's project's carried files (its recipe's `carry`) up to date, if the person
+   * allowed it, before a cloud Thread of it is made: its machine places them as it starts (`CloudCarriedFiles.sync`).
+   */
+  carried?(folder: string, why: string): Promise<void>
   /** A conversation's folder on its machine may have changed: its agent worked. At most once a `CHANGED_MS`. */
   changed?(conversationId: string): void
   /**
@@ -781,6 +786,7 @@ export class CloudConversations {
     asked.askedAt = Date.now()
     const making: CloudThreadMaking = { prepare: true }
     if (launch) making.harness = launch.harness
+    await this.#carried(folder, "a cloud Thread made ahead")
     asked.asking = account.createThread(asked.threadId, repository, making).then(({ ready }) => {
       asked.made = true
       asked.ready = ready
@@ -916,6 +922,11 @@ export class CloudConversations {
     return undefined
   }
 
+  /** The project's carried files brought up to date first; a failure is said, and the Thread starts without the newest. */
+  async #carried(folder: string, why: string): Promise<void> {
+    await this.#options.carried?.(folder, why).catch((error: Error) => hostWarn("cloud-conversations", "the project's carried files weren't brought up to date in the cloud", { why, error: error.message }))
+  }
+
   /** Where a new cloud conversation's start is, for its window: in words about its project and its harness, never the machine. */
   #step(conversationId: string, step: CloudStartStep, repository: CloudRepository): void {
     this.#options.emit(encodeRuntimeEvent({ type: "cloud-start-step", conversationId, step, project: projectName(repository) }))
@@ -954,6 +965,7 @@ export class CloudConversations {
     // A start this Mac made names its repository; only a conversation listed from another device has none, and isn't started here.
     if (!repository) throw new Error("That conversation runs on another device; it isn't started from this Mac.")
     if (!entry.created) {
+      await this.#carried(folder, "a cloud Thread started")
       await account.createThread(entry.threadId, repository, { harness })
       entry.created = true
       await this.#save()

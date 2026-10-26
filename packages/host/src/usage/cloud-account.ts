@@ -56,6 +56,7 @@ import {
   type CloudSignInListing,
 } from "../contracts/cloud-sign-ins.js"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
+import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { errorMessage } from "../base/error-message.js"
@@ -464,6 +465,25 @@ export class CloudAccounts {
 
   async removeSignIn(harness: CloudSignInHarness): Promise<void> {
     await this.#call("sign-ins.remove", "DELETE", `${this.#signInsPath()}/${harness}`)
+  }
+
+  /** A project's carried files the account's store keeps (`?repository=`), listed without their values. */
+  async carriedFiles(repository: string): Promise<CloudCarriedFile[]> {
+    const response = await this.#call("carried-files.list", "GET", `${this.#accountPath()}/carried-files?repository=${encodeURIComponent(repository)}`)
+    return z.object({ files: z.array(CloudCarriedFileSchema) }).parse(await response.json()).files
+  }
+
+  /** One of a project's carried files, sealed by the cloud and kept for the project's cloud Threads; answers its new listing. */
+  async putCarriedFile(repository: string, file: { path: string; data: Buffer; names: string[] }): Promise<CloudCarriedFile> {
+    const response = await this.#call("carried-files.put", "PUT", `${this.#accountPath()}/carried-files?repository=${encodeURIComponent(repository)}`, { path: file.path, data: file.data.toString("base64"), names: file.names })
+    return CloudCarriedFileSchema.parse(await response.json())
+  }
+
+  /** One of a project's carried files removed from the cloud, or with no `path` all of them; answers the paths removed. */
+  async removeCarriedFiles(repository: string, path?: string): Promise<string[]> {
+    const query = `repository=${encodeURIComponent(repository)}${path === undefined ? "" : `&path=${encodeURIComponent(path)}`}`
+    const response = await this.#call("carried-files.remove", "DELETE", `${this.#accountPath()}/carried-files?${query}`)
+    return z.object({ removed: z.array(z.string()) }).parse(await response.json()).removed
   }
 
   /**

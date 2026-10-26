@@ -137,6 +137,9 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       const opened = await openCore({
         config, owner, methods, jobs, foreground, subscribed, secrets, terminals,
         retryMachineWorkspace: () => machine?.retryWorkspace() ?? false,
+        refreshMachineCarried: async () => {
+          await machine?.refreshCarried()
+        },
         web: () => web,
         closing: () => closing,
         closeSocket,
@@ -201,6 +204,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         dataRoot: environment.dataRoot,
         installSignIns: async (signIns, secrets) => (await core.load("the machine's sign-ins")).installCloudSignIns(signIns, { home: homedir(), secrets }),
         openWorkspace: async (path) => (await core.load("the machine's workspace")).openMachineWorkspace(path),
+        carriedFiles: (files) => void core.load("the machine's carried files").then((loaded) => loaded.machineCarriedFiles(files)),
         workspaceFailed: (problem) => void core.load("the machine's workspace").then((loaded) => loaded.machineWorkspaceFailed(problem)),
         prepareFolder: async (path) => (await core.load("prepare a base's folder")).prepareFolder(path),
         prefetchStart: async (harness) => (await core.load("run a start ahead")).prefetchStart(harness),
