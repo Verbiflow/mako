@@ -59,7 +59,7 @@ import { actions, shallowEqual, useSession } from "@/state/session"
 import { threads, useThreads } from "@/state/threads"
 import { continueTargets } from "@/state/descriptors"
 import { continueTurn } from "@/state/acp-queue"
-import { AUTO_CONTINUE_NOTE, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
+import { AUTO_CONTINUE_NOTE, endedAsChosen, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { viewer } from "@/state/viewer"
 import { carriedBecause } from "@/lib/restore-plan"
 import { AnswerRequestContext, AnswerTimeContext, useTranscriptSource } from "./source-context"
@@ -315,6 +315,8 @@ function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): 
       return sender === "mako" ? "Mako continued the turn it paused to move" : sender === "person" ? "You continued the turn Mako paused to move" : "The turn Mako paused to move continued"
     case "not-saved":
       return sender === "mako" ? "Mako continued the turn it stopped when it couldn't save" : sender === "person" ? "You continued the turn Mako stopped when it couldn't save" : "The turn Mako stopped when it couldn't save continued"
+    case "goal-budget":
+      return sender === "mako" ? "Mako continued the turn it stopped at the goal's token budget" : sender === "person" ? "You continued the turn Mako stopped at the goal's token budget" : "The turn Mako stopped at the goal's token budget continued"
   }
 }
 
@@ -742,7 +744,7 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
   const work = useMemo(() => summarizeWork(fold.messages), [fold.messages])
   const { glyphs, text } = describeWork(work)
   const duration = fold.from !== undefined && fold.to !== undefined && fold.to >= fold.from ? formatDuration(fold.to - fold.from) : undefined
-  const yours = stop === true || (stop !== undefined && stop !== false && stop.reason === "stopped")
+  const yours = stop === true || (stop !== undefined && stop !== false && endedAsChosen(stop.reason))
   const cut = Boolean(stop) && !yours
   const verb = stop ? (yours ? "Stopped" : "Interrupted") : fold.continued ? "Continued" : "Worked"
   const said = work.tools > 0 ? text : undefined
@@ -1120,6 +1122,8 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
  * own connection cut the newest turn short, the footer says which and offers
  * to pick the turn up; the offer sends through the same path as a typed
  * message, so it queues, steers or reopens the session exactly as one would.
+ * A goal's token budget ending it is said as quietly as a Stop, with the
+ * goal's mark: an outcome the person set, offered nothing.
  */
 function Stopped({ stop }: { stop: true | TurnStop }) {
   useHarnessIdentity()
@@ -1128,13 +1132,15 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
   const [sending, setSending] = useState(false)
   const detail = stop === true ? undefined : stop
   const reason = detail?.reason ?? "stopped"
-  const yours = reason === "stopped"
+  const yours = endedAsChosen(reason)
   // What else the stop ended, in the words the agent is told of it when the turn goes on.
   const alsoStopped = detail?.stopped ? stoppedWorkWords(detail.stopped) : undefined
   return (
     <>
       <span data-turn-stopped={reason} className={cn("flex min-w-0 items-center gap-1.5", !yours && "text-foreground")}>
-        {yours ? <CircleStopIcon aria-hidden className="size-3 shrink-0" /> : <TriangleAlertIcon aria-hidden className="size-3 shrink-0 text-caution" />}
+        {reason === "goal-budget" ? <TargetIcon aria-hidden className="size-3 shrink-0" />
+          : yours ? <CircleStopIcon aria-hidden className="size-3 shrink-0" />
+            : <TriangleAlertIcon aria-hidden className="size-3 shrink-0 text-caution" />}
         <span className="shrink-0">{turnStopLabel(reason, harness ? harnessLabel(harness) : "the provider")}</span>
         {alsoStopped ? (
           <span data-turn-stopped-work={detail?.stopped?.length} title={alsoStopped.all} className="min-w-0 truncate text-muted-foreground">

@@ -52,6 +52,8 @@ const SITUATIONS = {
     "Continue where you left off. Mako stopped your work to hand this conversation to another machine; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
   "not-saved":
     "Continue where you left off. Mako stopped your previous turn because it couldn't save this conversation; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
+  "goal-budget":
+    "Continue where you left off. Mako stopped your previous turn when the goal reached its token budget; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
 } as const satisfies Record<InterruptionReason, string>
 
 /**

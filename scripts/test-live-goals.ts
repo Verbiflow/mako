@@ -12,7 +12,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { mock } from "node:test"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
-import { JournalWriteError, LiveJournal } from "@mako/host/conversations/live-journal"
+import { JournalWriteError, LiveJournal, storedRequest } from "@mako/host/conversations/live-journal"
+import { DatabaseSync } from "node:sqlite"
+import { z } from "zod"
+import { OlderRequestSchema } from "./fixtures/older-request-schema.ts"
 import { goalContinuePrompt, goalStartPrompt, goalTokens, observeGoal, readGoalReport, readTokenCount, type ConversationGoal, type GoalObservation, type StartGoal } from "@mako/host/contracts/live-goals"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
@@ -108,6 +111,8 @@ function goalHost(goals: GoalsCapability, turns: (text: string, index: number) =
   })
   return {
     id,
+    root,
+    journal: join(root, "journals", `${id}.sqlite`),
     sent,
     order,
     owner,
@@ -464,7 +469,16 @@ async function aHarnessGoalStopsMidTurnAtItsBudget() {
     assert.deepEqual(host.order, [`prompt /goal ${OBJECTIVE}`, "cancel", "prompt /goal clear"], "the turn stops at the call that spends the budget, then Claude's goal is cleared")
     assert.equal(host.goal()?.tokensUsed, 6_000, "the count stops where the turn was stopped")
     assert.equal(host.goal()?.by, "harness")
-    assert.equal(host.requests()[0]?.status, "interrupted")
+    // Mako's stop, at the budget the person set: never the person's own Stop. Older builds read it as one, as they recorded it.
+    const stopped = host.requests()[0]!
+    assert.equal(stopped.status, "interrupted")
+    assert.equal(stopped.interruption?.reason, "goal-budget")
+    const db = new DatabaseSync(host.journal, { readOnly: true })
+    const row = JSON.parse(z.object({ value: z.string() }).parse(db.prepare("SELECT value FROM requests WHERE id=?").get(stopped.id)).value)
+    db.close()
+    assert.deepEqual([row.interruption.reason, row.interruption.exactReason], ["stopped", "goal-budget"])
+    assert.equal(OlderRequestSchema.parse(row).interruption?.reason, "stopped", "a build before goal-budget opens the journal")
+    assert.equal(storedRequest(join(host.root, "journals"), host.id, stopped.id)?.interruption?.reason, "goal-budget", "read back, it's the budget")
   } finally {
     host.cleanup()
   }
