@@ -329,10 +329,10 @@ export class RecordCapture {
         const streamed = this.streams ? withStreams(own, this.streams.root, await this.streams.of(ref.harness, ref.nativeId)) : own
         const records = this.options.carried ? withCarried(streamed, await carriedFiles(this.options.carried, ref.harness, ref.nativeId)) : streamed
         const listed = Date.now() - started
-        const listing = this.options.listingOf?.(ref) ?? null
+        const listingOf = this.options.listingOf
         // Only a write heard as it landed was made by what's installed now; a backfill reads what older builds wrote.
         const observed = paced && own.writer?.installed ? this.options.observedInstall?.(ref.harness) ?? null : null
-        const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path, ...held !== null && { stamp: held }, ...listing !== null && { listing }, ...observed !== null && { observed } })
+        const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path, ...held !== null && { stamp: held }, ...listingOf && { listing: () => listingOf(ref) }, ...observed !== null && { observed } })
         took = listed + report.ms
         state.failures = 0
         this.options.onCaptured?.(ref, report)

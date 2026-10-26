@@ -208,4 +208,99 @@ const ref = { harness: "codex", nativeId: "pace", path: "/home/pace.jsonl" }
   }
 }
 
+// A capture keeps the rail's row the catalog lists as it commits, not the one it listed when the capture was asked
+// for. Asked at the archive, it runs while the session comes back out and its harness deletes it; between two of its
+// slices the catalog keeps the row it last listed. The capture's end leaves that row, not the archive's.
+{
+  const folder = await mkdtemp(join(tmpdir(), "mako-record-listing-"))
+  try {
+    const archive = join(folder, "archived_sessions", "s1.jsonl")
+    await mkdir(join(folder, "archived_sessions"), { recursive: true })
+    await writeFile(archive, `${JSON.stringify({ text: "x".repeat(40_000) })}\n`)
+    const records = { roots: [{ name: "synthetic", path: folder }], files: [archive], databases: [] }
+    let paused = null
+    let resume = () => {}
+    const store = new RecordStore(join(folder, "store"), nativeStores, {
+      step: (step) => {
+        if (step !== "versioned" || paused === null) return
+        const reached = paused
+        paused = null
+        reached()
+        return new Promise((resolve) => { resume = resolve })
+      },
+    })
+    await store.capture({ harness: "synthetic", nativeId: "s1", home: folder, records, listing: () => JSON.stringify({ path: join(folder, "sessions", "s1.jsonl") }) })
+    await writeFile(archive, `${JSON.stringify({ text: "y".repeat(40_000) })}\n`)
+    const archived = JSON.stringify({ path: archive, nativeArchived: true })
+    let listed = archived
+    const reached = new Promise((resolve) => { paused = resolve })
+    const capturing = store.capture({ harness: "synthetic", nativeId: "s1", home: folder, records, listing: () => listed })
+    await reached
+    listed = null
+    const last = JSON.stringify({ path: join(folder, "sessions", "s1.jsonl"), title: "Deleted after it came back out" })
+    const keeping = store.keepListing("synthetic", "s1", join(folder, "sessions", "s1.jsonl"), last)
+    resume()
+    await Promise.all([capturing, keeping])
+    assert.equal(store.listing("synthetic", "s1"), last, "the row the catalog kept as the session went is the one that stays")
+    await store.close()
+  } finally {
+    await rm(folder, { recursive: true, force: true })
+  }
+}
+
+// A harness deleting a session is never captured, so the session reads back as its newest versions. A capture asked
+// for before the harness deleted it and run after takes nothing; one the session's own file goes from as it runs
+// marks nothing of it gone.
+{
+  const folder = await mkdtemp(join(tmpdir(), "mako-record-deleted-"))
+  try {
+    const own = join(folder, "sessions", "s1.jsonl")
+    const kept = join(folder, "sessions", "s1", "tool-results", "r1.txt")
+    await mkdir(join(folder, "sessions", "s1", "tool-results"), { recursive: true })
+    await writeFile(own, `${JSON.stringify({ text: "Fix the login redirect" })}\n`)
+    await writeFile(kept, "output")
+    const database = join(folder, "state.sqlite")
+    const db = new DatabaseSync(database)
+    db.exec("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT)")
+    db.prepare("INSERT INTO threads VALUES ('s1', 'Fix the login redirect')").run()
+    const records = { roots: [{ name: "synthetic", path: folder }], files: [kept, own], databases: [{ path: database, tables: [{ table: "threads", where: "id = ?", params: ["s1"] }] }] }
+    let paused = null
+    let resume = () => {}
+    const store = new RecordStore(join(folder, "store"), nativeStores, {
+      step: (step) => {
+        if (step !== "versioned" || paused === null) return
+        const reached = paused
+        paused = null
+        reached()
+        return new Promise((resolve) => { resume = resolve })
+      },
+    })
+    await store.capture({ harness: "synthetic", nativeId: "s1", home: folder, records, path: own })
+    const heads = () => store.units("synthetic", "s1").map((unit) => [unit.key, store.versions("synthetic", unit.key).at(-1)?.kind]).sort()
+    const before = heads()
+    assert.ok(before.length >= 3 && before.every(([, kind]) => kind !== "delete"), JSON.stringify(before))
+
+    await rm(own)
+    db.exec("DELETE FROM threads")
+    const late = await store.capture({ harness: "synthetic", nativeId: "s1", home: folder, records, path: own })
+    assert.equal(late.versions.length, 0, "a capture run after its harness deleted the session takes nothing")
+    assert.deepEqual(heads(), before)
+
+    await writeFile(own, `${JSON.stringify({ text: "Fix the login redirect" })}\n`)
+    await writeFile(kept, "output, longer")
+    db.prepare("INSERT INTO threads VALUES ('s1', 'Fix the login redirect')").run()
+    const reached = new Promise((resolve) => { paused = resolve })
+    const capturing = store.capture({ harness: "synthetic", nativeId: "s1", home: folder, records, path: own })
+    await reached
+    await rm(join(folder, "sessions"), { recursive: true })
+    resume()
+    await capturing
+    assert.ok(heads().filter(([key]) => key.endsWith(".jsonl") || key.endsWith(".txt")).every(([, kind]) => kind !== "delete"), `deleted as a capture ran, none of its files is marked gone: ${JSON.stringify(heads())}`)
+    db.close()
+    await store.close()
+  } finally {
+    await rm(folder, { recursive: true, force: true })
+  }
+}
+
 console.log(`record-capture: ok\n  ${measured.join("\n  ")}`)

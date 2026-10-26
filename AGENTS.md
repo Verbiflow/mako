@@ -473,8 +473,17 @@ evicts. Child agents' copies stay: a child is read through its parent. The
 pass then gives the space back with a `VACUUM` in a thread of its own, once
 32 MiB or more is free and the disk has room (incremental vacuuming held the
 worker 566 ms a step and made each drop 20 times slower). Every capture keeps the
-rail's row of its session (`CaptureInput.listing`), so a session its harness
-deletes stays listed, read back from the store. Every resume verdict goes
+rail's row of its session (`CaptureInput.listing`, as the catalog lists it when
+the capture commits), so a session its harness deletes stays listed, read back
+from the store. A path its harness stops listing is matched to that row by the
+session, not by the path a capture last read: unless a harness lists the
+session elsewhere (a move), the catalog first makes the kept row the one it
+last listed (`SessionCatalog.unlist`), so a session moved before a capture
+followed it (Codex archiving a rollout, Claude Code entering a worktree) and
+then deleted stays where it was, reads back from wherever its records hold it,
+and restores there. A capture that finds the session's own file gone takes
+nothing: its harness deleted or moved it. `test/native-archive.mjs` and
+`test/record-capture.mjs` set those orders up. Every resume verdict goes
 through `restoringResume` (`conversations/kept-resume.ts`), so a reply to
 such a session, a reconnect or a wake first writes it back into the
 harness's own store (`SessionCatalog.restoreKept`; only when nothing holds
