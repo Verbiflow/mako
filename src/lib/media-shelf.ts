@@ -1,6 +1,7 @@
 import type { AttachmentContent } from "@mako/sessions"
 import type { MediaConfirmation } from "@mako/host/contracts/turn-media"
-import { mediaKind, type MediaCandidate } from "@mako/sessions/turn-media"
+import { countedChanges, type RequestChanges } from "@mako/host/contracts/turn-changes"
+import { mediaKind, mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
 import { exchangeMedia, type Exchange } from "@/lib/exchanges"
 import { textOf } from "@/lib/format"
 import { inlineFileTarget, markdownFileTarget } from "@/lib/file-citations"
@@ -34,13 +35,40 @@ function spelled(path: string, spellings: readonly string[]): boolean {
   return spellings.some((spelling) => spelling.startsWith("/") ? spelling === identity : identity.endsWith(`/${spelling.replace(/^~\//, "")}`))
 }
 
+const DIGEST = /^sha256:([a-f0-9]{64})$/
+
+/**
+ * The media files the turn's record of changes (`LiveRequest.changes`) says
+ * it left: whatever wrote them, a script, a browser's screenshot or a
+ * command line that names them only through `$PWD` included, which its
+ * calls' records can't all say. Each carries the content the turn left, so
+ * the host keeps those bytes and nothing the file held since.
+ */
+export function changedMedia(changes: RequestChanges | undefined, requestId: string): MediaCandidate[] {
+  const counted = countedChanges(changes)
+  if (!counted) return []
+  return counted.files.flatMap((file): MediaCandidate[] => {
+    const kind = mediaKind(file.path)
+    const digest = file.after ? DIGEST.exec(file.after)?.[1] : undefined
+    if (!kind || !digest || file.kind === "delete") return []
+    return [{ key: file.path, kind, evidence: "wrote", callId: `turn:${requestId}`, path: file.path, digest, endedAt: counted.at }]
+  })
+}
+
 /**
  * The exchange's media that belongs on its shelf: everything its calls
- * produced, less what `show` already put at its place and what the answer's
- * words already preview.
+ * produced and its record of changes names, less what `show` already put
+ * at its place and what the answer's words already preview.
  */
-export function shelfMedia(exchange: Exchange): MediaCandidate[] {
-  const media = exchangeMedia(exchange)
+export function shelfMedia(exchange: Exchange, changes?: RequestChanges): MediaCandidate[] {
+  const requestId = exchange.prompt?.requestId
+  const changed = requestId ? changedMedia(changes, requestId) : []
+  const called = exchangeMedia(exchange)
+  // Where the record and a call say as much (both "it wrote this"), the record's names the bytes.
+  const recorded = new Map(changed.map((candidate) => [candidate.key, candidate]))
+  const media = changed.length
+    ? mergeMedia([...called, ...changed]).map((candidate) => (candidate.evidence === "wrote" && recorded.get(candidate.key)) || candidate)
+    : called
   if (!media.length) return media
   const spellings = exchange.response.flatMap((message) => (message.role === "assistant" ? proseMediaSpellings(textOf(message.blocks)) : []))
   return media.filter((candidate) => candidate.evidence !== "shown" && !(candidate.path && spelled(candidate.path, spellings)))

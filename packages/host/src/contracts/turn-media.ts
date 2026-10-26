@@ -38,7 +38,7 @@ export interface MediaCheck {
   evidence: "shown" | "produced" | "wrote" | "named"
   startedAt?: Instant
   endedAt?: Instant
-  /** The copy `show` kept, when its result said. */
+  /** The copy `show` kept, when its result said; for a file the turn's record of changes names, the content the turn left. */
   digest?: Digest
 }
 

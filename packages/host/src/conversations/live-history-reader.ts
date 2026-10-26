@@ -9,6 +9,7 @@ import { nativeHistoryRevision } from "./native-history.js"
 import { cutOffRequests, mergedBase } from "./stream-merging.js"
 import { ContentWeights } from "../contracts/residency.js"
 import type { Entry } from "@mako/sessions/entries"
+import { mediaFacts } from "@mako/sessions/turn-media"
 import { readOriginal, readStreamOriginal, type EntryOriginal } from "@mako/sessions/record-original"
 import { hostLog } from "../base/host-log.js"
 
@@ -400,8 +401,9 @@ export class LiveHistoryReader {
 
 function previewLive(block: Entry, index: number): Entry {
   if (block.type !== "tool" || !largeTool(block)) return block
+  // What the turn made stays: its shelf reads the preview's media facts.
   return { ...block, input: block.input?.slice(0, TOOL_PREVIEW), output: block.output?.slice(0, TOOL_PREVIEW),
-    details: undefined, attachments: undefined, effects: undefined,
+    details: undefined, attachments: undefined, effects: undefined, ...mediaFacts(block, TOOL_PREVIEW),
     historyRest: { index, length: block.output?.length ?? 0 } }
 }
 
@@ -416,7 +418,7 @@ function previewSaved(entry: Entry): Entry {
   if (entry.type !== "tool" || !largeTool(entry)) return entry
   return { ...entry, input: entry.input?.slice(0, TOOL_PREVIEW), output: entry.output?.slice(0, TOOL_PREVIEW) ?? "",
     outputLength: entry.outputLength ?? entry.output?.length ?? 0, contentOmitted: true,
-    details: undefined, attachments: undefined, effects: undefined }
+    details: undefined, attachments: undefined, effects: undefined, ...mediaFacts(entry, TOOL_PREVIEW) }
 }
 
 function isPartial(entry: Entry): boolean {

@@ -8,6 +8,7 @@ import { z } from "zod"
 import { keepFileCopy } from "@mako/sessions/attachment-storage"
 import { mediaKind, type MediaKind } from "@mako/sessions/turn-media"
 import type { KeptMedia, MediaCheck, MediaConfirmation } from "../contracts/turn-media.js"
+import { keepPage, keptPage } from "./page-copy.js"
 
 /** A file changed this long before its call started still counts as the call's: clocks and file systems round. */
 const BEFORE_MS = 2_000
@@ -116,7 +117,7 @@ export class TurnMedia {
 
   private async decide(check: MediaCheck, kind: MediaKind): Promise<MediaConfirmation> {
     const end = (check.endedAt ?? this.now()) + AFTER_MS
-    if (check.evidence === "shown") {
+    if (check.evidence === "shown" || check.digest) {
       const kept = check.digest ? await this.kept(check.path, check.digest, kind) : this.shownBetween(check.path, (check.startedAt ?? 0) - BEFORE_MS, end)
       if (kept) return { kind: "kept", media: kept }
     }
@@ -128,7 +129,10 @@ export class TurnMedia {
       if (check.startedAt === undefined) return { kind: "dropped", reason: "The call's records don't say when it ran" }
       if (found.mtimeMs < check.startedAt - BEFORE_MS) return check.endedAt === undefined ? { kind: "pending" } : { kind: "dropped", reason: "The command named it but didn't change it" }
     }
-    return { kind: "kept", media: await this.keep(check.path, kind, found.size) }
+    const media = await this.keep(check.path, kind, found.size)
+    // The turn's record names the bytes it left: a file holding others since isn't what the turn made.
+    if (check.evidence !== "shown" && check.digest && media.digest && media.digest !== check.digest) return { kind: "dropped", reason: "It changed after the turn made it" }
+    return { kind: "kept", media }
   }
 
   /** The copy `show` kept of `path` between two times, the latest. */
@@ -141,7 +145,8 @@ export class TurnMedia {
 
   /** The copy named `digest`, when it is still here. */
   private async kept(path: string, digest: string, kind: MediaKind): Promise<KeptMedia | undefined> {
-    const file = join(this.root, `${digest}${extname(path).toLowerCase()}`)
+    const file = kind === "html" ? await keptPage(path, digest, this.root) : join(this.root, `${digest}${extname(path).toLowerCase()}`)
+    if (!file) return undefined
     const found = await stat(file).catch(() => undefined)
     if (!found?.isFile()) return undefined
     return this.described({ path, file, digest, kind, mimeType: mimeOf(path, kind), bytes: found.size })
@@ -152,7 +157,8 @@ export class TurnMedia {
     const media: KeptMedia = { path, file: path, kind, mimeType: mimeOf(path, kind), bytes }
     if (bytes <= limit) {
       const copy = await keepFileCopy(path, this.root, extname(path).toLowerCase())
-      media.file = copy.path
+      // A page is drawn from a folder of its own, with the styles and pictures it links.
+      media.file = kind === "html" ? await keepPage(path, copy.path, copy.digest, this.root) : copy.path
       media.digest = copy.digest
     }
     return this.described(media)
