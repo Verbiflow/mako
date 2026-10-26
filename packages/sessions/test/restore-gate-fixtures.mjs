@@ -77,7 +77,7 @@ try {
     const stream = streamPath(streams, "cursor", "2026-10-17T09-00-00-000Z-c.jsonl", id)
     await mkdir(join(streams, "cursor"), { recursive: true })
     await writeFile(stream, `{"capture":1,"harness":"cursor","session":{}}\n{"at":"2026-10-17T09:00:00.100Z","runtime":"1.0.40","via":"SDK child hello.sdkVersion"}\n{"at":"2026-10-17T09:00:00.200Z","message":{"type":"status"}}\n`)
-    const provider = new CursorProvider(stores, home, {})
+    const provider = new CursorProvider(stores, home)
     const own = await provider.records(path)
     assert.equal(own.writer, undefined, "Cursor's records state no version, and `cursor-agent`'s isn't the SDK's")
     const store = new RecordStore(recordsPath, stores)

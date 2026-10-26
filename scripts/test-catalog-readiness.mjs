@@ -195,6 +195,8 @@ try {
   }
   const threads = threadCatalog({
     dataRoot: root,
+    userRoot: root,
+    isolated: false,
     app: { appRoot: root, packaged: false, version: "0.0.1", build: {} },
     sessionMemory: null,
     threadStore: null,

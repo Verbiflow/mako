@@ -86,7 +86,7 @@ const machineApplied = "2026-10-23T09:00:00.000001Z"
 await devinStore(machineHome, machineApplied)
 await mkdir(join(machineHome, "image"), { recursive: true })
 await emitDevinSession(stores, { ...thread(join(machineHome, "image")), ref: { ...thread(join(machineHome, "image")).ref, title: "Image" } }, { cwd: join(machineHome, "image"), home: machineHome })
-const place = { home: machineHome, kept: join(machineHome, ".mako", "outputs.sqlite") }
+const place = { home: machineHome, userRoot: join(machineHome, ".mako"), kept: join(machineHome, ".mako", "outputs.sqlite") }
 const readers = SAVED_HISTORY_READERS.map((reader) => reader(stores, place))
 assert.equal(readers.find((each) => each.harness === "devin")?.fork, undefined, "Devin.app's reader, which has no fork rule, comes first")
 const machine = new SessionCatalog(readers, { recordsPath: join(root, "machine-records"), recordsHome: machineHome, readBack: { readers: SAVED_HISTORY_READERS, stores } })

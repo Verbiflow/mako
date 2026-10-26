@@ -310,7 +310,7 @@ if (values.real) {
       },
     })
   }
-  const sessionsRoot = join(scratch, "no-mako-sessions")
+  const userRoot = join(scratch, "no-mako-user")
   for (const usage of usageHarnesses(createHarnessHost(detachedHarnessContext(new NativeStores(false))))) {
     if (!usage.history || !harnesses.includes(usage.provider) || !wanted(usage.provider, "usage scan")) continue
     measures.push({
@@ -320,7 +320,7 @@ if (values.real) {
       unit: "scan",
       repetitions: 2,
       run: async () => {
-        const summary = await usageSummary([usage], sessionsRoot, home, undefined, { ledger: new UsageLedger() })
+        const summary = await usageSummary([usage], userRoot, home, undefined, { ledger: new UsageLedger() })
         return summary.sessions + 1
       },
     })

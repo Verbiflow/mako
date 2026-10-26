@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { cursorSdkIndexPath, cursorSdkStateRoot, type ThreadPage } from "@mako/sessions"
+import { makoUserRoot } from "@mako/sessions/mako-root"
 import { emitCursorSession } from "../packages/sessions/src/emit.ts"
 import { CursorProvider } from "../packages/sessions/src/providers/cursor.ts"
 import { readLegacyStoreSnapshot } from "@mako/host/harnesses/cursor/legacy-store"
@@ -21,8 +22,8 @@ const home = mkdtempSync(join(tmpdir(), "mako-cursor-seed-"))
 try {
   const thread = seedThread(join(home, "project"))
   const emitted = await emitCursorSession(nativeStores, thread, { home })
-  const seed = seeded(thread, await new CursorProvider(nativeStores, home, {}).read(emitted.path))
-  const stateRoot = cursorSdkStateRoot({}, home)
+  const seed = seeded(thread, await new CursorProvider(nativeStores, home).read(emitted.path))
+  const stateRoot = cursorSdkStateRoot(makoUserRoot(home))
   const copied = copyLegacyStore(nativeStores, emitted.path, stateRoot, emitted.sessionId)
   const document = importedAgentDocument({
     agentId: emitted.sessionId, source: { path: emitted.path, identity: emitted.sessionId },
@@ -34,7 +35,7 @@ try {
   index.prepare("INSERT INTO agents (agent_id, workspace_ref, status, latest_checkpoint_ref_json, name, metadata_json, created_at, updated_at) VALUES (?, ?, 'IDLE', ?, 'Seeded', ?, '2026-10-09T00:00:00Z', '2026-10-09T00:00:00Z')")
     .run(document.agentId, thread.ref.cwd!, JSON.stringify({ blobId: document.latestRootBlobId, storeKind: "local-agent-store" }), JSON.stringify(document.sdkMetadata))
   index.close()
-  const read = await new CursorProvider(nativeStores, home, {}).read(copied)
+  const read = await new CursorProvider(nativeStores, home).read(copied)
   assert.ok(read, "the SDK's copy reads back")
   assert.equal(read.entries.length, seed.native, "the copy holds what was written, no more")
   const page: ThreadPage = { ref: read.ref, entries: read.entries, start: 0, total: read.entries.length, hasEarlier: false }

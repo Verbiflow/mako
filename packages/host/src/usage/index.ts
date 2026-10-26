@@ -44,7 +44,7 @@ export interface Usage {
 
 export interface UsageDeps {
   dataRoot: string
-  /** `HostEnvironment.userRoot`, whose `sessions` the built-in runtime's old sessions were kept in. */
+  /** `HostEnvironment.userRoot`: the built-in runtime's old sessions, and Cursor's SDK agents, are read from it. */
   userRoot: string
   /** The script the ledger is read in, off the host; see `UsageReader`. */
   worker: URL
@@ -58,7 +58,7 @@ export function declareUsageMethods(methods: MethodTable, { dataRoot, userRoot, 
     reader ??= new UsageReader(worker, {
       ledgerPath: join(dataRoot, "usage-ledger.sqlite"),
       strictStores,
-      sessionsRoot: join(userRoot, "sessions"),
+      userRoot,
       homeRoot: homedir(),
       conversationsRoot: join(dataRoot, "conversations"),
       helperRuns: helperRunsRoot(dataRoot),

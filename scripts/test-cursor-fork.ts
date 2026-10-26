@@ -6,7 +6,7 @@ import { basename, join, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
 import { CursorProvider } from "@mako/sessions"
-import { cursorSdkAgentDirectory, cursorSdkIndexPath, cursorSdkStorePath } from "@mako/sessions/cursor-sdk-paths"
+import { cursorSdkAgentDirectory, cursorSdkIndexPath, cursorSdkStateRoot, cursorSdkStorePath } from "@mako/sessions/cursor-sdk-paths"
 import { CURSOR_SDK_IMPORT_METADATA_KEY } from "@mako/sessions/cursor-sdk-index"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { CursorSdkClient } from "@mako/host/harnesses/cursor/sdk/client"
@@ -233,14 +233,15 @@ async function driverDeclares() {
 
 /** Two real turns, a fork at the first: it remembers the first codeword and not the second. */
 async function liveFork(apiKey: string) {
-  const stateRoot = join(root, "live", "state")
+  const userRoot = join(root, "live", "mako")
+  const stateRoot = cursorSdkStateRoot(userRoot)
   const cwd = join(root, "live", "work")
   mkdirSync(cwd, { recursive: true })
   const first = `heron-${randomUUID().slice(0, 6)}`
   const second = `otter-${randomUUID().slice(0, 6)}`
   const source = randomUUID()
   const fork = randomUUID()
-  const catalog = new CursorProvider(stores, root, { MAKO_CURSOR_SDK_ROOT: stateRoot })
+  const catalog = new CursorProvider(stores, root, userRoot)
   const created: string[] = []
   try {
     let sideAnswer = ""

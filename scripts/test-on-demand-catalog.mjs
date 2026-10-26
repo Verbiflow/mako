@@ -42,7 +42,7 @@ if (process.argv[2] === 'client') {
     ].map(row => JSON.stringify(row)).join('\n')+'\n')
   }
   const env = { ...process.env, HOME: home, ELECTRON_RUN_AS_NODE: '1' }
-  if (!native) for (const name of ['CLAUDE_CONFIG_DIR', 'MAKO_CURSOR_SDK_ROOT', 'XDG_DATA_HOME', 'OPENCODE_DB']) delete env[name]
+  if (!native) for (const name of ['CLAUDE_CONFIG_DIR', 'XDG_DATA_HOME', 'OPENCODE_DB']) delete env[name]
   const daemon = resolve('packages/sessions/dist/daemon-main.js')
   // Resolve the same root/runtime scope in the prospective reader's environment.
   const identityProcess = spawn(process.execPath, ['--input-type=module', '-e', `import {defaultCatalogIdentity,loadedCatalogCode,onDemandCatalogPaths} from ${JSON.stringify(new URL('../packages/sessions/dist/index.js', import.meta.url).href)};const identity=await defaultCatalogIdentity(${JSON.stringify(join(home,'.mako/archive'))},loadedCatalogCode());console.log(JSON.stringify({identity,...onDemandCatalogPaths(identity)}))`], { env, stdio: ['ignore', 'pipe', 'inherit'] })

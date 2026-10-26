@@ -254,8 +254,8 @@ assumed.
 Everything Mako keeps per user (the record store and the streams its
 drivers write, decoded views, session memory, the Thread store, kept
 outputs, model catalogs, installed readings, transcripts, staged
-attachments, saved keys, and the accounts Mako keeps with their selection,
-leases and removals) is in the host's user root (`HostEnvironment.userRoot`):
+attachments, saved keys, the accounts Mako keeps with their selection,
+leases and removals, and Cursor's SDK agents) is in the host's user root (`HostEnvironment.userRoot`):
 `~/.mako` for the installed app, every profile and a cloud machine, and the
 data root itself for a host isolated outside the application-data folder (a
 test's, a proof's). An isolated host (`HostEnvironment.isolated`) reads its
@@ -281,8 +281,12 @@ that needs a Mako-kept account signs one in on its own host. A script
 acting for the person (`export-cloud-sign-ins.ts`) passes `makoUserRoot()`
 to `detachedHarnessContext`. `node scripts/test-isolated-host.mjs` (in
 `test:application`, after `npx tsgo -b packages/host`) starts a built host
-on a scratch home holding an account layout and root, chooses an account
-on it, and checks that nothing at all in the home's `.mako` changed;
+on a scratch home holding an account layout and root and a Cursor SDK store,
+with a Cursor agent of its own in its data root; it chooses an account,
+reads its catalog, a Cursor thread and usage, and checks that its catalog
+lists its own agent and not the person's, and that nothing at all in the
+home's `.mako` changed, `cursor-sdk` included (SQLite's `-shm` and `-wal`
+too, which any non-strict reader of a WAL store leaves);
 `scripts/test-account-root.ts` (in `test:accounts`) checks that the
 installed app and a profile read an existing `~/.mako/accounts` as earlier
 builds wrote it, and that the lease is per root.
@@ -2512,10 +2516,17 @@ The SDK runs in a child (`child.ts`, spawned through the host's bundled
 `LSUIElement` Helper with `ELECTRON_RUN_AS_NODE`) over an NDJSON wire (`wire.ts`) so a backend
 stall or an SDK crash cannot take the host with it; `CursorSdkClient` bounds
 every request except `login`. Its store is `SqliteLocalAgentStore` under
-Mako's state root (`~/.mako/cursor-sdk`, per user like the session-memory
-ledger, because every launched host receives `MAKO_DATA_ROOT` and a root
-keyed on it would hide each host's agents from the others; a fixture sets
-`MAKO_CURSOR_SDK_ROOT`): one `agents/agent-<sha256(agentId)>/store.db` plus a
+Mako's state root, `cursor-sdk` in the host's user root
+(`cursorSdkStateRoot(userRoot)`, the one rule the driver, the native runner,
+the catalog and its decode asides, record read-back and moves, writer
+evidence, usage and the fixture cleanup all follow): `~/.mako/cursor-sdk` for
+the installed app, every profile and a cloud machine, which share their
+agents, and `<data root>/cursor-sdk` for an isolated host, which neither
+lists nor writes the person's. It is Mako's store, not Cursor's
+(`cursor-agent` and the editor keep theirs under `~/.cursor`, which every
+host reads, as it does `~/.claude` and `~/.codex`), so an isolated host's
+catalog lists only the agents it can continue. One
+`agents/agent-<sha256(agentId)>/store.db` per agent plus a
 shared `index.db` holding each agent's cwd, model, title and root blob.
 `CursorProvider` reads both (`cursor-sdk-index.ts`) and folds `index.db`'s
 mtime into each store's revision because that is where a finished run lands;

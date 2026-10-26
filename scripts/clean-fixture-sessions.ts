@@ -6,6 +6,8 @@
  *   npx tsx scripts/clean-fixture-sessions.ts --delete   # remove them
  *   npx tsx scripts/clean-fixture-sessions.ts --root <finished-run> --delete
  *                                                       # remove that exact run now, wherever it ran
+ *   npx tsx scripts/clean-fixture-sessions.ts --data-root <isolated-host-data> [--root …] [--delete]
+ *                                                       # an isolated host's: its own Cursor agents and records
  *
  * A fixture session is one whose working directory is a disposable directory
  * that a Mako test or probe creates under the OS temporary directory: one
@@ -15,12 +17,20 @@
  * home rather than the temporary directory. Nothing else qualifies. macOS keeps those
  * directories around, so their presence says nothing; a fixture updated in
  * the last thirty minutes is treated as a run in progress and left alone.
+ *
+ * The harnesses' own stores (`~/.claude`, `~/.codex`, `~/.cursor`, …) are
+ * shared by every host. What Mako keeps per user is a host's user root: the
+ * person's `~/.mako` by default, or with `--data-root` the data root of a host
+ * isolated outside the application-data folder, which holds its Cursor SDK
+ * agents and its records instead. A dry run opens every store read-only at the
+ * file level, so it writes nothing anywhere, not even SQLite's `-shm`.
  */
 import { mkdtemp, realpath, rm } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { defaultCatalog } from "@mako/sessions"
 import type { ThreadRef } from "@mako/sessions"
+import { makoUserRoot } from "@mako/sessions/mako-root"
 import { makoRecords } from "@mako/sessions/record-streams"
 
 const FIXTURE_DIRECTORY =
@@ -55,9 +65,15 @@ if (rootIndex >= 0 && requestedRootValue === undefined)
 const requestedRoot = requestedRootValue
   ? await realpath(requestedRootValue)
   : undefined
+const dataRootIndex = process.argv.indexOf("--data-root")
+const dataRootValue = dataRootIndex < 0 ? undefined : process.argv[dataRootIndex + 1]
+if (dataRootIndex >= 0 && dataRootValue === undefined)
+  throw new Error("--data-root needs an isolated host's data root")
+/** The user root whose Mako-placed stores are read: an isolated host's own data root, else the person's `~/.mako`. */
+const userRoot = dataRootValue ? await realpath(dataRootValue) : makoUserRoot()
 const scratch = await mkdtemp(join(tmpdir(), "mako-clean-fixtures-"))
-// Deleting opens the record store, so a session deleted here leaves Mako's records too (`SessionCatalog.remove`); scanning alone captures nothing. A dry run doesn't open it.
-const catalog = defaultCatalog({ cachePath: join(scratch, "cache.json"), ...remove && { recordsPath: makoRecords() } })
+// Deleting opens the user root's record store, so a session deleted here leaves Mako's records too (`SessionCatalog.remove`); scanning alone captures nothing. A dry run doesn't open it.
+const catalog = defaultCatalog({ cachePath: join(scratch, "cache.json"), userRoot, readOnly: !remove, ...remove && { recordsPath: makoRecords(userRoot) } })
 try {
   const refs = await catalog.scan()
   // A run named by `--root` is the person's word that it's finished and disposable, wherever it ran: a scratch

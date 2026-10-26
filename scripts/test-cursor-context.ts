@@ -8,7 +8,7 @@ import { parseRootContext, readCursorSdkContext } from "@mako/sessions/cursor-sd
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { CursorProvider } from "@mako/sessions"
 import { compactionEvent, type Compaction } from "@mako/sessions/events"
-import { cursorSdkStorePath } from "@mako/sessions/cursor-sdk-paths"
+import { cursorSdkStateRoot, cursorSdkStorePath } from "@mako/sessions/cursor-sdk-paths"
 import { CursorSdkClient } from "@mako/host/harnesses/cursor/sdk/client"
 import { CursorDecoder } from "@mako/host/harnesses/cursor/sdk/decoder"
 import { CURSOR_SDK_WIRE_VERSION, type SdkEvent, type SdkMethod, type SdkResult } from "@mako/host/harnesses/cursor/sdk/wire"
@@ -313,7 +313,9 @@ async function liveTurn(apiKey: string) {
 /** A turn that fills composer-2.5's window: the summary Cursor makes is marked live as the saved reader marks it. */
 async function liveSummary(apiKey: string) {
   const cwd = join(root, "summary", "work")
-  const stateRoot = join(root, "summary", "state")
+  // The user root the provider below reads, as a host hands its own.
+  const userRoot = join(root, "summary", "mako")
+  const stateRoot = cursorSdkStateRoot(userRoot)
   mkdirSync(cwd, { recursive: true })
   const words = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu amber cobalt jade onyx pearl ruby slate topaz umber violet walnut maple cedar birch aspen willow spruce larch hazel rowan elder yew".split(" ")
   let seed = 7
@@ -356,7 +358,7 @@ async function liveSummary(apiKey: string) {
     writeFileSync(join(keep, "agent"), agentId)
   }
   assert.ok(compactions.length, "the turn filled the window and Cursor summarized it")
-  const thread = await new CursorProvider(stores, root, { MAKO_CURSOR_SDK_ROOT: stateRoot }).read(cursorSdkStorePath(stateRoot, agentId))
+  const thread = await new CursorProvider(stores, root, userRoot).read(cursorSdkStorePath(stateRoot, agentId))
   const saved = (thread?.entries ?? []).flatMap((entry) => entry.type === "event" && entry.source?.record ? [entry] : [])
   // The live marker as it ends: the decoder's last statement of each window's compaction, completed by the run's next reading.
   const decoder = new CursorDecoder({ models: [], state: { settings: undefined } })

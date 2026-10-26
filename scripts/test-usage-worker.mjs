@@ -20,7 +20,7 @@ const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 const root = await mkdtemp(join(tmpdir(), "mako-usage-worker-"))
 const now = Date.now()
 const data = {
-  ledgerPath: join(root, "ledger.sqlite"), sessionsRoot: join(root, "sessions"),
+  ledgerPath: join(root, "ledger.sqlite"), userRoot: join(root, "user"),
   homeRoot: join(root, "home"), conversationsRoot: join(root, "conversations"), env: {}, now, strictStores: false,
 }
 const worker = new URL("../packages/host/dist/usage-worker.js", import.meta.url)
@@ -54,7 +54,7 @@ try {
     input: 100, output: 20, cacheRead: 30, cacheWrite: 0,
   }))
   ledger.advanceStore("Fixture", "fixture", 1, events)
-  const direct = await measure(() => usageSummary(usageHarnesses(providerHost), data.sessionsRoot, data.homeRoot, data.conversationsRoot, { ledger, now, env: {} }))
+  const direct = await measure(() => usageSummary(usageHarnesses(providerHost), data.userRoot, data.homeRoot, data.conversationsRoot, { ledger, now, env: {} }))
   ledger.close()
   let first
   const background = await measure(() => {

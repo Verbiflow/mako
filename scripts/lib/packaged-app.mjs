@@ -116,7 +116,6 @@ export class PackagedApp {
       ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("MAKO_"))),
       MAKO_DATA_ROOT: this.profile,
       MAKO_CLIENT_ID: PROBE_CLIENT,
-      MAKO_CURSOR_SDK_ROOT: join(this.root, "cursor"),
       ...this.extraEnv,
     }
     delete env.ELECTRON_RUN_AS_NODE

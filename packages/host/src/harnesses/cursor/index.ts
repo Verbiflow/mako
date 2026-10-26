@@ -38,8 +38,10 @@ export const installCursor: ProviderModule = (host, context) => {
   // Cursor's own login, whichever account new sessions use; a selected
   // account's key arrives in each launch's prepared environment instead.
   const env = async () => childProcessEnv(process.env)
-  const stateRoot = () => cursorSdkStateRoot()
-  context.secrets.adoptLegacy(cursorLegacyFiles(stateRoot()))
+  // The SDK's agents are kept in the host's user root: `~/.mako/cursor-sdk`, or an isolated host's own.
+  const sdkRoot = cursorSdkStateRoot(context.userRoot)
+  const stateRoot = () => sdkRoot
+  context.secrets.adoptLegacy(cursorLegacyFiles(sdkRoot))
   const credentials = new CursorCredentialStore(context.secrets.secrets)
   const keys = new CursorAccountKeys(context.secrets.secrets)
   const auth = new CursorSdkAuth({ env, openUrl: (url) => context.openUrl(url), credentials })

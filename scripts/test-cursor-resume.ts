@@ -14,6 +14,7 @@ import {
   cursorSdkStorePath,
   cursorStoreOrigin,
 } from "@mako/sessions"
+import { makoUserRoot } from "@mako/sessions/mako-root"
 import type { ProviderBinding } from "@mako/host/contracts/conversation-control"
 import { CursorSdkAuth } from "@mako/host/harnesses/cursor/sdk/auth"
 import { CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
@@ -40,7 +41,7 @@ const nativeStores = new NativeStores(false)
  */
 
 const home = mkdtempSync(join(tmpdir(), "mako-fixture-cursor-resume-"))
-const stateRoot = cursorSdkStateRoot({}, home)
+const stateRoot = cursorSdkStateRoot(makoUserRoot(home))
 const legacyId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
 
 function writeLegacyStore(path: string, root: string, blobs: number, hex: boolean, extra: Record<string, string> = {}) {
@@ -65,14 +66,16 @@ try {
   const chatsPath = join(home, ".cursor", "chats", "hash", legacyId, "store.db")
 
   // Store origins: the three writers, told apart by path alone.
-  assert.deepEqual(cursorStoreOrigin(acpPath, { home }), { origin: "acp-sessions", sessionId: legacyId })
-  assert.deepEqual(cursorStoreOrigin(chatsPath, { home }), { origin: "chats", sessionId: legacyId, workspace: "hash" })
-  assert.deepEqual(cursorStoreOrigin(join(stateRoot, "agents", "agent-abc", "store.db"), { home }), {
+  assert.deepEqual(cursorStoreOrigin(acpPath, { stateRoot, home }), { origin: "acp-sessions", sessionId: legacyId })
+  assert.deepEqual(cursorStoreOrigin(chatsPath, { stateRoot, home }), { origin: "chats", sessionId: legacyId, workspace: "hash" })
+  assert.deepEqual(cursorStoreOrigin(join(stateRoot, "agents", "agent-abc", "store.db"), { stateRoot, home }), {
     origin: "sdk",
     directoryName: "agent-abc",
   })
-  assert.equal(cursorStoreOrigin(join(home, ".cursor", "acp-sessions", legacyId, "meta.json"), { home }), null)
-  assert.equal(cursorStoreOrigin(join(home, "elsewhere", "store.db"), { home }), null)
+  assert.equal(cursorStoreOrigin(join(home, ".cursor", "acp-sessions", legacyId, "meta.json"), { stateRoot, home }), null)
+  assert.equal(cursorStoreOrigin(join(home, "elsewhere", "store.db"), { stateRoot, home }), null)
+  // An isolated host's agents are its own root's: the person's `~/.mako/cursor-sdk` is no SDK store to it.
+  assert.equal(cursorStoreOrigin(join(stateRoot, "agents", "agent-abc", "store.db"), { stateRoot: cursorSdkStateRoot(join(home, "isolated")), home }), null)
   assert.equal(cursorLegacyIdentity({ origin: "acp-sessions", sessionId: legacyId }, legacyId), legacyId)
   assert.equal(cursorLegacyIdentity({ origin: "chats", sessionId: legacyId, workspace: "hash" }, legacyId), `chats:${legacyId}`)
 

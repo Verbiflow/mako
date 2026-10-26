@@ -47,7 +47,6 @@ exit 2
     MAKO_DATA_ROOT: dataRoot,
     MAKO_WEB_SOCKET: location.socket,
     MAKO_PROFILE: "client-test",
-    MAKO_CURSOR_SDK_ROOT: join(scratch, "cursor"),
     MAKO_TELEMETRY: "off",
     MAKO_PROD: "1",
     PATH: [standIn, process.env.PATH].filter(Boolean).join(delimiter),

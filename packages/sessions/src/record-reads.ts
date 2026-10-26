@@ -5,9 +5,10 @@ import { isAbsolute, join, relative } from "node:path"
 import { z } from "zod"
 import type { ThreadRef } from "./format.js"
 import { keptOutputsPath } from "./kept-outputs.js"
+import { makoUserRoot } from "./mako-root.js"
 import type { SessionProvider } from "./providers/types.js"
 import type { NativeStores } from "./read-only-sqlite.js"
-import type { SavedHistoryReader } from "./readers.js"
+import type { ReaderPlace, SavedHistoryReader } from "./readers.js"
 import { plainRecordPath } from "./record-files.js"
 import type { RecordStore } from "./record-store.js"
 
@@ -21,8 +22,8 @@ const MarkSchema = z.object({ capturedAt: z.number(), deferred: z.array(z.string
 export interface ReadBack {
   readers: readonly SavedHistoryReader[]
   stores: NativeStores
-  /** Where a reader keeps the command outputs it reads (`keptOutputsIn`); the user's by default. */
-  kept?: string
+  /** Where the catalog's readers read (`ReaderPlace`): the host's user root and kept outputs; the user's by default. */
+  place?: ReaderPlace
 }
 
 /** A session's records restored where a reader can read them: its path there, the reader, and the home they were restored into. */
@@ -208,7 +209,8 @@ export class RecordReads {
     let providers = this.readersAt.get(home)
     if (providers) this.readersAt.delete(home)
     else {
-      const place = { home, kept: this.kept }
+      // The restore put the session's Mako-placed stores (Cursor's SDK agents) under the restored home's `.mako`.
+      const place = { home, userRoot: makoUserRoot(home), kept: this.kept }
       providers = this.readers.map((reader) => reader(this.stores, place))
     }
     this.readersAt.set(home, providers)

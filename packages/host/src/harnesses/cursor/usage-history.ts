@@ -11,7 +11,8 @@ import { parseObject, tokenTotal, usageCounts, yieldToMain, type ProviderUsageHi
  * each run's tokens, summed over the run's model calls, as the run's `usage`
  * message streamed them (SDK 1.0.31; 733 of 733 finished runs and 22 of 41
  * failed ones in Mako's state root kept them on 2026-10-17). It reads Mako's
- * state root, which every host, the native runner and side questions share,
+ * state root in the host's user root (`cursorSdkStateRoot`), which the host's
+ * driver, native runner and side questions share,
  * and the stores any other `@cursor/sdk` program keeps under the SDK's
  * default root, `~/.cursor/projects/<workspace>/sdk-agent-store/<md5>/`.
  * `cursor-agent`'s own stores keep no token counts.
@@ -41,7 +42,7 @@ const RUNS_PER_READ = 1_024
 
 /** Every SDK index this machine keeps: Mako's state root, then the SDK's default stores. */
 function indexes(scan: UsageScan): string[] {
-  const found = new Set([cursorSdkIndexPath(cursorSdkStateRoot(scan.env, scan.homeRoot))])
+  const found = new Set([cursorSdkIndexPath(cursorSdkStateRoot(scan.userRoot))])
   const projects = join(scan.homeRoot, ".cursor", "projects")
   for (const project of entries(projects)) {
     const stores = join(projects, project, "sdk-agent-store")

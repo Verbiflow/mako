@@ -123,7 +123,7 @@ export const CURSOR_VOCABULARY = defineVocabulary({
       on: "2026-10-13",
       against: "the store.db files cursor-agent 2026.10.01 and SDK 1.0.31 wrote: every sampled blob plaintext, though meta can carry a blobEncryptionKey",
     },
-    where: "SQLite index.db and agents/<agent>/store.db under the SDK state root (Mako's: ~/.mako/cursor-sdk); cursor-agent keeps ~/.cursor/chats/<hash>/<id>/store.db, content-addressed blobs and a meta row",
+    where: "SQLite index.db and agents/<agent>/store.db under the SDK state root (Mako's: cursor-sdk in its user root, ~/.mako/cursor-sdk); cursor-agent keeps ~/.cursor/chats/<hash>/<id>/store.db, content-addressed blobs and a meta row",
     encodings: ["plain"],
     history: {
       branches: "meta.latestRootBlobId (an SDK agent's in index.db's agents.latest_checkpoint_ref_json): the root blob whose turns are the conversation; older roots are earlier states, each run's last in runs.latest_checkpoint_ref_json. A fork is a new agent indexed at one of them in a clone of its source's store; nothing in it names the source",

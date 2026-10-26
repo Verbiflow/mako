@@ -5,23 +5,21 @@ import { basename, dirname, join, sep } from "node:path"
 import { z } from "zod"
 
 /**
- * Where Mako keeps the Cursor SDK's local agent stores. The SDK's own default
+ * Where Mako keeps the Cursor SDK's local agent stores: `cursor-sdk` in the
+ * host's user root (`HostEnvironment.userRoot`). The SDK's own default
  * hashes the workspace into `~/.cursor/projects/<slug>/sdk-agent-store`,
  * which spreads one user's agents over as many roots as they have projects
  * and hides them from a catalog scan; Mako passes one explicit root instead.
- * It is per user, beside the other `~/.mako` state, so the installed app and
- * a development host see the same agents — the same rule as the session
- * memory ledger. `MAKO_DATA_ROOT` is not a signal here: every launched host
- * receives it, the installed app's included, so branching on it would give
- * each host its own invisible set of agents. A fixture that must not touch the
- * user's agents sets `MAKO_CURSOR_SDK_ROOT` (or `HOME`) explicitly.
+ * So it is Mako's, not Cursor's: `cursor-agent` and the editor keep their own
+ * stores under `~/.cursor`, which stay shared like every harness's. Like the
+ * other per-user state it is `~/.mako/cursor-sdk` for the installed app,
+ * every profile and a cloud machine, so they see the same agents, and the
+ * data root's own for an isolated host (a test's, a proof's), which never
+ * reads or writes the person's. The driver, the catalog, usage, moves and
+ * record evidence all take it from here, from the user root they were given.
  */
-export function cursorSdkStateRoot(
-  env: NodeJS.ProcessEnv = process.env,
-  home: string = homedir()
-): string {
-  if (env.MAKO_CURSOR_SDK_ROOT) return env.MAKO_CURSOR_SDK_ROOT
-  return join(home, ".mako", "cursor-sdk")
+export function cursorSdkStateRoot(userRoot: string): string {
+  return join(userRoot, "cursor-sdk")
 }
 
 /** The SDK names an agent's directory by the SHA-256 of its id. */
@@ -55,14 +53,15 @@ export type CursorStoreOrigin =
   | { origin: "acp-sessions"; sessionId: string }
   | { origin: "chats"; sessionId: string; workspace: string }
 
+/** `stateRoot` is the asking host's SDK root (`cursorSdkStateRoot`); the `cursor-agent` stores are under `home`. */
 export function cursorStoreOrigin(
   path: string,
-  options: { home?: string; env?: NodeJS.ProcessEnv } = {}
+  options: { stateRoot: string; home?: string }
 ): CursorStoreOrigin | null {
   const home = options.home ?? homedir()
   const parts = (root: string): string[] | null =>
     path.startsWith(`${root}${sep}`) ? path.slice(root.length + 1).split(sep) : null
-  const sdk = parts(join(cursorSdkStateRoot(options.env, home), "agents"))
+  const sdk = parts(join(options.stateRoot, "agents"))
   if (sdk) {
     const [directoryName, file] = sdk
     return sdk.length === 2 && file === "store.db" && directoryName?.startsWith("agent-")

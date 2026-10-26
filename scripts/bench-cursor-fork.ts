@@ -1,13 +1,14 @@
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs"
-import { homedir, tmpdir } from "node:os"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
 import { Agent, Cursor } from "@cursor/sdk"
 import { SqliteLocalAgentStore } from "@cursor/sdk/sqlite"
 import { cursorSdkDirectoryName } from "@mako/sessions/cursor-sdk-index"
-import { cursorSdkIndexPath, cursorSdkStorePath } from "@mako/sessions/cursor-sdk-paths"
+import { cursorSdkIndexPath, cursorSdkStateRoot, cursorSdkStorePath } from "@mako/sessions/cursor-sdk-paths"
+import { makoUserRoot } from "@mako/sessions/mako-root"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
 import { cloneCursorForkStore, cursorForkMetadata, cursorForkPoint, readCursorForkRun } from "@mako/host/harnesses/cursor/sdk/fork"
@@ -26,7 +27,8 @@ import { cloneCursorForkStore, cursorForkMetadata, cursorForkPoint, readCursorFo
 
 const args = process.argv.slice(2)
 const named = args.includes("--agent") ? args[args.indexOf("--agent") + 1] : undefined
-const stateRoot = process.env.MAKO_CURSOR_SDK_ROOT ?? join(homedir(), ".mako", "cursor-sdk")
+// The person's agents, read strictly: the bench forks a copy in a scratch root.
+const stateRoot = cursorSdkStateRoot(makoUserRoot())
 const real = new NativeStores(true)
 const megabytes = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`
 const peak = () => megabytes(process.resourceUsage().maxRSS * 1024)

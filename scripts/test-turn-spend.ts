@@ -149,7 +149,7 @@ try {
 
   // Settings › Usage counts them for a harness whose store keeps no counts.
   const measured = usageHarnesses(providerHost).map((harness) => harness.provider === "cursor" ? { provider: harness.provider, label: harness.label } : harness)
-  const summary = await usageSummary(measured, join(root, "no-sessions"), join(root, "home"), conversations)
+  const summary = await usageSummary(measured, join(root, "no-mako-user"), join(root, "home"), conversations)
   const cursor = summary.sources?.find((source) => source.source === "Cursor")
   assert.equal(cursor?.input, 210, "every turn's spend, the harness's own included")
   assert.equal(cursor?.messages, 4)

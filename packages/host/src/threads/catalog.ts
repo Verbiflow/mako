@@ -12,7 +12,7 @@
  * it can inherit the conversation, and that is what this hands over.
  */
 import { makoRuntimeReadings } from "@mako/sessions/record-observed"
-import { contextFreeTitle, keptOutputsIn, makoViews, threadIdentity, VIEWER_PAGE, type KeptRestore } from "@mako/sessions"
+import { contextFreeTitle, makoViews, threadIdentity, VIEWER_PAGE, type KeptRestore } from "@mako/sessions"
 import { makoRecords } from "@mako/sessions/record-streams"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import type { InstalledReading, SessionWriters } from "@mako/sessions/record-writers"
@@ -880,7 +880,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       runtimeReadings: makoRuntimeReadings(deps.userRoot),
       readOnly: catalogReadOnly,
       backfill: !catalogReadOnly && !deps.isolated,
-      kept: keptOutputsIn(deps.userRoot),
+      userRoot: deps.userRoot,
       decodeExecutable: headlessNodeExecutable(),
       ...deps.writer && { writer: deps.writer },
       ...deps.profiles && { profiles: { ...deps.profiles, dataRoot: deps.dataRoot, sessionMemory: sessionMemoryPath(deps.userRoot), home: homedir() } },
@@ -1089,7 +1089,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       runtimeReadings: makoRuntimeReadings(deps.userRoot),
       readOnly: catalogReadOnly,
       decodeExecutable: headlessNodeExecutable(),
-      kept: keptOutputsIn(deps.userRoot),
+      userRoot: deps.userRoot,
       ...deps.writer && { writer: deps.writer },
     })
     const stop = () => void source.stop()
@@ -1438,7 +1438,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       viewsPath: makoViews(deps.userRoot),
       readOnly: catalogReadOnly,
       decodeExecutable: headlessNodeExecutable(),
-      kept: keptOutputsIn(deps.userRoot),
+      userRoot: deps.userRoot,
     })
     try {
       return await direct.open(path, false)

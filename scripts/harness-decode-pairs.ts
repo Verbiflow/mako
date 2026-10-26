@@ -34,6 +34,7 @@ import { resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/insta
 import { SHUTDOWN_GRACE_MS } from "@mako/host/harnesses/live-driver"
 import { OpenCodeMessageIds, promptFiles } from "@mako/host/harnesses/opencode/live-driver"
 import { cursorSdkSelection, cursorSdkStateRoot, cursorSdkStorePath, normalizeCursorSdkModels, OPENCODE_PLAN_AGENT } from "@mako/sessions"
+import { makoUserRoot } from "@mako/sessions/mako-root"
 import { build } from "esbuild"
 import { readCursorCliApiKey } from "@mako/host/harnesses/cursor/sdk/cli-keychain"
 import { CursorSdkClient } from "@mako/host/harnesses/cursor/sdk/client"
@@ -1146,7 +1147,7 @@ const cursor: Recorder = {
       const catalog = normalizeCursorSdkModels((await client.request("models", undefined)).models)
       const model = cursorSdkSelection({ model: CURSOR_MODEL }, catalog.models)?.selection
       if (!model) throw new Error(`Cursor doesn't offer ${CURSOR_MODEL} to this account`)
-      const stateRoot = cursorSdkStateRoot(sandbox.env, sandbox.home)
+      const stateRoot = cursorSdkStateRoot(makoUserRoot(sandbox.home))
       const opened = await client.request("open", { strictStores: false, cwd: sandbox.project, stateRoot, agentId: randomUUID(), create: true, model })
       for (const turn of scenario.turns) {
         if (turn.resume) {

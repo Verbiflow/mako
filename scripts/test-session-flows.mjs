@@ -133,7 +133,8 @@ async function main(app) {
     readers.push(standIn.reader)
   }
   // The app pages through its catalog daemon; this host must not start or reach the user's.
-  const catalog = defaultCatalog({ archivePath: join(root, "archive"), recordsPath: join(root, "records"), viewsPath: join(root, "views"), readers })
+  // Its readers read the harness host's user root, where its Cursor agents are kept, as the app's catalog reads its host's.
+  const catalog = defaultCatalog({ archivePath: join(root, "archive"), recordsPath: join(root, "records"), viewsPath: join(root, "views"), readers, userRoot: harnessContext.userRoot })
   const { SessionMemory } = await import("@mako/host/threads/session-memory")
   const { openThreadStore } = await import("@mako/host/threads/store")
   const { WorkspaceSnapshots } = await load("packages/host/dist/workspaces/snapshots.js")
@@ -250,7 +251,7 @@ async function main(app) {
   const source = (provider) => selected.length > 1 && selected.includes(provider) ? selected[(selected.indexOf(provider) + 1) % selected.length] : undefined
   const tools = {
     identifyTool, nativeToolNames, harnesses: providerHost.harnesses, skills: providerHost.skillSources, readable: readableHarnesses(readers), history: (path) => catalog.page(path),
-    source, drivers: providerHost.liveDrivers, label, served, catalog, records: join(root, "records"),
+    source, drivers: providerHost.liveDrivers, label, served, catalog, records: join(root, "records"), userRoot: harnessContext.userRoot,
   }
   const bench = chosen.mode === "bench" ? benchFlows(historyProbe({ root, profile: join(root, "profile"), fed })) : []
   const carry = chosen.mode === "carry" ? await carryFlows(chosen.carry) : []
@@ -564,11 +565,12 @@ function notedBindings(snapshot, viewAt, root) {
 }
 
 /** A side conversation's copy of the agent leaves the SDK's index and the disk once it closes. */
-async function sideCopiesGone(provider, since) {
+async function sideCopiesGone(provider, userRoot, since) {
   if (provider !== "cursor") throw new Error(`The flows don't know where ${provider} keeps a side conversation's copy`)
   const { DatabaseSync } = await import("node:sqlite")
   const { createHash } = await import("node:crypto")
-  const root = process.env.MAKO_CURSOR_SDK_ROOT ?? join(homedir(), ".mako", "cursor-sdk")
+  const { cursorSdkStateRoot } = await import("@mako/sessions/cursor-sdk-paths")
+  const root = cursorSdkStateRoot(userRoot)
   const left = () => {
     const index = new DatabaseSync(join(root, "index.db"), { readOnly: true })
     try {
@@ -798,7 +800,7 @@ const FLOWS = [
       if (stopped.status !== "stopped") throw new Error(`Stop left the side answer ${stopped.status}`)
       await h.owner.sideQuestion(id, { kind: "close" })
       if (h.snapshot(id).side) throw new Error("The side conversation stayed open after closing")
-      if (by === "fork") await sideCopiesGone(h.provider, new Date(asked - 60_000).toISOString())
+      if (by === "fork") await sideCopiesGone(h.provider, h.tools.userRoot, new Date(asked - 60_000).toISOString())
       return { by, duringTurn, seconds: Math.round((Date.now() - asked) / 1000) }
     },
   },

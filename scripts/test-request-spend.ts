@@ -112,11 +112,11 @@ try {
   await owner.close(id)
 
   // Cursor's spend is read from its own SDK index (`cursorUsageHistory`), never also from the journal.
-  const fromStore = await usageSummary(usageHarnesses(providerHost), join(root, "no-sessions"), join(root, "home"), conversations)
+  const fromStore = await usageSummary(usageHarnesses(providerHost), join(root, "no-mako-user"), join(root, "home"), conversations)
   assert.equal(fromStore.sources?.find((source) => source.source === "Cursor"), undefined, "a harness that reads its own store isn't counted again from Mako's journals")
   // A harness whose store keeps no counts is counted from what the journal measured.
   const measured = usageHarnesses(providerHost).map((harness) => harness.provider === "cursor" ? { provider: harness.provider, label: harness.label } : harness)
-  const summary = await usageSummary(measured, join(root, "no-sessions"), join(root, "home"), conversations)
+  const summary = await usageSummary(measured, join(root, "no-mako-user"), join(root, "home"), conversations)
   const cursor = summary.sources?.find((source) => source.source === "Cursor")
   assert.equal(cursor?.harness, "cursor", "so Settings › Usage reads what the harness declares about sessions outside Mako")
   assert.equal(cursor?.messages, 1)

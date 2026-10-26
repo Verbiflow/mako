@@ -1,7 +1,7 @@
 import { rm, mkdir } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
-import { keptOutputsPath, SAVED_HISTORY_READERS, SessionCatalog, type KeptRestore } from "@mako/sessions"
+import { homePlace, SAVED_HISTORY_READERS, SessionCatalog, type KeptRestore } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import { createContinuationPlanner } from "@mako/host/conversations/continuation"
@@ -44,7 +44,7 @@ for (const harness of chosen) {
   const note = (ok: boolean, what: string) => lines.push(`${harness.padEnd(8)} ${ok ? "PASS" : "FAIL"} ${what}`)
   const word = `KEPT-${harness.toUpperCase()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`
   let id = ""
-  const catalog = new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores, { home, kept: keptOutputsPath(home) })), {
+  const catalog = new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores, homePlace(home))), {
     recordsPath: join(scratchRoot, "records"), recordsHome: home, cachePath: join(scratchRoot, `${harness}-cache.json`),
     readBack: { readers: SAVED_HISTORY_READERS, stores },
   })

@@ -49,7 +49,7 @@ export function cursorSdkNativeRunner(dependencies: CursorNativeRunnerDependenci
   /** A thread still in a `cursor-agent` store is imported the first time it runs here, as the live driver does. */
   function importFrom(id: string, path: string | undefined): SdkImportSource | undefined {
     if (!path) return undefined
-    const origin = cursorStoreOrigin(path, { home: dependencies.home })
+    const origin = cursorStoreOrigin(path, { stateRoot: dependencies.stateRoot(), home: dependencies.home })
     if (!origin || origin.origin === "sdk") return undefined
     return { path, identity: cursorLegacyIdentity(origin, id, dependencies.home ?? homedir()) }
   }

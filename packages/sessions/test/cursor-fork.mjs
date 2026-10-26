@@ -70,7 +70,7 @@ try {
     join(home, ".cursor", "chats", "workspace", id, "meta.json"),
     JSON.stringify({ cwd: home, hasConversation: true, updatedAtMs: 2_000 })
   )
-  const provider = new CursorProvider(nativeStores, home, {})
+  const provider = new CursorProvider(nativeStores, home)
   const files = await provider.discover()
   const originalRef = await provider.peek(files.find((file) => file.path === original))
   const forkRef = await provider.peek(files.find((file) => file.path === fork))
@@ -117,7 +117,7 @@ try {
       JSON.stringify({ makoImport: { path: original, identity: id, agentId: id }, blobEncryptionKey: "a2V5" })
     )
   index.close()
-  const importedProvider = new CursorProvider(nativeStores, home, {})
+  const importedProvider = new CursorProvider(nativeStores, home)
   const importedFiles = await importedProvider.discover()
   const importedPath = join(agentDirectory, "store.db")
   const importedRef = await importedProvider.peek(importedFiles.find((file) => file.path === importedPath))
@@ -148,7 +148,7 @@ try {
     join(home, ".cursor", "chats", "elsewhere", id, "meta.json"),
     JSON.stringify({ cwd: join(home, "b"), hasConversation: true, createdAtMs: 3_000, updatedAtMs: 3_000 })
   )
-  const resumed = new CursorProvider(nativeStores, home, {})
+  const resumed = new CursorProvider(nativeStores, home)
   const resumedFiles = await resumed.discover()
   const refOf = async (path) => resumed.peek(resumedFiles.find((file) => file.path === path) ?? { path, bytes: 0, mtimeMs: 0 })
   assert.equal((await refOf(fork)).identity, `chats:${id}`, "the first chats store keeps the identity references name")
@@ -165,7 +165,7 @@ try {
       (await refOf(path)).identity,
       `continuing the ${workspace} store records the identity of its own row`
     )
-  const everyStore = await new SessionCatalog([new CursorProvider(nativeStores, home, {})]).scan()
+  const everyStore = await new SessionCatalog([new CursorProvider(nativeStores, home)]).scan()
   assert.deepEqual(
     everyStore.filter((ref) => ref.path.includes("/chats/")).map((ref) => ref.path).sort(),
     [elsewhere, fork, third].sort(),
@@ -176,16 +176,16 @@ try {
   // Deleting the imported agent deletes the session it stands for: the
   // acp-sessions store folded under it goes too, or the rail would show it
   // again once the agent is gone. A chats store of another identity stays.
-  const deleting = new SessionCatalog([new CursorProvider(nativeStores, home, {})])
+  const deleting = new SessionCatalog([new CursorProvider(nativeStores, home)])
   await deleting.scan()
   assert.equal(await deleting.remove(importedPath), true)
   assert.equal(existsSync(importedPath), false, "the agent's store goes")
   assert.equal(existsSync(original), false, "and the store it was imported from, folded under it")
   assert.equal(existsSync(fork), true, "a chats store of another identity stays")
-  const rescanned = await new SessionCatalog([new CursorProvider(nativeStores, home, {})]).scan()
+  const rescanned = await new SessionCatalog([new CursorProvider(nativeStores, home)]).scan()
   assert.ok(!rescanned.some((ref) => ref.nativeId === id && !ref.path.includes("/chats/")), "nothing of the deleted session comes back")
   // A `cursor-agent` chat is one session's folder, removed like any other; Cursor Desktop's rows are not.
-  const chatsProvider = new CursorProvider(nativeStores, home, {})
+  const chatsProvider = new CursorProvider(nativeStores, home)
   assert.equal(await chatsProvider.remove(third), true)
   assert.equal(existsSync(dirname(third)), false, "the chat's folder goes")
   assert.equal(await chatsProvider.remove(join(home, "Library", "Application Support", "Cursor", "User", "globalStorage", "state.vscdb")), false, "Desktop's database is never removed")

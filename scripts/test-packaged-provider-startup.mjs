@@ -26,8 +26,7 @@ const traceWatchClose = process.argv.includes("--trace-watch-close")
 const requested = process.argv.slice(3).filter(arg => !arg.startsWith("--"))
 const report = { app, build: metadata.makoBuild, root, results: [], status: "running" }
 const call = (channel, ...args) => invokeRuntime(socket, client, channel, args)
-const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket,
-  MAKO_CURSOR_SDK_ROOT: join(root, "cursor") }
+const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket }
 for (const key of ["VITE_DEV_SERVER_URL", "MAKO_PROFILE", "MAKO_PROD"])
   delete env[key]
 await mkdir(directory, { recursive: true })

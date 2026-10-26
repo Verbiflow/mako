@@ -72,7 +72,7 @@ try {
     entry.kind === "user" ? `user:${entry.text}` : entry.kind === "event" ? `event:${entry.label}` : `assistant:${entry.blocks.map((block) => block.text).join("")}`
   const transcript = (entries) => messagesFromEntries(entries).map(line)
 
-  const provider = new CursorProvider(nativeStores, home, {})
+  const provider = new CursorProvider(nativeStores, home)
   const follower = provider.createFollower(path, 0)
   const once = await follower.next()
   assert.deepEqual(transcript(once.entries), ["user:first", "assistant:one", "event:Context compacted", "user:second", "assistant:two"],
@@ -85,7 +85,7 @@ try {
   const whole = ["user:first", "assistant:one", "event:Context compacted", "user:second", "assistant:two", "event:Context compacted", "user:third", "assistant:three"]
   assert.deepEqual(transcript([...once.entries.slice(0, twice.replaceFrom), ...twice.entries]), whole,
     "a live update after a new summary keeps everything before it")
-  const fresh = messagesFromEntries((await new CursorProvider(nativeStores, home, {}).read(path)).entries)
+  const fresh = messagesFromEntries((await new CursorProvider(nativeStores, home).read(path)).entries)
   assert.deepEqual(fresh.map(line), whole, "a fresh read agrees with the followed one")
   assert.deepEqual(fresh.filter((entry) => entry.kind === "event").map((entry) => entry.body), ["summary 1", "summary 2"],
     "each marker opens on the summary its window was replaced by")
@@ -98,13 +98,13 @@ try {
   put("root-3", root([...afterTwo, ...third, ...fourth], [windowOne, windowTwo]))
   run.run("run-3", id, 3, "CANCELLED", checkpoint("root-2"), checkpoint("root-3"), "2026-09-26T00:00:05.000Z")
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint("root-3"), id)
-  const stopped = await new CursorProvider(nativeStores, home, {}).read(path)
+  const stopped = await new CursorProvider(nativeStores, home).read(path)
   assert.deepEqual(transcript(stopped.entries), [...whole, "user:fourth", "assistant:partial", "event:Interrupted"])
 
   // A store without windows reads exactly as before.
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint("root-0"), id)
   index.exec("DELETE FROM runs")
-  assert.deepEqual(transcript((await new CursorProvider(nativeStores, home, {}).read(path)).entries), ["user:first", "assistant:one"])
+  assert.deepEqual(transcript((await new CursorProvider(nativeStores, home).read(path)).entries), ["user:first", "assistant:one"])
   console.log("Cursor compaction: summarized windows read ahead of the live one, live and in history, with a marker at each summary citing its window")
 
   // The summary the model was handed (`providerOptions.cursor.isSummary`)
@@ -123,14 +123,14 @@ try {
   put(textless, list(first))
   put("root-4", root([...stored([scaffold(3)[0], handed("summary 3"), said("fifth"), answer("five")])], [textless]))
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint("root-4"), id)
-  assert.deepEqual(outline((await new CursorProvider(nativeStores, home, {}).read(path)).entries),
+  assert.deepEqual(outline((await new CursorProvider(nativeStores, home).read(path)).entries),
     ["user:first", "assistant:one", "event:Context compacted [summary 3]", "user:fifth", "assistant:five"])
 
   const notification = "<timestamp>Thursday, Jul 2, 2026, 3:11 AM (UTC-7)</timestamp>\n<system_notification>\nThe following task has finished. If you were already aware, ignore this notification and do not restate prior responses.\n\n<task>\nkind: subagent\nstatus: success\ntask_id: 284ad2dd\ntitle: Inspect module\n<response>It is clean.</response>\n</task>\n</system_notification>\n<user_query>The beginning of the above subagent result is already visible to the user. Perform any follow-up actions (if needed).</user_query>"
   const windowless = stored([scaffold(4)[0], handed("summary 4"), said("sixth"), answer("started"), { role: "user", content: notification }, answer("checked")])
   put("root-5", root(windowless, []))
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint("root-5"), id)
-  const windowlessRead = await new CursorProvider(nativeStores, home, {}).read(path)
+  const windowlessRead = await new CursorProvider(nativeStores, home).read(path)
   assert.deepEqual(outline(windowlessRead.entries), [
     "event:Context compacted [summary 4]",
     "user:sixth",
@@ -152,7 +152,7 @@ try {
   put("root-7", root([...windowless, ...expiredTurn, ...failedTurn], []))
   ended.run("run-8", id, 8, "ERROR", checkpoint("root-6"), checkpoint("root-7"), "Provider returned error: overloaded", "2026-09-26T00:00:09.000Z")
   index.prepare("UPDATE agents SET latest_checkpoint_ref_json = ? WHERE agent_id = ?").run(checkpoint("root-7"), id)
-  const endedRead = (await new CursorProvider(nativeStores, home, {}).read(path)).entries
+  const endedRead = (await new CursorProvider(nativeStores, home).read(path)).entries
   const endedMessages = messagesFromEntries(endedRead)
   assert.deepEqual(outline(endedRead).slice(-6), [
     "user:seventh",

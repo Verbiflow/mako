@@ -28,8 +28,8 @@ const catalogWorkerData = z.object({
   readOnly: z.boolean(),
   /** Takes every session in the rail into the record store (never a read-only catalog's, nor an isolated host's). */
   backfill: z.boolean(),
-  /** Where readers keep the command outputs they read: the user root's. */
-  kept: z.string().min(1),
+  /** The host's user root: where readers keep the command outputs they read and find the stores Mako places (Cursor's SDK agents). */
+  userRoot: z.string().min(1),
   /** Runs a large record's decode as Node in a child process: Electron's Helper inside the app. */
   decodeExecutable: z.string().min(1),
   /** How this build stamps a store format it sets (`storeWriter`). */
@@ -65,7 +65,7 @@ async function main(): Promise<void> {
     readOnly: data.data.readOnly,
     // Off the host's main thread, so the worker takes every session in the rail into the record store.
     backfill: data.data.backfill,
-    kept: data.data.kept,
+    userRoot: data.data.userRoot,
     log: (message, fields) => post({ type: "log", message, fields }),
     decodeExecutable: data.data.decodeExecutable,
     ...data.data.writer && { writer: data.data.writer },

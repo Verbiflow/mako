@@ -16,7 +16,7 @@ port.on("message", raw => {
   pending = pending.then(async () => {
     let reply: UsageWorkerReply
     try {
-      const summary = await usageSummary(harnesses, data.sessionsRoot, data.homeRoot, data.conversationsRoot, {
+      const summary = await usageSummary(harnesses, data.userRoot, data.homeRoot, data.conversationsRoot, {
         ledger,
         env: data.env,
         now: data.now,

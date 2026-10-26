@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "node:fs/promises"
+import { cp, mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -10,6 +10,7 @@ import { npmReleaseTimeline, readReleaseTimelines, releaseBound, writeReleaseTim
 import { NativeStores } from "../dist/read-only-sqlite.js"
 import { RecordStore } from "../dist/record-store.js"
 import { ClaudeProvider } from "../dist/providers/claude.js"
+import { CursorProvider } from "../dist/providers/cursor.js"
 import { EVIDENCE_RULES, outdatedOf, outdatedText, restoreGate, writersOf } from "../dist/record-writers.js"
 import { compareVersions } from "../dist/runtime-version.js"
 
@@ -189,7 +190,7 @@ try {
     // Folders made now: every one was born before the chat's first write; the newest is the only install over its writes.
     assert.equal(evidence.line, "cursor-agent")
     assert.deepEqual([evidence.source, evidence.versions], ["install", ["2026.10.14-0f9edde"]])
-    assert.equal(await reader().cursorStore(join(home, ".mako", "cursor-sdk", "agents", "agent-x", "store.db")), null, "an SDK agent with no store has nothing to read")
+    assert.equal(await reader().cursorSdkAgent(join(home, ".mako", "cursor-sdk", "agents", "agent-x", "store.db")), null, "an SDK agent with no store has nothing to read")
     // Mako's own SDK agents: the newest SDK Mako's repository had pinned by the last write.
     const agent = join(home, ".mako", "cursor-sdk", "agents", "agent-y")
     await mkdir(agent, { recursive: true })
@@ -197,12 +198,20 @@ try {
     agentDb.exec("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
     agentDb.close()
     await touch(join(agent, "store.db"), "2026-10-01T12:00:00Z")
-    const pinned = await reader().cursorStore(join(agent, "store.db"))
+    const pinned = await reader().cursorSdkAgent(join(agent, "store.db"))
     assert.deepEqual([pinned.source, pinned.bound, pinned.upTo], ["range", "pins", "1.0.31"])
     assert.match(pinned.why, /not proof of the build that ran/)
     assert.equal(restoreGate({ record: [], observed: [], evidence: pinned }, "1.0.31").kind, "same-or-newer", "the SDK Mako ships reads what it pinned")
     await touch(join(agent, "store.db"), "2026-09-01T12:00:00Z")
-    assert.equal((await reader().cursorStore(join(agent, "store.db"))).source, "unknown", "an agent from before the repository pinned an SDK")
+    assert.equal((await reader().cursorSdkAgent(join(agent, "store.db"))).source, "unknown", "an agent from before the repository pinned an SDK")
+    // The SDK's agents are Mako's wherever its user root is: an isolated host's under its data root, which `cursorStore` doesn't take for a `cursor-agent` store.
+    const isolated = join(home, "isolated-root", "cursor-sdk", "agents", "agent-z")
+    await mkdir(isolated, { recursive: true })
+    await cp(join(agent, "store.db"), join(isolated, "store.db"))
+    await touch(join(isolated, "store.db"), "2026-10-01T12:00:00Z")
+    const provider = new CursorProvider(new NativeStores(true), home, join(home, "isolated-root"))
+    assert.equal((await provider.writerEvidence(join(isolated, "store.db"), reader())).bound, "pins", "an isolated host's SDK agent reads as Mako's own")
+    assert.equal(await reader().cursorStore(join(isolated, "store.db")), null)
     // An older chat, from before any kept build: only its day bounds the build that wrote it.
     const old = join(home, ".cursor", "chats", "68cb518f", "11111111-7793-4e80-b5d1-343da0f42fea")
     await mkdir(old, { recursive: true })

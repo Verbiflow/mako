@@ -42,7 +42,9 @@ near(estimateUsageCost("gpt-6-luna", million({ output: 1e6 })), 0.5)
 const AUGUST_25 = Date.parse("2026-08-25T12:00:00.000Z")
 
 const root = await mkdtemp(join(tmpdir(), "mako-usage-"))
-const sessionsRoot = join(root, "built-in")
+/** The user root the built-in runtime's old sessions were kept in. */
+const userRoot = join(root, "built-in")
+const sessionsRoot = join(userRoot, "sessions")
 const homeRoot = join(root, "home")
 
 try {
@@ -157,7 +159,7 @@ try {
   )
   await putOpenCodeDatabases(homeRoot)
 
-  const summary = await usageSummary(usageHarnesses(providerHost), sessionsRoot, homeRoot, undefined, { now: AUGUST_25 })
+  const summary = await usageSummary(usageHarnesses(providerHost), userRoot, homeRoot, undefined, { now: AUGUST_25 })
 
   assert.equal(summary.total.messages, 11)
   assert.equal(summary.sessions, 9)
@@ -237,7 +239,7 @@ try {
   const hashed = join(grokHome, ".grok", "sessions", "workspace-0123456789abcdef")
   await putJsonl(join(hashed, "grok-2", "updates.jsonl"), [turn("p3", 1_787_000_200, { "grok-build": { inputTokens: 10, outputTokens: 0 } })])
   await writeFile(join(hashed, ".cwd"), "/a/very/long/workspace\n")
-  const grokSummary = await usageSummary(usageHarnesses(providerHost), join(root, "no-mako-sessions"), grokHome, undefined, { now: AUGUST_25 })
+  const grokSummary = await usageSummary(usageHarnesses(providerHost), join(root, "no-mako-user"), grokHome, undefined, { now: AUGUST_25 })
   const grok = grokSummary.sources?.find((source) => source.source === "Grok")
   assert.equal(grok?.messages, 3, "one event per model per turn; a repeated turn, other files and subagents add nothing")
   assert.equal(grok?.input, 150, "cached input is counted apart from fresh input")
@@ -300,7 +302,7 @@ async function cursorUsage(homeRoot: string): Promise<void> {
   ])
   const ledger = new UsageLedger(join(homeRoot, "ledger.sqlite"))
   try {
-    const read = async () => (await usageSummary(usageHarnesses(providerHost), join(homeRoot, "no-mako-sessions"), homeRoot, undefined, { now: AUGUST_25, ledger })).sources?.find((source) => source.source === "Cursor")
+    const read = async () => (await usageSummary(usageHarnesses(providerHost), join(homeRoot, ".mako"), homeRoot, undefined, { now: AUGUST_25, ledger })).sources?.find((source) => source.source === "Cursor")
     const first = await read()
     assert.equal(first?.messages, 3, "a finished run, a failed run that kept its usage, and another program's run; neither the running nor the month-old run")
     assert.equal(first?.input, 500, "Cursor's input includes what the cache supplied, which is counted apart")
@@ -318,6 +320,14 @@ async function cursorUsage(homeRoot: string): Promise<void> {
     assert.equal(second?.output, 82)
   } finally {
     ledger.close()
+  }
+  // An isolated host's user root holds its own agents: the home's `.mako/cursor-sdk` isn't its, while another program's store under `~/.cursor` is still read.
+  const isolated = new UsageLedger(join(homeRoot, "isolated-ledger.sqlite"))
+  try {
+    const own = (await usageSummary(usageHarnesses(providerHost), join(homeRoot, "isolated-data"), homeRoot, undefined, { now: AUGUST_25, ledger: isolated })).sources?.find((source) => source.source === "Cursor")
+    assert.equal(own?.messages, 1, "only the other program's run: the person's state root is not an isolated host's")
+  } finally {
+    isolated.close()
   }
   console.log("Cursor usage: each run's usage from the SDK's index, in Mako's state root and another program's store, cache apart from input, a run counted once and read again only when it changes")
 }
@@ -338,7 +348,7 @@ async function invalidLedgerState(root: string): Promise<void> {
   const ledger = new UsageLedger(path)
   const db = new DatabaseSync(path)
   const harnesses = usageHarnesses(providerHost).filter((harness) => harness.provider === "codex")
-  const summarize = () => usageSummary(harnesses, join(root, "no-built-in"), home, undefined, { now, ledger })
+  const summarize = () => usageSummary(harnesses, join(root, "no-mako-user"), home, undefined, { now, ledger })
   try {
     assert.equal((await summarize()).total.input, 10)
     const saved = db.prepare("SELECT state, offset FROM files WHERE source = 'Codex'").get()
@@ -382,7 +392,7 @@ async function keptLedger(root: string): Promise<void> {
   const sessions = join(home, ".codex", "sessions")
   await mkdir(sessions, { recursive: true })
   const ledger = new UsageLedger(join(root, "ledger.sqlite"))
-  const summarize = () => usageSummary(usageHarnesses(providerHost), join(root, "no-built-in"), home, undefined, { now, ledger })
+  const summarize = () => usageSummary(usageHarnesses(providerHost), join(root, "no-mako-user"), home, undefined, { now, ledger })
   const codexOf = (summary: UsageSummary) => {
     const codex = summary.sources?.find((source) => source.source === "Codex")
     return { messages: codex?.messages ?? 0, input: codex?.input ?? 0, cacheRead: codex?.cacheRead ?? 0, output: codex?.output ?? 0 }
@@ -482,7 +492,7 @@ async function keptLedger(root: string): Promise<void> {
     spend("request-1", today + 60_000, { input: 100_000, cacheRead: 200_000, cacheWrite: 0, output: 100_000 })
     spend("request-old", since - 1, { input: 9_999, cacheRead: 0, cacheWrite: 0, output: 0 })
     const recordedSummary = (summary: UsageSummary) => summary.sources?.find((source) => source.source === harness.label)
-    const withJournals = () => usageSummary(harnesses, join(root, "no-built-in"), home, conversations, { now, ledger })
+    const withJournals = () => usageSummary(harnesses, join(root, "no-mako-user"), home, conversations, { now, ledger })
     let recorded = recordedSummary(await withJournals())
     assert.equal(recorded?.messages, 1)
     near(recorded?.estimatedCost ?? null, 1.22, "a request's spend is a turn's sum")

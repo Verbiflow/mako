@@ -108,12 +108,12 @@ try {
     "user:also check notes.md (steered)",
     "assistant(composer-2.5):text:two",
   ]
-  const thread = await new CursorProvider(nativeStores, home, {}).read(path)
+  const thread = await new CursorProvider(nativeStores, home).read(path)
   assert.deepEqual(transcript(thread.entries), whole,
     "both runs replay, the one before the compaction placed by its last message; the failed read shows the checkpoint's error; the steer is drawn once")
   assert.equal(thread.entries.find((entry) => entry.text === "second")?.at, Date.parse("2026-10-01T00:00:05.000Z"), "a replayed turn's prompt is stamped when its run started")
 
-  const recent = await new CursorProvider(nativeStores, home, {}).recent(path, 1)
+  const recent = await new CursorProvider(nativeStores, home).recent(path, 1)
   assert.deepEqual(transcript(recent), whole.slice(2), "a recent window that would start at the steer starts at its run's prompt")
 
   // A running run's checkpoints, read as Cursor saves each step: the result

@@ -21,7 +21,7 @@ const HARNESSES = ["claude", "codex", "cursor", "devin", "grok", "opencode"] as 
 
 function catalogAt(home: string, stores: NativeStores, translator?: string): SessionCatalog {
   const kept = join(home, ".mako", "kept-outputs")
-  return new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores, { home, kept })), {
+  return new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores, { home, userRoot: join(home, ".mako"), kept })), {
     recordsPath: join(home, ".mako", "records"),
     recordsHome: home,
     viewsPath: join(home, ".mako", "views"),
@@ -499,7 +499,7 @@ async function statsAsDiscovered(): Promise<void> {
   for (const harness of HARNESSES) {
     for (const name of await readdir(join(FIXTURE_ROOT, harness, "pairs"))) {
       const home = join(FIXTURE_ROOT, harness, "pairs", name, "home")
-      const providers = SAVED_HISTORY_READERS.map((reader) => reader(stores, { home, kept: join(home, ".mako", "kept-outputs") }))
+      const providers = SAVED_HISTORY_READERS.map((reader) => reader(stores, { home, userRoot: join(home, ".mako"), kept: join(home, ".mako", "kept-outputs") }))
       for (const provider of providers) {
         if (!provider.stat) continue
         for (const file of await provider.discover().catch(() => [])) {

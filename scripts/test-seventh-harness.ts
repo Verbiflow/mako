@@ -217,7 +217,7 @@ const usage = usageHarnesses(host).find(({ provider }) => provider === "seventh"
 assert.deepEqual(usage && { label: usage.label, history: usage.history }, { label: "Seventh Agent", history: undefined })
 const root = await mkdtemp(join(tmpdir(), "mako-seventh-"))
 try {
-  const summary = await usageSummary(usageHarnesses(host), join(root, "sessions"), join(root, "home"), join(root, "conversations"))
+  const summary = await usageSummary(usageHarnesses(host), join(root, "mako"), join(root, "home"), join(root, "conversations"))
   assert.equal(summary.sessions, 0)
 } finally {
   await rm(root, { recursive: true, force: true })

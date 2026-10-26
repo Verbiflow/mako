@@ -39,7 +39,7 @@ const providers = [
   new OpenCodeProvider(stores, home("opencode")),
   devinCli,
   new DevinLocalProvider(stores, join(home("devin"), "Library", "Application Support", "Devin", "User")),
-  new CursorProvider(stores, home("cursor"), {}),
+  new CursorProvider(stores, home("cursor")),
 ]
 const catalog = new SessionCatalog(providers)
 

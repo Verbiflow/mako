@@ -25,6 +25,8 @@ export const AsideJobSchema = z.object({
   translator: z.string(),
   /** `NativeStores.strict` of the stores the parent reads: the child's open each harness store as they do. */
   strict: z.boolean(),
+  /** The parent's `ReaderPlace`, where its reader was made to read; the machine's own stores without one. */
+  place: z.object({ home: z.string(), userRoot: z.string(), kept: z.string() }).optional(),
 })
 export type AsideJob = z.infer<typeof AsideJobSchema>
 
