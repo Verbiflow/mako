@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { HarnessProfile } from "../src/lib/types"
-import { ModelChoiceNotice } from "../src/components/composer/model-notice"
+import { useModelChoiceNotice } from "../src/components/composer/model-notice"
+import { ProducedNotice } from "../src/components/composer/composer-notices"
 import { modelNoticeText } from "../src/lib/model-notice"
 import { composerSettingsInput, replaceUnusableModel } from "../src/state/composer-settings"
 import { prefsStore, setPref } from "../src/state/prefs"
@@ -29,26 +30,26 @@ const target = { kind: "new", harness: "claude", cwd: "" } as const
 providerStore.set({ profiles: { claude: profile }, contexts: { [providerProfileKey("claude", "")]: profile } })
 threadsStore.set({ composerHarness: "claude", viewing: null, opening: null })
 
-assert.equal(renderToStaticMarkup(<ModelChoiceNotice />), "", "silent while the choice can start")
+assert.equal(renderToStaticMarkup(<ProducedNotice use={useModelChoiceNotice} />), "", "silent while the choice can start")
 
 setPref("providerSettings", { claude: { source: "saved", settings: { model: "claude-opus-4-6" } } })
-const gone = renderToStaticMarkup(<ModelChoiceNotice />)
+const gone = renderToStaticMarkup(<ProducedNotice use={useModelChoiceNotice} />)
 assert.match(gone, /data-model-notice="saved"/)
 assert.match(gone, /Claude Code doesn&#x27;t offer your default model, claude-opus-4-6, anymore\./)
 assert.match(gone, />Use Claude Opus 5\.5</)
 replaceUnusableModel(target, issueOf())
 assert.equal(prefsStore.get().providerSettings.claude, undefined, "a saved default that can't start goes back to Mako's")
-assert.equal(renderToStaticMarkup(<ModelChoiceNotice />), "")
+assert.equal(renderToStaticMarkup(<ProducedNotice use={useModelChoiceNotice} />), "")
 
 setPref("settingsOverrides", { [JSON.stringify(["claude", "new", ""])]: { model: "claude-sonnet-5-5" } })
 const issue = issueOf()
 assert.equal(issue.source, "override")
-const refused = renderToStaticMarkup(<ModelChoiceNotice />)
+const refused = renderToStaticMarkup(<ProducedNotice use={useModelChoiceNotice} />)
 assert.match(refused, /data-model-notice="override"/)
 assert.match(refused, /Claude Sonnet 5\.5 can&#x27;t start\. This version of Claude Code doesn&#x27;t support it yet\./)
 replaceUnusableModel(target, issue)
 assert.equal(composerSettingsInput(target).resolved.settings.model, "claude-opus-5-5", "a choice made here moves to the model it was covering")
-assert.equal(renderToStaticMarkup(<ModelChoiceNotice />), "")
+assert.equal(renderToStaticMarkup(<ProducedNotice use={useModelChoiceNotice} />), "")
 
 assert.equal(
   modelNoticeText({ kind: "model", model: "retired", source: "override", message: "" }, "Grok", []),

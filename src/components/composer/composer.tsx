@@ -6,7 +6,6 @@ import { APP_SETUP_CONTEXT } from "@/lib/app-setup-context"
 import { appSetupAttachment } from "@/state/project-setup"
 import { AttachmentStrip } from "./attachments"
 import { useComposerClipboard } from "./composer-clipboard"
-import { InterruptedSends } from "./interrupted-sends"
 import {
   preserveSendingDraft,
   settleSendingDraft,
@@ -14,7 +13,7 @@ import {
 } from "@/state/send-recovery"
 import { PromptQueue } from "./prompt-queue"
 import { promptDelivery } from "@/state/prompt-delivery"
-import { savedMessageDraft, type RestoreSavedMessageEvent } from "@/lib/saved-message-draft"
+import { savedMessageDraft, type RestoreSavedMessageEvent, type RestoreUnsentEvent } from "@/lib/saved-message-draft"
 import type { ProposedPlan } from "@mako/sessions/content"
 import type { ContextInput } from "@/lib/context-detail"
 import { parsePlanContext } from "@/lib/proposed-plan"
@@ -37,8 +36,8 @@ import {
   restoreAttachmentReferences,
 } from "@/lib/attachment-references"
 import { recordLabel, writeDraft } from "@/lib/context/draft"
-import { Banner } from "@/components/composer/banner"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
+import { useComposerResume } from "@/components/composer/use-composer-resume"
 import { ComposerRouting } from "@/components/composer/composer-routing"
 import { ContextMeter } from "@/components/composer/context-meter"
 import type { PlanHandle } from "@/components/composer/plan-toggle"
@@ -55,6 +54,7 @@ import { MentionMenu } from "@/components/composer/mention-menu"
 import { ReferenceOverlay } from "@/components/composer/reference-overlay"
 import { Chip, IconAction } from "@/components/ui/kit"
 import { Slot } from "@/extend/slot"
+import { ComposerNotices } from "@/components/composer/composer-notices"
 import {
   useAttachments,
   type Attachment,
@@ -107,7 +107,6 @@ import {
   removeDraftPlan,
   replaceDraftPlans,
   retainRejectedDraft,
-  takeRejectedDraft,
   useDrafts,
 } from "@/state/drafts"
 import {
@@ -207,7 +206,6 @@ export function Composer() {
       (state) => ({
         streaming: state.meta?.isStreaming ?? false,
         compacting: state.meta?.isCompacting ?? false,
-        retrying: state.meta?.isRetrying ?? false,
         queued:
           (state.meta?.queued.steering.length ?? 0) +
           (state.meta?.queued.followUp.length ?? 0),
@@ -262,9 +260,6 @@ export function Composer() {
   useLayoutEffect(() => {
     activeAttachmentDraft.current = draftKey
   }, [draftKey])
-  const rejectedDrafts = useDrafts((state) =>
-    state.rejected.filter((item) => item.key === draftKey)
-  )
 
   /**
    * Up-arrow prompt recall, the way every terminal taught your hands: with
@@ -484,15 +479,24 @@ export function Composer() {
         restoredMessages.current.delete(oldest)
       focusComposerSoon(textarea, text.length, viewRef)
     }
+    // A kept copy of a send goes after whatever is being typed, never over it.
+    const restoreUnsent = (event: RestoreUnsentEvent) => {
+      appendRecoveredDraft(activeAttachmentDraft.current, event.detail)
+      reattach(event.detail.attachments)
+      setMention(null)
+      textarea.current?.focus()
+    }
     window.addEventListener("mako:focus-composer", focus)
     window.addEventListener("mako:compose", setText)
     window.addEventListener("mako:insert", insert)
     window.addEventListener("mako:restore-saved-message", restoreSaved)
+    window.addEventListener("mako:restore-unsent", restoreUnsent)
     return () => {
       window.removeEventListener("mako:focus-composer", focus)
       window.removeEventListener("mako:compose", setText)
       window.removeEventListener("mako:insert", insert)
       window.removeEventListener("mako:restore-saved-message", restoreSaved)
+      window.removeEventListener("mako:restore-unsent", restoreUnsent)
     }
   }, [reattach, pasteAttachments])
 
@@ -1028,10 +1032,12 @@ export function Composer() {
     canSteer: liveOwnsComposer && canSteer,
     steerOnEnter,
   })
+  const resume = useComposerResume(liveOwnsComposer && !turnRunning && hostConnected && !opening)
   const primaryAction = composerActionKind({
     running: turnRunning && hostConnected && !opening,
     hasContent,
     steer: enterAction === "steer",
+    resume: resume !== null,
   })
   const viewingResumeUnavailable = useThreads(
     (state) => state.viewing?.ref.resumeUnavailable
@@ -1087,18 +1093,11 @@ export function Composer() {
   return (
     <div data-composer inert={!draftReady} aria-busy={!draftReady} className={cn("flex min-h-0 shrink-0 flex-col border-t border-hairline bg-surface", expanded ? "max-h-[80dvh]" : "max-h-[55dvh]")}>
       <div className="flex min-h-0 w-full flex-col">
-        <Slot name="composer.above" meta={meta} />
         <GoalBar />
         <SidePanel />
         <ReviewPicker cwd={cwd} />
         <PromptQueue />
 
-        {status.compacting ? (
-          <Banner text="Compacting the conversation…" />
-        ) : null}
-        {status.retrying ? (
-          <Banner text="Retrying after a provider error…" />
-        ) : null}
         {status.queued > 0 ? (
           <div className="mb-1.5 flex items-center gap-2 px-1 text-label text-faint">
             <Chip>{status.queued} queued</Chip>
@@ -1115,6 +1114,7 @@ export function Composer() {
         ) : null}
 
         {planDecision ? <PlanDecisionBar key={planDecision.plan.id} decision={planDecision} /> : null}
+        <ComposerNotices meta={meta} draftKey={draftKey} />
 
         <input
           ref={filePicker}
@@ -1170,29 +1170,6 @@ export function Composer() {
            * native caret, IME, undo, and spellcheck — a contenteditable would
            * trade all four for the same visual result.
            */}
-          <InterruptedSends
-            onRestore={(recovered) => {
-              appendRecoveredDraft(draftKey, recovered)
-              attachments.reattach(recovered.attachments)
-              textarea.current?.focus()
-            }}
-          />
-          {rejectedDrafts.map((rejected) => (
-            <button
-              key={rejected.id}
-              type="button"
-              className="pressable mx-2 mb-1 text-left text-ui text-caution"
-              onClick={() => {
-                const recovered = takeRejectedDraft(rejected.id)
-                if (!recovered) return
-                appendRecoveredDraft(draftKey, recovered)
-                attachments.reattach(recovered.attachments)
-              }}
-            >
-              Restore unsent message:{" "}
-              {rejected.text.slice(0, 80) || "Attachments"}
-            </button>
-          ))}
           <PlanContextChips
             plans={draftPlans ?? []}
             onRemove={(plan) => removeDraftPlan(draftKey, plan)}
@@ -1344,6 +1321,8 @@ export function Composer() {
                */}
               <ComposerActionButton
                 action={primaryAction}
+                resumeLabel={resume?.resume.label}
+                onResume={() => void resume?.run()}
                 ready={hasContent && !opening && hostConnected}
                 stopping={liveOwnsComposer && stopping}
                 steerTitle={steerTitle}

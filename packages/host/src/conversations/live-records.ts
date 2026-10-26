@@ -2,7 +2,7 @@ import { join } from "node:path"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { hostLog } from "../base/host-log.js"
-import type { Interruption, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
+import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, isBusyNativeAgent } from "../contracts/native-agents.js"
 import type { ConversationMemory } from "../contracts/provider-residency.js"
@@ -469,6 +469,7 @@ function residentWeight(weights: ContentWeights, { snapshot }: Resident): number
 
 /** The listing's line for a conversation, loaded or not. */
 function residentSummary(snapshot: LiveSnapshot): LiveSummary {
+  const wakes = wakeAt(snapshot.requests)
   return {
     hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
     nativePaths: snapshot.control?.bindings.flatMap((binding) =>
@@ -478,5 +479,14 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
     revision: snapshot.revision,
     threadPath: snapshot.threadPath,
     createdAt: snapshot.createdAt,
+    ...wakes !== undefined && { wakeAt: wakes },
   }
+}
+
+/** The soonest a held request sends itself, if one waits for a time. */
+export function wakeAt(requests: readonly LiveRequest[]): number | undefined {
+  let soonest: number | undefined
+  for (const request of requests)
+    if (request.status === "held" && request.wake && (soonest === undefined || request.wake.at < soonest)) soonest = request.wake.at
+  return soonest
 }

@@ -470,6 +470,9 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const selected = await profiles.resolveLaunch(session.harness, session.cwd, tuning)
     return live.submit(id, requestId, text, attachments, selected)
   })
+  // A failed message sent again at a time: a usage limit's reset.
+  methods.handle("mako:live-hold-until", (id: string, requestId: string, input: { after: string; at: number }) =>
+    live.holdUntil(id, requestId, input))
   // A turn Mako cut short, continued here as Mako: a handoff's turn on the machine it went to, or here when it stayed.
   // `stopped`: the background work the handoff stopped, which the continuation names for the agent.
   methods.handle("mako:live-continue-turn", (id: string, requestId: string, input: { reason: "handed-off"; continues: string; stopped?: string[] }) =>
