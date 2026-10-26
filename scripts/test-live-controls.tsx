@@ -10,7 +10,7 @@ import { attachmentReference } from "../src/lib/attachment-references"
 import { writeDraft } from "../src/lib/context/draft"
 import { RetainedRequests } from "../src/components/viewer/acp-panel"
 import { continueTurnPrompt, makoPrompts, recoverableRequests } from "../src/state/prompt-delivery"
-import { agentActivity } from "../src/state/agent-activity"
+import { agentActivity, startLabel } from "../src/state/agent-activity"
 import { cn } from "../src/lib/utils"
 import { ActivityMark } from "../src/components/ui/activity-mark"
 import { FolderActivity } from "../src/components/rail/rail-activity"
@@ -672,7 +672,8 @@ assert.deepEqual(agentActivity({...activityBase,blocks:[pendingTool],quietForMs:
 assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"thinking",text:"Weighing"}],quietForMs:65*60_000}),{kind:"reasoning",label:"No output for 1h 5m"})
 assert.deepEqual(agentActivity({...activityBase,blocks:[],connecting:true,makingWorktree:true}),{kind:"connecting",label:"Checking out files"},"a checkout made on the spot is named until the provider starts")
 assert.equal(agentActivity({...activityBase,blocks:[],connecting:true,makingWorktree:true,worktreeStep:"carry"}).label,"Copying files from your folder","each step the host reports is named")
-assert.equal(agentActivity({...activityBase,blocks:[],connecting:true}).label,"Connecting")
+assert.equal(agentActivity({...activityBase,blocks:[],connecting:true}).label,"Starting","a start says the harness is starting, local or cloud")
+assert.equal(agentActivity({...activityBase,blocks:[],connecting:true,starting:startLabel("Codex")}).label,"Starting Codex")
 assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"text",text:"Half an ans"}],quietForMs:2*60_000}),{kind:"working",label:"No output for 2m"},
   "a reply that stopped mid-stream stops reading as responding")
 assert.equal(agentActivity({...activityBase,blocks:[],quietForMs:120*60_000}).label,"No output for 2h")
@@ -798,12 +799,21 @@ const pending = details({}, "claude", [])
 assert.match(pending, />After the first reply</)
 assert.match(pending, /Claude Code reports how full the context is after each reply\./)
 assert.match(pending, /Counted after the first reply\./)
-// A harness that declares no fill (Cursor) says why, in its own declaration's words, and why it shows no cost.
-const cursorTurn = [spentTurn({ provider: "cursor", at: 1, tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } })]
-const spendOnly = details({}, "cursor", cursorTurn)
+// A harness that declares no fill says why, in its own declaration's words, and why it shows no cost. All six
+// measure their context now, so a stand-in declares it absent.
+const measuredDescriptors = threadsStore.get().descriptors
+const cursorDescriptor = measuredDescriptors.find((entry) => entry.provider === "cursor")!
+threadsStore.set({
+  descriptors: [...measuredDescriptors, {
+    ...cursorDescriptor, provider: "unmeasured", displayName: "Unmeasured",
+    usage: { ...cursorDescriptor.usage!, context: harnessLacks("Unmeasured reports what each turn spent, never how full the context is."), cost: harnessLacks("Unmeasured reports tokens only and prices none of them.") },
+  }],
+})
+const unmeasuredTurn = [spentTurn({ provider: "unmeasured", at: 1, tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } })]
+const spendOnly = details({}, "unmeasured", unmeasuredTurn)
 assert.match(spendOnly, />Not reported</)
-assert.match(spendOnly, /data-context-unmeasured[^>]*>Cursor&#x27;s SDK reports what each turn spent, never how full the context is\./)
-assert.match(spendOnly, /data-cost-unreported[^>]*>Cursor&#x27;s SDK reports tokens only and prices none of them\./)
+assert.match(spendOnly, /data-context-unmeasured[^>]*>Unmeasured reports what each turn spent, never how full the context is\./)
+assert.match(spendOnly, /data-cost-unreported[^>]*>Unmeasured reports tokens only and prices none of them\./)
 assert.doesNotMatch(spendOnly, /Cache write/)
 assert.doesNotMatch(readingMarkup, /data-unrecorded-spend|data-cost-unreported/, "complete, priced spend carries no note")
 // Mako's estimate for a harness that prices nothing: marked, named as list prices with its table, never the harness's cost.
@@ -824,12 +834,13 @@ const native = details({ used: 1_000, size: 200_000, native: { tokens: { input: 
 assert.match(native, /data-harness-total[^>]*>.*OpenCode’s own count for this session.*100k.*\$1\.50.*It includes turns run outside Mako\./)
 const readingUsage = conversation.session.usage
 const readingRequests = conversation.requests
-conversation.harness = "cursor"
-conversation.session = { ...conversation.session, harness: "cursor", usage: { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } } }
+conversation.harness = "unmeasured"
+conversation.session = { ...conversation.session, harness: "unmeasured", usage: { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } } }
 publish()
 const spendOnlyMeter = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
 assert.match(spendOnlyMeter, /aria-label="Context fill not reported"/)
 assert.match(spendOnlyMeter, /data-unmeasured-ring/)
+threadsStore.set({ descriptors: measuredDescriptors })
 conversation.harness = "devin"
 conversation.session = { ...conversation.session, harness: "devin", usage: { compactedFrom: 164_000, size: 200_000 } }
 publish()
