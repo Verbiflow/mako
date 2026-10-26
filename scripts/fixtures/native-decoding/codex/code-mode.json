@@ -5,7 +5,7 @@
     "version": "0.159.3",
     "origin": "written"
   },
-  "about": "A code cell's calls. The cell's record names only the cell, so a command it runs shows from the app-server's item while it runs, with its output streaming, and from its own record once it ends. An MCP call and an image view the cell made draw from their items, which have no response item of their own. A cell that finished draws nothing of its own; one that failed is its own row, with the error its calls never carry.",
+  "about": "A code cell's calls. The cell's record names only the cell, so a command it runs shows from the app-server's item while it runs, with its output streaming, and from its own record once it ends. An MCP call and an image view the cell made draw from their items, which have no response item of their own; the image view names its file by a `file://` URL, which draws as the path. A cell that finished draws nothing of its own; one that failed is its own row, with the error its calls never carry.",
   "session": {
     "threadId": "thread-1"
   },
@@ -330,7 +330,7 @@
           },
           {
             "from": 1622,
-            "to": 1838,
+            "to": 1845,
             "record": {
               "timestamp": "2026-10-12T12:00:00.000Z",
               "type": "event_msg",
@@ -341,14 +341,14 @@
                 "item": {
                   "type": "ImageView",
                   "id": "view-1",
-                  "path": "/tmp/project/screen.png"
+                  "path": "file:///tmp/project/screen.png"
                 }
               }
             }
           },
           {
-            "from": 1838,
-            "to": 2056,
+            "from": 1845,
+            "to": 2063,
             "record": {
               "timestamp": "2026-10-12T12:00:00.000Z",
               "type": "response_item",
@@ -410,8 +410,8 @@
       "message": {
         "records": [
           {
-            "from": 2056,
-            "to": 2345,
+            "from": 2063,
+            "to": 2352,
             "record": {
               "timestamp": "2026-10-12T12:00:00.000Z",
               "type": "response_item",
@@ -429,8 +429,8 @@
             }
           },
           {
-            "from": 2345,
-            "to": 2590,
+            "from": 2352,
+            "to": 2597,
             "record": {
               "timestamp": "2026-10-12T12:00:00.000Z",
               "type": "response_item",
@@ -463,8 +463,8 @@
       "message": {
         "records": [
           {
-            "from": 2590,
-            "to": 2746,
+            "from": 2597,
+            "to": 2753,
             "record": {
               "timestamp": "2026-10-12T12:00:00.000Z",
               "type": "event_msg",

@@ -2779,6 +2779,18 @@ its next write, and the store's `delegation` Sessions become `fork` on open.
 footer and the recovery rows, and `test-conversation-transfers.ts` a journal
 Delegate wrote across a restart.
 
+Every Stop Mako sends a provider goes through `LiveConversations.stopProvider`,
+which writes `live Mako stops the provider's turn` to the host log with `why`:
+`person` (Stop), `handed-off`, `goal-budget`, or `not-saved` (a warning, with
+the error: the conversation couldn't be saved). Codex's engine adds `codex
+interrupt the turn` with the turn id Codex's own log names. A harness turn
+that ends interrupted with no such line was stopped by the harness itself.
+A file an agent names that Mako can't read is an `unavailable` attachment
+(`LiveAssets`), never a failure to save, which would stop the turn: a Codex
+code cell's `view_image` names its image by a `file://` URL in the rollout
+(`codexLocalPath`), and reading that as a path once stopped Codex turns with
+nothing in the log (`makoStopsAreSaid`, the `cell-image` decode pair).
+
 The fourth reason, `connection-lost`, is a turn the agent ended on its own
 dropped backend connection. It was found on `cursor-agent acp`, which ran
 its agent loop without the transport retries its TUI and SDK paths use, so

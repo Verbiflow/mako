@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveAssets, wholeField } from "@mako/host/conversations/live-assets"
@@ -29,4 +29,30 @@ try {
   console.log("PASS: a shortened call field reads back whole from the attachment its preview names, and stays a preview without it")
 } finally {
   rmSync(root, { recursive: true, force: true })
+}
+
+/**
+ * A file an agent names is copied into Mako's store; one that is gone or can't be read is an attachment Mako
+ * can't show, never a throw, which would read as a conversation Mako can't save and stop the agent's turn. A
+ * prompt's attachment Mako can't read still refuses the prompt, saying why.
+ */
+const store = mkdtempSync(join(tmpdir(), "mako-live-assets-"))
+try {
+  const assets = new LiveAssets(join(store, "assets"))
+  const image = join(store, "tide-report.png")
+  writeFileSync(image, "png")
+  const viewed = (path: string) => assets.prepare({ kind: "tool", id: "view-1", title: "View tide-report.png", status: "completed", output: "",
+    attachments: [{ type: "attachment", name: "tide-report.png", mimeType: "image/png", source: { kind: "file", path } }] })
+  const [copied] = viewed(image)
+  const kept = copied?.kind === "tool" ? copied.attachments?.[0]?.source : undefined
+  assert.ok(kept?.kind === "file" && kept.originalPath === image && readFileSync(kept.path, "utf8") === "png", "a readable file is copied into the store")
+  for (const path of [join(store, "gone.png"), `file://${image}`]) {
+    const [sent] = viewed(path)
+    const source = sent?.kind === "tool" ? sent.attachments?.[0]?.source : undefined
+    assert.deepEqual(source, { kind: "unavailable", reason: "tide-report.png could not be read (ENOENT)" }, `${path} is an attachment Mako can't show`)
+  }
+  assert.throws(() => assets.retainPrompt([{ name: "gone.png", mimeType: "image/png", path: join(store, "gone.png") }]), /gone\.png could not be read \(ENOENT\)/)
+  console.log("PASS: a file the agent named that can't be read is an unavailable attachment, not a failure to save")
+} finally {
+  rmSync(store, { recursive: true, force: true })
 }

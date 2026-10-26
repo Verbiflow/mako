@@ -403,6 +403,20 @@ export const SCENARIOS: Scenario[] = [
     }],
   },
   {
+    name: "cell-image",
+    about: "A code cell that views an image file through the harness's own image tool, then the answer.",
+    files: {},
+    images: { "swatch.png": solidPng(32, [30, 160, 60]) },
+    needs: ["codeMode"],
+    turns: [{
+      prompt: "In one code cell, view swatch.png with your image tool and tell me its colour. Don't run commands.",
+      steps: [
+        { call: (tools, project) => cell(tools, `await tools.view_image({ path: ${JSON.stringify(join(project, "swatch.png"))} })`) },
+        { text: "swatch.png is a solid green square." },
+      ],
+    }],
+  },
+  {
     name: "question",
     about: "A question with two options, answered with the first, then the answer.",
     files: { "notes.md": NOTES },

@@ -1,6 +1,7 @@
 import type { SessionSettings } from "@mako/sessions/settings"
 import { createHash, randomUUID } from "node:crypto"
 import {
+  accessSync,
   constants,
   copyFileSync,
   chmodSync,
@@ -15,6 +16,7 @@ import { join, relative, isAbsolute } from "node:path"
 import type { AttachmentContent } from "@mako/sessions"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
 import type { LiveUpdate } from "@mako/sessions/live-content"
+import { hostWarn } from "../base/host-log.js"
 
 export function promptFingerprint(
   text: string,
@@ -79,6 +81,16 @@ export function wholeField(text: string, attachments: readonly AttachmentContent
   return whole === null || !whole.startsWith(text.slice(0, match.index)) ? { text } : { text: whole, attachment: match[2] }
 }
 
+/** Why the file at `path` can't be read (its error's code), or undefined when it can. */
+function sourceUnreadable(path: string): string | undefined {
+  try {
+    accessSync(path, constants.R_OK)
+    return undefined
+  } catch (error) {
+    return error instanceof Error && "code" in error ? String(error.code) : String(error)
+  }
+}
+
 /** Keep large payloads in durable artifacts, with small references on the event wire. */
 export class LiveAssets {
   private readonly root: string
@@ -137,7 +149,7 @@ export class LiveAssets {
         source: { kind: "file", path: attachment.path },
       })
       if (retained.source.kind !== "file")
-        throw new Error("The attachment could not be retained")
+        throw new Error(retained.source.kind === "unavailable" ? retained.source.reason : "The attachment could not be retained")
       return { ...attachment, path: retained.source.path }
     })
   }
@@ -152,7 +164,16 @@ export class LiveAssets {
         this.root,
         `${randomUUID()}-${attachment.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-100)}`
       )
-      copyFileSync(attachment.source.path, path, constants.COPYFILE_FICLONE)
+      try {
+        copyFileSync(attachment.source.path, path, constants.COPYFILE_FICLONE)
+      } catch (error) {
+        // A file the harness named that is gone or can't be read is an attachment Mako can't show, not a
+        // conversation it can't save: that would stop the turn (`storageFailed`).
+        const unreadable = sourceUnreadable(attachment.source.path)
+        if (!unreadable) throw error
+        hostWarn("live", "an attachment's file could not be read", { name: attachment.name, error: unreadable })
+        return { ...attachment, source: { kind: "unavailable", reason: `${attachment.name} could not be read (${unreadable})` } }
+      }
       chmodSync(path, 0o600)
       return {
         ...attachment,
