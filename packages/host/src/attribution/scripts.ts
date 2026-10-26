@@ -169,7 +169,8 @@ export function makeRules(makefile: string, goals: readonly string[]): { text: s
     current = targets.map((target) => {
       const found = rules.get(target) ?? { lines: [], prerequisites: [], recipes: [] }
       found.lines.push(line)
-      found.prerequisites.push(...prerequisites.replace("|", " ").split(/\s+/).filter(Boolean))
+      // Order-only prerequisites follow a `|`; they are prerequisites all the same.
+      found.prerequisites.push(...prerequisites.split(/[\s|]+/).filter(Boolean))
       if (inline?.trim()) found.recipes.push(inline.trim())
       rules.set(target, found)
       return found
