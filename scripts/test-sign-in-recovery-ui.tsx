@@ -86,7 +86,7 @@ function render(requests: LiveRequest[]): string {
   // The line, and what it keeps behind its info button.
   let detail: ReactNode = null
   function Detail() {
-    detail = useSignInRecoveryNotice({ meta: undefined, draftKey: conversation.draftKey })?.detail ?? null
+    detail = useSignInRecoveryNotice()?.detail ?? null
     return null
   }
   const line = renderToStaticMarkup(<ProducedNotice use={useSignInRecoveryNotice} />)
