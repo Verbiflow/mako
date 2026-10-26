@@ -3,7 +3,7 @@ import { subagentTurn } from "@mako/sessions"
 import type { AcpProviderTurnObserver } from "../acp-source.js"
 
 const SubagentMeta = z.object({
-  "cognition.ai/subagent_started": z.object({ agentId: z.string(), title: z.string(), depth: z.number().optional() }).optional(),
+  "cognition.ai/subagent_started": z.object({ agentId: z.string(), title: z.string(), depth: z.number().optional(), isBackground: z.boolean().optional() }).optional(),
   "cognition.ai/subagent_completed": z.object({ agentId: z.string(), success: z.boolean(), summary: z.string().optional(), depth: z.number().optional() }).optional(),
 })
 
@@ -22,24 +22,31 @@ const AgentStoppedSchema = z.object({ sessionId: z.string(), cause: z.string() }
  * `summary` is the subagent's report, the text saved history reads from its
  * completion notification; how long it ran is measured here, from the
  * start to the completion this host saw.
+ *
+ * Checked 2026-10-25 against devin 3000.11.205 (`harness:decode-pairs`): a
+ * foreground subagent completes the same way, as its own call's result,
+ * which its parent's turn waited on; saved history draws nothing for it, so
+ * neither does this.
  */
 export function devinProviderTurns(now: () => number = Date.now): AcpProviderTurnObserver {
-  const titles = new Map<string, { title: string; at: number }>()
+  const titles = new Map<string, { title: string; at: number; background: boolean }>()
   return {
     // Verified 2026-10-12 against devin 3000.10.23 (scripts/probe-provider-turn.mjs): a background subagent that
-    // finished while its parent's turn ran was written into that turn, and the turn answered it.
+    // finished while its parent's turn ran was written into that turn, and the turn answered it. Devin 3000.11.205
+    // holds the prompt's turn open until its background subagents report, so each report comes this way
+    // (`harness:decode-pairs devin subagent-wake`).
     midTurn: "marker",
     updateCause({ sessionId, update }) {
       if (update.sessionUpdate !== "tool_call_update") return undefined
       const parsed = SubagentMeta.safeParse(update._meta ?? {})
       if (!parsed.success) return undefined
       const started = parsed.data["cognition.ai/subagent_started"]
-      if (started) titles.set(started.agentId, { title: started.title, at: now() })
+      if (started) titles.set(started.agentId, { title: started.title, at: now(), background: started.isBackground ?? true })
       const completed = parsed.data["cognition.ai/subagent_completed"]
       if (!completed) return undefined
       const begun = titles.get(completed.agentId)
       titles.delete(completed.agentId)
-      if ((completed.depth ?? 1) > 1) return undefined
+      if ((completed.depth ?? 1) > 1 || begun?.background === false) return undefined
       return {
         sessionId,
         ...subagentTurn({

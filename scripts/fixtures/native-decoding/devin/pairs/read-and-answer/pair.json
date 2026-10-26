@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#daily-golf",
+      "path": ".local/share/devin/cli/sessions.db#profuse-newt",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/f85de959-4bcd-4dfd-939f-218bdfe4f549.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/d3440e73-c76e-4a19-a412-509109ddad49.db",
       "known": [
         {
           "side": "-",

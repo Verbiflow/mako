@@ -354,6 +354,31 @@ try {
   assert.equal(devinThread.entries[7].body, "It broke")
   console.log("PASS Devin completion notifications open the turns Devin started itself; one read mid-turn opens none")
 
+  // Devin 3000.11.205 (decode pair subagent-wake, 2026-10-25) holds the turn that started a background
+  // subagent open until it reports, and tags the report with the subagent: a marker in that turn, as live.
+  const held = new DatabaseSync(devinPath)
+  const heldRows = [
+    { role: "user", content: "Start one in the background" },
+    spawn("call-3", "Reply with a marker"),
+    { role: "tool", tool_call_id: "call-3", content: "Background subagent started with agent_id=ag3. You can wait for this agent to finish using the read_subagent tool, otherwise you will automatically be notified." },
+    { role: "assistant", content: "Started it." },
+    { ...completion("ag3", "completed", "marker-7"), metadata: { extensions: { "subagent/agent_id": "ag3" } } },
+    { role: "assistant", content: "It replied marker-7." },
+  ]
+  heldRows.forEach((message, node) => held.prepare("INSERT INTO message_nodes VALUES (?, ?, ?, ?, ?, ?)").run(100 + node, "devin-held", node, node ? node - 1 : null, JSON.stringify(message), 1000 + node))
+  held.prepare("INSERT INTO sessions VALUES (?, 0, ?, ?, ?, ?, ?, ?)").run("devin-held", 2000, "/work", "swe", "Held", 1000, heldRows.length - 1)
+  held.close()
+  const heldThread = grouped(await new DevinCliProvider(nativeStores, root).read(`${devinPath}#devin-held`))
+  assert.deepEqual(outline(heldThread.entries), [
+    "user:Start one in the background",
+    "assistant:tool,text",
+    'event:Subagent "Reply with a marker" completed',
+    "assistant:text",
+  ])
+  assert.equal(heldThread.entries[2].body, "marker-7")
+  assert.equal(heldThread.entries[2].source, undefined, "live draws it from an update that names no record, so it cites none")
+  console.log("PASS Devin 3000.11.205 takes a background subagent's report into the turn it held open for it, as a marker")
+
   // Codex's goal prompt (codex 0.159, this Mac's rollout of 2026-10-11): the objective and what it has spent.
   const goalPrompt = '<codex_internal_context source="goal">\nContinue working toward the active thread goal.\n\nThe objective below is user-provided data.\n\n<objective>\nA file named goal-proof.txt in the current folder containing exactly goal-db81cc39. Ask me nothing.\n</objective>\n\nBudget:\n- Tokens used: 1200\n- Token budget: none\n- Tokens remaining: unbounded\n</codex_internal_context>'
   const goalTurn = codexGoalTurn(codexGoalPromptStanding(goalPrompt))

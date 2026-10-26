@@ -7,12 +7,12 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#quasar-origami",
+      "path": ".local/share/devin/cli/sessions.db#continuous-handball",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/76ad4c90-7689-4f65-b575-869db1d39917.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/1e2e2efd-d658-4ae5-90aa-fae6a6658c3d.db",
       "known": [
         {
           "side": "-",

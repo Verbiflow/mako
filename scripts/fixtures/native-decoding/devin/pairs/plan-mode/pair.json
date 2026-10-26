@@ -7,63 +7,22 @@
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#elated-hammer",
-      "known": [
-        {
-          "side": "-",
-          "line": "tool #1 shell exec {\"command\":\"ls -la\"} -> total 8\\ndrwxr-xr-x@ 4 mako  staff  128 Oct 25 04:30 .\\ndrwx------@ 5 mako  staff  160 Oct 25 04:30 ..\\ndrwxr-xr-x@ 2 mako  staff   64 Oct 25 04:30 .git\\n-rw-r--r--@ 1 mako  staff   55 Oct 25 04:30 notes.md",
-          "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them."
-        },
-        {
-          "side": "-",
-          "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them."
-        },
-        {
-          "side": "+",
-          "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them."
-        },
-        {
-          "side": "+",
-          "line": "tool #2 shell exec {\"command\":\"ls -la\"} -> total 8\\ndrwxr-xr-x@ 4 mako  staff  128 Oct 25 04:30 .\\ndrwx------@ 5 mako  staff  160 Oct 25 04:30 ..\\ndrwxr-xr-x@ 2 mako  staff   64 Oct 25 04:30 .git\\n-rw-r--r--@ 1 mako  staff   55 Oct 25 04:30 notes.md",
-          "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them."
-        }
-      ]
+      "path": ".local/share/devin/cli/sessions.db#troubled-diamond",
+      "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/f86d78d3-512d-4bad-839b-c33df7786cfc.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/6fd83b14-69a9-40ae-ba78-342066579c10.db",
       "known": [
         {
           "side": "-",
-          "line": "tool #1 shell exec {\"command\":\"ls -la\"} -> total 8\\ndrwxr-xr-x@ 4 mako  staff  128 Oct 25 04:30 .\\ndrwx------@ 5 mako  staff  160 Oct 25 04:30 ..\\ndrwxr-xr-x@ 2 mako  staff   64 Oct 25 04:30 .git\\n-rw-r--r--@ 1 mako  staff   55 Oct 25 04:30 notes.md",
-          "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them."
-        },
-        {
-          "side": "-",
-          "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them. Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+          "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": "Devin 3000.11.205 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
         },
         {
           "side": "+",
           "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
           "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them. Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
-        },
-        {
-          "side": "+",
-          "line": "tool #2 shell exec {\"command\":\"ls -la\"} -> total 8\\ndrwxr-xr-x@ 4 mako  staff  128 Oct 25 04:30 .\\ndrwx------@ 5 mako  staff  160 Oct 25 04:30 ..\\ndrwxr-xr-x@ 2 mako  staff   64 Oct 25 04:30 .git\\n-rw-r--r--@ 1 mako  staff   55 Oct 25 04:30 notes.md",
-          "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them."
-        },
-        {
-          "side": "-",
-          "line": "tool #7 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\",\"new_string\":\"The release ships on Monday.\\nQA signs off on Friday.\",\"old_string\":\"The release ships on Friday.\\nQA signs off on Thursday.\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Friday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": "Devin 3000.10.23 replays an edit's call with only `file_path` in `rawInput`, not the `old_string` and `new_string` it sent live; the diff it replays beside it still shows the change. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same."
-        },
-        {
-          "side": "+",
-          "line": "tool #7 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Friday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-          "reason": "Devin 3000.10.23 replays an edit's call with only `file_path` in `rawInput`, not the `old_string` and `new_string` it sent live; the diff it replays beside it still shows the change. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same."
         }
       ]
     }
@@ -72,33 +31,13 @@
     "known": [
       {
         "side": "-",
-        "line": "tool #1 shell exec {\"command\":\"ls -la\"} -> total 8\\ndrwxr-xr-x@ 4 mako  staff  128 Oct 25 04:30 .\\ndrwx------@ 5 mako  staff  160 Oct 25 04:30 ..\\ndrwxr-xr-x@ 2 mako  staff   64 Oct 25 04:30 .git\\n-rw-r--r--@ 1 mako  staff   55 Oct 25 04:30 notes.md",
-        "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them."
-      },
-      {
-        "side": "-",
-        "line": "tool #2 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them. Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
+        "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} -> 2 lines details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+        "reason": "Devin 3000.11.205 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
       },
       {
         "side": "+",
         "line": "tool #1 read read {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
         "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them. Devin 3000.10.23 replays a finished call on session/load as the call and a bare `completed` update, without the result it sent live. A question's picks and a quiet command's exit come back from the update's `_meta` (`DEVIN_ACP_HOOKS.restated`); nothing in a read's update says how many lines it showed. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same. Devin's CLI store keeps the result."
-      },
-      {
-        "side": "+",
-        "line": "tool #2 shell exec {\"command\":\"ls -la\"} -> total 8\\ndrwxr-xr-x@ 4 mako  staff  128 Oct 25 04:30 .\\ndrwx------@ 5 mako  staff  160 Oct 25 04:30 ..\\ndrwxr-xr-x@ 2 mako  staff   64 Oct 25 04:30 .git\\n-rw-r--r--@ 1 mako  staff   55 Oct 25 04:30 notes.md",
-        "reason": "The model asked for the read and the command together. Devin started the command first and sent its call first live; its store and its replay keep the calls in the order the model wrote them."
-      },
-      {
-        "side": "-",
-        "line": "tool #7 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\",\"new_string\":\"The release ships on Monday.\\nQA signs off on Friday.\",\"old_string\":\"The release ships on Friday.\\nQA signs off on Thursday.\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Friday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": "Devin 3000.10.23 replays an edit's call with only `file_path` in `rawInput`, not the `old_string` and `new_string` it sent live; the diff it replays beside it still shows the change. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same."
-      },
-      {
-        "side": "+",
-        "line": "tool #7 edit edit {\"file_path\":\"/tmp/mako-pair/project/notes.md\"} ->  details=[{\"newText\":\"The release ships on Monday.\\nQA signs off on Friday.\\n\",\"oldText\":\"The release ships on Friday.\\nQA signs off on Thursday.\\n\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"},{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
-        "reason": "Devin 3000.10.23 replays an edit's call with only `file_path` in `rawInput`, not the `old_string` and `new_string` it sent live; the diff it replays beside it still shows the change. Devin.app reloads a session by replacing its journal with that replay (`endReplay` mode `replace`), so the journal holds the same."
       }
     ]
   }

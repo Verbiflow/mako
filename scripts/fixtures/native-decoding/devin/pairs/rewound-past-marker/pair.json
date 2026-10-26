@@ -1,0 +1,40 @@
+{
+  "harness": "devin",
+  "native": {
+    "version": "3000.11.205"
+  },
+  "about": "Say hello. / Say hello again. / /rewind / Without running anything, say done. Two turns failing with a server error, each leaving a marker both sides cite, a rewind to before the second, then a turn that replaces it: the first marker stays, citing the same record, and the second goes.",
+  "stores": [
+    {
+      "reader": "devin",
+      "path": ".local/share/devin/cli/sessions.db#nova-burn",
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Turn failed",
+          "reason": "Devin 3000.11.205 keeps nothing of a turn its model failed: its store holds the prompt with no reply, error or stop, and its replay sends none. The failure reached its client only live, as `_cognition.ai/agent_stopped` with cause `error` once its retries ran out."
+        }
+      ]
+    },
+    {
+      "reader": "devin-ide",
+      "path": "Library/Application Support/Devin/User/acp-messages/ea5efe6a-be18-415f-967d-f9394d599710.db",
+      "known": [
+        {
+          "side": "-",
+          "line": "note: Turn failed",
+          "reason": "Devin 3000.11.205 keeps nothing of a turn its model failed: its store holds the prompt with no reply, error or stop, and its replay sends none. The failure reached its client only live, as `_cognition.ai/agent_stopped` with cause `error` once its retries ran out."
+        }
+      ]
+    }
+  ],
+  "replay": {
+    "known": [
+      {
+        "side": "-",
+        "line": "note: Turn failed",
+        "reason": "Devin 3000.11.205 keeps nothing of a turn its model failed: its store holds the prompt with no reply, error or stop, and its replay sends none. The failure reached its client only live, as `_cognition.ai/agent_stopped` with cause `error` once its retries ran out."
+      }
+    ]
+  }
+}

@@ -13,7 +13,7 @@ import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { NativeNotice } from "../contracts/native-activity.js"
 import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
 import type { LiveUpdate } from "@mako/sessions/live-content"
-import type { TranscriptEvent } from "@mako/sessions/events"
+import { event, type TranscriptEvent } from "@mako/sessions/events"
 import type { ProviderTurnCause } from "@mako/sessions/provider-turn"
 import type { UsageObservation } from "./session-usage.js"
 
@@ -402,6 +402,11 @@ export interface AcpProviderTurnObserver {
    * Absent: it draws nothing, unless the cause says the agent `wakes` on it.
    */
   midTurn?: "marker"
+}
+
+/** The marker a cause reported while a turn runs draws in that turn, for an agent whose `midTurn` is `marker`. */
+export function midTurnMarker(cause: ProviderTurnCause): TranscriptEvent {
+  return { ...event(cause.reason, undefined, cause.body), ...cause.cause && { cause: cause.cause } }
 }
 
 export interface AcpAgentObserver {

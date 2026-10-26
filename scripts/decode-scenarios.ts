@@ -37,6 +37,12 @@ export interface ToolVocabulary {
   subagent: Optional<SubagentTools>
   /** A watch left running on `command`, each line it prints reported to the agent as it comes. */
   monitor: Optional<(command: string, description: string) => Call>
+  /**
+   * How the model cites line `line` of `path` in its answer, for a harness
+   * whose client links a markup of its own (Devin's `<ref_snippet>`); any
+   * other's model names the file.
+   */
+  cite?: (path: string, line: number) => string
 }
 
 /** What a subagent is started on: the harness's own subagent tool takes both, and runs it apart from the turn when `background`. */
@@ -108,6 +114,8 @@ export interface Step {
   plan?: string
   /** Text the request this step answers must carry: a steered message the harness had to deliver. */
   hears?: string
+  /** An answer citing a file's line, written as the harness's model cites one (`ToolVocabulary.cite`), in place of `text`. */
+  cites?: (tools: ToolVocabulary, project: string) => string
   /**
    * A subagent started on the task, whose own requests take `steps`: the
    * scripted model tells them from its parent's by the task's prompt, which
@@ -135,10 +143,11 @@ export interface Scenario {
   name: string
   about: string
   /**
-   * The model's answer, once, if the harness runs a turn of its own after the
-   * last step on a report that came in once that turn had ended (Grok 1.0.70
-   * wakes on its watch's end); a harness that takes the report into the turn
-   * asks for none.
+   * The model's answer, once, if the harness asks for one after the last
+   * step on a report that came in: in a turn of its own once that turn had
+   * ended (Grok 1.0.70 wakes on its watch's end), or in the turn it holds open
+   * for its background subagent (Devin 3000.11.205). A harness that only takes
+   * the report into the turn's next request asks for none.
    */
   woken?: Step
   files: Record<string, string>
@@ -434,7 +443,7 @@ export const SCENARIOS: Scenario[] = [
       prompt: "Read notes.md, then tell me in one sentence what its second line says, citing the file and that line.",
       steps: [
         { call: (tools, project) => tools.read(join(project, "notes.md")) },
-        { text: "Line 2 of notes.md says QA signs off on Thursday." },
+        { cites: (tools, project) => `Line 2 of ${tools.cite?.(join(project, "notes.md"), 2) ?? "notes.md"} says QA signs off on Thursday.` },
       ],
     }],
   },
@@ -729,7 +738,7 @@ export const SCENARIOS: Scenario[] = [
 export function script(scenario: Scenario, tools: ToolVocabulary, project: string): Script {
   const unheard: string[] = []
   const quoted = (text: string) => JSON.stringify(text).slice(1, -1)
-  const children: { prompt: string; steps: Steps }[] = []
+  const children: { prompt: string; steps: Steps; started?: Step }[] = []
   const expand = (step: Step): Step[] => {
     if (step.plan !== undefined) {
       if ("absent" in tools.plan) throw new Error(tools.plan.absent)
@@ -739,12 +748,15 @@ export function script(scenario: Scenario, tools: ToolVocabulary, project: strin
     if ("absent" in tools.subagent) throw new Error(tools.subagent.absent)
     const { steps: own, ...task } = step.subagent
     const { start, wait } = tools.subagent
-    children.push({ prompt: quoted(task.prompt), steps: steps(`subagent ${children.length + 1} `, `call_s${children.length + 1}_`, own.flatMap(expand)) })
-    return [{ reasoning: step.reasoning, call: () => start(task) }, ...wait && !task.background ? [{ call: () => wait }] : []]
+    const started: Step = { reasoning: step.reasoning, call: () => start(task) }
+    children.push({ prompt: quoted(task.prompt), steps: steps(`subagent ${children.length + 1} `, `call_s${children.length + 1}_`, own.flatMap(expand)), ...task.background && { started } })
+    return [started, ...wait && !task.background ? [{ call: () => wait }] : []]
   }
   const steps = (label: string, ids: string, list: Step[]): Steps => ({ label, ids, list, next: 0 })
   const parent = steps("", "call_", scenario.turns.flatMap((turn) => turn.steps.flatMap(expand).map((step) => ({ ...step, turn }))))
   const prompts = scenario.turns.map((turn) => quoted(turn.prompt))
+  /** The subagent whose request `heard` is: one that carries its task's prompt and none of the turns'. */
+  const childOf = (heard: string) => prompts.some((prompt) => heard.includes(prompt)) ? undefined : children.find((candidate) => heard.includes(candidate.prompt))
   let woken = scenario.woken
   const retried = (heard: string) => {
     const failed = parent.list[parent.next - 1]
@@ -757,9 +769,14 @@ export function script(scenario: Scenario, tools: ToolVocabulary, project: strin
     unheard,
     taken,
     done: () => parent.next >= parent.list.length && !woken && children.every(({ steps: child }) => child.next >= child.list.length),
+    waits: (heard) => {
+      const started = childOf(heard)?.started
+      const turn = started && parent.list.find((step) => step.call === started.call)?.turn
+      return Boolean(turn) && parent.list.slice(parent.next).some((step) => step.turn === turn)
+    },
     unfinished: () => children.flatMap(({ steps: child }) => child.next < child.list.length ? [`${child.label.trim()} (took ${child.next} of ${child.list.length})`] : []),
     reply: (heard) => {
-      const child = prompts.some((prompt) => heard.includes(prompt)) ? undefined : children.find((candidate) => heard.includes(candidate.prompt))
+      const child = childOf(heard)
       const at = child?.steps ?? parent
       let step = !child && retried(heard) ? at.list[at.next - 1] : at.list[at.next++]
       if (!step && !child && woken) [step, woken] = [woken, undefined]
@@ -767,7 +784,7 @@ export function script(scenario: Scenario, tools: ToolVocabulary, project: strin
       if (!step) return undefined
       if (step.hears && !heard.includes(step.hears)) unheard.push(`${at.label}step ${at.next} never heard "${step.hears}"`)
       const call = step.call?.(tools, project, heard)
-      return { reasoning: step.reasoning, text: step.text, call: call && { id: `${at.ids}${at.next}`, ...call }, fail: step.fail }
+      return { reasoning: step.reasoning, text: step.cites?.(tools, project) ?? step.text, call: call && { id: `${at.ids}${at.next}`, ...call }, fail: step.fail }
     },
   }
 }
@@ -788,6 +805,14 @@ export interface Script {
   taken: string[]
   /** Every step was asked for: the turns', each subagent's, and the turn the harness runs on its own (`woken`). */
   done: () => boolean
+  /**
+   * Whether `heard`, a request of a subagent left running in the
+   * background, waits for its parent to take every step of the turn that
+   * started it, as a subagent slower than that answer would: a stand-in
+   * holds it until then, so the report comes after the parent's answer
+   * whichever request a harness running both in one process sends first.
+   */
+  waits: (heard: string) => boolean
   /** Each subagent whose requests didn't take all its steps: one the harness never started, or stopped early. */
   unfinished: () => string[]
 }
