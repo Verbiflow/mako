@@ -101,6 +101,8 @@ export interface ConversationsDeps {
   controlInstructions: NonNullable<LiveDependencies["controlInstructions"]>
   /** A waiting move may go ahead; the moves are made after the conversations. */
   settled(conversationId: string): void
+  /** The attribution journal, for counting each turn's changes; undefined until it opens. */
+  turnLedger?: LiveDependencies["turnLedger"]
   /** Whether the host takes new work. */
   admission: Admission
   /** Held while a harness starts, so routine work waits for it. */
@@ -151,6 +153,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     resumeVerdict: assessResume,
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
     settled: deps.settled,
+    turnLedger: deps.turnLedger,
     admission: deps.admission,
     appPath: environment.appRoot,
     root: join(dataRoot, "conversations"),

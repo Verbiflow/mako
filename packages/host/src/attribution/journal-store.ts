@@ -19,6 +19,7 @@ import {
   type ThreadHistoryPart,
   type TrackedRoot,
 } from "@mako/protocol"
+import { TurnChangesSchema, type TurnChanges } from "../contracts/turn-changes.js"
 import { compress, decompress } from "./content.js"
 import { FootprintTurnSchema, type FootprintTurn } from "./footprint.js"
 import type { NoiseRow } from "./noise-baseline.js"
@@ -146,6 +147,10 @@ export interface StatRow {
   checkedNs: bigint
 }
 
+/** How a call ended, as its harness reported it: a refused or failed call changed nothing it said it would. */
+export type CallStatus = "completed" | "failed" | "refused" | "running"
+const CallStatusSchema = z.enum(["completed", "failed", "refused", "running"])
+
 const MetaRow = z.object({ key: z.string(), value: z.string() })
 const RootRow = z.object({
   id: z.string(), path: z.string(), kind: z.enum(["workspace", "attached"]), carry: z.string().nullable(), repository: z.number(),
@@ -173,8 +178,12 @@ const NoiseRowSchema = z.object({ key: z.string(), kind: z.enum(["template", "fo
 const ActivityRow = z.object({
   kind: z.enum(["turn", "call", "background"]), id: z.string(), session: z.string(), thread: z.string(), turn: z.string().nullable(), checkout: z.string().nullable(),
   cwd: z.string().nullable(), label: z.string().nullable(), named: z.string(), record: z.string().nullable(), started_at: z.number(), ended_at: z.number().nullable(), effects: z.string().nullable(),
+  // A journal opened read-only from before these columns has neither.
+  status: CallStatusSchema.nullable().optional(), run: z.string().nullable().optional(),
 })
 const Count = z.object({ count: z.number() })
+const TurnChangesRow = z.object({ summary: z.string() })
+const TurnSeqRow = z.object({ turn: z.string(), seq: z.number() })
 const ChoiceRow = z.object({ spelling: z.string(), path: z.string(), at: z.number() })
 const CarriedRow = z.object({ journal: z.string(), device: z.string(), through: z.number(), at: z.number(), received: z.number(), roots: z.string() })
 const CarriedActivityRow = z.object({
@@ -190,6 +199,10 @@ export interface StoredActivity {
   session: string
   thread: string
   turn?: string
+  /** A call's status as its reported effects last said; absent for a call that reported none. */
+  status?: CallStatus
+  /** The harness's own run id, for a turn it reported one for: metadata, never the key. */
+  run?: string
   checkout?: string
   cwd?: string
   label?: string
@@ -264,6 +277,11 @@ const MIGRATION = `
     at INTEGER NOT NULL, thread TEXT NOT NULL, kind TEXT NOT NULL, files INTEGER NOT NULL, guessed INTEGER NOT NULL, offered INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS moves_at ON moves(at);
+  CREATE TABLE IF NOT EXISTS entry_candidates (seq INTEGER NOT NULL, thread TEXT NOT NULL, turn TEXT, PRIMARY KEY (seq, thread)) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS entry_candidates_thread ON entry_candidates(thread, turn);
+  CREATE TABLE IF NOT EXISTS turn_changes (
+    thread TEXT NOT NULL, turn TEXT NOT NULL, session TEXT NOT NULL, at INTEGER NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (thread, turn)
+  ) WITHOUT ROWID;
   CREATE TABLE IF NOT EXISTS choices (thread TEXT NOT NULL, spelling TEXT NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (thread, spelling)) WITHOUT ROWID;
   CREATE TABLE IF NOT EXISTS carried (
     thread TEXT NOT NULL, journal TEXT NOT NULL, device TEXT NOT NULL, through INTEGER NOT NULL, at INTEGER NOT NULL, received INTEGER NOT NULL, roots TEXT NOT NULL,
@@ -279,10 +297,26 @@ const MIGRATION = `
   ) WITHOUT ROWID;
 `
 
-/** Columns added after a table was first made, with what adds them. */
+/**
+ * Columns added after a table was first made, with what adds them. An
+ * entry's turn is its author's, and the Threads an ambiguous entry names
+ * are kept beside it, so a turn's changes and a Thread's maybe are an
+ * indexed read; both are filled once from the authors already kept.
+ */
 const ADDED_COLUMNS = [
   { table: "footprint", column: "basis", add: "ALTER TABLE footprint ADD COLUMN basis TEXT" },
   { table: "commits", column: "ref", add: "ALTER TABLE commits ADD COLUMN ref TEXT; CREATE INDEX IF NOT EXISTS commits_ref ON commits(root, path, ref, at)" },
+  {
+    table: "entries",
+    column: "turn",
+    add: `ALTER TABLE entries ADD COLUMN turn TEXT;
+      UPDATE entries SET turn = json_extract(author, '$.author.turn') WHERE thread IS NOT NULL;
+      INSERT OR IGNORE INTO entry_candidates (seq, thread, turn)
+        SELECT e.seq, json_extract(c.value, '$.thread'), json_extract(c.value, '$.turn') FROM entries e, json_each(e.author, '$.candidates') c WHERE e.certainty = 'ambiguous';
+      CREATE INDEX IF NOT EXISTS entries_turn ON entries(thread, turn, seq) WHERE turn IS NOT NULL`,
+  },
+  { table: "activity", column: "status", add: "ALTER TABLE activity ADD COLUMN status TEXT" },
+  { table: "activity", column: "run", add: "ALTER TABLE activity ADD COLUMN run TEXT" },
 ] as const
 
 const optional = <T>(value: T | null): T | undefined => value ?? undefined
@@ -400,20 +434,30 @@ export class JournalStore {
   }
 
   insertEntry(entry: Omit<StoredEntry, "seq">): number {
-    const thread = "author" in entry.author ? entry.author.author.thread : null
-    const session = "author" in entry.author ? entry.author.author.session : null
+    const named = "author" in entry.author ? entry.author.author : null
     const result = this.statement(`INSERT INTO entries (at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores,
-      certainty, thread, session, author, settled, map) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      certainty, thread, session, turn, author, settled, map) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(entry.at, entry.changedAt, entry.root, entry.path, entry.kind, entry.from ?? null, entry.before, entry.after, entry.size ?? null, entry.text ? 1 : 0,
         entry.added ?? null, entry.removed ?? null, entry.stored ? 1 : 0, entry.observed, entry.gap ?? null, entry.restores ?? null, entry.author.certainty,
-        thread, session, JSON.stringify(entry.author), entry.settled ? 1 : 0, entry.map ? encodeMap(entry.map) : null)
-    return Number(result.lastInsertRowid)
+        named?.thread ?? null, named?.session ?? null, named?.turn ?? null, JSON.stringify(entry.author), entry.settled ? 1 : 0, entry.map ? encodeMap(entry.map) : null)
+    const seq = Number(result.lastInsertRowid)
+    this.saveCandidates(seq, entry.author)
+    return seq
   }
 
   updateAuthor(seq: number, author: Attribution, settled: boolean): void {
-    const thread = "author" in author ? author.author.thread : null
-    const session = "author" in author ? author.author.session : null
-    this.statement("UPDATE entries SET author=?, certainty=?, thread=?, session=?, settled=? WHERE seq=?").run(JSON.stringify(author), author.certainty, thread, session, settled ? 1 : 0, seq)
+    const named = "author" in author ? author.author : null
+    this.statement("UPDATE entries SET author=?, certainty=?, thread=?, session=?, turn=?, settled=? WHERE seq=?")
+      .run(JSON.stringify(author), author.certainty, named?.thread ?? null, named?.session ?? null, named?.turn ?? null, settled ? 1 : 0, seq)
+    this.statement("DELETE FROM entry_candidates WHERE seq=?").run(seq)
+    this.saveCandidates(seq, author)
+  }
+
+  /** The Threads an ambiguous author names, each with its turn, beside the entry. */
+  private saveCandidates(seq: number, author: Attribution): void {
+    if (author.certainty !== "ambiguous") return
+    const save = this.statement("INSERT OR IGNORE INTO entry_candidates (seq, thread, turn) VALUES (?, ?, ?)")
+    for (const candidate of author.candidates) save.run(seq, candidate.thread, candidate.turn ?? null)
   }
 
   settle(seq: number): void {
@@ -460,6 +504,12 @@ export class JournalStore {
     return this.statement("SELECT * FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 ORDER BY seq").all(root, path, after).map((row) => this.entryOf(row))
   }
 
+  /** A file's entries after `after` that changed it after `since`, oldest first, without line maps; a rename away from it counts. */
+  versions(root: string, path: string, after: number, since: number): StoredEntry[] {
+    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map
+      FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 AND changed_at > ?4 ORDER BY seq`).all(root, path, after, since).map((row) => this.entryOf(row))
+  }
+
   /** A file's last entry after `after`, without its line map; a rename away from it counts. */
   last(root: string, path: string, after = 0): StoredEntry | undefined {
     const row = this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 ORDER BY seq DESC LIMIT 1").get(root, path, after)
@@ -480,7 +530,48 @@ export class JournalStore {
 
   /** Entries that name `thread` among their candidates. */
   ambiguousWith(thread: string): number {
-    return Count.parse(this.statement("SELECT count(*) AS count FROM entries WHERE certainty='ambiguous' AND instr(author, ?) > 0").get(JSON.stringify({ thread }).slice(1, -1))).count
+    return Count.parse(this.statement("SELECT count(*) AS count FROM entry_candidates WHERE thread=?").get(thread)).count
+  }
+
+  /**
+   * A turn's entries, oldest first, without line maps: the Thread's own in
+   * the turn, and the ambiguous ones that name it with that turn.
+   */
+  entriesOfTurn(thread: string, turn: string): StoredEntry[] {
+    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map
+      FROM entries WHERE seq IN (SELECT seq FROM entries WHERE thread=?1 AND turn=?2 UNION SELECT seq FROM entry_candidates WHERE thread=?1 AND turn=?2) ORDER BY seq`)
+      .all(thread, turn).map((row) => this.entryOf(row))
+  }
+
+  /** The Thread's turns with an entry after `after`, each with its newest: a summary counted before then is behind. */
+  turnsChangedAfter(thread: string, after: number): Map<string, number> {
+    const rows = this.statement(`SELECT turn, max(seq) AS seq FROM (SELECT turn, seq FROM entries WHERE thread=?1 AND turn IS NOT NULL AND seq > ?2
+      UNION ALL SELECT turn, seq FROM entry_candidates WHERE thread=?1 AND turn IS NOT NULL AND seq > ?2) GROUP BY turn`).all(thread, after)
+    return new Map(rows.map((row) => TurnSeqRow.parse(row)).map((row) => [row.turn, row.seq]))
+  }
+
+  /** Entries journaled between two instants, without line maps, oldest first. */
+  entriesBetween(from: number, to: number, limit = 10_000): StoredEntry[] {
+    return this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map FROM entries WHERE at >= ? AND at <= ? ORDER BY seq LIMIT ?")
+      .all(from, to, limit).map((row) => this.entryOf(row))
+  }
+
+  /** Whether any entry that changed by `at` may still be given another author. */
+  unsettledThrough(at: number): boolean {
+    return this.statement("SELECT 1 FROM entries WHERE settled=0 AND changed_at <= ? LIMIT 1").get(at) !== undefined
+  }
+
+  /** A turn's summary as last counted: kept per Thread and turn, the record "changes made" sums. */
+  saveTurnChanges(summary: TurnChanges, session: string): void {
+    this.statement("INSERT OR REPLACE INTO turn_changes (thread, turn, session, at, summary) VALUES (?, ?, ?, ?, ?)").run(summary.thread, summary.turn, session, summary.at, JSON.stringify(summary))
+  }
+
+  /** Every turn summary of a Thread, oldest first; one of a version this build doesn't read is left out. */
+  turnChangesOf(thread: string): TurnChanges[] {
+    return this.statement("SELECT summary FROM turn_changes WHERE thread=? ORDER BY at").all(thread).flatMap((row) => {
+      const parsed = TurnChangesSchema.safeParse(JSON.parse(TurnChangesRow.parse(row).summary))
+      return parsed.success ? [parsed.data] : []
+    })
   }
 
   lastSeq(): number {
@@ -550,12 +641,14 @@ export class JournalStore {
   }
 
   saveActivity(activity: StoredActivity): void {
-    this.statement(`INSERT INTO activity (session, kind, id, thread, turn, checkout, cwd, label, named, record, started_at, ended_at, effects) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    this.statement(`INSERT INTO activity (session, kind, id, thread, turn, checkout, cwd, label, named, record, started_at, ended_at, effects, status, run) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session, kind, id) DO UPDATE SET thread=excluded.thread, turn=coalesce(excluded.turn, turn), checkout=coalesce(excluded.checkout, checkout),
       cwd=coalesce(excluded.cwd, cwd), label=coalesce(excluded.label, label), named=excluded.named, record=coalesce(excluded.record, record),
-      started_at=min(started_at, excluded.started_at), ended_at=coalesce(excluded.ended_at, ended_at), effects=coalesce(excluded.effects, effects)`)
+      started_at=min(started_at, excluded.started_at), ended_at=coalesce(excluded.ended_at, ended_at), effects=coalesce(excluded.effects, effects),
+      status=coalesce(excluded.status, status), run=coalesce(excluded.run, run)`)
       .run(activity.session, activity.kind, activity.id, activity.thread, activity.turn ?? null, activity.checkout ?? null, activity.cwd ?? null,
-        activity.label ?? null, JSON.stringify(activity.named), activity.record ?? null, activity.start, activity.end, activity.effects ? JSON.stringify(activity.effects) : null)
+        activity.label ?? null, JSON.stringify(activity.named), activity.record ?? null, activity.start, activity.end, activity.effects ? JSON.stringify(activity.effects) : null,
+        activity.status ?? null, activity.run ?? null)
   }
 
   private activityOf(value: Row): StoredActivity {
@@ -564,7 +657,15 @@ export class JournalStore {
       kind: row.kind, id: row.id, session: row.session, thread: row.thread, turn: optional(row.turn), checkout: optional(row.checkout), cwd: optional(row.cwd),
       label: optional(row.label), named: z.array(z.string()).parse(JSON.parse(row.named)), record: optional(row.record), start: row.started_at, end: row.ended_at,
       effects: row.effects ? StoredEffectSchema.parse(JSON.parse(row.effects)) : undefined,
+      ...(row.status && { status: row.status }),
+      ...(row.run && { run: row.run }),
     }
+  }
+
+  /** A Thread's turn, by its id. */
+  turn(thread: string, turn: string): StoredActivity | undefined {
+    const row = this.statement("SELECT * FROM activity WHERE thread=? AND kind='turn' AND id=? ORDER BY started_at DESC LIMIT 1").get(thread, turn)
+    return row ? this.activityOf(row) : undefined
   }
 
   /** Activity that overlaps `[from, to]`. */
@@ -844,6 +945,12 @@ export class JournalStore {
     })
     const after = this.blobSize()
     return { dropped: before.count - after.count, bytes: before.bytes - after.bytes }
+  }
+
+  /** A number that changes whenever anything is written to the journal, by this connection or another: what a cache of what it holds is keyed by. */
+  version(): string {
+    const own = Count.parse(this.statement("SELECT total_changes() AS count").get()).count
+    return `${this.dataVersion()}:${own}`
   }
 
   /** A number that changes whenever another connection commits: a reader's cue that what it read is stale. */

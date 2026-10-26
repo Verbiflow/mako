@@ -46,7 +46,7 @@ const go: LiveUpdate = { kind: "user", text: "Fix the redirect", at: at(0) }
   assert.equal(html.match(/data-live-step/g)?.length, 1, "one live row")
   assert.match(html, /shimmer-text[^>]*>Running</, "the running step's verb sweeps")
   assert.match(html, />npm test</, "and says what it runs")
-  assert.match(html, /data-work-summary[^>]*>[^]*Edited a file, read a file and searched once/, "what finished reads as today's summary")
+  assert.match(html, /data-work-summary[^>]*>[^]*Made an edit, read a file and searched once/, "what finished reads as today's summary")
   assert.doesNotMatch(html, /data-transcript-tool/, "the rows stay unmounted until the list opens")
   assert.match(html, /data-turn-clock/, "the turn's head carries its clock")
 }

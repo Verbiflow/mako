@@ -5,8 +5,10 @@ import type { Git } from "@mako/git"
 import type { CarriedEffect, CarriedName } from "@mako/protocol"
 import { QUIET_FOLDERS } from "../base/quiet-folders.js"
 import type { FileResolution, MovedPaths, Touch, TouchKind } from "../contracts/file-references.js"
-import { candidatesOf, RENAME_LOG, RenameHistory, resolveSpelling, SuffixIndex, type Place, type ReferenceContext } from "../files/index.js"
+import { candidatesOf, RENAME_LOG, RenameHistory, resolveSpelling, spellingLine, SuffixIndex, type Place, type ReferenceContext } from "../files/index.js"
+import { decodeText } from "./content.js"
 import type { JournalStore, StoredActivity, StoredEffect, StoredRoot } from "./journal-store.js"
+import { diffLines, splitLines } from "./line-diff.js"
 
 /** Whose message the spellings are in: its Thread, and the folders it works in now. */
 export interface ReferenceSource {
@@ -38,9 +40,13 @@ const RENAMES_FRESH_MS = 60_000
 const RENAMES_TIMEOUT_MS = 20_000
 /** Threads whose carried history is kept read. */
 const CARRIED_THREADS = 32
+/** Threads whose work is kept read, until the journal changes. */
+const WORK_THREADS = 16
+/** Renames a line is followed through, at most. */
+const LINE_HOPS = 16
 
 /** A turn, call or background work as resolving reads it: this journal's own, or one carried from another's. */
-type Worked = Pick<StoredActivity, "start" | "cwd" | "checkout"> & { named: readonly string[]; effects?: readonly (StoredEffect | CarriedEffect)[] }
+type Worked = Pick<StoredActivity, "start" | "cwd" | "checkout" | "status"> & { named: readonly string[]; effects?: readonly (StoredEffect | CarriedEffect)[] }
 
 /** The parts of a Thread's history other journals carried here, read for resolving. */
 interface Carried {
@@ -100,6 +106,8 @@ const STRENGTH = { wrote: 0, read: 1, named: 2 } as const satisfies Record<Touch
  */
 export class ThreadFiles {
   private readonly indexes = new Map<string, Indexed>()
+  /** Each Thread's work as last read, with the journal's version then. */
+  private readonly work = new Map<string, { version: string; work: ThreadWork }>()
   private readonly repositories = new Map<string, Promise<string | undefined>>()
   private readonly renames = new Map<string, Reading>()
   private readonly carried = new Map<string, Carried>()
@@ -115,7 +123,15 @@ export class ThreadFiles {
     const wanted = new Set<string>()
     for (const spelling of spellings) for (const draft of candidatesOf(spelling, context)) wanted.add(draft.path)
     const files = await existing([...wanted])
-    return spellings.map((spelling) => resolveSpelling(spelling, context, (path) => files.has(path)))
+    const roots = store.roots()
+    return spellings.map((spelling) => {
+      const found = resolveSpelling(spelling, context, (path) => files.has(path))
+      const line = spellingLine(spelling)
+      // A line the answer named, where it is now: the file changed since, and the line moved with it.
+      if (found.kind !== "file" || line === undefined || source.asOf === undefined) return found
+      const now = lineNow(store, roots, found.file.was ?? found.file.path, line, source.asOf)
+      return now === undefined ? found : { ...found, file: { ...found.file, line: { was: line, now } } }
+    })
   }
 
   /** Once the renames being read from repositories' Git history are in. */
@@ -180,7 +196,15 @@ export class ThreadFiles {
     for (const item of activity) if (item.cwd && !folders.includes(item.cwd) && folders.length < MAX_FOLDERS) folders.push(item.cwd)
     if (source.cwd && !folders.includes(source.cwd)) folders.push(source.cwd)
     const touched = touchesOf(activity, work.writes, until)
-    const places = await this.places(store, roots, source, activity, work.roots)
+    // Only where the Thread has been: the roots its work ran in or touched, and where it works now.
+    const been = new Set(source.current)
+    for (const item of work.activity) {
+      if (item.checkout) been.add(item.checkout)
+      if (item.cwd) been.add(item.cwd)
+    }
+    const near = (root: StoredRoot) =>
+      [...been].some((folder) => within(folder, root.path) || within(root.path, folder)) || [...touched.keys()].some((path) => within(path, root.path))
+    const places = await this.places(store, roots.filter(near), source, activity, work.roots)
     const histories = source.asOf === undefined ? new Map<string, RenameHistory>() : this.histories(places, [...folders, ...touched.keys()])
     return {
       folders,
@@ -192,13 +216,25 @@ export class ThreadFiles {
     }
   }
 
-  /** The Thread's activity and certain writes in this journal, with the parts other journals carried here. */
+  /** The Thread's activity and certain writes in this journal, with the parts other journals carried here; read again once anything is written. */
   private workOf(store: JournalStore, roots: readonly StoredRoot[], thread: string): ThreadWork {
     if (store.id !== this.journal) {
       this.indexes.clear()
       this.carried.clear()
+      this.work.clear()
       this.journal = store.id
     }
+    const version = store.version()
+    const known = this.work.get(thread)
+    if (known?.version === version) return known.work
+    const work = this.readWork(store, roots, thread)
+    this.work.delete(thread)
+    this.work.set(thread, { version, work })
+    if (this.work.size > WORK_THREADS) this.work.delete(this.work.keys().next().value!)
+    return work
+  }
+
+  private readWork(store: JournalStore, roots: readonly StoredRoot[], thread: string): ThreadWork {
     const carried = this.carriedOf(store, thread)
     const byId = new Map(roots.map((root) => [root.id, root.path]))
     const writes = [...carried.writes]
@@ -275,6 +311,7 @@ export class ThreadFiles {
 
   private async places(store: JournalStore, roots: readonly StoredRoot[], source: ReferenceSource, activity: readonly Worked[], carried: ThreadWork["roots"]): Promise<Place[]> {
     const current = (root: string) => source.current.some((folder) => within(folder, root) || within(root, folder))
+    const indexes = this.indexesOf(store, roots.filter((root) => root.active))
     const places: Place[] = []
     await Promise.all(roots.map(async (root) => {
       const gone = !root.active && !existsSync(root.path)
@@ -285,7 +322,7 @@ export class ThreadFiles {
         current: current(root.path),
         ...(repository && { repository }),
         ...(gone && { gone }),
-        ...(root.active && { index: this.index(store, root) }),
+        ...(indexes.has(root.id) && { index: indexes.get(root.id) }),
       })
     }))
     // Folders another journal tracked the Thread in, before it came here: this machine's own index has them if it tracks them too.
@@ -316,34 +353,48 @@ export class ThreadFiles {
     return found
   }
 
-  /** The root's files by the end of their paths, caught up to the journal's last entry. */
-  private index(store: JournalStore, root: StoredRoot): SuffixIndex {
+  /**
+   * Each root's files by the end of their paths, caught up to the journal's
+   * last entry: one built from the journal's list of the root's files when
+   * it has none or is far behind, the rest caught up together in one pass
+   * over the entries since the oldest of them.
+   */
+  private indexesOf(store: JournalStore, roots: readonly StoredRoot[]): Map<string, SuffixIndex> {
     const last = store.lastSeq()
-    let indexed = this.indexes.get(root.id)
-    if (!indexed || last - indexed.seq > CATCH_UP) {
-      indexed = { index: SuffixIndex.of(store.stats(root.id).keys()), seq: last }
-      this.indexes.set(root.id, indexed)
-      return indexed.index
+    const behind = new Map<string, Indexed>()
+    for (const root of roots) {
+      const indexed = this.indexes.get(root.id)
+      if (!indexed || last - indexed.seq > CATCH_UP) this.indexes.set(root.id, { index: SuffixIndex.of(store.stats(root.id).keys()), seq: last })
+      else if (indexed.seq < last) behind.set(root.id, indexed)
     }
-    while (indexed.seq < last) {
-      const batch = store.entries(indexed.seq, 1_000)
+    let seq = Math.min(...[...behind.values()].map((indexed) => indexed.seq))
+    while (behind.size && seq < last) {
+      const batch = store.entries(seq, 1_000)
       if (!batch.length) break
       for (const entry of batch) {
-        if (entry.root !== root.id) continue
+        const indexed = behind.get(entry.root)
+        if (!indexed || entry.seq <= indexed.seq) continue
         if (entry.kind === "delete") indexed.index.remove(entry.path)
         else {
           if (entry.kind === "rename" && entry.from) indexed.index.remove(entry.from)
           indexed.index.add(entry.path)
         }
       }
-      indexed.seq = batch.at(-1)!.seq
+      seq = batch.at(-1)!.seq
     }
-    indexed.seq = last
-    return indexed.index
+    for (const indexed of behind.values()) indexed.seq = last
+    return new Map(roots.flatMap((root) => {
+      const indexed = this.indexes.get(root.id)
+      return indexed ? [[root.id, indexed.index]] : []
+    }))
   }
 }
 
-/** Each file the Thread touched, by absolute path, with its strongest touch and when. */
+/**
+ * Each file the Thread touched, by absolute path, with its strongest touch
+ * and when. A call that failed or was refused wrote nothing it said it
+ * would: its effects only name their paths.
+ */
 function touchesOf(activity: readonly Worked[], writes: ThreadWork["writes"], until = Number.POSITIVE_INFINITY): Map<string, Touch> {
   const touched = new Map<string, Touch>()
   const touch = (path: string | undefined, kind: TouchKind, at: number, cwd?: string) => {
@@ -355,11 +406,12 @@ function touchesOf(activity: readonly Worked[], writes: ThreadWork["writes"], un
   }
   for (const item of activity) {
     for (const path of item.named) touch(path, "named", item.start, item.cwd)
+    const wrote = item.status === "failed" || item.status === "refused" ? "named" : "wrote"
     for (const effect of item.effects ?? []) {
-      if (effect.kind === "rename") touch(effect.to, "wrote", item.start, item.cwd)
+      if (effect.kind === "rename") touch(effect.to, wrote, item.start, item.cwd)
       else if (effect.kind === "read") touch(effect.path, "read", item.start, item.cwd)
       else if (effect.kind === "command") for (const path of effect.named ?? []) touch(path, "named", item.start, effect.cwd ?? item.cwd)
-      else touch(effect.path, "wrote", item.start, item.cwd)
+      else touch(effect.path, wrote, item.start, item.cwd)
     }
   }
   for (const write of writes) if (write.at <= until) touch(write.path, "wrote", write.at)
@@ -395,6 +447,52 @@ function renamedTo(store: JournalStore, roots: readonly StoredRoot[], path: stri
     after = { root: root.id, seq: local.seq }
   }
   return current !== path ? current : undefined
+}
+
+/**
+ * Where line `line` (from 1) of the file at `path` as of `asOf` is now:
+ * through each change to it since, by the journal's own line diff of the
+ * change's two sides, and through its renames. Null once the line was
+ * removed or the file deleted; undefined when the file isn't tracked or a
+ * version between isn't kept.
+ */
+export function lineNow(store: JournalStore, roots: readonly StoredRoot[], path: string, line: number, asOf: number): number | null | undefined {
+  let root: StoredRoot | undefined
+  for (const candidate of roots) if (within(path, candidate.path) && path !== candidate.path && (!root || candidate.path.length > root.path.length)) root = candidate
+  if (!root) return undefined
+  let current = path.slice(root.path.length + 1)
+  let at = line - 1
+  let after = 0
+  const text = (ref: string | null) => {
+    if (ref === null) return []
+    const bytes = store.blob(ref)
+    return bytes && splitLines(decodeText(bytes))
+  }
+  for (let hops = 0; hops < LINE_HOPS; hops++) {
+    let renamed = false
+    for (const entry of store.versions(root.id, current, after, asOf)) {
+      after = entry.seq
+      if (entry.after === null) return null
+      if (!entry.text) return undefined
+      const before = text(entry.before)
+      const next = text(entry.after)
+      if (!before || !next) return undefined
+      let shift = 0
+      for (const hunk of diffLines(before, next)) {
+        if (at < hunk.a) break
+        if (at < hunk.a + hunk.removed) return null
+        shift += hunk.added - hunk.removed
+      }
+      at += shift
+      if (entry.kind === "rename" && entry.from === current) {
+        current = entry.path
+        renamed = true
+        break
+      }
+    }
+    if (!renamed) return at + 1
+  }
+  return at + 1
 }
 
 /** Where Git's history says a file in one of these repositories went after `since`. */

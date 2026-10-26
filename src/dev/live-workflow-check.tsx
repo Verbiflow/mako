@@ -30,10 +30,21 @@ import { acpStore } from "@/state/acp"
 import { threadsStore } from "@/state/thread-store"
 import { store } from "@/state/session"
 import type { LiveSnapshot } from "@/lib/types"
+import { TURN_CHANGES_VERSION, type TurnChanges } from "@mako/host/contracts/turn-changes"
 import { installMockBridge } from "./mock-bridge"
 import "../index.css"
 
 const mock = installMockBridge()
+// The answer's file link as the host resolves it: the guard, changed since, its line moved down by four.
+const bridge = window.mako
+if (bridge) window.mako = {
+  ...bridge,
+  resolveFileReferences: async (_source, spellings) => spellings.map((spelling) => spelling === "src/router/guard.ts:14"
+    ? { kind: "file", file: { path: "/fixture/project/src/router/guard.ts", reason: "touched", place: { name: "project", folder: "src/router" }, touch: { kind: "wrote", at: Date.now() - 40_000 }, line: { was: 14, now: 18 } } }
+    : spelling === "src/router/guard.test.ts"
+      ? { kind: "file", file: { path: "/fixture/project/src/router/guard.test.ts", reason: "touched", place: { name: "project", folder: "src/router" }, touch: { kind: "wrote", at: Date.now() - 34_000 } } }
+      : { kind: "none" }),
+}
 registerSlot("appshot", "composer.controls", AppshotButton, -10)
 installComposerNotices()
 const id = "11111111-1111-4111-8111-111111111111"
@@ -257,7 +268,35 @@ function publishQueue(phase: "starting" | "reasoning" | "responding" | keyof typ
  * Each is shaped the way a live Claude conversation reports it.
  */
 const turnId = "66666666-6666-4666-8666-666666666666"
-type TurnScene = "tools" | "agents" | "settled" | "stopped" | "table"
+type TurnScene = "tools" | "agents" | "settled" | "stopped" | "table" | "changed" | "changed-maybe" | "reopened"
+
+/**
+ * What the journal counted for the fixture's turn: the guard edited, a test
+ * added and, with `maybe`, a note the person saved while it ran, which
+ * nothing ties to the agent. `state` as the journal had it then.
+ */
+function turnRecord(now: number, maybe: boolean): TurnChanges {
+  const ref = (fill: string) => `sha256:${fill.repeat(64)}`
+  const files: TurnChanges["files"] = [
+    { path: `${cwd}/src/router/guard.test.ts`, root: "r-fixture", relative: "src/router/guard.test.ts", kind: "create", own: { added: 31, removed: 0 }, before: null, after: ref("a"), entries: { first: 812, last: 812 } },
+    { path: `${cwd}/src/router/guard.ts`, root: "r-fixture", relative: "src/router/guard.ts", kind: "modify", own: { added: 9, removed: 2 }, before: ref("b"), after: ref("c"), entries: { first: 809, last: 815 } },
+  ]
+  if (maybe) files.unshift({ path: `${cwd}/notes/routing.md`, root: "r-fixture", relative: "notes/routing.md", kind: "modify", maybe: { added: 3, removed: 0 }, before: ref("d"), after: ref("e"), entries: { first: 811, last: 811 } })
+  return {
+    version: TURN_CHANGES_VERSION,
+    state: "settled",
+    thread: "fixture-thread",
+    turn: turnId,
+    own: { files: 2, added: 40, removed: 2 },
+    maybe: maybe ? { files: 1, added: 3, removed: 0 } : { files: 0, added: 0, removed: 0 },
+    others: { files: 0, added: 0, removed: 0 },
+    files,
+    more: 0,
+    journal: "5f1e2d3c-4b5a-4968-8776-655443322110",
+    through: 816,
+    at: now,
+  }
+}
 function turnScene(scene: TurnScene, now: number): Pick<LiveSnapshot, "blocks" | "requests" | "session" | "nativeAgents"> {
   const tool = (id: string, name: string, input: Record<string, string>, status: string, at: number, output = "") => ({ type: "tool" as const, id, name, input: JSON.stringify(input), output, status, at, endedAt: status === "pending" ? undefined : at + 2_000 })
   const prompt = { type: "user" as const, text: "Fix the expired-session redirect and run the router tests.", requestId: turnId, at: now - (scene === "settled" ? 192_000 : scene === "stopped" ? 100_000 : 74_000) }
@@ -325,6 +364,28 @@ function turnScene(scene: TurnScene, now: number): Pick<LiveSnapshot, "blocks" |
         requests: [...snapshot.requests, request("completed", { snapshots: { before: { kind: "ready", snapshot: { id: crypto.randomUUID(), scope: cwd, createdAt: now - 192_000, files: 2 } }, after: { kind: "ready", snapshot: { id: crypto.randomUUID(), scope: cwd, createdAt: now, files: 2 } } } })],
         nativeAgents: undefined,
       }
+    case "changed":
+    case "changed-maybe":
+    case "reopened": {
+      // Reopened: the process is gone and so are its checkpoints; the request's own record still draws the line.
+      const reopened = scene === "reopened"
+      return {
+        session: reopened ? { ...idle, connection: "disconnected" as const } : idle,
+        blocks: [
+          ...snapshot.blocks,
+          prompt,
+          ...working,
+          tool("write-test", "Write", { file_path: `${cwd}/src/router/guard.test.ts`, content: "describe(\"expired session\", …)" }, "completed", now - 34_000),
+          tool("test-router", "Bash", { command: "npm test -- src/router" }, "completed", now - 28_000, "PASS src/router/guard.test.ts (13 tests)"),
+          { type: "text" as const, text: "The guard now keeps `returnTo` when the session refresh fails (`src/router/guard.ts:14`), so signing in returns to the deep link. I added an expired-session case to `src/router/guard.test.ts`; the router suite passes.", at: now },
+        ],
+        requests: [...snapshot.requests, request("completed", {
+          changes: turnRecord(now, scene === "changed-maybe"),
+          ...(!reopened && { snapshots: { before: { kind: "ready" as const, snapshot: { id: crypto.randomUUID(), scope: cwd, createdAt: now - 192_000, files: 2 } }, after: { kind: "ready" as const, snapshot: { id: crypto.randomUUID(), scope: cwd, createdAt: now, files: 2 } } } }),
+        })],
+        nativeAgents: undefined,
+      }
+    }
     case "stopped":
       return {
         session: idle,
@@ -507,9 +568,9 @@ export function Fixture() {
               </button>
             ))}
             <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="background" onClick={publishBackground}>Background work</button>
-            {(["tools", "agents", "settled", "stopped", "table"] as const).map((scene) => (
+            {(["tools", "agents", "settled", "stopped", "table", "changed", "changed-maybe", "reopened"] as const).map((scene) => (
               <button key={scene} className="pressable rounded border border-hairline px-2 py-1" data-fixture={`turn-${scene}`} onClick={() => publishTurn(scene)}>
-                {{ tools: "Several tools", agents: "Agents together", settled: "Settled turn", stopped: "Stopped turn", table: "Writing a table" }[scene]}
+                {{ tools: "Several tools", agents: "Agents together", settled: "Settled turn", stopped: "Stopped turn", table: "Writing a table", changed: "Turn's changes", "changed-maybe": "Changes, maybe yours", reopened: "Reopened turn" }[scene]}
               </button>
             ))}
             <span data-fixture="status-marks" className="flex items-center gap-3">

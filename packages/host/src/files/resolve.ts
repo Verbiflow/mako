@@ -37,6 +37,13 @@ export function spellingPath(spelling: string): string {
   return spelling.trim().replace(/#L\d+(?:-L?\d+)?$/, "").replace(/(?::\d+){1,2}$/, "")
 }
 
+/** The line a spelling names (`a.ts:12`, `a.ts:12:5`, `a.ts#L12-L20`), from 1; undefined when it names none. */
+export function spellingLine(spelling: string): number | undefined {
+  const found = /(?:#L(\d+)(?:-L?\d+)?|:(\d+)(?::\d+)?)$/.exec(spelling.trim())
+  const line = Number(found?.[1] ?? found?.[2])
+  return Number.isSafeInteger(line) && line > 0 ? line : undefined
+}
+
 const segmentsOf = (path: string) => path.split(/[\\/]/).filter((part) => part && part !== ".")
 
 interface Draft {

@@ -66,6 +66,8 @@ export interface ChangeCounts {
   commands?: number
   /** Paths outside its checkouts it touched, as a count: the weak ones are too noisy to list. */
   outside?: number
+  /** Files changed while its turns ran that might be its, or the person's: counted apart from `files`. */
+  maybe?: number
 }
 
 /** What change counts are asked for: a turn by its request id, a session, or a thread. */

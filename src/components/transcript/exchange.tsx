@@ -59,7 +59,7 @@ import { continueTurn } from "@/state/acp-queue"
 import { AUTO_CONTINUE_NOTE, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { viewer } from "@/state/viewer"
 import { carriedBecause } from "@/lib/restore-plan"
-import { AnswerTimeContext, useTranscriptSource } from "./source-context"
+import { AnswerRequestContext, AnswerTimeContext, useTranscriptSource } from "./source-context"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
@@ -215,6 +215,7 @@ export const Exchange = memo(function Exchange({
     <AnswerTimeContext.Provider value={finishedAt}>
       {/* One gallery per exchange: every picture and video in the prompt, the answer and its work steps a step apart. */}
       <MediaGalleryScope>
+      <AnswerRequestContext.Provider value={exchange.prompt?.requestId}>
       <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
         {exchange.prompt ? (
           mako?.kind === "continued" ? (
@@ -261,6 +262,7 @@ export const Exchange = memo(function Exchange({
           <Footer exchange={exchange} streaming={streaming} interrupted={interrupted} />
         ) : null}
       </article>
+      </AnswerRequestContext.Provider>
       </MediaGalleryScope>
     </AnswerTimeContext.Provider>
   )
@@ -793,7 +795,7 @@ function WorkEndings({ work }: { work: Pick<WorkSummaryData, "failed" | "stopped
  * glance without the words; the open log hangs from them on a hairline.
  */
 const WORK_PHRASES = [
-  { glyph: "edit", count: (work) => work.changedFiles, phrase: (n) => `edited ${n === 1 ? "a file" : `${n} files`}` },
+  { glyph: "edit", count: (work) => work.edits, phrase: (n) => `made ${n === 1 ? "an edit" : `${n} edits`}` },
   { glyph: "shell", count: (work) => work.commands, phrase: (n) => `ran ${n === 1 ? "a command" : `${n} commands`}` },
   { glyph: "read", count: (work) => work.reads, phrase: (n) => `read ${n === 1 ? "a file" : `${n} files`}` },
   { glyph: "search", count: (work) => work.searches, phrase: (n) => `searched ${n === 1 ? "once" : `${n} times`}` },

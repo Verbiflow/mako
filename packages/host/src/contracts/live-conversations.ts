@@ -19,6 +19,7 @@ import type {
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { NativeActivity, NativeActivityObservation } from "./native-activity.js"
 import type { RunSnapshots } from "./workspace-snapshots.js"
+import type { RequestChanges } from "./turn-changes.js"
 import type { ProviderFailureKind } from "./provider-failure.js"
 import type { LiveSessionUsage } from "./providers-acp.js"
 import type { Actor } from "./thread-identity.js"
@@ -194,6 +195,13 @@ export interface LiveRequest {
   nativePrompt?: NativePromptReference
   targetBindingId?: string
   snapshots?: RunSnapshots
+  /**
+   * What its turn changed, as the attribution journal counted it once the
+   * turn ended (`TurnChanges`): the one record the line under the answer,
+   * its file links and "changes made" read. Absent for a turn from before
+   * Mako counted them, which only its checkpoints can say.
+   */
+  changes?: RequestChanges
   tuning?: SessionSettings
   inputDigest?: string
   nativeRun?: { bindingId: string; runId: string; forkId?: string }

@@ -33,6 +33,13 @@ export interface FileCandidate {
   place?: { name: string; folder: string }
   touch?: Touch
   reason: ResolveReason
+  /**
+   * The line the spelling named as of its answer (`was`), and where that
+   * line is in the file now, followed through every change since by the
+   * journal's own line diff; null once it was removed. Absent when the
+   * spelling names no line, or the versions between aren't kept.
+   */
+  line?: { was: number; now: number | null }
 }
 
 export type FileResolution =

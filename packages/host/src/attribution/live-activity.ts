@@ -5,7 +5,7 @@ import type { ToolEffect } from "@mako/sessions/tool-effects"
 import { liveEffectsStatus } from "@mako/sessions/tool-effect-reading"
 import { identifyTool } from "@mako/sessions/tool-identity"
 import { activeWork } from "../contracts/background-work.js"
-import type { LiveBatch } from "../contracts/live-conversations.js"
+import { requestsAfter, type LiveBatch, type LiveRequest } from "../contracts/live-conversations.js"
 import type { NativeAgent } from "../contracts/native-agents.js"
 import { readOnlyCall } from "./read-only.js"
 
@@ -15,6 +15,14 @@ import { readOnlyCall } from "./read-only.js"
  * it finished; its reported effects come on its tool updates. Read from the
  * batches the host already sends every window, so attribution adds no hook
  * to any harness's driver.
+ *
+ * A turn's id is the request it answers (`LiveRequest.id`): the request
+ * dispatching when it starts, the one id checkpoints, rewind and Changes
+ * use too, the same after a reopen or a restart. A turn the harness runs on
+ * its own (a background agent's report) answers no request, and is named
+ * for when it started. The harness's own run id rides along as metadata,
+ * held for one turn only, so a turn that starts before the harness names
+ * its run never takes the last one's.
  */
 
 export interface LiveActivityDeps {
@@ -48,11 +56,14 @@ interface Conversation {
   status?: string
   harness?: string
   cwd?: string
+  /** The harness's id for the run in progress, as reported this turn. */
   runId?: string
+  /** The request being answered, while one dispatches. */
+  dispatching?: string
+  requests?: readonly LiveRequest[]
   /** The harness's own record of the session. */
   record?: string
   turn?: string
-  turns: number
   calls: Map<string, Call>
   /** Work the session runs on its own (subagents, commands left running, monitors), by its native id. */
   work: Map<string, { started: number; named: string[] }>
@@ -66,6 +77,7 @@ interface Placement {
 /** The fields every mark of a conversation shares. */
 interface MarkFields extends Placement {
   turn?: string
+  run?: string
   cwd?: string
   checkout?: string
 }
@@ -94,15 +106,26 @@ export class LiveActivity {
     let conversation = this.conversations.get(batch.id)
     if (!conversation) {
       const known = this.deps.session(batch.id)
-      conversation = { turns: 0, calls: new Map(), work: new Map(), cwd: known?.cwd, harness: known?.harness, record: known?.record }
+      conversation = { calls: new Map(), work: new Map(), cwd: known?.cwd, harness: known?.harness, record: known?.record }
       this.conversations.set(batch.id, conversation)
     }
     const session = batch.session ?? batch.sessionChanges
     if (session?.harness) conversation.harness = session.harness
     if (session?.cwd) conversation.cwd = session.cwd
-    if (session?.nativeRunId) conversation.runId = session.nativeRunId
+    // A run id only as the harness reports it changing, or as the request records it: a session sent whole still carries the last turn's.
+    if (batch.sessionChanges?.nativeRunId) conversation.runId = batch.sessionChanges.nativeRunId
     if (batch.threadPath) conversation.record = batch.threadPath
+    const requests = requestsAfter(conversation.requests, batch)
+    if (requests) {
+      conversation.requests = requests
+      const dispatching = requests.filter((request) => request.status === "dispatching").at(-1)
+      conversation.dispatching = dispatching?.id
+      if (dispatching?.nativeRun && dispatching.id === conversation.turn) conversation.runId = dispatching.nativeRun.runId
+    }
     const status = session?.status
+    // The next request went out while the session still showed the last turn running: that turn is over.
+    if (conversation.turn && conversation.dispatching && conversation.turn !== conversation.dispatching && (status ?? conversation.status) === "running" && requests)
+      this.turnEnded(batch.id, conversation)
     if (status === "running" && !conversation.turn) this.turnStarted(batch.id, conversation)
     for (const update of batch.updates) this.update(batch.id, conversation, update)
     if (batch.nativeAgents !== undefined || status === "closed") this.work(batch.id, conversation, status === "closed" ? [] : activeWork(batch.nativeAgents))
@@ -114,13 +137,16 @@ export class LiveActivity {
   /** What every mark of this conversation carries: whose it is, and where it ran. */
   private about(conversation: Conversation, placed: Placement): MarkFields {
     const cwd = conversation.cwd
-    return { thread: placed.thread, session: placed.session, turn: conversation.turn, cwd, checkout: cwd ? this.deps.checkout(cwd) : undefined }
+    const fields: MarkFields = { thread: placed.thread, session: placed.session, turn: conversation.turn, cwd, checkout: cwd ? this.deps.checkout(cwd) : undefined }
+    if (conversation.runId) fields.run = conversation.runId
+    return fields
   }
 
   private turnStarted(id: string, conversation: Conversation): void {
     const placed = this.deps.placement(id)
-    conversation.turns += 1
-    conversation.turn = conversation.runId ?? `${conversation.turns}`
+    conversation.turn = conversation.dispatching ?? `own-${this.deps.now()}`
+    const request = conversation.requests?.find((item) => item.id === conversation.turn)
+    if (request?.nativeRun) conversation.runId = request.nativeRun.runId
     if (conversation.cwd) this.deps.working(conversation.cwd)
     if (!placed) return
     this.deps.tracker.activity({ ...this.about(conversation, placed), kind: "turn", id: conversation.turn, edge: "start", at: this.deps.now(), record: conversation.record })
@@ -133,6 +159,7 @@ export class LiveActivity {
     const turn = conversation.turn!
     if (placed) this.deps.tracker.activity({ ...this.about(conversation, placed), kind: "turn", id: turn, edge: "end", at: this.deps.now(), record: conversation.record })
     conversation.turn = undefined
+    conversation.runId = undefined
   }
 
   /** Background work starts when the roster first names it active, and ends when it no longer does. */

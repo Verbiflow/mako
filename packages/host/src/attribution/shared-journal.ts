@@ -24,6 +24,7 @@ import {
 import { acquireHostLock, type HostLock } from "../base/host-lock.js"
 import { nodePlatform } from "../base/platform.js"
 import type { LostVersion } from "../contracts/thread-changes.js"
+import { TurnChangesSchema, type TurnChanges } from "../contracts/turn-changes.js"
 import type { BackfillResult } from "./backfill.js"
 import { JOURNAL_FORMAT, type FileChoice, type MoveRecord } from "./journal-store.js"
 import type { CarryResult } from "./thread-history.js"
@@ -82,6 +83,8 @@ export interface JournalWrites {
   moved(move: MoveRecord): void
   /** The person picked a file for a spelling in a Thread's answers. */
   chose(choice: FileChoice): void
+  /** A turn's changes as counted, kept for "changes made" to sum. */
+  counted(summary: TurnChanges, session: string): void
   /** A follower's Threads' sessions; the owner's own are in its catalog. */
   sessions(sessions: readonly PlacedSession[]): void
   track(root: string): Promise<void>
@@ -119,6 +122,7 @@ const OneWaySchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("mako-wrote"), write: MakoWriteSchema, startedAt: Instant, endedAt: Instant }),
   z.object({ kind: z.literal("moved"), move: MoveRecordSchema }),
   z.object({ kind: z.literal("chose"), choice: FileChoiceSchema }),
+  z.object({ kind: z.literal("counted"), summary: TurnChangesSchema, session: SessionRefSchema }),
   z.object({ kind: z.literal("sessions"), sessions: z.array(PlacedSessionSchema).max(50_000) }),
 ])
 type OneWay = z.infer<typeof OneWaySchema>
@@ -367,6 +371,7 @@ export class SharedJournal {
       makoWrote: (write, startedAt, endedAt) => oneWay({ kind: "mako-wrote", write, startedAt, endedAt }),
       moved: (move) => oneWay({ kind: "moved", move }),
       chose: (choice) => oneWay({ kind: "chose", choice }),
+      counted: (summary, session) => oneWay({ kind: "counted", summary, session }),
       sessions: (sessions) => {
         this.lastSessions = [...sessions]
         oneWay({ kind: "sessions", sessions: [...sessions] })
@@ -602,6 +607,7 @@ export class SharedJournal {
       case "mako-wrote": return writes.makoWrote(message.write, message.startedAt, message.endedAt)
       case "moved": return writes.moved(message.move)
       case "chose": return writes.chose(message.choice)
+      case "counted": return writes.counted(message.summary, message.session)
       case "sessions": return writes.sessions(message.sessions)
     }
   }
