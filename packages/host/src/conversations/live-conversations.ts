@@ -1169,6 +1169,8 @@ export class LiveConversations {
         goal: previous.goal !== snapshot.goal ? (snapshot.goal ?? null) : undefined,
         side: previous.side !== snapshot.side ? (snapshot.side ?? null) : undefined,
         historyFailure: previous.historyFailure !== snapshot.historyFailure ? (snapshot.historyFailure ?? null) : undefined,
+        harnessTurns: previous.harnessTurns !== snapshot.harnessTurns ? snapshot.harnessTurns : undefined,
+        spentThrough: previous.spentThrough !== snapshot.spentThrough ? (snapshot.spentThrough ?? null) : undefined,
         control:
           previous.control !== snapshot.control ? snapshot.control : undefined,
         base: previous.base !== snapshot.base ? snapshot.base : undefined,

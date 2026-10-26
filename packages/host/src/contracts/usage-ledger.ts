@@ -1,4 +1,4 @@
-import type { LiveRequest } from "./live-conversations.js"
+import type { HarnessTurn, LiveRequest, SpentThrough } from "./live-conversations.js"
 import type { LiveSessionUsage, TokenCounts } from "./providers-acp.js"
 
 /**
@@ -121,19 +121,29 @@ export interface ConversationSpend {
   unrecorded: { tokens: number; cost: number }
   /** The turn running now, measured so far; already inside the sums. */
   running?: TurnSpend
+  /** Spent since the last turn by work still going (a background subagent), which the next turn counts; already inside the sums. */
+  since?: TurnSpend
   last?: TurnSpend
 }
 
 /**
  * Every turn's spend added up, the running one included as far as it has
- * gone. Reads only the requests' own records, so a reopened conversation
- * sums the same as a live one.
+ * gone: Mako's requests, the turns the harness ran on its own
+ * (`harnessTurns`), and what was spent since the last turn ended
+ * (`spentThrough`), which the next turn counts. Reads only the
+ * conversation's own records, so a reopened conversation sums the same as
+ * a live one, and every token the meter read is in one turn.
  */
-export function conversationSpend(requests: readonly LiveRequest[], usage?: LiveSessionUsage, harness?: string): ConversationSpend {
+export function conversationSpend(
+  requests: readonly LiveRequest[],
+  usage?: LiveSessionUsage,
+  harness?: string,
+  outside: { harnessTurns?: readonly HarnessTurn[]; spentThrough?: SpentThrough; running?: boolean } = {}
+): ConversationSpend {
   const total: ConversationSpend = { turns: 0, unpriced: 0, unrecorded: { tokens: 0, cost: 0 } }
-  const add = (spend: TurnSpend) => {
+  const add = (spend: TurnSpend, counts = true) => {
     if (!spend.tokens && spend.cost === undefined && !spend.estimate) return
-    total.turns += 1
+    if (counts) total.turns += 1
     if (spend.tokens) total.tokens = addTokens(total.tokens, spend.tokens)
     if (spend.cost !== undefined) total.cost = (total.cost ?? 0) + spend.cost
     else if (spend.estimate) {
@@ -145,15 +155,32 @@ export function conversationSpend(requests: readonly LiveRequest[], usage?: Live
     } else if (spend.tokens) total.unpriced += 1
     if (spend.unrecorded) total.unrecorded[spend.unrecorded] += 1
   }
-  for (const request of requests) {
-    if (request.spend) {
-      add(request.spend)
-      total.last = request.spend
-    } else if (request.status === "dispatching" && harness) {
-      const spend = spendBetween(request.usageFrom, usage)
-      if (spend.tokens || spend.cost !== undefined) {
-        total.running = { provider: harness, at: Date.now(), ...spend }
-        add(total.running)
+  const ended = [
+    ...requests.flatMap((request) => (request.spend ? [request.spend] : [])),
+    ...(outside.harnessTurns ?? []).map((turn) => turn.spend),
+  ].sort((a, b) => a.at - b.at)
+  for (const spend of ended) {
+    add(spend)
+    total.last = spend
+  }
+  const dispatching = requests.find((request) => request.status === "dispatching")
+  if (harness && dispatching) {
+    const spend = spendBetween(dispatching.usageFrom, usage)
+    if (spend.tokens || spend.cost !== undefined) {
+      total.running = { provider: harness, at: Date.now(), ...spend }
+      add(total.running)
+    }
+  } else if (harness && outside.spentThrough) {
+    // A turn the harness runs on its own, or work going on between turns, counts from the last turn's end.
+    const spend = spendBetween(outside.spentThrough.usage, usage)
+    if (spend.tokens || spend.cost !== undefined) {
+      const measured: TurnSpend = { provider: harness, at: Date.now(), ...spend }
+      if (outside.running) {
+        total.running = measured
+        add(measured)
+      } else {
+        total.since = measured
+        add(measured, false)
       }
     }
   }

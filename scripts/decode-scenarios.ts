@@ -39,13 +39,13 @@ export interface ToolVocabulary {
   monitor: Optional<(command: string, description: string) => Call>
 }
 
-/** What a subagent is started on: the harness's own subagent tool takes both. */
-export type Task = { description: string; prompt: string }
+/** What a subagent is started on: the harness's own subagent tool takes both, and runs it apart from the turn when `background`. */
+export type Task = { description: string; prompt: string; background?: true }
 
 export interface SubagentTools {
-  /** The call that starts a subagent on `task`, which returns its report unless the harness has `wait`. */
+  /** The call that starts a subagent on `task`, which returns its report unless it runs in the background or the harness has `wait`. */
   start(task: Task): Call
-  /** The call that waits for the report, for a harness whose start returns at once (Codex's `wait_agent`). */
+  /** The call that waits for the report of one not in the background, for a harness whose start returns at once (Codex's `wait_agent`). */
   wait?: Call
   /** The model whose turns offer these tools, for a harness that offers them to some models only. */
   model?: string
@@ -498,10 +498,13 @@ export const SCENARIOS: Scenario[] = [
     about: "A subagent left running in the background reports after the turn that started it; the harness runs a turn of its own on the report, or takes it into the turn still running.",
     files: {},
     needs: ["subagent"],
-    captured: "the harness runs its own turn after the prompt's has ended, which only Mako's live driver follows; record it with scripts/probe-provider-turn.mjs and keep it with --capture",
+    woken: { text: "The subagent replied marker-7." },
     turns: [{
       prompt: "Run exactly one subagent in the background (do not wait for it) whose whole task is to reply with a marker, then end your turn at once.",
-      steps: [],
+      steps: [
+        { subagent: { description: "Reply with a marker", prompt: "Reply with exactly marker-7 and nothing else.", background: true, steps: [{ text: "marker-7" }] } },
+        { text: "Started one subagent in the background." },
+      ],
     }],
   },
   {
@@ -737,7 +740,7 @@ export function script(scenario: Scenario, tools: ToolVocabulary, project: strin
     const { steps: own, ...task } = step.subagent
     const { start, wait } = tools.subagent
     children.push({ prompt: quoted(task.prompt), steps: steps(`subagent ${children.length + 1} `, `call_s${children.length + 1}_`, own.flatMap(expand)) })
-    return [{ reasoning: step.reasoning, call: () => start(task) }, ...wait ? [{ call: () => wait }] : []]
+    return [{ reasoning: step.reasoning, call: () => start(task) }, ...wait && !task.background ? [{ call: () => wait }] : []]
   }
   const steps = (label: string, ids: string, list: Step[]): Steps => ({ label, ids, list, next: 0 })
   const parent = steps("", "call_", scenario.turns.flatMap((turn) => turn.steps.flatMap(expand).map((step) => ({ ...step, turn }))))
@@ -753,6 +756,7 @@ export function script(scenario: Scenario, tools: ToolVocabulary, project: strin
   return {
     unheard,
     taken,
+    done: () => parent.next >= parent.list.length && !woken && children.every(({ steps: child }) => child.next >= child.list.length),
     unfinished: () => children.flatMap(({ steps: child }) => child.next < child.list.length ? [`${child.label.trim()} (took ${child.next} of ${child.list.length})`] : []),
     reply: (heard) => {
       const child = prompts.some((prompt) => heard.includes(prompt)) ? undefined : children.find((candidate) => heard.includes(candidate.prompt))
@@ -782,6 +786,8 @@ export interface Script {
   unheard: string[]
   /** Which conversation's step each conversation request took, in order: what a failed run's requests were answered with. */
   taken: string[]
+  /** Every step was asked for: the turns', each subagent's, and the turn the harness runs on its own (`woken`). */
+  done: () => boolean
   /** Each subagent whose requests didn't take all its steps: one the harness never started, or stopped early. */
   unfinished: () => string[]
 }

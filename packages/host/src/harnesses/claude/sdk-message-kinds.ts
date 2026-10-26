@@ -93,6 +93,18 @@ export function claudeCommandLifecycle(message: SDKMessage): z.infer<typeof Comm
  * Mako's message `id`: its result names neither it nor anything else (2.1.283: a notice of background work found
  * stopped as a session reopened, `num_turns` 0, recorded 2026-10-23).
  */
+/**
+ * A result that doesn't end the turn: a steer aborted the step it landed in,
+ * a reply streaming or a command running, and Claude opens a query for it
+ * after this result (Claude Code 2.1.278 and 2.1.293, `steered-shell`
+ * pairs); or more turns are queued behind it.
+ */
+export function claudeTurnGoesOn(message: SDKMessage, steered: boolean): boolean {
+  if (message.type !== "result") return false
+  if (steered && (message.terminal_reason === "aborted_streaming" || message.terminal_reason === "aborted_tools")) return true
+  return (message.queued_turn_count ?? 0) > 0
+}
+
 export function claudeOwnTurnEnded(message: SDKMessage, id: string): boolean {
   if (message.type !== "result") return false
   return message.origin?.kind === "task-notification" && message.user_message_uuid !== id && !(message.user_message_uuids ?? []).includes(id)

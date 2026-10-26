@@ -52,6 +52,7 @@ import type {
   SessionUpdate,
 } from "./types.js"
 import { devinFork } from "./devin-fork.js"
+import { addTurnUsage } from "../turn-usage.js"
 
 type SqliteFields = Record<string, SQLOutputValue>
 type StoredTimestamp = number | undefined
@@ -140,6 +141,7 @@ function isoOf(value: StoredTimestamp): string | undefined {
 }
 
 export class DevinCliProvider implements SessionProvider {
+  readonly subagentSpendInParent = true
   /** Its records state no version: what its harness leaves beside them says (`record-evidence.ts`). */
   writerEvidence(path: string, reader: WriterEvidenceLookups): Promise<WriterEvidence | null> {
     return reader.devinCli(path)
@@ -992,7 +994,7 @@ function translator(
           turns.sink.reading(record)
         }
         const usage = message.usage ?? row.usage
-        if (usage) spent = addUsage(spent, usage)
+        if (usage) spent = addTurnUsage(spent, usage)
         return
       }
       if (message.role === "tool") {
@@ -1014,11 +1016,11 @@ function translator(
       turns.unread(`message ${message.role ?? "(no role)"}`, "unknown", JSON.parse(row.chatMessage))
     },
     spend(usage) {
-      if (running) spent = addUsage(spent, usage)
-      else idle = addUsage(idle, usage)
+      if (running) spent = addTurnUsage(spent, usage)
+      else idle = addTurnUsage(idle, usage)
     },
     snapshot() {
-      if (idle) spent = addUsage(spent, idle)
+      if (idle) spent = addTurnUsage(spent, idle)
       idle = undefined
       commit()
       return turns.done()
@@ -1079,15 +1081,6 @@ function toolEnd(id: string, call: MadeCall, stored: StoredAcpCall | undefined, 
   return update
 }
 
-function addUsage(total: TurnUsage | undefined, more: TurnUsage): TurnUsage {
-  if (!total) return { ...more }
-  return {
-    input: (total.input ?? 0) + (more.input ?? 0),
-    output: (total.output ?? 0) + (more.output ?? 0),
-    cacheRead: (total.cacheRead ?? 0) + (more.cacheRead ?? 0),
-    cacheWrite: (total.cacheWrite ?? 0) + (more.cacheWrite ?? 0),
-  }
-}
 
 function parseSubagentCompletion(text: string): {
   id: string

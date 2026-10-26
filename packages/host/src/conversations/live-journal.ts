@@ -66,6 +66,18 @@ const TokenCountsSchema = z.object({
 })
 const CostSchema = z.object({ amount: z.number(), currency: z.string() })
 const UnrecordedSchema = z.object({ tokens: z.number().int().nonnegative(), cost: z.number().int().nonnegative() })
+/** What a turn spent, as Mako measured it; see `TurnSpend`. */
+const TurnSpendSchema = z.object({
+  provider: z.string(),
+  model: z.string().optional(),
+  at: z.number(),
+  tokens: TokenCountsSchema.optional(),
+  cost: z.number().nonnegative().optional(),
+  estimate: z.object({ amount: z.number().nonnegative(), currency: z.literal("USD"), table: z.string() }).optional(),
+  unrecorded: z.enum(["tokens", "cost"]).optional(),
+})
+/** A turn Mako didn't send, or what was spent after the last; see `HarnessTurn`. */
+export const HarnessTurnSchema = z.object({ id: z.string(), kind: z.enum(["turn", "after"]), spend: TurnSpendSchema })
 
 export const LiveRequestSchema = z.object({
   actor: ActorSchema.optional(),
@@ -134,15 +146,7 @@ export const LiveRequestSchema = z.object({
     unrecorded: UnrecordedSchema.optional(),
   }).optional(),
   /** What answering this request spent, as Mako measured it; see `TurnSpend`. */
-  spend: z.object({
-    provider: z.string(),
-    model: z.string().optional(),
-    at: z.number(),
-    tokens: TokenCountsSchema.optional(),
-    cost: z.number().nonnegative().optional(),
-    estimate: z.object({ amount: z.number().nonnegative(), currency: z.literal("USD"), table: z.string() }).optional(),
-    unrecorded: z.enum(["tokens", "cost"]).optional(),
-  }).optional(),
+  spend: TurnSpendSchema.optional(),
   continues: z
     .object({
       requestId: z.string(),
@@ -302,7 +306,7 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
  * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves. `elsewhere` and
  * `copy` are a cloud router's word on a conversation it relays or reads from the account's copy, never a journal's.
  */
-type UnstoredMetadata = "blocks" | "requests" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "copy"
+type UnstoredMetadata = "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "copy"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by
@@ -407,6 +411,7 @@ export class LiveJournal {
       CREATE TABLE IF NOT EXISTS base (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS blocks (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS requests (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS harness_turns (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));
       ${MAKO_LOG_TABLE}`)
       for (const value of this.db
@@ -488,8 +493,13 @@ export class LiveJournal {
       .map((row) =>
         LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value))
       )
+    const harnessTurns = this.db
+      .prepare("SELECT value FROM harness_turns ORDER BY rowid")
+      .all()
+      .map((row) => HarnessTurnSchema.parse(JSON.parse(RowSchema.parse(row).value)))
     const snapshot: LiveSnapshot = {
       ...metadata,
+      ...harnessTurns.length && { harnessTurns },
       ...baseLiveStart !== undefined && { baseLiveStart },
       // A base an earlier build kept unmerged reads as every other reading of it does.
       base: read ? mergedBase(read.base, blocks, metadata.baseCoveredBlocks ?? 0, baseLiveStart, { cutOff: cutOffRequests(requests) }).base : null,
@@ -538,7 +548,7 @@ export class LiveJournal {
   commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
     this.db.exec("BEGIN IMMEDIATE")
     try {
-      const { blocks, requests, ...metadata } = next
+      const { blocks, requests, harnessTurns, ...metadata } = next
       const { configOptions, ...session } = metadata.session
       // Comes from the live harness each time and is not read back.
       delete session.commands
@@ -548,7 +558,7 @@ export class LiveJournal {
       if (!previous || writeOptions || this.messageBase || metadataChanged(previous, next))
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-          .run(JSON.stringify({ ...metadata, session, base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined }))
+          .run(JSON.stringify({ ...metadata, session, base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined, spentThrough: undefined }))
       this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.
@@ -624,6 +634,12 @@ export class LiveJournal {
         const kept = new Set(requests.map((request) => request.id))
         if (!previous || previous.requests.some((request) => !kept.has(request.id)))
           this.db.prepare("DELETE FROM requests WHERE id NOT IN (SELECT value FROM json_each(?))").run(JSON.stringify([...kept]))
+      }
+      // Each is kept as it ends and never changes.
+      if (harnessTurns !== previous?.harnessTurns && harnessTurns?.length) {
+        const kept = new Set(previous?.harnessTurns?.map((turn) => turn.id))
+        const insert = this.db.prepare("INSERT OR IGNORE INTO harness_turns VALUES (?, ?)")
+        for (const turn of harnessTurns) if (!kept.has(turn.id)) insert.run(turn.id, JSON.stringify(turn))
       }
       const events = this.logState().advance(makoFacts(next))
       if (events.length) this.appendLog(events, "host")

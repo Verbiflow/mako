@@ -72,7 +72,7 @@ const NoticeMetadata = z.object({
   signal: z.string().optional(),
 })
 
-function openCodeNotice(item: InboxItem): OpenCodeNotice | undefined {
+export function openCodeNotice(item: InboxItem): OpenCodeNotice | undefined {
   if (item.type !== "synthetic") return undefined
   const notice = item.payload
   const metadata = NoticeMetadata.safeParse(notice.metadata ?? {}).data ?? {}

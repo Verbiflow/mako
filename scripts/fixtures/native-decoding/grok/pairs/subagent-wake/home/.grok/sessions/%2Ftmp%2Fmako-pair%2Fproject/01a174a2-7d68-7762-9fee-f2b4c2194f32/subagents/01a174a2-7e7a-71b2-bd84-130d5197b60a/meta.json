@@ -1,0 +1,18 @@
+{
+  "subagent_id": "01a174a2-7e7a-71b2-bd84-130d5197b60a",
+  "attempt_id": "at1.fb7fb14c05a444e8a941b826b1a2036",
+  "parent_session_id": "01a174a2-7d68-7762-9fee-f2b4c2194f32",
+  "child_session_id": "01a174a2-7e7a-71b2-bd84-130d5197b60a",
+  "subagent_type": "general-purpose",
+  "description": "Reply with a marker",
+  "prompt": "Reply with exactly marker-7 and nothing else.",
+  "status": "completed",
+  "started_at": "2026-10-25T19:56:08.712025Z",
+  "completed_at": "2026-10-25T19:56:09.064096Z",
+  "duration_ms": 353,
+  "tool_calls": 0,
+  "turns": 1,
+  "effective_context_source": "new",
+  "child_cwd": "/tmp/mako-pair/project",
+  "effective_model_id": "grok-4.6"
+}
