@@ -14,6 +14,7 @@ import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeRev
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
 import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
+import type { FileWriters, RewindPreview, WorkspaceSnapshot } from "@mako/host/contracts/workspace-snapshots"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "@mako/host/contracts/utility-work"
 import type { NativeRequestInput, NativeRequest } from "@mako/host/contracts/native-requests"
 import type { ForkInput, TransferInput } from "@mako/host/contracts/conversation-control"
@@ -517,6 +518,8 @@ export function installMockBridge() {
    * drawn under its first prompt.
    */
   const forkOpeningScene = scene === "fork-opening"
+  /** `?app=rewind`: a changed turn's rewind shows whose each file is; `&checkpoint=refused`, why there is none. */
+  const rewindScene = scene !== "rewind" ? undefined : "location" in window && new URLSearchParams(window.location.search).get("checkpoint") === "refused" ? "refused" : "shared"
   const streamsScene = scene === "streams" || forkOpeningScene
   const openingNotices = (snapshot: LiveSnapshot): LiveUpdate[] =>
     !forkOpeningScene || snapshot.requests.length ? [] : (snapshot.control?.ancestry?.kind === "fork" ? ["paper", "wisprflow"] : ["paper"])
@@ -2138,8 +2141,16 @@ export function installMockBridge() {
     liveAcknowledgeAction: async () => {
       throw new Error("Provider controls require the real host")
     },
-    liveRewindPreview: async () => {
-      throw new Error("Workspace rewind requires the real host")
+    // `?app=rewind`: a turn another Thread and the person worked alongside, its files' writers from the journal.
+    liveRewindPreview: async (id: string, requestId: string) => {
+      const live = liveSnapshots.get(id)
+      const request = live?.requests.find((item) => item.id === requestId)
+      const after = request?.snapshots?.after
+      if (!live || after?.kind !== "ready") throw new Error("Workspace rewind requires the real host")
+      return mockRewindPreview(after.snapshot, live.threadId ?? "", (thread, title) => {
+        titles.set(thread, { thread, title, source: "user" })
+        emit({ type: "thread-titles", titles: [{ thread, title, source: "user" }] })
+      })
     },
     liveRewind: async () => {
       throw new Error("Workspace rewind requires the real host")
@@ -2541,7 +2552,7 @@ export function installMockBridge() {
         ? { ...snapshot.session.settings, ...tuning, options: { ...snapshot.session.settings?.options, ...tuning.options } }
         : snapshot.session.settings
       const reply = mockReply({ ...snapshot.session, settings }, request, settings)
-      if (reply.changed) request.snapshots = mockTurnSnapshots(GIT.root ?? snapshot.session.cwd)
+      if (reply.changed) request.snapshots = mockTurnSnapshots(GIT.root ?? snapshot.session.cwd, rewindScene)
       const { permission } = reply
       const updates = framed(id, snapshot.session.harness, [...openingNotices(snapshot), ...reply.updates])
       if (streamsScene && snapshot.blocks.length) {
@@ -3274,9 +3285,25 @@ interface MockReply {
 }
 
 /** Checkpoints either side of a turn in `scope`, both saved. */
-function mockTurnSnapshots(scope: string): NonNullable<LiveRequest["snapshots"]> {
-  const snapshot = (createdAt: number) => ({ kind: "ready" as const, snapshot: { id: crypto.randomUUID(), scope, createdAt, files: 2 } })
+function mockTurnSnapshots(scope: string, rewind?: "shared" | "refused"): NonNullable<LiveRequest["snapshots"]> {
+  const snapshot = (createdAt: number) => ({ kind: "ready" as const, snapshot: { id: crypto.randomUUID(), scope, createdAt, files: 2, ...rewind === "shared" && { shared: [crypto.randomUUID()] } } })
+  if (rewind === "refused") return { before: snapshot(Date.now() - 1_000), after: { kind: "unavailable", reason: "Resolve this workspace's merge conflicts before a checkpoint can be taken." } }
   return { before: snapshot(Date.now() - 1_000), after: snapshot(Date.now()) }
+}
+
+/** A rewind's preview with the journal's writers: this Thread's files, the person's save, and another Thread's. */
+function mockRewindPreview(target: WorkspaceSnapshot, thread: string, named: (thread: string, title: string) => void): RewindPreview {
+  const other = "mock-thread-retry-tests"
+  named(other, "Fix the flaky retry test")
+  const writers = {
+    "src/components/session-rail.tsx": [{ kind: "thread", thread, sure: true }],
+    "src/state/session-store.ts": [{ kind: "thread", thread, sure: true }],
+    "src/net/retry.test.ts": [{ kind: "thread", thread: other, sure: true }],
+    "src/net/retry.ts": [{ kind: "thread", thread: other, sure: true }, { kind: "thread", thread, sure: false }],
+    "README.md": [{ kind: "person" }],
+  } satisfies FileWriters
+  const changedFiles = Object.keys(writers)
+  return { target, current: { ...target, id: crypto.randomUUID(), createdAt: Date.now() }, changedFiles, changedFileCount: changedFiles.length, stagingChanged: false, writers }
 }
 
 /** A planning turn answers with a Markdown plan, and waits on the harness's own plan approval where it has one. */

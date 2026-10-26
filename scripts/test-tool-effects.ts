@@ -224,6 +224,8 @@ assert.deepEqual(namedPaths("perl -pi -e 's/a/b/' notes.md", cwd), ["/Users/me/p
 assert.deepEqual(namedPaths("sed -n '1,5p' notes.md", cwd), [], "sed without -i writes nothing")
 assert.deepEqual(namedPaths("npm test | tee -a test.log", cwd), ["/Users/me/project/test.log"])
 assert.deepEqual(namedPaths("git mv a.ts b.ts && git rm -q c.ts", cwd), ["/Users/me/project/a.ts", "/Users/me/project/b.ts", "/Users/me/project/c.ts"])
+assert.deepEqual(namedPaths("git checkout HEAD~1 -- src/a.ts && git restore --source main -- b.ts c.ts", cwd), ["/Users/me/project/src/a.ts", "/Users/me/project/b.ts", "/Users/me/project/c.ts"], "files Git puts back by name")
+assert.deepEqual(namedPaths("git checkout feature && git restore --staged d.ts", cwd), [], "a branch switch names no file; restoring only the index writes none")
 assert.deepEqual(namedPaths("cd packages/app && touch ready", cwd), ["/Users/me/project/packages/app/ready"], "a cd into a known folder moves where relative paths resolve")
 assert.deepEqual(namedPaths("cd \"$DIR\" && touch ready && touch /tmp/abs", cwd), ["/tmp/abs"], "after a cd into an unknown folder only absolute paths are named")
 assert.deepEqual(namedPaths("rm $HOME/x *.log ~/y `pwd`/z", cwd), [], "words the shell expands are left out")

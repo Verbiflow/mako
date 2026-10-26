@@ -3,14 +3,21 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { test } from "node:test"
 import { Git } from "@mako/git"
-import type { ActivityMark, ReportedEffect } from "@mako/protocol"
+import type { ActivityMark, ExactBounds, ReportedEffect } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
+import { JournalStore } from "@mako/host/attribution/journal-store"
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
+import { contentRef } from "@mako/host/attribution/content"
+import { writersSince } from "@mako/host/attribution/writers-since"
+import { CallBounds, liveCallBounds, type LiveCallBounds } from "@mako/host/harnesses/call-bounds"
+import { claudeCallHooks } from "@mako/host/harnesses/claude/call-hooks"
 import { changes, hunks, partition, restorable, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { lineNow, ThreadFiles } from "@mako/host/attribution/thread-files"
+import { threadTotals } from "@mako/host/attribution"
 import { threadTrees } from "@mako/host/attribution/thread-tree"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { LiveActivity } from "@mako/host/attribution/live-activity"
@@ -386,6 +393,8 @@ async function liveWorld() {
     view: (): JournalView => ({ store: tracker.store, roots: () => tracker.rootStates().values(), author: (seq) => tracker.authorOf(seq) }),
     batch,
     write,
+    /** A call's exact bounds, as a harness's hooks publish them (`liveCallBounds`). */
+    bounds: (call: string, status: "completed" | "failed", exact: ExactBounds) => adapter.bounds("conversation-7", call, status, exact),
     /** One call that edits a file and reports it, ending as `status` says. */
     async edit(id: string, name: string, text: string, status: "completed" | "failed" = "completed") {
       const path = join(folder, name)
@@ -396,8 +405,9 @@ async function liveWorld() {
       batch({ updates: [{ kind: "tool-update", id, status, output: status === "completed" ? "ok" : "Error: the file was changed since it was read", effects: [{ kind: "write", path, content: text }] }] })
       await tracker.settled()
     },
-    /** Every change so far settled, as the journal settles them once nothing can reach them. */
+    /** Every change so far settled, as the journal settles them once nothing can reach them; each heard at once, as the watcher hears it. */
     async settle() {
+      await tracker.settled()
       clock.advance(15_000)
       tracker.sweep()
       await tracker.settled()
@@ -424,6 +434,8 @@ const TURN_ONE = "11111111-1111-4111-8111-111111111111"
 const TURN_TWO = "22222222-2222-4222-8222-222222222222"
 const TURN_THREE = "33333333-3333-4333-8333-333333333333"
 const TURN_FOUR = "44444444-4444-4444-8444-444444444444"
+const TURN_FIVE = "55555555-5555-4555-8555-555555555555"
+const TURN_SIX = "66666666-6666-4666-8666-666666666666"
 
 test("a turn is the request it answers: two turns, a restart between them, and a stale run id", async () => {
   const world = await liveWorld()
@@ -547,6 +559,529 @@ test("a root whose folder went while no tracker ran is let go, not journaled as 
   assert.equal(gone.rootStates().size, 0)
   await gone.close()
   rmSync(goneStorage, { recursive: true, force: true })
+})
+
+/**
+ * A repository with an upstream to pull from, its own tracker on a scripted
+ * clock, and Git run for real. `gitHeard` tells the tracker what a Git
+ * command touched as the watcher hears it: the files it wrote, then its own
+ * files (HEAD, the index, the reflog), each file's time set to the clock.
+ */
+async function gitWorld(t: { after(run: () => Promise<void> | void): void }) {
+  const upstream = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-upstream-")))
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-git-")))
+  const journal = mkdtempSync(join(tmpdir(), "mako-attribution-git-journal-"))
+  const run = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], { cwd, encoding: "utf8", env: { ...process.env, GIT_EDITOR: "true" } }).trim()
+  run(upstream, "init", "-q", "-b", "main")
+  writeFileSync(join(upstream, "a.ts"), lines(6))
+  writeFileSync(join(upstream, "b.ts"), "export const b = 1\n")
+  run(upstream, "add", "-A")
+  run(upstream, "commit", "-q", "-m", "base")
+  run(folder, "clone", "-q", upstream, ".")
+  const worldClock = new FakeClock(Date.now())
+  const worldEvents = new FakeEventSource()
+  const worldTracker = await LaptopTracker.open(
+    { fs: nodeFileSystem(), events: worldEvents, clock: worldClock, storage: journal, device: "scenario" },
+    { repository: async (path) => gitRepository(runner, path) },
+  )
+  await worldTracker.track({ id: "git", path: folder, kind: "workspace" })
+  t.after(async () => {
+    await worldTracker.close()
+    for (const path of [upstream, folder, journal]) rmSync(path, { recursive: true, force: true })
+  })
+  const touch = (path: string) => {
+    const absolute = join(folder, path)
+    try {
+      utimesSync(absolute, worldClock.now() / 1000, worldClock.now() / 1000)
+    } catch {
+      // Gone: a deletion is heard all the same.
+    }
+    worldEvents.changed(absolute)
+  }
+  return {
+    upstream,
+    folder,
+    tracker: worldTracker,
+    clock: worldClock,
+    git: (...args: string[]) => run(folder, ...args),
+    upstreamGit: (...args: string[]) => run(upstream, ...args),
+    write(path: string, text: string) {
+      writeFileSync(join(folder, path), text)
+      touch(path)
+    },
+    /** What a Git command wrote, heard as the watcher hears it: files first, then Git's own. */
+    gitHeard(paths: readonly string[], own: readonly string[] = [".git/index", ".git/HEAD", ".git/logs/HEAD", ".git/ORIG_HEAD"]) {
+      for (const path of paths) touch(path)
+      for (const path of own) worldEvents.changed(join(folder, path))
+    },
+    mark(kind: ActivityMark["kind"], thread: string, id: string, edge: "start" | "end", turn?: string) {
+      worldTracker.activity({ kind, id, edge, at: worldClock.now(), thread, session: `${thread}-session`, checkout: folder, turn })
+    },
+    entries: () => worldTracker.changes(0),
+  }
+}
+
+test("a branch switch, a pull, a stash and a rebase are Git's, not the running Thread's", async (t) => {
+  const world = await gitWorld(t)
+  const { folder } = world
+  const since = () => world.entries().at(-1)?.seq ?? 0
+
+  // The person switches branches while T1's turn runs: the files the switch wrote are the new branch's base.
+  world.git("checkout", "-q", "-b", "feature")
+  writeFileSync(join(folder, "a.ts"), lines(6, { 2: "line 2 on feature" }))
+  writeFileSync(join(folder, "f.ts"), "export const f = 6\n")
+  world.git("rm", "-q", "b.ts")
+  world.git("add", "-A")
+  world.git("commit", "-q", "-m", "feature work")
+  world.git("checkout", "-q", "main")
+  world.gitHeard(["a.ts", "b.ts", "f.ts"])
+  await world.tracker.settled()
+  let from = since()
+  world.mark("turn", "T1", "t1", "start")
+  world.clock.advance(100)
+  world.git("checkout", "-q", "feature")
+  world.gitHeard(["a.ts", "b.ts", "f.ts"])
+  await world.tracker.settled()
+  assert.deepEqual(world.entries().filter((entry) => entry.seq > from), [], "a branch switch journals nothing")
+  assert.equal(world.tracker.rootStates().get("git")?.files.size, 0, "every file is clean against the new branch")
+
+  // An agent's `git checkout -b x && git pull`: the pulled files are the new base, not the call's edits.
+  world.upstreamGit("checkout", "-q", "main")
+  writeFileSync(join(world.upstream, "a.ts"), lines(6, { 5: "line 5 upstream" }))
+  writeFileSync(join(world.upstream, "u.ts"), "export const u = 21\n")
+  world.upstreamGit("add", "-A")
+  world.upstreamGit("commit", "-q", "-m", "upstream work")
+  world.git("checkout", "-q", "main")
+  world.gitHeard(["a.ts", "b.ts", "f.ts"])
+  await world.tracker.settled()
+  from = since()
+  world.clock.advance(100)
+  world.mark("call", "T1", "pull", "start", "t1")
+  world.clock.advance(20)
+  const head = world.git("rev-parse", "HEAD")
+  world.git("checkout", "-q", "-b", "x")
+  world.git("pull", "-q", "--no-rebase", "origin", "main")
+  world.gitHeard(world.git("diff", "--name-only", head, "HEAD").split("\n"))
+  world.clock.advance(20)
+  world.tracker.reported({ thread: "T1", session: "T1-session", turn: "t1", call: "pull", status: "completed", endedAt: world.clock.now(), effects: [{ kind: "command", command: "git checkout -b x && git pull", cwd: folder }] })
+  world.mark("call", "T1", "pull", "end", "t1")
+  await world.tracker.settled()
+  assert.deepEqual(world.entries().filter((entry) => entry.seq > from), [], "a pull journals nothing")
+
+  // Git wrote the files before HEAD moved and they were heard first: their entries are marked as Git's.
+  from = since()
+  world.git("checkout", "-q", "-b", "y", head)
+  world.gitHeard(["a.ts", "u.ts"], [])
+  await world.tracker.settled()
+  world.gitHeard([], [".git/HEAD", ".git/index", ".git/logs/HEAD"])
+  await world.tracker.settled()
+  const early = world.entries().filter((entry) => entry.seq > from)
+  assert.ok(early.length > 0 && early.every((entry) => entry.git), "files heard before HEAD moved are marked as Git's")
+  world.git("checkout", "-q", "x")
+  world.gitHeard(["a.ts", "u.ts"])
+  await world.tracker.settled()
+
+  // The person's own edit, stashed before T1's turn and popped during it: the lines stay the person's.
+  world.clock.advance(20_000)
+  world.mark("turn", "T1", "t1", "end")
+  world.clock.advance(5_000)
+  world.write("b.ts", "export const b = 2 // the person's\n")
+  await world.tracker.settled()
+  const persons = world.entries().at(-1)!
+  assert.deepEqual(persons.author, { certainty: "person", via: "no-activity" })
+  world.git("stash", "-q")
+  world.gitHeard(["b.ts"], [".git/index", ".git/logs/refs/stash", ".git/refs/stash"])
+  await world.tracker.settled()
+  const stashed = world.entries().at(-1)!
+  assert.deepEqual([stashed.path, stashed.git], ["b.ts", true], "a stash's reset to the base is Git's")
+  world.clock.advance(1_000)
+  world.mark("turn", "T1", "t2", "start")
+  world.clock.advance(100)
+  world.git("stash", "pop", "-q")
+  world.gitHeard(["b.ts"], [".git/index", ".git/logs/refs/stash", ".git/refs/stash"])
+  await world.tracker.settled()
+  const popped = world.entries().at(-1)!
+  assert.equal(popped.path, "b.ts")
+  assert.equal(popped.git, true, "the pop is Git's, not T1's")
+  assert.equal(popped.restores, persons.seq, "the popped version is the person's")
+  const writer = world.tracker.blame("git", "b.ts")?.find((run) => run.entry !== null)
+  assert.equal(writer?.entry, persons.seq, "its line is still the person's")
+
+  // An agent's own `git checkout -- b.ts`, the file named: its work, not Git's.
+  world.clock.advance(100)
+  world.mark("call", "T1", "undo", "start", "t2")
+  world.clock.advance(20)
+  world.git("checkout", "--", "b.ts")
+  world.gitHeard(["b.ts"], [".git/index"])
+  world.clock.advance(20)
+  world.tracker.reported({ thread: "T1", session: "T1-session", turn: "t2", call: "undo", status: "completed", endedAt: world.clock.now(), effects: [{ kind: "command", command: "git checkout -- b.ts", cwd: folder, named: [join(folder, "b.ts")] }] })
+  world.mark("call", "T1", "undo", "end", "t2")
+  await world.tracker.settled()
+  const undone = world.entries().at(-1)!
+  assert.equal(undone.git, undefined, "a call that named the file did it")
+  assert.equal(undone.author.certainty, "named")
+
+  // An interactive rebase while T2 runs: every file it rewrote is the rewritten branch's base.
+  world.clock.advance(5_000)
+  world.mark("turn", "T1", "t2", "end")
+  for (const [path, text] of [["r1.ts", "export const r1 = 1\n"], ["r2.ts", "export const r2 = 2\n"]] as const) {
+    writeFileSync(join(folder, path), text)
+    world.git("add", path)
+    world.git("commit", "-q", "-m", path)
+    world.gitHeard([path])
+  }
+  await world.tracker.settled()
+  from = since()
+  world.mark("turn", "T2", "r", "start")
+  world.clock.advance(100)
+  const before = world.git("rev-parse", "HEAD")
+  // Drop the older of the two commits, as `git rebase -i` with that line removed does.
+  execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "rebase", "-q", "-i", "HEAD~2"], {
+    cwd: folder,
+    env: { ...process.env, GIT_SEQUENCE_EDITOR: `${process.execPath} -e "const f=process.argv[1];const fs=require('fs');const l=fs.readFileSync(f,'utf8').split('\\n');l[0]='drop'+l[0].slice(4);fs.writeFileSync(f,l.join('\\n'))"` },
+  })
+  assert.notEqual(world.git("rev-parse", "HEAD"), before)
+  world.gitHeard(["r1.ts", "r2.ts"])
+  await world.tracker.settled()
+  assert.deepEqual(world.entries().filter((entry) => entry.seq > from), [], "a rebase journals nothing")
+  world.mark("turn", "T2", "r", "end")
+  assert.equal(world.tracker.rootStates().get("git")?.files.size, 0)
+})
+
+test("a call a hook bounds: its write proven by content, the person's saves around it the person's", async (t) => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-hooked-")))
+  const journal = mkdtempSync(join(tmpdir(), "mako-attribution-hooked-journal-"))
+  const hookedClock = new FakeClock(Date.now())
+  const hookedEvents = new FakeEventSource()
+  const hooked = await LaptopTracker.open({ fs: nodeFileSystem(), events: hookedEvents, clock: hookedClock, storage: journal, device: "scenario" })
+  t.after(async () => {
+    await hooked.close()
+    rmSync(folder, { recursive: true, force: true })
+    rmSync(journal, { recursive: true, force: true })
+  })
+  for (const name of ["a.ts", "x.ts", "p.ts", "q.ts"]) writeFileSync(join(folder, name), `${name} as it was\n`)
+  await hooked.track({ id: "hooked", path: folder, kind: "attached" })
+  const began = hookedClock.now()
+  const when = (ms: number) => hookedClock.advance(began + ms - hookedClock.now())
+  const save = (name: string, text: string) => {
+    writeFileSync(join(folder, name), text)
+    utimesSync(join(folder, name), hookedClock.now() / 1000, hookedClock.now() / 1000)
+    hookedEvents.changed(join(folder, name))
+  }
+  const T5 = { thread: "T5", session: "T5-session", checkout: folder }
+  const author = (name: string) => hooked.changes(0).findLast((entry) => entry.path === name)?.author
+
+  hooked.activity({ ...T5, kind: "turn", id: "t5", edge: "start", at: hookedClock.now() })
+  // The stream shows the call as the model starts writing it.
+  when(100)
+  hooked.activity({ ...T5, kind: "call", id: "h1", edge: "start", at: hookedClock.now(), turn: "t5", named: [join(folder, "a.ts")] })
+  // The person saves while the model is still writing the call, before the tool runs.
+  when(600)
+  save("x.ts", "x.ts saved by the person\n")
+  // The tool runs from 1000 to 1030 ms; its stream reports no patch.
+  when(1_010)
+  save("a.ts", "a.ts written by the call\n")
+  when(1_030)
+  hooked.reported({ ...T5, call: "h1", status: "completed", startedAt: began + 1_000, endedAt: began + 1_030, effects: [], exact: {
+    start: began + 1_000,
+    end: began + 1_030,
+    files: [{ path: join(folder, "a.ts"), before: contentRef(Buffer.from("a.ts as it was\n")), after: contentRef(Buffer.from("a.ts written by the call\n")) }],
+  } })
+  when(1_100)
+  hooked.reported({ ...T5, turn: "t5", call: "h1", status: "completed", endedAt: hookedClock.now(), effects: [{ kind: "write", path: join(folder, "a.ts") }] })
+  hooked.activity({ ...T5, kind: "call", id: "h1", edge: "end", at: hookedClock.now(), turn: "t5" })
+  // The person saves just after the call ended, as the model writes its next one.
+  when(1_400)
+  save("p.ts", "p.ts saved by the person\n")
+  when(3_000)
+  hooked.activity({ ...T5, kind: "call", id: "h2", edge: "start", at: hookedClock.now(), turn: "t5" })
+  await hooked.settled()
+  assert.deepEqual(author("a.ts"), { certainty: "exact", author: { thread: "T5", session: "T5-session", turn: "t5", call: "h1" }, effect: "modify" }, "the hook's own record of the file proves the write")
+  assert.deepEqual(author("x.ts"), { certainty: "person", via: "no-activity" }, "a save while the model wrote the call is the person's")
+  assert.deepEqual(author("p.ts"), { certainty: "person", via: "no-activity" }, "a save just after the hooked call ended is the person's")
+  when(3_100)
+  hooked.reported({ ...T5, call: "h2", status: "completed", startedAt: began + 3_050, endedAt: began + 3_080, effects: [], exact: { start: began + 3_050, end: began + 3_080 } })
+  hooked.activity({ ...T5, kind: "call", id: "h2", edge: "end", at: hookedClock.now(), turn: "t5" })
+  hooked.activity({ ...T5, kind: "turn", id: "t5", edge: "end", at: hookedClock.now() })
+  // Just after the turn ended: the person's.
+  when(3_500)
+  save("q.ts", "q.ts saved by the person\n")
+  await hooked.settled()
+  assert.deepEqual(author("q.ts"), { certainty: "person", via: "no-activity" }, "a save just after a hooked turn ended is the person's")
+  // A rewind's preview names each file's writers since its checkpoint.
+  const hookedView: JournalView = { store: hooked.store, roots: () => hooked.rootStates().values(), author: (seq) => hooked.authorOf(seq) }
+  assert.deepEqual(writersSince(hookedView, [join(folder, "a.ts"), join(folder, "x.ts")], began), {
+    [join(folder, "a.ts")]: [{ kind: "thread", thread: "T5", sure: true }],
+    [join(folder, "x.ts")]: [{ kind: "person" }],
+  })
+
+  // The same timing with no hook: only the stream's marks, so the save trails the call and stays its maybe.
+  const T6 = { thread: "T6", session: "T6-session", checkout: folder }
+  when(10_000)
+  hooked.activity({ ...T6, kind: "turn", id: "t6", edge: "start", at: hookedClock.now() })
+  hooked.activity({ ...T6, kind: "call", id: "s1", edge: "start", at: hookedClock.now(), turn: "t6" })
+  when(10_500)
+  hooked.activity({ ...T6, kind: "call", id: "s1", edge: "end", at: hookedClock.now(), turn: "t6" })
+  when(10_800)
+  save("p.ts", "p.ts saved again by the person\n")
+  await hooked.settled()
+  const trailing = author("p.ts")
+  assert.equal(trailing?.certainty, "window", "without exact bounds the stream's trail still reaches it")
+  hooked.activity({ ...T6, kind: "turn", id: "t6", edge: "end", at: hookedClock.now() })
+})
+
+test("Claude's hooks mark a call's exact bounds and hash the file it wrote; a call left running bounds nothing", async (t) => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-hooks-")))
+  t.after(() => rmSync(folder, { recursive: true, force: true }))
+  const target = join(folder, "page.ts")
+  writeFileSync(target, "export const title = 'old'\n")
+  const heard: LiveCallBounds[] = []
+  const unsubscribe = liveCallBounds.subscribe((bounds) => heard.push(bounds))
+  t.after(unsubscribe)
+  let now = 1_000
+  const hooks = claudeCallHooks(new CallBounds("conversation-1", () => now))
+  const base = { session_id: "s", transcript_path: join(folder, "t.jsonl"), cwd: folder }
+  const signal = { signal: new AbortController().signal }
+  await hooks.pre({ ...base, hook_event_name: "PreToolUse", tool_name: "Edit", tool_use_id: "toolu_1", tool_input: { file_path: target, old_string: "'old'", new_string: "'new'" } }, "toolu_1", signal)
+  // The person takes 4 s to approve; the tool itself runs 30 ms.
+  now = 5_000
+  writeFileSync(target, "export const title = 'new'\n")
+  now = 5_030
+  await hooks.post({ ...base, hook_event_name: "PostToolUse", tool_name: "Edit", tool_use_id: "toolu_1", tool_input: { file_path: target }, tool_response: {}, duration_ms: 30 }, "toolu_1", signal)
+  assert.deepEqual(heard, [{ conversation: "conversation-1", call: "toolu_1", status: "completed", exact: {
+    start: 5_000,
+    end: 5_030,
+    files: [{ path: target, before: contentRef(Buffer.from("export const title = 'old'\n")), after: contentRef(Buffer.from("export const title = 'new'\n")) }],
+  } }], "the start is when the tool ran, not when it was asked")
+  await hooks.pre({ ...base, hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: "toolu_2", tool_input: { command: "npm run dev", run_in_background: true } }, "toolu_2", signal)
+  now = 5_100
+  await hooks.post({ ...base, hook_event_name: "PostToolUseFailure", tool_name: "Bash", tool_use_id: "toolu_2", tool_input: { command: "npm run dev", run_in_background: true }, error: "exit 1" }, "toolu_2", signal)
+  assert.deepEqual(heard.at(-1), { conversation: "conversation-1", call: "toolu_2", status: "failed", exact: { start: 5_030, end: 5_100, detached: true } })
+})
+
+/*
+ * The journal's two halves together: what a turn changed (`turnChanges`,
+ * the stored summary, "changes made") is counted from the same entries and
+ * the same evidence the capture side writes, Git's put-backs and a hook's
+ * exact bounds among them.
+ */
+
+test("an agent's `git checkout -b x && git pull` in a turn: the pulled files are in neither its summary nor changes made", async (t) => {
+  const world = await gitWorld(t)
+  const { folder } = world
+  const view: JournalView = { store: world.tracker.store, roots: () => world.tracker.rootStates().values(), author: (seq) => world.tracker.authorOf(seq) }
+  world.upstreamGit("checkout", "-q", "main")
+  writeFileSync(join(world.upstream, "a.ts"), lines(6, { 3: "line 3 upstream" }))
+  writeFileSync(join(world.upstream, "u.ts"), "export const u = 1\nexport const v = 2\n")
+  world.upstreamGit("add", "-A")
+  world.upstreamGit("commit", "-q", "-m", "upstream work")
+  const began = world.clock.now()
+  world.mark("turn", "T1", TURN_SIX, "start")
+  // The agent's own edit in the turn: counted, as before.
+  world.clock.advance(100)
+  world.mark("call", "T1", "own", "start", TURN_SIX)
+  world.clock.advance(20)
+  world.write("own.ts", "export const own = 1\n")
+  await world.tracker.settled()
+  world.clock.advance(20)
+  world.tracker.reported({ thread: "T1", session: "T1-session", turn: TURN_SIX, call: "own", status: "completed", endedAt: world.clock.now(), effects: [{ kind: "write", path: join(folder, "own.ts"), content: "export const own = 1\n" }] })
+  world.mark("call", "T1", "own", "end", TURN_SIX)
+  const from = world.entries().at(-1)!.seq
+  // Its command switches branch and pulls; the watcher hears the files Git wrote before Git's own, so they are journaled first.
+  world.clock.advance(100)
+  world.mark("call", "T1", "pull", "start", TURN_SIX)
+  world.clock.advance(20)
+  const head = world.git("rev-parse", "HEAD")
+  world.git("checkout", "-q", "-b", "x")
+  world.git("pull", "-q", "--no-rebase", "origin", "main")
+  const pulled = world.git("diff", "--name-only", head, "HEAD").split("\n")
+  assert.deepEqual(pulled.sort(), ["a.ts", "u.ts"])
+  world.gitHeard(pulled, [])
+  await world.tracker.settled()
+  world.gitHeard([], [".git/HEAD", ".git/index", ".git/logs/HEAD"])
+  await world.tracker.settled()
+  world.clock.advance(20)
+  world.tracker.reported({ thread: "T1", session: "T1-session", turn: TURN_SIX, call: "pull", status: "completed", endedAt: world.clock.now(), effects: [{ kind: "command", command: "git checkout -b x && git pull", cwd: folder }] })
+  world.mark("call", "T1", "pull", "end", TURN_SIX)
+  world.clock.advance(100)
+  world.mark("turn", "T1", TURN_SIX, "end")
+  world.clock.advance(15_000)
+  world.tracker.sweep()
+  await world.tracker.settled()
+
+  const gits = world.entries().filter((entry) => entry.seq > from)
+  assert.deepEqual(gits.map((entry) => [entry.path, entry.git]).sort(), [["a.ts", true], ["u.ts", true]], "what the pull wrote was journaled, and marked as Git's")
+  assert.ok(gits.every((entry) => "author" in entry.author && entry.author.author.thread === "T1"), "timing alone names the running Thread: only the mark keeps it out")
+  const summary = turnChanges(view, "T1", TURN_SIX)
+  assert.deepEqual(summary.files.map((file) => [file.relative, file.own]), [["own.ts", { added: 1, removed: 0 }]], "the turn's summary is its own edit alone")
+  assert.deepEqual([summary.own, summary.maybe.files, summary.others.files], [{ files: 1, added: 1, removed: 0 }, 0, 0], "the pulled files are nobody's: not own, maybe or others'")
+  // "Changes made" sums the stored summaries; the thread's own count of sure changes agrees.
+  world.tracker.store.saveTurnChanges(summary, "T1-session")
+  const found = changes(view, "T1")
+  const made = threadTotals(world.tracker.store.turnChangesOf("T1"), found)
+  assert.deepEqual([made.files, made.lines, made.maybe], [{ created: 1, changed: 0, deleted: 0, renamed: 0 }, { added: 1, removed: 0 }, 0])
+  assert.deepEqual([found.files.created.map((path) => basename(path)), found.files.modified, found.maybe], [["own.ts"], [], 0])
+  assert.deepEqual(world.tracker.store.turnsChangedAfter("T1", from), new Map(), "nothing Git wrote calls for a recount")
+  // A rewind's preview agrees: Git wrote them, and Git is no writer.
+  assert.deepEqual(writersSince(view, [join(folder, "a.ts"), join(folder, "u.ts"), join(folder, "own.ts")], began), {
+    [join(folder, "a.ts")]: [],
+    [join(folder, "u.ts")]: [],
+    [join(folder, "own.ts")]: [{ kind: "thread", thread: "T1", sure: true }],
+  })
+})
+
+test("a hook-bounded call's turn: its summary keeps the call's write and leaves out the person's save just after it", async () => {
+  const world = await liveWorld()
+  try {
+    world.write("a.ts", "a.ts as it was\n")
+    world.write("p.ts", "p.ts as it was\n")
+    await world.settle()
+    const a = join(world.folder, "a.ts")
+    world.batch({ requestChanges: [request(TURN_FIVE, "dispatching")], sessionChanges: { status: "running" } })
+    const started = world.clock.now()
+    // The stream shows the call as the model starts writing it; the tool runs once the person approves it.
+    world.batch({ updates: [{ kind: "tool", id: "toolu_h1", title: "Edit", name: "Edit", status: "in_progress", input: JSON.stringify({ file_path: a, old_string: "as it was", new_string: "by the call" }) }] })
+    world.clock.advance(900)
+    const ran = world.clock.now()
+    world.write("a.ts", "a.ts by the call\n")
+    world.clock.advance(30)
+    world.bounds("toolu_h1", "completed", {
+      start: ran,
+      end: world.clock.now(),
+      files: [{ path: a, before: contentRef(Buffer.from("a.ts as it was\n")), after: contentRef(Buffer.from("a.ts by the call\n")) }],
+    })
+    world.clock.advance(50)
+    world.batch({ updates: [{ kind: "tool-update", id: "toolu_h1", status: "completed", output: "ok", effects: [{ kind: "modify", path: a, edits: [{ old: "as it was", new: "by the call" }] }] }] })
+    // The person saves while the model writes its next call; a whole second would read as a coarse file system's rounding.
+    world.clock.advance(300)
+    if (world.clock.now() % 1_000 === 0) world.clock.advance(1)
+    world.write("p.ts", "p.ts saved by the person\n")
+    await world.tracker.settled()
+    world.clock.advance(1_500)
+    world.batch({ updates: [{ kind: "tool", id: "toolu_h2", title: "Bash", name: "Bash", status: "in_progress", input: JSON.stringify({ command: "npm test" }) }] })
+    await world.tracker.settled()
+    world.clock.advance(30)
+    world.bounds("toolu_h2", "completed", { start: world.clock.now() - 20, end: world.clock.now() })
+    world.batch({ updates: [{ kind: "tool-update", id: "toolu_h2", status: "completed", output: "ok" }] })
+    // A subagent's write the stream never shows: only the hooks report it, and it is the turn's all the same.
+    world.clock.advance(200)
+    const sub = world.clock.now()
+    world.write("s.ts", "s.ts by a subagent\n")
+    world.clock.advance(20)
+    world.bounds("toolu_sub", "completed", { start: sub, end: world.clock.now(), files: [{ path: join(world.folder, "s.ts"), before: null, after: contentRef(Buffer.from("s.ts by a subagent\n")) }] })
+    await world.tracker.settled()
+    world.batch({ requestChanges: [request(TURN_FIVE, "completed")], sessionChanges: { status: "ready" } })
+    await world.settle()
+
+    // One record of each call, under the request its marks carry: the hook's bounds took the same path.
+    const calls = world.tracker.store.activityOfThread("T7").filter((item) => item.kind === "call")
+    assert.deepEqual(calls.map((call) => [call.id, call.turn, call.status]).sort(), [["toolu_h1", TURN_FIVE, "completed"], ["toolu_h2", TURN_FIVE, "completed"], ["toolu_sub", TURN_FIVE, "completed"]])
+    const h1 = calls.find((call) => call.id === "toolu_h1")!
+    assert.deepEqual(h1.effects, [{ kind: "modify", path: a }], "the stream's effects and the hook's bounds are one call")
+    const author = (name: string) => world.tracker.changes(0).findLast((entry) => entry.path === name)?.author
+    assert.deepEqual(author("a.ts"), { certainty: "exact", author: { thread: "T7", session: "session-7", turn: TURN_FIVE, call: "toolu_h1" }, effect: "modify" })
+    assert.deepEqual(author("p.ts"), { certainty: "person", via: "no-activity" }, "outside the hook's bounds, between two calls: the person's")
+    const summary = turnChanges(world.view(), "T7", TURN_FIVE)
+    assert.deepEqual(author("s.ts"), { certainty: "exact", author: { thread: "T7", session: "session-7", turn: TURN_FIVE, call: "toolu_sub" }, effect: "create" }, "the hook's report carries the request its turn answers")
+    assert.deepEqual(summary.files.map((file) => [file.relative, file.own, file.maybe]), [["a.ts", { added: 1, removed: 1 }, undefined], ["s.ts", { added: 1, removed: 0 }, undefined]], "the person's save is neither the turn's nor its maybe")
+    assert.deepEqual([summary.own.files, summary.maybe.files, summary.others.files], [2, 0, 1], "it counts as others' while the turn ran")
+    // A rewind's writers read the same entries the same way.
+    assert.deepEqual(writersSince(world.view(), [a, join(world.folder, "p.ts")], started), {
+      [a]: [{ kind: "thread", thread: "T7", sure: true }],
+      [join(world.folder, "p.ts")]: [{ kind: "person" }],
+    })
+  } finally {
+    await world.close()
+  }
+})
+
+test("a version Git puts back in a turn keeps its writers: a stash and pop of the turn's own edit is still its own", async (t) => {
+  const world = await gitWorld(t)
+  const { folder } = world
+  const view: JournalView = { store: world.tracker.store, roots: () => world.tracker.rootStates().values(), author: (seq) => world.tracker.authorOf(seq) }
+  const turn = "77777777-7777-4777-8777-777777777777"
+  world.mark("turn", "T1", turn, "start")
+  world.clock.advance(100)
+  world.mark("call", "T1", "edit", "start", turn)
+  world.clock.advance(20)
+  const edited = lines(6, { 4: "line 4 by the turn" })
+  world.write("a.ts", edited)
+  await world.tracker.settled()
+  world.clock.advance(20)
+  world.tracker.reported({ thread: "T1", session: "T1-session", turn, call: "edit", status: "completed", endedAt: world.clock.now(), effects: [{ kind: "write", path: join(folder, "a.ts"), content: edited }] })
+  world.mark("call", "T1", "edit", "end", turn)
+  await world.tracker.settled()
+  // The person stashes and pops while the turn still runs.
+  world.clock.advance(4_000)
+  world.git("stash", "-q")
+  world.gitHeard(["a.ts"], [".git/index", ".git/logs/refs/stash", ".git/refs/stash"])
+  await world.tracker.settled()
+  world.clock.advance(4_000)
+  world.git("stash", "pop", "-q")
+  world.gitHeard(["a.ts"], [".git/index", ".git/logs/refs/stash", ".git/refs/stash"])
+  await world.tracker.settled()
+  // The turn edits the file again: its count spans the stash and the pop.
+  world.clock.advance(4_000)
+  world.mark("call", "T1", "again", "start", turn)
+  world.clock.advance(20)
+  const again = lines(6, { 4: "line 4 by the turn", 5: "line 5 by the turn" })
+  world.write("a.ts", again)
+  await world.tracker.settled()
+  world.clock.advance(20)
+  world.tracker.reported({ thread: "T1", session: "T1-session", turn, call: "again", status: "completed", endedAt: world.clock.now(), effects: [{ kind: "write", path: join(folder, "a.ts"), content: again }] })
+  world.mark("call", "T1", "again", "end", turn)
+  await world.tracker.settled()
+  world.clock.advance(100)
+  world.mark("turn", "T1", turn, "end")
+  world.clock.advance(15_000)
+  world.tracker.sweep()
+  await world.tracker.settled()
+  const [stash, pop] = world.entries().filter((entry) => entry.path === "a.ts").slice(-3, -1)
+  assert.deepEqual([stash?.git, pop?.git], [true, true], "both are Git's")
+  const own = world.tracker.blame("git", "a.ts")?.filter((run) => run.entry !== null)
+  assert.equal(own?.length, 2)
+  assert.ok(own?.every((run) => view.author(run.entry!)?.certainty === "exact"), "the line map has the turn's line back")
+  const summary = turnChanges(view, "T1", turn)
+  assert.deepEqual(summary.files.map((file) => [file.relative, file.own]), [["a.ts", { added: 2, removed: 2 }]], "and so does the turn's count")
+  assert.deepEqual(writersSince(view, [join(folder, "a.ts")], 0), { [join(folder, "a.ts")]: [{ kind: "thread", thread: "T1", sure: true }] })
+})
+
+test("a journal from before either column set opens in the one format: turns and candidates filled once, nothing Git's", () => {
+  const folder = mkdtempSync(join(tmpdir(), "mako-attribution-format-"))
+  const path = join(folder, "journal.sqlite")
+  try {
+    const at = Date.now()
+    const entry = (author: Parameters<JournalStore["insertEntry"]>[0]["author"], name: string) => ({
+      at, changedAt: at, root: "r1", path: name, kind: "modify" as const, before: null, after: null, text: true, added: 1, removed: 0, stored: false, observed: "event" as const, author, settled: true,
+    })
+    const older = JournalStore.open(path, { device: "scenario" })
+    older.insertEntry(entry({ certainty: "exact", author: { thread: "T1", session: "S1", turn: TURN_ONE, call: "c1" }, effect: "modify" }, "own.ts"))
+    older.insertEntry(entry({ certainty: "ambiguous", reason: "several-threads", candidates: [{ thread: "T1", session: "S1", turn: TURN_ONE }, { thread: "T2", session: "S2", turn: TURN_TWO }] }, "shared.ts"))
+    older.saveActivity({ kind: "call", id: "c1", session: "S1", thread: "T1", turn: TURN_ONE, named: [], start: at, end: at + 10 })
+    older.close()
+    // As the journal was before this format: no turn, run, status or git columns, nor the tables beside the entries.
+    const db = new DatabaseSync(path)
+    db.exec(`DROP INDEX entries_turn; ALTER TABLE entries DROP COLUMN turn; ALTER TABLE entries DROP COLUMN git;
+      ALTER TABLE activity DROP COLUMN status; ALTER TABLE activity DROP COLUMN run; DROP TABLE entry_candidates; DROP TABLE turn_changes`)
+    db.close()
+
+    const store = JournalStore.open(path, { device: "scenario" })
+    try {
+      assert.deepEqual(store.entriesOfTurn("T1", TURN_ONE).map((found) => found.path), ["own.ts", "shared.ts"], "each entry's turn, and the candidates of an ambiguous one, read from its author once")
+      assert.deepEqual(store.entriesOfTurn("T2", TURN_TWO).map((found) => found.path), ["shared.ts"])
+      assert.equal(store.ambiguousWith("T2"), 1)
+      assert.ok(store.entries(0).every((found) => found.git === undefined), "nothing older is Git's")
+      store.markGit(store.entries(0)[1]!.seq, true)
+      assert.deepEqual(store.entriesOfTurn("T2", TURN_TWO), [], "once marked Git's, no turn's")
+      assert.equal(store.ambiguousWith("T2"), 0)
+      store.saveActivity({ kind: "call", id: "c1", session: "S1", thread: "T1", status: "failed", named: [], start: at, end: at + 10 })
+      assert.equal(store.activityOfThread("T1")[0]?.status, "failed")
+    } finally {
+      store.close()
+    }
+  } finally {
+    rmSync(folder, { recursive: true, force: true })
+  }
 })
 
 test.after(async () => {

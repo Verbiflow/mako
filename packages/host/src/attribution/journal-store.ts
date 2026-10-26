@@ -69,6 +69,12 @@ export interface StoredEntry {
   restores?: number
   author: Attribution
   settled: boolean
+  /**
+   * Git made it, not a writer: a checkout, pull, rebase, reset or stash put
+   * back content Git holds, while no call named the file. What a Thread or a
+   * turn changed leaves it out; its lines keep the writers they had.
+   */
+  git?: true
   /** The file's line map after this entry, for text. */
   map?: Run[]
 }
@@ -161,7 +167,7 @@ const EntryRow = z.object({
   seq: z.number(), at: z.number(), changed_at: z.number(), root: z.string(), path: z.string(), kind: z.enum(["create", "modify", "delete", "rename"]),
   from_path: z.string().nullable(), before: Ref, after: Ref, size: z.number().nullable(), text: z.number(), added: z.number().nullable(), removed: z.number().nullable(),
   stored: z.number(), observed: ObservedBySchema, gap: z.number().nullable(), restores: z.number().nullable(),
-  author: z.string(), settled: z.number(), map: z.instanceof(Uint8Array).nullable(),
+  author: z.string(), settled: z.number(), git: z.number().nullable().optional(), map: z.instanceof(Uint8Array).nullable(),
 })
 const FileRow = z.object({ root: z.string(), path: z.string(), base: Ref, base_seq: z.number(), current: Ref, text: z.number(), map: z.instanceof(Uint8Array) })
 const StatRowSchema = z.object({
@@ -317,6 +323,7 @@ const ADDED_COLUMNS = [
   },
   { table: "activity", column: "status", add: "ALTER TABLE activity ADD COLUMN status TEXT" },
   { table: "activity", column: "run", add: "ALTER TABLE activity ADD COLUMN run TEXT" },
+  { table: "entries", column: "git", add: "ALTER TABLE entries ADD COLUMN git INTEGER" },
 ] as const
 
 const optional = <T>(value: T | null): T | undefined => value ?? undefined
@@ -436,13 +443,18 @@ export class JournalStore {
   insertEntry(entry: Omit<StoredEntry, "seq">): number {
     const named = "author" in entry.author ? entry.author.author : null
     const result = this.statement(`INSERT INTO entries (at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores,
-      certainty, thread, session, turn, author, settled, map) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      certainty, thread, session, turn, author, settled, git, map) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(entry.at, entry.changedAt, entry.root, entry.path, entry.kind, entry.from ?? null, entry.before, entry.after, entry.size ?? null, entry.text ? 1 : 0,
         entry.added ?? null, entry.removed ?? null, entry.stored ? 1 : 0, entry.observed, entry.gap ?? null, entry.restores ?? null, entry.author.certainty,
-        named?.thread ?? null, named?.session ?? null, named?.turn ?? null, JSON.stringify(entry.author), entry.settled ? 1 : 0, entry.map ? encodeMap(entry.map) : null)
+        named?.thread ?? null, named?.session ?? null, named?.turn ?? null, JSON.stringify(entry.author), entry.settled ? 1 : 0, entry.git ? 1 : null, entry.map ? encodeMap(entry.map) : null)
     const seq = Number(result.lastInsertRowid)
     this.saveCandidates(seq, entry.author)
     return seq
+  }
+
+  /** Whether Git made an entry's change (`StoredEntry.git`). */
+  markGit(seq: number, git: boolean): void {
+    this.statement("UPDATE entries SET git=? WHERE seq=?").run(git ? 1 : null, seq)
   }
 
   updateAuthor(seq: number, author: Attribution, settled: boolean): void {
@@ -466,12 +478,14 @@ export class JournalStore {
 
   private entryOf(value: Row): StoredEntry {
     const row = EntryRow.parse(value)
-    return {
+    const entry: StoredEntry = {
       seq: row.seq, at: row.at, changedAt: row.changed_at, root: row.root, path: row.path, kind: row.kind, from: optional(row.from_path),
       before: row.before, after: row.after, size: optional(row.size), text: Boolean(row.text), added: optional(row.added), removed: optional(row.removed),
       stored: Boolean(row.stored), observed: row.observed, gap: optional(row.gap), restores: optional(row.restores),
       author: AttributionSchema.parse(JSON.parse(row.author)), settled: Boolean(row.settled), map: row.map ? decodeMap(row.map) : undefined,
     }
+    if (row.git) entry.git = true
+    return entry
   }
 
   entry(seq: number): StoredEntry | undefined {
@@ -495,7 +509,7 @@ export class JournalStore {
 
   /** Entries after `after`, without their line maps. */
   entries(after: number, limit = 1000): StoredEntry[] {
-    return this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map FROM entries WHERE seq > ? ORDER BY seq LIMIT ?")
+    return this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map FROM entries WHERE seq > ? ORDER BY seq LIMIT ?")
       .all(after, limit).map((row) => this.entryOf(row))
   }
 
@@ -506,53 +520,55 @@ export class JournalStore {
 
   /** A file's entries after `after` that changed it after `since`, oldest first, without line maps; a rename away from it counts. */
   versions(root: string, path: string, after: number, since: number): StoredEntry[] {
-    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map
+    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map
       FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 AND changed_at > ?4 ORDER BY seq`).all(root, path, after, since).map((row) => this.entryOf(row))
   }
 
   /** A file's last entry after `after`, without its line map; a rename away from it counts. */
   last(root: string, path: string, after = 0): StoredEntry | undefined {
-    const row = this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 ORDER BY seq DESC LIMIT 1").get(root, path, after)
+    const row = this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map FROM entries WHERE root=?1 AND (path=?2 OR from_path=?2) AND seq > ?3 ORDER BY seq DESC LIMIT 1").get(root, path, after)
     return row ? this.entryOf(row) : undefined
   }
 
   /** Entries by a Thread or Session, without line maps. */
   entriesBy(column: "thread" | "session", id: string): StoredEntry[] {
-    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map FROM entries WHERE ${column}=? ORDER BY seq`)
+    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map FROM entries WHERE ${column}=? ORDER BY seq`)
       .all(id).map((row) => this.entryOf(row))
   }
 
   /** Entries the journal may still change the author of. */
   unsettled(): StoredEntry[] {
-    return this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map FROM entries WHERE settled=0 ORDER BY seq")
+    return this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map FROM entries WHERE settled=0 ORDER BY seq")
       .all().map((row) => this.entryOf(row))
   }
 
-  /** Entries that name `thread` among their candidates. */
+  /** Entries that name `thread` among their candidates; Git's are nobody's. */
   ambiguousWith(thread: string): number {
-    return Count.parse(this.statement("SELECT count(*) AS count FROM entry_candidates WHERE thread=?").get(thread)).count
+    return Count.parse(this.statement("SELECT count(*) AS count FROM entry_candidates c JOIN entries e ON e.seq = c.seq WHERE c.thread=? AND e.git IS NULL").get(thread)).count
   }
 
   /**
    * A turn's entries, oldest first, without line maps: the Thread's own in
-   * the turn, and the ambiguous ones that name it with that turn.
+   * the turn, and the ambiguous ones that name it with that turn. Git's
+   * (`StoredEntry.git`) are no turn's change: a checkout or pull the turn
+   * ran put back what Git holds.
    */
   entriesOfTurn(thread: string, turn: string): StoredEntry[] {
-    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map
-      FROM entries WHERE seq IN (SELECT seq FROM entries WHERE thread=?1 AND turn=?2 UNION SELECT seq FROM entry_candidates WHERE thread=?1 AND turn=?2) ORDER BY seq`)
+    return this.statement(`SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map
+      FROM entries WHERE seq IN (SELECT seq FROM entries WHERE thread=?1 AND turn=?2 UNION SELECT seq FROM entry_candidates WHERE thread=?1 AND turn=?2) AND git IS NULL ORDER BY seq`)
       .all(thread, turn).map((row) => this.entryOf(row))
   }
 
-  /** The Thread's turns with an entry after `after`, each with its newest: a summary counted before then is behind. */
+  /** The Thread's turns with an entry after `after` (as `entriesOfTurn` reads them), each with its newest: a summary counted before then is behind. */
   turnsChangedAfter(thread: string, after: number): Map<string, number> {
-    const rows = this.statement(`SELECT turn, max(seq) AS seq FROM (SELECT turn, seq FROM entries WHERE thread=?1 AND turn IS NOT NULL AND seq > ?2
-      UNION ALL SELECT turn, seq FROM entry_candidates WHERE thread=?1 AND turn IS NOT NULL AND seq > ?2) GROUP BY turn`).all(thread, after)
+    const rows = this.statement(`SELECT turn, max(seq) AS seq FROM (SELECT turn, seq FROM entries WHERE thread=?1 AND turn IS NOT NULL AND seq > ?2 AND git IS NULL
+      UNION ALL SELECT c.turn, c.seq FROM entry_candidates c JOIN entries e ON e.seq = c.seq WHERE c.thread=?1 AND c.turn IS NOT NULL AND c.seq > ?2 AND e.git IS NULL) GROUP BY turn`).all(thread, after)
     return new Map(rows.map((row) => TurnSeqRow.parse(row)).map((row) => [row.turn, row.seq]))
   }
 
   /** Entries journaled between two instants, without line maps, oldest first. */
   entriesBetween(from: number, to: number, limit = 10_000): StoredEntry[] {
-    return this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, NULL AS map FROM entries WHERE at >= ? AND at <= ? ORDER BY seq LIMIT ?")
+    return this.statement("SELECT seq, at, changed_at, root, path, kind, from_path, before, after, size, text, added, removed, stored, observed, gap, restores, author, settled, git, NULL AS map FROM entries WHERE at >= ? AND at <= ? ORDER BY seq LIMIT ?")
       .all(from, to, limit).map((row) => this.entryOf(row))
   }
 
@@ -901,9 +917,9 @@ export class JournalStore {
 
   changesSince(since: number): ChangesSince {
     const rows = this.statement(`SELECT root, count(DISTINCT path) AS files, coalesce(sum(added), 0) AS added, coalesce(sum(removed), 0) AS removed, count(DISTINCT thread) AS threads
-      FROM entries WHERE at >= ? AND thread IS NOT NULL GROUP BY root`).all(since)
+      FROM entries WHERE at >= ? AND thread IS NOT NULL AND git IS NULL GROUP BY root`).all(since)
     const roots = rows.map((row) => z.object({ root: z.string(), files: z.number(), added: z.number(), removed: z.number(), threads: z.number() }).parse(row))
-    const threads = Count.parse(this.statement("SELECT count(DISTINCT thread) AS count FROM entries WHERE at >= ? AND thread IS NOT NULL").get(since)).count
+    const threads = Count.parse(this.statement("SELECT count(DISTINCT thread) AS count FROM entries WHERE at >= ? AND thread IS NOT NULL AND git IS NULL").get(since)).count
     return { roots, threads }
   }
 

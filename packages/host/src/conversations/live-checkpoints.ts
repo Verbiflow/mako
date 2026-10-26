@@ -6,12 +6,14 @@ import {
   type RewindPreview,
   type RunSnapshots,
 } from "../contracts/workspace-snapshots.js"
-import type { TreeComparison } from "@mako/git"
+import type { CheckpointComparison } from "../workspaces/index.js"
 import { treeDiff, treeFiles } from "../git/index.js"
 import type { GitDiff, GitFile } from "../contracts/git-workspace-search.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
+import { hostWarn } from "../base/host-log.js"
+import { join } from "node:path"
 import type { LiveTurnChanges } from "./live-turn-changes.js"
 
 /** Turns kept open for reading their files; each holds one object reader. */
@@ -22,7 +24,7 @@ const OPEN_TURNS = 4
 export class LiveCheckpoints {
   private readonly preparing = new Set<string>()
   /** The turns last read, newest last, by their two checkpoints. */
-  private readonly turns = new Map<string, TreeComparison>()
+  private readonly turns = new Map<string, CheckpointComparison>()
   private readonly host: LiveAccess
   private readonly fork: (id: string, input: ForkInput) => LiveSnapshot
   private readonly changes: LiveTurnChanges
@@ -198,7 +200,19 @@ export class LiveCheckpoints {
     const snapshots = this.host.dependencies.workspaceSnapshots
     if (!snapshots) throw new Error("Workspace checkpoints are unavailable")
     const { snapshot } = this.target(id, requestId, position)
-    return snapshots.preview(snapshot.id)
+    const preview = await snapshots.preview(snapshot.id)
+    // Whose each file is: a rewind takes back everyone's changes since the checkpoint, the person's and other Threads' too.
+    try {
+      const scope = preview.target.scope
+      const writers = this.host.dependencies.rewindWriters?.(preview.changedFiles.map((path) => join(scope, path)), snapshot.createdAt)
+      if (writers) preview.writers = Object.fromEntries(preview.changedFiles.flatMap((path) => {
+        const found = writers[join(scope, path)]
+        return found ? [[path, found]] : []
+      }))
+    } catch (error) {
+      hostWarn("rewind", "whose files a rewind takes back could not be read", { error: errorMessage({ error }) })
+    }
+    return preview
   }
 
   /** What one finished turn changed in its workspace, from the checkpoints either side of it. */
@@ -211,7 +225,7 @@ export class LiveCheckpoints {
     return treeDiff(this.turn(id, requestId), path)
   }
 
-  private turn(id: string, requestId: string): TreeComparison {
+  private turn(id: string, requestId: string): CheckpointComparison {
     const snapshots = this.host.dependencies.workspaceSnapshots
     if (!snapshots) throw new Error("Workspace checkpoints are unavailable")
     const request = this.host.require(id).snapshot.requests.find((item) => item.id === requestId)

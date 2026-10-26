@@ -7,11 +7,12 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   writeFileSync,
   rmSync,
 } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { mock } from "node:test"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
@@ -83,10 +84,16 @@ const driver: ProviderLiveDriver = {
   setMode: async () => {},
   close: () => {},
 }
+const asked: { paths: string[]; since: number }[] = []
 const dependencies = {
   root: join(root, "conversations"),
   appPath: root,
   workspaceSnapshots: snapshots,
+  // The journal's answer for whose each file is: the person and another Thread both wrote the checkout's file.
+  rewindWriters: (paths: readonly string[], since: number) => {
+    asked.push({ paths: [...paths], since })
+    return Object.fromEntries(paths.map((path) => [path, [{ kind: "thread" as const, thread: "other-thread", sure: true }, { kind: "person" as const }]]))
+  },
   driver: () => driver,
   history: async () => null,
   emit: () => {},
@@ -136,6 +143,10 @@ try {
     () => owner.snapshot(id)?.requests[1].snapshots?.after?.kind === "ready"
   )
   const preview = await owner.previewRewind(id, first)
+  assert.deepEqual(preview.changedFiles, [basename(file)])
+  assert.deepEqual(asked.at(-1)?.paths, [join(realpathSync(cwd), basename(file))], "the journal is asked about the files the rewind changes")
+  assert.equal(asked.at(-1)?.since, preview.target.createdAt)
+  assert.deepEqual(preview.writers?.[basename(file)], [{ kind: "thread", thread: "other-thread", sure: true }, { kind: "person" }], "the preview says whose each file is")
   const rewindId = randomUUID()
   const rewound = await owner.rewind(id, {
     id: rewindId,

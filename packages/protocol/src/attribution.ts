@@ -201,6 +201,12 @@ export const JournalEntrySchema = z
     author: AttributionSchema,
     /** False while later evidence (a call's result, its reported effects) may still change the author. */
     settled: z.boolean(),
+    /**
+     * Git made it, not a writer: a checkout, pull, rebase, reset or stash put
+     * back content Git holds while no call named the file. What a Thread or a
+     * turn changed leaves it out; its lines keep the writers they had.
+     */
+    git: z.literal(true).optional(),
   })
   .strict()
 export type JournalEntry = z.infer<typeof JournalEntrySchema>
@@ -297,6 +303,28 @@ export const ReportedEffectSchema = z.discriminatedUnion("kind", [
 ])
 export type ReportedEffect = z.infer<typeof ReportedEffectSchema>
 
+/**
+ * A tool call's exact bounds, from a hook its harness runs around the tool
+ * itself rather than from the stream that shows it: `start` just before the
+ * tool ran (after any approval), `end` just after it returned. `files` are
+ * the files it targeted, each with its content's address just before and just
+ * after; a change between exactly those two is the call's, whatever its
+ * patch says. `detached`: it left work running (a command sent to the
+ * background), so its end bounds nothing.
+ */
+export const ExactBoundsSchema = z
+  .object({
+    start: InstantSchema,
+    end: InstantSchema,
+    files: z
+      .array(z.object({ path: AbsolutePathSchema, before: ContentRefSchema.nullable(), after: ContentRefSchema.nullable() }).strict())
+      .max(64)
+      .optional(),
+    detached: z.literal(true).optional(),
+  })
+  .strict()
+export type ExactBounds = z.infer<typeof ExactBoundsSchema>
+
 /** One tool call's reported effects. */
 export const ReportedCallSchema = z
   .object({
@@ -306,6 +334,8 @@ export const ReportedCallSchema = z
     call: z.string().min(1).max(200),
     startedAt: InstantSchema.optional(),
     endedAt: InstantSchema.optional(),
+    /** When a hook marked the call's bounds: these, not `startedAt` and `endedAt`, say when it could have written. */
+    exact: ExactBoundsSchema.optional(),
     /** A refused call changed nothing. */
     status: z.enum(["completed", "failed", "refused", "running"]),
     checkout: AbsolutePathSchema.optional(),

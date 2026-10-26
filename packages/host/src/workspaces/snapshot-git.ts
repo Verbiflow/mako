@@ -82,6 +82,9 @@ function environment(
       : undefined,
   }
 }
+/** What one Git command of a checkpoint may print: a listing of every file of a large repository fits. */
+export const SNAPSHOT_OUTPUT_BYTES = 64 * 1024 * 1024
+
 export async function snapshotGit(
   git: Git,
   cwd: string,
@@ -96,10 +99,10 @@ export async function snapshotGit(
     read: true,
     env: environment(index, objects),
     input,
-    maxBytes: 16 * 1024 * 1024,
+    maxBytes: SNAPSHOT_OUTPUT_BYTES,
     timeoutMs: 30_000,
   })
-  if (result.truncated) throw new Error(`git ${args[0] ?? ""} wrote more than 16 MB for a checkpoint`)
+  if (result.truncated) throw new Error(`git ${args[0] ?? ""} wrote more than 64 MB for a checkpoint`)
   return result.stdout.toString("utf8")
 }
 export async function privateSnapshotObjects(
@@ -128,17 +131,25 @@ export async function privateSnapshotObjects(
   ])
   return { write: join(directory, "git", "objects"), read: [source] }
 }
+/**
+ * Pack what a checkpoint commit reaches into its private store, leaving out
+ * what `base` (the commit checked out, which the repository keeps while it is
+ * HEAD) holds already, by its tree, since no checkpoint descends from it: a checkpoint of a large repository keeps only what
+ * the turn's files and staging add. A rewind is refused once HEAD moves, so
+ * no restore needs what the base held.
+ */
 export async function sealSnapshotObjects(
   git: Git,
   cwd: string,
   directory: string,
   commit: string,
   objects: SnapshotObjects,
-  limit: number
+  limit: number,
+  base?: string
 ): Promise<void> {
   const ids = await snapshotGit(git,
     cwd,
-    ["rev-list", "--objects", "--no-object-names", commit],
+    ["rev-list", "--objects", "--no-object-names", commit, ...(base ? ["--not", `${base}^{tree}`] : [])],
     undefined,
     undefined,
     objects
@@ -170,7 +181,7 @@ export async function sealSnapshotObjects(
       join(directory, "git/objects/pack/pack"),
     ],
     undefined,
-    `${commit}\n`,
+    base ? `${commit}\n^${base}^{tree}\n` : `${commit}\n`,
     objects
   )
   for (const entry of await readdir(join(directory, "git/objects"))) {

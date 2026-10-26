@@ -573,7 +573,8 @@ interface Word {
 /**
  * The paths a command line names as what it writes: redirect targets, the
  * operands of `rm`, `mv`, `cp`, `touch`, `mkdir`, `tee` and their kind, the
- * files of `sed -i` and `perl -i`, and `git rm`/`git mv`. Conservative: a
+ * files of `sed -i` and `perl -i`, `git rm`/`git mv`, and the files `git
+ * checkout -- <paths>` and `git restore` put back. Conservative: a
  * word the shell would expand, a heredoc's body and anything after a `cd`
  * into a folder it can't place are left out, and relative paths need the
  * folder the command ran in.
@@ -605,8 +606,35 @@ export function namedPaths(command: string, cwd: string | undefined): string[] {
     if (PATH_COMMANDS.has(name)) for (const operand of withoutOptions(rest)) add(operand)
     else if ((name === "sed" || name === "perl") && rest.some((word) => /^-[a-zA-Z]*i/.test(word.text) || word.text.startsWith("--in-place"))) inPlaceFiles(name, rest).forEach(add)
     else if (name === "git" && (rest[0]?.text === "rm" || rest[0]?.text === "mv")) for (const operand of withoutOptions(rest.slice(1))) add(operand)
+    else if (name === "git") gitRewrites(rest).forEach(add)
   }
   return [...named]
+}
+
+/**
+ * The files a Git command puts back in the working tree by name: `git
+ * checkout <commit> -- <paths>` (only after `--`, since a word before it may
+ * be a branch) and `git restore <paths>`, unless `--staged` alone says it
+ * changes only the index.
+ */
+function gitRewrites(words: readonly Word[]): Word[] {
+  const [subcommand, ...rest] = words
+  if (subcommand?.text === "checkout") {
+    const separator = rest.findIndex((word) => word.text === "--")
+    return separator < 0 ? [] : rest.slice(separator + 1)
+  }
+  if (subcommand?.text !== "restore") return []
+  const flags = rest.map((word) => word.text)
+  if ((flags.includes("--staged") || flags.includes("-S")) && !flags.includes("--worktree") && !flags.includes("-W")) return []
+  const operands: Word[] = []
+  let options = true
+  for (let index = 0; index < rest.length; index++) {
+    const word = rest[index]!
+    if (options && word.text === "--") options = false
+    else if (options && (word.text === "-s" || word.text === "--source")) index++
+    else if (!options || !word.text.startsWith("-")) operands.push(word)
+  }
+  return operands
 }
 
 /** Operands after the options; everything after `--` is an operand. */

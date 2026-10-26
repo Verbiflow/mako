@@ -83,6 +83,12 @@ const RACY_NS = 2_000_000_000n
 const MARK_EVERY_MS = 60_000
 /** A HEAD check waits for Git to finish writing. */
 const HEAD_DEBOUNCE_MS = 150
+/** Files heard while Git writes wait at most this long for the HEAD check, however long Git keeps writing. */
+const HEAD_HOLD_MS = 2_000
+/** Entries heard this long before Git's own files moved may be what it wrote: Git writes the files first, HEAD and the index last. */
+const GIT_LOOKBACK_MS = 2_000
+/** Entries kept in memory for telling what Git wrote, per root, at most. */
+const RECENT_KEPT = 4096
 const LOG_EVERY_MS = 10_000
 const SLOW_FLUSH_MS = 50
 const DAY_MS = 86_400_000
@@ -122,6 +128,18 @@ interface RootState {
   gap?: { id: number; from: number; reason: Gap["reason"] }
   muted: boolean
   headTimer?: ReturnType<typeof setTimeout>
+  /**
+   * When Git's own files (HEAD, the index, a branch) began moving, until the
+   * HEAD check that follows: file flushes wait for it, so what a checkout,
+   * pull or rebase wrote is read against the commit it wrote.
+   */
+  gitSince?: number
+  /** What the HEAD move just checked changed, by path: the new commit's content, null where it has none. The flush held behind it takes a file holding exactly that as its base. */
+  moved?: Map<string, ContentRef | null>
+  /** The newest entries, a few seconds' worth, oldest first: what Git may have written before HEAD moved. */
+  recent: { seq: number; path: string; at: number }[]
+  /** The last entry before the base last moved: a clean file brought back to a version after it gets that version's writers back. */
+  headSeq: number
   /** The history position taken last, saved once the next is taken: by then everything before it has been heard. */
   markTaken?: { mark: string; at: number }
   markTimer?: ReturnType<typeof setTimeout>
@@ -132,6 +150,8 @@ interface Pending {
   seq: number
   change: ObservedChange
   author: Attribution
+  /** Marked as Git's (`StoredEntry.git`) until a call is found to have named the file. */
+  git?: boolean
 }
 
 /** What one flush found for one path. */
@@ -282,7 +302,7 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   private state(root: StoredRoot, repo: TrackerRepository | null, stats: Map<string, StatRow>, files: Map<string, FileState>): RootState {
-    const state: RootState = { root, repo, stats, files, tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false }
+    const state: RootState = { root, repo, stats, files, tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false, recent: [], headSeq: this.seq }
     const replaced = this.states.get(root.id)
     if (replaced) this.unlisten(replaced)
     this.states.set(root.id, state)
@@ -300,17 +320,23 @@ export class LaptopTracker implements AttributionTracker {
     const history = root.mark ? await this.ports.events.since(root.mark, root.path).catch(() => null) : null
     const gap = this.store.openGap(root.id, from, "restart")
     state.gap = { id: gap, from, reason: "restart" }
-    if (history?.complete) {
-      const paths = history.paths.filter((path) => within(root.path, path) && path !== root.path).map((path) => relative(root.path, path))
-      for (const path of paths) if (!isGitPath(path)) state.pending.set(path, "history")
-      if (paths.some((path) => GIT_HEAD.test(path))) this.headMoved(state)
-      await this.queue(state, async () => {
-        await this.flush(state)
-        this.store.closeGap(gap, this.now())
-        state.gap = undefined
-      })
-    } else await this.queue(state, () => this.rescan(state))
-    if (repo) await this.queue(state, () => this.checkHead(state))
+    // HEAD first, so what a checkout or pull wrote while no host ran is read as the base it is.
+    if (repo) await this.queue(state, async () => {
+      state.moved = await this.checkHead(state)
+    })
+    try {
+      if (history?.complete) {
+        const paths = history.paths.filter((path) => within(root.path, path) && path !== root.path).map((path) => relative(root.path, path))
+        for (const path of paths) if (!isGitPath(path)) state.pending.set(path, "history")
+        await this.queue(state, async () => {
+          await this.flush(state)
+          this.store.closeGap(gap, this.now())
+          state.gap = undefined
+        })
+      } else await this.queue(state, () => this.rescan(state))
+    } finally {
+      state.moved = undefined
+    }
   }
 
   private async listen(state: RootState): Promise<void> {
@@ -350,6 +376,8 @@ export class LaptopTracker implements AttributionTracker {
     if (head) this.headMoved(state)
     if (!state.pending.size) return
     if (!state.firstHeard) state.firstHeard = this.now()
+    // Git is writing: its files are read once the HEAD check knows what it wrote.
+    if (state.gitSince !== undefined) return
     clearTimeout(state.timer)
     const wait = Math.max(0, Math.min(DEBOUNCE_MS, state.firstHeard + MAX_DELAY_MS - this.now()))
     state.timer = setTimeout(() => void this.queue(state, () => this.flush(state)), wait)
@@ -376,8 +404,50 @@ export class LaptopTracker implements AttributionTracker {
 
   private headMoved(state: RootState): void {
     if (!state.repo) return
+    state.gitSince ??= this.now()
+    clearTimeout(state.timer)
     clearTimeout(state.headTimer)
-    state.headTimer = setTimeout(() => void this.queue(state, () => this.checkHead(state)), HEAD_DEBOUNCE_MS)
+    const wait = Math.max(0, Math.min(HEAD_DEBOUNCE_MS, state.gitSince + HEAD_HOLD_MS - this.now()))
+    state.headTimer = setTimeout(() => void this.queue(state, () => this.gitMoved(state)), wait)
+  }
+
+  /**
+   * Git's own files moved: check HEAD, read the files held behind the check,
+   * and mark what Git put back as Git's. A checkout or pull writes the new
+   * commit's content, which becomes the file's base, not a change; a stash,
+   * a reset or `checkout -- file` puts back a version the journal or the
+   * base already has, which is Git's unless a call named the file.
+   */
+  private async gitMoved(state: RootState): Promise<void> {
+    clearTimeout(state.headTimer)
+    state.headTimer = undefined
+    const since = (state.gitSince ?? this.now()) - GIT_LOOKBACK_MS
+    state.gitSince = undefined
+    try {
+      state.moved = await this.checkHead(state)
+      await this.flush(state)
+    } finally {
+      state.moved = undefined
+    }
+    this.markGit(state, since)
+  }
+
+  /** Entries since `since` that only put back content Git holds (the base again, or an earlier version), whose file no call named: Git's. */
+  private markGit(state: RootState, since: number): void {
+    const recent = state.recent.filter((item) => item.at >= since)
+    if (!recent.length) return
+    const latest = new Map(recent.map((item) => [item.path, item.seq]))
+    this.store.transaction(() => {
+      for (const item of recent) {
+        const author = this.authorOf(item.seq)
+        if (!author || author.certainty === "exact" || author.certainty === "named" || author.certainty === "mako") continue
+        const based = latest.get(item.path) === item.seq && !state.files.has(item.path)
+        if (!based && this.store.entry(item.seq)?.restores === undefined) continue
+        this.store.markGit(item.seq, true)
+        const pending = this.pending.get(item.seq)
+        if (pending) pending.git = true
+      }
+    })
   }
 
   private queue(state: RootState, run: () => Promise<void>): Promise<void> {
@@ -544,13 +614,14 @@ export class LaptopTracker implements AttributionTracker {
     })
     // Same content gone from one path and come at another, in one burst: a rename.
     const gone = new Map<ContentRef, Observed>()
+    // What a HEAD move wrote is taken as the new base, path by path: never a rename.
     for (const item of observed) {
       const ref = previous.get(item.path)?.ref
-      if (item.kind === "gone" && state.stats.has(item.path) && ref) gone.set(ref, item)
+      if (item.kind === "gone" && state.stats.has(item.path) && ref && !state.moved?.has(item.path)) gone.set(ref, item)
     }
     const renamed = new Map<string, string>()
     for (const item of observed)
-      if (item.kind === "file" && !state.stats.has(item.path) && item.ref && gone.has(item.ref)) {
+      if (item.kind === "file" && !state.stats.has(item.path) && item.ref && gone.has(item.ref) && !state.moved?.has(item.path)) {
         renamed.set(item.path, gone.get(item.ref)!.path)
         gone.delete(item.ref)
       }
@@ -559,11 +630,11 @@ export class LaptopTracker implements AttributionTracker {
     const paired = new Set(renamed.values())
     for (const item of observed) {
       const row = state.stats.get(item.path)
-      if (item.kind === "gone" && row && !paired.has(item.path)) goneFiles.set(`${row.dev}:${row.ino}`, item)
+      if (item.kind === "gone" && row && !paired.has(item.path) && !state.moved?.has(item.path)) goneFiles.set(`${row.dev}:${row.ino}`, item)
     }
     if (goneFiles.size)
       for (const item of observed) {
-        if (item.kind !== "file" || !item.stat || state.stats.has(item.path) || renamed.has(item.path)) continue
+        if (item.kind !== "file" || !item.stat || state.stats.has(item.path) || renamed.has(item.path) || state.moved?.has(item.path)) continue
         const id = `${item.stat.dev}:${item.stat.ino}`
         const from = goneFiles.get(id)
         if (!from) continue
@@ -690,18 +761,27 @@ export class LaptopTracker implements AttributionTracker {
     const path = item.path
     const row = state.stats.get(path)
     const file = state.files.get(from ?? path)
+    // What a checkout, pull or rebase wrote: the new commit's content, now this file's base, and nobody's change.
+    const taken = !from && state.moved?.has(path) && state.moved.get(path) === (item.kind === "file" ? item.ref : null)
     if (item.kind === "gone") {
       if (!row && !file) return 0
       state.stats.delete(path)
       this.store.deleteStat(root.id, path)
     } else {
       const ref = item.ref!
-      state.stats.set(path, this.row(item.stat!, ref))
+      state.stats.set(path, this.row(item.stat!, taken ? null : ref))
       this.store.saveStat(root.id, path, state.stats.get(path)!)
       if (from) {
         state.stats.delete(from)
         this.store.deleteStat(root.id, from)
       }
+    }
+    if (taken) {
+      if (file) {
+        state.files.delete(path)
+        this.store.deleteFile(root.id, path)
+      }
+      return 0
     }
     const before = known ?? { ref: file?.current ?? row?.ref ?? null }
     const afterRef = item.kind === "file" ? item.ref! : null
@@ -734,22 +814,27 @@ export class LaptopTracker implements AttributionTracker {
     const state0: FileState = from
       ? { ...(file ?? fresh(null)), path, base: null, map: (file ?? fresh(null)).map.filter((run) => !run.del) }
       : (file ?? fresh(before.ref))
+    const written = item.stat && !from ? millis(item.stat.mtimeNs) : undefined
     const change: ObservedChange = {
       path: join(root.path, path),
       from: from ? join(root.path, from) : undefined,
       kind,
       changedAt,
+      refs: { before: before.ref, after: afterRef },
       lost: state.gap && how !== "event" ? { from: state.gap.from, to: at } : undefined,
       before: beforeText,
       after: afterText,
       root: root.path,
     }
+    // Its modification time isn't when it was written: a copy that kept an old one, one ahead of the clock, or one rounded to the second.
+    if (written === undefined || written > at || at - written > TRAIL_MS || item.stat!.mtimeNs % 1_000_000_000n === 0n) change.heard = at
     const outsider = how === "event" && !given ? this.options.outsider?.(change.path, root.path) : undefined
     if (outsider) change.outsider = outsider
     const author = given ?? attribute(change, evidence)
     if (author.certainty === "exact") evidence.proved(author.author, change.path, change.changedAt)
     // Content back to what an earlier version had brings back that version's authors.
-    const restored = afterRef ? this.restored(state0, afterRef) : undefined
+    // A clean file brought back to a version it had since the base last moved (a stash popped) gets that version's writers back.
+    const restored = afterRef ? this.restored(file || from ? state0 : { ...state0, baseSeq: state.headSeq }, afterRef) : undefined
     let map: Run[] | undefined
     let lines: { added: number; removed: number } | undefined
     if (state0.text && text && beforeText !== undefined && afterText !== undefined) {
@@ -781,6 +866,8 @@ export class LaptopTracker implements AttributionTracker {
     })
     if (inserted !== seq) throw new Error(`The journal numbered an entry ${inserted}, not ${seq}.`)
     this.seq = seq
+    state.recent.push({ seq, path, at })
+    while (state.recent.length > RECENT_KEPT || state.recent[0]!.at < at - GIT_LOOKBACK_MS - HEAD_HOLD_MS) state.recent.shift()
     const next: FileState = { ...state0, current: afterRef, text: Boolean(map), map: map ?? [] }
     if (from) {
       // The old path keeps its base, now deleted by this entry.
@@ -823,16 +910,18 @@ export class LaptopTracker implements AttributionTracker {
    * the new commit's content. A file with changes keeps its uncommitted
    * lines and records who wrote each line the commit took; a clean file the
    * move left behind (a soft reset) now differs from its base by lines no
-   * entry wrote.
+   * entry wrote. Returns what the move changed, by path: the new commit's
+   * content, null where it has none.
    */
-  private async checkHead(state: RootState): Promise<void> {
+  private async checkHead(state: RootState): Promise<Map<string, ContentRef | null> | undefined> {
     const { repo, root } = state
     if (!repo) return
     const head = await repo.head()
     if (head === root.head || !head) return
     const previous = root.head
     const started = this.now()
-    const paths = new Set([...(await repo.changed(previous, head)), ...state.files.keys()])
+    const moved = await repo.changed(previous, head)
+    const paths = new Set([...moved, ...state.files.keys()])
     const committed = new Map<string, Uint8Array | null>()
     const earlier = new Map<string, Uint8Array | null>()
     await mapLimit([...paths], PARALLEL, async (path) => {
@@ -901,8 +990,13 @@ export class LaptopTracker implements AttributionTracker {
       root.head = head
       this.store.saveRoot(root)
     })
+    state.headSeq = this.seq
     for (const path of paths) state.tracked.add(path)
     this.log("base moved", { root: root.path, from: previous ?? "none", to: head, files: paths.size, ms: this.now() - started })
+    return new Map(moved.map((path) => {
+      const bytes = committed.get(path)
+      return [path, bytes ? contentRef(bytes) : null]
+    }))
   }
 
   private scheduleMark(state: RootState): void {
@@ -933,9 +1027,11 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   reported(input: ReportedCall): void {
-    const call = ReportedCallSchema.parse(input)
-    this.evidence.report(call)
-    this.footprints?.reported(call)
+    const parsed = ReportedCallSchema.parse(input)
+    this.evidence.report(parsed)
+    this.footprints?.reported(parsed)
+    // A hook's bounds and the stream's effects for one call come apart; the activity keeps both.
+    const call = this.evidence.reportOf(parsed.session, parsed.call) ?? parsed
     const span = this.evidence.callSpan(call)
     this.store.saveActivity({
       kind: "call",
@@ -954,7 +1050,7 @@ export class LaptopTracker implements AttributionTracker {
           : effect.kind === "command" ? { kind: "command", command: effect.command.slice(0, 500), cwd: effect.cwd, exitCode: effect.exitCode, ...effect.named?.length && { named: effect.named.slice(0, STORED_NAMED) } }
             : { kind: effect.kind, path: effect.path }),
     })
-    this.adopt(call)
+    this.adopt(parsed)
     this.reattribute()
   }
 
@@ -1177,6 +1273,11 @@ export class LaptopTracker implements AttributionTracker {
         if (JSON.stringify(author) === JSON.stringify(pending.author)) continue
         pending.author = author
         this.store.updateAuthor(pending.seq, author, false)
+        // A call that named the file ran the Git command that wrote it: its work, as `git checkout -- file` is.
+        if (pending.git && (author.certainty === "exact" || author.certainty === "named")) {
+          pending.git = false
+          this.store.markGit(pending.seq, false)
+        }
       }
     })
   }
@@ -1214,8 +1315,8 @@ export class LaptopTracker implements AttributionTracker {
       for (const state of states) {
         clearTimeout(state.timer)
         clearTimeout(state.headTimer)
-        if (state.pending.size) void this.queue(state, () => this.flush(state))
-        if (state.headTimer) void this.queue(state, () => this.checkHead(state))
+        if (state.headTimer || state.gitSince !== undefined) void this.queue(state, () => this.gitMoved(state))
+        else if (state.pending.size) void this.queue(state, () => this.flush(state))
         state.headTimer = undefined
       }
       await Promise.all(states.map((state) => state.chain))
@@ -1250,6 +1351,7 @@ export class LaptopTracker implements AttributionTracker {
       restores: entry.restores,
       author: this.pending.get(entry.seq)?.author ?? entry.author,
       settled: entry.settled,
+      ...(entry.git && { git: true as const }),
     }
   }
 

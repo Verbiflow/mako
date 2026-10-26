@@ -46,8 +46,8 @@ import type { CarryResult } from "./thread-history.js"
  *   this one over.
  */
 
-/** Bumped when a message changes. 2: `carry`. */
-const WIRE_VERSION = 2
+/** Bumped when a message changes. 2: `carry`. 3: a reported call's `exact` bounds, and `counted`. */
+const WIRE_VERSION = 3
 
 /** The journal format and the messages, as one name: the shared journal's folder. */
 export const SHARED_FORMAT = createHash("sha256").update(`${JOURNAL_FORMAT}\nwire ${WIRE_VERSION}`).digest("hex").slice(0, 16)

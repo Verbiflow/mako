@@ -1,5 +1,5 @@
 import { isAbsolute, resolve } from "node:path"
-import type { ActivityMark, AttributionTracker, ReportedEffect } from "@mako/protocol"
+import type { ActivityMark, AttributionTracker, ExactBounds, ReportedEffect } from "@mako/protocol"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { ToolEffect } from "@mako/sessions/tool-effects"
 import { liveEffectsStatus } from "@mako/sessions/tool-effect-reading"
@@ -23,6 +23,11 @@ import { readOnlyCall } from "./read-only.js"
  * for when it started. The harness's own run id rides along as metadata,
  * held for one turn only, so a turn that starts before the harness names
  * its run never takes the last one's.
+ *
+ * Where a harness runs Mako's code around the tool itself (Claude's hooks,
+ * OpenCode's own event times), a call's exact bounds come here too
+ * (`bounds`), and are reported under the same turn, Session and checkout as
+ * the call's marks: one record of the call, whichever arrives first.
  */
 
 export interface LiveActivityDeps {
@@ -105,8 +110,7 @@ export class LiveActivity {
   observe(batch: LiveBatch): void {
     let conversation = this.conversations.get(batch.id)
     if (!conversation) {
-      const known = this.deps.session(batch.id)
-      conversation = { calls: new Map(), work: new Map(), cwd: known?.cwd, harness: known?.harness, record: known?.record }
+      conversation = this.fresh(batch.id)
       this.conversations.set(batch.id, conversation)
     }
     const session = batch.session ?? batch.sessionChanges
@@ -132,6 +136,35 @@ export class LiveActivity {
     if (status !== undefined && status !== "running" && conversation.turn) this.turnEnded(batch.id, conversation)
     if (status === "closed") this.conversations.delete(batch.id)
     conversation.status = status ?? conversation.status
+  }
+
+  /**
+   * A call's exact bounds, from a hook its harness ran around the tool:
+   * reported as the call, under the turn its marks carry. The stream's own
+   * report of the call merges with it (`Evidence.report`).
+   */
+  bounds(id: string, call: string, status: "completed" | "failed", exact: ExactBounds): void {
+    const placed = this.deps.placement(id)
+    if (!placed) return
+    const about = this.about(this.conversations.get(id) ?? this.fresh(id), placed)
+    this.deps.tracker.reported({
+      thread: about.thread,
+      session: about.session,
+      ...(about.turn && { turn: about.turn }),
+      ...(about.checkout && { checkout: about.checkout }),
+      call,
+      startedAt: exact.start,
+      endedAt: exact.end,
+      exact,
+      status,
+      effects: [],
+    })
+  }
+
+  /** A conversation first heard mid-way, from what the host knows of it already. */
+  private fresh(id: string): Conversation {
+    const known = this.deps.session(id)
+    return { calls: new Map(), work: new Map(), cwd: known?.cwd, harness: known?.harness, record: known?.record }
   }
 
   /** What every mark of this conversation carries: whose it is, and where it ran. */
