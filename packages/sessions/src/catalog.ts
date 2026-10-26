@@ -61,7 +61,7 @@ import { WriterEvidenceReader } from "./record-evidence.js"
 import { readReleaseTimelines } from "./record-releases.js"
 import { EVIDENCE_RULES, type WriterEvidence } from "./record-writers.js"
 import { RecordCapture } from "./record-capture.js"
-import { RecordReads, RESTORED, type ReadBack } from "./record-reads.js"
+import { RecordReads, RESTORED, type ReadBack, type RestoredSession } from "./record-reads.js"
 import { RecordStore, type RestoreInput } from "./record-store.js"
 import type { RecordRoot } from "./harness-records.js"
 import { ReadingCopies, ReceivedCopies, type CopyPage, type CopyScope } from "./reading-copies.js"
@@ -794,11 +794,9 @@ export class SessionCatalog {
     for (const path of this.byPath.keys()) {
       const owner = this.ownerOf(path)
       if (seen.has(path) || (owner && unavailable.has(owner))) continue
+      const entry = this.byPath.get(path)
       const existing = await stat(path).catch(() => null)
-      if (!existing) {
-        this.forget(path)
-        if (options.emitChanges) this.emit({ type: "removed", path })
-      }
+      if (!existing) await this.unlist(path, entry, options.emitChanges)
     }
     this.scheduleSave()
     return this.list()
@@ -898,12 +896,10 @@ export class SessionCatalog {
    */
   private async restored(path: string, asOf?: number): Promise<{ view: SessionView; ref: ThreadRef; decoded?: Thread } | null> {
     const reads = this.recordReads
-    const session = reads && this.recordStore && (this.recordStore.sessionAt(path) ?? this.recordStore.parentAt(path))
+    const own = this.recordStore?.sessionAt(path) ?? null
+    const session = own ?? this.recordStore?.parentAt(path) ?? null
     if (!reads || !session) return null
-    const restored = await reads.read({ ...session, path }, asOf).catch((error) => {
-      console.warn("A session could not be read back from its records", path, error instanceof Error ? error.message : error)
-      return null
-    })
+    const restored = await this.readKept(session, path, asOf, own !== null)
     if (!restored) return null
     const stamp = await nativeFileOf(restored.provider, restored.path)
     const found = stamp ? await this.viewOf(restored.provider, restored.path, stamp) : await this.unstamped(restored.provider, restored.path)
@@ -914,6 +910,32 @@ export class SessionCatalog {
     const childOf = read.childOf?.path ? { childOf: { ...read.childOf, path: reads.original(read.childOf.path, restored.home) } } : {}
     const ref = this.workspaces.ref({ ...read, ...childOf, path, archived: true }) ?? read
     return { ...found, ref }
+  }
+
+  /**
+   * The session's records read back at `path`. A session its harness moved
+   * before a capture followed it, then deleted, is kept at the path it was
+   * deleted from (`keepLastRow`) while its records hold it where a capture
+   * last read it: it's read at the first of the session's paths
+   * (`RecordStore.pathsOf`) its reader finds it at. `moved` false reads at
+   * `path` alone: a child agent's, read from its parent's records.
+   */
+  private async readKept(session: { harness: string; nativeId: string }, path: string, asOf?: number, moved = true): Promise<RestoredSession | null> {
+    const reads = this.recordReads
+    const store = this.recordStore
+    if (!reads || !store) return null
+    const places = moved ? new Set([path, ...store.pathsOf(session.harness, session.nativeId)]) : [path]
+    let first: RestoredSession | null = null
+    for (const at of places) {
+      const restored = await reads.read({ ...session, path: at }, asOf).catch((error) => {
+        console.warn("A session could not be read back from its records", at, error instanceof Error ? error.message : error)
+        return null
+      })
+      if (!restored) continue
+      if (await nativeFileOf(restored.provider, restored.path)) return restored
+      first ??= restored
+    }
+    return first
   }
 
   /**
@@ -973,14 +995,20 @@ export class SessionCatalog {
         : refused(`${provider.displayName} holds a copy of this session that went on without Mako, and its fork couldn't be written.`)
     }
     if (report.diverged.length && !report.written) return refused(`${provider.displayName} holds part of this session that Mako never saw (${report.diverged[0]!.reason}), so nothing was restored.`)
-    // The harness lists it again: the catalog reads it as it reads any session written.
+    // The harness lists it again: the catalog reads it as it reads any session written. Its records put it back where
+    // a capture last read it, which is another path for a session its harness moved before a capture followed it.
     if (rescansFor(provider, path)) await this.rescanProvider(provider)
-    else await this.refresh(provider, path)
+    else
+      for (const at of new Set([path, ...store.pathsOf(session.harness, session.nativeId)])) {
+        const owner = this.ownerOf(at)
+        if (owner) await this.refresh(owner, at)
+      }
     this.recordRows = null
     this.orderedRefs = null
-    if (!this.byPath.get(path)?.ref) return refused(`Mako restored this session's records, but ${provider.displayName} doesn't list it at ${path}.`)
+    const listed = this.byPath.get(path)?.ref ? path : [...this.byPath].find(([, entry]) => entry.ref?.harness === session.harness && entry.ref.nativeId === session.nativeId)?.[0]
+    if (!listed) return refused(`Mako restored this session's records, but ${provider.displayName} doesn't list it at ${path}.`)
     return {
-      kind: "restored", path,
+      kind: "restored", path: listed,
       files: report.actions.filter((action) => action.action !== "skip").length,
       rows: report.rows.reduce((total, rows) => total + rows.insert + rows.replace + rows.delete, 0),
       ms: Math.round(performance.now() - started),
@@ -2068,17 +2096,8 @@ export class SessionCatalog {
       }
     }
     const roots = provider.roots()
-    for (const path of this.byPath.keys()) {
-      if (
-        roots.some(
-          (root) => path === root || path.startsWith(`${root}${sep}`)
-        ) &&
-        !seen.has(path)
-      ) {
-        this.forget(path)
-        this.emit({ type: "removed", path })
-      }
-    }
+    const gone = [...this.byPath].filter(([path]) => roots.some((root) => path === root || path.startsWith(`${root}${sep}`)) && !seen.has(path))
+    for (const [path, entry] of gone) await this.unlist(path, entry)
     this.scheduleSave()
   }
 
@@ -2121,10 +2140,7 @@ export class SessionCatalog {
   ): Promise<void> {
     const file = await nativeFileOf(provider, path)
     if (!file) {
-      if (this.forget(path)) {
-        this.scheduleSave()
-        this.emit({ type: "removed", path })
-      }
+      if (await this.unlist(path, this.byPath.get(path))) this.scheduleSave()
       return
     }
     const cached = this.cachedEntry(path, provider)
@@ -2386,10 +2402,7 @@ export class SessionCatalog {
     const store = this.recordStore
     const session = store?.sessionAt(path)
     if (!reads || !store || !session || (await nativeFileOf(provider, path))) return null
-    const restored = await reads.read({ ...session, path }).catch((error) => {
-      console.warn("A session's children could not be read back from its records", path, error instanceof Error ? error.message : error)
-      return null
-    })
+    const restored = await this.readKept(session, path)
     const children = restored?.provider.children ? await restored.provider.children(restored.path) : null
     if (!restored || !children) return null
     const listed = children.map((child) => (child.path ? { ...child, path: reads.original(child.path, restored.home) } : child))
@@ -2399,6 +2412,40 @@ export class SessionCatalog {
         console.warn("A kept session's children could not be linked to it", path, error instanceof Error ? error.message : error)
       })
     return listed
+  }
+
+  /**
+   * Its harness lists nothing at `path` any more: the catalog forgets it and
+   * says so. A session the record store holds stays in the rail, read back
+   * from its records (`keptRecordRows`), and its kept row is first made the
+   * row the catalog last listed, found by the session's identity: a capture
+   * may last have seen it at another path (Codex archived it, then
+   * unarchived it, before a capture followed), and that row would neither
+   * be found at this path nor say where the session was. A session a
+   * harness lists at another path only moved, and this one is simply
+   * removed. `entry` is what the catalog listed at `path` when it found the
+   * path gone; false when it lists something else there by now, or nothing.
+   */
+  private async unlist(path: string, entry: CacheEntry | undefined, emitChanges = true): Promise<boolean> {
+    if (entry?.ref) await this.keepLastRow(entry.ref)
+    if (!entry || this.byPath.get(path) !== entry) return false
+    this.forget(path)
+    if (emitChanges) this.emit({ type: "removed", path })
+    return true
+  }
+
+  /** Makes the record store's kept row of `ref`'s session `ref`, unless a harness lists the session elsewhere or the store holds none of it. */
+  private async keepLastRow(ref: ThreadRef): Promise<void> {
+    const store = this.recordStore
+    if (!store || !this.recordReads || store.access !== "write" || this.readOnly) return
+    if (this.listsIdentity(threadIdentity(ref), ref.path)) return
+    const row = JSON.stringify(railRow(ref))
+    if (store.listing(ref.harness, ref.nativeId) === row) return
+    const kept = await store.keepListing(ref.harness, ref.nativeId, ref.path, row).catch((error) => {
+      console.warn("A deleted session's row could not be kept with its records", ref.path, error instanceof Error ? error.message : error)
+      return false
+    })
+    if (kept) this.recordRows = null
   }
 
   private forget(path: string): boolean {
@@ -2420,9 +2467,9 @@ export class SessionCatalog {
     for (const listener of this.listeners) listener(event)
   }
 
-  /** Whether a harness lists a session of this identity now, at any path. */
-  private listsIdentity(identity: string): boolean {
-    for (const entry of this.byPath.values()) if (entry.ref && threadIdentity(entry.ref) === identity) return true
+  /** Whether a harness lists a session of this identity now, at any path but `except`. */
+  private listsIdentity(identity: string, except?: string): boolean {
+    for (const [path, entry] of this.byPath) if (path !== except && entry.ref && threadIdentity(entry.ref) === identity) return true
     return false
   }
 

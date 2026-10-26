@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url"
 import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
 import { SessionCatalog } from "../dist/catalog.js"
+import { ClaudeProvider } from "../dist/providers/claude.js"
 import { CodexProvider } from "../dist/providers/codex.js"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { OpenCodeProvider } from "../dist/providers/opencode.js"
@@ -97,6 +98,73 @@ try {
   assert.deepEqual(plainEvents.map((event) => event.type), ["removed"])
   await plain.stop()
   console.log("Native archive: a Codex rollout archived and unarchived follows its file both ways; a deleted one whose records Mako keeps stays")
+
+  // Moved by its harness before a capture followed it, then deleted there. The record store's row of the session is
+  // the one a capture last saw, at its old path; under load the test above met that order (Codex archived the rollout,
+  // a capture took the archive, Codex unarchived it and deleted it before the next capture ran) and the session was
+  // announced removed while a reload listed it at the archive. The catalog finds the store's row by the session, so
+  // the session stays where it was deleted from, now and after a restart. Mako closed while the harness moved it
+  // leaves the same order every time.
+  const movedThenDeleted = async (label, { provider, reader, from, to, write, move }) => {
+    const root = join(home, "moved", label)
+    const recordedHere = { recordsPath: join(root, "records"), recordsHome: root, readBack: { readers: [reader], stores: nativeStores } }
+    const there = { from: from(root), to: to(root) }
+    await write(root, there.from)
+    const holding = new SessionCatalog([provider(root)], recordedHere)
+    await holding.scan()
+    assert.equal(await holding.hold(there.from), true, `${label}: held where it was`)
+    await holding.stop()
+    await move(root, there.from, there.to)
+    const moved = new SessionCatalog([provider(root)], recordedHere)
+    const heard = []
+    moved.onEvent((event) => heard.push(event))
+    assert.deepEqual((await moved.scan()).map((ref) => ref.path), [there.to], `${label}: listed where its harness moved it`)
+    await rm(there.to)
+    await moved.scan({ emitChanges: true })
+    assert.deepEqual(heard.map((event) => [event.type, event.ref?.path ?? event.path, event.ref?.archived]), [["updated", there.to, true]], `${label}: deleted after a move, it stays where it was deleted from`)
+    assert.deepEqual(moved.list().map((ref) => [ref.path, ref.archived]), [[there.to, true]], `${label}: and is listed there`)
+    const read = await moved.open(there.to)
+    assert.ok(read?.entries.some((entry) => entry.type === "user" && entry.text === "Fix the login redirect"), `${label}: read back from its records`)
+    await moved.stop()
+    const reloaded = new SessionCatalog([provider(root)], recordedHere)
+    assert.deepEqual((await reloaded.scan()).map((ref) => [ref.path, ref.archived]), [[there.to, true]], `${label}: a restart lists it there too`)
+    // Its records put it back where a capture last read it, and its harness lists it there.
+    const back = await reloaded.restoreKept(there.to)
+    assert.deepEqual([back.kind, back.path], ["restored", there.from], `${label}: restored to resume: ${JSON.stringify(back)}`)
+    assert.deepEqual(reloaded.list().map((ref) => [ref.path, ref.archived]), [[there.from, undefined]], `${label}: one row, its harness's`)
+    await reloaded.stop()
+  }
+  await movedThenDeleted("codex", {
+    provider: (root) => new CodexProvider(nativeStores, root),
+    reader: (stores, place) => new CodexProvider(stores, place?.home ?? home),
+    from: (root) => join(root, ".codex", "sessions", "2026", "09", "28", name),
+    to: (root) => join(root, ".codex", "archived_sessions", name),
+    write: async (root, path) => {
+      await mkdir(join(root, ".codex", "sessions", "2026", "09", "28"), { recursive: true })
+      await writeFile(path, line("session_meta", { id, cwd: home }) + line("response_item", { type: "message", role: "user", content: [{ type: "input_text", text: "Fix the login redirect" }] }))
+    },
+    move: async (root, from, to) => {
+      await mkdir(join(root, ".codex", "archived_sessions"), { recursive: true })
+      await rename(from, to)
+    },
+  })
+  // Claude Code files a session under the folder it works in: entering a worktree moves it to that project's folder.
+  const claudeId = "62362b25-2460-43e5-9cff-390f9712d579"
+  await movedThenDeleted("claude", {
+    provider: (root) => new ClaudeProvider(root),
+    reader: (_stores, place) => new ClaudeProvider(place?.home ?? home),
+    from: (root) => join(root, ".claude", "projects", "-repo", `${claudeId}.jsonl`),
+    to: (root) => join(root, ".claude", "projects", "-repo-worktree", `${claudeId}.jsonl`),
+    write: async (root, path) => {
+      await mkdir(join(root, ".claude", "projects", "-repo"), { recursive: true })
+      await writeFile(path, `${JSON.stringify({ type: "user", sessionId: claudeId, uuid: "u1", timestamp: "2026-09-28T09:19:16Z", cwd: home, message: { role: "user", content: "Fix the login redirect" } })}\n`)
+    },
+    move: async (root, from, to) => {
+      await mkdir(join(root, ".claude", "projects", "-repo-worktree"), { recursive: true })
+      await rename(from, to)
+    },
+  })
+  console.log("Native archive: a session its harness moved before a capture followed it (a Codex archive, a Claude Code worktree) and then deleted stays where it was deleted from, now and after a restart")
 
   // Each Codex archive is its own, even one made while Mako was closed over
   // a cached row, and a rewrite doesn't make a new one. Codex 0.154 sets the

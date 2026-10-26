@@ -137,12 +137,14 @@ export interface CaptureInput {
    */
   stamp?: string
   /**
-   * The rail's row for the session as the catalog lists it now (a
-   * `ThreadRef`, as JSON), kept with the capture: once the harness deletes
-   * the session, the catalog lists it from this and reads it back from the
-   * store.
+   * The rail's row for the session (a `ThreadRef`, as JSON), kept with the
+   * capture: once the harness deletes the session, the catalog lists it from
+   * this and reads it back from the store. Asked as the capture commits, not
+   * as it's asked for: one that waited behind another capture of the session
+   * doesn't put back a row the catalog has since moved or stopped listing
+   * (null keeps the row the store has).
    */
-  listing?: string
+  listing?: () => string | null
   /**
    * The harness version observed writing the session as this capture runs,
    * for a write heard as it landed (`observedInstall`): stamped, as
@@ -1895,6 +1897,11 @@ export class RecordStore {
     const folders = rootFolders(records.roots)
     const started = Date.now()
     const report: CaptureReport = { versions: [], taken: 0, unchanged: 0, newChunks: 0, newBytes: 0, storedBytes: 0, ms: 0, waitedMs: 0, reads: 0, longestReadMs: 0, rowsRead: 0, rowsMatched: 0, writers: { record: [], observed: [] } }
+    // The session's own file gone is its harness deleting or moving it, which is never captured: a deleted session
+    // reads back as its newest versions (`RecordReads`), and a moved one is captured where it's listed now. A capture
+    // asked for before the harness deleted it, and run after, takes nothing.
+    const own = read !== undefined && records.files.includes(read)
+    if (own && !(await statRecord(read))) return report
     await this.begin()
     this.generations.set(report, this.dropGeneration())
     this.takings.set(report, { observed: observed ?? null, writers: report.writers })
@@ -1912,12 +1919,15 @@ export class RecordStore {
       // A launch's stream names the version that ran it, which stamps what the capture takes after it where the records state none: streams go first.
       const streams = `${STREAMS_ROOT}:`
       const files = [...records.files.filter((path) => qualify(records.roots, path).startsWith(streams)), ...records.files.filter((path) => !qualify(records.roots, path).startsWith(streams))]
+      let ownGone = false
       for (const path of files) {
         const unit = await this.captureFile(harness, session, records, path, report)
         if (unit !== null) seen.add(unit)
+        else if (own && path === read) ownGone = true
         await this.slice(report)
       }
-      await this.captureGoneFiles(session, folders, seen, report)
+      // Gone as this capture read it: what else of the session is gone says nothing either.
+      if (!ownGone) await this.captureGoneFiles(session, folders, seen, report)
       for (const lines of records.lines ?? []) await this.captureLines(harness, session, records.roots, lines, report)
       for (const database of records.databases) await this.captureDatabase(harness, session, records, database, report)
       if (report.writers.record.length || report.writers.observed.length) {
@@ -1929,7 +1939,8 @@ export class RecordStore {
         this.prepared("INSERT INTO captures (session, at, versions, new_bytes, stored_bytes, ms, waited_ms, reads, longest_read_ms, rows_read, rows_matched) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
           .run(session, started, report.taken, report.newBytes, report.storedBytes, report.ms, report.waitedMs, report.reads, report.longestReadMs, report.rowsRead, report.rowsMatched)
       if (stamp !== undefined) this.setMark(session, HELD_STAMP, stamp)
-      if (listing !== undefined) this.setMark(session, LISTING, listing)
+      const row = listing?.() ?? null
+      if (row !== null) this.setMark(session, LISTING, row)
       if (records.children) this.setMark(session, CHILDREN_LINKED, "1")
       // Every chunk it stored is named now, with the stamp: the intent goes in the same transaction.
       if (intent.id !== null) this.prepared("DELETE FROM intents WHERE id = ?").run(intent.id)
