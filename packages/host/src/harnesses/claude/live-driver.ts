@@ -10,13 +10,15 @@ import { ClaudeSettingsReader } from "./approval-settings.js"
 import { approvalRoot, type HarnessContext } from "../host.js"
 import { heavy } from "../../base/heavy-packages.js"
 import { KeptOutputs, keptOutputsIn } from "@mako/sessions"
+import type { AccountRoot } from "../accounts-common.js"
+import { claudeConfigDir } from "./accounts.js"
 
 /** The SDK's stream-JSON mode, which its sessions run in, and its first control request. */
 const CLAUDE_SDK_ARGS = ["--output-format", "stream-json", "--verbose", "--input-format", "stream-json"]
 const CLAUDE_INITIALIZE = JSON.stringify({ type: "control_request", request_id: "prefetch", request: { subtype: "initialize" } })
 const ControlResponse = z.object({ type: z.literal("control_response") }).loose()
 
-export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" | "userRoot" | "stores" | "streams">): ProviderLiveDriver {
+export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" | "userRoot" | "stores" | "streams">, accounts: AccountRoot): ProviderLiveDriver {
   const settings = new ClaudeSettingsReader()
   const driver = createClaudeSdkDriver({
     available: () => claudeRuntime() !== null,
@@ -25,6 +27,7 @@ export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" 
     query: async (input) => (await heavy.claudeAgentSdk.load("claude session")).query(input),
     prepareApprovals: input =>
       prepareClaudePermissionObserver({ ...input, root: approvalRoot(context), settings }),
+    configDir: (account) => claudeConfigDir(accounts, account),
     streams: context.streams,
     // Per user beside the session archive, as the history reader keeps them.
     outputs: new KeptOutputs(keptOutputsIn(context.userRoot), context.stores),

@@ -13,8 +13,8 @@ import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
 
-const host = createProviderHost()
 const context = detachedHarnessContext(nativeStores)
+const host = createProviderHost(context)
 
 const capability = { kind: "accepted-message-id", evidence: "Injected message receipt" } as const
 assert.equal(createAcpLiveDriver({

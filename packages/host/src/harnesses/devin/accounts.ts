@@ -10,8 +10,6 @@ import type {
   UsageWindow,
 } from "../../contracts/accounts.js"
 import {
-  accountDir,
-  accountsRoot,
   cleanAccountName,
   credentialFileFingerprint,
   jsonFields,
@@ -21,6 +19,7 @@ import {
   parseUsageReset,
   stringValue,
   valueFields,
+  type AccountRoot,
 } from "../accounts-common.js"
 import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
@@ -179,38 +178,38 @@ async function devinStatus(readings: Readings, path: string): Promise<DevinStatu
  * never with the key in `WINDSURF_API_KEY`, which every tool the agent runs
  * would inherit.
  */
-function accountRoot(name: string): string {
-  return accountDir("devin", name)
+function accountRoot(root: AccountRoot, name: string): string {
+  return root.dir("devin", name)
 }
-function accountCredentials(name: string, root = accountRoot(name)): string {
-  return credentialsPath({ XDG_DATA_HOME: join(root, "data") })
+function accountCredentials(root: AccountRoot, name: string, folder = accountRoot(root, name)): string {
+  return credentialsPath({ XDG_DATA_HOME: join(folder, "data") })
 }
 /** A login being renewed lands here first, so a failed one leaves the old login as it was. */
-function renewalRoot(name: string): string {
-  return join(accountRoot(name), "renewal")
+function renewalRoot(root: AccountRoot, name: string): string {
+  return join(accountRoot(root, name), "renewal")
 }
 const IdentitySchema = z.object({ email: z.string() })
-function identityPath(name: string): string {
-  return join(accountRoot(name), "identity.json")
+function identityPath(root: AccountRoot, name: string): string {
+  return join(accountRoot(root, name), "identity.json")
 }
 
-async function managedAccounts(selection: string | null): Promise<HarnessAccount[]> {
+async function managedAccounts(root: AccountRoot, selection: string | null): Promise<HarnessAccount[]> {
   const accounts: HarnessAccount[] = []
-  for (const name of await readdir(join(accountsRoot(), "devin")).catch(() => [])) {
-    if (name.startsWith(".") || loginPending(accountRoot(name))) continue
-    const email = await readFile(identityPath(name), "utf8")
+  for (const name of await readdir(root.provider("devin")).catch(() => [])) {
+    if (name.startsWith(".") || loginPending(accountRoot(root, name))) continue
+    const email = await readFile(identityPath(root, name), "utf8")
       .then((contents) => IdentitySchema.parse(JSON.parse(contents)).email)
       .catch(() => undefined)
     const account: HarnessAccount = {
       harness: "devin",
       name,
-      dir: accountCredentials(name),
+      dir: accountCredentials(root, name),
       active: selection === name,
       source: "mako",
       route: "managed",
     }
     if (email !== undefined) account.email = email
-    if (!existsSync(accountCredentials(name))) account.signedOut = true
+    if (!existsSync(accountCredentials(root, name))) account.signedOut = true
     accounts.push(account)
   }
   return accounts
@@ -219,16 +218,16 @@ async function managedAccounts(selection: string | null): Promise<HarnessAccount
 /** Keys that would sign Devin in as someone else than the selected account. */
 const AUTH_ENV = ["WINDSURF_API_KEY", "WINDSURF_API_SERVER_URL", "DEVIN_API_KEY"]
 
-async function accountEnv(selection: string | null, base: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
+async function accountEnv(root: AccountRoot, selection: string | null, base: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
   const env = { ...base }
   if (!selection || selection === "default") return env
-  if (!existsSync(accountRoot(selection)))
+  if (!existsSync(accountRoot(root, selection)))
     throw new Error("The selected Devin account no longer exists. Choose another account in Settings → Agents.")
-  const contents = await readFile(accountCredentials(selection), "utf8").catch(() => null)
+  const contents = await readFile(accountCredentials(root, selection), "utf8").catch(() => null)
   if (contents === null || !devinCredential(contents, "windsurf_api_key"))
     throw new Error("The selected Devin account is signed out. Sign in again in Settings → Agents.")
   for (const key of AUTH_ENV) delete env[key]
-  env.XDG_DATA_HOME = await linkDataHome(join(accountRoot(selection), "data"), devinDataHome(base))
+  env.XDG_DATA_HOME = await linkDataHome(join(accountRoot(root, selection), "data"), devinDataHome(base))
   return env
 }
 
@@ -277,31 +276,31 @@ async function linkEntries(target: string, source: string, own: string, replace:
  * for a new account, a renewal folder beside it for one signed in again.
  * The page shows a code to paste back rather than calling a local port.
  */
-async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
+async function prepareAccountLogin(root: AccountRoot, { name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
   const base = childProcessEnv(process.env)
   const executable = devinExecutable(base)
   if (!executable) throw new Error("Devin isn't installed. Install it, then sign in.")
-  let root: string
+  let folder: string
   if (renew) {
-    if (!existsSync(accountRoot(name))) throw new Error("That Devin account is gone. Refresh to see your accounts.")
-    root = renewalRoot(name)
-    await rm(root, { recursive: true, force: true })
-    await mkdir(root, { mode: 0o700 })
+    if (!existsSync(accountRoot(root, name))) throw new Error("That Devin account is gone. Refresh to see your accounts.")
+    folder = renewalRoot(root, name)
+    await rm(folder, { recursive: true, force: true })
+    await mkdir(folder, { mode: 0o700 })
   } else {
-    root = accountRoot(cleanAccountName(name))
-    await mkdir(join(accountsRoot(), "devin"), { recursive: true, mode: 0o700 })
-    await mkdir(root, { mode: 0o700 })
-    await markLoginPending(root).catch(async (error) => {
-      await rm(root, { recursive: true, force: true })
+    folder = accountRoot(root, cleanAccountName(name))
+    await mkdir(root.provider("devin"), { recursive: true, mode: 0o700 })
+    await mkdir(folder, { mode: 0o700 })
+    await markLoginPending(folder).catch(async (error) => {
+      await rm(folder, { recursive: true, force: true })
       throw error
     })
   }
   const env: NodeJS.ProcessEnv = {
     ...base,
-    XDG_DATA_HOME: join(root, "data"),
-    XDG_CONFIG_HOME: join(root, "config"),
-    XDG_CACHE_HOME: join(root, "cache"),
-    XDG_STATE_HOME: join(root, "state"),
+    XDG_DATA_HOME: join(folder, "data"),
+    XDG_CONFIG_HOME: join(folder, "config"),
+    XDG_CACHE_HOME: join(folder, "cache"),
+    XDG_STATE_HOME: join(folder, "state"),
   }
   for (const key of AUTH_ENV) delete env[key]
   return {
@@ -318,19 +317,19 @@ async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise
 }
 
 /** Devin's status command answers the same whether or not it is signed in; Devin's server is asked instead. */
-async function confirmAccountLogin({ name, renew }: AccountLoginTarget): Promise<void> {
-  const landed = renew ? accountCredentials(name, renewalRoot(name)) : accountCredentials(name)
+async function confirmAccountLogin(root: AccountRoot, { name, renew }: AccountLoginTarget): Promise<void> {
+  const landed = renew ? accountCredentials(root, name, renewalRoot(root, name)) : accountCredentials(root, name)
   if (!existsSync(landed)) throw new Error("Devin finished, but no login was saved. Try again.")
   const status = await fetchDevinStatus(landed).catch(() => null)
   if (!status) throw new Error("Devin finished, but the login didn't check out. Try again.")
   if (renew) {
-    await mkdir(join(accountRoot(name), "data", "devin"), { recursive: true, mode: 0o700 })
-    await rename(landed, accountCredentials(name))
-    await rm(renewalRoot(name), { recursive: true, force: true })
+    await mkdir(join(accountRoot(root, name), "data", "devin"), { recursive: true, mode: 0o700 })
+    await rename(landed, accountCredentials(root, name))
+    await rm(renewalRoot(root, name), { recursive: true, force: true })
   }
-  await chmod(accountCredentials(name), 0o600)
+  await chmod(accountCredentials(root, name), 0o600)
   if (status.email !== undefined)
-    await writeFile(identityPath(name), JSON.stringify({ email: status.email }), { mode: 0o600 })
+    await writeFile(identityPath(root, name), JSON.stringify({ email: status.email }), { mode: 0o600 })
 }
 
 async function usageFor(readings: Readings, path: string): Promise<AccountUsage> {
@@ -367,7 +366,8 @@ export const devinCloudSignIn: CloudSignInCapability = {
   },
 }
 
-export function createDevinAccountCapability(): SelectableAccountCapability {
+/** Devin's accounts: its own login, and those Mako keeps in `root`. */
+export function createDevinAccountCapability(root: AccountRoot): SelectableAccountCapability {
   const readings: Readings = new Map()
   return {
     provider: "devin",
@@ -376,7 +376,7 @@ export function createDevinAccountCapability(): SelectableAccountCapability {
     label: "Devin",
     loginCommand: "devin auth login",
     async listAccounts(selection) {
-      const accounts = await managedAccounts(selection)
+      const accounts = await managedAccounts(root, selection)
       const status = await devinStatus(readings, credentialsPath(process.env)).catch(() => null)
       if (!status) return accounts
       const account: HarnessAccount = {
@@ -389,21 +389,21 @@ export function createDevinAccountCapability(): SelectableAccountCapability {
       if (status.email !== undefined) account.email = status.email
       return [account, ...accounts]
     },
-    accountEnv,
-    prepareAccountLogin,
-    confirmAccountLogin,
+    accountEnv: (selection, base) => accountEnv(root, selection, base),
+    prepareAccountLogin: (target) => prepareAccountLogin(root, target),
+    confirmAccountLogin: (target) => confirmAccountLogin(root, target),
     abandonAccountLogin: async ({ name, renew }) => {
-      if (renew) await rm(renewalRoot(name), { recursive: true, force: true })
+      if (renew) await rm(renewalRoot(root, name), { recursive: true, force: true })
     },
     removeAccount: async (name) => {
       if (name === "default") throw new Error("The default account is Devin's own login")
-      await rm(accountRoot(name), { recursive: true, force: true })
+      await rm(accountRoot(root, name), { recursive: true, force: true })
       return {}
     },
     selectedAccount: (selection) => ({ name: selection ?? "default" }),
     credentialRevision: (name, env = process.env) =>
-      credentialFileFingerprint(name === "default" ? credentialsPath(env) : accountCredentials(name)),
-    accountUsage: (name) => usageFor(readings, name === "default" ? credentialsPath(process.env) : accountCredentials(name)),
+      credentialFileFingerprint(name === "default" ? credentialsPath(env) : accountCredentials(root, name)),
+    accountUsage: (name) => usageFor(readings, name === "default" ? credentialsPath(process.env) : accountCredentials(root, name)),
     cloudSignIn: devinCloudSignIn,
   }
 }

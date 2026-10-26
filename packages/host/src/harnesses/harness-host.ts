@@ -30,20 +30,22 @@ const modules: ProviderModule[] = [
 
 /** A provider host with every harness Mako ships installed on it. */
 export function createHarnessHost(context: HarnessContext): ProviderHost {
-  const host = createProviderHost(context.work)
+  const host = createProviderHost(context)
   for (const install of modules) install(host, context)
   return host
 }
 
 /**
  * A context that reaches nothing of the person's: secrets held in memory, no
- * screen, and files under `dataRoot`, a temporary folder unless one is given.
- * For a worker, a script or a test.
+ * screen, and files under `dataRoot`, a temporary folder unless one is given,
+ * so its harnesses run on their default logins. For a worker, a script or a
+ * test. A script acting for the person, such as one exporting the sign-ins
+ * their Mako runs on, passes their user root (`makoUserRoot()`).
  */
-export function detachedHarnessContext(stores: NativeStores, dataRoot = join(tmpdir(), "mako-detached-harnesses")): HarnessContext {
+export function detachedHarnessContext(stores: NativeStores, dataRoot = join(tmpdir(), "mako-detached-harnesses"), userRoot = join(dataRoot, "user")): HarnessContext {
   return {
     dataRoot,
-    userRoot: join(dataRoot, "user"),
+    userRoot,
     stores,
     appRoot: installedAppRoot(dirname(fileURLToPath(import.meta.url))),
     secrets: detachedSecrets(),

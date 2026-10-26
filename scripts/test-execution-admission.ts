@@ -39,7 +39,7 @@ try {
   const provider = "future-admission-fixture"
   let revision = "private-fixture-revision"
   let rotateDuringPreparation = false
-  const host = createProviderHost()
+  const host = createProviderHost({ userRoot: join(root, ".mako") })
   const { accounts } = host
   const removeAccount = host.accountCapabilities.register({
     provider, mode: "selectable", label: provider, loginCommand: "fixture", listAccounts: async () => [],

@@ -53,7 +53,7 @@ import { ProviderStartupWatch, STARTUP_TOTAL_MS, stderrDetail } from "../provide
 import type { ProviderLaunchTrace } from "../provider-launch.js"
 import { hostLog, hostWarn } from "../../base/host-log.js"
 import { CLAUDE_AUTH_LOG, claudeAuthDiagnostics } from "./auth-diagnostics.js"
-import { claudeConfigDir, type ClaudeCredentialState } from "./accounts.js"
+import type { ClaudeCredentialState } from "./accounts.js"
 import { claudeStopReason } from "./sdk-notices.js"
 import { claudeAcknowledged, claudeCommandLifecycle, claudeOwnTurnEnded, claudeTurnGoesOn } from "./sdk-message-kinds.js"
 import { fileResumeEvidence } from "../native-continuation.js"
@@ -166,8 +166,8 @@ export interface ClaudeSdkDependencies {
   receiptTimeoutMs?: number
   prepareApprovals?: (input: Omit<Parameters<typeof prepareClaudePermissionObserver>[0], "root" | "settings">) => Promise<ClaudePermissionObserver | undefined>
   inspectCredentials?: (env: NodeJS.ProcessEnv) => Promise<ClaudeCredentialState>
-  /** The config folder an account's sessions are kept under. */
-  configDir?: (account: string) => string
+  /** The config folder an account's sessions are kept under (`claudeConfigDir`). */
+  configDir(account: string): string
   /** Where streams go (`HarnessContext.streams`); without it none are written. */
   streams?: string
   /** Kept copies of what background commands printed, for when Claude Code's output files are gone. */
@@ -573,7 +573,7 @@ export function createClaudeSdkDriver(
       async locate(binding) {
         const account = binding.executionContext?.account
         const name = account?.kind === "configured" ? account.name : "default"
-        return new ClaudeTranscript((dependencies.configDir ?? claudeConfigDir)(name)).locate(binding.nativeId)
+        return new ClaudeTranscript(dependencies.configDir(name)).locate(binding.nativeId)
       },
       elsewhere: {
         via: "The same `resume` from the new folder: Claude finds the session by ID and keeps writing its file under the folder it started in.",

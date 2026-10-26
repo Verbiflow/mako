@@ -53,7 +53,7 @@ try {
     const emitters = new Map<string, (event: LiveDriverEvent) => void>()
     const sessions = new Map<string, LiveSessionState>()
     const sent: string[] = []
-    const host = createProviderHost()
+    const host = createProviderHost({ userRoot: join(root, ".mako") })
     const unregister = host.accountCapabilities.register({
       provider, mode: "selectable", label: provider, loginCommand: "fixture",
       listAccounts: async () => [], accountEnv: async (name, base) => ({ ...base, FIXTURE_ACCOUNT: name ?? "default" }),

@@ -6,13 +6,15 @@ import os from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { mock } from "node:test"
-import { claudeAccountCapability as claude } from "@mako/host/harnesses/claude/accounts"
+import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
 
 const securityStandIn = fileURLToPath(new URL("./fixtures/security-stand-in.cjs", import.meta.url))
 
 // Exercise actual account consumers without reading or changing the user's Keychain.
 if (process.platform === "darwin") {
   const root = await mkdtemp(join(os.tmpdir(), "mako-claude-credential-source-"))
+  const claude = claudeAccountCapability(new AccountRoot(join(root, ".mako")))
   const originalEnv = { ...process.env }
   const originalFetch = globalThis.fetch
   mock.method(os, "homedir", () => root)

@@ -4,8 +4,9 @@
  *
  * A hold is taken under the provider's account lease, together with the
  * launch it covers, and released once that process is gone. Within a host
- * the registry is exact. Hosts sharing ~/.mako (the installed app and a
- * development copy) each leave one lease file naming the accounts they hold;
+ * the registry is exact. Hosts sharing an account root (the installed app,
+ * its profiles and a development copy, all on `~/.mako`) each leave one lease
+ * file naming the accounts they hold;
  * a lease whose host exited, or whose pid now belongs to another program,
  * holds nothing and is cleared by the next reader.
  *
@@ -18,7 +19,7 @@ import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { readdir, readFile, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import { accountsRoot } from "./accounts-common.js"
+import type { AccountRoot } from "./accounts-common.js"
 import { hostWarn } from "../base/host-log.js"
 import { processIdentityMatches } from "../base/process-liveness.js"
 
@@ -58,18 +59,15 @@ function accountKey(provider: string, name: string): string {
   return `${provider}/${name}`
 }
 
-function holdsDir(): string {
-  return join(accountsRoot(), "holds")
-}
-
-function leasePath(pid: number): string {
-  return join(holdsDir(), `${pid}.json`)
-}
-
 /** The accounts this host's running work holds, and the lease that tells other hosts. */
 export class AccountHolds {
+  private readonly root: AccountRoot
   private readonly held = new Map<string, { provider: string; name: string; entries: Set<Entry> }>()
   private readonly releasedListeners = new Set<(provider: string, name: string) => void>()
+
+  constructor(root: AccountRoot) {
+    this.root = root
+  }
 
   hold(provider: string, name: string, holder: AccountHolder): AccountHold {
     const key = accountKey(provider, name)
@@ -124,10 +122,10 @@ export class AccountHolds {
    */
   async heldElsewhere(provider: string, name: string): Promise<boolean> {
     const key = accountKey(provider, name)
-    const files = await readdir(holdsDir()).catch(() => [])
+    const files = await readdir(this.root.holds).catch(() => [])
     for (const file of files) {
       if (!file.endsWith(".json") || file === `${process.pid}.json`) continue
-      const path = join(holdsDir(), file)
+      const path = join(this.root.holds, file)
       let lease: z.infer<typeof Lease>
       try {
         lease = Lease.parse(JSON.parse(await readFile(path, "utf8")))
@@ -151,13 +149,13 @@ export class AccountHolds {
 
   /** Rewritten only when an account gains its first holder or loses its last. */
   private writeLease(): void {
-    const path = leasePath(process.pid)
+    const path = join(this.root.holds, `${process.pid}.json`)
     try {
       if (!this.held.size) {
         rmSync(path, { force: true })
         return
       }
-      mkdirSync(holdsDir(), { recursive: true, mode: 0o700 })
+      mkdirSync(this.root.holds, { recursive: true, mode: 0o700 })
       const temporary = `${path}.tmp`
       writeFileSync(temporary, JSON.stringify({
         version: 1,

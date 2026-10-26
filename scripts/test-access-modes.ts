@@ -32,10 +32,10 @@ import { NativeStores } from "@mako/sessions/read-only-sqlite"
 const nativeStores = new NativeStores(false)
 const devinAcpSource = createDevinAcpSource(nativeStores)
 
-const host = createProviderHost()
 const context = detachedHarnessContext(nativeStores)
+const host = createProviderHost(context)
 const codexLiveDriver = createCodexLiveDriver(createCodexProcessProbe(), context)
-const claudeLiveDriver = createClaudeLiveDriver(context)
+const claudeLiveDriver = createClaudeLiveDriver(context, host.accounts.root)
 const grokAcpSource = createGrokAcpSource()
 
 const servers = new OpenCodeServers()

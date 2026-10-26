@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { makoUserRoot } from "@mako/sessions/mako-root"
 import { childProcessEnv } from "@mako/host/base/child-environment"
 import { CloudSignInHarnessSchema, CloudSignInSchema, type CloudSignIn } from "@mako/host/contracts/cloud-sign-ins"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
@@ -20,7 +21,8 @@ if (process.stdout.isTTY) {
 }
 const dataRoot = await mkdtemp(join(tmpdir(), "mako-export-sign-ins-"))
 try {
-  const host = createHarnessHost(detachedHarnessContext(new NativeStores(false), dataRoot))
+  // On the accounts the person's Mako runs each harness under.
+  const host = createHarnessHost(detachedHarnessContext(new NativeStores(false), dataRoot, makoUserRoot()))
   const collected: CloudSignIn[] = []
   for (const capability of host.accountCapabilities.list()) {
     const harness = CloudSignInHarnessSchema.safeParse(capability.provider)

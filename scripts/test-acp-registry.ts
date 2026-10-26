@@ -21,8 +21,8 @@ import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
 
-const host = createProviderHost()
 const context = detachedHarnessContext(nativeStores)
+const host = createProviderHost(context)
 
 // Native enum titles may be blank. Display the value without changing its wire identity.
 for (const type of ["string", "array"] as const) {

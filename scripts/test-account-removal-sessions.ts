@@ -37,7 +37,7 @@ try {
   for (const original of [...peers, { ...peers[0]!, provider: "future" }]) {
     const provider = `removal-fixture-${original.provider}`
     const deleted: string[] = []
-    const host = createProviderHost()
+    const host = createProviderHost({ userRoot: join(root, ".mako") })
     const { accounts } = host
     const unregister = host.accountCapabilities.register({
       provider, mode: "selectable", label: provider, loginCommand: "fixture", listAccounts: async () => [],

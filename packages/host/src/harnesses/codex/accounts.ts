@@ -23,8 +23,6 @@ import {
   markLoginPending,
   managedAccountHome,
   recordAccountHome,
-  accountDir,
-  accountsRoot,
   cleanAccountName,
   ensureSharedLinks,
   jsonFields,
@@ -32,6 +30,7 @@ import {
   stringValue,
   valueFields,
   writeKeychain,
+  type AccountRoot,
 } from "../accounts-common.js"
 import { childProcessEnv } from "../../base/child-environment.js"
 import type { JsonValue } from "../../contracts/json.js"
@@ -182,6 +181,7 @@ async function accountEmail(dir: string): Promise<string | undefined> {
 }
 
 async function listAccounts(
+  root: AccountRoot,
   selection: string | null
 ): Promise<HarnessAccount[]> {
   const accounts: HarnessAccount[] = []
@@ -196,9 +196,9 @@ async function listAccounts(
     route: "native",
   })
   try {
-    for (const name of await readdir(join(accountsRoot(), "codex"))) {
+    for (const name of await readdir(root.provider("codex"))) {
       if (name.startsWith(".")) continue
-      const dir = accountDir("codex", name)
+      const dir = root.dir("codex", name)
       if (loginPending(dir)) continue
       accounts.push({
         harness: "codex",
@@ -220,11 +220,11 @@ async function listAccounts(
  * Capture the CLI's current login as a named account. Credentials are copied,
  * never invented; browser OAuth remains the CLI's job.
  */
-async function captureAccount(name: string): Promise<void> {
+async function captureAccount(root: AccountRoot, name: string): Promise<void> {
   const clean = cleanAccountName(name)
   const realHome = join(homedir(), HOME)
-  const dir = accountDir("codex", clean)
-  await mkdir(join(accountsRoot(), "codex"), { recursive: true, mode: 0o700 })
+  const dir = root.dir("codex", clean)
+  await mkdir(root.provider("codex"), { recursive: true, mode: 0o700 })
   await mkdir(dir, { mode: 0o700 })
 
   try {
@@ -257,7 +257,7 @@ async function captureAccount(name: string): Promise<void> {
  * its own file: a new empty one, or one Mako keeps whose login expired,
  * which Codex replaces in place.
  */
-async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
+async function prepareAccountLogin(root: AccountRoot, { name, renew }: AccountLoginTarget): Promise<AccountLoginLaunch> {
   const executable = await resolveCodexExecutable()
   if (!executable) throw new Error("Codex isn't installed. Install it, then sign in.")
   const command = (dir: string): AccountLoginLaunch => {
@@ -267,14 +267,14 @@ async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise
     return { kind: "command", executable, args: ["login"], statusArgs: ["login", "status"], env }
   }
   if (renew) {
-    const dir = accountDir("codex", name)
+    const dir = root.dir("codex", name)
     if (!existsSync(dir)) throw new Error("That Codex account is gone. Refresh to see your accounts.")
     await managedCodexConfig(await managedAccountHome(dir, join(homedir(), HOME), "sessions"), dir, true)
     return command(dir)
   }
-  const dir = accountDir("codex", cleanAccountName(name))
+  const dir = root.dir("codex", cleanAccountName(name))
   const home = join(homedir(), HOME)
-  await mkdir(join(accountsRoot(), "codex"), { recursive: true, mode: 0o700 })
+  await mkdir(root.provider("codex"), { recursive: true, mode: 0o700 })
   await mkdir(dir, { mode: 0o700 })
   try {
     await markLoginPending(dir)
@@ -285,20 +285,21 @@ async function prepareAccountLogin({ name, renew }: AccountLoginTarget): Promise
   } catch (error) { await rm(dir, { recursive: true, force: true }); throw error }
 }
 
-async function removeAccount(name: string): Promise<AccountRemoval> {
+async function removeAccount(root: AccountRoot, name: string): Promise<AccountRemoval> {
   if (name === "default")
     throw new Error("The default account is the CLI's own login")
-  await rm(accountDir("codex", name), { recursive: true, force: true })
+  await rm(root.dir("codex", name), { recursive: true, force: true })
   return {}
 }
 
 async function accountEnv(
+  root: AccountRoot,
   selection: string | null,
   base: NodeJS.ProcessEnv
 ): Promise<NodeJS.ProcessEnv> {
   const env = nativeEnv(base)
   if (!selection) return env
-  const dir = accountDir("codex", selection)
+  const dir = root.dir("codex", selection)
   if (!existsSync(dir))
     throw new Error(
       "The selected Codex account no longer exists. Choose another account in Settings → Agents."
@@ -336,14 +337,14 @@ async function usageForDir(dir: string): Promise<AccountUsage> {
  * credits under the account's own home and refreshes the sign-in to do it.
  * The usage endpoint with the stored token covers a Codex that can't start.
  */
-async function accountUsage(processes: DiscoveryProcesses, name: string): Promise<AccountUsage> {
-  const fromCodex = await codexAppServerUsage(processes, name).catch(() => null)
+async function accountUsage(root: AccountRoot, processes: DiscoveryProcesses, name: string): Promise<AccountUsage> {
+  const fromCodex = await codexAppServerUsage(root, processes, name).catch(() => null)
   if (fromCodex?.status === "ok") return fromCodex
-  return usageForDir(name === "default" ? join(homedir(), HOME) : accountDir("codex", name))
+  return usageForDir(name === "default" ? join(homedir(), HOME) : root.dir("codex", name))
 }
 
-async function codexAppServerUsage(processes: DiscoveryProcesses, name: string): Promise<AccountUsage | null> {
-  const env = await accountEnv(name === "default" ? null : name, childProcessEnv(process.env))
+async function codexAppServerUsage(root: AccountRoot, processes: DiscoveryProcesses, name: string): Promise<AccountUsage | null> {
+  const env = await accountEnv(root, name === "default" ? null : name, childProcessEnv(process.env))
   const executable = await resolveCodexExecutable(env)
   if (!executable) return null
   return parseCodexRateLimits(await rpcRequest(processes, executable, ["app-server"], "account/rateLimits/read", env, false))
@@ -363,8 +364,8 @@ export function resetCreditRequest(attempt: string) {
  * keys the spend on `attempt`, so the same attempt after a lost answer
  * spends nothing more, and it spends nothing when no window needs it.
  */
-async function useResetCredit(processes: DiscoveryProcesses, name: string, attempt: string): Promise<ResetCreditOutcome> {
-  const env = await accountEnv(name === "default" ? null : name, childProcessEnv(process.env))
+async function useResetCredit(root: AccountRoot, processes: DiscoveryProcesses, name: string, attempt: string): Promise<ResetCreditOutcome> {
+  const env = await accountEnv(root, name === "default" ? null : name, childProcessEnv(process.env))
   const executable = await resolveCodexExecutable(env)
   if (!executable) throw new Error("Codex is not installed")
   const answer = await withDiscoveryRpc(
@@ -461,32 +462,33 @@ export const codexCloudSignIn: CloudSignInCapability = {
   },
 }
 
-export function codexAccountCapability(processes: DiscoveryProcesses): SelectableAccountCapability {
+/** Codex's accounts: its own login, and those Mako keeps in `root`. */
+export function codexAccountCapability(root: AccountRoot, processes: DiscoveryProcesses): SelectableAccountCapability {
   return {
     provider: "codex",
     mode: "selectable",
     nativeLogin: true,
     label: "Codex",
     loginCommand: "codex login",
-    listAccounts,
-    captureAccount,
-    prepareAccountLogin,
-    removeAccount,
-    accountEnv,
+    listAccounts: (selection) => listAccounts(root, selection),
+    captureAccount: (name) => captureAccount(root, name),
+    prepareAccountLogin: (target) => prepareAccountLogin(root, target),
+    removeAccount: (name) => removeAccount(root, name),
+    accountEnv: (selection, base) => accountEnv(root, selection, base),
     selectedAccount: (selection, env) =>
       ({ name: selection ?? "default", dir: codexHome(env) }),
-    accountUsage: (name) => accountUsage(processes, name),
+    accountUsage: (name) => accountUsage(root, processes, name),
     cloudSignIn: codexCloudSignIn,
     credentialRevision: async (name) => {
       const home = name === "default" ? join(homedir(), HOME) : null
       const raw = home
         ? await readCodexCredentials(home)
-        : await readFile(join(accountDir("codex", name), "auth.json"), "utf8").catch((error) => {
+        : await readFile(join(root.dir("codex", name), "auth.json"), "utf8").catch((error) => {
           if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
           throw error
         })
       return credentialFingerprint([home, principalFingerprint(raw, CodexPrincipal)])
     },
-    useResetCredit: (name, attempt) => useResetCredit(processes, name, attempt),
+    useResetCredit: (name, attempt) => useResetCredit(root, processes, name, attempt),
   }
 }

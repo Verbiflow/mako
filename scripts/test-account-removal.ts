@@ -8,16 +8,17 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
 import { join } from "node:path"
-import { readSelection, writeSelection } from "@mako/host/harnesses/accounts-common"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import type { SelectableAccountCapability } from "@mako/host/harnesses/account-capability"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
 
-const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
-
 const sandbox = await mkdtemp(join(os.tmpdir(), "mako-removal-policy-"))
+// Every host here shares the sandbox's `~/.mako`, as the installed app and its profiles share the person's.
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores, join(sandbox, "data"), join(sandbox, ".mako")))
+const shared = new AccountRoot(join(sandbox, ".mako"))
 mock.method(os, "homedir", () => sandbox)
 syncBuiltinESMExports()
 const { accounts } = providerHost
@@ -71,19 +72,19 @@ try {
         accounts.remove(provider, "selected"),
         /Choose another account/
       )
-      assert.equal(await readSelection(provider), "selected")
+      assert.equal(await shared.readSelection(provider), "selected")
       assert.equal(deleted.length, 0)
       await assert.rejects(
         accounts.remove(provider, "fails"),
         /Native removal failed/
       )
       assert.equal(accounts.removalPending(provider, "fails"), false, "a failed removal leaves no marker behind")
-      assert.equal(await readSelection(provider), "selected")
+      assert.equal(await shared.readSelection(provider), "selected")
       await Promise.all([
         accounts.select(provider, "other"),
         accounts.remove(provider, "selected"),
       ])
-      assert.equal(await readSelection(provider), "other")
+      assert.equal(await shared.readSelection(provider), "other")
       assert.equal(launched.account.name, "selected", "later selection never relabels a resolved launch")
       const nextLaunch = await accounts.launch(provider, {})
       assert.equal(nextLaunch.account.name, "other")
@@ -92,7 +93,7 @@ try {
       // An explicit default selection is an identity change the user requested.
       await accounts.select(provider, null)
       assert.deepEqual(await accounts.remove(provider, "other"), { status: "removed", stillValid: { reason: "the provider couldn't be reached", manageUrl: "https://provider.example.invalid/keys" } }, "a key the provider still accepts reaches the window")
-      assert.equal(await readSelection(provider), null)
+      assert.equal(await shared.readSelection(provider), null)
 
       // Running work keeps its account: removal waits, refuses selection
       // meanwhile, and finishes when the last holder lets go.
@@ -148,7 +149,7 @@ try {
       const chosen = await accounts.launch(provider, {}, { holder: { kind: "run" } })
       await accounts.select(provider, null)
       assert.deepEqual(await accounts.remove(provider, "chosen"), { status: "pending" })
-      await writeSelection(provider, "chosen")
+      await shared.writeSelection(provider, "chosen")
       chosen.hold!.release()
       await until(() => events.at(-1) === `${provider}/chosen:kept`, "the window hears a selection kept it")
       assert.equal(deleted.includes("chosen"), false, "a selected account is never deleted")
@@ -177,7 +178,7 @@ try {
     }
   }
   await writeFile(join(sandbox, "victim"), "isolated fixture credentials")
-  await writeSelection("cross-profile-fixture", "other")
+  await shared.writeSelection("cross-profile-fixture", "other")
   const messages = new Map<string, string[]>()
   const worker = (action: string) => {
     const child = spawn(
@@ -223,7 +224,7 @@ try {
     await wait("remove", "success")
     await wait("select", "rejected")
     assert.equal(
-      await readSelection("cross-profile-fixture"),
+      await shared.readSelection("cross-profile-fixture"),
       "other",
       "deleted credentials cannot become selected in another profile"
     )
@@ -235,7 +236,7 @@ try {
   // Another Mako sharing ~/.mako runs a session on the account: removal
   // here waits for it, and that host finishes it when its session lets go.
   await writeFile(join(sandbox, "shared"), "isolated fixture credentials")
-  await writeSelection("cross-profile-fixture", "shared")
+  await shared.writeSelection("cross-profile-fixture", "shared")
   const holding = worker("hold")
   const dispose = providerHost.accountCapabilities.register({
     provider: "cross-profile-fixture",
@@ -255,7 +256,7 @@ try {
   })
   try {
     await wait("hold", "holding")
-    await writeSelection("cross-profile-fixture", "other")
+    await shared.writeSelection("cross-profile-fixture", "other")
     assert.deepEqual(await accounts.remove("cross-profile-fixture", "shared"), { status: "pending" }, "another host's live session holds the account")
     assert.equal(existsSync(join(sandbox, "shared")), true)
     holding.send("finish")

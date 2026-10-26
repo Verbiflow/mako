@@ -8,10 +8,10 @@ import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
 
-const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
-
 const root = process.argv[2]!,
   action = process.argv[3]!
+// Another Mako on the same `~/.mako`, as a profile's host shares the installed app's.
+const providerHost = createHarnessHost(detachedHarnessContext(nativeStores, join(root, "data"), join(root, ".mako")))
 mock.method(os, "homedir", () => root)
 syncBuiltinESMExports()
 const release = Promise.withResolvers<void>()

@@ -5,8 +5,9 @@ import { join } from "node:path"
 import { homedir } from "node:os"
 import { z } from "zod"
 import { claudeAccountCapability } from "@mako/host/harnesses/claude/accounts"
+import { makoUserRoot } from "@mako/sessions/mako-root"
 import { claudeRuntime, terminalClaudeExecutable } from "@mako/host/harnesses/claude/runtime"
-import { withAccountMutation, readSelection } from "@mako/host/harnesses/accounts-common"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
 import { childProcessEnv } from "@mako/host/base/child-environment"
 
 const directory = z.string().min(1).parse(process.env.MAKO_THREAD_DATA_DIR)
@@ -17,16 +18,19 @@ const Status = z.object({ loggedIn: z.boolean(), authMethod: z.string(), email: 
 const SignedOutExit = z.object({ code: z.literal(1), stdout: z.string() })
 const NumericExit = z.object({ code: z.number().int() })
 const results: { source: string; selected: boolean; loggedIn?: boolean; method?: string; identityMatches?: boolean; configuredMetadataMatchesNative?: boolean; configuredHomeMatches?: boolean; credentialsChanged?: boolean; error?: string; phase?: string; code?: number }[] = []
-const selection = await readSelection("claude")
-const accounts = await claudeAccountCapability.listAccounts(selection)
+// The person's own accounts, as their Mako keeps them.
+const accountRoot = new AccountRoot(makoUserRoot())
+const claude = claudeAccountCapability(accountRoot)
+const selection = await accountRoot.readSelection("claude")
+const accounts = await claude.listAccounts(selection)
 const version = (await execute(runtime.executable, ["--version"], { timeout: 10_000, maxBuffer: 64 * 1024 })).stdout.trim()
 for (const account of accounts.slice(0, 12)) {
-  const result = await withAccountMutation("claude", async () => {
+  const result = await accountRoot.withMutation("claude", async () => {
     let phase = "credential-before"
     try {
-      const before = await claudeAccountCapability.credentialRevision(account.name)
+      const before = await claude.credentialRevision(account.name)
       phase = "environment"
-      const env = await claudeAccountCapability.accountEnv(account.name === "default" ? null : account.name, childProcessEnv(process.env))
+      const env = await claude.accountEnv(account.name === "default" ? null : account.name, childProcessEnv(process.env))
       phase = "native-status"
       const output = await execute(runtime.executable, ["auth", "status", "--json"], { env, timeout: 15_000, maxBuffer: 64 * 1024 })
         .then(value => ({ stdout: value.stdout, code: 0 }))
@@ -44,7 +48,7 @@ for (const account of accounts.slice(0, 12)) {
         .then((text) => z.object({ oauthAccount: z.object({ emailAddress: z.string().optional() }).optional() }).parse(JSON.parse(text)))
         .catch(() => undefined)
       phase = "credential-after"
-      const after = await claudeAccountCapability.credentialRevision(account.name)
+      const after = await claude.credentialRevision(account.name)
       return {
         source: account.source ?? (account.name === "default" ? "cli" : "mako"),
         selected: account.active, loggedIn: native.loggedIn, method: /^[a-zA-Z0-9_.-]{1,40}$/.test(native.authMethod) ? native.authMethod : "unrecognized",
@@ -71,7 +75,7 @@ const receipt = {
 // The SDK's runtime and the terminal's `claude` must see the same ordinary
 // login under the default account's environment. Status only; public booleans.
 const contexts = []
-const ordinary = await claudeAccountCapability.accountEnv(null, childProcessEnv(process.env))
+const ordinary = await claude.accountEnv(null, childProcessEnv(process.env))
 const terminal = terminalClaudeExecutable(ordinary)
 for (const candidate of [
   { label: "sdk", executable: runtime.executable },

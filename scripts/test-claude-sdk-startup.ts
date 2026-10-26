@@ -22,6 +22,7 @@ await chmod(shim, 0o700)
 const driver = createClaudeSdkDriver({
   available: () => true,
   query: async (input) => query(input),
+  configDir: () => join(root, ".claude"),
   configure: async () => ({
     account: { name: "fixture-launch" },
     options: {

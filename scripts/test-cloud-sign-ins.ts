@@ -18,6 +18,7 @@ import { CursorSdkAuth } from "@mako/host/harnesses/cursor/sdk/auth"
 import { CursorAccountKeys, CursorCredentialStore } from "@mako/host/harnesses/cursor/sdk/credentials"
 import { memorySecrets } from "@mako/host/base/secrets"
 import { HarnessAccounts } from "@mako/host/harnesses/accounts"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
 import { ProviderRegistry } from "@mako/host/harnesses/registry"
 import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
 import { chainFingerprint, type CloudSignInCapability, type CloudSignInExport, type CloudSignInPayload } from "@mako/host/harnesses/cloud-sign-in"
@@ -36,6 +37,7 @@ const root = await mkdtemp(join(os.tmpdir(), "mako-cloud-sign-ins-"))
 const mac = join(root, "mac")
 const machine = { home: join(root, "machine", "home"), secrets: join(root, "machine", "secrets") }
 let home = mac
+const accountRoot = new AccountRoot(join(mac, ".mako"))
 mock.method(os, "homedir", () => home)
 syncBuiltinESMExports()
 const original = { ...process.env }
@@ -153,7 +155,7 @@ else process.exit(1);
   // The machine: installed by each adapter, read back as the harness reads it, from a home with no keychain item.
   const signIns: CloudSignIn[] = HARNESSES.map((harness) => CloudSignInSchema.parse({ harness, ...exported[harness] }))
   const registry = new ProviderRegistry<ProviderAccountCapability>()
-  for (const provider of HARNESSES) registry.register({ ...claudeAccountCapability, provider, cloudSignIn: adapters[provider] })
+  for (const provider of HARNESSES) registry.register({ ...claudeAccountCapability(accountRoot), provider, cloudSignIn: adapters[provider] })
   const installed = await installCloudSignIns(registry, signIns, machine)
   assert.deepEqual(installed.map((install) => [install.harness, install.status]), signIns.map((signIn) => [signIn.harness, "installed"]))
   delete stores["Claude Code-credentials"]
@@ -339,7 +341,7 @@ else process.exit(1);
   const choicePath = join(root, "data", "cloud", "sign-ins.json")
   // An older build's "off" was about sharing access alone; it isn't carried over.
   await write(choicePath, JSON.stringify({ version: 1, sharing: false }))
-  const sync = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, dataRoot: join(root, "data"), onChange: () => {} })
+  const sync = new CloudSignInSync({ accounts: new HarnessAccounts(registry, accountRoot), capabilities: registry, store, dataRoot: join(root, "data"), onChange: () => {} })
   const row = (of: Awaited<ReturnType<typeof sync.check>>, harness: CloudSignInHarness) => of.harnesses.find((entry) => entry.harness === harness)
   const claudeItem = () => JSON.parse(stores["Claude Code-credentials"] ?? "{}")
   const readStores = async () => {
@@ -422,7 +424,7 @@ else process.exit(1);
   console.log("ok  a sign-in a stale refresh cleared while this Mac was behind is restored from the cloud")
 
   // A copy the cloud has moved past, with nothing here to say so (a new install of Mako): the cloud says it's stale.
-  const fresh = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, dataRoot: join(root, "fresh"), onChange: () => {} })
+  const fresh = new CloudSignInSync({ accounts: new HarnessAccounts(registry, accountRoot), capabilities: registry, store, dataRoot: join(root, "fresh"), onChange: () => {} })
   const moved = refresh("grok")
   calls.length = 0
   await fresh.check()
@@ -493,8 +495,8 @@ else process.exit(1);
   // a harness's launch waits for it (at most five seconds) so it never starts on a pair the cloud moved past.
   let unreachable = 2
   const offline = { ...store, list: async () => (unreachable-- > 0 ? Promise.reject(new Error("offline")) : store.list()) }
-  const woken = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store: offline, dataRoot: join(root, "woken"), onChange: () => {}, wakeRetryMs: [20, 20, 20] })
-  const gated = new HarnessAccounts(registry)
+  const woken = new CloudSignInSync({ accounts: new HarnessAccounts(registry, accountRoot), capabilities: registry, store: offline, dataRoot: join(root, "woken"), onChange: () => {}, wakeRetryMs: [20, 20, 20] })
+  const gated = new HarnessAccounts(registry, accountRoot)
   gated.gateLaunches(() => woken.inStep())
   const wokeAt = performance.now()
   woken.wake()
@@ -530,7 +532,7 @@ else process.exit(1);
     },
   }
   const overnight = { get claude() { return cloud.get("claude")!.payload }, get grok() { return cloud.get("grok")!.payload } }
-  const morning = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store: returning, dataRoot: join(root, "data"), onChange: () => {}, wakeRetryMs: [150, 150, 150, 150], wakeHoldMs: 3_000 })
+  const morning = new CloudSignInSync({ accounts: new HarnessAccounts(registry, accountRoot), capabilities: registry, store: returning, dataRoot: join(root, "data"), onChange: () => {}, wakeRetryMs: [150, 150, 150, 150], wakeHoldMs: 3_000 })
   const claudeLock = join(mac, ".claude", ".oauth_refresh.lock")
   const grokLock = join(mac, ".grok", "auth.json.lock")
   const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -615,7 +617,7 @@ else process.exit(1);
   // A store this Mac can't write: the cloud must never move a pair the Mac can't follow, so a new run proves the
   // write before anything else, and on a refusal takes the sign-in back from the cloud and sends access alone.
   await writeFile(join(root, "refuse-writes"), "")
-  const refusing = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, dataRoot: join(root, "data"), onChange: () => {} })
+  const refusing = new CloudSignInSync({ accounts: new HarnessAccounts(registry, accountRoot), capabilities: registry, store, dataRoot: join(root, "data"), onChange: () => {} })
   calls.length = 0
   const refusedState = await refusing.check()
   const claudeRow = row(refusedState, "claude")
@@ -626,7 +628,7 @@ else process.exit(1);
   assert.ok(!cloud.has("claude"))
   assert.ok(!calls.includes("share claude"))
   await rm(join(root, "refuse-writes"))
-  const writing = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store, dataRoot: join(root, "data"), onChange: () => {} })
+  const writing = new CloudSignInSync({ accounts: new HarnessAccounts(registry, accountRoot), capabilities: registry, store, dataRoot: join(root, "data"), onChange: () => {} })
   calls.length = 0
   const writingState = await writing.check()
   assert.equal(row(writingState, "claude")?.kept?.state, "connected", "once it writes again, a run shares it again")
@@ -646,7 +648,7 @@ else process.exit(1);
       calls.push(`put ${signIn.harness}`)
     },
   }
-  const proof = new CloudSignInSync({ accounts: new HarnessAccounts(registry), capabilities: registry, store: proofStore, dataRoot: proofRoot, onChange: () => {} })
+  const proof = new CloudSignInSync({ accounts: new HarnessAccounts(registry, accountRoot), capabilities: registry, store: proofStore, dataRoot: proofRoot, onChange: () => {} })
   calls.length = 0
   const proofState = await proof.check()
   assert.deepEqual(calls.filter((call) => !call.startsWith("put ")), [], "no chain shared, pulled, refreshed or taken back")

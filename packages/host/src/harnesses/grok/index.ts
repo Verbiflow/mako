@@ -76,7 +76,7 @@ export const installGrok: ProviderModule = (host, context) => {
     live: createAcpLiveDriver(acp, host, context),
     decoder: acpDecoderSource(acp),
     profile,
-    accounts: grokAccountCapability(host.discovery),
+    accounts: grokAccountCapability(host.accounts.root, host.discovery),
     acp,
     nativeRunner: grokNativeRunner,
     processProbe: grokProcessProbe,
