@@ -83,8 +83,9 @@ export type Certainty = z.infer<typeof CertaintySchema>
 
 /**
  * How a call named the path, for `named`: an effect it reported on the path,
- * its command line, its target, or lines it wrote that the file still holds
- * (`content`), found in its record after the change.
+ * its command line or a script that command ran (`command`), its target, or
+ * lines it wrote that the file still holds (`content`), found in its record
+ * after the change.
  */
 export const NamingSchema = z.enum(["effect", "command", "target", "content"])
 

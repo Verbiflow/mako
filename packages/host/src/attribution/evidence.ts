@@ -3,13 +3,15 @@ import { diffLines, splitLines } from "./line-diff.js"
 import { applyPatch } from "./patch.js"
 import { within } from "./paths.js"
 import { readOnlyCommand } from "./read-only.js"
+import type { RanText } from "./scripts.js"
 import { WorkingSets } from "./working-set.js"
 import { distinct } from "./written.js"
 
 /*
  * Who made a change, from what the tracker knows: Mako's own writes, the
- * effects tool calls reported, the paths calls in flight named, and which
- * Threads had anything running. `attribute` is a pure function of a change
+ * effects tool calls reported, the paths calls in flight named (in their
+ * command lines and in the scripts those ran), and which Threads had
+ * anything running. `attribute` is a pure function of a change
  * and this evidence, so the same journal and evidence always give the same
  * author, and a test can state the whole ladder.
  */
@@ -112,6 +114,8 @@ export class Evidence {
   private readonly writes = new Set<MakoInterval>()
   /** When a call's reported effect on a path proved a change, by call and path: one effect explains one change. */
   private readonly proofs = new Map<string, number>()
+  /** What each call's commands ran besides their own lines (`ranTexts`), by call; empty while it's read. */
+  private readonly scripts = new Map<string, RanText[]>()
   /** Where each Thread's work has been, over its whole history: never pruned with the rest. */
   readonly worked: WorkingSets
 
@@ -162,6 +166,17 @@ export class Evidence {
     if (exact) merged.exact = exact
     if (known?.endedAt !== undefined && merged.endedAt !== undefined) merged.endedAt = Math.max(known.endedAt, merged.endedAt)
     this.reports.set(id, merged)
+  }
+
+  /** Text a reported call's commands ran, read as it was when the call started: it names files as the command line does. */
+  ran(session: string, call: string, texts: readonly RanText[]): void {
+    const id = key(session, call)
+    if (this.reports.has(id)) this.scripts.set(id, [...(this.scripts.get(id) ?? []), ...texts])
+  }
+
+  /** What a call's commands ran, as far as read; undefined before it's asked for. */
+  ranBy(session: string, call: string): readonly RanText[] | undefined {
+    return this.scripts.get(key(session, call))
   }
 
   /** A call's report as it stands, every report of it merged. */
@@ -301,6 +316,7 @@ export class Evidence {
       if (!span || (span.end !== null && span.end + TRAIL_MS < before)) this.reports.delete(id)
     }
     for (const id of this.proofs.keys()) if (!this.reports.has(id.slice(0, id.lastIndexOf("\u0000")))) this.proofs.delete(id)
+    for (const id of this.scripts.keys()) if (!this.reports.has(id)) this.scripts.delete(id)
     for (const write of this.writes) if (write.end !== null && write.end + MAKO_TRAIL_MS < before) this.writes.delete(write)
   }
 }
@@ -431,26 +447,32 @@ function echoed(report: ReportedCall, change: ObservedChange): "content" | undef
  * A command whose text spells out the changed file, where the parsed
  * command names nothing (`namedPaths` leaves out a script's strings, a
  * heredoc's body, an option's value): `plt.savefig("tide.png")` in a
- * heredoc, `--screenshot=shot.png`, `-o out/report.pdf`. Its path from the
- * folder the command ran in, `./` and all, or its absolute path, as a whole
- * word: between quotes, spaces, `=`, `:`, `,`, parentheses or redirects,
- * never inside a longer path. Only a name that reads as a file's (a dot or
- * a folder in it) counts, so a word that happens to match doesn't. A save
- * of the person's while the command runs, of a file it doesn't spell, stays
- * only timing's.
+ * heredoc, `--screenshot=shot.png`, `-o out/report.pdf`. The text it ran
+ * counts the same (`ranTexts`): `draw.py`'s for `python3 draw.py`, a
+ * package script's for `npm run gen`, the Makefile's rules for `make`, each
+ * as it was when the command started. A save of the person's while the
+ * command runs, of a file none of that spells, stays only timing's.
  */
-function spelled(report: ReportedCall, change: ObservedChange): "command" | undefined {
-  for (const effect of report.effects) {
-    if (effect.kind !== "command") continue
-    const names = [change.path]
-    const cwd = effect.cwd
-    if (cwd && change.path.startsWith(`${cwd}/`)) {
-      const inside = change.path.slice(cwd.length + 1)
-      names.push(inside, `./${inside}`)
-    }
-    if (names.some((name) => /[./]/.test(name) && spells(effect.command, name))) return "command"
+function spelled(report: ReportedCall, change: ObservedChange, ran: readonly RanText[]): "command" | undefined {
+  for (const effect of report.effects) if (effect.kind === "command" && spellsPath(effect.command, change.path, [effect.cwd])) return "command"
+  return ran.some((item) => spellsPath(item.text, change.path, item.folders)) ? "command" : undefined
+}
+
+/**
+ * Whether `text` spells `path`: from one of `folders` (`./` and all), or
+ * absolute, as a whole word: between quotes, spaces, `=`, `:`, `,`,
+ * parentheses or redirects, never inside a longer path. Only a name that
+ * reads as a file's (a dot or a folder in it) counts, so a word that happens
+ * to match doesn't.
+ */
+function spellsPath(text: string, path: string, folders: readonly (string | undefined)[]): boolean {
+  const names = [path]
+  for (const folder of folders) {
+    if (!folder || !path.startsWith(`${folder}/`)) continue
+    const inside = path.slice(folder.length + 1)
+    names.push(inside, `./${inside}`)
   }
-  return undefined
+  return names.some((name) => /[./]/.test(name) && spells(text, name))
 }
 
 /** Characters a file's name ends at in a command's text. */
@@ -537,7 +559,7 @@ export function attribute(change: ObservedChange, evidence: Evidence): Attributi
       if (claimed?.proven) exact.push({ author, effect: claimed.effect, start: span.start })
       else if (claimed) named.push({ author, by: "effect", start: span.start })
       else if (!readOnlyReport(report)) {
-        const by = naming(undefined, report, change) ?? echoed(report, change) ?? spelled(report, change)
+        const by = naming(undefined, report, change) ?? echoed(report, change) ?? spelled(report, change, evidence.ranBy(report.session, report.call) ?? [])
         if (by) named.push({ author, by, start: span.start })
       }
     }

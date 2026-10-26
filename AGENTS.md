@@ -877,7 +877,11 @@ engine hands each finished call to `LiveEngineHooks.effects` (by default the
 `scripts/test-tool-effects.ts` (in `test:decoders`) holds every pair's live
 and saved effects equal, `npm run attribution:effects -- <harness> <session>`
 prints a session's, and `npm run audit:effects` counts how exactly this
-machine's recent calls state their changes.
+machine's recent calls state their changes. A command names a file its own
+text spells out, and so does what it ran (`scriptRuns`: the script of
+`python3 draw.py`, `npm run gen`'s package script, `make`'s rules), each read
+by the tracker as it was when the command started and never when something
+touched it since (`attribution/scripts.ts`).
 
 `@mako/sessions` remains the pure native-store layer. Its `SessionProvider`
 contract owns discovery, translation, and following without importing Electron

@@ -34,6 +34,7 @@ import { applyHunks, BASE, baseMap, onlyBase, presentLines, presentRuns, rebase,
 import { FootprintReader, type FootprintOptions } from "./footprint-reader.js"
 import type { FootprintTurn } from "./footprint.js"
 import { untrackable, within } from "./paths.js"
+import { ranTexts, SCRIPT_LIMIT } from "./scripts.js"
 import { lagSummary } from "./status.js"
 import { writtenLines } from "./written.js"
 
@@ -174,6 +175,10 @@ const mapLimit = async <T, R>(items: readonly T[], limit: number, run: (item: T)
   return out
 }
 
+const sameFile = (one: TrackerFileStat, other: TrackerFileStat) =>
+  one.dev === other.dev && one.ino === other.ino && one.size === other.size && one.mtimeNs === other.mtimeNs && one.ctimeNs === other.ctimeNs
+/** The same content as the stat cache recorded: a status change alone (a `chmod`) leaves these as they were. */
+const sameContent = (row: StatRow, stat: TrackerFileStat) => row.dev === stat.dev && row.ino === stat.ino && row.size === stat.size && row.mtimeNs === stat.mtimeNs
 const sameStat = (row: StatRow, stat: TrackerFileStat) =>
   row.dev === stat.dev && row.ino === stat.ino && row.size === stat.size && row.mtimeNs === stat.mtimeNs && row.ctimeNs === stat.ctimeNs
 
@@ -211,6 +216,8 @@ export class LaptopTracker implements AttributionTracker {
   private reattributing = false
   /** Reads that may still name an open change's author. */
   private holds = 0
+  /** Reads under way of what reported commands ran (`readScripts`). */
+  private readonly scriptReads = new Set<Promise<void>>()
   /** Each turn's footprint outside the tracked roots, and the machine's learned churn. */
   readonly footprints?: FootprintReader
   private readonly flushes: Flush[] = []
@@ -1074,7 +1081,81 @@ export class LaptopTracker implements AttributionTracker {
             : { kind: effect.kind, path: effect.path }),
     })
     this.adopt(parsed)
+    this.readScripts(call)
     this.reattribute()
+  }
+
+  /**
+   * Read what the call's commands ran (`ranTexts`), once a report first
+   * carries them: each script as it was when the call started, so the files
+   * its text names are the call's as its command line's are.
+   */
+  private readScripts(call: ReportedCall): void {
+    if (call.status === "refused" || this.evidence.ranBy(call.session, call.call)) return
+    const commands = call.effects.flatMap((effect) => (effect.kind === "command" ? [effect] : []))
+    const start = this.evidence.callSpan(call)?.start
+    if (!commands.length || start === undefined) return
+    this.evidence.ran(call.session, call.call, [])
+    const release = this.hold()
+    const reading = (async () => {
+      for (const effect of commands) this.evidence.ran(call.session, call.call, await ranTexts(effect.command, effect.cwd, (path) => this.scriptAt(path, call.session, start)))
+    })()
+      .catch((error: Error) => this.options.log?.("a command's scripts could not be read", { error: error.message }))
+      .finally(() => {
+        release()
+        this.scriptReads.delete(reading)
+        this.reattribute()
+      })
+    this.scriptReads.add(reading)
+  }
+
+  /**
+   * A script's text as it was when a command of `session` that ran it
+   * started at `start`, or undefined when that can't be known. Where the
+   * journal tracks it, its content must be the version the journal last
+   * recorded (the same file, size and modification time, nothing heard
+   * since), written before the command started; a status change alone, such
+   * as `chmod +x`, moves no content. Elsewhere its modification and
+   * status-change times must both be before the start: a write, a rename into
+   * its place and a `touch` all move the latter. A start is heard up to
+   * `LEAD_MS` late, so a version written in those moments counts only when
+   * the journal puts it on a call of the same session heard to end by then:
+   * one session's calls are heard in the order they ran. The read itself
+   * must see the same file throughout.
+   */
+  private async scriptAt(path: string, session: string, start: number): Promise<string | null | undefined> {
+    if (secretPath(path)) return undefined
+    const before = await this.ports.fs.stat(path)
+    if (!before) return null
+    if (before.kind !== "file" || before.size > SCRIPT_LIMIT) return undefined
+    const modified = millis(before.mtimeNs)
+    // The innermost tracked root holding it: a repository inside a tracked project folder is its own.
+    let state: RootState | undefined
+    for (const item of this.states.values()) if (within(item.root.path, path) && path !== item.root.path && (!state || item.root.path.length > state.root.path.length)) state = item
+    if (!state) {
+      if (Math.max(modified, millis(before.ctimeNs)) >= start - LEAD_MS) return undefined
+    } else {
+      const asked = relative(state.root.path, path)
+      // A file system that ignores case finds `makefile` as `Makefile`: the cache keeps the name as written, and the same file by its inode.
+      const own = state.stats.has(asked) ? asked : [...state.stats.keys()].find((key) => key.toLowerCase() === asked.toLowerCase() && state.stats.get(key)?.ino === before.ino) ?? asked
+      const row = state.stats.get(own)
+      const last = this.store.last(state.root.id, own)
+      const written = Math.max(modified, last?.changedAt ?? -Infinity)
+      if (state.pending.has(own) || !row || !sameContent(row, before) || written >= start) return undefined
+      if (written >= start - LEAD_MS && !(last && this.endedBefore(this.authorOf(last.seq), session, start))) return undefined
+    }
+    const bytes = await this.ports.fs.read(path)
+    const after = await this.ports.fs.stat(path)
+    if (!bytes || !after || !sameFile(before, after) || !isText(bytes)) return undefined
+    return decodeText(bytes)
+  }
+
+  /** Whether `author` is a call of `session` heard to end by `start`. */
+  private endedBefore(author: Attribution | null, session: string, start: number): boolean {
+    if ((author?.certainty !== "exact" && author?.certainty !== "named") || author.author.session !== session || !author.author.call) return false
+    const report = this.evidence.reportOf(session, author.author.call)
+    const end = report && this.evidence.callSpan(report)?.end
+    return end !== undefined && end !== null && end <= start
   }
 
   /** A write Mako begins, from `at` (another host on this device says when its own began); `end` takes when it ended the same way. */
@@ -1344,6 +1425,7 @@ export class LaptopTracker implements AttributionTracker {
         state.headTimer = undefined
       }
       await Promise.all(states.map((state) => state.chain))
+      await Promise.all(this.scriptReads)
       await this.footprints?.settled()
       await new Promise((resolve) => setImmediate(resolve))
       if (states.every((state) => !state.pending.size)) return
