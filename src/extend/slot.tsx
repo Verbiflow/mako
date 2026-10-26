@@ -81,7 +81,6 @@ export function Slot(props: SlotInvocation): ReactNode {
       })
     case "transcript.header":
     case "transcript.empty":
-    case "composer.above":
     case "titlebar.status":
       return renderSlot(entries, props.name, { meta: props.meta })
     case "transcript.turn.trailing":

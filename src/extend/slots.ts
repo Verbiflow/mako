@@ -59,7 +59,6 @@ export interface SlotMap {
   "transcript.turn.trailing": TranscriptTurnSlotProps
   "composer.controls": ComposerControlSlotProps
   "composer.trailing": ComposerControlSlotProps
-  "composer.above": SessionMetaSlotProps
   "changes.file.trailing": ChangedFileSlotProps
 }
 
