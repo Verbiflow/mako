@@ -1,5 +1,6 @@
 import { answerLiveApproval } from "./live-approvals"
 import type { WorktreeStart } from "@mako/host/contracts/thread-worktrees"
+import type { TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "@mako/host/contracts/turn-review"
 import { durableAttachments, saveMessage, settleMessage } from "@/state/message-outbox"
 import { stagePrompt } from "@/state/acp-pending"
 import { autoContinuePending } from "@/state/prompt-delivery"
@@ -656,20 +657,39 @@ export const acp = {
    * moved along; `changed` counts them for the announcement. The Local
    * session stays in the Thread as it was.
    */
-  /** What one finished turn changed, from the checkpoints either side of it. */
+  /**
+   * What one finished turn changed in `workspace`: its request's record, or
+   * for a turn from before Mako kept one, its checkpoints.
+   */
   turnChanges(
     conversation: string,
-    requestId: string
+    requestId: string,
+    workspace?: string
   ): Promise<{ root: string; files: GitFile[] }> {
-    return getMako().liveTurnChanges(conversation, requestId)
+    return getMako().liveTurnChanges(conversation, requestId, workspace)
   },
 
+  /** One file's diff over a turn; with `only`, the turn's own lines alone. */
   turnDiff(
     conversation: string,
     requestId: string,
-    path: string
+    path: string,
+    options?: { only?: boolean }
   ): Promise<GitDiff> {
-    return getMako().liveTurnDiff(conversation, requestId, path)
+    return getMako().liveTurnDiff(conversation, requestId, path, options)
+  },
+
+  /** Who wrote each changed line of a turn's diff of one file. */
+  turnWriters(conversation: string, requestId: string, path: string): Promise<TurnFileWriters | null> {
+    return getMako().liveTurnWriters(conversation, requestId, path)
+  },
+
+  turnUndoPreview(conversation: string, scope: TurnUndoScope): Promise<TurnUndoPreview> {
+    return getMako().liveTurnUndoPreview(conversation, scope)
+  },
+
+  turnUndo(conversation: string, scope: TurnUndoScope, token: string): Promise<TurnUndoResult> {
+    return getMako().liveTurnUndo(conversation, scope, token)
   },
 
   async previewRewind(

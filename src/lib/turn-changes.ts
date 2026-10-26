@@ -1,5 +1,5 @@
 import type { GitFile } from "@/lib/types"
-import { countedChanges, type RequestChanges } from "@mako/host/contracts/turn-changes"
+import { countedChanges, type RequestChanges, type TurnChangedFile } from "@mako/host/contracts/turn-changes"
 
 /** What one finished turn changed: the line under its answer. */
 export interface TurnChangeSummary {
@@ -50,4 +50,18 @@ export function turnChangeWords(files: number): string {
 /** What might be the person's: "1 maybe yours", "3 maybe yours". */
 export function maybeWords(files: number): string {
   return `${files.toLocaleString()} maybe yours`
+}
+
+/** The repository a record's file is in: its path less its path inside the journal's root. */
+export function fileRoot(file: Pick<TurnChangedFile, "path" | "relative">): string {
+  return file.path.slice(0, file.path.length - file.relative.length - 1)
+}
+
+/**
+ * The repositories a turn's record names, in its order: what Review opens
+ * when its checkpoints weren't both saved. Empty while the record is
+ * pending, or for a turn that changed nothing.
+ */
+export function recordRoots(changes: RequestChanges | undefined): string[] {
+  return [...new Set(countedChanges(changes)?.files.map(fileRoot) ?? [])]
 }

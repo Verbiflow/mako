@@ -7,6 +7,7 @@ import { workDefault } from "@mako/host/contracts/harness-defaults"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { ConversationSettings } from "@mako/host/contracts/turn-continuation"
+import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
@@ -1004,6 +1005,9 @@ export function installMockBridge() {
     gitChangedSince: async () => ({ base: "b".repeat(40), files: GIT.files }),
     liveTurnChanges: async () => ({ root: GIT.root ?? "", files: GIT.files.slice(0, 2).map((file) => ({ ...file, staged: false })) }),
     liveTurnDiff: async (_id: string, _requestId: string, path: string) => ({ path, binary: false, oldFile: { name: path, contents: "const turn = 1\n" }, newFile: { name: path, contents: "const turn = 2\n" } }),
+    liveTurnWriters: async () => null,
+    liveTurnUndoPreview: async (_id: string, scope: TurnUndoScope) => ({ scope, checkout: GIT.root ?? "", undo: [], kept: [], left: [], token: "mock" }),
+    liveTurnUndo: async () => ({ files: 0, backup: "", left: [] }),
     gitDefaultBranch: async () => "main",
     gitSinceDiff: async (_base: string, path: string) => ({ path, binary: false, oldFile: { name: path, contents: "const base = 1\n" }, newFile: { name: path, contents: "const base = 2\n" } }),
     gitCommit: async () => {},

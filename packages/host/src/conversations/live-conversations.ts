@@ -47,6 +47,8 @@ import { LiveAutoContinue } from "./live-auto-continue.js"
 import { stoppedWork } from "./interrupted-turn.js"
 import { LiveCheckpoints } from "./live-checkpoints.js"
 import { LiveTurnChanges } from "./live-turn-changes.js"
+import { LiveTurnReview } from "./live-turn-review.js"
+import type { TurnUndoScope } from "../contracts/turn-review.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch } from "./live-dispatch.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
@@ -86,6 +88,7 @@ export class LiveConversations {
   private readonly records: LiveRecords
   private readonly checkpoints: LiveCheckpoints
   private readonly counts: LiveTurnChanges
+  private readonly turnReview: LiveTurnReview
   private readonly questions: LiveQuestions
   private readonly approvals: LiveApprovals
   private readonly actions: LiveActions
@@ -159,6 +162,7 @@ export class LiveConversations {
       residents: () => this.records.values(),
       require: (id) => this.records.require(id),
       load: (id) => this.records.load(id),
+      request: (id, requestId) => this.records.request(id, requestId),
       add: (resident) => this.records.add(resident),
       control: conversationControl,
       flush: (resident) => this.flush(resident),
@@ -220,6 +224,24 @@ export class LiveConversations {
     }
     this.counts = new LiveTurnChanges({ ledger: () => dependencies.turnLedger?.(), flush: (resident) => access.flush(resident) })
     this.checkpoints = new LiveCheckpoints(access, (id, input) => this.fork(id, input), this.counts)
+    this.turnReview = new LiveTurnReview({
+      git: dependencies.git,
+      ledger: () => dependencies.turnReview?.(),
+      request: (id, requestId) => this.records.request(id, requestId),
+      cwd: (id) => this.records.session(id)?.cwd,
+      checkpoints: (id, requestId) => {
+        try {
+          return this.checkpoints.turn(id, requestId)
+        } catch {
+          // Checkpoints pruned since: the journal draws the turn.
+          return undefined
+        }
+      },
+      busy: (folder) => [...this.records.values()].some(({ snapshot, checkpointing }) =>
+        (checkpointing || snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "dispatching")) &&
+        (snapshot.session.cwd === folder || snapshot.session.cwd.startsWith(`${folder}/`) || folder.startsWith(`${snapshot.session.cwd}/`))),
+      plans: join(dependencies.root, "undos"),
+    })
     this.approvals = new LiveApprovals(access)
     this.questions = new LiveQuestions(access, {
       continue: (id, bindingId, requestId, text, displayText) => { this.continueBinding(id, bindingId, requestId, text, [], undefined, displayText) },
@@ -722,12 +744,32 @@ export class LiveConversations {
     return this.checkpoints.preview(id, requestId, position)
   }
 
-  turnChanges(id: string, requestId: string) {
-    return this.checkpoints.turnChanges(id, requestId)
+  /** A turn's files, from its request's record (or, for a turn from before it, its checkpoints): any turn, loaded or not. */
+  turnChanges(id: string, requestId: string, workspace?: string) {
+    return this.turnReview.files(id, requestId, workspace)
   }
 
-  turnDiff(id: string, requestId: string, path: string) {
-    return this.checkpoints.turnDiff(id, requestId, path)
+  turnDiff(id: string, requestId: string, path: string, options?: { only?: boolean }) {
+    return this.turnReview.diff(id, requestId, path, options)
+  }
+
+  /** Who wrote each changed line of a turn's diff of one file. */
+  turnWriters(id: string, requestId: string, path: string) {
+    return this.turnReview.writers(id, requestId, path)
+  }
+
+  turnUndoPreview(id: string, scope: TurnUndoScope) {
+    return this.turnReview.undoPreview(id, scope)
+  }
+
+  turnUndo(id: string, scope: TurnUndoScope, token: string) {
+    this.admission.assert()
+    return this.turnReview.undo(id, scope, token)
+  }
+
+  /** At start: undos a host died in the middle of are finished or put back. */
+  resumeUndos() {
+    return this.turnReview.resume()
   }
 
   async rewind(id: string, input: RewindInput) {

@@ -12,7 +12,7 @@ import type { JournalFacts } from "../threads/index.js"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
-import { LiveJournal, journalIds } from "./live-journal.js"
+import { LiveJournal, journalIds, storedRequest } from "./live-journal.js"
 import { backfillMemory } from "./live-ledger.js"
 import { conversationControl, residentOf, type Dependencies, type Resident } from "./live-runtime.js"
 import { interruptRequests } from "./live-settlement.js"
@@ -157,6 +157,13 @@ export class LiveRecords {
   /** Whether `unload` let this resident go; a write through it is dropped. */
   isReleased(resident: Resident): boolean {
     return this.released.has(resident)
+  }
+
+  /** A request as the conversation keeps it: from memory when it's loaded, else read from its journal without loading it. */
+  request(id: string, requestId: string): LiveRequest | undefined {
+    const resident = this.residents.get(id)
+    if (resident) return resident.snapshot.requests.find((request) => request.id === requestId)
+    return this.recovered.has(id) ? storedRequest(this.dependencies.root, id, requestId) : undefined
   }
 
   require(id: string): Resident {

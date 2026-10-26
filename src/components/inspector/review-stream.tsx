@@ -2,17 +2,24 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import { getSingularPatch, parseDiffFromFile, type CodeViewDiffItem, type DiffLineAnnotation, type FileDiffMetadata, type SelectedLineRange } from "@pierre/diffs"
 import { CodeView, type CodeViewHandle, type CodeViewReactOptions } from "@pierre/diffs/react"
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, ChevronsDownUpIcon, ChevronsUpDownIcon, Columns2Icon, CopyIcon, EllipsisIcon, FileIcon, GitBranchIcon, GitCommitHorizontalIcon, Maximize2Icon, MessageSquareIcon, PencilIcon, RefreshCwIcon, Undo2Icon, WrapTextIcon } from "lucide-react"
+import { countedChanges } from "@mako/host/contracts/turn-changes"
+import type { TurnFileWriters, TurnUndoScope } from "@mako/host/contracts/turn-review"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { ImageThumbs } from "@/components/inspector/binary-diff"
 import { Annotation, GutterAdd } from "@/components/inspector/review"
+import { TurnUndoDialog } from "@/components/inspector/turn-undo"
+import { WriterRow } from "@/components/inspector/turn-writers"
 import { PickedDiffLines } from "@/components/inspector/diff-line-pick"
 import { isPickEnd, pickEnd, workspacePath } from "@/lib/line-comments"
 import { LineCounts, StatusLetter } from "@/components/inspector/change-marks"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
-import { Action, IconAction } from "@/components/ui/kit"
-import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
+import { Action, IconAction, Toggle } from "@/components/ui/kit"
+import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger } from "@/components/ui/menu"
 import { SearchSelect } from "@/components/ui/search-select"
 import { DIFF_THEME } from "@/lib/diff-theme"
 import { binarySizes } from "@/lib/git-binary"
+import { fileRoot } from "@/lib/turn-changes"
+import { noteKey, writerNotes, type WriterNote } from "@/lib/turn-writers"
 import { cn } from "@/lib/utils"
 import type { GitCommitEntry, GitDiff, GitFile } from "@/lib/types"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
@@ -36,7 +43,7 @@ const LARGE_LINES = 800
 const HEADER_HEIGHT = 32
 
 type Loaded =
-  | { kind: "diff"; fileDiff: FileDiffMetadata; signature: string; lines: number; limited: boolean }
+  | { kind: "diff"; fileDiff: FileDiffMetadata; signature: string; lines: number; limited: boolean; writers?: ReadonlyMap<string, WriterNote> }
   | { kind: "binary"; diff: GitDiff }
   | { kind: "unavailable"; reason: string }
 
@@ -123,9 +130,20 @@ function lineCount(fileDiff: FileDiffMetadata): number {
   return fileDiff.hunks.reduce((sum, hunk) => sum + hunk.additionLines + hunk.deletionLines, 0)
 }
 
+/** Who wrote each changed line of a file's diff, for a turn: read beside the diff. */
+type Writers = (path: string) => Promise<TurnFileWriters | null>
+
+/** A diff with its writers' rows, when another writer than the turn's own changed lines in it. */
+function withWriters(loaded: Loaded, found: TurnFileWriters | null | undefined): Loaded {
+  if (loaded.kind !== "diff" || !found?.runs.length) return loaded
+  const writers = writerNotes(loaded.fileDiff, found.runs)
+  return writers.size ? { ...loaded, writers, signature: `${loaded.signature}:w${fingerprint([...writers].map(([key, note]) => `${key}${note.writer}${note.lines}`).join())}` } : loaded
+}
+
 /** Reads the diffs of mounted headers, `LOADS` at a time; a header that unmounts first is skipped. */
-function diffQueue(first: (path: string) => Promise<GitDiff>, onLoaded: (path: string, loaded: Loaded) => void) {
+function diffQueue(first: (path: string) => Promise<GitDiff>, firstWriters: Writers | undefined, onLoaded: (path: string, loaded: Loaded) => void) {
   let load = first
+  let writers = firstWriters
   let wanted: string[] = []
   let open = true
   const reading = new Set<string>()
@@ -134,7 +152,8 @@ function diffQueue(first: (path: string) => Promise<GitDiff>, onLoaded: (path: s
       const path = wanted.shift()
       if (path === undefined) return
       reading.add(path)
-      void load(path).then(toLoaded, unreadable).then((loaded) => {
+      // A file's writers come beside its diff; without them it still shows.
+      void Promise.all([load(path), writers?.(path).catch(() => null)]).then(([diff, found]) => withWriters(toLoaded(diff), found), unreadable).then((loaded) => {
         if (open) onLoaded(path, loaded)
       }).finally(() => {
         reading.delete(path)
@@ -154,8 +173,9 @@ function diffQueue(first: (path: string) => Promise<GitDiff>, onLoaded: (path: s
       open = true
     },
     /** Reads from here on go through `next`. */
-    use(next: (path: string) => Promise<GitDiff>) {
+    use(next: (path: string) => Promise<GitDiff>, nextWriters: Writers | undefined) {
       load = next
+      writers = nextWriters
     },
     close() {
       open = false
@@ -224,14 +244,65 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
     return () => { current = false }
   }, [edits, key, scope, workspace])
 
+  // "Only this thread's lines" belongs to the turn it was turned on for.
+  const [onlyFor, setOnlyFor] = useState<string | null>(null)
+  const only = scope.kind === "turn" && onlyFor === key
   const shown = scope.kind === "uncommitted" ? files : read?.key === key ? read.files : undefined
   const base = read?.key === key ? read.base : undefined
-  const load = loader(scope, base)
+  const load = loader(scope, base, only)
+  const writers = scope.kind === "turn" && !only ? (path: string) => acp.turnWriters(scope.conversation, scope.requestId, path) : undefined
   const picker = <ScopePicker scope={scope} workspace={workspace} onChoose={choose} />
   if (shown === undefined || (scope.kind === "since" && shown && !base)) return <ScopeMessage picker={picker} text="Reading…" />
   if (shown === null) return <ScopeMessage picker={picker} text={unreadScope(scope)} />
   if (shown.length === 0 && scope.kind === "turn") return <ScopeMessage picker={picker} text="That turn changed no files." />
-  return <ReviewFiles key={key} files={shown} workspace={workspace} staged={scope.kind === "uncommitted" ? staged : 0} scope={scope} picker={picker} load={load} onReviewInCenter={onReviewInCenter} />
+  const bar = scope.kind === "turn" ? <TurnBar scope={scope} only={only} onOnly={(on) => setOnlyFor(on ? key : null)} /> : null
+  return <ReviewFiles key={only ? `${key}:only` : key} files={shown} workspace={workspace} staged={scope.kind === "uncommitted" ? staged : 0} scope={scope} picker={picker} bar={bar} load={load} writers={writers} only={only} onReviewInCenter={onReviewInCenter} />
+}
+
+/**
+ * A turn's bar under the header: "Only this thread's lines", which redraws
+ * each diff with every other writer's change on both sides, and undoing the
+ * turn, or every change of the Thread, keeping everyone else's lines.
+ */
+function TurnBar({ scope, only, onOnly }: { scope: TurnScope; only: boolean; onOnly: (on: boolean) => void }) {
+  const [undo, setUndo] = useState<TurnUndoScope | null>(null)
+  return (
+    <div data-turn-bar="" className="flex h-8 shrink-0 items-center gap-2 border-b border-hairline pr-1.5 pl-2.5 text-label">
+      <label className="pressable flex min-w-0 cursor-pointer items-center gap-2 text-muted-foreground hover:text-foreground">
+        <Toggle label="Only this thread's lines" on={only} onChange={() => onOnly(!only)} />
+        <span className="truncate">Only this thread's lines</span>
+      </label>
+      <div className="ml-auto flex shrink-0 items-center">
+        <Action size="xs" tone="ghost" data-undo-turn="" onClick={() => setUndo({ kind: "turn", requestId: scope.requestId })}>
+          <Undo2Icon />
+          Undo this turn…
+        </Action>
+        <Menu modal={false}>
+          <MenuTrigger asChild>
+            <IconAction label="More ways to undo" size="xs">
+              <EllipsisIcon />
+            </IconAction>
+          </MenuTrigger>
+          <MenuContent align="end" className="min-w-56">
+            <MenuItem onSelect={() => setUndo({ kind: "thread" })}>
+              <Undo2Icon className="size-3.5 text-faint" />
+              Undo every change of this thread…
+            </MenuItem>
+          </MenuContent>
+        </Menu>
+      </div>
+      {undo ? (
+        <TurnUndoDialog
+          conversation={scope.conversation}
+          scope={undo}
+          prompt={undo.kind === "turn" ? scope.prompt : undefined}
+          open
+          onOpenChange={(open) => { if (!open) setUndo(null) }}
+          onUndone={() => void actions.refreshGit()}
+        />
+      ) : null}
+    </div>
+  )
 }
 
 function scopeKey(scope: Scope): string {
@@ -247,7 +318,7 @@ async function readScope(scope: Exclude<Scope, { kind: "uncommitted" }>, workspa
     return { files: since?.files ?? null, base: since?.base }
   }
   if (scope.kind === "turn") {
-    const turn = await acp.turnChanges(scope.conversation, scope.requestId)
+    const turn = await acp.turnChanges(scope.conversation, scope.requestId, workspace)
     return { files: turn.root === workspace ? turn.files : null }
   }
   return { files: (await gitActions.commitFiles(scope.hash)).map((file): GitFile => ({ ...file, staged: false })) }
@@ -255,21 +326,21 @@ async function readScope(scope: Exclude<Scope, { kind: "uncommitted" }>, workspa
 
 function unreadScope(scope: Scope): string {
   if (scope.kind === "since") return `This branch shares no history with ${scope.label.replace(/^Since /, "")}.`
-  if (scope.kind === "turn") return "That turn's checkpoints couldn't be read."
+  if (scope.kind === "turn") return "That turn's changes couldn't be read."
   return "This commit couldn't be read."
 }
 
 /** What a scope's diffs compare against, as a comment on their lines names it. */
-function scopeBase(scope: Scope): string {
+function scopeBase(scope: Scope, only = false): string {
   if (scope.kind === "commit") return `${scope.shortHash}^`
   if (scope.kind === "since") return scope.ref
-  if (scope.kind === "turn") return "the start of that turn"
+  if (scope.kind === "turn") return only ? "the start of that turn, with only its own lines changed" : "the start of that turn"
   return "HEAD"
 }
 
-function loader(scope: Scope, base: string | undefined): (path: string) => Promise<GitDiff> {
+function loader(scope: Scope, base: string | undefined, only: boolean): (path: string) => Promise<GitDiff> {
   if (scope.kind === "commit") return (path) => gitActions.commitFileDiff(scope.hash, path)
-  if (scope.kind === "turn") return (path) => acp.turnDiff(scope.conversation, scope.requestId, path)
+  if (scope.kind === "turn") return (path) => acp.turnDiff(scope.conversation, scope.requestId, path, only ? { only } : undefined)
   if (scope.kind === "since") return (path) => base ? gitActions.sinceDiff(base, path) : Promise.reject(new Error("Reading where the branch started…"))
   return (path) => gitActions.diff(path)
 }
@@ -283,23 +354,56 @@ function ScopeMessage({ picker, text }: { picker: ReactNode; text: string }) {
   )
 }
 
+/** A turn the scope menu offers: its scope, its place among the conversation's prompts, and what it changed here. */
+interface TurnChoice {
+  scope: TurnScope
+  number: number
+  /** Files, and net lines, the turn's record counts in this repository; null for a turn read from its checkpoints. */
+  files: number | null
+  added: number
+  removed: number
+}
+
+/** Each conversation's turns, by its requests and the repository: worked out once per change of its requests, not per streamed token. */
+const turnRows = new WeakMap<readonly LiveRequest[], Map<string, string>>()
+
 /**
- * The last finished turn of the open conversation, when checkpoints either
- * side of it saved this repository. Kept as one string so the selector is stable.
+ * Every finished turn of the open conversation that changed files in this
+ * repository, newest first: those whose record names a file here, and those
+ * from before the record whose checkpoints either side saved it. Kept as one
+ * string so the selector is stable.
  */
-function useLastTurn(workspace: string): Extract<Scope, { kind: "turn" }> | null {
+function useTurns(workspace: string): TurnChoice[] {
   const found = useAcp((state) => {
     const live = activeLiveAcp(state)
-    const request = live?.requests?.findLast((item) => item.snapshots?.after)
-    const snapshots = request?.snapshots
-    if (!live || !request || snapshots?.before.kind !== "ready" || snapshots.after?.kind !== "ready" || snapshots.before.snapshot.scope !== workspace) return null
-    return `${live.key}\n${request.id}\n${request.text}`
+    const requests = live?.requests
+    if (!live || !requests) return ""
+    const byWorkspace = turnRows.get(requests) ?? new Map<string, string>()
+    turnRows.set(requests, byWorkspace)
+    const held = byWorkspace.get(workspace)
+    if (held !== undefined) return held
+    const rows: string[] = []
+    requests.forEach((request, index) => {
+      const counted = countedChanges(request.changes)
+      const before = request.snapshots?.before
+      const words = (request.displayText ?? request.text).replace(/\s+/g, " ").trim()
+      if (counted) {
+        const here = counted.files.filter((file) => fileRoot(file) === workspace)
+        if (!here.length) return
+        const sum = (key: "added" | "removed") => here.reduce((total, file) => total + (file.own?.[key] ?? 0) + (file.maybe?.[key] ?? 0), 0)
+        rows.push([live.key, request.id, index + 1, here.length, sum("added"), sum("removed"), words].join("\t"))
+      } else if (before?.kind === "ready" && request.snapshots?.after?.kind === "ready" && before.snapshot.scope === workspace) {
+        rows.push([live.key, request.id, index + 1, -1, 0, 0, words].join("\t"))
+      }
+    })
+    const joined = rows.reverse().join("\n")
+    byWorkspace.set(workspace, joined)
+    return joined
   })
-  return useMemo(() => {
-    if (!found) return null
-    const [conversation = "", requestId = "", ...prompt] = found.split("\n")
-    return { kind: "turn", conversation, requestId, prompt: prompt.join(" ").trim() }
-  }, [found])
+  return useMemo(() => (found ? found.split("\n") : []).map((row): TurnChoice => {
+    const [conversation = "", requestId = "", number = "0", files = "-1", added = "0", removed = "0", ...prompt] = row.split("\t")
+    return { scope: { kind: "turn", conversation, requestId, prompt: prompt.join("\t") }, number: Number(number), files: Number(files) < 0 ? null : Number(files), added: Number(added), removed: Number(removed) }
+  }), [found])
 }
 
 /**
@@ -312,7 +416,8 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
   const branch = useSession((state) => state.git?.branch)
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, repository)?.worktree)
   const hosted = useGitHub((state) => state.status?.defaultBranch)
-  const lastTurn = useLastTurn(workspace)
+  const turns = useTurns(workspace)
+  const lastTurn = turns[0]?.scope ?? null
   const turnHarness = useAcp((state) => {
     const conversation = scope.kind === "turn" ? state.conversations[scope.conversation] : undefined
     return conversation?.kind === "live" ? conversation.session.harness : undefined
@@ -334,9 +439,10 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
     else void gitActions.defaultBranch().then(offer, () => setSince(null))
   }
   const turnOn = scope.kind === "turn" && lastTurn?.requestId === scope.requestId
-  // A turn the transcript asked for that isn't the last one is offered by its words, checked, above the last.
-  const otherTurn = scope.kind === "turn" && !turnOn ? scope : null
-  const label = scope.kind === "uncommitted" ? "Uncommitted" : scope.kind === "since" ? scope.label : scope.kind === "turn" ? turnOn ? "Last turn" : "Turn" : scope.shortHash
+  const chosenTurn = scope.kind === "turn" ? turns.find((turn) => turn.scope.requestId === scope.requestId) : undefined
+  // A turn the transcript asked for that the menu doesn't list (no file of it here yet) is offered by its words, checked.
+  const otherTurn = scope.kind === "turn" && !chosenTurn ? scope : null
+  const label = scope.kind === "uncommitted" ? "Uncommitted" : scope.kind === "since" ? scope.label : scope.kind === "turn" ? turnOn ? "Last turn" : chosenTurn ? `Turn ${chosenTurn.number}` : "Turn" : scope.shortHash
   return (
     <Menu modal={false} onOpenChange={open}>
       <MenuTrigger asChild>
@@ -351,6 +457,35 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
         {since ? <ScopeItem on={scope.kind === "since" && scope.ref === since.ref} onSelect={() => onChoose({ kind: "since", ...since })} title={since.label} detail="Every commit on this branch and what isn't committed" /> : null}
         {otherTurn ? <ScopeItem on onSelect={() => onChoose(otherTurn)} title="Turn" detail={otherTurn.prompt || "What the agent changed in that answer"} /> : null}
         {lastTurn ? <ScopeItem on={turnOn} onSelect={() => onChoose(lastTurn)} title="Last turn" detail={lastTurn.prompt || "What the agent changed in its last answer"} /> : null}
+        {turns.length > 1 ? (
+          <MenuSub>
+            <MenuSubTrigger data-turn-picker="">
+              <CheckIcon className={cn("size-3.5 shrink-0", scope.kind === "turn" && !turnOn && chosenTurn ? "text-foreground" : "invisible")} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate">Turn…</span>
+                <span className="block truncate text-label text-faint">{`Any of ${turns.length} turns that changed files here`}</span>
+              </span>
+            </MenuSubTrigger>
+            <MenuSubContent className="max-h-96 w-80 overflow-y-auto">
+              {turns.map((turn) => (
+                <MenuItem key={turn.scope.requestId} onSelect={() => onChoose(turn.scope)} aria-checked={scope.kind === "turn" && scope.requestId === turn.scope.requestId} role="menuitemradio" data-turn-choice={turn.number}>
+                  <CheckIcon className={cn("size-3.5 shrink-0", scope.kind === "turn" && scope.requestId === turn.scope.requestId ? "text-foreground" : "invisible")} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate">{turn.scope.prompt || `Turn ${turn.number}`}</span>
+                    <span className="flex items-center gap-1.5 text-label text-faint">
+                      <span className="tabular">{`Turn ${turn.number}`}</span>
+                      <span aria-hidden>·</span>
+                      {turn.files === null ? <span>From its checkpoints</span> : <>
+                        <span className="tabular">{turn.files === 1 ? "1 file" : `${turn.files} files`}</span>
+                        <LineCounts insertions={turn.added} deletions={turn.removed} />
+                      </>}
+                    </span>
+                  </span>
+                </MenuItem>
+              ))}
+            </MenuSubContent>
+          </MenuSub>
+        ) : null}
         <MenuSeparator />
         <MenuLabel>A commit</MenuLabel>
         {commits === null ? <MenuItem disabled>Reading history…</MenuItem> : commits.length === 0 ? <MenuItem disabled>No commits yet</MenuItem> : commits.map((commit) => (
@@ -381,14 +516,32 @@ function ScopeItem({ on, title, detail, mono = false, onSelect }: { on: boolean;
  * visible ones do. A status change re-reads only the files in view, and the
  * old diff stays up until the new one lands.
  */
-function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewInCenter }: { files: readonly GitFile[]; workspace: string; staged: number; scope: Scope; picker: ReactNode; load: (path: string) => Promise<GitDiff>; onReviewInCenter: () => void }) {
+function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, writers, only, onReviewInCenter }: {
+  files: readonly GitFile[]
+  workspace: string
+  staged: number
+  scope: Scope
+  picker: ReactNode
+  /** A turn's bar, under the header. */
+  bar?: ReactNode
+  load: (path: string) => Promise<GitDiff>
+  /** Who wrote each changed line, read beside each diff (a turn's). */
+  writers?: Writers
+  /** The diffs show only the turn's own lines. */
+  only?: boolean
+  onReviewInCenter: () => void
+}) {
   const diffStyle = usePrefs((prefs) => prefs.diffStyle)
   const wrapDiff = usePrefs((prefs) => prefs.wrapDiff)
   const marks = useViewed((state) => state.marks)
   const allComments = useReview((state) => state.comments)
   const draft = useReview((state) => state.draft)
-  const base = scopeBase(scope)
+  const base = scopeBase(scope, only)
   const handle = useRef<CodeViewHandle<undefined>>(null)
+  const harness = useAcp((state) => {
+    const conversation = scope.kind === "turn" ? state.conversations[scope.conversation] : undefined
+    return conversation?.kind === "live" ? conversation.session.harness : undefined
+  })
   // Lines picked in one file, once the press that picked them ends; the
   // stream reports every step of a drag, kept here until then.
   const [picked, setPicked] = useState<{ id: string; range: SelectedLineRange } | null>(null)
@@ -404,7 +557,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
   const scrollTop = useRef(0)
   const [entries, setEntries] = useState(() => new Map<string, Entry>())
   const [opened, setOpened] = useState(() => new Map<string, boolean>())
-  const [queue] = useState(() => diffQueue(load, (path, loaded) => setEntries((previous) => {
+  const [queue] = useState(() => diffQueue(load, writers, (path, loaded) => setEntries((previous) => {
     const current = previous.get(path)
     return new Map(previous).set(path, { loaded: current && sameLoaded(current.loaded, loaded) ? current.loaded : loaded, stale: false })
   })))
@@ -412,7 +565,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
     queue.open()
     return () => queue.close()
   }, [queue])
-  useEffect(() => queue.use(load), [load, queue])
+  useEffect(() => queue.use(load, writers), [load, writers, queue])
 
   const byPath = useMemo(() => new Map(files.map((file) => [file.path, file])), [files])
 
@@ -470,6 +623,12 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
       annotate(end.lineNumber, end.side)
     }
     const loaded = entry?.loaded
+    // Who wrote each stretch, under its last line, where another writer shares the file.
+    if (loaded?.kind === "diff" && loaded.writers)
+      for (const key of loaded.writers.keys()) {
+        const [side, line] = key.split(":")
+        annotate(Number(line), side === "deletions" ? "deletions" : "additions")
+      }
     // The stream redraws an item only when its version moves; this one moves
     // with anything its header or body shows.
     const version = fingerprint(`${loaded?.kind === "diff" ? loaded.signature : loaded?.kind ?? ""}|${collapsed}|${[...seen].join(",")}|${file.status}|${file.insertions}|${file.deletions}|${open}|${viewedFor(file.path, entry)}`)
@@ -591,6 +750,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
           </IconAction>
         </div>
       </div>
+      {bar}
       <div
         data-review-stream
         data-file-count={files.length}
@@ -623,20 +783,31 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
                 load={load}
                 base={base}
                 discardable={scope.kind === "uncommitted"}
+                only={only}
               />
             )
           }}
           renderAnnotation={(annotation, item) => {
             const side = "side" in annotation ? annotation.side : "additions"
-            const loaded = picked?.id === item.id ? entries.get(item.id)?.loaded : undefined
+            const line = annotation.lineNumber
+            const found = entries.get(item.id)?.loaded
+            const note = found?.kind === "diff" ? found.writers?.get(noteKey(side, line)) : undefined
+            const comments = allComments.filter((comment) => comment.workspace === workspace && comment.path === item.id)
+            const picks = picked?.id === item.id && isPickEnd(picked.range, { lineNumber: line, side })
+            const noted = picks || comments.some((comment) => comment.line === line && comment.side === side) || (draft?.workspace === workspace && draft.path === item.id && draft.line === line && draft.side === side)
+            const writer = note ? <WriterRow note={note} harness={harness} /> : null
+            if (!noted) return writer
+            const loaded = picked?.id === item.id ? found : undefined
             return (
+              <>
+              {writer}
               <Annotation
                 workspace={workspace}
                 path={item.id}
                 line={annotation.lineNumber}
                 side={side}
-                comments={allComments.filter((comment) => comment.workspace === workspace && comment.path === item.id)}
-                selection={picked?.id === item.id && isPickEnd(picked.range, { lineNumber: annotation.lineNumber, side }) ? (
+                comments={comments}
+                selection={picks && picked ? (
                   <PickedDiffLines
                     path={workspacePath(`${workspace}/${item.id}`, store.get().meta?.cwd)}
                     base={base}
@@ -646,6 +817,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
                   />
                 ) : undefined}
               />
+              </>
             )
           }}
           renderGutterUtility={(getHoveredLine, item) => (
@@ -673,7 +845,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, load, onReviewIn
  * One file's header. The stream mounts headers only for files in its window,
  * so a header asks for its own diff while it is mounted and the diff is due.
  */
-function FileHeader({ file, entry, open, viewed, root, queue, load, base, discardable, onToggle, onViewed }: {
+function FileHeader({ file, entry, open, viewed, root, queue, load, base, discardable, only = false, onToggle, onViewed }: {
   file: GitFile
   entry: Entry | undefined
   open: boolean
@@ -685,6 +857,8 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
   base: string
   /** The file's changes aren't committed, so Discard can take them back. */
   discardable: boolean
+  /** The diff shows only a turn's own lines. */
+  only?: boolean
   onToggle: (path: string) => void
   onViewed: (path: string, on: boolean) => void
 }) {
@@ -704,6 +878,8 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
     ? (loaded.diff.before?.image || loaded.diff.after?.image ? binarySizes(loaded.diff) : `Binary${binarySizes(loaded.diff) ? ` · ${binarySizes(loaded.diff)}` : ""}`)
     : loaded?.kind === "unavailable"
       ? loaded.reason
+      : only && loaded?.kind === "diff" && !loaded.fileDiff.hunks.length
+        ? "None of its lines are this thread's for sure"
       : !open && generated(file.path)
         ? "Generated · Load diff"
         : !open && lines !== null && lines > LARGE_LINES && !viewed

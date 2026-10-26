@@ -34,6 +34,8 @@ import { gitRepository, nodeFileSystem, watcherEvents, type SystemHistory, type 
 import { changes, hunks, partition, restorable, shares, storedView, turnChanges, type CheckoutHunk, type CheckoutShares, type JournalView, type Partition, type PartitionOptions, type Restorable, type ThreadChanges } from "./queries.js"
 import { lostVersions, restoreVersion } from "./recovery.js"
 import { threadTrees, type ThreadTree } from "./thread-tree.js"
+import { runningIn, turnOnlyPair, turnWriters, undoPlan, type ShownPair, type UndoPlan } from "./turn-lines.js"
+import type { TurnUndoScope, WriterRun } from "../contracts/turn-review.js"
 import { LaptopTracker, SETTLE_MS } from "./tracker.js"
 import { TRAIL_MS } from "./evidence.js"
 
@@ -41,8 +43,9 @@ export { JournalStore } from "./journal-store.js"
 export { LaptopTracker, type TrackerOptions, type TrackerRepository } from "./tracker.js"
 export { changes, classOf, hunks, partition, restorable, shares, side, storedView, turnChanges, unattributed, writerOf, type ChangeClass, type CheckoutHunk, type CheckoutShares, type FileVersion, type JournalView, type Partition, type PartitionFile, type PartitionOptions, type Restorable, type Share, type ThreadChanges, type UncertainChange, type WholeHunk } from "./queries.js"
 export { threadTrees, type ThreadTree } from "./thread-tree.js"
+export { runningIn, turnOnlyPair, turnWriters, undoPlan, type Hand, type ShownPair, type UndoPlan, type UndoWrite } from "./turn-lines.js"
 export { LOST_LISTED, lostVersions, restoreVersion } from "./recovery.js"
-export { contentRef, STORE_LIMIT } from "./content.js"
+export { contentRef, decodeText, isText, STORE_LIMIT } from "./content.js"
 export { diffLines, splitLines } from "./line-diff.js"
 export { LiveActivity, reportedEffect } from "./live-activity.js"
 export { gitRepository, nodeFileSystem, watcherEvents, type SystemHistory, type TreeWatcher } from "./ports.js"
@@ -252,6 +255,18 @@ export interface Attribution {
   counted(summary: TurnChanges, session: string): void
   /** The Thread's turns with entries after `after`, each with its newest: a summary counted through less is behind. */
   turnsChangedAfter(thread: string, after: number): Map<string, number>
+  /**
+   * Who wrote each changed line of a turn's diff of one of its record's
+   * files (`turn-lines.ts`), on the journal's sides or on `shown`'s; undefined
+   * when a version isn't kept or the file isn't text.
+   */
+  turnWriters(thread: string, turn: string, file: TurnChangedFile, shown?: ShownPair): WriterRun[] | undefined
+  /** The turn's diff of one file with only its own lines changed. */
+  turnOnly(thread: string, turn: string, file: TurnChangedFile): { before: string | null; after: string | null } | undefined
+  /** How to take a turn's or the Thread's own lines back out of the files in `checkout`, as they are now. */
+  undoPlan(thread: string, scope: TurnUndoScope, checkout: string): UndoPlan
+  /** A turn or background work running in `checkout` on any host of this journal; undefined when none is. */
+  running(checkout: string): { thread: string; kind: "turn" | "background" } | undefined
   /** "Changes made" by every Thread on this device over the journal's window, for Settings › Usage. */
   changeUsage(): ChangeUsage
   /** Which file each spelling in a message means, from its Thread's touches, folders, places and renames. */
@@ -816,6 +831,10 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     settledThrough: (at) => !view().store.unsettledThrough(at + TRAIL_MS),
     counted: (summary, session) => journal.writes.counted(summary, session),
     turnsChangedAfter: (thread, after) => view().store.turnsChangedAfter(thread, after),
+    turnWriters: (thread, turn, file, shown) => turnWriters(view(), thread, turn, file, shown),
+    turnOnly: (thread, turn, file) => turnOnlyPair(view(), thread, turn, file),
+    undoPlan: (thread, scope, checkout) => undoPlan(view(), thread, scope, checkout),
+    running: (checkout) => runningIn(view(), checkout),
     changeUsage: () => changeUsage(view().store, Date.now() - RETENTION_DAYS * DAY_MS),
     resolveFiles: (source, spellings) => files.resolve(view().store, referenceSource(source), spellings.slice(0, MAX_SPELLINGS)),
     chooseFile(source, spelling, path) {

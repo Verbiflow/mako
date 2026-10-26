@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react"
 import { FileDiffIcon } from "lucide-react"
 import { LineCounts } from "@/components/inspector/change-marks"
-import { maybeWords, recordedTurnChanges, turnChangeSummary, turnChangeWords, type TurnChangeSummary } from "@/lib/turn-changes"
+import { TurnUndoDialog } from "@/components/inspector/turn-undo"
+import { maybeWords, recordRoots, recordedTurnChanges, turnChangeSummary, turnChangeWords, type TurnChangeSummary } from "@/lib/turn-changes"
 import { cn } from "@/lib/utils"
 import { acp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
@@ -52,8 +53,9 @@ function readTurn(conversation: string, requestId: string, key: string): Promise
  * its file links and "changes made" read. Changes that only might be the
  * agent's (a save of the person's while it ran) are counted apart. A turn
  * from before Mako kept that record falls back to its checkpoints, read
- * once it nears the viewport. Review opens Changes on that turn, when its
- * checkpoints are there to show it.
+ * once it nears the viewport. Review opens Changes on that turn, from its
+ * checkpoints or, without them, from the journal the record was counted
+ * from; Undo takes the turn's own lines back out and keeps everyone else's.
  */
 export function TurnChanges({ requestId }: { requestId: string | undefined }) {
   const { liveId } = useTranscriptSource()
@@ -61,12 +63,13 @@ export function TurnChanges({ requestId }: { requestId: string | undefined }) {
     const live = liveId ? state.conversations[liveId] : undefined
     return live?.kind === "live" && requestId ? live.requests?.find((each) => each.id === requestId) : undefined
   })
-  // The repository its checkpoints saved, when both sides were saved: what Review opens.
+  // The repository its checkpoints saved, when both sides were saved; else the one its record names: what Review opens.
   const before = request?.snapshots?.before
-  const workspace = before?.kind === "ready" && request?.snapshots?.after?.kind === "ready" ? before.snapshot.scope : null
+  const saved = before?.kind === "ready" && request?.snapshots?.after?.kind === "ready" ? before.snapshot.scope : null
   if (!liveId || !requestId || !request) return null
   const recorded = recordedTurnChanges(request.changes)
-  if (recorded) return <TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={workspace} />
+  if (recorded) return <TurnChangesRow summary={recorded} conversation={liveId} requestId={requestId} workspace={saved ?? recordRoots(request.changes)[0] ?? null} undoable />
+  const workspace = saved
   // A count on its way, or none to make: nothing to read from the checkpoints.
   if (request.changes || !workspace) return null
   // Mounted once the checkpoints are, so the line watches the viewport from its first frame.
@@ -98,7 +101,15 @@ function CheckpointTurnChanges({ conversation, requestId, workspace }: { convers
   )
 }
 
-function TurnChangesRow({ summary, conversation, requestId, workspace }: { summary: TurnChangeSummary; conversation: string; requestId: string; workspace: string | null }) {
+/** The words the turn answered, read once, on a click: they name it in the scope menu and the undo. */
+function promptOf(conversation: string, requestId: string): string {
+  const live = acpStore.get().conversations[conversation]
+  const request = live?.kind === "live" ? live.requests?.find((each) => each.id === requestId) : undefined
+  return (request ? (request.displayText ?? request.text) : "").replace(/\s+/g, " ").trim()
+}
+
+function TurnChangesRow({ summary, conversation, requestId, workspace, undoable = false }: { summary: TurnChangeSummary; conversation: string; requestId: string; workspace: string | null; undoable?: boolean }) {
+  const [undo, setUndo] = useState<string | null>(null)
   if (summary.files === 0 && summary.maybe === 0) return null
   return (
     <div
@@ -137,17 +148,26 @@ function TurnChangesRow({ summary, conversation, requestId, workspace }: { summa
             type="button"
             data-review-turn=""
             title="Review what this turn changed in Changes"
-            onClick={() => {
-              // The words the turn answered name it in the scope menu; read once, on the click.
-              const live = acpStore.get().conversations[conversation]
-              const request = live?.kind === "live" ? live.requests?.find((each) => each.id === requestId) : undefined
-              const text = request ? (request.displayText ?? request.text) : ""
-              reviewTurn(workspace, { conversation, requestId, prompt: text.replace(/\s+/g, " ").trim() })
-            }}
+            onClick={() => reviewTurn(workspace, { conversation, requestId, prompt: promptOf(conversation, requestId) })}
             className="pressable -mx-1 shrink-0 rounded px-1 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground focus-visible:text-foreground"
           >
             Review
           </button>
+        </>
+      ) : null}
+      {undoable && summary.files > 0 ? (
+        <>
+          <span aria-hidden className="shrink-0 text-faint">·</span>
+          <button
+            type="button"
+            data-undo-turn=""
+            title="Take this turn's lines back out, keeping yours and other threads'"
+            onClick={() => setUndo(promptOf(conversation, requestId))}
+            className="pressable -mx-1 shrink-0 rounded px-1 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground focus-visible:text-foreground"
+          >
+            Undo
+          </button>
+          {undo !== null ? <TurnUndoDialog conversation={conversation} scope={{ kind: "turn", requestId }} prompt={undo} open onOpenChange={(open) => { if (!open) setUndo(null) }} /> : null}
         </>
       ) : null}
     </div>

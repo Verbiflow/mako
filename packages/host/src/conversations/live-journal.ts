@@ -15,7 +15,7 @@ import {
   NativeTotalsSchema,
   PromptAttachmentSchema,
 } from "../contracts/conversation-control.js"
-import { mkdirSync, readdirSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
@@ -24,7 +24,7 @@ import { DecodedEntrySchema, entriesFromMessages, ThreadRefSchema, type DecodedE
 import { ToolGrowthSchema, changedEntryStart, growTool, type ToolGrowth } from "@mako/sessions/live-content"
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { RequestChangesSchema } from "../contracts/turn-changes.js"
-import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "../contracts/provider-failure.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
 import { ACCESS_TIER_NAMES } from "../contracts/access.js"
@@ -702,6 +702,23 @@ export class LiveJournal {
       hostWarn("journal", "a journal's free space could not be read", { path: this.path, error: errorMessage({ error }) })
       return false
     }
+  }
+}
+
+/**
+ * One request as journal `id` keeps it, read without loading the
+ * conversation: a turn's review reads a conversation nobody has open.
+ * Undefined when the journal or the request isn't there.
+ */
+export function storedRequest(root: string, id: string, requestId: string): LiveRequest | undefined {
+  const path = join(root, `${id}.sqlite`)
+  if (!existsSync(path)) return undefined
+  const db = new DatabaseSync(path, { readOnly: true })
+  try {
+    const row = db.prepare("SELECT value FROM requests WHERE id=?").get(requestId)
+    return row ? LiveRequestSchema.parse(JSON.parse(RowSchema.parse(row).value)) : undefined
+  } finally {
+    db.close()
   }
 }
 

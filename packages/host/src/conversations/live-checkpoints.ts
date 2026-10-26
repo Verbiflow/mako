@@ -7,8 +7,6 @@ import {
   type RunSnapshots,
 } from "../contracts/workspace-snapshots.js"
 import type { CheckpointComparison } from "../workspaces/index.js"
-import { treeDiff, treeFiles } from "../git/index.js"
-import type { GitDiff, GitFile } from "../contracts/git-workspace-search.js"
 import type { LiveRequest, LiveSnapshot } from "../contracts/live-conversations.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
@@ -215,26 +213,27 @@ export class LiveCheckpoints {
     return preview
   }
 
-  /** What one finished turn changed in its workspace, from the checkpoints either side of it. */
-  async turnChanges(id: string, requestId: string): Promise<{ root: string; files: GitFile[] }> {
-    const turn = this.turn(id, requestId)
-    return { root: turn.root, files: await treeFiles(turn) }
-  }
-
-  async turnDiff(id: string, requestId: string, path: string): Promise<GitDiff> {
-    return treeDiff(this.turn(id, requestId), path)
-  }
-
-  private turn(id: string, requestId: string): CheckpointComparison {
+  /**
+   * One finished turn's two checkpoints, compared, with the folder they
+   * saved; undefined unless both were saved. Read from the request as its
+   * conversation keeps it, so a conversation nobody has open is read
+   * without loading it.
+   */
+  turn(id: string, requestId: string): { scope: string; comparison: CheckpointComparison } | undefined {
     const snapshots = this.host.dependencies.workspaceSnapshots
-    if (!snapshots) throw new Error("Workspace checkpoints are unavailable")
-    const request = this.host.require(id).snapshot.requests.find((item) => item.id === requestId)
+    if (!snapshots) return undefined
+    const request = this.host.request(id, requestId)
     const before = request?.snapshots?.before
     const after = request?.snapshots?.after
-    if (before?.kind !== "ready" || after?.kind !== "ready") throw new Error("This turn has no checkpoints to compare")
-    const key = `${before.snapshot.id}:${after.snapshot.id}`
+    if (before?.kind !== "ready" || after?.kind !== "ready") return undefined
+    const comparison = this.compare(snapshots, before.snapshot.id, after.snapshot.id)
+    return { scope: comparison.root, comparison }
+  }
+
+  private compare(snapshots: NonNullable<LiveAccess["dependencies"]["workspaceSnapshots"]>, before: string, after: string): CheckpointComparison {
+    const key = `${before}:${after}`
     // Each read keeps both checkpoints past the next prune, so reading never finds a store gone.
-    const trees = snapshots.trees(before.snapshot.id, after.snapshot.id)
+    const trees = snapshots.trees(before, after)
     const open = this.turns.get(key)
     if (open) {
       this.turns.delete(key)

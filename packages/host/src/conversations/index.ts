@@ -27,6 +27,7 @@ import { resumingUnder } from "./live-ledger.js"
 import { restorePlan, restoringResume } from "./kept-resume.js"
 import type { RestorePlan } from "../contracts/restore-plan.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
+import type { TurnUndoScope } from "../contracts/turn-review.js"
 import type { HostTelemetry } from "../usage/index.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
@@ -104,6 +105,8 @@ export interface ConversationsDeps {
   settled(conversationId: string): void
   /** The attribution journal, for counting each turn's changes; undefined until it opens. */
   turnLedger?: LiveDependencies["turnLedger"]
+  /** The attribution journal, for reviewing and undoing a turn; undefined until it opens. */
+  turnReview?: LiveDependencies["turnReview"]
   /** Whether the host takes new work. */
   admission: Admission
   /** Held while a harness starts, so routine work waits for it. */
@@ -156,6 +159,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
     settled: deps.settled,
     turnLedger: deps.turnLedger,
+    turnReview: deps.turnReview,
+    git: deps.git,
     admission: deps.admission,
     appPath: environment.appRoot,
     root: join(dataRoot, "conversations"),
@@ -189,6 +194,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       message: `Workspace rewind recovery needs attention: ${error instanceof Error ? error.message : String(error)}`,
     })
   )
+  // An undo the last host died in the middle of is finished, or put back, from its saved plan.
+  await live.resumeUndos().catch((error) => hostWarn("turn-undo", "an undo cut short couldn't be read", { error: error instanceof Error ? error.message : String(error) }))
   // The turns the last host's exit cut short go on, if the person chose so, once their sessions reopen.
   live.continueRestarted()
   // Headless runs report to every window, and claim their session in the ledger while they run.
@@ -413,8 +420,11 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-rewind-preview", (id: string, requestId: string, position?: "before" | "after") =>
     live.previewRewind(id, requestId, position)
   )
-  methods.handle("mako:live-turn-changes", (id: string, requestId: string) => live.turnChanges(id, requestId))
-  methods.handle("mako:live-turn-diff", (id: string, requestId: string, path: string) => live.turnDiff(id, requestId, path))
+  methods.handle("mako:live-turn-changes", (id: string, requestId: string, workspace?: string) => live.turnChanges(id, requestId, workspace))
+  methods.handle("mako:live-turn-diff", (id: string, requestId: string, path: string, options?: { only?: boolean }) => live.turnDiff(id, requestId, path, options))
+  methods.handle("mako:live-turn-writers", (id: string, requestId: string, path: string) => live.turnWriters(id, requestId, path))
+  methods.handle("mako:live-turn-undo-preview", (id: string, scope: TurnUndoScope) => live.turnUndoPreview(id, scope))
+  methods.handle("mako:live-turn-undo", (id: string, scope: TurnUndoScope, token: string) => live.turnUndo(id, scope, token))
   methods.handle("mako:live-rewind", async (id: string, input: RewindInput) => {
     const rewound = await live.rewind(id, input)
     telemetry.feature("turn.rewound", live.session(id)?.harness)

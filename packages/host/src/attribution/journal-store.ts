@@ -695,6 +695,11 @@ export class JournalStore {
     return row ? this.activityOf(row) : undefined
   }
 
+  /** Turns, calls and background work still running, on any host of this journal. */
+  openActivity(): StoredActivity[] {
+    return this.statement("SELECT * FROM activity WHERE ended_at IS NULL").all().map((row) => this.activityOf(row))
+  }
+
   activityOfThread(thread: string): StoredActivity[] {
     return this.statement("SELECT * FROM activity WHERE thread=? ORDER BY started_at").all(thread).map((row) => this.activityOf(row))
   }
