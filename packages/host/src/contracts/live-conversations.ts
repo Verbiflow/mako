@@ -58,7 +58,8 @@ export interface LiveStartOptions {
  * Why a turn stopped before the provider finished it. `stopped` is the user's
  * own Stop; the others are nobody's choice — Mako's exit or the provider's
  * own connection — and are what the transcript owns up to, with an offer to
- * continue the turn.
+ * continue the turn. A journal keeps a reason older builds don't know as one
+ * they do, with the exact one beside it (`OLDER_READING`).
  */
 export const INTERRUPTION_REASONS = [
   /** The user pressed Stop. */
@@ -92,8 +93,47 @@ export const INTERRUPTION_REASONS = [
    * in the cloud once it arrives, or here if the handoff couldn't finish.
    */
   "handed-off",
+  /**
+   * Mako couldn't write the conversation's journal (a full disk, a file it
+   * can't write), so it stopped the turn rather than let the agent go on with
+   * nothing saved. The turn so far stands in the provider's session; the
+   * person continues it once Mako can save again, never Mako on its own.
+   */
+  "not-saved",
 ] as const
 export type InterruptionReason = (typeof INTERRUPTION_REASONS)[number]
+
+/**
+ * The reasons every build reads. Builds before `not-saved` parse a saved
+ * reason against these alone and refuse the whole journal for any other, so a
+ * newer reason is never saved as `reason` itself.
+ */
+export const SAVED_REASONS = ["stopped", "host-quit", "host-crashed", "connection-lost", "provider-exited", "signed-out", "handed-off"] as const satisfies readonly InterruptionReason[]
+export type SavedReason = (typeof SAVED_REASONS)[number]
+
+/**
+ * What a build that predates a reason should take it for: the nearest reason
+ * it knows, chosen by the build that writes it. The journal saves that one as
+ * `reason` and the exact one as `exactReason`, which older builds pass over
+ * and newer ones read; a reason added later must say its older reading here.
+ * `not-saved` reads as the person's Stop, which is how every build before it
+ * recorded this stop.
+ */
+export const OLDER_READING = { "not-saved": "stopped" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
+
+function isSavedReason(reason: InterruptionReason): reason is SavedReason {
+  return SAVED_REASONS.some((saved) => saved === reason)
+}
+
+/** A reason as a journal keeps it: one every build reads, with the exact one beside it when that is newer. */
+export function savedReason(reason: InterruptionReason): { reason: SavedReason; exactReason?: InterruptionReason } {
+  return isSavedReason(reason) ? { reason } : { reason: OLDER_READING[reason], exactReason: reason }
+}
+
+/** The reason a journal kept: its exact one when this build knows it, else the one every build reads. */
+export function readReason(reason: InterruptionReason, exactReason: string | undefined): InterruptionReason {
+  return INTERRUPTION_REASONS.find((known) => known === exactReason) ?? reason
+}
 
 export interface Interruption {
   reason: InterruptionReason

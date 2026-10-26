@@ -92,8 +92,12 @@ export function requestRecovery(
         : undefined
 
   const evidence = deliveryKnown(request)
-  // The agent got it and the connection only dropped: its work stands, so it goes on rather than starting over.
-  const carryOn: RecoveryAction | undefined = failed && request.failure === "network" && evidence === "received" ? { kind: "continue", reason: "connection-lost" } : undefined
+  // Mako stopped the turn because it couldn't save the conversation: the agent's work stands in its session.
+  const unsaved = request.status === "interrupted" && request.interruption?.reason === "not-saved"
+  // The agent got it and the connection only dropped, or Mako stopped it unsaved: its work stands, so it goes on rather than starting over.
+  const carryOn: RecoveryAction | undefined = failed && request.failure === "network" && evidence === "received" ? { kind: "continue", reason: "connection-lost" }
+    : unsaved ? { kind: "continue", reason: "not-saved" }
+      : undefined
 
   let primary: RecoveryAction | undefined
   if (reset !== undefined) primary = { kind: "resume-at", at: reset, label: `${evidence === "never" ? "Resume" : "Send a copy"} at ${clockText(reset, now)}` }
@@ -117,10 +121,11 @@ export function requestRecovery(
   const more = candidates.filter((action): action is RecoveryAction => action !== undefined && !sameAction(action, primary))
 
   return {
-    title: reset !== undefined ? "Usage limit reached" : recovery.title,
+    title: reset !== undefined ? "Usage limit reached" : unsaved ? "Mako couldn't save this conversation" : recovery.title,
     description: reset !== undefined ? `resets ${clockText(reset, now)}` : undefined,
     guidance: recoveryGuidance(request, evidence, { ...context, compacted: context.compacted, reset: reset !== undefined }),
-    tone: reset !== undefined || request.failure === "rate-limited" || request.status !== "failed" ? "caution" : "danger",
+    // A conversation Mako couldn't save is a fault of Mako's, not a wait.
+    tone: unsaved ? "danger" : reset !== undefined || request.failure === "rate-limited" || request.status !== "failed" ? "caution" : "danger",
     delivery: recovery.delivery,
     primary,
     more,
@@ -172,6 +177,8 @@ function recoveryGuidance(
       : `Mako can't tell whether ${agent} got it; check the conversation before sending a copy.`
   if (request.status === "interrupted") {
     const reason = request.interruption?.reason ?? "stopped"
+    if (reason === "not-saved")
+      return `Mako stopped ${agent} rather than let it work on with nothing saved; what it did so far stands. Once Mako can save again, often after freeing disk space, continue the turn.`
     return reason === "stopped"
       ? "You stopped it before it was sent, so sending it again is safe."
       : `${turnStopLabel(reason, agent)} before it was sent, so sending it again is safe.`

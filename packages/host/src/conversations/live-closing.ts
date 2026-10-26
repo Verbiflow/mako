@@ -340,7 +340,12 @@ export class LiveClosing {
         if (autoContinueCandidate(resident.snapshot.requests, true)?.id === running.id)
           left.push({ conversationId: resident.snapshot.session.id, requestId: running.id })
       }
-      this.access.flush(resident)
+      // One conversation Mako can't save doesn't keep the others from saving how this host left them.
+      try {
+        this.access.flush(resident)
+      } catch (error) {
+        hostWarn("live", "a conversation couldn't be saved as Mako stopped", { conversation: resident.snapshot.session.id, error: errorMessage({ error }) })
+      }
       // Open questions keep a conversation loaded until the host stops, so its dropped copy's space is reclaimed here.
       resident.journal.close((path) => { void this.access.reclaims.reclaim(path) })
     }

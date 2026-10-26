@@ -8,7 +8,7 @@ import { PromptAttachmentSchema } from "./prompt-attachments.js"
 import { PROVIDER_FAILURE_KINDS } from "./provider-failure.js"
 import { MessageAnchorSchema } from "./message-anchor.js"
 import { ActorSchema } from "./thread-identity.js"
-import { INTERRUPTION_REASONS } from "./live-conversations.js"
+import { INTERRUPTION_REASONS, readReason, type InterruptionReason } from "./live-conversations.js"
 import { OutdatedRestoreSchema, type OutdatedRestore } from "./restore-plan.js"
 export { PromptAttachmentSchema } from "./prompt-attachments.js"
 
@@ -142,6 +142,16 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ kind: z.literal("uncertain"), error: z.string() }),
 ])
+/**
+ * An interruption's reason as a journal keeps it (`savedReason`): one every
+ * build reads, and the exact one beside it, which is read back when this
+ * build knows it and passed over when it doesn't.
+ */
+export const StoredReason = { reason: z.enum(INTERRUPTION_REASONS), exactReason: z.string().optional() }
+export function readStoredReason<Fields extends { reason: InterruptionReason; exactReason?: string }>({ exactReason, ...fields }: Fields): Omit<Fields, "exactReason"> {
+  return { ...fields, reason: readReason(fields.reason, exactReason) }
+}
+
 export const ContextTransferSchema = z.object({
   inputDigest: z.string().optional(),
   input: TransferInputSchema,
@@ -150,9 +160,9 @@ export const ContextTransferSchema = z.object({
   /** The cut-short turn a reconnect carries on, set by the host and never by the caller. */
   continues: z.object({
     requestId: z.string(),
-    reason: z.enum(INTERRUPTION_REASONS),
+    ...StoredReason,
     auto: z.boolean(),
-  }).optional(),
+  }).transform(readStoredReason).optional(),
   createdAt: z.number(),
   state: TransferStateSchema,
 })

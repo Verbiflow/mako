@@ -12,6 +12,8 @@ import {
 import {
   ContextManifestSchema,
   ConversationControlSchema,
+  readStoredReason,
+  StoredReason,
   NativeTotalsSchema,
   PromptAttachmentSchema,
 } from "../contracts/conversation-control.js"
@@ -25,7 +27,7 @@ import { ToolGrowthSchema, changedEntryStart, growTool, type ToolGrowth } from "
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { RequestChangesSchema } from "../contracts/turn-changes.js"
 import { TurnUndoneSchema } from "../contracts/turn-review.js"
-import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, MAX_INTERRUPTED_CALLS, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { ACCOUNT_SWITCH_WAITS, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
 import { PROVIDER_FAILURE_KINDS } from "../contracts/provider-failure.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
 import { ACCESS_TIER_NAMES } from "../contracts/access.js"
@@ -81,6 +83,30 @@ const TurnSpendSchema = z.object({
 /** A turn Mako didn't send, or what was spent after the last; see `HarnessTurn`. */
 export const HarnessTurnSchema = z.object({ id: z.string(), kind: z.enum(["turn", "after"]), spend: TurnSpendSchema })
 
+/**
+ * A request as its row keeps it: a reason older builds don't know saved as the
+ * one they read it as, with the exact one beside it (`OLDER_READING`), so a
+ * journal this build writes still opens in a build before it.
+ */
+function requestRow(request: LiveRequest): string {
+  const { interruption, continues } = request
+  if (!interruption && !continues) return JSON.stringify(request)
+  return JSON.stringify({
+    ...request,
+    ...interruption && { interruption: { ...interruption, ...savedReason(interruption.reason) } },
+    ...continues && { continues: { ...continues, ...savedReason(continues.reason) } },
+  })
+}
+
+/** The conversation's control as the metadata row keeps it: a transfer's continuation saved as a request's is (`requestRow`). */
+function controlRow(control: LiveSnapshot["control"]): LiveSnapshot["control"] {
+  if (!control?.transfers.some((transfer) => transfer.continues)) return control
+  return {
+    ...control,
+    transfers: control.transfers.map((transfer) => transfer.continues ? { ...transfer, continues: { ...transfer.continues, ...savedReason(transfer.continues.reason) } } : transfer),
+  }
+}
+
 export const LiveRequestSchema = z.object({
   actor: ActorSchema.optional(),
   nativeDelivery: PromptDeliverySchema.optional(),
@@ -123,7 +149,7 @@ export const LiveRequestSchema = z.object({
   wake: z.object({ at: z.number(), after: z.string() }).optional(),
   interruption: z
     .object({
-      reason: z.enum(INTERRUPTION_REASONS),
+      ...StoredReason,
       at: z.number(),
       autoContinue: z.object({ at: z.number() }).optional(),
       calls: z
@@ -142,6 +168,7 @@ export const LiveRequestSchema = z.object({
       closed: z.array(z.string()).optional(),
       stopped: z.array(z.string()).optional(),
     })
+    .transform(readStoredReason)
     .optional(),
   failure: z.enum(PROVIDER_FAILURE_KINDS).optional(),
   /** The session's usage reading when this request was dispatched; `spend` is measured from it. */
@@ -155,9 +182,10 @@ export const LiveRequestSchema = z.object({
   continues: z
     .object({
       requestId: z.string(),
-      reason: z.enum(INTERRUPTION_REASONS),
+      ...StoredReason,
       auto: z.boolean(),
     })
+    .transform(readStoredReason)
     .optional(),
   goal: z.object({ step: z.enum(["set", "pause", "resume", "clear", "continue"]), turn: z.number().int().positive().optional() }).optional(),
   review: ReviewTargetSchema.optional(),
@@ -382,6 +410,17 @@ export function journalSummary(metadata: string) {
 }
 
 /**
+ * A commit the journal couldn't make: the conversation isn't saved (`storageFailed`). Anything else that goes wrong
+ * taking in what a provider said is not this, and doesn't stop its turn.
+ */
+export class JournalWriteError extends Error {
+  constructor(cause: unknown) {
+    super(errorMessage({ error: cause }), { cause })
+    this.name = "JournalWriteError"
+  }
+}
+
+/**
  * One independent journal per conversation. Only changed blocks and requests
  * are written.
  *
@@ -545,7 +584,7 @@ export class LiveJournal {
       this.appendLog(events, "journal")
       this.db.exec("COMMIT")
     } catch (error) {
-      this.db.exec("ROLLBACK")
+      if (this.db.isTransaction) this.db.exec("ROLLBACK")
       this.log = undefined
       throw error
     }
@@ -564,7 +603,11 @@ export class LiveJournal {
 
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
   commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
-    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      this.db.exec("BEGIN IMMEDIATE")
+    } catch (error) {
+      throw new JournalWriteError(error)
+    }
     try {
       const { blocks, requests, harnessTurns, ...metadata } = next
       const { configOptions, ...session } = metadata.session
@@ -576,7 +619,7 @@ export class LiveJournal {
       if (!previous || writeOptions || this.messageBase || metadataChanged(previous, next))
         this.db
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
-          .run(JSON.stringify({ ...metadata, session, base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined, spentThrough: undefined }))
+          .run(JSON.stringify({ ...metadata, session, control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, historyFailure: undefined, spentThrough: undefined }))
       this.db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.
@@ -648,7 +691,7 @@ export class LiveJournal {
         )
         for (const request of requests)
           if (request !== oldRequests.get(request.id))
-            upsertRequest.run(request.id, JSON.stringify(request))
+            upsertRequest.run(request.id, requestRow(request))
         const kept = new Set(requests.map((request) => request.id))
         if (!previous || previous.requests.some((request) => !kept.has(request.id)))
           this.db.prepare("DELETE FROM requests WHERE id NOT IN (SELECT value FROM json_each(?))").run(JSON.stringify([...kept]))
@@ -673,9 +716,10 @@ export class LiveJournal {
         else this.appends.delete(index)
       }
     } catch (error) {
-      this.db.exec("ROLLBACK")
+      // SQLite rolls a full disk, an I/O error or a busy lock back itself, and a ROLLBACK then would throw over why.
+      if (this.db.isTransaction) this.db.exec("ROLLBACK")
       this.log = undefined
-      throw error
+      throw new JournalWriteError(error)
     }
   }
 

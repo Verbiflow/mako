@@ -3,7 +3,7 @@ import { PROVIDER_FAILURE_KINDS, describeProviderFailure } from "@mako/host/cont
 import { limitResetAt } from "@mako/host/contracts/account-usage"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import { composerResume, recoveryLabel, requestRecovery, usageLimitReset } from "../src/state/request-recovery"
-import { recoveriesByPlace, turnStops } from "../src/state/prompt-delivery"
+import { recoveriesByPlace, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
 import { orderNotices, type ComposerNotice } from "../src/extend/notices"
 
 /**
@@ -123,6 +123,25 @@ const places = recoveriesByPlace({ blocks, requests })
 assert.deepEqual([...places.onTurns.keys()], ["on-turn"])
 assert.deepEqual(places.apart.map((request) => request.id), ["new-apart", "quit-apart"], "older ones are in the saved messages list")
 
+// A turn Mako stopped because it couldn't save the conversation: its own row, never the person's "Stopped".
+const unsaved: LiveRequest = {
+  ...failed(undefined, "accepted"), id: "unsaved", status: "interrupted", failure: undefined,
+  interruption: { reason: "not-saved", at: 1 }, error: "database or disk is full",
+}
+const unsavedRow = requestRecovery(unsaved, context)
+assert.equal(unsavedRow.title, "Mako couldn't save this conversation")
+assert.equal(unsavedRow.guidance, "Mako stopped Claude Code rather than let it work on with nothing saved; what it did so far stands. Once Mako can save again, often after freeing disk space, continue the turn.")
+assert.equal(unsavedRow.tone, "danger", "Mako's fault, not a wait")
+assert.deepEqual(unsavedRow.primary, { kind: "continue", reason: "not-saved" })
+assert.deepEqual(unsavedRow.more.map((action) => action.kind), ["restore", "copy"])
+assert.equal(turnStopLabel("not-saved", "Claude Code"), "Stopped when Mako couldn't save")
+assert.notEqual(turnStopLabel("not-saved", "Claude Code"), turnStopLabel("stopped", "Claude Code"))
+// SAFETY: a reason no build knows yet, as a newer host relays it; the label must still say something.
+assert.equal(turnStopLabel("reason-from-a-newer-host" as never, "Claude Code"), "Interrupted", "a reason this build doesn't know still says something")
+const unsavedPlaces = recoveriesByPlace({ blocks: [{ type: "user" as const, requestId: "unsaved", text: "Make the page" }], requests: [unsaved, { ...stopped, id: "yours" }] })
+assert.deepEqual([...unsavedPlaces.onTurns.keys()], ["unsaved"], "it ends on its failure row; a Stop of the person's keeps its footer")
+assert.deepEqual(composerResume([unsaved], turnStops([unsaved], false), context), { kind: "continue", reason: "not-saved", label: "Continue turn" })
+
 // The notice stack's order: urgent first, then work under way, then the rest; registration order breaks ties.
 const notice = (id: string, tone: ComposerNotice["tone"], priority?: number): ComposerNotice => ({ id, tone, title: id, ...priority !== undefined && { priority } })
 assert.deepEqual(orderNotices([
@@ -133,4 +152,4 @@ assert.deepEqual(orderNotices([
   { notice: notice("pinned", "info", -1), order: 0 },
 ]).map((entry) => entry.notice.id), ["pinned", "failure", "late-caution", "moving", "info"])
 
-console.log("PASS: failure recovery by kind and delivery evidence, usage-limit resets and timed sends, the composer's resume, where each failure is drawn, and the notice stack's order")
+console.log("PASS: failure recovery by kind and delivery evidence, usage-limit resets and timed sends, the composer's resume, where each failure is drawn, a turn Mako stopped unsaved, and the notice stack's order")

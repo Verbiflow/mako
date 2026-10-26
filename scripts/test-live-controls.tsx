@@ -9,7 +9,8 @@ import type { SentProse } from "../src/lib/prompt-markdown"
 import { attachmentReference } from "../src/lib/attachment-references"
 import { writeDraft } from "../src/lib/context/draft"
 import { RetainedRequests } from "../src/components/viewer/acp-panel"
-import { continueTurnPrompt, makoPrompts, recoverableRequests, recoveriesByPlace } from "../src/state/prompt-delivery"
+import { continueTurnPrompt, makoPrompts, recoverableRequests, recoveriesByPlace, turnStops } from "../src/state/prompt-delivery"
+import { FailedRequestsContext } from "../src/components/transcript/failed-requests"
 import { FailureRow } from "../src/components/transcript/failure-row"
 import { requestRecovery } from "../src/state/request-recovery"
 import { agentActivity, startLabel } from "../src/state/agent-activity"
@@ -548,6 +549,28 @@ assert.match(quitMarkup, /<button[^>]*>[^]*?Continue turn/)
 const crashedMarkup = renderToStaticMarkup(<Exchange interrupted={{ reason: "host-crashed", continuable: false, automatic: false }} exchange={stoppedExchange} />)
 assert.match(crashedMarkup, /Interrupted when Mako closed unexpectedly/)
 assert.doesNotMatch(crashedMarkup, /Continue turn/, "an older interrupted turn is described, not offered")
+// A turn Mako stopped because it couldn't save the conversation ends on its failure row, live and reopened alike:
+// what happened, that the agent's work stands, Continue turn, and what failed under Details. Never "Stopped".
+const unsavedRequest: LiveRequest = { id: "stopped", text: "Keep this original question", attachments: [], status: "interrupted", interruption: { reason: "not-saved", at: 1 }, error: "database or disk is full" }
+conversation.requests = [unsavedRequest]
+publish()
+const unsavedPlaces = recoveriesByPlace(conversation)
+assert.deepEqual([...unsavedPlaces.onTurns.keys()], ["stopped"])
+const unsavedMarkup = renderToStaticMarkup(
+  <TranscriptSourceContext value={{ liveId: conversation.key }}>
+    <FailedRequestsContext value={unsavedPlaces.onTurns}>
+      <Exchange interrupted={turnStops([unsavedRequest], false).get("stopped")} exchange={stoppedExchange} />
+    </FailedRequestsContext>
+  </TranscriptSourceContext>
+)
+assert.match(unsavedMarkup, /data-failure-row="stopped"[^>]*data-failure-tone="danger"/)
+assert.match(unsavedMarkup, /Mako couldn&#x27;t save this conversation/)
+assert.match(unsavedMarkup, /Mako stopped Claude Code rather than let it work on with nothing saved; what it did so far stands\. Once Mako can save again, often after freeing disk space, continue the turn\./)
+assert.match(unsavedMarkup, /data-recovery-primary="continue"[^>]*>Continue turn</)
+assert.doesNotMatch(unsavedMarkup, /data-turn-stopped/, "the footer doesn't say it again")
+assert.doesNotMatch(unsavedMarkup, />Stopped</, "never the person's Stop")
+conversation.requests = []
+publish()
 // A turn the provider ended on its own dropped connection names that
 // provider's connection and offers to go on, since the work so far stands.
 const droppedMarkup = renderToStaticMarkup(

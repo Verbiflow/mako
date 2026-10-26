@@ -56,7 +56,7 @@ import { LiveForks } from "./live-forks.js"
 import { LiveGoals } from "./live-goals.js"
 import { LiveSideQuestions } from "./live-side-questions.js"
 import { LiveHibernation } from "./live-hibernation.js"
-import { LiveRequestSchema } from "./live-journal.js"
+import { JournalWriteError, LiveRequestSchema } from "./live-journal.js"
 import { JournalReclaims } from "./journal-reclaim.js"
 import { LiveLaunches, nativeStart } from "./live-launches.js"
 import { syncMemory } from "./live-ledger.js"
@@ -74,6 +74,8 @@ import { LiveTransfers } from "./live-transfers.js"
 /** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
 const SETTLE_AFTER_START_MS = 60_000
 const SETTLE_EVERY_MS = 15 * 60_000
+/** How often Mako tries again to write a conversation it couldn't save (`saveAgain`): soon after space comes back. */
+const SAVE_AGAIN_MS = 5_000
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
@@ -166,6 +168,7 @@ export class LiveConversations {
       add: (resident) => this.records.add(resident),
       control: conversationControl,
       flush: (resident) => this.flush(resident),
+      keep: (resident) => this.keep(resident),
       schedule: (resident) => this.schedule(resident),
       storageFailed: (resident, boundary) => this.storageFailed(resident, boundary),
       stamp: (snapshot) => this.stamp(snapshot),
@@ -222,7 +225,7 @@ export class LiveConversations {
       goalObserved: (resident, goal) => this.goals.observe(resident, goal),
       goalSpent: (resident) => this.goals.spent(resident),
     }
-    this.counts = new LiveTurnChanges({ ledger: () => dependencies.turnLedger?.(), flush: (resident) => access.flush(resident) })
+    this.counts = new LiveTurnChanges({ ledger: () => dependencies.turnLedger?.(), flush: (resident) => access.keep(resident) })
     this.checkpoints = new LiveCheckpoints(access, (id, input) => this.fork(id, input), this.counts)
     this.turnReview = new LiveTurnReview({
       git: dependencies.git,
@@ -1032,9 +1035,12 @@ export class LiveConversations {
     resident.snapshot = { ...snapshot, requests: snapshot.requests.map((request) => request.status === "queued" && request.id !== requestId ? { ...request, status: "held" } : request) }
     try { this.flush(resident) } catch (error) { resident.snapshot = snapshot; return Promise.reject(error) }
     const opening = resident.opening
-    resident.stopping = requestId
-    resident.stoppingFor = reason
-    resident.stoppingWork = stopped.length ? stopped : undefined
+    // A turn Mako already stopped because it couldn't save it stays Mako's, whoever presses Stop after.
+    if (resident.stopping !== requestId || resident.stoppingFor !== "not-saved") {
+      resident.stopping = requestId
+      resident.stoppingFor = reason
+      resident.stoppingWork = stopped.length ? stopped : undefined
+    }
     const result = this.cancelRequest(id, requestId, why).then(async () => { if (opening) await this.close(id); return true }).catch((error) => { this.stops.delete(id); throw error })
     this.stops.set(id, { requestId, result })
     return result
@@ -1232,6 +1238,16 @@ export class LiveConversations {
     }, 16)
   }
 
+  /** See `LiveAccess.keep`. */
+  private keep(resident: Resident): void {
+    try {
+      this.flush(resident)
+    } catch (error) {
+      if (!(error instanceof JournalWriteError)) throw error
+      this.storageFailed(resident, { error })
+    }
+  }
+
   /** Commits what changed to the journal and tells every window, in one batch. */
   private flush(resident: Resident): void {
     if (this.records.isReleased(resident)) {
@@ -1344,15 +1360,47 @@ export class LiveConversations {
     return driver.cancel(conversationControl(resident).activeBindingId)
   }
 
+  /**
+   * The conversation's journal couldn't be written, so its turn is stopped rather than left to go on with nothing
+   * saved. The turn it stops settles as Mako's (`not-saved`) with what failed as its error, whoever's Stop follows;
+   * what isn't saved stays in memory, and the next commit that works writes it.
+   */
   private storageFailed(resident: Resident, boundary: FailureBoundary): void {
     if (resident.storageFault) return
     resident.storageFault = true
+    const error = errorMessage(boundary)
     this.dependencies.emit({
       type: "notice",
       level: "error",
-      message: `The conversation could not be saved. The provider is being stopped; buffered output is retained in memory. ${errorMessage(boundary)}`,
+      message: `Mako couldn't save this conversation, so it stopped the agent's turn. What isn't saved yet is kept until Mako can write it. ${error}`,
     })
-    void this.stopProvider(resident, "not-saved", errorMessage(boundary)).catch(() => {})
+    const requestId = resident.snapshot.requests.find((request) => request.status === "dispatching")?.id
+    if (resident.driver && requestId && resident.stopping !== requestId) {
+      resident.stopping = requestId
+      resident.stoppingFor = "not-saved"
+      resident.stoppingError = error
+      resident.stoppingWork = undefined
+    }
+    void this.stopProvider(resident, "not-saved", error).catch(() => {})
+    this.saveAgain(resident)
+  }
+
+  /**
+   * Tries an unsaved conversation's journal again until a commit works, which writes what memory kept and tells every
+   * window, the stopped turn included. Nothing else would: the stopped provider says nothing more, and space coming
+   * back on a disk is no event Mako hears. It ends once a commit works, or the conversation leaves this host.
+   */
+  private saveAgain(resident: Resident): void {
+    resident.savingAgain = setTimeout(() => {
+      resident.savingAgain = undefined
+      if (!resident.storageFault || this.records.get(resident.snapshot.session.id) !== resident) return
+      try {
+        this.flush(resident)
+      } catch {
+        this.saveAgain(resident)
+      }
+    }, this.dependencies.saveAgainMs ?? SAVE_AGAIN_MS)
+    resident.savingAgain.unref?.()
   }
 }
 
