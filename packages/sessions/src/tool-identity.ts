@@ -346,8 +346,22 @@ const MCP_FORMS = {
  * (`HarnessVocabulary.mcp`), or Mako's own `mcp__mako__app_start`.
  */
 function mcpName(name: string, forms: readonly McpNaming[]): McpName | undefined {
-  const match = /^mcp__(.+?)__(.+)$/.exec(name) ?? forms.reduce<RegExpExecArray | null>((found, form) => found ?? MCP_FORMS[form].exec(name), null)
+  const own = makoMcpName(name)
+  if (own) return own
+  const match = forms.reduce<RegExpExecArray | null>((found, form) => found ?? MCP_FORMS[form].exec(name), null)
   return match ? { server: match[1]!, tool: match[2]! } : undefined
+}
+
+/**
+ * `mcp__<server>__<tool>`: the server ends at the first `__` after one
+ * character of it, and both parts are on one line. Read by position, not by
+ * a lazy pattern, so a long name of repeated `__` costs one pass.
+ */
+function makoMcpName(name: string): McpName | undefined {
+  if (!name.startsWith("mcp__") || /[\n\r\u2028\u2029]/.test(name)) return undefined
+  const split = name.indexOf("__", "mcp__".length + 1)
+  if (split < 0 || split + 2 >= name.length) return undefined
+  return { server: name.slice("mcp__".length, split), tool: name.slice(split + 2) }
 }
 
 function mcpForms(harness: string | undefined): readonly McpNaming[] {
