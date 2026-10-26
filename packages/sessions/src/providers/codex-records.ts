@@ -29,6 +29,7 @@ import {
   codexGeneratedImage,
   codexGoalPromptStanding,
   codexImageFile,
+  codexLocalPath,
   codexPatchInput,
   codexPatchText,
   codexPresentation,
@@ -437,7 +438,7 @@ const CollabItem = z.object({
   model: z.string().nullish(),
   agents_states: z.record(z.string(), AgentState.nullable()).catch({}),
 })
-const ImageViewItem = z.object({ id: z.string(), path: z.string() })
+const ImageViewItem = z.object({ id: z.string(), path: z.string().transform(codexLocalPath) })
 /** An agent message's parts when it is a new task: the header, then the task's text. */
 const NewTask = z.array(z.object({ type: z.string(), text: z.string().optional(), encrypted_content: z.string().optional() }).loose())
   .transform((parts, context) => {

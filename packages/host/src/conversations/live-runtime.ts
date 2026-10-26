@@ -55,6 +55,12 @@ export interface ProviderConnection {
   session: LiveSessionState
 }
 
+/**
+ * Why Mako stops a provider's turn, as the host log says it: the person's Stop, a handoff of the Thread to another
+ * machine, a goal at its token budget, or a conversation Mako can't save.
+ */
+export type ProviderStop = "person" | "handed-off" | "goal-budget" | "not-saved"
+
 export interface Resident {
   closing?: boolean
   closeOperation?: Promise<void>

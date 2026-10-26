@@ -66,7 +66,7 @@ import { LiveRecords } from "./live-records.js"
 import { LiveRelocations } from "./live-relocations.js"
 import { LiveRestarts } from "./live-restarts.js"
 import { ContextBundles } from "./live-context.js"
-import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident } from "./live-runtime.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { LiveTransfers } from "./live-transfers.js"
@@ -265,7 +265,7 @@ export class LiveConversations {
     this.autoContinue = new LiveAutoContinue(access)
     this.goals = new LiveGoals(access, {
       submit: (id, message) => this.submit(id, randomUUID(), message.text, [], message.tuning, undefined, message.displayText, message.actor, { goal: message.goal, verbatim: message.verbatim }),
-      stop: (id) => this.cancelTurn(id),
+      stop: (id) => this.cancelTurn(id, "goal-budget"),
     })
     this.sideQuestions = new LiveSideQuestions(access)
     const { actions, approvals, questions, checkpoints, assets, transfers, records } = this
@@ -912,7 +912,7 @@ export class LiveConversations {
     if (!resident || !stopped.length) return undefined
     // The turn that left it running: the newest that ran, which the continuation follows on from.
     const left = [...resident.snapshot.requests].reverse().find((request) => request.status !== "canceled" && request.status !== "queued" && request.status !== "held")
-    await this.cancel(id)
+    await this.cancel(id, "handed-off")
     return left ? { requestId: left.id, stopped } : undefined
   }
 
@@ -1021,9 +1021,9 @@ export class LiveConversations {
   /**
    * Stops the running request. `handed-off`: Mako stops it to hand the Thread to another machine, which continues it
    * (`continueTurn`); its queued messages are held, to go with it, and the interruption keeps the background work
-   * that stops with it (`stopped`).
+   * that stops with it (`stopped`). `why`: who asked, as the host log says it (`stopProvider`).
    */
-  stopRequest(id: string, requestId: string, reason: "stopped" | "handed-off" = "stopped", stopped: string[] = []): Promise<boolean> {
+  stopRequest(id: string, requestId: string, reason: "stopped" | "handed-off" = "stopped", stopped: string[] = [], why: ProviderStop = reason === "handed-off" ? "handed-off" : "person"): Promise<boolean> {
     const previous = this.stops.get(id)
     if (previous?.requestId === requestId) return previous.result
     if (this.activeRequest(id) !== requestId) return Promise.resolve(false)
@@ -1035,19 +1035,19 @@ export class LiveConversations {
     resident.stopping = requestId
     resident.stoppingFor = reason
     resident.stoppingWork = stopped.length ? stopped : undefined
-    const result = this.cancelRequest(id, requestId).then(async () => { if (opening) await this.close(id); return true }).catch((error) => { this.stops.delete(id); throw error })
+    const result = this.cancelRequest(id, requestId, why).then(async () => { if (opening) await this.close(id); return true }).catch((error) => { this.stops.delete(id); throw error })
     this.stops.set(id, { requestId, result })
     return result
   }
 
-  async cancelRequest(id: string, requestId: string): Promise<void> {
+  async cancelRequest(id: string, requestId: string, why: ProviderStop = "person"): Promise<void> {
     const resident = this.records.require(id)
     if (this.checkpoints.cancelBeforeDispatch(resident, requestId)) return
     const request = resident.snapshot.requests.find(
       (request) => request.id === requestId
     )
     if (request?.status === "dispatching") {
-      await this.cancelDriver(resident)
+      await this.cancelDriver(resident, why)
       return
     }
     const pending = this.transfers.pending(resident)
@@ -1082,14 +1082,14 @@ export class LiveConversations {
    * asked is then stopped, not lost: a process Stop closes can't report its
    * tasks' ends, and its disconnect alone would read as "status unavailable".
    */
-  private async cancelDriver(resident: Resident): Promise<void> {
+  private async cancelDriver(resident: Resident, why: ProviderStop): Promise<void> {
     const binding = conversationControl(resident).activeBindingId
     const driver = resident.driver
     if (!driver) return
     const running = new Set((resident.snapshot.nativeAgents?.agents ?? [])
       .filter((agent) => agent.bindingId === binding && agent.background && isActiveNativeAgent(agent))
       .map((agent) => agent.nativeId))
-    await driver.cancel(binding)
+    await this.stopProvider(resident, why)
     if (driver.backgroundStop.kind !== "ends-on-stop" || !running.size || this.records.isReleased(resident)) return
     const roster = resident.snapshot.nativeAgents
     if (!roster) return
@@ -1123,10 +1123,11 @@ export class LiveConversations {
     return true
   }
 
-  async cancel(id: string): Promise<void> {
+  /** Stop: the person's (`mako:live-cancel`) unless `why` names Mako's own reason. */
+  async cancel(id: string, why: ProviderStop = "person"): Promise<void> {
     const loaded = this.records.get(id)
     const pauseGoal = loaded ? await this.goals.stopping(loaded) : undefined
-    await this.cancelTurn(id)
+    await this.cancelTurn(id, why)
     await pauseGoal?.()
   }
 
@@ -1160,9 +1161,9 @@ export class LiveConversations {
     return this.sideQuestions.command(id, command)
   }
 
-  private async cancelTurn(id: string): Promise<void> {
+  private async cancelTurn(id: string, why: ProviderStop): Promise<void> {
     const requestId = this.activeRequest(id)
-    if (requestId) { await this.stopRequest(id, requestId); return }
+    if (requestId) { await this.stopRequest(id, requestId, why === "handed-off" ? "handed-off" : "stopped", [], why); return }
     const resident = this.records.require(id)
     // Stop on a request whose process has gone puts it away: there is no turn left to stop.
     if (resident.snapshot.permissions.some((permission) => permission.gone)) {
@@ -1178,7 +1179,7 @@ export class LiveConversations {
       return
     }
     if (this.checkpoints.cancelBeforeDispatch(resident)) return
-    await this.cancelDriver(resident)
+    await this.cancelDriver(resident, why)
   }
 
   async setMode(id: string, modeId: string): Promise<void> {
@@ -1321,6 +1322,28 @@ export class LiveConversations {
       void this.sources.checkpointIdle(resident)
   }
 
+  /**
+   * Every Stop Mako sends a provider goes through here, said in the host log with why, so a turn a harness reports
+   * interrupted is never left unexplained: the person's Stop, a handoff, a goal at its budget, or a conversation
+   * Mako can't save.
+   */
+  private stopProvider(resident: Resident, why: ProviderStop, error?: string): Promise<void> {
+    const driver = resident.driver
+    if (!driver) return Promise.resolve()
+    const id = resident.snapshot.session.id
+    const request = this.activeRequest(id)
+    const fields = {
+      conversation: id,
+      provider: activeBinding(resident)?.provider ?? resident.snapshot.session.harness,
+      why,
+      ...(request && { request }),
+      ...(error !== undefined && { error }),
+    }
+    if (why === "not-saved") hostWarn("live", "Mako stops the provider's turn", fields)
+    else hostLog("live", "Mako stops the provider's turn", fields)
+    return driver.cancel(conversationControl(resident).activeBindingId)
+  }
+
   private storageFailed(resident: Resident, boundary: FailureBoundary): void {
     if (resident.storageFault) return
     resident.storageFault = true
@@ -1329,9 +1352,7 @@ export class LiveConversations {
       level: "error",
       message: `The conversation could not be saved. The provider is being stopped; buffered output is retained in memory. ${errorMessage(boundary)}`,
     })
-    void resident.driver
-      ?.cancel(conversationControl(resident).activeBindingId)
-      .catch(() => {})
+    void this.stopProvider(resident, "not-saved", errorMessage(boundary)).catch(() => {})
   }
 }
 

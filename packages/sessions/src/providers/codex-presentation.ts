@@ -1,6 +1,7 @@
 import { type AttachmentContent } from "../content.js"
 import type { GoalStanding } from "../provider-turn.js"
 import { extname, basename } from "node:path"
+import { fileURLToPath } from "node:url"
 import { z } from "zod"
 import { userTextFrom } from "../format.js"
 import {
@@ -205,8 +206,20 @@ function readableError(text: string): string {
   }
 }
 
-/** An image file Codex names by path, as an attachment that reads it from disk. */
-export function codexImageFile(path: string): AttachmentContent {
+/**
+ * A path Codex names, as a path on this machine: Codex 0.159.3 and 0.164.0 write the image a code cell's
+ * `view_image` viewed as a `file://` URL in its rollout's `ImageView`, and some app-server items name images
+ * the same way. Anything else is returned as it is.
+ */
+export function codexLocalPath(path: string): string {
+  if (!path.startsWith("file:")) return path
+  const url = URL.parse(path)
+  return url && (!url.hostname || url.hostname === "localhost") ? fileURLToPath(url) : path
+}
+
+/** An image file Codex names by path or `file://` URL, as an attachment that reads it from disk. */
+export function codexImageFile(named: string): AttachmentContent {
+  const path = codexLocalPath(named)
   const extension = extname(path).slice(1).toLowerCase()
   return {
     type: "attachment",

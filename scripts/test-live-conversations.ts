@@ -10,6 +10,8 @@ import { z } from "zod"
 import { randomUUID } from "node:crypto"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
+import { LiveAssets } from "@mako/host/conversations/live-assets"
+import { followHostLog, type HostLogLine } from "@mako/host/base/host-log"
 import { SessionMemory } from "@mako/host/threads/session-memory"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
@@ -78,6 +80,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
   const prompts: ReturnType<typeof deferred<void>>[] = []
   const events: HostEvent[] = []
   let closed = 0
+  let cancels = 0
   const driver: ProviderLiveDriver = {
     ...fixtureCapabilities,
     resume: fixtureResume(),
@@ -94,7 +97,9 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
       await pending.promise
     },
     permission: async () => {},
-    cancel: async () => {},
+    cancel: async () => {
+      cancels++
+    },
     close: () => {
       closed++
     },
@@ -121,6 +126,7 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
     owner,
     dependencies,
     closed: () => closed,
+    cancels: () => cancels,
     cleanup: () => {
       owner.stop()
       rmSync(root, { recursive: true, force: true })
@@ -1412,6 +1418,59 @@ async function failureIsolationAndAssets() {
   }
 }
 
+/**
+ * Mako stops a provider's turn only for a reason it says in the host log. A file an agent names that Mako can't read
+ * is no such reason: a Codex code cell's `view_image` once named its image by a `file://` URL, the copy failed, the
+ * failure read as a conversation Mako couldn't save, and Mako sent Codex `turn/interrupt` with nothing in the log.
+ */
+async function makoStopsAreSaid() {
+  const f = fixture()
+  const said: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => { if (line.message === "Mako stops the provider's turn") said.push(line) })
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    const request = randomUUID()
+    f.owner.submit(f.id, request, "make the page and its screenshot")
+    await waitFor(() => f.sent.length === 1, "the prompt was not sent")
+    f.owner.observe({ type: "live-session", session: { ...f.state, status: "running" } })
+    const gone = join(f.root, "gone", "tide-report.png")
+    f.owner.observe({
+      type: "live-update",
+      id: f.id,
+      update: {
+        kind: "tool", id: "view-1", title: "View tide-report.png", name: "view_image", status: "completed", output: "",
+        attachments: [{ type: "attachment", name: "tide-report.png", mimeType: "image/png", source: { kind: "file", path: gone } }],
+      },
+    })
+    await tick()
+    assert.equal(f.cancels(), 0, "a file the agent named that can't be read doesn't stop its turn")
+    assert.equal(f.owner.snapshot(f.id)?.session.status, "running")
+    assert.ok(!f.events.some((event) => event.type === "notice" && event.message.includes("could not be saved")))
+    const source = f.owner.snapshot(f.id)?.blocks.find((block) => block.type === "tool")?.attachments?.[0]?.source
+    assert.equal(source?.kind, "unavailable", "the attachment says it can't be read")
+    assert.match(source?.kind === "unavailable" ? source.reason : "", /tide-report\.png could not be read \(ENOENT\)/)
+    assert.equal(said.length, 0, "nothing was stopped")
+
+    // A conversation Mako can't save does stop the turn, and says so.
+    const fault = mock.method(LiveAssets.prototype, "prepare", () => { throw new Error("disk unavailable") })
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool", id: "read-1", title: "Read notes.md", status: "completed", output: "notes" } })
+    fault.mock.restore()
+    await waitFor(() => f.cancels() === 1, "the unsaved conversation's turn was not stopped")
+    assert.deepEqual(said.map((line) => [line.level, line.fields?.why, line.fields?.request, line.fields?.error]), [["warn", "not-saved", request, "disk unavailable"]])
+
+    // The person's Stop is said as theirs.
+    await f.owner.cancel(f.id)
+    assert.equal(f.cancels(), 2)
+    assert.deepEqual(said.slice(1).map((line) => [line.level, line.fields?.why, line.fields?.provider, line.fields?.request]), [["info", "person", "test-provider", request]])
+  } finally {
+    stopHearing()
+    f.cleanup()
+  }
+  console.log("PASS: Mako stops a turn only for a reason its log names; a file the agent named that can't be read is an unavailable attachment, not a stop")
+}
+
 async function quietTurnsCarryLastActivity() {
   const f = fixture()
   const clock = mock.method(Date, "now", () => 1_000)
@@ -2325,6 +2384,7 @@ await coalescedToolBursts()
 await quietTurnsCarryLastActivity()
 await nativeActivityLastsItsTurn()
 await failureIsolationAndAssets()
+await makoStopsAreSaid()
 
 await queuedSettings()
 await acceptanceAndRaces()

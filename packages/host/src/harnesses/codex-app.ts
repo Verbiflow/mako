@@ -26,7 +26,7 @@ import { codexGoalObservation } from "./codex/goals.js"
 import { reviewDisplayText, type ReviewTarget } from "../contracts/live-reviews.js"
 import type { ReviewTarget as CodexReviewTarget } from "./codex/generated/v2/ReviewTarget.js"
 import { CodexSideQuestions } from "./codex/side-questions.js"
-import { hostWarn } from "../base/host-log.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./provider-process.js"
 import { existsSync } from "node:fs"
@@ -534,8 +534,11 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         // Capture and terminate foreground terminals while the native turn still
         // owns their IDs. Interrupt can discard that ownership before cleanup.
         await cleanBackground(live)
-        if (turnId && live.currentTurnId === turnId)
+        if (turnId && live.currentTurnId === turnId) {
+          // Codex's own log says only "interrupt received"; this names the turn Mako's Stop interrupts.
+          hostLog("codex", "interrupt the turn", { conversation: id, turn: turnId })
           await rpcRequest(live, "turn/interrupt", { threadId, turnId })
+        }
         await settled
         await Promise.all([cleanBackground(live), endSubagents(live)])
         await drainStoppedCommands(live)
