@@ -11,7 +11,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import type { Entry } from "@mako/sessions/entries"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { identifyTool } from "@mako/sessions/tool-identity"
-import { callMedia, MEDIA_META, mediaDetails, mediaKind, SHOW_MEDIA_LINE, turnMedia } from "@mako/sessions/turn-media"
+import { callMedia, MEDIA_META, mediaDetails, mediaFacts, mediaKind, SHOW_MEDIA_LINE, turnMedia } from "@mako/sessions/turn-media"
 import { ClaudeProjection } from "../packages/sessions/src/claude-projection.ts"
 import { ClaudeProvider } from "../packages/sessions/src/providers/claude.ts"
 import { CodexRecords } from "../packages/sessions/src/providers/codex-records.ts"
@@ -21,7 +21,9 @@ import { producedMedia } from "../packages/control/src/program/runtime.ts"
 import { registerShowTool, TurnMedia } from "../packages/host/src/media/index.ts"
 import { entriesToMessages } from "../src/lib/entry-messages.ts"
 import { exchangeMedia, responseSections, toExchanges } from "../src/lib/exchanges.ts"
-import { proseMediaSpellings, shelfMedia } from "../src/lib/media-shelf.ts"
+import { changedMedia, proseMediaSpellings, shelfMedia } from "../src/lib/media-shelf.ts"
+import { TURN_CHANGES_VERSION, type TurnChanges } from "@mako/host/contracts/turn-changes"
+import { createHash } from "node:crypto"
 import { turnFolds } from "../src/lib/turn-fold.ts"
 import { foldTools } from "../src/lib/tools.ts"
 
@@ -78,6 +80,20 @@ assert.equal(merged[0]!.evidence, "attached", "with the bytes the read returned"
 assert.equal(merged[0]!.attachment, image)
 const screenshotTool: Extract<Entry, { type: "tool" }> = { type: "tool", id: "pw", name: "mcp__playwright__browser_take_screenshot", status: "completed", attachments: [image] }
 assert.deepEqual(callMedia(screenshotTool, identifyTool({ harness: "claude", name: screenshotTool.name })).map((media) => [media.evidence, media.key]), [["attached", "pw#0"]])
+
+// A call too large to send whole is previewed with what `callMedia` reads: the same files, without its bulk.
+const script = "cat > report.html <<'EOF'\n" + "<p>row</p>\n".repeat(400) + "EOF\npython3 draw.py && chrome --screenshot=/repo/shot.png file:///repo/report.html"
+const big: Extract<Entry, { type: "tool" }> = {
+  type: "tool", id: "big", name: "Bash", status: "completed", at: 1_000, endedAt: 2_000, input: JSON.stringify({ command: script }),
+  effects: [{ kind: "command", command: script, cwd: "/repo", named: ["/repo/report.html", "/repo/shot.png"] }, { kind: "create", path: "/repo/report.html", content: "<p>row</p>\n".repeat(400) }],
+  details: [{ type: "media", via: "produced", files: [{ path: "/repo/clip.mp4" }] }],
+  attachments: [{ ...image, source: { kind: "inline" as const, data: "A".repeat(10_000) } }, { type: "attachment" as const, name: "home.png", mimeType: "image/png", source: { kind: "file" as const, path: "/repo/home.png" } }],
+}
+const facts = mediaFacts(big, 2048)
+assert.ok(JSON.stringify(facts).length < 2_048 * 2, "the facts are small")
+assert.equal(facts.attachmentsOmitted, 1, "the inline bytes past the preview are left for opening the call")
+assert.deepEqual(callMedia({ ...big, ...facts }).map((media) => [media.evidence, media.path ?? media.key]), callMedia(big).filter((media) => media.attachment?.source.kind !== "inline").map((media) => [media.evidence, media.path ?? media.key]),
+  "the preview finds what the whole call made but the bytes it leaves out")
 
 // `show` without `_meta`, named and wrapped as each harness does.
 const showInput = { files: [{ path: "/tmp/shots/home.png", caption: "Home after sign-in" }, { path: "/tmp/flow.mp4" }], title: "Sign-in flow" }
@@ -211,6 +227,37 @@ const [byTime, byDigest] = await media.confirm([
 assert.ok(byTime?.kind === "kept" && byTime.media.digest === shown.digest)
 assert.ok(byDigest?.kind === "kept" && (await readFile(byDigest.media.file, "utf8")).includes("Report"), "the page as it was shown")
 await assert.rejects(media.show(join(shots, "notes.txt")), /isn't an image/)
+// A file the turn's record of changes names comes with the content the turn left: kept while the file holds it, from the copy after.
+const chart = join(shots, "chart.png")
+await writeFile(chart, PNG)
+const left = createHash("sha256").update(PNG).digest("hex")
+const [recorded, since] = await media.confirm([
+  { callId: "turn:r1", path: chart, evidence: "wrote", digest: left, endedAt: Date.now() },
+  { callId: "turn:r2", path: chart, evidence: "wrote", digest: "0".repeat(64), endedAt: Date.now() },
+])
+assert.ok(recorded?.kind === "kept" && recorded.media.digest === left, "the bytes the turn left")
+assert.equal(since?.kind, "dropped", "a file holding other bytes isn't what that turn made")
+await writeFile(chart, "overwritten")
+const [stillKept] = await media.confirm([{ callId: "turn:r3", path: chart, evidence: "wrote", digest: left, endedAt: Date.now() }])
+assert.ok(stillKept?.kind === "kept" && (await readFile(stillKept.media.file)).equals(PNG), "found by its content after the file changed")
+// A page is kept in a folder of its own with the files beside it that it links, so it draws with its own styles and pictures.
+const site = join(root, "site")
+await mkdir(join(site, "img"), { recursive: true })
+await writeFile(join(site, "page.css"), "body { background: url('img/wave.png') } @import 'theme.css';")
+await writeFile(join(site, "theme.css"), "h1 { color: navy }")
+await writeFile(join(site, "img", "wave.png"), PNG)
+await writeFile(join(site, "chart.png"), PNG)
+await writeFile(join(site, ".secret.png"), PNG)
+await writeFile(join(root, "outside.css"), "body {}")
+await writeFile(join(site, "notes.txt"), "private")
+const pageHtml = '<link rel="stylesheet" href="page.css"><link rel="stylesheet" href="../outside.css"><img src="chart.png?v=2"><img src=".secret.png"><a href="notes.txt">notes</a><img src="https://example.com/a.png">'
+await writeFile(join(site, "index.html"), pageHtml)
+const [sitePage] = await media.confirm([{ callId: "turn:r4", path: join(site, "index.html"), evidence: "wrote", digest: createHash("sha256").update(pageHtml).digest("hex"), endedAt: Date.now() }])
+assert.ok(sitePage?.kind === "kept")
+const keptFolder = join(sitePage.media.file, "..")
+const { readdir } = await import("node:fs/promises")
+assert.deepEqual((await readdir(keptFolder, { recursive: true })).sort(), ["chart.png", "img", "img/wave.png", "index.html", "page.css", "theme.css"],
+  "the page with the styles and pictures it links, and nothing else beside it")
 
 // `show` over MCP: validates, keeps, and states what it showed.
 await writeFile(join(shots, "home.png"), PNG)
@@ -231,7 +278,7 @@ media.close()
 
 // The transcript: `show` stands where it was called, the shelf holds the rest.
 const turn: Entry[] = [
-  { type: "user", text: "Take screenshots of the sign-in flow", id: "p1", at: 1 },
+  { type: "user", text: "Take screenshots of the sign-in flow", id: "p1", requestId: "p1", at: 1 },
   { ...command, id: "cmd1" },
   { type: "tool", id: "show1", name: "mcp__mako__show", status: "completed", input: JSON.stringify(showInput), at: 3, endedAt: 4 },
   { ...write, id: "w1", effects: [{ kind: "create", path: "/repo/report.html" }, { kind: "create", path: "/repo/out/chart.png" }] },
@@ -248,6 +295,24 @@ assert.deepEqual(exchangeMedia(exchange).map((candidate) => [candidate.evidence,
 ], "each file once, under the strongest evidence, in the order the turn made them")
 assert.deepEqual(proseMediaSpellings("See ![home](/tmp/a.png), `./out/b.mp4`, `c.png` and [d](notes.md)."), ["/tmp/a.png", "out/b.mp4"])
 assert.deepEqual(shelfMedia(exchange).map((candidate) => candidate.path), ["/repo/report.html"], "shown and cited files aren't on the shelf twice")
+// The turn's record of changes names what its calls can't: a PNG a script drew, a screenshot a command wrote through `$PWD`.
+const record: TurnChanges = {
+  version: TURN_CHANGES_VERSION, state: "settled", thread: "T", turn: "p1",
+  own: { files: 1, added: 3, removed: 0 }, maybe: { files: 0, added: 0, removed: 0 }, others: { files: 0, added: 0, removed: 0 },
+  files: [
+    { path: "/repo/report.html", root: "r", relative: "report.html", kind: "create", own: { added: 3, removed: 0 }, before: null, after: `sha256:${"a".repeat(64)}`, entries: { first: 1, last: 1 } },
+    { path: "/repo/tide.png", root: "r", relative: "tide.png", kind: "create", own: null, before: null, after: `sha256:${"b".repeat(64)}`, entries: { first: 2, last: 2 } },
+    { path: "/repo/old.png", root: "r", relative: "old.png", kind: "delete", before: `sha256:${"c".repeat(64)}`, after: null, entries: { first: 3, last: 3 } },
+    { path: "/repo/notes.md", root: "r", relative: "notes.md", kind: "modify", own: { added: 1, removed: 0 }, before: `sha256:${"d".repeat(64)}`, after: `sha256:${"e".repeat(64)}`, entries: { first: 4, last: 4 } },
+  ],
+  more: 0, journal: "j", through: 4, at: 5_000,
+}
+assert.deepEqual(changedMedia(record, "p1").map((candidate) => [candidate.path, candidate.digest, candidate.callId]), [
+  ["/repo/report.html", "a".repeat(64), "turn:p1"], ["/repo/tide.png", "b".repeat(64), "turn:p1"],
+], "media it left, not what it removed and never text")
+assert.deepEqual(changedMedia({ version: TURN_CHANGES_VERSION, state: "pending" }, "p1"), [], "nothing while the count is on its way")
+assert.deepEqual(shelfMedia(exchange, record).map((candidate) => [candidate.path, candidate.digest]), [["/repo/report.html", "a".repeat(64)], ["/repo/tide.png", "b".repeat(64)]],
+  "the shelf adds what the record names, with the bytes it names, once each")
 // The same turn live: the same media.
 const liveTurn = toExchanges(foldTools(entriesToMessages(turn, { kind: "live", running: false, provider: "claude" }).messages))[0]!
 assert.deepEqual(exchangeMedia(liveTurn), exchangeMedia(exchange))

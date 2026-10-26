@@ -369,3 +369,23 @@ console.log("PASS: conditional refresh owner/epoch and eviction fences")
   await detail(second, views[2]!)
   console.log("PASS: views weigh what they keep beyond memory; a held conversation's newest view stays")
 }
+
+{
+  // A call too large to send whole keeps what the turn made, live and saved: the shelf under its answer reads the preview.
+  const script = "cat > report.html <<'EOF'\n" + "<p>row</p>\n".repeat(400) + "EOF\nchrome --screenshot=\"$PWD/shot.png\" file://$PWD/report.html"
+  const call: Entry = { type: "tool", id: "make-page", name: "Bash", status: "completed", input: JSON.stringify({ command: script }), output: "done",
+    effects: [{ kind: "command", command: script, cwd: "/repo", named: ["/repo/report.html"] }, { kind: "create", path: "/repo/report.html", content: "<p>row</p>\n".repeat(400) }] }
+  const snapshot = auditSnapshot(0)
+  snapshot.session = { ...snapshot.session, id: auditId(7100) }
+  snapshot.blocks = [{ type: "user", id: "u", text: "Make the page" }, call]
+  snapshot.base = { ref: { harness: "claude", nativeId: "media", path: "fixture" }, start: 0, total: 1, hasEarlier: false, entries: [{ ...call, id: "saved-make-page" }] }
+  const view = new LiveHistoryReader().capture(snapshot)
+  const live = view.blocks.find((block) => block.type === "tool")
+  const saved = view.base!.entries.find((entry) => entry.type === "tool")
+  for (const preview of [live, saved]) {
+    assert.ok(preview?.type === "tool" && (preview.historyRest || preview.contentOmitted), "the call is a preview")
+    assert.deepEqual(preview.effects, [{ kind: "command", command: script.slice(0, 2048), cwd: "/repo", named: ["/repo/report.html"] }, { kind: "create", path: "/repo/report.html" }],
+      "its effects stay, without the content they wrote")
+  }
+  console.log("PASS: a large call's preview keeps the media facts of what it made")
+}

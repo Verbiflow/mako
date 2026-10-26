@@ -1,11 +1,15 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 
-/** Heavy transcript previews start only when close to the reading viewport. */
+/**
+ * Heavy transcript previews start only when close to the reading viewport.
+ * `ref` is a callback, so an element that mounts after the component did
+ * (a turn's shelf that fills once the turn has made something) is watched
+ * from the moment it is there.
+ */
 export function useVisible() {
-  const ref = useRef<HTMLDivElement>(null)
+  const [element, ref] = useState<HTMLDivElement | null>(null)
   const [visible, setVisible] = useState(false)
   useEffect(() => {
-    const element = ref.current
     if (!element || visible) return
     const observer = new IntersectionObserver((entries) => {
       if (!entries.some((entry) => entry.isIntersecting)) return
@@ -14,6 +18,6 @@ export function useVisible() {
     }, {rootMargin: "240px"})
     observer.observe(element)
     return () => observer.disconnect()
-  }, [visible])
+  }, [element, visible])
   return {ref, visible}
 }

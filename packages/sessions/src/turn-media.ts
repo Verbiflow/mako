@@ -1,5 +1,6 @@
 import { z } from "zod"
 import type { AttachmentContent, ToolDetail } from "./content.js"
+import type { ToolEffect } from "./tool-effects.js"
 import type { Entry, EntryOf } from "./entries.js"
 import { identifyTool, type ToolIdentity } from "./tool-identity.js"
 
@@ -238,6 +239,44 @@ export function callMedia(call: MediaCall, identity?: ToolIdentity): MediaCandid
     else if (effect.kind === "command") for (const path of effect.named ?? []) atPath("named", path)
   }
   return found
+}
+
+/** What `callMedia` reads of a call, without its bulk (`mediaFacts`). */
+export type MediaFacts = Pick<MediaCall, "effects" | "details" | "attachments"> & { attachmentsOmitted?: number }
+
+/**
+ * The parts of a call `callMedia` reads, for a preview of a call too large
+ * to send whole: its effects without the content they wrote or the patches
+ * they applied, a command's line cut to `chars`, its media details, and
+ * its attachments but those whose inline bytes pass `chars` (counted in
+ * `attachmentsOmitted`; opening the call reads them). A preview that keeps
+ * these finds the same files as the whole call.
+ */
+export function mediaFacts(call: Pick<MediaCall, "effects" | "details" | "attachments">, chars: number): MediaFacts {
+  const facts: MediaFacts = {}
+  const effects = call.effects?.map((effect): ToolEffect => {
+    switch (effect.kind) {
+      case "create":
+        return { kind: "create", path: effect.path, ...(effect.seen !== undefined && { seen: effect.seen }) }
+      case "write":
+        return { kind: "write", path: effect.path }
+      case "modify":
+        return { kind: "modify", path: effect.path, ...(effect.seen !== undefined && { seen: effect.seen }) }
+      case "command":
+        return effect.command.length > chars ? { ...effect, command: effect.command.slice(0, chars) } : effect
+      default:
+        return effect
+    }
+  })
+  if (effects) facts.effects = effects
+  const details = call.details?.filter((detail) => detail.type === "media")
+  if (details?.length) facts.details = details
+  if (call.attachments) {
+    const kept = call.attachments.filter((attachment) => attachment.source.kind !== "inline" || attachment.source.data.length <= chars)
+    facts.attachments = kept
+    if (kept.length < call.attachments.length) facts.attachmentsOmitted = call.attachments.length - kept.length
+  }
+  return facts
 }
 
 /**
