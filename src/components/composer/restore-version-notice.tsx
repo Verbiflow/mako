@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react"
 import { HarnessIcon } from "@/components/ui/provider-icon"
+import { Shimmer } from "@/components/ui/shimmer"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { restoreNotice, updateResolves } from "@/lib/restore-plan"
 import { activeAcp, useAcp } from "@/state/acp"
 import { providers, useProviders } from "@/state/providers"
 import { loadRestorePlan, useRestorePlans } from "@/state/restore-plan"
 import { useThreads } from "@/state/threads"
-import type { ComposerNotice } from "@/extend/notices"
+import { cn } from "@/lib/utils"
 
 /**
  * Above the composer, while it shows a session its harness deleted that
@@ -19,7 +20,7 @@ import type { ComposerNotice } from "@/extend/notices"
  * session's transcript, which the second line says. Nothing shows for a
  * session its harness still has, or when the versions allow the restore.
  */
-export function useRestoreVersionNotice(): ComposerNotice | null {
+export function RestoreVersionNotice() {
   useHarnessIdentity()
   const live = useAcp((state) => activeAcp(state) !== null)
   const ref = useThreads((state) => (state.opening ? null : state.viewing?.ref ?? null))
@@ -58,31 +59,52 @@ export function useRestoreVersionNotice(): ComposerNotice | null {
       void loadRestorePlan(path)
     }
   }
-  const line = updating ? `Updating ${label}…` : problem ? `${label} wasn't updated` : words.line
-  const settings = (detail: string) => () => window.dispatchEvent(new CustomEvent("mako:settings", { detail }))
-  const action =
-    offer.kind === "update"
-      ? { label: problem ? "Try again" : `Update ${label}`, primary: true, disabled: updating, onClick: () => void update() }
-      : offer.kind === "owner" && offer.owner === "Mako"
-        ? { label: "Updates", onClick: settings("updates") }
-        : offer.kind === "manual" && offer.command
-          ? { label: "Copy command", onClick: () => void navigator.clipboard.writeText(offer.command ?? "") }
-          : undefined
-  return {
-    id: "restore-version",
-    tone: updating ? "progress" : "caution",
-    icon: <HarnessIcon harness={outdated.harness} />,
-    title: line,
-    description: problem && !updating ? problem : undefined,
-    detail: (
-      <>
-        <p>{words.detail}</p>
+  const line = updating ? `Updating ${label}…` : problem ? `${label} wasn't updated: ${problem}` : words.line
+
+  return (
+    <div
+      role="status"
+      data-restore-version-notice={outdated.harness}
+      className="mb-1.5 flex items-start gap-2 rounded-md bg-raised px-2 py-1.5 text-ui"
+    >
+      <HarnessIcon harness={outdated.harness} className="mt-0.5 size-3.5 shrink-0" />
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className={cn("min-w-0", problem && !updating ? "text-caution" : "text-foreground")}>
+          {updating ? <Shimmer text={line} /> : line}
+        </span>
+        <span className="min-w-0 text-label text-muted-foreground">{words.detail}</span>
         {offer.kind === "manual" && offer.command ? (
-          <code data-restore-command className="mt-1.5 block font-mono text-label break-all text-foreground">{offer.command}</code>
+          <code data-restore-command className="mt-0.5 min-w-0 truncate font-mono text-label text-faint" title={offer.command}>
+            {offer.command}
+          </code>
         ) : null}
-      </>
-    ),
-    actions: action ? [action] : undefined,
-    data: { "data-restore-version-notice": outdated.harness },
-  }
+      </div>
+      {offer.kind === "update" ? (
+        <button
+          type="button"
+          disabled={updating}
+          onClick={() => void update()}
+          className="pressable shrink-0 rounded px-1.5 py-0.5 text-label font-medium text-foreground hover:bg-fill-hover disabled:opacity-60"
+        >
+          {problem ? "Try again" : `Update ${label}`}
+        </button>
+      ) : offer.kind === "owner" && offer.owner === "Mako" ? (
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "updates" }))}
+          className="pressable shrink-0 rounded px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+        >
+          Updates
+        </button>
+      ) : offer.kind === "manual" && offer.command ? (
+        <button
+          type="button"
+          onClick={() => void navigator.clipboard.writeText(offer.command ?? "")}
+          className="pressable shrink-0 rounded px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+        >
+          Copy command
+        </button>
+      ) : null}
+    </div>
+  )
 }

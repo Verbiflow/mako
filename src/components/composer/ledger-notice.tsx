@@ -1,7 +1,6 @@
 import { useEffect } from "react"
 import { ledgerReplyWords } from "@mako/host/contracts/thread-continuation"
-import { useUpdateMakoAction } from "@/components/shell/use-update-mako"
-import type { ComposerNotice } from "@/extend/notices"
+import { UpdateMako } from "@/components/shell/store-format-line"
 import { harnessLabel } from "@/lib/harness-label"
 import { activeAcp, useAcp } from "@/state/acp"
 import { loadLedgerPlan, useLedgerPlans, useStoreFormats } from "@/state/store-formats"
@@ -15,8 +14,7 @@ import { useThreads } from "@/state/threads"
  * in the same words the send follows (`ledgerReply`), with Update. Nothing
  * shows while this build writes the ledger or the conversation is running.
  */
-export function useLedgerNotice(): ComposerNotice | null {
-  const update = useUpdateMakoAction()
+export function LedgerNotice() {
   const newer = useStoreFormats((state) => state.stores.some((row) => row.store === "session-memory" && row.access !== "write"))
   const viewed = useThreads((state) => (state.opening ? null : state.viewing?.ref?.path ?? null))
   const live = useAcp((state) => {
@@ -37,12 +35,14 @@ export function useLedgerNotice(): ComposerNotice | null {
   if (!path || !newer || !plan) return null
   if (plan.transport !== "handoff" && plan.transport !== "refused" && plan.transport !== "attached") return null
   if (!plan.makoUpdate || !plan.notice) return null
-  return {
-    id: "newer-ledger",
-    tone: "caution",
-    title: plan.notice.line,
-    description: ledgerReplyWords(plan.notice, harnessLabel(plan.notice.harness)),
-    actions: [{ ...update, primary: true }],
-    data: { "data-ledger-notice": plan.transport },
-  }
+  // Laid out as the version notice is (`RestoreVersionNotice`): what changed, then what a reply does now.
+  return (
+    <div role="status" data-ledger-notice={plan.transport} className="mb-1.5 flex items-start gap-2 rounded-md bg-raised px-2 py-1.5 text-ui">
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="min-w-0 text-foreground">{plan.notice.line}</span>
+        <span className="min-w-0 text-label text-muted-foreground">{ledgerReplyWords(plan.notice, harnessLabel(plan.notice.harness))}</span>
+      </div>
+      <UpdateMako />
+    </div>
+  )
 }

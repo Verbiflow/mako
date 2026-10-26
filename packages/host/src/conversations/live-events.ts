@@ -3,7 +3,7 @@ import type { LiveBatch, LiveDriverEvent, LiveRequest } from "../contracts/live-
 import { GoalObservationSchema } from "../contracts/live-goals.js"
 import type { NativeActivity, NativeActivityObservation } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, NativeAgentObservationSchema, observeNativeAgent } from "../contracts/native-agents.js"
-import type { LivePermissionRequest, LiveSessionState } from "../contracts/providers-acp.js"
+import type { LiveSessionState } from "../contracts/providers-acp.js"
 import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { hostWarn } from "../base/host-log.js"
 import { drawnWhileOpening, queueLiveUpdate } from "@mako/sessions/live-content"
@@ -150,13 +150,6 @@ export class LiveEvents {
         }
         resident.driver = null
         resident.connections.delete(bindingId)
-        // A request this process asked and nobody answered stays on screen, said to be unanswerable.
-        const askedHere = (permission: LivePermissionRequest) => (permission.origin?.bindingId ?? permission.sessionId) === bindingId
-        if (resident.snapshot.permissions.some((permission) => askedHere(permission) && !permission.gone))
-          resident.snapshot = {
-            ...resident.snapshot,
-            permissions: resident.snapshot.permissions.map((permission) => askedHere(permission) ? { ...permission, gone: true } : permission),
-          }
         void revokeTools(dependencies, bindingId, id)
         if (exited && !resident.closing && !resident.hibernating) releaseExited(resident, exited, id, bindingId)
       }

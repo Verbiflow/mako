@@ -17,7 +17,6 @@ import { memo, useMemo, useState, type ReactNode } from "react"
 import { Prose } from "@/components/transcript/markdown"
 import { ToolRow } from "@/components/transcript/tool-row"
 import { ToolGlyph } from "@/components/transcript/tool-views"
-import { ExchangeFailure, TurnError } from "@/components/transcript/failure-row"
 import { ActivityMark } from "@/components/ui/activity-mark"
 import { AgentGroup } from "./agent-group"
 import { groupAgentCalls } from "@/lib/agent-groups"
@@ -72,6 +71,7 @@ import type { ToolCall } from "@/extend/slots"
 import {
   CheckIcon,
   ChevronRightIcon,
+  CircleAlertIcon,
   CircleStopIcon,
   CloudIcon,
   CopyIcon,
@@ -249,7 +249,6 @@ export const Exchange = memo(function Exchange({
           </div>
         ) : null}
         {streaming ? null : <TurnChanges requestId={exchange.prompt?.requestId} />}
-        <ExchangeFailure requestId={exchange.prompt?.requestId} />
         {exchange.response.length > 0 || interrupted ? (
           <Footer exchange={exchange} streaming={streaming} interrupted={interrupted} />
         ) : null}
@@ -959,7 +958,14 @@ function Response({
       ))}
       {text ? <Prose text={text} streaming={message.streaming} previewedFiles={previewedFiles} answerId={message.id} /> : null}
 
-      {message.error ? <TurnError error={message.error} /> : null}
+      {message.error ? (
+        // The failure is the content here, so all of it shows: the glyph in
+        // the tool column and the words in the error's tone, no card.
+        <div role="alert" data-event-error className="flex items-start gap-2 text-ui text-negative">
+          <CircleAlertIcon aria-hidden className="mt-[3px] size-3.5 shrink-0" />
+          <span className="min-w-0 whitespace-pre-wrap break-words">{message.error}</span>
+        </div>
+      ) : null}
 
     </div>
   )

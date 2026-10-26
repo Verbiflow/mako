@@ -9,10 +9,8 @@ import type { SentProse } from "../src/lib/prompt-markdown"
 import { attachmentReference } from "../src/lib/attachment-references"
 import { writeDraft } from "../src/lib/context/draft"
 import { RetainedRequests } from "../src/components/viewer/acp-panel"
-import { continueTurnPrompt, makoPrompts, recoverableRequests, recoveriesByPlace } from "../src/state/prompt-delivery"
-import { FailureRow } from "../src/components/transcript/failure-row"
-import { requestRecovery } from "../src/state/request-recovery"
-import { agentActivity, startLabel } from "../src/state/agent-activity"
+import { continueTurnPrompt, makoPrompts, recoverableRequests } from "../src/state/prompt-delivery"
+import { agentActivity } from "../src/state/agent-activity"
 import { cn } from "../src/lib/utils"
 import { ActivityMark } from "../src/components/ui/activity-mark"
 import { FolderActivity } from "../src/components/rail/rail-activity"
@@ -134,11 +132,9 @@ for (const descriptor of fixtureHarnesses) {
   assert.deepEqual(prepared.attachments.map((file) => [file.stagedPath, file.data]), [["/disposable/report.pdf", undefined], [undefined, "YWJjZA=="]])
   assert.equal(request.status, "failed")
   assert.equal(request.nativeDelivery.evidence.kind, "accepted")
-  const markup = renderToStaticMarkup(<FailureRow conversationId={id} request={request} />)
+  const markup = renderToStaticMarkup(<RetainedRequests />)
   assert.match(markup, /Sign-in required/)
-  assert.match(markup, /data-recovery-primary="sign-in"/)
   assert.doesNotMatch(markup, /Use in new thread|Send again|Send another copy/)
-  assert.deepEqual(requestRecovery(request, { provider: descriptor.displayName }).more.map((action) => action.kind), ["restore", "copy", "settings"], "a signed-out account offers no repeat and no new thread")
 }
 const duplicateFiles = savedMessageDraft({ id: "duplicates", text: "Keep both", attachments: [
   { name: "same.pdf", mimeType: "application/pdf", size: 1, path: "/a/same.pdf" },
@@ -528,7 +524,6 @@ conversation.requests = [{id:"stopped",text:"Keep this original question",attach
 publish()
 assert.equal(renderToStaticMarkup(<RetainedRequests />), "")
 assert.equal(recoverableRequests(conversation).length, 0)
-assert.equal(recoveriesByPlace(conversation).onTurns.size, 0, "a stopped turn says so in its own footer, not in a failure row")
 const stoppedMarkup = renderToStaticMarkup(<Exchange interrupted exchange={{id:"stopped",prompt:{id:"stopped",role:"user",requestId:"stopped",blocks:[{type:"text",text:"Keep this original question"}]},response:[],system:[]}} />)
 assert.match(stoppedMarkup, /data-turn-stopped="stopped"/)
 assert.match(stoppedMarkup, />Stopped</)
@@ -602,24 +597,20 @@ conversation.requests.push({id:"unsent",text:"Do not lose a pre-dispatch stop",a
 conversation.requests.push({id:"failed",text:"Failed input remains recoverable",attachments:[],status:"failed"})
 publish()
 const recoveries = renderToStaticMarkup(<RetainedRequests />)
-assert.match(recoveries, /Saved messages \(2\)/)
-assert.doesNotMatch(recoveries, /Do not lose a pre-dispatch stop|Failed input remains recoverable|Keep this original question|Send again/, "the archive's rows mount only when opened")
+assert.equal((recoveries.match(/data-recovery-notice="true"/g) ?? []).length, 1)
+assert.match(recoveries, /Review message/)
+assert.match(recoveries, /Earlier messages \(1\)/)
+assert.doesNotMatch(recoveries, /Do not lose a pre-dispatch stop|Failed input remains recoverable|Keep this original question|Send again/)
 assert.deepEqual(recoverableRequests(conversation).map(request => request.id), ["unsent", "failed"], "both saved messages remain available behind the disclosure")
-// Neither reached the transcript, so both are drawn after its last turn, quoting their words.
-assert.deepEqual(recoveriesByPlace(conversation).apart.map((request) => request.id), ["unsent", "failed"])
-const apart = renderToStaticMarkup(<FailureRow conversationId={id} request={conversation.requests.find((request) => request.id === "failed")!} quoted />)
-assert.match(apart, /Failed input remains recoverable/)
-assert.match(apart, /data-recovery-primary="resend"[^>]*>Send another copy</, "no delivery evidence: a repeat is another copy")
 // A classified failure is described for the provider and offers Send again
 // only when a repeat can work.
 conversation.requests.push({id:"rejected",text:"Once more",attachments:[],status:"failed",failure:"transcript-rejected",error:"reasoning encrypted_content was not issued to this caller"})
 conversation.requests.push({id:"quit-unsent",text:"Cut short before it ran",attachments:[],status:"interrupted",interruption:{reason:"host-quit",at:1}})
 publish()
-const classified = renderToStaticMarkup(<FailureRow conversationId={id} request={conversation.requests.find((request) => request.id === "rejected")!} />)
-assert.match(classified, /Session history was rejected/)
-assert.match(classified, /data-recovery-primary="fresh"[^>]*>Use in new thread</, "a history the model refuses is escaped only by a new thread")
-assert.doesNotMatch(classified, /Send again/)
-assert.doesNotMatch(classified, /encrypted_content was not issued/, "the provider's words wait behind Details, mounted when opened")
+const classified = renderToStaticMarkup(<RetainedRequests />)
+assert.match(classified, /Review message/)
+assert.match(classified, /Earlier messages \(3\)/)
+assert.doesNotMatch(classified, /encrypted_content was not issued|Send again/, "details and actions require opening the saved message")
 assert.deepEqual(recoverableRequests(conversation).map(request => request.id), ["unsent", "failed", "rejected", "quit-unsent"])
 conversation.requests.splice(-2, 2)
 publish()
@@ -639,14 +630,15 @@ publish()
 assert.match(renderToStaticMarkup(<CompactionControl requestId="failed" />), /disabled=""/)
 control.actions[0].state = { kind: "completed" }
 publish()
-// Once its compaction finished, a full context may fit: the row offers the repeat.
-assert.match(renderToStaticMarkup(<FailureRow conversationId={id} request={compactionRequest} />), /data-recovery-primary="resend"/)
+assert.match(renderToStaticMarkup(<RetainedRequests />), /Review message/)
+assert.doesNotMatch(renderToStaticMarkup(<RetainedRequests />), /Compaction completed\. You can send/, "compaction guidance belongs inside expanded recovery")
 // The unsupported-provider case must not inherit the completed compaction above.
 control.actions = []
 publish()
 threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Fixture", resumable: true, live: true,
   ...fixtureDeclarations("claude"), capabilities: { ...fixtureCapabilities("claude"), compaction: harnessLacks("Fixture cannot compact") } }] })
-assert.doesNotMatch(renderToStaticMarkup(<FailureRow conversationId={id} request={compactionRequest} />), /Fixture cannot compact|Compact and retry/)
+assert.match(renderToStaticMarkup(<RetainedRequests />), /Review message/)
+assert.doesNotMatch(renderToStaticMarkup(<RetainedRequests />), /Fixture cannot compact|Start new thread with saved message/)
 assert.doesNotMatch(renderToStaticMarkup(<CompactionControl />), /<button/)
 // A harness that compacts on its own says so, and offers no Compact of its own.
 threadsStore.set({ descriptors: [{ provider: "claude", displayName: "Fixture", resumable: true, live: true,
@@ -680,8 +672,7 @@ assert.deepEqual(agentActivity({...activityBase,blocks:[pendingTool],quietForMs:
 assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"thinking",text:"Weighing"}],quietForMs:65*60_000}),{kind:"reasoning",label:"No output for 1h 5m"})
 assert.deepEqual(agentActivity({...activityBase,blocks:[],connecting:true,makingWorktree:true}),{kind:"connecting",label:"Checking out files"},"a checkout made on the spot is named until the provider starts")
 assert.equal(agentActivity({...activityBase,blocks:[],connecting:true,makingWorktree:true,worktreeStep:"carry"}).label,"Copying files from your folder","each step the host reports is named")
-assert.equal(agentActivity({...activityBase,blocks:[],connecting:true}).label,"Starting","a start says the harness is starting, local or cloud")
-assert.equal(agentActivity({...activityBase,blocks:[],connecting:true,starting:startLabel("Codex")}).label,"Starting Codex")
+assert.equal(agentActivity({...activityBase,blocks:[],connecting:true}).label,"Connecting")
 assert.deepEqual(agentActivity({...activityBase,blocks:[{type:"text",text:"Half an ans"}],quietForMs:2*60_000}),{kind:"working",label:"No output for 2m"},
   "a reply that stopped mid-stream stops reading as responding")
 assert.equal(agentActivity({...activityBase,blocks:[],quietForMs:120*60_000}).label,"No output for 2h")
@@ -807,21 +798,12 @@ const pending = details({}, "claude", [])
 assert.match(pending, />After the first reply</)
 assert.match(pending, /Claude Code reports how full the context is after each reply\./)
 assert.match(pending, /Counted after the first reply\./)
-// A harness that declares no fill says why, in its own declaration's words, and why it shows no cost. All six
-// measure their context now, so a stand-in declares it absent.
-const measuredDescriptors = threadsStore.get().descriptors
-const cursorDescriptor = measuredDescriptors.find((entry) => entry.provider === "cursor")!
-threadsStore.set({
-  descriptors: [...measuredDescriptors, {
-    ...cursorDescriptor, provider: "unmeasured", displayName: "Unmeasured",
-    usage: { ...cursorDescriptor.usage!, context: harnessLacks("Unmeasured reports what each turn spent, never how full the context is."), cost: harnessLacks("Unmeasured reports tokens only and prices none of them.") },
-  }],
-})
-const unmeasuredTurn = [spentTurn({ provider: "unmeasured", at: 1, tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } })]
-const spendOnly = details({}, "unmeasured", unmeasuredTurn)
+// A harness that declares no fill (Cursor) says why, in its own declaration's words, and why it shows no cost.
+const cursorTurn = [spentTurn({ provider: "cursor", at: 1, tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } })]
+const spendOnly = details({}, "cursor", cursorTurn)
 assert.match(spendOnly, />Not reported</)
-assert.match(spendOnly, /data-context-unmeasured[^>]*>Unmeasured reports what each turn spent, never how full the context is\./)
-assert.match(spendOnly, /data-cost-unreported[^>]*>Unmeasured reports tokens only and prices none of them\./)
+assert.match(spendOnly, /data-context-unmeasured[^>]*>Cursor&#x27;s SDK reports what each turn spent, never how full the context is\./)
+assert.match(spendOnly, /data-cost-unreported[^>]*>Cursor&#x27;s SDK reports tokens only and prices none of them\./)
 assert.doesNotMatch(spendOnly, /Cache write/)
 assert.doesNotMatch(readingMarkup, /data-unrecorded-spend|data-cost-unreported/, "complete, priced spend carries no note")
 // Mako's estimate for a harness that prices nothing: marked, named as list prices with its table, never the harness's cost.
@@ -842,13 +824,12 @@ const native = details({ used: 1_000, size: 200_000, native: { tokens: { input: 
 assert.match(native, /data-harness-total[^>]*>.*OpenCode’s own count for this session.*100k.*\$1\.50.*It includes turns run outside Mako\./)
 const readingUsage = conversation.session.usage
 const readingRequests = conversation.requests
-conversation.harness = "unmeasured"
-conversation.session = { ...conversation.session, harness: "unmeasured", usage: { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } } }
+conversation.harness = "cursor"
+conversation.session = { ...conversation.session, harness: "cursor", usage: { tokens: { input: 900, cacheRead: 40_000, cacheWrite: 0, output: 1_000 } } }
 publish()
 const spendOnlyMeter = renderToStaticMarkup(<TooltipProvider><ContextMeter /></TooltipProvider>)
 assert.match(spendOnlyMeter, /aria-label="Context fill not reported"/)
 assert.match(spendOnlyMeter, /data-unmeasured-ring/)
-threadsStore.set({ descriptors: measuredDescriptors })
 conversation.harness = "devin"
 conversation.session = { ...conversation.session, harness: "devin", usage: { compactedFrom: 164_000, size: 200_000 } }
 publish()

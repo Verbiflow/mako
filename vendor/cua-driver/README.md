@@ -3,8 +3,35 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.25`. +25 is +24 with `0003-transport-scoped-snapshots.patch`
+`0.28.2+mako.26`. +26 is +25 with `0004-stable-wayland-seat-pointer.patch`
+and the version. +25 is +24 with `0003-transport-scoped-snapshots.patch`
 and the version.
+
+### 0004: a stable Wayland seat pointer
+
+Each wlroots gesture (click, scroll, drag, held button) creates its own
+`zwlr_virtual_pointer_v1` and destroys it afterwards. On a seat with no other
+pointer, such as headless Sway or a nested compositor, that device was the
+seat's only pointer. Creating it made the compositor announce
+`wl_seat.capabilities(pointer)`, and destroying it withdrew the capability
+along with every client's `wl_pointer`. An app receives pointer events only
+after it answers the announcement with `wl_seat.get_pointer`; wlroots drops
+what it would have sent the app before that. The drag's first motion reaches
+the compositor in the same flush as the new device, and the press follows
+15 ms later, so an app whose main loop was busy for longer lost the press and
+the start of the drag. That was the intermittent `Exactly one drag press
+reaches the app` failure in the Sway acceptance suites: the app recorded no
+press and no motion before about 100 ms, then the rest of the drag and the
+release. The injecting client cannot see another client's binding, so no
+wait before the press could be correct.
+
+The daemon now creates one idle virtual pointer on the primary seat before it
+binds its socket, and keeps it on its own connection until the compositor goes
+away. The seat's pointer capability no longer changes while the daemon runs:
+apps bind their pointer once, when they start or when the daemon does, and
+each gesture's device joins a seat that already has one. The held device sends
+no events. Seats that already have a pointer, X11, and compositors without
+wlroots virtual pointers (GNOME and KDE use libei) see no change.
 
 ### 0003: transport-scoped snapshots
 

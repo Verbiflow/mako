@@ -165,8 +165,6 @@ const replays = [
   /** `LiveConversations.submit`: the request id; content is fingerprinted. */
   "mako:live-prompt",
   "mako:live-continue",
-  /** `LiveConversations.holdUntil`, through `submit`: the request id; the repeated words are the failed request's. */
-  "mako:live-hold-until",
   /** `LiveConversations.start`: the conversation id; a second start returns the session. */
   "mako:live-start",
   /** `LiveTransfers.accept`: the transfer id; content is fingerprinted. */

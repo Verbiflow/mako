@@ -175,12 +175,6 @@ export type SignInResume = "resumed" | "signed-out"
 export const ACCOUNT_SWITCH_WAITS = ["background", "subagents", "approval", "turn", "operation"] as const
 export type AccountSwitchWait = (typeof ACCOUNT_SWITCH_WAITS)[number]
 
-/** When a held request sends itself, and the failed request it repeats. */
-export interface RequestWake {
-  at: number
-  after: string
-}
-
 export interface LiveRequest {
   /**
    * Who sent it, assigned by the host at admission. Absent in older journals:
@@ -228,14 +222,6 @@ export interface LiveRequest {
    * outcome and is continued, or left for review, on Resume.
    */
   signIn?: SignInHold
-  /**
-   * A `held` request that releases itself at `at` (epoch ms): a message the
-   * person asked to send again once a usage limit resets. `after` is the
-   * failed request it repeats. It waits like any held message, a Resume
-   * sends it now and removing it cancels the wait; the host's held-wakes job
-   * releases it when the time comes, across restarts, since the journal keeps it.
-   */
-  wake?: RequestWake
   /** Present on an `interrupted` or `uncertain` request that a Stop or a host exit cut short. */
   interruption?: Interruption
   /**
@@ -301,8 +287,6 @@ export interface LiveSummary {
    */
   copy?: { at: number }
   createdAt: number
-  /** The soonest a held request here sends itself (`LiveRequest.wake`). */
-  wakeAt?: number
   /** The Thread and Session this conversation belongs to, the same IDs a catalog row carries. */
   threadId?: string
   sessionId?: string

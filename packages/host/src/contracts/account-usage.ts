@@ -36,22 +36,6 @@ export function nextReset(usage: AccountUsage | undefined, now: number): number 
   return soonest
 }
 
-/**
- * When a spent account takes work again: the latest reset among its windows
- * at their limit, since every one of them must give room back. Null while no
- * window is spent, or one that is names no reset.
- */
-export function limitResetAt(usage: AccountUsage | undefined, now: number): number | null {
-  if (usage?.status !== "ok") return null
-  let latest: number | null = null
-  for (const window of usage.windows) {
-    if (window.usedPercent < 100 || (window.resetsAt !== null && window.resetsAt <= now)) continue
-    if (window.resetsAt === null) return null
-    if (latest === null || window.resetsAt > latest) latest = window.resetsAt
-  }
-  return latest
-}
-
 /** The windows as they stand at `now`: one past its reset has emptied. */
 export function windowsAt(windows: readonly UsageWindow[], now: number): UsageWindow[] {
   return windows.map((window) =>

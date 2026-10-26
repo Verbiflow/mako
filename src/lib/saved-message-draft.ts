@@ -59,17 +59,9 @@ export function savedMessageDraft(
   return { text, attachments: records, plans: draft.plans }
 }
 
-/** Put a kept copy back in the composer's draft, with its attachments; the composer listens (`mako:restore-unsent`). */
-export function restoreUnsent(draft: import("@/state/drafts").RejectedDraft): void {
-  window.dispatchEvent(new CustomEvent("mako:restore-unsent", { detail: draft }))
-}
-
 export type RestoreSavedMessageEvent = CustomEvent<{ conversationId: string; requestId: string }>
-/** A copy of a send kept in this window (cut off, or refused before it started), put back in the draft on screen. */
-export type RestoreUnsentEvent = CustomEvent<import("@/state/drafts").RejectedDraft>
 declare global {
   interface WindowEventMap {
     "mako:restore-saved-message": RestoreSavedMessageEvent
-    "mako:restore-unsent": RestoreUnsentEvent
   }
 }

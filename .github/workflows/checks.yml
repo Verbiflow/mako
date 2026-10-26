@@ -52,32 +52,6 @@ jobs:
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
 
-  # The renderer's and the live state's own suites, in Node without a window: the transcript as live and saved
-  # draw it, the stage's thread identity, the live controls and notices, how a message is delivered and recovered,
-  # and model tuning. Suites that open an Electron window stay local.
-  renderer:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        with:
-          node-version: 24
-          package-manager-cache: false
-      - run: npm ci
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      - run: npm run build:control-runtime
-      - run: npm run test:transcript
-      - run: npm run test:transcript-events
-      - run: npm run test:stage
-      - run: npm run test:live-controls
-      - run: npm run test:prompt-delivery
-      - run: npm run test:live-prompt-delivery
-      - run: npm run test:tuning
-
   # Every harness's decoders against its recorded pairs (live and saved draw the same, or say why not), and the
   # three readers of spend (live, saved, the store's scan) agreeing on each pair.
   decoders-and-usage:

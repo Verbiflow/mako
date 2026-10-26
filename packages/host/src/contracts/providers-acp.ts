@@ -261,13 +261,6 @@ export interface LivePermissionRequest {
    * reaches the agent with the refusal instead of as the next message.
    */
   feedbackOption?: string
-  /**
-   * The agent process that asked has exited, so no answer can reach it. Set
-   * by the host when the process goes while the request waits; the request
-   * is shown with Stop or Continue turn instead of its options, and the next
-   * message or Stop drops it.
-   */
-  gone?: true
 }
 
 /**

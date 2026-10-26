@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index a91f724..3d74527 100644
+index a91f724..c6d0942 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "cua-driver"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -16,7 +16,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "cua-driver-bindgen"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -25,7 +25,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "cua-driver-contract"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "schemars",
   "serde",
@@ -34,7 +34,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "cua-driver-core"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -43,7 +43,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "cua-driver-sdk"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -52,7 +52,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "cua-driver-testkit"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "core-foundation",
   "image",
@@ -61,7 +61,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "cua-driver-uia"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -70,7 +70,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "cursor-overlay"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -79,7 +79,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "cursor-theme-cli"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -88,7 +88,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "pip-preview"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "serde_json",
  ]
@@ -97,7 +97,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "platform-linux"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -106,7 +106,7 @@ index a91f724..3d74527 100644
  [[package]]
  name = "platform-macos"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -115,12 +115,12 @@ index a91f724..3d74527 100644
  [[package]]
  name = "platform-windows"
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 351b086..4d37947 100644
+index 351b086..671fd9d 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
@@ -128,7 +128,7 @@ index 351b086..4d37947 100644
  
  [workspace.package]
 -version = "0.28.2"
-+version = "0.28.2+mako.25"
++version = "0.28.2+mako.26"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
@@ -2654,10 +2654,19 @@ index a26a6bf..d23239e 100644
      async fn public_observation_mirror_revives_an_implicit_transport_session() {
          let _runtime_guard = crate::test_runtime_lock().lock().await;
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123b..fbafd6c 100644
+index 67e123b..093f5a4 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-@@ -987,6 +987,29 @@ pub async fn run_serve(
+@@ -972,6 +972,8 @@ pub async fn run_serve(
+ 
+     #[cfg(target_os = "linux")]
+     platform_linux::recover_orphaned_mpx_devices();
++    #[cfg(target_os = "linux")]
++    platform_linux::hold_wayland_seat_pointer();
+ 
+     // Create parent directory.
+     if let Some(dir) = std::path::Path::new(socket_path).parent() {
+@@ -987,6 +989,29 @@ pub async fn run_serve(
          UnixListener::bind(socket_path).map_err(|e| anyhow::anyhow!("bind {socket_path}: {e}"))?;
      secure_local_socket(socket_path)?;
      let bound_socket = socket_identity(socket_path)?;
@@ -2687,7 +2696,7 @@ index 67e123b..fbafd6c 100644
  
      eprintln!("Cua Driver daemon listening on {socket_path}");
  
-@@ -1050,6 +1073,7 @@ pub async fn run_serve(
+@@ -1050,6 +1075,7 @@ pub async fn run_serve(
                      // connection EOFs (graceful proxy exit OR kill -9, both
                      // kernel-guaranteed), the post-loop block reaps the session.
                      let mut control_session_id: Option<String> = None;
@@ -2695,7 +2704,7 @@ index 67e123b..fbafd6c 100644
                      let mut trusted_session: Option<TrustedConnectionSession> = None;
  
                      while let Ok(Some(line)) = lines.next_line().await {
-@@ -1334,7 +1358,7 @@ pub async fn run_serve(
+@@ -1334,7 +1360,7 @@ pub async fn run_serve(
                                      (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                  ).await;
                              }
@@ -2704,7 +2713,7 @@ index 67e123b..fbafd6c 100644
                                  // The proxy's persistent control connection.
                                  // Record the session_id so this connection's EOF
                                  // (graceful proxy exit OR kill -9) reaps the
-@@ -1342,6 +1366,7 @@ pub async fn run_serve(
+@@ -1342,6 +1368,7 @@ pub async fn run_serve(
                                  // the ONLY place a connection is marked control;
                                  // per-call connections never send this. ACK ok.
                                  if let Some(sid) = req.session_id.as_deref() {
@@ -2712,7 +2721,7 @@ index 67e123b..fbafd6c 100644
                                      control_session_id = Some(sid.to_owned());
                                      active_proxy_sessions()
                                          .lock()
-@@ -1401,6 +1426,7 @@ pub async fn run_serve(
+@@ -1401,6 +1428,7 @@ pub async fn run_serve(
                      if let Some(sid) = control_session_id {
                          active_proxy_sessions().lock().unwrap().remove(&sid);
                          reg.end_transport_sessions(&sid);
@@ -2720,7 +2729,7 @@ index 67e123b..fbafd6c 100644
                      }
                      if let Some(connection) = trusted_session {
                          detach_trusted_connection(&trusted_resume_registry, connection).await;
-@@ -1422,6 +1448,9 @@ pub async fn run_serve(
+@@ -1422,6 +1450,9 @@ pub async fn run_serve(
      // stops. Abort and join them before tearing down the SDK runtime.
      connection_tasks.shutdown().await;
      release_active_proxy_sessions();
@@ -2730,7 +2739,7 @@ index 67e123b..fbafd6c 100644
  
      // Do not unlink a replacement socket created after this listener was bound.
      remove_owned_socket(socket_path, bound_socket);
-@@ -1811,6 +1840,7 @@ pub async fn run_serve(
+@@ -1811,6 +1842,7 @@ pub async fn run_serve(
                      // ERROR_BROKEN_PIPE on the next read, ending the while-let
                      // loop equally reliably.
                      let mut control_session_id: Option<String> = None;
@@ -2738,7 +2747,7 @@ index 67e123b..fbafd6c 100644
                      let mut trusted_session: Option<TrustedConnectionSession> = None;
  
                      while let Ok(Some(line)) = lines.next_line().await {
-@@ -2074,12 +2104,13 @@ pub async fn run_serve(
+@@ -2074,12 +2106,13 @@ pub async fn run_serve(
                                      (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                  ).await;
                              }
@@ -2753,7 +2762,7 @@ index 67e123b..fbafd6c 100644
                                      control_session_id = Some(sid.to_owned());
                                      active_proxy_sessions()
                                          .lock()
-@@ -2128,6 +2159,7 @@ pub async fn run_serve(
+@@ -2128,6 +2161,7 @@ pub async fn run_serve(
                      if let Some(sid) = control_session_id {
                          active_proxy_sessions().lock().unwrap().remove(&sid);
                          reg.end_transport_sessions(&sid);
@@ -3811,10 +3820,26 @@ index 29a4d2d..2d0c76d 100644
 +    );
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/lib.rs b/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
-index 879aa53..9697b5e 100644
+index 879aa53..f54758a 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
-@@ -196,3 +196,6 @@ mod display_detection_tests {
+@@ -167,6 +167,15 @@ pub fn recover_orphaned_mpx_devices() {
+     input::reap_orphaned_master_pointers();
+ }
+ 
++/// Standalone daemon startup: give a native Wayland seat one pointer for the
++/// daemon's lifetime, so per-gesture virtual pointers never change whether the
++/// seat has a pointer. See `wayland::seat_pointer`.
++#[cfg(target_os = "linux")]
++pub fn hold_wayland_seat_pointer() {
++    wayland::ensure_nested_session();
++    wayland::seat_pointer::hold();
++}
++
+ #[cfg(test)]
+ mod display_detection_tests {
+     use super::detect_wsl;
+@@ -196,3 +205,6 @@ mod display_detection_tests {
          assert!(!detect_wsl(false, None));
      }
  }
@@ -5557,18 +5582,19 @@ index a2691a0..25d4701 100644
  
      /// Pick a pointer device whose announced Region contains `(x, y)`,
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
-index ca0b769..2aee290 100644
+index ca0b769..af47835 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
-@@ -21,6 +21,7 @@ pub mod persistent_vptr;
+@@ -21,6 +21,8 @@ pub mod persistent_vptr;
  pub(crate) mod portal;
  pub mod portal_screenshot;
  mod primary_seat;
 +mod recording;
++pub mod seat_pointer;
  pub mod shell_helper;
  pub mod sway_ipc;
  mod virtual_keyboard;
-@@ -50,6 +51,10 @@ use wayland_client::{
+@@ -50,6 +52,10 @@ use wayland_client::{
      },
      Connection, Dispatch, Proxy, QueueHandle, WEnum,
  };
@@ -5579,7 +5605,7 @@ index ca0b769..2aee290 100644
  use wayland_protocols_wlr::foreign_toplevel::v1::client::{
      zwlr_foreign_toplevel_handle_v1::{self as ftl_handle, ZwlrForeignToplevelHandleV1},
      zwlr_foreign_toplevel_manager_v1::{
-@@ -395,6 +400,11 @@ struct State {
+@@ -395,6 +401,11 @@ struct State {
      output: Option<WlOutput>,
      output_w: u32,
      output_h: u32,
@@ -5591,7 +5617,7 @@ index ca0b769..2aee290 100644
      // Native screencopy capture state.
      scrcopy_manager: Option<ZwlrScreencopyManagerV1>,
      shm: Option<WlShm>,
-@@ -432,7 +442,11 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
+@@ -432,7 +443,11 @@ impl Dispatch<wl_registry::WlRegistry, ()> for State {
                      qh,
                      (),
                  ));
@@ -5603,7 +5629,7 @@ index ca0b769..2aee290 100644
                  let out = registry.bind::<WlOutput, _, _>(name, version.min(4), qh, ());
                  if state.output.is_none() {
                      state.output = Some(out);
-@@ -469,16 +483,72 @@ impl Dispatch<WlSeat, ()> for State {
+@@ -469,16 +484,72 @@ impl Dispatch<WlSeat, ()> for State {
  impl Dispatch<WlOutput, ()> for State {
      fn event(
          state: &mut Self,
@@ -5681,7 +5707,7 @@ index ca0b769..2aee290 100644
          }
      }
  }
-@@ -864,7 +934,14 @@ fn capture_via_screencopy() -> anyhow::Result<Vec<u8>> {
+@@ -864,7 +935,14 @@ fn capture_via_screencopy() -> anyhow::Result<Vec<u8>> {
                  rgba.extend_from_slice(&[r, g, b, a]);
              }
          }
@@ -5697,7 +5723,7 @@ index ca0b769..2aee290 100644
      })();
  
      // Always tear down regardless of result.
-@@ -881,6 +958,33 @@ fn capture_via_screencopy() -> anyhow::Result<Vec<u8>> {
+@@ -881,6 +959,33 @@ fn capture_via_screencopy() -> anyhow::Result<Vec<u8>> {
      result
  }
  
@@ -5731,7 +5757,7 @@ index ca0b769..2aee290 100644
  /// Allocate an anonymous shared-memory file of `size` bytes and mmap it RW.
  /// Returns the raw fd and the mmap pointer; the caller is responsible for
  /// passing both to [`cleanup_mmap`] when done.
-@@ -1080,6 +1184,81 @@ pub fn screenshot_dispatch_with_pid(xid: u64, pid: u32) -> anyhow::Result<Vec<u8
+@@ -1080,6 +1185,81 @@ pub fn screenshot_dispatch_with_pid(xid: u64, pid: u32) -> anyhow::Result<Vec<u8
      screenshot_dispatch_for_pid(xid, Some(pid))
  }
  
@@ -5813,7 +5839,7 @@ index ca0b769..2aee290 100644
  fn screenshot_dispatch_for_pid(xid: u64, pid: Option<u32>) -> anyhow::Result<Vec<u8>> {
      if is_wayland() && hyprland::is_session() {
          return hyprland::capture(xid, pid).map_err(|error| {
-@@ -1090,6 +1269,17 @@ fn screenshot_dispatch_for_pid(xid: u64, pid: Option<u32>) -> anyhow::Result<Vec
+@@ -1090,6 +1270,17 @@ fn screenshot_dispatch_for_pid(xid: u64, pid: Option<u32>) -> anyhow::Result<Vec
              )
          });
      }
@@ -5831,7 +5857,7 @@ index ca0b769..2aee290 100644
      screenshot_window_bytes_with_dispatch(
          is_wayland(),
          xid,
-@@ -1258,6 +1448,90 @@ pub struct VptrSession {
+@@ -1258,6 +1449,90 @@ pub struct VptrSession {
      pub output_h: u32,
  }
  
@@ -5922,7 +5948,7 @@ index ca0b769..2aee290 100644
  /// Bind manager + seat + virtual-pointer + first output, optionally activate a
  /// foreign-toplevel by `window_id` so the synthesised events land on it, and
  /// return the live session that scroll / drag / click reuse. Wayland forbids a
-@@ -1272,6 +1546,13 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
+@@ -1272,6 +1547,13 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
  
      let mut state = State::default();
      queue.roundtrip(&mut state)?;
@@ -5936,7 +5962,7 @@ index ca0b769..2aee290 100644
      for _ in 0..4 {
          queue.roundtrip(&mut state)?;
      }
-@@ -1323,8 +1604,8 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
+@@ -1323,8 +1605,8 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
          queue.roundtrip(&mut state)?;
      }
  
@@ -5946,7 +5972,7 @@ index ca0b769..2aee290 100644
      Ok(VptrSession {
          conn,
          queue,
-@@ -1423,6 +1704,19 @@ pub fn activate_window_for_input_target(
+@@ -1423,6 +1705,19 @@ pub fn activate_window_for_input_target(
      )
  }
  
@@ -5966,7 +5992,7 @@ index ca0b769..2aee290 100644
  /// Run a focus-bound keyboard transaction only after a compositor adapter has
  /// confirmed the exact PID/window pair, and restore the previously focused
  /// toplevel afterward. Global virtual-keyboard/libei input is refused when the
-@@ -1851,7 +2145,18 @@ pub fn drag(
+@@ -1851,7 +2146,18 @@ pub fn drag(
      button: u8,
  ) -> anyhow::Result<()> {
      with_libei_fallback(
@@ -5986,7 +6012,7 @@ index ca0b769..2aee290 100644
          || {
              libei_wait_pointer_ready()?;
              activate_window_for_input(window_id)?;
-@@ -1871,7 +2176,7 @@ pub fn drag_desktop(
+@@ -1871,7 +2177,7 @@ pub fn drag_desktop(
      button: u8,
  ) -> anyhow::Result<()> {
      with_libei_fallback(
@@ -5995,7 +6021,7 @@ index ca0b769..2aee290 100644
          || {
              libei_wait_pointer_ready()?;
              libei_drag(from_x, from_y, to_x, to_y, steps, duration_ms, button)
-@@ -1881,6 +2186,7 @@ pub fn drag_desktop(
+@@ -1881,6 +2187,7 @@ pub fn drag_desktop(
  
  /// wlroots virtual-pointer implementation of [`drag`].
  #[allow(clippy::too_many_arguments)]
@@ -6003,7 +6029,7 @@ index ca0b769..2aee290 100644
  fn drag_vptr(
      window_id: Option<u64>,
      from_x: i32,
-@@ -1888,9 +2194,11 @@ fn drag_vptr(
+@@ -1888,9 +2195,11 @@ fn drag_vptr(
      to_x: i32,
      to_y: i32,
      steps: u32,
@@ -6015,7 +6041,7 @@ index ca0b769..2aee290 100644
      std::thread::sleep(std::time::Duration::from_millis(40));
      let (w, h) = (sess.output_w, sess.output_h);
      let btn = evdev_pointer_button(button);
-@@ -1907,17 +2215,28 @@ fn drag_vptr(
+@@ -1907,17 +2216,28 @@ fn drag_vptr(
      std::thread::sleep(std::time::Duration::from_millis(15));
      sess.vptr.button(event_time_ms(), btn, ButtonState::Pressed);
      sess.vptr.frame();
@@ -6045,7 +6071,7 @@ index ca0b769..2aee290 100644
      }
      let (tx, ty) = clamp_xy(to_x, to_y);
      sess.vptr.motion_absolute(event_time_ms(), tx, ty, w, h);
-@@ -1926,6 +2245,9 @@ fn drag_vptr(
+@@ -1926,6 +2246,9 @@ fn drag_vptr(
      sess.vptr
          .button(event_time_ms(), btn, ButtonState::Released);
      sess.vptr.frame();
@@ -6101,6 +6127,198 @@ index 0000000..f94fdaf
 +            (y - self.bounds.1) / self.bounds.3,
 +            pressed,
 +        );
++    }
++}
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/seat_pointer.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/seat_pointer.rs
+new file mode 100644
+index 0000000..fd21a55
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/seat_pointer.rs
+@@ -0,0 +1,186 @@
++//! One idle virtual pointer held on the input seat for the daemon's lifetime.
++//!
++//! Every wlroots gesture creates its own `zwlr_virtual_pointer_v1` (click,
++//! scroll and drag in the parent module, held buttons in
++//! [`super::persistent_vptr`]) and destroys it afterwards. On a seat with no
++//! other pointer, such as a headless or nested compositor, that device is the
++//! seat's only pointer: creating it makes the compositor announce
++//! `wl_seat.capabilities(pointer)` and destroying it withdraws the capability,
++//! which also destroys every client's `wl_pointer`. A client receives pointer
++//! events only after it answers the announcement with `wl_seat.get_pointer`;
++//! the compositor drops whatever it would have sent the client before then.
++//! A gesture presses tens of milliseconds after creating its device, so an app
++//! whose main loop was busy for that long never saw the press or the start of
++//! the drag. The injecting client cannot observe another client's binding, so
++//! no wait before the press could be correct.
++//!
++//! Holding one device from daemon startup gives the seat a pointer capability
++//! that never changes while the daemon runs. Apps bind their pointer once, when
++//! they start or when the daemon does, and each gesture's own device joins a
++//! seat that already has a pointer, so its first event reaches the app. The
++//! device itself sends nothing.
++
++use std::sync::OnceLock;
++
++use wayland_client::{
++    protocol::{
++        wl_registry,
++        wl_seat::{self, WlSeat},
++    },
++    Connection, Dispatch, EventQueue, Proxy, QueueHandle,
++};
++use wayland_protocols_wlr::virtual_pointer::v1::client::{
++    zwlr_virtual_pointer_manager_v1::ZwlrVirtualPointerManagerV1,
++    zwlr_virtual_pointer_v1::ZwlrVirtualPointerV1,
++};
++
++use super::primary_seat::Seats;
++
++#[derive(Default)]
++struct Anchor {
++    seats: Seats<WlSeat>,
++    manager: Option<ZwlrVirtualPointerManagerV1>,
++}
++
++/// Create the seat's pointer before the daemon accepts its first call, then
++/// keep it on its own thread until the compositor goes away. Idempotent. Does
++/// nothing outside a native Wayland input session, in nested-injection mode, or
++/// on compositors without wlroots virtual pointers (libei input goes through
++/// devices the compositor itself owns).
++pub fn hold() {
++    static STARTED: OnceLock<()> = OnceLock::new();
++    if !super::wayland_input_enabled() || super::is_inject_mode() {
++        return;
++    }
++    STARTED.get_or_init(|| {
++        // The thread owns the connection from the start; `hold` returns once
++        // the device exists or the thread has given up.
++        let (ready, created) = std::sync::mpsc::sync_channel::<()>(1);
++        let spawned = std::thread::Builder::new()
++            .name("cua-seat-pointer".into())
++            .spawn(move || {
++                let (_conn, mut queue, mut state, _pointer) = match open() {
++                    Ok(Some(held)) => held,
++                    Ok(None) => return,
++                    Err(error) => {
++                        tracing::warn!("could not hold a seat pointer: {error:#}");
++                        return;
++                    }
++                };
++                let _ = ready.send(());
++                // The device sends nothing; dispatching keeps the seat and
++                // registry events from piling up unread and ends the thread
++                // when the compositor exits.
++                loop {
++                    if let Err(error) = queue.blocking_dispatch(&mut state) {
++                        tracing::debug!("seat pointer connection ended: {error}");
++                        return;
++                    }
++                }
++            });
++        match spawned {
++            Ok(_) => {
++                let _ = created.recv();
++            }
++            Err(error) => tracing::warn!("could not hold a seat pointer: {error}"),
++        }
++    });
++}
++
++#[allow(clippy::type_complexity)]
++fn open() -> anyhow::Result<
++    Option<(
++        Connection,
++        EventQueue<Anchor>,
++        Anchor,
++        ZwlrVirtualPointerV1,
++    )>,
++> {
++    let conn = Connection::connect_to_env()?;
++    let mut queue = conn.new_event_queue::<Anchor>();
++    let qh = queue.handle();
++    conn.display().get_registry(&qh, ());
++    let mut state = Anchor::default();
++    // Globals first, then the seats' names, which choose the primary seat
++    // exactly as the gesture sessions do.
++    queue.roundtrip(&mut state)?;
++    queue.roundtrip(&mut state)?;
++    let (Some(manager), Some(seat)) = (state.manager.clone(), state.seats.selected()) else {
++        return Ok(None);
++    };
++    let pointer = manager.create_virtual_pointer(Some(&seat), &qh, ());
++    // Once this returns the compositor has added the device and announced the
++    // pointer capability to every client.
++    queue.roundtrip(&mut state)?;
++    Ok(Some((conn, queue, state, pointer)))
++}
++
++impl Dispatch<wl_registry::WlRegistry, ()> for Anchor {
++    fn event(
++        state: &mut Self,
++        registry: &wl_registry::WlRegistry,
++        event: wl_registry::Event,
++        _: &(),
++        _: &Connection,
++        qh: &QueueHandle<Self>,
++    ) {
++        if let wl_registry::Event::Global {
++            name,
++            interface,
++            version,
++        } = event
++        {
++            if interface == WlSeat::interface().name {
++                state
++                    .seats
++                    .add(registry.bind::<WlSeat, _, _>(name, version.min(7), qh, ()));
++            } else if interface == ZwlrVirtualPointerManagerV1::interface().name {
++                state.manager = Some(registry.bind::<ZwlrVirtualPointerManagerV1, _, _>(
++                    name,
++                    version.min(2),
++                    qh,
++                    (),
++                ));
++            }
++        }
++    }
++}
++
++impl Dispatch<WlSeat, ()> for Anchor {
++    fn event(
++        state: &mut Self,
++        seat: &WlSeat,
++        event: wl_seat::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        if let wl_seat::Event::Name { name } = event {
++            state.seats.name(seat, name);
++        }
++    }
++}
++
++impl Dispatch<ZwlrVirtualPointerManagerV1, ()> for Anchor {
++    fn event(
++        _: &mut Self,
++        _: &ZwlrVirtualPointerManagerV1,
++        _: <ZwlrVirtualPointerManagerV1 as Proxy>::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++    }
++}
++
++impl Dispatch<ZwlrVirtualPointerV1, ()> for Anchor {
++    fn event(
++        _: &mut Self,
++        _: &ZwlrVirtualPointerV1,
++        _: <ZwlrVirtualPointerV1 as Proxy>::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs

@@ -145,22 +145,6 @@ export function continueTurn(id: string, reason: InterruptionReason = "host-quit
 }
 
 /**
- * Send a failed message again at `at`: the host admits a new request with its
- * words and attachments, held until then (`LiveRequest.wake`), and the queue
- * shows it with its time. The failed record stays.
- */
-export async function holdUntil(id: string, after: string, at: number): Promise<boolean> {
-  if (!hasBridge()) return false
-  try {
-    await getMako().liveHoldUntil(id, crypto.randomUUID(), { after, at })
-    return true
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : String(error))
-    return false
-  }
-}
-
-/**
  * Re-issue every prompt a send left unconfirmed, once the host is back. The
  * host settles a request by its id, so a prompt it already accepted comes
  * back as that acceptance and one it never saw is accepted now; nothing is
