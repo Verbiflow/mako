@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdir, open } from "node:fs/promises"
+import { mkdir, open, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
@@ -35,7 +35,13 @@ export async function startHost({ dataRoot, output, env = process.env }) {
   }
   if (probe?.state !== "ready") {
     child.kill("SIGKILL")
-    throw new Error(exited ? `mako-host exited before it answered (${exited.code ?? exited.signal}); see ${output}` : `mako-host didn't answer /health within 30 s; see ${output}`)
+    // Its own last words, so a failure inside an image build (whose files go with it) says why: what it
+    // printed, else its log, where a crash at start is written.
+    const tail = async (file) => (await readFile(file, "utf8").catch(() => "")).trimEnd().split("\n").slice(-40).join("\n")
+    const hostLog = join(dataRoot, "logs", "host.log")
+    const printed = await tail(output)
+    const [file, said] = printed ? [output, printed] : [hostLog, await tail(hostLog)]
+    throw new Error(`${exited ? `mako-host exited before it answered (${exited.code ?? exited.signal})` : "mako-host didn't answer /health within 30 s"}; ${said ? `${file} ends:\n${said}` : `${output} and ${hostLog} are empty`}`)
   }
   const client = randomUUID()
   return {

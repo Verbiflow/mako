@@ -46,7 +46,7 @@ export interface Host {
 }
 
 /** The domains of packages/host/src the core builds together; each window uses them first. */
-const CORE = ["threads", "conversations", "harnesses", "workspaces", "tools", "control", "git", "usage", "application", "attribution"]
+const CORE = ["threads", "conversations", "harnesses", "workspaces", "tools", "control", "git", "usage", "application", "attribution", "media"]
 
 /**
  * The core's modules in the order they build on each other, each step
