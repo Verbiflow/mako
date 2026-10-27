@@ -32,6 +32,11 @@ export type HarnessCheckOptions = {
   writers(path: string): SessionWriters | null
   /** The harness here as a restore weighs it (`RuntimeUpdates.restoreRuntime`). */
   installed(harness: string): InstalledRuntime
+  /**
+   * Takes the harness's installed readings again (`RuntimeUpdates.reread`): one the person updated a moment ago, in
+   * Mako or a terminal, is weighed as it is now, not as it was last read. Spawns only for a binary that changed.
+   */
+  reread(harness: string): Promise<void>
   /** The runtimes' readings (`RuntimeUpdates.snapshot`): what an update offer installs. */
   updates(): HarnessUpdates
   /** A harness's name as the person reads it, for a refusal's words. */
@@ -56,6 +61,8 @@ export class HarnessCheck {
   async check(sessions: readonly CheckedSession[]): Promise<ThreadHarnessCheck> {
     const held = await this.#cloud()
     if ("missed" in held) return { kind: "unknown", reason: held.missed }
+    const weighed = new Set(sessions.map((session) => session.harness).filter((harness) => held.cloud.harnesses[harness]))
+    await Promise.all([...weighed].map((harness) => this.#options.reread(harness)))
     const check = weighHarnesses(held.cloud, sessions, this.#options)
     return check.kind === "known" && check.ahead.length ? { ...check, refusal: aheadRefusal(check.ahead, this.#options.label) } : check
   }

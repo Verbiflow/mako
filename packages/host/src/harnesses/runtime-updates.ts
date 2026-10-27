@@ -106,6 +106,16 @@ interface Carried {
 const READING_FIELDS = persistedInfoSchema.keyof().options
 type Signature = z.infer<typeof signatureSchema>
 
+/** How one reading is taken (`RuntimeUpdates.check`). */
+interface CheckOptions {
+  /** Run the binary for its version even when the file hasn't changed. */
+  force?: boolean
+  /** Ask the registry now, whatever the age of the last public reading. */
+  latest?: boolean
+  /** Only the installed reading: the public version waits for its own pass. */
+  installedOnly?: boolean
+}
+
 export interface RuntimeChange {
   provider: string
   from?: string
@@ -122,6 +132,8 @@ export interface RuntimeUpdatesOptions {
   env?: () => NodeJS.ProcessEnv
   /** The installed reading moved: the binary is new, gone, or another version. */
   onRuntimeChanged?: (change: RuntimeChange) => void
+  /** A harness's name as the person reads it, for an update's words. Default: the provider's id. */
+  label?: (provider: string) => string
   /** Probes and runners, injectable for tests. Defaults spawn real processes and read the npm registry. */
   version?: (
     binary: string,
@@ -185,6 +197,8 @@ export class RuntimeUpdates {
   private declined = false
   private carried: Carried = { file: {}, updates: {} }
   private readonly checking = new Map<string, Promise<HarnessUpdateInfo>>()
+  /** The npm prefix each npm global install was last read under: where its update installs (`npmUpdate`). */
+  private readonly npmRoots = new Map<string, NpmRoot>()
   private readonly updating = new Map<string, "updating" | "installing">()
   private readonly locks = new Map<string, Promise<void>>()
   private refreshing: Promise<HarnessUpdates> | null = null
@@ -344,11 +358,18 @@ export class RuntimeUpdates {
   }
 
   /**
-   * What is known now, and a fresh reading behind it when the caller asks or
-   * the last one is old. Never waits on a probe.
+   * What is known now, with a fresh reading behind it when the last one is
+   * old; that one never waits on a probe. Asked to `refresh`, it answers with
+   * a reading taken after the ask, registry included: what an update or a
+   * terminal just did shows in the answer, not in a later event.
    */
   async read(refresh = false): Promise<HarnessUpdates> {
     await this.load()
+    if (refresh) {
+      // A pass already running may have read a binary before it changed: this answer waits it out and reads again.
+      await this.refreshing?.catch(() => undefined)
+      return this.refresh({ latest: true })
+    }
     const now = this.options.now?.() ?? Date.now()
     const stale = this.sources().some((source) => {
       const held = this.updates[source.key]
@@ -356,9 +377,23 @@ export class RuntimeUpdates {
         !held?.checkedAt || now - held.checkedAt > this.options.installedTtlMs
       )
     })
-    if (refresh || stale)
-      void this.refresh({ latest: refresh }).catch(() => undefined)
+    if (stale) void this.refresh().catch(() => undefined)
     return this.snapshot()
+  }
+
+  /**
+   * Takes the installed readings of every installation of `harness` again,
+   * after any reading already running, so what's weighed next is what is
+   * installed now. Spawns only for a binary that changed since its last
+   * reading, and leaves the public version to its own pass. An installation
+   * being updated or installed is left alone: its binary is mid-write, and
+   * the update reads it again as it ends.
+   */
+  async reread(harness: string): Promise<void> {
+    await this.load()
+    await Promise.all(this.sources().filter((source) => source.provider === harness && !this.updating.has(source.key)).map((source) =>
+      this.readAfter(source.key, { installedOnly: true }).catch(() => undefined)
+    ))
   }
 
   /** Every runtime, read once; concurrent callers share the pass. */
@@ -385,7 +420,7 @@ export class RuntimeUpdates {
    */
   check(
     provider: string,
-    options: { force?: boolean; latest?: boolean } = {}
+    options: CheckOptions = {}
   ): Promise<HarnessUpdateInfo> {
     const active = this.checking.get(provider)
     if (active) return active
@@ -399,7 +434,7 @@ export class RuntimeUpdates {
 
   private async readRuntime(
     provider: string,
-    options: { force?: boolean; latest?: boolean }
+    options: CheckOptions
   ): Promise<HarnessUpdateInfo> {
     await this.load()
     const source = this.sources().find((entry) => entry.key === provider)
@@ -445,12 +480,16 @@ export class RuntimeUpdates {
           next.description = policy.description
           next.primary = policy.primary
         }
-        Object.assign(next, resolveRuntimeChannel(policy, binary, real))
+        const { npmRoot, ...placement } = resolveRuntimeChannel(policy, binary, real)
+        Object.assign(next, placement)
+        if (npmRoot) this.npmRoots.set(provider, npmRoot)
+        else this.npmRoots.delete(provider)
         // Never offer an update when its executable could not identify itself.
         if (!installed.version) delete next.update
       } else {
         // Not installed: nothing to update, only the installer Mako can run here.
         this.signatures.delete(provider)
+        this.npmRoots.delete(provider)
         next.install = source.install.find(
           (plan) => resolveExecutable(plan.command, env) !== null
         )
@@ -491,7 +530,7 @@ export class RuntimeUpdates {
     }
     const versions = runtimeVersions(next.installed, policy.versions, policy.belowOldest)
     if (versions) next.versions = versions
-    this.pinUpdate(next, policy)
+    this.pinUpdate(next, policy, this.npmRoots.get(provider))
     next.checkedAt = this.options.now?.() ?? Date.now()
     const working = this.updating.get(provider)
     this.publish(provider, working ? { ...next, phase: working } : next)
@@ -513,6 +552,7 @@ export class RuntimeUpdates {
     }
     await this.persist()
     if (
+      !options.installedOnly &&
       next.installed &&
       next.releaseSource &&
       this.latestDue(next, options.latest === true)
@@ -523,7 +563,7 @@ export class RuntimeUpdates {
     return this.updates[provider] ?? next
   }
 
-  private pinUpdate(info: HarnessUpdateInfo, source: RuntimeUpdateSource) {
+  private pinUpdate(info: HarnessUpdateInfo, source: RuntimeUpdateSource, npmRoot: NpmRoot | undefined) {
     if (!source.pinVersion && !source.native?.pinVersion) return
     // A pinned target older than the installed release is no update; running it would move back.
     if (!info.latest || info.latestError || !info.binary
@@ -553,10 +593,13 @@ export class RuntimeUpdates {
         info.channel === "bun" ||
         info.channel === "pnpm")
     ) {
-      info.update = packageUpdate(
+      const update = packageUpdate(
         info.channel,
-        `${source.npmPackage}@${info.latest}`
+        `${source.npmPackage}@${info.latest}`,
+        npmRoot
       )
+      if (update) info.update = update
+      else delete info.update
     }
   }
 
@@ -600,7 +643,7 @@ export class RuntimeUpdates {
         )
       const next: HarnessUpdateInfo = { ...held, latest, latestCheckedAt: at }
       delete next.latestError
-      this.pinUpdate(next, source)
+      this.pinUpdate(next, source, this.npmRoots.get(provider))
       this.publish(provider, next)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -609,7 +652,7 @@ export class RuntimeUpdates {
         delete next.latest
         delete next.update
       }
-      this.pinUpdate(next, source)
+      this.pinUpdate(next, source, this.npmRoots.get(provider))
       this.publish(provider, next)
     }
   }
@@ -664,29 +707,40 @@ export class RuntimeUpdates {
    * at a time, because two npm globals installing together corrupt each
    * other's tree; one update per provider at a time, because the second
    * would report the first's outcome as its own.
+   *
+   * The plan is the one the reading offers: the public version it was read
+   * with stands for its hour, so a registry that's slow at the moment of the
+   * click doesn't take back an update the person was just offered. The
+   * update has worked only when the binary Mako runs reports the version the
+   * plan installs; anything short of that is a failure that names both.
    */
   async update(provider: string): Promise<HarnessUpdateInfo> {
     await this.load()
     const source = this.sources().find((entry) => entry.key === provider)
-    if (!source) throw new Error(`${provider} does not update through Mako`)
+    if (!source) throw new Error(`${this.label(provider)} does not update through Mako`)
     if (this.updating.has(provider))
-      throw new Error(`${provider} is already updating`)
-    const current = await this.check(provider, { latest: true })
+      throw new Error(`${this.label(provider)} is already updating`)
+    const current = await this.check(provider)
     if (this.updating.has(provider))
-      throw new Error(`${provider} is already updating`)
+      throw new Error(`${this.label(provider, current)} is already updating`)
     const plan = current.update
     if (!plan) {
-      throw new Error(
-        current.managedBy
-          ? `${provider} updates come from ${current.managedBy}`
-          : `${provider} does not update through Mako`
-      )
+      // Already where an update would take it: what was offered is done, by a terminal or another window.
+      if (current.installed && current.latest && !current.error && !current.latestError && compareVersions(current.installed, current.latest) >= 0) {
+        const done = withoutPhase({ ...current, result: { at: this.options.now?.() ?? Date.now(), outcome: "unchanged", from: current.installed, to: current.installed } })
+        this.publish(provider, done)
+        await this.persist()
+        return done
+      }
+      throw new Error(this.noUpdate(provider, current))
     }
     const env = this.options.env?.() ?? process.env
     const lockKey =
       current.channel === "self"
         ? source.provider
         : (current.channel ?? provider)
+    const npmRoot = current.channel === "npm" ? this.npmRoots.get(provider) : undefined
+    const prepared = source.updateEnvironment?.(env) ?? env
     this.updating.set(provider, "updating")
     this.publish(provider, { ...current, phase: "updating" })
     const startedAt = this.options.now?.() ?? Date.now()
@@ -696,12 +750,11 @@ export class RuntimeUpdates {
         provider,
         current,
         plan,
-        source.updateEnvironment?.(env) ?? env,
+        // The npm and node of the prefix the install lives under come first, where it has them.
+        npmRoot ? environmentForExecutable(`${npmRoot.bin}/npm`, prepared) : prepared,
         lockKey
       )
-      // A reading already in flight predates the update; wait it out, then read again.
-      await this.checking.get(provider)?.catch(() => undefined)
-      const after = await this.check(provider, { force: true, latest: true })
+      const after = await this.readAfter(provider, { force: true, latest: true })
       if (failure !== null) {
         // A vendor installer may end in an interactive step (`devin setup`)
         // that fails without a terminal once the CLI is in place: the binary
@@ -720,14 +773,13 @@ export class RuntimeUpdates {
         throw new Error(
           after.error ?? "The updated executable did not report a version"
         )
-      if (
-        current.installed === to &&
-        current.latest &&
-        compareVersions(to, current.latest) < 0
-      )
-        throw new Error(
-          `The updater finished, but this installation is still ${to}. Version ${current.latest} is available. Check the installation details and try again.`
-        )
+      // A pinned plan installs `latest` exactly; another updater goes to its own newest, at least not staying put.
+      const target = current.latest
+      const pinned = Boolean(source.pinVersion || source.native?.pinVersion)
+      if (target && compareVersions(to, target) < 0 && (pinned || to === current.installed))
+        throw new Error(missedWords(this.label(provider, current), plan, npmRoot, target, after.binary ?? current.binary, to))
+      if (after.binary && current.binary && after.binary !== current.binary)
+        hostWarn("runtime", "the update changed which binary Mako runs", { provider, before: current.binary, after: after.binary })
       const outcome =
         to && current.installed && compareVersions(to, current.installed) === 0
           ? "unchanged"
@@ -737,6 +789,7 @@ export class RuntimeUpdates {
         from: current.installed ?? null,
         to: to ?? null,
         outcome,
+        binary: after.binary ?? null,
       })
       const done = withoutPhase({
         ...after,
@@ -747,13 +800,15 @@ export class RuntimeUpdates {
       await this.persist()
       return done
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      hostWarn("runtime", "update failed", { provider, from: current.installed ?? null, binary: current.binary ?? null, error: message })
       const failed = withoutPhase({
         ...(this.updates[provider] ?? current),
         result: {
           at: startedAt,
           outcome: "failed",
           from: current.installed,
-          message: error instanceof Error ? error.message : String(error),
+          message,
         },
       })
       this.updating.delete(provider)
@@ -763,6 +818,32 @@ export class RuntimeUpdates {
     } finally {
       this.updating.delete(provider)
     }
+  }
+
+  /** A reading begun after now: readings already in flight began before, and are waited out first. */
+  private async readAfter(provider: string, options: CheckOptions): Promise<HarnessUpdateInfo> {
+    for (let active = this.checking.get(provider); active; active = this.checking.get(provider))
+      await active.catch(() => undefined)
+    return this.check(provider, options)
+  }
+
+  /** The runtime's name as the person reads it: its installation's own label, else the harness's. */
+  private label(provider: string, info?: HarnessUpdateInfo): string {
+    const harness = this.sources().find((entry) => entry.key === provider)?.provider ?? provider
+    return info?.label ?? this.options.label?.(harness) ?? harness
+  }
+
+  /** Why a reading offers no update, in the words a refused click shows. */
+  private noUpdate(provider: string, info: HarnessUpdateInfo): string {
+    const label = this.label(provider, info)
+    if (info.managedBy) return `${label} updates come from ${info.managedBy}`
+    if (!info.binary) return `${label} isn't installed here`
+    if (info.error) return `Mako can't update ${label}: ${info.error}`
+    if (info.latestError) return `Mako has no version of ${label} to update to: ${info.latestError.replace(/\.$/, "")}`
+    if (info.channel === "npm" && !this.npmRoots.has(provider)) return `Mako can't update ${label}: ${info.binary} isn't in an npm global folder Mako can name`
+    if (info.channel === "brew") return `${label} comes from Homebrew, which keeps it at its own version`
+    if (info.channel === "manual") return `Mako can't tell how ${info.binary} was installed, so it doesn't update it`
+    return `${label} does not update through Mako`
   }
 
   /**
@@ -804,8 +885,7 @@ export class RuntimeUpdates {
       // A vendor installer may end in an interactive step (`devin setup`
       // signs in) that fails without a terminal after the CLI is in place, so
       // the binary reporting a supported version decides, not the exit code.
-      await this.checking.get(provider)?.catch(() => undefined)
-      const after = await this.check(provider, { force: true, latest: true })
+      const after = await this.readAfter(provider, { force: true, latest: true })
       if (!after.binary)
         throw new Error(
           failure ??
@@ -868,6 +948,8 @@ export class RuntimeUpdates {
         provider,
         channel: current.channel ?? null,
         command: [plan.command, ...plan.args].join(" "),
+        resolved: command,
+        binary: current.binary ?? null,
         from: current.installed ?? null,
       })
       const outcome = await (this.options.run ?? spawnUpdate)(
@@ -891,7 +973,7 @@ export class RuntimeUpdates {
       return null
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      hostWarn("runtime", `${action} failed`, { provider, error: message })
+      hostWarn("runtime", `${action} command failed`, { provider, error: message })
       return message
     } finally {
       release()
@@ -988,11 +1070,40 @@ function commandText(plan: HarnessUpdateCommand): string {
   return [basename(plan.command), ...plan.args].join(" ")
 }
 
+/** The npm prefix a global npm install lives under, and the folder its own `npm` and `node` would be in. */
+export interface NpmRoot {
+  prefix: string
+  bin: string
+}
+
+/** Where a binary came from (`resolveRuntimeChannel`): its channel, its owner or update, and for an npm global, its prefix. */
+export interface RuntimePlacement extends Pick<HarnessUpdateInfo, "channel" | "managedBy" | "update"> {
+  npmRoot?: NpmRoot
+}
+
+/**
+ * The npm prefix of a file inside a global npm package: `<prefix>/lib/node_modules/…`,
+ * or `<prefix>/node_modules/…` on Windows, where the prefix is npm's own `…/npm`
+ * folder and holds the commands itself. Undefined for a project's own
+ * `node_modules`, which no global update reaches.
+ */
+function npmRootOf(path: string): NpmRoot | undefined {
+  const posix = path.indexOf("/lib/node_modules/")
+  if (posix > 0) {
+    const prefix = path.slice(0, posix)
+    return { prefix, bin: `${prefix}/bin` }
+  }
+  const windows = path.toLowerCase().indexOf("/npm/node_modules/")
+  if (windows < 0) return undefined
+  const prefix = path.slice(0, windows + "/npm".length)
+  return { prefix, bin: prefix }
+}
+
 export function resolveRuntimeChannel(
   source: RuntimeUpdateSource,
   binary: string,
   real: string
-): Pick<HarnessUpdateInfo, "channel" | "managedBy" | "update"> {
+): RuntimePlacement {
   const paths = [binary, real]
   const normalized = paths.map((path) => path.replaceAll("\\", "/"))
   const managed = source.managedBy?.find(([needle]) =>
@@ -1032,24 +1143,42 @@ export function resolveRuntimeChannel(
       channel: "pnpm",
       update: pkg ? packageUpdate("pnpm", pkg) : undefined,
     }
-  if (has("/lib/node_modules/", "/node_modules/.bin/", "/npm/node_modules/"))
+  if (has("/lib/node_modules/", "/node_modules/.bin/", "/npm/node_modules/")) {
+    // The package's own file names its prefix; the link on PATH may be anywhere.
+    const npmRoot = [...normalized].reverse().map(npmRootOf).find((root) => root !== undefined)
+    if (!npmRoot) return { channel: "npm" }
     return {
       channel: "npm",
-      update: pkg ? packageUpdate("npm", pkg) : undefined,
+      npmRoot,
+      update: pkg ? packageUpdate("npm", pkg, npmRoot) : undefined,
     }
+  }
   if (has("/cellar/", "/caskroom/")) {
     if (!source.homebrew) return { channel: "brew", managedBy: "Homebrew" }
     const { name, cask } = source.homebrew
+    // The `brew` of the Homebrew that holds this keg (an Apple silicon Mac can have /usr/local's beside /opt/homebrew's).
+    const keg = normalized.find((path) => /\/(cellar|caskroom)\//i.test(path)) ?? ""
+    const prefix = keg.slice(0, keg.search(/\/(cellar|caskroom)\//i))
     return {
       channel: "brew",
       update: {
         label: "Update with Homebrew",
-        command: "brew",
+        command: prefix ? `${prefix}/bin/brew` : "brew",
         args: cask ? ["upgrade", "--cask", name] : ["upgrade", name],
       },
     }
   }
   return { channel: "manual" }
+}
+
+/**
+ * Why an update that ran left the binary Mako runs short of the version it
+ * installs, naming both: where the update went and what Mako runs.
+ */
+function missedWords(label: string, plan: HarnessUpdateCommand, npmRoot: NpmRoot | undefined, target: string, binary: string | undefined, installed: string): string {
+  const runs = binary ? `Mako runs ${binary}, still ${installed}` : `the ${label} Mako runs is still ${installed}`
+  if (npmRoot) return `npm installed ${label} ${target} into ${npmRoot.prefix}, but ${runs}.`
+  return `${plan.label} finished, but ${runs}, not ${target}.`
 }
 
 function withoutPhase(info: HarnessUpdateInfo): HarnessUpdateInfo {
@@ -1058,11 +1187,17 @@ function withoutPhase(info: HarnessUpdateInfo): HarnessUpdateInfo {
   return copy
 }
 
+/**
+ * A package manager's global update. npm's goes to the prefix the install
+ * lives under, named; one that can't be placed (`npmRoot` unknown) has none,
+ * since npm's configured prefix may be another tree.
+ */
 function packageUpdate(
   channel: "npm" | "bun" | "pnpm",
-  pkg: string
-): HarnessUpdateCommand {
-  if (channel === "npm") return npmUpdate(pkg)
+  pkg: string,
+  npmRoot?: NpmRoot
+): HarnessUpdateCommand | undefined {
+  if (channel === "npm") return npmRoot ? npmUpdate(pkg, npmRoot.prefix) : undefined
   return {
     label: `Update with ${channel}`,
     command: channel,

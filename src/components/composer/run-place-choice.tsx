@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useCloudAccount } from "@/state/cloud-account"
 import { decideCarriedFiles, readCarriedFiles, useCarriedFiles } from "@/state/carried-files"
-import { bringBack, checkHarnesses, checkHarnessesAgain, moveToCloud, updateThen, useCloudMoves } from "@/state/cloud-moves"
+import { bringBack, checkHarnesses, moveToCloud, updateThen, useCloudMoves } from "@/state/cloud-moves"
 import { HarnessesBehind } from "./harnesses-behind"
 import { runPlaceStore, useRunPlace } from "@/state/run-place"
 import { shallowEqual } from "@/state/store"
@@ -106,7 +106,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
                 void updateThen(live.key, "back")
               }}
               onAnyway={back}
-              onCheckAgain={() => void checkHarnessesAgain(live.key)}
+              onCheckAgain={() => void checkHarnesses(live.key)}
             />
           ) : null}
         </PopoverContent>
@@ -177,7 +177,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
           onClick={behind.length ? undefined : () => start(false)}
         />
         {behind.length ? (
-          <HarnessesBehind behind={behind} way="move" handOff={handOff} onUpdate={() => start(true)} onAnyway={() => start(false)} onCheckAgain={() => void checkHarnessesAgain(live.key)} />
+          <HarnessesBehind behind={behind} way="move" handOff={handOff} onUpdate={() => start(true)} onAnyway={() => start(false)} onCheckAgain={() => void checkHarnesses(live.key)} />
         ) : null}
         </>
         )}

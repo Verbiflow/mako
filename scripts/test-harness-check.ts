@@ -98,8 +98,10 @@ const options: Pick<HarnessCheckOptions, "writers" | "installed" | "updates"> = 
   let asked = 0
   let answer: CloudHarnesses | null | Error = cloud
   let signedIn = true
+  const reread: string[] = []
   const check = new HarnessCheck({
     ...options,
+    reread: async (harness) => void reread.push(harness),
     label: (harness) => harness,
     account: () => (signedIn ? { cloudHarnesses: async () => {
       asked += 1
@@ -109,6 +111,7 @@ const options: Pick<HarnessCheckOptions, "writers" | "installed" | "updates"> = 
   })
   const [first, second] = await Promise.all([check.check([{ harness: "codex", path: "/codex/new.jsonl" }]), check.check([{ harness: "codex" }])])
   assert.equal(asked, 1, "two checks at once ask the cloud once")
+  assert.deepEqual(reread, ["codex", "codex"], "each check weighs the installed reading taken again, of the harnesses the cloud runs")
   assert.equal(first.kind === "known" && first.behind[0]?.harness, "codex")
   assert.deepEqual(second, first)
   await check.check([{ harness: "grok" }])
@@ -141,7 +144,7 @@ const options: Pick<HarnessCheckOptions, "writers" | "installed" | "updates"> = 
     Date.now = now
   }
   signedIn = false
-  const signedOut = new HarnessCheck({ ...options, label: (harness) => harness, account: () => undefined })
+  const signedOut = new HarnessCheck({ ...options, reread: async () => {}, label: (harness) => harness, account: () => undefined })
   assert.deepEqual(await signedOut.check([{ harness: "codex" }]), { kind: "unknown", reason: "This Mac isn't signed in to Mako Cloud." })
 }
 

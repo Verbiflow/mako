@@ -4,7 +4,7 @@ import { makoRecords } from "@mako/sessions/record-streams"
 import type { MethodTable } from "../base/methods.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import type { ProviderHost } from "./host.js"
-import { describeHarnesses } from "./harness-descriptors.js"
+import { describeHarnesses, harnessLabel } from "./harness-descriptors.js"
 import { describeConnection } from "./connection-capability.js"
 import { toolHarnesses } from "./tool-harnesses.js"
 import type { ToolHarnesses } from "../tools/index.js"
@@ -100,6 +100,7 @@ export function openHarnesses({ host, appRoot, userRoot, catalog, live, emit, jo
     onRuntimeChanged: ({ provider }) => {
       void profiles.refresh(provider)
     },
+    label: (provider) => harnessLabel(host, provider),
   })
   host.launchReadings.bind((provider) => updates.launchVersion(provider))
   // When each harness published its releases, for the record store's evidence pass: read hourly at most once a day, never waited on.
@@ -194,7 +195,8 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
     )
   })
   // What is known answers at once; a reading that is due runs behind it and
-  // arrives as `runtime-updates`. `refresh` re-reads everything, registry included.
+  // arrives as `runtime-updates`. `refresh` re-reads everything, registry
+  // included, and answers with that reading.
   methods.handle("mako:harness-updates", (refresh?: boolean) => harnesses.updates.read(refresh === true))
   methods.handle("mako:harness-update", (provider: string) => harnesses.updates.update(provider))
   methods.handle("mako:harness-install", (provider: string) => harnesses.updates.install(provider))
