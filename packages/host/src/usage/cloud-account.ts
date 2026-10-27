@@ -59,6 +59,7 @@ import type { CloudRepository } from "../contracts/cloud-threads.js"
 import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
+import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
 import { errorMessage } from "../base/error-message.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
 import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
@@ -415,6 +416,15 @@ export class CloudAccounts {
   /** Tells the account's list what changed of this Mac's Sessions, on the runtime link it serves now (none while signed out). */
   reportSessions(): void {
     this.#options.sessions?.report(this.#served)
+  }
+
+  /**
+   * The harness versions the cloud's machines run: the record of the image it makes them from. Null from a cloud that
+   * doesn't say (one older than saying it, or one that names no image).
+   */
+  async cloudHarnesses(): Promise<CloudHarnesses | null> {
+    const response = await this.#call("cloud.harnesses", "GET", "/v1/cloud/harnesses", undefined, false, [404])
+    return response.status === 404 ? null : CloudHarnessesSchema.parse(await response.json())
   }
 
   async devices(): Promise<{ devices: CloudDevice[]; current: string }> {

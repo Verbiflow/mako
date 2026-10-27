@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, type ReactNode } from "react"
 import type { CarriedFilesView } from "@mako/host/contracts/cloud-carried-files"
 import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon, LoaderCircleIcon } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -8,7 +8,8 @@ import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useCloudAccount } from "@/state/cloud-account"
 import { decideCarriedFiles, readCarriedFiles, useCarriedFiles } from "@/state/carried-files"
-import { bringBack, moveToCloud, useCloudMoves } from "@/state/cloud-moves"
+import { bringBack, checkHarnesses, checkHarnessesAgain, moveToCloud, updateThen, useCloudMoves } from "@/state/cloud-moves"
+import { HarnessesBehind } from "./harnesses-behind"
 import { runPlaceStore, useRunPlace } from "@/state/run-place"
 import { shallowEqual } from "@/state/store"
 import { useSession } from "@/state/session"
@@ -61,14 +62,29 @@ function ThreadRunPlace({ thread }: { thread: string }) {
   const worktree = useWorktrees((state) => state.worktrees.find((entry) => entry.thread === thread)?.path)
   const moving = useCloudMoves((state) => (live ? Boolean(state.moving[live.key]) : false))
   const returning = useCloudMoves((state) => (live ? Boolean(state.returning[live.key]) : false))
+  const check = useCloudMoves((state) => (live ? state.harnesses[live.key] : undefined))
   const [open, setOpen] = useState(false)
-  const [asking, setAsking] = useState(false)
+  /** The carried-files question, asked before the move it was asked for: with this Mac's harnesses updated first, or without. */
+  const [asking, setAsking] = useState<"move" | "update" | false>(false)
   const carried = useCarriedFiles((state) => (worktree ? state.byFolder[worktree] : undefined))
   const carriedBusy = useCarriedFiles((state) => (worktree ? state.busy[worktree] : undefined))
   if (!live) return null
-  if (live.elsewhere)
+  const known = check?.kind === "known" ? check : undefined
+  if (live.elsewhere) {
+    const behind = known?.behind ?? []
+    const back = () => {
+      setOpen(false)
+      void bringBack(live.key)
+    }
+    const why = live.running ? "Threads come back between turns: wait for this turn to end, or stop it." : "What it did in the cloud comes into its worktree here, and every session picks up on this Mac. The cloud machine ends."
     return (
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover
+        open={open}
+        onOpenChange={(next) => {
+          setOpen(next)
+          if (next) void checkHarnesses(live.key)
+        }}
+      >
         <PopoverTrigger asChild>
           <button type="button" data-run-place="cloud" disabled={returning} aria-label={returning ? "Coming back to this Mac" : "Runs on a cloud machine. Bring it back to this Mac"} title={returning ? "Coming back to this Mac" : "Runs on a cloud machine, at the same folder"} className={cn(triggerClass, "text-foreground")}>
             {returning ? <LoaderCircleIcon className="size-3 shrink-0 animate-spin" /> : <CloudIcon className="size-3 shrink-0" />}
@@ -77,45 +93,50 @@ function ThreadRunPlace({ thread }: { thread: string }) {
             </span>
           </button>
         </PopoverTrigger>
-        <PopoverContent side="top" align="start" sideOffset={8} className="w-80 p-1">
+        <PopoverContent side="top" align="start" sideOffset={8} className={cn("p-1", behind.length ? "w-96" : "w-80")}>
           <p className="px-2 py-1.5 text-label text-faint">Where this thread runs</p>
-          <button
-            type="button"
-            data-thread-return-offer
-            disabled={live.running}
-            onClick={() => {
-              setOpen(false)
-              void bringBack(live.key)
-            }}
-            className="pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60"
-          >
-            <CloudDownloadIcon className="mt-0.5 size-3 shrink-0" />
-            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="text-ui">Bring back to this Mac</span>
-              <span className="text-label text-faint">
-                {live.running ? "Threads come back between turns: wait for this turn to end, or stop it." : "What it did in the cloud comes into its worktree here, and every session picks up on this Mac. The cloud machine ends."}
-              </span>
-            </span>
-          </button>
+          <OfferRow data={{ "data-thread-return-offer": true }} icon={<CloudDownloadIcon className="mt-0.5 size-3 shrink-0" />} title="Bring back to this Mac" detail={why} disabled={live.running} onClick={behind.length ? undefined : back} />
+          {behind.length ? (
+            <HarnessesBehind
+              behind={behind}
+              way="back"
+              disabled={live.running}
+              onUpdate={() => {
+                setOpen(false)
+                void updateThen(live.key, "back")
+              }}
+              onAnyway={back}
+              onCheckAgain={() => void checkHarnessesAgain(live.key)}
+            />
+          ) : null}
         </PopoverContent>
       </Popover>
     )
+  }
   const inWorktree = worktree !== undefined && (live.cwd === worktree || live.cwd.startsWith(`${worktree}/`))
+  // The cloud can't resume a Session a newer harness here wrote: said here, before anything is made (`ThreadHarnessCheck`).
   const blocked = !live.started
     ? "Send a first message before it moves."
     : !inWorktree
       ? "It works in the project folder. Move it to its own branch first, from the menu beside this; the project folder stays on this Mac."
-      : undefined
+      : known?.refusal
+  // This Mac's harnesses older than the cloud's: the way back will need them updated, said before it goes.
+  const behind = blocked === undefined ? known?.behind ?? [] : []
   // At work, it's handed off: its turn pauses, goes along, and continues in the cloud; what it left running in the
   // background stops, and the agent is told there what stopped.
   const handOff = live.running || live.background
-  const move = () => {
+  const move = (update: boolean) => {
     setOpen(false)
     setAsking(false)
-    void moveToCloud(live.key, handOff)
+    if (update) void updateThen(live.key, "move", handOff)
+    else void moveToCloud(live.key, handOff)
   }
   // The project's files Git leaves out go too once the person says so, asked here the first time, once per project.
   const unasked = carried && carried.decision === "unasked" && carried.repository !== null && carried.files.length > 0 ? carried : undefined
+  const start = (update: boolean) => {
+    if (unasked) setAsking(update ? "update" : "move")
+    else move(update)
+  }
   return (
     <Popover
       open={open}
@@ -123,6 +144,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
         setOpen(next)
         setAsking(false)
         if (next && inWorktree && worktree) void readCarriedFiles(worktree)
+        if (next && inWorktree && live.started) void checkHarnesses(live.key)
       }}
     >
       <PopoverTrigger asChild>
@@ -133,42 +155,56 @@ function ThreadRunPlace({ thread }: { thread: string }) {
           </span>
         </button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="start" sideOffset={8} className="w-80 p-1">
+      <PopoverContent side="top" align="start" sideOffset={8} className={cn("p-1", behind.length && !asking ? "w-96" : "w-80")}>
         {asking && unasked ? (
           <CarriedFilesQuestion view={unasked} busy={carriedBusy} onAnswer={async (allowed) => {
-            if (await decideCarriedFiles(unasked.project, allowed)) move()
+            if (await decideCarriedFiles(unasked.project, allowed)) move(asking === "update")
           }} />
         ) : (
         <>
         <p className="px-2 py-1.5 text-label text-faint">Where this thread runs</p>
-        <button
-          type="button"
-          data-thread-move-offer
-          data-thread-handoff={handOff || undefined}
+        <OfferRow
+          data={{ "data-thread-move-offer": true, "data-thread-handoff": handOff || undefined }}
+          icon={<CloudUploadIcon className="mt-0.5 size-3 shrink-0" />}
+          title={handOff ? "Hand off to the cloud" : "Move to the cloud"}
+          detail={blocked ??
+            (live.running
+              ? "Its turn pauses, and its worktree and every session go to a cloud machine at the same folder. The turn goes on there from where it paused. Your Mac can close."
+              : handOff
+              ? "What it left running in the background stops, and its worktree and every session go to a cloud machine at the same folder, where it's told what stopped. Your Mac can close."
+              : "Its worktree and every session go to a cloud machine, at the same folder, and pick up where they left off. Your Mac can close.")}
           disabled={blocked !== undefined}
-          onClick={() => {
-            if (unasked) setAsking(true)
-            else move()
-          }}
-          className="pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60"
-        >
-          <CloudUploadIcon className="mt-0.5 size-3 shrink-0" />
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="text-ui">{handOff ? "Hand off to the cloud" : "Move to the cloud"}</span>
-            <span className="text-label text-faint">
-              {blocked ??
-                (live.running
-                  ? "Its turn pauses, and its worktree and every session go to a cloud machine at the same folder. The turn goes on there from where it paused. Your Mac can close."
-                  : handOff
-                  ? "What it left running in the background stops, and its worktree and every session go to a cloud machine at the same folder, where it's told what stopped. Your Mac can close."
-                  : "Its worktree and every session go to a cloud machine, at the same folder, and pick up where they left off. Your Mac can close.")}
-            </span>
-          </span>
-        </button>
+          onClick={behind.length ? undefined : () => start(false)}
+        />
+        {behind.length ? (
+          <HarnessesBehind behind={behind} way="move" handOff={handOff} onUpdate={() => start(true)} onAnyway={() => start(false)} onCheckAgain={() => void checkHarnessesAgain(live.key)} />
+        ) : null}
         </>
         )}
       </PopoverContent>
     </Popover>
+  )
+}
+
+/**
+ * A place the Thread can go, as the chip's popover offers it: pressed to go, or, with this Mac's harnesses to weigh
+ * first (`HarnessesBehind`), only said, its choices under it.
+ */
+function OfferRow({ data, icon, title, detail, disabled, onClick }: { data: Record<`data-${string}`, boolean | undefined>; icon: ReactNode; title: string; detail: string; disabled?: boolean; onClick?: () => void }) {
+  const body = (
+    <>
+      {icon}
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="text-ui">{title}</span>
+        <span className="text-label text-faint">{detail}</span>
+      </span>
+    </>
+  )
+  if (!onClick) return <div {...data} aria-disabled={disabled || undefined} className={cn("flex w-full items-start gap-2 px-2 py-1.5", disabled && "opacity-60")}>{body}</div>
+  return (
+    <button type="button" {...data} disabled={disabled} onClick={onClick} className="pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60">
+      {body}
+    </button>
   )
 }
 

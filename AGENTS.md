@@ -559,10 +559,22 @@ postinstall once put a build in their `~/.grok/bin`, repointed their `grok`
 and rewrote their `config.toml`. `scripts/test-scratch-home.ts` covers the
 refusals and holds every `prove-*.ts` to it. Devin (one CLI, inside
 Devin.app) and Cursor (the bundled SDK) are proven on recorded stores
-(`packages/sessions/test/restore-gate-fixtures.mjs`). A cloud machine picks
-what to install for a session's records with `cloudRuntime` in
-`contracts/harness-versions.ts`: the version that wrote them, or the
-laptop's if newer, never below `oldest`. `tsx scripts/records.ts
+(`packages/sessions/test/restore-gate-fixtures.mjs`). Cloud machines never
+install a laptop's versions: every machine starts from one image, whose
+harnesses are exactly the `tested` of the Mako revision it was built from,
+and the cloud says which (`GET /v1/cloud/harnesses`,
+`CloudAccount.cloudHarnesses`). Before a Thread moves either way, the Mac
+weighs its Sessions against that record with the same gate
+(`HarnessCheck`, `mako:thread-harness-check`): a Session whose writer here
+is newer than the cloud's version is refused before anything is made, not
+as it arrives; a harness here older than the cloud's is said in the Local
+chip's popover with "Update Codex, then move" (or "Move anyway", the way
+back then waiting for the update), and in the Cloud chip's with "Update
+Codex and bring it back". Mako's update installs this Mako's `tested`, so
+when that's older than the cloud's, the offer is a newer Mako. An offer
+Mako can't run (another app's install, a command) says what to do and is
+weighed again when the window is focused. `scripts/test-harness-check.ts`
+covers the weighing and `test:moves-ui` the window. `tsx scripts/records.ts
 archive` shows migrated, kept and pending (`--migrate` runs a pass), and
 `npm run bench:archive-migration` measures it on a clone of this Mac's
 archive.

@@ -38,6 +38,7 @@ import { mcpServerFailedEvent } from "@mako/sessions/events"
 import type { RecordRef } from "@mako/sessions/entries"
 import { restoreGate } from "@mako/sessions/record-writers"
 import type { RestorePlan } from "@mako/host/contracts/restore-plan"
+import type { HarnessBehind, ThreadHarnessCheck } from "@mako/host/contracts/cloud-harnesses"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import type { StoreFormats } from "@mako/host/contracts/store-formats"
 import type { EntryOriginal, OriginalPart } from "@mako/sessions/record-original"
@@ -128,8 +129,43 @@ const mockHandOffOnSleep = { value: true }
 /** The fixture's conversation settings, off as on a new Mac. */
 interface MockConversationSettings { value: ConversationSettings }
 const mockConversationSettings: MockConversationSettings = { value: { continueAfterRestart: false } }
-/** `?return=outdated`: the first way back stays, Codex here being older than the one that wrote it in the cloud. */
-const mockReturnOutdated = { value: new URLSearchParams(globalThis.location?.search).get("return") === "outdated" }
+/**
+ * `?return=outdated`: the first way back stays, Codex here being older than the one that wrote it in the cloud;
+ * `?return=outdated-devin`: Devin's, which Devin.app updates.
+ */
+const mockReturnOutdated = { value: new URLSearchParams(globalThis.location?.search).get("return") ?? "" }
+/**
+ * `?harnesses=`: this Mac's harnesses against a cloud on Codex 0.164.0, OpenCode 2.1.4, Devin 3000.11.205 and Grok
+ * 1.0.70, as production met them. `behind`: Codex here is older, and Mako updates it; `several`: Codex and OpenCode
+ * by Mako's update, Devin through Devin.app and Grok only by a newer Mako; `devin`: Devin alone; `failing`: Codex's
+ * update fails; `ahead`: a Session a newer Codex wrote here, which the cloud can't resume. Without it, the fixture's
+ * cloud doesn't say what it runs.
+ */
+const mockHarnessScene = new URLSearchParams(globalThis.location?.search).get("harnesses")
+const MOCK_CLOUD_HARNESSES = new Map([["codex", "0.164.0"], ["opencode", "2.1.4"], ["devin", "3000.11.205"], ["grok", "1.0.70"]])
+/** This Mac's versions in the scene: an update takes one to the cloud's; a test sets Devin's as Devin.app would. */
+export const mockHarnessesHere = new Map([["codex", "0.159.3"], ["opencode", "2.0.1"], ["devin", "3000.10.23"], ["grok", "1.0.46"]])
+const MOCK_HARNESS_OFFERS = new Map<string, Pick<HarnessBehind, "offer" | "to">>([
+  ["codex", { offer: { kind: "update", runtimeId: "codex", label: "Update with npm" }, to: "0.164.0" }],
+  ["opencode", { offer: { kind: "update", runtimeId: "opencode", label: "Update with npm" }, to: "2.1.4" }],
+  ["devin", { offer: { kind: "owner", owner: "Devin" } }],
+  ["grok", { offer: { kind: "owner", owner: "Mako" } }],
+])
+
+function mockHarnessCheck(): ThreadHarnessCheck {
+  if (!mockHarnessScene) return { kind: "unknown", reason: "The cloud doesn't say which harness versions its machines run." }
+  const image = "mako-machine-c3918df7b6f3"
+  if (mockHarnessScene === "ahead")
+    return { kind: "known", image, ahead: [{ harness: "codex", wrote: "0.165.0", cloud: "0.164.0" }], behind: [], refusal: "The cloud runs Codex 0.164.0, older than the 0.165.0 that wrote this Thread here, so it can't pick up there yet. It can move once the cloud runs 0.165.0 or newer." }
+  const harnesses = mockHarnessScene === "several" ? ["codex", "opencode", "devin", "grok"] : mockHarnessScene === "devin" ? ["devin"] : ["codex"]
+  const behind = harnesses.flatMap((harness): HarnessBehind[] => {
+    const here = mockHarnessesHere.get(harness) ?? ""
+    const cloud = MOCK_CLOUD_HARNESSES.get(harness) ?? ""
+    const offer = MOCK_HARNESS_OFFERS.get(harness)
+    return here === cloud || !offer ? [] : [{ harness, here, cloud, ...offer }]
+  })
+  return { kind: "known", image, ahead: [], behind }
+}
 const MOCK_PROVIDERS: UtilityProviderInfo[] = [
   { id: "google", name: "Google", description: "Gemini with a Google AI Studio API key" },
   { id: "openai", name: "OpenAI", description: "GPT models with an OpenAI API key" },
@@ -1880,6 +1916,15 @@ export function installMockBridge() {
     // An update goes to the tested version, so the reading comes back at it.
     runHarnessUpdate: async (provider: string) => {
       await new Promise((resolve) => setTimeout(resolve, 1_200))
+      const cloud = mockHarnessScene ? MOCK_CLOUD_HARNESSES.get(provider) : undefined
+      if (cloud) {
+        const from = mockHarnessesHere.get(provider)
+        const reading = { provider, binary: `/Users/you/.nvm/versions/node/v24.19.0/bin/${provider}`, channel: "npm" as const, checkedAt: Date.now() }
+        if (mockHarnessScene === "failing")
+          return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: "npm error code EACCES: permission denied, mkdir '/usr/local/lib/node_modules/@openai'" } }
+        mockHarnessesHere.set(provider, cloud)
+        return { ...reading, installed: cloud, result: { at: Date.now() - 1_200, outcome: "updated" as const, from, to: cloud }, versions: { tested: cloud, standing: "tested" as const } }
+      }
       if (outdatedScene && provider === "codex") {
         const from = keptCodexInstalled
         keptCodexInstalled = "0.163.0"
@@ -2782,6 +2827,8 @@ export function installMockBridge() {
       step({ kind: "moved", conversations: [conversationId], ...handOff && { continued: true } })
       return { kind: "moved" as const, cloudThread: "t-0123456789abcdef" }
     },
+    /** What this Mac's harnesses mean against the fixture cloud's, by the `?harnesses=` scene. */
+    threadHarnessCheck: async (): Promise<ThreadHarnessCheck> => mockHarnessCheck(),
     /** A fixture has no agents at work unless a review page says so (`application-review`). */
     handOffCandidates: async (): Promise<HandOffCandidate[]> => [],
     handOff: async (handOff: string): Promise<HandOffResult[]> => {
@@ -2808,10 +2855,17 @@ export function installMockBridge() {
         step(next)
         await pause(900)
       }
-      if (mockReturnOutdated.value) {
-        mockReturnOutdated.value = false
+      if (mockReturnOutdated.value === "outdated") {
+        mockReturnOutdated.value = ""
         const reason = "Codex 0.163.0 wrote its sessions in the cloud, and this Mac has 0.159.3."
         const outdated = { harness: "codex", wrote: { version: "0.163.0", source: "record" as const }, installed: "0.159.3", offer: { kind: "update" as const, runtimeId: "codex", label: "Update with npm" } }
+        step({ kind: "stayed", reason, outdated })
+        return { kind: "stayed" as const, reason, outdated }
+      }
+      if (mockReturnOutdated.value === "outdated-devin") {
+        mockReturnOutdated.value = ""
+        const reason = "Devin 3000.11.205 wrote its sessions in the cloud, and this Mac has 3000.10.23."
+        const outdated = { harness: "devin", wrote: { version: "3000.11.205", source: "record" as const }, installed: "3000.10.23", offer: { kind: "owner" as const, owner: "Devin" } }
         step({ kind: "stayed", reason, outdated })
         return { kind: "stayed" as const, reason, outdated }
       }

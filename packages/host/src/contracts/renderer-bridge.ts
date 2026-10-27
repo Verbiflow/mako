@@ -65,6 +65,7 @@ import type { ProviderConnection, ProviderConnectionAction } from "./provider-co
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
+import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
@@ -421,6 +422,8 @@ export function createMakoBridge(transport: BridgeTransport) {
      * answers how that move went. Its steps arrive as `thread-move-step` events.
      */
     threadMove: (conversationId: string, move: string, handOff?: ThreadHandOff) => invokeTrustedHost<ThreadMoveOutcome>("mako:thread-move", conversationId, move, handOff),
+    /** What the Thread of a conversation's harnesses here and in the cloud mean for moving it either way, before it moves. */
+    threadHarnessCheck: (conversationId: string) => invokeTrustedHost<ThreadHarnessCheck>("mako:thread-harness-check", conversationId),
     /** This Mac's Threads whose agents are working, each with why it couldn't go to the cloud now, if it couldn't. */
     handOffCandidates: () => invokeTrustedHost<HandOffCandidate[]>("mako:handoff-candidates"),
     /** Hands every Thread at work to the cloud as one handoff named `handOff`; each move's steps arrive as `thread-move-step`. */

@@ -18,6 +18,7 @@ import type { HostEnvironment } from "../base/host-environment.js"
 import { hostLog } from "../base/host-log.js"
 import type { DomainSecrets } from "../base/host-secrets.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { CloudHarnesses } from "../contracts/cloud-harnesses.js"
 import type { MethodTable } from "../base/methods.js"
 import { type GatewayHostOptions, type HostMethods, serveHostThroughGateway } from "../transport/index.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
@@ -89,6 +90,8 @@ export interface CloudAccount {
   tookWaiting?(session: string, id: string): Promise<void>
   /** The account's devices, by ID and name, and which is this one. */
   devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
+  /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
+  cloudHarnesses?(): Promise<CloudHarnesses | null>
   /** A project's carried files in the account's secret store, by its repository: listed, put and removed, never read. */
   carriedFiles?: {
     list(repository: string): Promise<CloudCarriedFile[]>
@@ -283,6 +286,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     tookWaiting: (session, id) => cloud.tookWaiting(session, id),
     reportSessions: () => cloud.reportSessions(),
     devices: () => cloud.devices(),
+    cloudHarnesses: () => cloud.cloudHarnesses(),
     carriedFiles: {
       list: (repository) => cloud.carriedFiles(repository),
       put: (repository, file) => cloud.putCarriedFile(repository, file),

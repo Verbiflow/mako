@@ -97,6 +97,8 @@ const reads = [
   "mako:harness-descriptors",
   "mako:thread-continuation-plan",
   "mako:thread-restore-plan",
+  /** Weighs a Thread's harnesses against what the cloud says it runs; changes nothing. */
+  "mako:thread-harness-check",
   "mako:unread-records",
   "mako:store-formats",
   "mako:stream-original",

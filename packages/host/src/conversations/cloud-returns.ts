@@ -147,6 +147,28 @@ export class CloudReturns {
     return running ? Promise.all(running).then(() => undefined) : undefined
   }
 
+  /**
+   * The harnesses the Thread of `conversationId` runs in the cloud, each Session's, those begun there included: what
+   * bringing it back weighs against this Mac's (`HarnessCheck`). Undefined when it doesn't run in the cloud.
+   */
+  async harnessesAway(conversationId: string): Promise<string[] | undefined> {
+    const threads = this.#options.threads()
+    const placed = threads?.journalPlacement(conversationId)
+    if (!threads || !placed) return undefined
+    const owners = new Set<string>()
+    for (const { session } of threads.threadSessions(placed.thread)) {
+      const execution = threads.execution(session)
+      if (execution?.state !== "elsewhere" || execution.owner.kind !== "cloud") return undefined
+      owners.add(execution.owner.runtime)
+    }
+    const [runtime] = owners
+    if (owners.size !== 1 || !runtime) return undefined
+    const forward = await this.#forward(placed.thread, RuntimeIdSchema.parse(runtime)).catch(() => undefined)
+    if (!forward) return undefined
+    const begunThere = this.#options.cloud.threadConversations(forward.cloudThread)
+    return [...new Set([...forward.sessions.map((session) => session.harness), ...begunThere.map((begun) => begun.harness)])]
+  }
+
   /** Settles every return a stopped host left unsettled, as its plan stands. */
   async settle(): Promise<void> {
     for (const name of await readdir(this.#options.folder).catch(() => [])) {

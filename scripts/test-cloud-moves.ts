@@ -77,7 +77,7 @@ class Gateway {
 
 type Setup = { moves: CloudMoves; fresh(): CloudMoves; gateway: Gateway; threads: ThreadStore; steps: ThreadMoveStep[]; conversation: string; thread: string; session: string; checkout: string; busy: { reasons: string[]; late: string[] }; folder: string; started: string[]; work: Work }
 
-function setup(name: string, options: { worktree?: boolean } = {}): Setup {
+function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMovesOptions["harnesses"] } = {}): Setup {
   const folder = join(root, name)
   const remote = join(folder, "remote.git")
   const checkout = join(folder, "Users", "ada", "worktrees", "fix")
@@ -229,6 +229,7 @@ function setup(name: string, options: { worktree?: boolean } = {}): Setup {
     remembered: () => ({ modeId: "access:full", settings: { model: "gpt-5.5" } }),
     step: (_conversationId, _move, step) => steps.push(step),
     newCloudThread: () => `t-${name.padEnd(16, "0").slice(0, 16).replace(/[^0-9a-f]/g, "a")}`,
+    ...options.harnesses && { harnesses: options.harnesses },
   })
   return { moves: make(), fresh: make, gateway, threads, steps, conversation, thread: placed.thread, session: placed.session, checkout, busy, folder, started, work }
 }
@@ -287,6 +288,31 @@ try {
     assert.deepEqual(state(s), { state: "here", owner: s.threads.self, generation: 1 }, "nothing begun; the Session is as it was")
     assert.deepEqual([s.gateway.made.length, s.gateway.sentRecords.length, s.gateway.checkpoints.size], [0, 0, 0], "no cloud Thread made, nothing sent")
     assert.equal(s.gateway.answers.size, 0)
+  }
+
+  // A Session the cloud can't resume (Codex here wrote it with a newer version than the cloud runs): refused before
+  // anything is made, with what the cloud runs and when it can go, rather than by its arrival after this Mac let go.
+  // One the cloud only runs newer than here moves, the check weighing it all the same.
+  {
+    const weighed: string[][] = []
+    const harnesses = (ahead: boolean): CloudMovesOptions["harnesses"] => ({
+      check: async (sessions) => {
+        weighed.push(sessions.map((session) => `${session.harness} ${session.path ?? ""}`))
+        if (!ahead) return { kind: "known", image: "mako-machine-000000000000", ahead: [], behind: [{ harness: "codex", here: "0.159.3", cloud: "0.164.0", offer: { kind: "update", runtimeId: "codex", label: "Update with npm" }, to: "0.164.0" }] }
+        const refusal = "The cloud runs Codex 0.164.0, older than the 0.165.0 that wrote this Thread here, so it can't pick up there yet. It can move once the cloud runs 0.165.0 or newer."
+        return { kind: "known", image: "mako-machine-000000000000", ahead: [{ harness: "codex", wrote: "0.165.0", cloud: "0.164.0" }], behind: [], refusal }
+      },
+    })
+    const s = setup("harness-ahead", { harnesses: harnesses(true) })
+    const outcome = await s.moves.move(s.conversation, move())
+    assert.deepEqual(outcome, { kind: "kept-here", reason: "The cloud runs Codex 0.164.0, older than the 0.165.0 that wrote this Thread here, so it can't pick up there yet. It can move once the cloud runs 0.165.0 or newer." })
+    assert.deepEqual(weighed, [["codex /codex/n-1.jsonl"]], "each Session weighed by its harness and its native path here")
+    assert.deepEqual(state(s), { state: "here", owner: s.threads.self, generation: 1 }, "nothing begun")
+    assert.deepEqual([s.gateway.made.length, s.gateway.sentRecords.length, s.gateway.checkpoints.size], [0, 0, 0], "no cloud Thread made, nothing sent")
+    assert.equal(await s.moves.refusal(s.conversation), outcome.kind === "kept-here" ? outcome.reason : "", "a quit or a sleep wouldn't hand it off either")
+    assert.equal((await s.moves.harnessCheck(s.conversation)).kind, "known", "the window's check reads the same weighing without refusing")
+    const behind = setup("harness-behind", { harnesses: harnesses(false) })
+    assert.equal((await behind.moves.move(behind.conversation, move())).kind, "moved", "a harness here older than the cloud's lets it go: the way back says what it needs")
   }
 
   // Busy only by the release (a turn started after the move asked): the release refuses, nothing released, the Thread runs here.

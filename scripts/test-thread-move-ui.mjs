@@ -13,8 +13,12 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
  * through sending ahead, handing over and resuming; once moved the chip says
  * Cloud, and offers Bring back to this Mac, whose strip walks through packing
  * and bringing it here until the chip says Local again. A busy Thread stays
- * here and says why. Screenshots of each, dark and
- * light, stay in the printed directory.
+ * here and says why. This Mac's harnesses weighed against the cloud's before
+ * either way: one older than the cloud's offers "Update Codex to 0.164.0, then
+ * move" or "Move anyway", its update's progress and failure above the
+ * composer; one the cloud can't resume refuses the move in the popover; and a
+ * way back waiting on Devin.app's update turns ready as the window is focused
+ * again. Screenshots of each, dark and light, stay in the printed directory.
  */
 
 if (process.versions.electron) {
@@ -235,10 +239,99 @@ async function checkWindow() {
   assert.ok(await evaluate(`document.querySelector('[data-run-place="cloud"]') !== null`), "the Thread stays in the cloud meanwhile")
   await both("return-outdated", ['[data-thread-return]', '[data-run-place]'])
   await clickText('[data-thread-return="outdated"]', "Update Codex and bring it back")
-  await until(`document.querySelector('[data-thread-return="outdated"]')?.innerText.includes('Updating Codex')`, "updating")
-  await both("return-updating", ['[data-thread-return]'])
+  await until(`document.querySelector('[data-harness-update="updating"]')?.innerText.includes('Updating Codex')`, "updating")
+  await both("return-updating", ['[data-harness-update]'])
   await until(`document.querySelector('[data-thread-return="packing"]') !== null`, "bringing it back after the update")
   await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-return]')`, "back after the update")
+
+  const escape = async () => {
+    await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+    await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+  }
+  const popover = '[data-slot="popover-content"]'
+  const text = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)})?.innerText ?? ''`)
+
+  // 8. Codex here older than the cloud's: said before the move, with the one choice that updates it, then moves.
+  await startThread("&harnesses=behind")
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  await click('[data-run-place="local"]')
+  await until(`document.querySelector('[data-harness-behind="move"]') !== null`, "the harnesses behind the cloud's")
+  assert.match(await text('[data-harness-behind]'), /Codex here is older than the cloud's[\s\S]*comes back only after Codex here is 0\.164\.0 or newer[\s\S]*Codex 0\.159\.3 here, 0\.164\.0 in the cloud[\s\S]*Update Codex to 0\.164\.0, then move[\s\S]*Move anyway/)
+  assert.equal(await evaluate(`document.querySelector('[data-thread-move-offer]').tagName`), "DIV", "the move is said, its choices under it")
+  await both("harness-skew-move-behind", [popover])
+  await click("[data-harness-update-then]")
+  await until(`document.querySelector('[data-harness-update="updating"]') !== null`, "updating before the move")
+  assert.match(await text('[data-harness-update]'), /Updating Codex[\s\S]*Then it moves to the cloud/)
+  assert.ok(await evaluate(`document.querySelector('[data-run-place="local"]') !== null`), "it's on this Mac while Codex updates")
+  await both("harness-skew-updating", ['[data-harness-update]'])
+  await until(`document.querySelector('[data-thread-move="packing"]') !== null`, "the move after the update")
+  await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved after the update")
+  await click('[data-run-place="cloud"]')
+  await until(`document.querySelector('[data-thread-return-offer]') !== null`, "the return offer")
+  assert.equal(await evaluate(`document.querySelector('[data-harness-behind]')`), null, "updated, nothing holds the way back")
+  await escape()
+
+  // 9. Several behind: Mako updates Codex and OpenCode; Devin is Devin.app's and Grok needs a newer Mako, each said. Moved
+  // anyway, the Cloud chip says the same before the way back.
+  await startThread("&harnesses=several")
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  await click('[data-run-place="local"]')
+  await until(`document.querySelector('[data-harness-behind="move"]') !== null`, "several harnesses behind")
+  assert.equal(await evaluate(`document.querySelectorAll('[data-harness-behind-row]').length`), 4)
+  assert.match(await text('[data-harness-behind]'), /Harnesses here are older than the cloud's[\s\S]*Update it through Devin; Mako checks again when you come back to this window[\s\S]*A newer Mako brings Grok 1\.0\.70: update Mako first[\s\S]*Update Codex and OpenCode, then move[\s\S]*Check again[\s\S]*Move anyway/)
+  await both("harness-skew-move-several", [popover])
+  await click("[data-harness-anyway]")
+  await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved anyway")
+  await click('[data-run-place="cloud"]')
+  await until(`document.querySelector('[data-harness-behind="back"]') !== null`, "the way back's harnesses")
+  assert.match(await text('[data-harness-behind]'), /It comes back once Codex, OpenCode, Devin and Grok here are as new as the cloud's[\s\S]*Update Codex and OpenCode, then bring it back[\s\S]*Bring back anyway/)
+  await both("harness-skew-back-several", [popover])
+  await escape()
+
+  // 10. An update that fails says which and why, above the composer; the Thread stays, and can still move anyway.
+  await startThread("&harnesses=failing")
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  await click('[data-run-place="local"]')
+  await until(`document.querySelector('[data-harness-update-then]') !== null`, "the update offer")
+  await click("[data-harness-update-then]")
+  await until(`document.querySelector('[data-harness-update="failed"]') !== null`, "the failed update")
+  assert.match(await text('[data-harness-update]'), /Codex wasn't updated[\s\S]*EACCES/)
+  assert.ok(await evaluate(`document.querySelector('[data-run-place="local"]') !== null`), "it stays on this Mac")
+  await both("harness-skew-update-failed", ['[data-harness-update]'])
+  await clickText('[data-harness-update]', "Move anyway")
+  await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved anyway after the failed update")
+
+  // 11. A Session a newer Codex wrote here than the cloud runs: the move is refused in the popover, with when it can go.
+  await startThread("&harnesses=ahead")
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  await click('[data-run-place="local"]')
+  await until(`document.querySelector('[data-thread-move-offer]')?.innerText.includes("can't pick up there yet")`, "the refusal")
+  assert.equal(await evaluate(`document.querySelector('[data-thread-move-offer]').disabled`), true)
+  assert.match(await text('[data-thread-move-offer]'), /The cloud runs Codex 0\.164\.0, older than the 0\.165\.0 that wrote this Thread here[\s\S]*once the cloud runs 0\.165\.0 or newer/)
+  await both("harness-skew-ahead", [popover])
+  await escape()
+
+  // 12. Devin, which Devin.app updates: the way back stays and says what to do; updated there, the window weighs it
+  // again as it's focused, and one choice brings the Thread back.
+  await startThread("&harnesses=devin&return=outdated-devin")
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  await click('[data-run-place="local"]')
+  await until(`document.querySelector('[data-harness-anyway]') !== null`, "Devin behind the cloud's")
+  assert.equal(await evaluate(`document.querySelector('[data-harness-update-then]')`), null, "Mako can't update Devin.app's Devin")
+  await click("[data-harness-anyway]")
+  await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved")
+  await click('[data-run-place="cloud"]')
+  await until(`document.querySelector('[data-harness-behind="back"]') !== null`, "the way back's Devin")
+  await click("[data-harness-anyway]")
+  await until(`document.querySelector('[data-thread-return="outdated"]') !== null`, "the way back stayed")
+  assert.match(await text('[data-thread-return="outdated"]'), /stayed in the cloud[\s\S]*Update Devin through Devin, then bring it back[\s\S]*Check again/)
+  await both("harness-skew-return-devin", ['[data-thread-return]'])
+  await evaluate(`import('/src/dev/mock-bridge.ts').then((mock) => { mock.mockHarnessesHere.set('devin', '3000.11.205'); window.dispatchEvent(new Event('focus')); return true })`)
+  await until(`document.querySelector('[data-thread-return="ready"]') !== null`, "ready once Devin.app updated it")
+  assert.match(await text('[data-thread-return="ready"]'), /Ready to come back[\s\S]*Devin here is as new as the cloud's now/)
+  await both("harness-skew-return-ready", ['[data-thread-return]'])
+  await clickText('[data-thread-return="ready"]', "Bring it back")
+  await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-return]')`, "back after Devin.app's update")
 
   // 7. Settings: handing off as this Mac sleeps, and what quitting does while agents work.
   await evaluate(`window.dispatchEvent(new CustomEvent("mako:settings", { detail: "account" })), true`)
@@ -250,7 +343,7 @@ async function checkWindow() {
   await clickText('[data-handoff-settings]', "Hand off")
   await until(`document.querySelector('[data-handoff-settings] [aria-pressed="true"]')?.innerText.includes('Hand off')`, "quitting hands off")
   await both("handoff-settings-changed", ['[data-handoff-settings]'])
-  console.log("Thread move UI: offered from a worktree Thread's Local chip, three steps above the composer, Cloud once moved; brought back from its Cloud chip in two steps, Local once back; a busy Thread kept here; a Thread at work handed off with its turn paused, and one with only background work; an outdated way back updated and brought back in one choice; and the handoff settings")
+  console.log("Thread move UI: offered from a worktree Thread's Local chip, three steps above the composer, Cloud once moved; brought back from its Cloud chip in two steps, Local once back; a busy Thread kept here; a Thread at work handed off with its turn paused, and one with only background work; an outdated way back updated and brought back in one choice; harnesses here older than the cloud's said before the move with the update that settles them, its progress and its failure, a Session the cloud can't resume refused before anything moves, and a way back waiting on Devin.app ready once it's updated; and the handoff settings")
   clearTimeout(watchdog)
   app.exit(0)
 }

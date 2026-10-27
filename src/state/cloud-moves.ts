@@ -1,6 +1,7 @@
 import { toast } from "sonner"
 import type { ThreadMoveOutcome, ThreadMoveStep, ThreadReturnOutcome, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
+import type { ThreadHarnessCheck } from "@mako/host/contracts/cloud-harnesses"
 import { providers } from "@/state/providers"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { updateAcpConversation } from "@/state/acp-state"
@@ -22,10 +23,23 @@ interface CloudMovesState {
    * A way back that stayed because a harness here is older than the one that wrote its sessions in the cloud, by the
    * conversation it was asked from: shown above the composer until the update brings it back, or the person dismisses it.
    */
-  outdated: Record<string, { outdated: OutdatedRestore; updating?: boolean; failed?: string }>
+  outdated: Record<string, { outdated: OutdatedRestore }>
+  /**
+   * What each Thread's harnesses here and in the cloud mean for moving it either way, by the conversation it was
+   * weighed for (`mako:thread-harness-check`): read as its Local or Cloud chip opens, and again after an update.
+   */
+  harnesses: Record<string, ThreadHarnessCheck>
+  /** Harnesses Mako updates before a move or a way back, by the conversation it was asked from (`updateThen`). */
+  updating: Record<string, HarnessUpdating>
 }
 
-export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, returning: {}, outdated: {} })
+/**
+ * One choice that updates the harnesses Mako can update, one after another, then moves the Thread or brings it back:
+ * `at`, the harness updating now; `failed`, the one that didn't, and why. The Thread stays where it is meanwhile.
+ */
+export type HarnessUpdating = { after: "move" | "back"; handOff?: boolean; harnesses: string[]; at: number; failed?: { harness: string; reason: string } }
+
+export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, returning: {}, outdated: {}, harnesses: {}, updating: {} })
 export const useCloudMoves = createHook(cloudMovesStore)
 
 /** Where a moved conversation's folder is, as the cloud router names a cloud Thread's (`CLOUD_FOLDER_WHERE`). */
@@ -95,42 +109,103 @@ export function threadReturnStepped(conversationId: string, move: string, step: 
         void hydrateLive(id, true)
       }
     } else if (step.outdated) {
-      // Said above the composer, where its Update is, not in a toast that goes.
+      // Said above the composer, where its Update is, not in a toast that goes; weighed again for every harness it needs.
       const outdated = step.outdated
       cloudMovesStore.set((state) => ({ ...state, outdated: { ...state.outdated, [conversationId]: { outdated } } }))
+      void checkHarnesses(conversationId)
     } else toast.message("It stayed in the cloud", { id: `return:${move}`, description: step.reason })
     return
   }
   cloudMovesStore.set((state) => ({ ...state, returning: { ...state.returning, [conversationId]: { move, step } } }))
 }
 
+/** Without one key: what the window keeps by conversation, put away. */
+function without<Value>(record: Record<string, Value>, key: string): Record<string, Value> {
+  return Object.fromEntries(Object.entries(record).filter(([id]) => id !== key))
+}
+
 /**
- * Updates the harness a way back was too old for, then brings the Thread back: one choice for the person. An update
- * that fails says why and leaves the Thread in the cloud, where it goes on.
+ * Weighs the Thread of `conversationId`'s harnesses against the cloud's again (`mako:thread-harness-check`), and keeps
+ * what the host said for the window. Nothing is kept for a Thread that couldn't move at all: its chip says why.
  */
-export async function updateAndBringBack(conversationId: string): Promise<void> {
-  const entry = cloudMovesStore.get().outdated[conversationId]
-  if (!entry || entry.updating || entry.outdated.offer.kind !== "update") return
-  const runtimeId = entry.outdated.offer.runtimeId
-  const set = (next: CloudMovesState["outdated"][string] | undefined) =>
-    cloudMovesStore.set((state) => ({ ...state, outdated: next ? { ...state.outdated, [conversationId]: next } : Object.fromEntries(Object.entries(state.outdated).filter(([id]) => id !== conversationId)) }))
-  set({ outdated: entry.outdated, updating: true })
-  try {
-    const info = await providers.runRuntimeUpdate(runtimeId)
-    const outcome = info.result?.outcome
-    if (outcome !== "updated" && outcome !== "installed" && outcome !== "unchanged") {
-      set({ outdated: entry.outdated, failed: info.result?.message ?? "The update didn't finish." })
+export async function checkHarnesses(conversationId: string): Promise<ThreadHarnessCheck | undefined> {
+  if (!hasBridge()) return undefined
+  const check = await getMako().threadHarnessCheck(conversationId).catch(() => undefined)
+  cloudMovesStore.set((state) => ({ ...state, harnesses: check ? { ...state.harnesses, [conversationId]: check } : without(state.harnesses, conversationId) }))
+  return check
+}
+
+/**
+ * One choice for the person: updates every harness here older than the cloud's that Mako can update, one after
+ * another, then moves the Thread (`after: "move"`) or brings it back (`"back"`). An update that fails, or that leaves a
+ * harness still older than the cloud's, stops there and says why; the Thread stays where it is, and nothing moves.
+ * A way back the cloud refused updates the harness the refusal named too.
+ */
+export async function updateThen(conversationId: string, after: "move" | "back", handOff = false): Promise<void> {
+  const running = cloudMovesStore.get().updating[conversationId]
+  if (running && !running.failed) return
+  const check = await checkHarnesses(conversationId)
+  const runtimes = new Map<string, string>()
+  if (check?.kind === "known") for (const behind of check.behind) if (behind.offer.kind === "update") runtimes.set(behind.harness, behind.offer.runtimeId)
+  // The version a refused way back named is the one its records need, whatever the cloud says it runs now.
+  const refused = after === "back" ? cloudMovesStore.get().outdated[conversationId]?.outdated : undefined
+  if (refused?.offer.kind === "update" && !runtimes.has(refused.harness)) runtimes.set(refused.harness, refused.offer.runtimeId)
+  const harnesses = [...runtimes.keys()]
+  const set = (next: HarnessUpdating | undefined) => cloudMovesStore.set((state) => ({ ...state, updating: next ? { ...state.updating, [conversationId]: next } : without(state.updating, conversationId) }))
+  const base = { after, harnesses, ...handOff && { handOff } }
+  for (const [at, harness] of harnesses.entries()) {
+    set({ ...base, at })
+    try {
+      const info = await providers.runRuntimeUpdate(runtimes.get(harness) ?? harness)
+      const outcome = info.result?.outcome
+      if (outcome !== "updated" && outcome !== "installed" && outcome !== "unchanged") {
+        set({ ...base, at, failed: { harness, reason: info.result?.message ?? "The update didn't finish." } })
+        return
+      }
+    } catch (error) {
+      set({ ...base, at, failed: { harness, reason: error instanceof Error ? error.message : String(error) } })
       return
     }
-  } catch (error) {
-    set({ outdated: entry.outdated, failed: error instanceof Error ? error.message : String(error) })
+  }
+  // Weighed again: an update that didn't reach the cloud's version says so, rather than moving a Thread that couldn't come back.
+  const updated = harnesses.length ? await checkHarnesses(conversationId) : check
+  const short = updated?.kind === "known" ? updated.behind.find((behind) => runtimes.has(behind.harness)) : undefined
+  if (short) {
+    set({ ...base, at: harnesses.indexOf(short.harness), failed: { harness: short.harness, reason: `It's ${short.here} after the update, still older than the cloud's ${short.cloud}.` } })
     return
   }
   set(undefined)
+  if (after === "move") {
+    await moveToCloud(conversationId, handOff)
+    return
+  }
+  dismissOutdatedReturn(conversationId)
   await bringBack(conversationId)
+}
+
+/** The person put a failed update away: the Thread stays where it is. */
+export function dismissHarnessUpdate(conversationId: string): void {
+  cloudMovesStore.set((state) => ({ ...state, updating: without(state.updating, conversationId) }))
+}
+
+/**
+ * A harness Mako can't update itself (another app's install, a command to run) is updated by the person elsewhere:
+ * the readings are taken again and the Thread weighed again, as they come back to the window or ask.
+ */
+export async function checkHarnessesAgain(conversationId: string): Promise<void> {
+  await providers.loadRuntimeUpdates(true)
+  await checkHarnesses(conversationId)
+}
+
+/**
+ * Updates the harness a way back was too old for, then brings the Thread back: one choice for the person (`updateThen`).
+ * An update that fails says why and leaves the Thread in the cloud, where it goes on.
+ */
+export async function updateAndBringBack(conversationId: string): Promise<void> {
+  await updateThen(conversationId, "back")
 }
 
 /** The person put the notice away; the Thread stays in the cloud, and its Cloud chip still brings it back. */
 export function dismissOutdatedReturn(conversationId: string): void {
-  cloudMovesStore.set((state) => ({ ...state, outdated: Object.fromEntries(Object.entries(state.outdated).filter(([id]) => id !== conversationId)) }))
+  cloudMovesStore.set((state) => ({ ...state, outdated: without(state.outdated, conversationId) }))
 }

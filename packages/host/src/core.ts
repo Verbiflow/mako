@@ -44,7 +44,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -589,6 +589,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   jobs.every("held-wakes", HELD_WAKE_TICK_MS, () => void live.wakeDue(), { firstAfterMs: 2_000 })
   /** Filled once the handoffs exist: the cloud Thread each Thread at work keeps ready, which its move takes. */
   let readinessOnce: CloudReadiness | undefined
+  // What the cloud's machines run, weighed against this Mac's harnesses before a Thread moves either way.
+  const harnessCheck = cloudConversations && new HarnessCheck({
+    account: () => late.cloud,
+    writers: (path) => catalog.recordWriters(path),
+    installed: (harness) => harnesses.updates.restoreRuntime(harness),
+    updates: () => harnesses.updates.snapshot(),
+    label: (harness) => opened.harnessLabel(harness),
+  })
   // A person's Mac moves its Threads to the cloud (`mako:thread-move`); a machine takes them (`mako:move-arrive`).
   const cloudMoves = cloudConversations && new CloudMoves({
     folder: join(environment.dataRoot, "cloud", "moves"),
@@ -612,6 +620,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
     ready: { take: (thread, folder, repository) => readinessOnce?.take(thread, folder, repository) ?? Promise.resolve(undefined) },
     carried: async (folder, why) => void (await carriedFiles?.sync(folder, why)),
+    harnesses: harnessCheck,
   })
   void cloudMoves?.settle().catch((error: Error) => hostWarn("moves", "moves a stopped host left couldn't be settled", { error: error.message }))
   // And brings them back (`mako:thread-return`): a machine sends them (`mako:move-depart`).
@@ -896,6 +905,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-return`'s schema before routing it.
         const [conversationId, move] = args as [string, string]
         return { handled: true, value: encodeRuntimeValue(await cloudReturns.bringBack(conversationId, move)) }
+      }
+      if (channel === "mako:thread-harness-check" && cloudMoves && harnessCheck) {
+        // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-harness-check`'s schema before routing it.
+        const [conversationId] = args as [string]
+        const away = await cloudReturns?.harnessesAway(conversationId)
+        return { handled: true, value: encodeRuntimeValue(away ? await harnessCheck.check(away.map((harness) => ({ harness }))) : await cloudMoves.harnessCheck(conversationId)) }
       }
       if (channel === "mako:thread-move" && cloudMoves) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-move`'s schema before routing it.
