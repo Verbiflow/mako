@@ -7,7 +7,7 @@ import { zstdDecompressSync } from "node:zlib"
 import { RecordConflictError, planRecordImport } from "@mako/protocol/records"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 import { RecordStore } from "../dist/record-store.js"
-import { RECORDS_LINK_REFUSED, RecordPushes, RecordSync, RecordSyncConflictError, RecordsLinkRefusedError, linkRefused, splitBundle, withFreshLink } from "../dist/record-sync.js"
+import { RECORDS_LINK_REFUSED, RecordPushes, RecordSync, RecordSyncConflictError, RecordsLinkRefusedError, describeSync, linkRefused, splitBundle, withFreshLink } from "../dist/record-sync.js"
 
 /**
  * A record store kept in step with a remote one, as a machine's and a laptop's are with the gateway's: pushes send
@@ -126,6 +126,27 @@ try {
   assert.equal(second.versions, 1)
   assert.ok(second.chunks >= 1 && second.chunks < first.chunks, `only the new chunks: ${second.chunks} of ${first.chunks}`)
   assert.equal(second.requests, 1, "a turn's worth goes in one request, its chunks with it")
+
+  // A call the network layer sent twice is one call in the report, with its two tries, what ended the first, and the
+  // correlation ID the gateway logged both under: never one slow call that hides a repeat.
+  class RepeatingRemote extends MemoryRemote {
+    async pushWith(bundle, pack, trace) {
+      Object.assign(trace, { correlationId: "corr-1", tries: 2, failures: ["TimeoutError after 120003 ms"] })
+      return super.pushWith(bundle, pack)
+    }
+  }
+  const repeated = await new RecordSync(a, new RepeatingRemote("gateway/t-2")).push("synthetic", "s1")
+  assert.equal(repeated.calls.push.count, 1)
+  assert.equal(repeated.calls.push.tries, 2)
+  assert.deepEqual(repeated.calls.push.failures, ["TimeoutError after 120003 ms"])
+  assert.equal(repeated.calls.push.slowest.correlationId, "corr-1")
+  assert.match(describeSync(repeated), /push 1× \d+ ms \(2 tries: TimeoutError after 120003 ms\)/)
+  assert.equal(first.calls.push.tries, undefined, "a call that went once says nothing of tries")
+  assert.equal(
+    describeSync({ versions: 0, held: 193, chunks: 193, bytes: 51636, requests: 1, ms: 115800, calls: { push: { count: 1, ms: 115790, tries: 2, failures: ["503 after 115412 ms"], slowest: { ms: 115790, correlationId: "5f0c" } } } }),
+    "0 versions, 51636 bytes in 115800 ms: push 1× 115790 ms (2 tries: 503 after 115412 ms; slowest 115790 ms, correlation 5f0c)",
+    "a slow call names where the gateway logged it"
+  )
 
   // Down, to a laptop, a page at a time and in several asks for chunks, then restored natively.
   const laptopStore = new RecordStore(join(root, "laptop-store"), stores)

@@ -8,6 +8,11 @@ export interface JobOptions {
   firstAfterMs?: number
   /** Runs only while one of these is on; the job holds no timer, and so never wakes the host, while none is. */
   needs?: readonly JobDemand[]
+  /**
+   * Runs while the foreground is held too: a job too small to slow a start, whose point is when it runs (the wake
+   * watch's tick, which would otherwise read a long start as the machine having slept).
+   */
+  runsWhileHeld?: boolean
 }
 
 /** A reason some recurring work is needed, such as an open window; whoever knows sets it on and off. */
@@ -22,6 +27,7 @@ interface Job {
   run: () => void | Promise<void>
   firstAfterMs: number
   needs: readonly JobDemand[]
+  runsWhileHeld: boolean
   timer: NodeJS.Timeout | undefined
   running: boolean
 }
@@ -35,7 +41,8 @@ interface Job {
  * paused while none of its demands is on, and starts over, first run
  * included, when one comes back on. Each run is work by the job's name, so a
  * run that holds the event loop is named. A run that comes due while the
- * foreground is held (a harness starting) waits until it's free.
+ * foreground is held (a harness starting) waits until it's free, unless the
+ * job runs while it's held (`runsWhileHeld`).
  */
 export class HostJobs {
   private readonly jobs = new Map<string, Job>()
@@ -58,6 +65,7 @@ export class HostJobs {
       run,
       firstAfterMs: options.firstAfterMs ?? everyMs,
       needs,
+      runsWhileHeld: options.runsWhileHeld ?? false,
       timer: undefined,
       running: false,
     }
@@ -113,7 +121,7 @@ export class HostJobs {
       if (this.stopped) return
       this.schedule(job, job.state.everyMs)
       if (job.running) return
-      if (!this.foreground?.busy) return void this.run(job)
+      if (job.runsWhileHeld || !this.foreground?.busy) return void this.run(job)
       // Due while a person waits on the foreground: it runs once nothing holds it.
       job.running = true
       void this.foreground.idle().then(() => {

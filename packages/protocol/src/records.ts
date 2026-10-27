@@ -1,4 +1,5 @@
 import { z } from "zod"
+import type { GatewayCallTrace } from "./gateway-http.js"
 
 /**
  * A session's records as they cross between record stores (a machine's, the gateway's, a laptop's): its units and
@@ -257,23 +258,24 @@ export const RecordHoldingsPageSchema = z.object({ holdings: RecordHoldingsSchem
 /**
  * A remote record store, as a gateway serves one Thread's: the chunks it lacks, packs of them up and down, and the
  * sessions pushed and pulled by `planRecordImport`'s rule. Every call is safe to repeat: chunks are kept once, a
- * version held is passed over, and reads change nothing.
+ * version held is passed over, and reads change nothing. A remote over the network fills in each call's `trace`
+ * (`GatewayCallTrace`): its correlation ID and the tries it took.
  */
 export interface RecordRemote {
   /** Names the remote in a store's cursors: one per Thread. */
   readonly id: string
-  missing(hashes: string[]): Promise<string[]>
+  missing(hashes: string[], trace?: GatewayCallTrace): Promise<string[]>
   /** One pack up; the remote checks each chunk against its hash. */
-  putChunks(pack: PackedChunk[]): Promise<{ taken: number }>
+  putChunks(pack: PackedChunk[], trace?: GatewayCallTrace): Promise<{ taken: number }>
   /** Those of `hashes` the remote holds, as many as fit one pack, in the order asked; ask again for the rest. */
-  readChunks(hashes: string[]): Promise<PackedChunk[]>
-  push(bundle: RecordBundle): Promise<RecordPushAnswer>
+  readChunks(hashes: string[], trace?: GatewayCallTrace): Promise<PackedChunk[]>
+  push(bundle: RecordBundle, trace?: GatewayCallTrace): Promise<RecordPushAnswer>
   /**
    * A push with its chunks in the same request: the remote keeps those it lacks and takes the bundle. `missing` names
    * chunks the bundle needs that neither the remote nor the pack holds; send them, then `push`.
    */
-  pushWith(bundle: RecordBundle, chunks: PackedChunk[]): Promise<RecordPushAnswer | { missing: string[] }>
-  holdings(harness: string, nativeId: string, after: string): Promise<{ holdings: RecordHoldings; next: string | null }>
-  pull(harness: string, nativeId: string, after: number): Promise<RecordPulled | null>
+  pushWith(bundle: RecordBundle, chunks: PackedChunk[], trace?: GatewayCallTrace): Promise<RecordPushAnswer | { missing: string[] }>
+  holdings(harness: string, nativeId: string, after: string, trace?: GatewayCallTrace): Promise<{ holdings: RecordHoldings; next: string | null }>
+  pull(harness: string, nativeId: string, after: number, trace?: GatewayCallTrace): Promise<RecordPulled | null>
   sessions(): Promise<RecordSession[]>
 }

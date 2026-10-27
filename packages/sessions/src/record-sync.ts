@@ -1,3 +1,4 @@
+import type { GatewayCallTrace } from "@mako/protocol/gateway-http"
 import { CHUNK_HEADER_BYTES, RECORD_ASK_HASHES, RECORD_PACK_BYTES, RECORD_PUSH_WITH_BYTES, RecordConflictError, recordChunks, type PackedChunk, type RecordBundle, type RecordHoldings, type RecordPushAnswer, type RecordRemote, type RecordUnit } from "@mako/protocol/records"
 import { z } from "zod"
 import { KeptRestoreSchema } from "./kept-restore.js"
@@ -30,8 +31,21 @@ export class RecordSyncConflictError extends Error {
   }
 }
 
-/** The calls of one kind an exchange made (`pull`, `read`, `push`…): how many, and the time spent waiting on them. */
-export const SyncCallsSchema = z.object({ count: z.number(), ms: z.number() })
+/**
+ * The calls of one kind an exchange made (`pull`, `read`, `push`…): how many, and the time spent waiting on them. A
+ * call sent more than once counts once, its tries in `tries` and what ended each in `failures`; the slowest names its
+ * correlation ID, under which the gateway logged each of its tries.
+ */
+export const SyncCallsSchema = z.object({
+  count: z.number(), ms: z.number(),
+  tries: z.number().optional(),
+  failures: z.array(z.string()).optional(),
+  slowest: z.object({ ms: z.number(), correlationId: z.string() }).optional(),
+})
+/** A call this slow names its correlation ID where the exchange is described. */
+export const SLOW_CALL_MS = 2_000
+/** The most failed tries an exchange's report keeps of one kind of call. */
+const FAILURES_KEPT = 4
 export const SyncReportSchema = z.object({
   versions: z.number(), held: z.number(), chunks: z.number(), bytes: z.number(), requests: z.number(), ms: z.number(),
   /** Each kind of call to the remote, with its time; with `queuedMs`, what says where an exchange's time went. */
@@ -43,25 +57,49 @@ export type SyncReport = z.infer<typeof SyncReportSchema>
 
 /**
  * Where an exchange's time went, for a log line: "6 versions, 30316 bytes in 2225 ms: pull 2× 310 ms, read 3× 1620 ms,
- * queued 0 ms".
+ * queued 0 ms". A call sent again says so, and a slow one says where the gateway logged it: "push 1× 60283 ms (2 tries:
+ * 503 after 60011 ms; slowest 60283 ms, correlation 5f0c…)".
  */
 export function describeSync(report: SyncReport): string {
-  const calls = Object.entries(report.calls ?? {}).map(([kind, { count, ms }]) => `${kind} ${count}× ${Math.round(ms)} ms`)
+  const calls = Object.entries(report.calls ?? {}).map(([kind, tally]) => `${kind} ${tally.count}× ${Math.round(tally.ms)} ms${callNotes(tally)}`)
   if (report.queuedMs !== undefined) calls.push(`queued ${Math.round(report.queuedMs)} ms`)
   return `${report.versions} versions, ${report.bytes} bytes in ${Math.round(report.ms)} ms${calls.length ? `: ${calls.join(", ")}` : ""}`
 }
 
-/** Times one call to the remote into `report.calls[kind]`, whether it answers or throws. */
-async function timed<Value>(report: SyncReport, kind: string, call: () => Promise<Value>): Promise<Value> {
+function callNotes({ count, tries, failures, slowest }: SyncCalls): string {
+  const notes: string[] = []
+  if (tries !== undefined && tries > count) notes.push(`${tries} tries${failures?.length ? `: ${failures.join(", ")}` : ""}`)
+  if (slowest && slowest.ms >= SLOW_CALL_MS) notes.push(`slowest ${Math.round(slowest.ms)} ms, correlation ${slowest.correlationId}`)
+  return notes.length ? ` (${notes.join("; ")})` : ""
+}
+
+/**
+ * Times one call to the remote into `report.calls[kind]`, whether it answers or throws, with the tries the remote says
+ * it took (`GatewayCallTrace`).
+ */
+async function timed<Value>(report: SyncReport, kind: string, call: (trace: GatewayCallTrace) => Promise<Value>): Promise<Value> {
   const started = performance.now()
+  const trace: GatewayCallTrace = { tries: 0, failures: [] }
   try {
-    return await call()
+    return await call(trace)
   } finally {
+    const ms = performance.now() - started
     const calls = (report.calls ??= {})
     const tally = (calls[kind] ??= { count: 0, ms: 0 })
     tally.count += 1
-    tally.ms += performance.now() - started
+    tally.ms += ms
+    tallyTries(tally, 1, Math.max(1, trace.tries), trace.failures)
+    if (trace.correlationId && ms > (tally.slowest?.ms ?? -1)) tally.slowest = { ms, correlationId: trace.correlationId }
   }
+}
+
+type SyncCalls = z.infer<typeof SyncCallsSchema>
+
+/** Adds the tries of `calls` calls, already counted in `tally.count`; `tries` is kept only once a call took more than one. */
+function tallyTries(tally: SyncCalls, calls: number, tries: number, failures: readonly string[]): void {
+  const before = tally.tries ?? tally.count - calls
+  if (tries > calls || tally.tries !== undefined) tally.tries = before + tries
+  if (failures.length) tally.failures = [...(tally.failures ?? []), ...failures].slice(0, FAILURES_KEPT)
 }
 
 /** Each unit of a session by its key, at its head version: what a store holds of it (`RecordStore.holdings`). */
@@ -156,7 +194,7 @@ export class RecordSync {
     const hashes = recordChunks(part.units.flatMap((unit) => unit.versions))
     const small = await this.#small(hashes)
     if (small) {
-      const sent = await timed(report, "push", () => this.#remote.pushWith(part, small.chunks))
+      const sent = await timed(report, "push", (trace) => this.#remote.pushWith(part, small.chunks, trace))
       report.requests += 1
       report.chunks += small.chunks.length
       report.bytes += small.bytes
@@ -187,21 +225,21 @@ export class RecordSync {
   async #pushAsking(part: RecordBundle, hashes: string[], report: SyncReport): Promise<RecordPushAnswer> {
     const lacking: string[] = []
     for (let at = 0; at < hashes.length; at += RECORD_ASK_HASHES) {
-      lacking.push(...(await timed(report, "missing", () => this.#remote.missing(hashes.slice(at, at + RECORD_ASK_HASHES)))))
+      lacking.push(...(await timed(report, "missing", (trace) => this.#remote.missing(hashes.slice(at, at + RECORD_ASK_HASHES), trace))))
       report.requests += 1
     }
     const sent = await this.#upload(lacking, report)
     report.chunks += sent.chunks
     report.bytes += sent.bytes
     report.requests += sent.requests + 1
-    return timed(report, "push", () => this.#remote.push(part))
+    return timed(report, "push", (trace) => this.#remote.push(part, trace))
   }
 
   async #holdings(harness: string, nativeId: string, report: SyncReport): Promise<RecordHoldings> {
     const holdings: RecordHoldings = {}
     let after = ""
     for (;;) {
-      const page = await timed(report, "holdings", () => this.#remote.holdings(harness, nativeId, after))
+      const page = await timed(report, "holdings", (trace) => this.#remote.holdings(harness, nativeId, after, trace))
       report.requests += 1
       Object.assign(holdings, page.holdings)
       if (page.next === null) return holdings
@@ -215,7 +253,7 @@ export class RecordSync {
     const flights = new Set<Promise<void>>()
     let failed: Error | undefined
     const send = (chunks: PackedChunk[]) => {
-      const flight: Promise<void> = timed(report, "upload", () => this.#put(chunks)).then((error) => {
+      const flight: Promise<void> = timed(report, "upload", (trace) => this.#put(chunks, trace)).then((error) => {
         flights.delete(flight)
         if (error) failed ??= error
         else sent.requests += 1
@@ -247,9 +285,9 @@ export class RecordSync {
   }
 
   /** One pack up; what went wrong, rather than a rejection, so a pack in flight never goes unheard. */
-  async #put(chunks: PackedChunk[]): Promise<Error | undefined> {
+  async #put(chunks: PackedChunk[], trace: GatewayCallTrace): Promise<Error | undefined> {
     try {
-      await this.#remote.putChunks(chunks)
+      await this.#remote.putChunks(chunks, trace)
       return undefined
     } catch (error) {
       return error instanceof Error ? error : new Error(String(error))
@@ -261,7 +299,7 @@ export class RecordSync {
     const report: SyncReport = { versions: 0, held: 0, chunks: 0, bytes: 0, requests: 0, ms: 0 }
     let after = this.#store.pulledThrough(this.#remote.id, harness, nativeId)
     for (;;) {
-      const pulled = await timed(report, "pull", () => this.#remote.pull(harness, nativeId, after))
+      const pulled = await timed(report, "pull", (trace) => this.#remote.pull(harness, nativeId, after, trace))
       report.requests += 1
       if (!pulled) break
       if (pulled.bundle.units.length) {
@@ -304,7 +342,7 @@ export class RecordSync {
     for (let at = 0; at < hashes.length; at += RECORD_ASK_HASHES) {
       let asking = hashes.slice(at, at + RECORD_ASK_HASHES)
       while (asking.length) {
-        const came = await timed(report, "read", () => this.#remote.readChunks(asking))
+        const came = await timed(report, "read", (trace) => this.#remote.readChunks(asking, trace))
         report.requests += 1
         if (!came.length) return
         const got = new Set<string>()
@@ -379,10 +417,12 @@ function sumReports(first: SyncReport, second: SyncReport, started: number): Syn
 
 function sumCalls(first: NonNullable<SyncReport["calls"]>, second: NonNullable<SyncReport["calls"]>): NonNullable<SyncReport["calls"]> {
   const sum = structuredClone(first)
-  for (const [kind, { count, ms }] of Object.entries(second)) {
+  for (const [kind, added] of Object.entries(second)) {
     const tally = (sum[kind] ??= { count: 0, ms: 0 })
-    tally.count += count
-    tally.ms += ms
+    tally.count += added.count
+    tally.ms += added.ms
+    tallyTries(tally, added.count, added.tries ?? added.count, added.failures ?? [])
+    if (added.slowest && added.slowest.ms > (tally.slowest?.ms ?? -1)) tally.slowest = added.slowest
   }
   return sum
 }
@@ -607,7 +647,7 @@ export class RecordPushes {
         this.#status.versions += report.versions
         this.#status.bytes += report.bytes
         this.#status.last = { harness: entry.harness, nativeId: entry.nativeId, at: started, ms: Math.round(report.ms), versions: report.versions }
-        if (report.ms >= 1_000) this.log("info", "records pushed slowly", { link: this.#link, harness: entry.harness, nativeId: entry.nativeId, versions: report.versions, bytes: report.bytes, requests: report.requests, ms: Math.round(report.ms) })
+        if (report.ms >= 1_000) this.log("info", "records pushed slowly", { link: this.#link, harness: entry.harness, nativeId: entry.nativeId, versions: report.versions, bytes: report.bytes, requests: report.requests, ms: Math.round(report.ms), calls: describeSync(report) })
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
