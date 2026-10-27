@@ -1,5 +1,5 @@
 import { toast } from "sonner"
-import type { ThreadMoveOutcome, ThreadMoveStep, ThreadReturnOutcome, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import type { ReturnProjectMissing, ThreadMoveOutcome, ThreadMoveStep, ThreadReturnOptions, ThreadReturnOutcome, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { ThreadHarnessCheck } from "@mako/host/contracts/cloud-harnesses"
 import { providers } from "@/state/providers"
@@ -25,6 +25,12 @@ interface CloudMovesState {
    */
   outdated: Record<string, { outdated: OutdatedRestore }>
   /**
+   * A way back refused before the cloud was asked, because the Thread's project isn't on this Mac, by the conversation
+   * it was asked from: shown above the composer, with the host's words, until the person chooses where the project is
+   * now or keeps the Thread in the cloud.
+   */
+  missing: Record<string, { missing: ReturnProjectMissing; reason: string }>
+  /**
    * What each Thread's harnesses here and in the cloud mean for moving it either way, by the conversation it was
    * weighed for (`mako:thread-harness-check`): read as its Local or Cloud chip opens, and again after an update.
    */
@@ -39,7 +45,7 @@ interface CloudMovesState {
  */
 export type HarnessUpdating = { after: "move" | "back"; handOff?: boolean; harnesses: string[]; at: number; failed?: { harness: string; reason: string } }
 
-export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, returning: {}, outdated: {}, harnesses: {}, updating: {} })
+export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, returning: {}, outdated: {}, missing: {}, harnesses: {}, updating: {} })
 export const useCloudMoves = createHook(cloudMovesStore)
 
 /** Where a moved conversation's folder is, as the cloud router names a cloud Thread's (`CLOUD_FOLDER_WHERE`). */
@@ -84,18 +90,52 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
   })
 }
 
-/** Asks the host to bring the Thread of `conversationId` back from the cloud; its steps arrive as events. */
-export async function bringBack(conversationId: string): Promise<ThreadReturnOutcome | undefined> {
+/**
+ * Asks the host to bring the Thread of `conversationId` back from the cloud; its steps arrive as events. `options.project`:
+ * the folder its project is in now, when the one it was made from moved.
+ */
+export async function bringBack(conversationId: string, options?: ThreadReturnOptions): Promise<ThreadReturnOutcome | undefined> {
   if (!hasBridge() || cloudMovesStore.get().returning[conversationId]) return undefined
-  const move = crypto.randomUUID()
+  return askReturn(conversationId, crypto.randomUUID(), options)
+}
+
+/** The host asked for a return, new or one it left unsettled: the window shows it packing until the host says more. */
+async function askReturn(conversationId: string, move: string, options?: ThreadReturnOptions): Promise<ThreadReturnOutcome> {
   threadReturnStepped(conversationId, move, { kind: "packing" })
   try {
-    return await getMako().threadReturn(conversationId, move)
+    return await getMako().threadReturn(conversationId, move, options)
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     threadReturnStepped(conversationId, move, { kind: "stayed", reason })
     return { kind: "stayed", reason }
   }
+}
+
+/**
+ * The person asks again about a return the host left unsettled: the same return, under its own id, goes on from where
+ * its plan stands, and settles, or says again who it waits on.
+ */
+export async function askReturnAgain(conversationId: string): Promise<ThreadReturnOutcome | undefined> {
+  const entry = cloudMovesStore.get().returning[conversationId]
+  if (!hasBridge() || entry?.step.kind !== "unsettled") return undefined
+  return askReturn(conversationId, entry.move)
+}
+
+/**
+ * A Thread whose project isn't on this Mac anymore, brought back into the folder the person chooses as its project's
+ * now: the host checks it's a clone of the same repository, tells the worktree where it is, and brings the Thread back.
+ */
+export async function bringBackFromChosenProject(conversationId: string): Promise<void> {
+  if (!hasBridge()) return
+  const project = await getMako().pickFolder()
+  if (!project) return
+  dismissMissingProject(conversationId)
+  await bringBack(conversationId, { project })
+}
+
+/** The person keeps the Thread in the cloud: its notice goes, and its Cloud chip still brings it back. */
+export function dismissMissingProject(conversationId: string): void {
+  cloudMovesStore.set((state) => ({ ...state, missing: without(state.missing, conversationId) }))
 }
 
 /** A step of a return, from the host. Back or stayed is said once, then the strip goes; unsettled stays shown. */
@@ -108,6 +148,10 @@ export function threadReturnStepped(conversationId: string, move: string, step: 
         updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: undefined } : conversation))
         void hydrateLive(id, true)
       }
+    } else if (step.missing) {
+      // Said above the composer, where choosing the project's folder is, not in a toast that goes.
+      const entry = { missing: step.missing, reason: step.reason }
+      cloudMovesStore.set((state) => ({ ...state, missing: { ...state.missing, [conversationId]: entry } }))
     } else if (step.outdated) {
       // Said above the composer, where its Update is, not in a toast that goes; weighed again for every harness it needs.
       const outdated = step.outdated

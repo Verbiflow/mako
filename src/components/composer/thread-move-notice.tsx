@@ -1,6 +1,6 @@
 import { useEffect } from "react"
 import type { ThreadHarnessCheck } from "@mako/host/contracts/cloud-harnesses"
-import type { ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import type { ReturnProjectMissing, ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { ComposerNotice, ComposerNoticeAction } from "@/extend/notices"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -9,7 +9,7 @@ import { returnNotice } from "@/lib/restore-plan"
 import { MoveSteps as Steps } from "./move-steps"
 import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
-import { bringBack, checkHarnesses, dismissHarnessUpdate, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, type HarnessUpdating } from "@/state/cloud-moves"
+import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, type HarnessUpdating } from "@/state/cloud-moves"
 
 /** A move's steps in the order they're taken, each in the words its step says. */
 const STEPS = [
@@ -56,8 +56,6 @@ function returnDetail(step: ThreadReturnStep): string {
       return "Its cloud machine takes no new work and sends back its worktree and sessions. Until they're sent, it's still the cloud's."
     case "bringing":
       return "The cloud let go of it. Its worktree and sessions are arriving here; nothing runs it until they have."
-    case "unsettled":
-      return step.reason
     default:
       return ""
   }
@@ -65,8 +63,9 @@ function returnDetail(step: ThreadReturnStep): string {
 
 /**
  * Above the composer while the Thread on screen moves to the cloud or comes back: where it is, step by step, and what
- * that means for the Thread. One whose answer this Mac can't hear yet says so, in caution: the Thread runs nowhere
- * until it hears, and the host asks again.
+ * that means for the Thread. A move whose answer this Mac can't hear yet says so, in caution: the Thread runs nowhere
+ * until it hears, and the host asks again. A way back that's unsettled says who it waits on, the cloud or this Mac,
+ * and offers to ask again now.
  */
 export function useThreadMoveNotice(): ComposerNotice | null {
   useHarnessIdentity()
@@ -74,6 +73,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   const moving = useCloudMoves((state) => (key ? state.moving[key] : undefined))
   const returning = useCloudMoves((state) => (key ? state.returning[key] : undefined))
   const outdated = useCloudMoves((state) => (key ? state.outdated[key] : undefined))
+  const missing = useCloudMoves((state) => (key ? state.missing[key] : undefined))
   const updating = useCloudMoves((state) => (key ? state.updating[key] : undefined))
   const check = useCloudMoves((state) => (key ? state.harnesses[key] : undefined))
   // A harness the person updates outside Mako (another app's, a command) is weighed again as they come back to the window.
@@ -84,7 +84,8 @@ export function useThreadMoveNotice(): ComposerNotice | null {
     window.addEventListener("focus", again)
     return () => window.removeEventListener("focus", again)
   }, [key, waitsElsewhere])
-  if (updating && !moving && !returning && key) return harnessUpdate(key, updating)
+  if (!key) return null
+  if (updating && !moving && !returning) return harnessUpdate(key, updating)
   if (moving) {
     const unsettled = moving.step.kind === "unsettled"
     const handOff = moving.handOff === true
@@ -104,21 +105,60 @@ export function useThreadMoveNotice(): ComposerNotice | null {
       data: { "data-thread-move": moving.step.kind, "data-thread-handoff": handOff || undefined },
     }
   }
-  if (!returning) return key && outdated ? outdatedReturn(key, outdated, check) : null
-  const unsettled = returning.step.kind === "unsettled"
-  const at = RETURN_STEPS.findIndex((each) => each.kind === returning.step.kind)
+  if (!returning) {
+    if (missing) return missingProject(key, missing)
+    return outdated ? outdatedReturn(key, outdated, check) : null
+  }
+  const step = returning.step
+  if (step.kind === "unsettled") {
+    const here = step.waitsOn === "here"
+    return {
+      id: "thread-move",
+      tone: "caution",
+      title: here ? "Couldn't finish coming back" : "Waiting for the cloud's answer",
+      description: "Nothing runs it yet",
+      detail: <p>{step.reason}</p>,
+      actions: [{ label: "Ask again", primary: true, onClick: () => void askReturnAgain(key) }],
+      data: { "data-thread-return": "unsettled", "data-waits-on": step.waitsOn },
+    }
+  }
+  const at = RETURN_STEPS.findIndex((each) => each.kind === step.kind)
   return {
     id: "thread-move",
-    tone: unsettled ? "caution" : "progress",
-    title: unsettled ? "Waiting for the cloud's answer" : "Coming back to this Mac",
-    description: unsettled ? undefined : RETURN_STEPS[at]?.words,
+    tone: "progress",
+    title: "Coming back to this Mac",
+    description: RETURN_STEPS[at]?.words,
     detail: (
       <>
-        <p>{returnDetail(returning.step)}</p>
-        {!unsettled && <Steps steps={RETURN_STEPS} at={at} />}
+        <p>{returnDetail(step)}</p>
+        <Steps steps={RETURN_STEPS} at={at} />
       </>
     ),
-    data: { "data-thread-return": returning.step.kind },
+    data: { "data-thread-return": step.kind },
+  }
+}
+
+/**
+ * A way back refused before the cloud was asked, because the project the Thread's worktree was made from isn't on this
+ * Mac: the host's words, and the one choice that brings it, the folder the project is in now. Putting it away keeps
+ * the Thread in the cloud, where it goes on; its Cloud chip still brings it back.
+ */
+function missingProject(conversationId: string, entry: { missing: ReturnProjectMissing; reason: string }): ComposerNotice {
+  return {
+    id: "thread-move",
+    tone: "caution",
+    title: "Its project isn't on this Mac",
+    description: "Still in the cloud",
+    detail: (
+      <>
+        <p>{entry.reason}</p>
+        <p>{`If you moved the project, locate it where it is now: Mako brings the Thread back into its worktree, ${entry.missing.folder}, as the cloud left it.`}</p>
+      </>
+    ),
+    actions: [{ label: "Locate project…", primary: true, onClick: () => void bringBackFromChosenProject(conversationId) }],
+    onDismiss: () => dismissMissingProject(conversationId),
+    dismissLabel: "Keep in the cloud",
+    data: { "data-thread-return": "missing-project" },
   }
 }
 

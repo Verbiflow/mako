@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
@@ -8,13 +7,13 @@ import { describeGatewayFailure } from "@mako/protocol/gateway-http"
 import { describeSync, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink, type StagedRecords } from "@mako/sessions/record-sync"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import type { ThreadReturnOutcome, ThreadReturnStep } from "../contracts/cloud-threads.js"
+import { ReturnProjectMissingSchema, type ReturnWaitsOn, type ThreadReturnOptions, type ThreadReturnOutcome, type ThreadReturnStep } from "../contracts/cloud-threads.js"
 import { OutdatedRestoreSchema, type OutdatedRestore, type RuntimeUpdateOffer } from "../contracts/restore-plan.js"
 import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { HandoffSchema, MoveIdSchema, RuntimeIdSchema, type ClaimReceipt, type ExecutionOwner, type Handoff, type MoveId, type SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "../contracts/thread-identity.js"
 import type { CloudAccount } from "../usage/index.js"
-import { applyMoveCheckpoint, captureMoveCheckpoint } from "../workspaces/index.js"
+import { applyMoveCheckpoint, captureMoveCheckpoint, ProjectMissingError } from "../workspaces/index.js"
 import { cloudRuntimeOf, MovePlanSchema, namedUuid } from "./cloud-moves.js"
 
 /**
@@ -33,11 +32,19 @@ import { cloudRuntimeOf, MovePlanSchema, namedUuid } from "./cloud-moves.js"
  * 5. This Mac claims the Thread in its own store, each Session one generation on, and its conversations stop being
  *    the cloud's. The cloud is told the return is done, and ends the machine.
  *
+ * What this Mac must have to take the Thread is made sure of before the cloud lets go: its worktree is a checkout Git
+ * reads (made ready again from its project if the project moved or the folder went, `ThreadWorktreeService.
+ * readyForReturn`), and kept as it is (4's copy) while the machine packs. A Thread whose project isn't on this Mac is
+ * refused before the cloud is asked anything, and one whose worktree can't be kept cancels at 3: it goes on in the cloud.
+ *
  * A failure before 3 cancels the return: the Thread goes on in the cloud. One after 3 and before 5 puts this Mac's
  * worktree back from the copy it kept and gives the Thread back to the cloud. Either way the machine, which released
- * the Thread as it packed, is told to take it back (`mako:move-stay`) before the return counts as stayed. An answer the cloud didn't give is asked
- * for again, never guessed: until it's heard, the Thread runs nowhere (`unsettled`). Each step's plan is written first
- * (`<data root>/cloud/returns/<move>.json`), so a host that stops mid-way settles the return at its next start.
+ * the Thread as it packed, is told to take it back (`mako:move-stay`) before the return counts as stayed. An answer the
+ * cloud didn't give is asked for again, never guessed: until it's heard, the Thread runs nowhere (`unsettled`, waiting
+ * on the cloud). So is work of this Mac's after the cloud let go that isn't a refusal (recording the claim), waiting on
+ * this Mac. One Thread has one return open at a time: asked back again under another id, the open one goes on. Each
+ * step's plan is written first (`<data root>/cloud/returns/<move>.json`), so a host that stops mid-way settles the
+ * return at its next start, and the person's "Ask again" settles it now.
  */
 
 const ReturnSessionSchema = z.object({
@@ -77,10 +84,15 @@ const ReturnPlanSchema = z.object({
   reason: z.string().optional(),
   /** Why it stayed, when a harness here was older than the one that wrote its sessions there: the update that lets it come. */
   outdated: OutdatedRestoreSchema.optional(),
+  /** Why it stayed, when its project wasn't on this Mac: where its worktree is, and the project it was made from. */
+  missing: ReturnProjectMissingSchema.optional(),
   began: z.number(),
   timings: z.record(z.string(), z.number()).default({}),
 })
 type ReturnPlan = z.infer<typeof ReturnPlanSchema>
+type Kept = NonNullable<ReturnPlan["kept"]>
+/** A return still under way, one a later ask for the same Thread goes on with rather than beginning another. */
+const OPEN_PHASES: readonly ReturnPlan["phase"][] = ["preparing", "released", "applied", "claimed"]
 
 /** What the way back needs of the host. */
 export type CloudReturnsOptions = {
@@ -102,6 +114,12 @@ export type CloudReturnsOptions = {
   /** The Thread store's claim, through the live conversations so their residents follow (`LiveMoves.claim`). */
   claim(input: { operationId: string; handoff: Handoff; actor: Actor }): ClaimReceipt
   receiveRecords(link: RecordsLink, sessions: ReceivingSession[]): Promise<ReceivedRecords[]>
+  /**
+   * Makes the Thread's worktree here ready to take it back, before the cloud is asked (`ThreadWorktreeService.
+   * readyForReturn`): `repository`, the GitHub repository it works in; `project`, the folder the person chose as its
+   * project's now. Throws `ProjectMissingError` when its project isn't here.
+   */
+  ready(input: { thread: ThreadId; folder: string; branch?: string; repository: string; project?: string }): Promise<void>
   /** Pulls each session's records into this Mac's record store, writing none into its harness (`SessionCatalog.stageRecords`). */
   stageRecords(link: RecordsLink, sessions: ReceivingSession[]): Promise<StagedRecords[]>
   /** How a harness here gets to a newer version (`RuntimeUpdates.restoreRuntime`), for a return it's too old to take. */
@@ -129,11 +147,15 @@ export class CloudReturns {
     this.#options = options
   }
 
-  /** Brings the Thread of `conversationId` back from the cloud under `move`, or answers how that return went. */
-  bringBack(conversationId: string, move: string): Promise<ThreadReturnOutcome> {
+  /**
+   * Brings the Thread of `conversationId` back from the cloud under `move`, or answers how that return went. A return of
+   * the Thread's still open under another id (unsettled) is the one that goes on. `options.project`: the folder its
+   * project is in now, when the one its worktree was made from moved.
+   */
+  bringBack(conversationId: string, move: string, options: ThreadReturnOptions = {}): Promise<ThreadReturnOutcome> {
     const running = this.#running.get(move)
     if (running) return running
-    const work = this.#bringBack(conversationId, MoveIdSchema.parse(move)).finally(() => this.#running.delete(move))
+    const work = this.#bringBack(conversationId, MoveIdSchema.parse(move), options).finally(() => this.#running.delete(move))
     this.#running.set(move, work)
     return work
   }
@@ -185,30 +207,55 @@ export class CloudReturns {
     }
   }
 
-  async #bringBack(conversationId: string, move: MoveId): Promise<ThreadReturnOutcome> {
+  async #bringBack(conversationId: string, move: MoveId, options: ThreadReturnOptions): Promise<ThreadReturnOutcome> {
     const known = await this.#read(move).catch(() => undefined)
     if (known) {
       if (known.phase === "done") return { kind: "back" }
       if (known.phase === "stayed" || known.phase === "staying") {
         if (known.phase === "staying") await this.#tellStay(known).catch(() => undefined)
-        return { kind: "stayed", reason: known.reason ?? "It stayed in the cloud.", ...known.outdated && { outdated: known.outdated } }
+        return stayedOutcome(known)
       }
       return this.#resume(known)
     }
+    // The cloud takes one return of a Thread at a time: one left open goes on, under its own id, and its window hears it.
+    const open = await this.#open(conversationId)
+    if (open) {
+      const running = this.#running.get(open.move)
+      if (running) return running
+      const work = this.#resume(open).finally(() => this.#running.delete(open.move))
+      this.#running.set(open.move, work)
+      return work
+    }
     let plan: ReturnPlan
     try {
-      plan = await this.#plan(conversationId, move)
+      plan = await this.#plan(conversationId, move, options)
     } catch (error) {
+      // Refused before the cloud was asked anything: the Thread goes on there as it was.
       const reason = errorMessage({ error })
-      this.#options.step(conversationId, move, { kind: "stayed", reason })
-      return { kind: "stayed", reason }
+      const missing = error instanceof ProjectMissingError ? error.missing : undefined
+      hostLog("returns", "a return was refused before the cloud was asked", { move, reason, ...missing?.project !== undefined && { project: missing.project } })
+      this.#options.step(conversationId, move, { kind: "stayed", reason, ...missing && { missing } })
+      return { kind: "stayed", reason, ...missing && { missing } }
     }
     await this.#write(plan)
     return this.#resume(plan)
   }
 
+  /** The return of the Thread of `conversationId` still under way here, if one is: begun and neither done nor stayed. */
+  async #open(conversationId: string): Promise<ReturnPlan | undefined> {
+    const thread = this.#options.threads()?.journalPlacement(conversationId)?.thread
+    if (!thread) return undefined
+    let open: ReturnPlan | undefined
+    for (const name of await readdir(this.#options.folder).catch(() => [])) {
+      if (!name.endsWith(".json")) continue
+      const plan = ReturnPlanSchema.safeParse(JSON.parse(await readFile(join(this.#options.folder, name), "utf8").catch(() => "null"))).data
+      if (plan?.thread === thread && OPEN_PHASES.includes(plan.phase) && (!open || plan.began > open.began)) open = plan
+    }
+    return open
+  }
+
   /** What the return carries, read before anything changes: refused, with the reason, when the Thread can't come back. */
-  async #plan(conversationId: string, move: MoveId): Promise<ReturnPlan> {
+  async #plan(conversationId: string, move: MoveId, options: ThreadReturnOptions): Promise<ReturnPlan> {
     const account = this.#options.account()
     if (!account || !(await account.id())) throw new Error("Bringing a Thread back needs this Mac signed in to Mako Cloud.")
     const threads = this.#options.threads()
@@ -247,9 +294,10 @@ export class CloudReturns {
       }
     }
     if (left.length) hostLog("returns", "conversations begun in the cloud whose harness never started there bring nothing back", { move, conversations: left.join(", ") })
-    if (!existsSync(forward.folder)) throw new Error(`Its worktree on this Mac, ${forward.folder}, is gone; it has nowhere to come back to.`)
     const device = await account.deviceId()
     if (!device) throw new Error("This Mac isn't one of the account's devices, so nothing can be sent back to it.")
+    // Last, as it may change this Mac: its worktree made a checkout Git reads, of a project that's here.
+    await this.#ready(placed.thread, forward, options.project)
     return { move, thread: placed.thread, asked: conversationId, cloudThread: forward.cloudThread, folder: forward.folder, forward: forward.handoff, sessions, left, phase: "preparing", device, began: Date.now(), timings: {} }
   }
 
@@ -257,6 +305,12 @@ export class CloudReturns {
   async #nativeThere(cloudThread: string, conversationId: string): Promise<string | undefined> {
     const value = await this.#options.cloud.callThread(cloudThread, "mako:live-snapshot", [conversationId], conversationId)
     return z.object({ session: z.object({ nativeId: z.string().nullish() }).loose() }).loose().nullable().parse(decodeRuntimeValue(value))?.session.nativeId || undefined
+  }
+
+  /** The Thread's worktree made ready to take it, by what the move that took it there recorded (`ready`). */
+  async #ready(thread: ThreadId, forward: z.infer<typeof MovePlanSchema>, project?: string): Promise<void> {
+    const branch = forward.checkpoint?.branch
+    await this.#options.ready({ thread, folder: forward.folder, repository: forward.repository.url, ...branch && { branch }, ...project !== undefined && { project } })
   }
 
   /** The move that took the Thread to the cloud runtime `runtime`, as its plan stands done. */
@@ -313,7 +367,7 @@ export class CloudReturns {
           if (!session.path) throw new Error(`the records of ${session.harness}'s session ${session.nativeId} came back with no path`)
           await this.#options.capture(session.conversationId, session.path)
         }
-        await this.#account().finishReturn(plan.cloudThread, plan.move)
+        await heard(this.#account().finishReturn(plan.cloudThread, plan.move))
         if (plan.kept) await rm(plan.kept.file, { force: true })
         plan.phase = "done"
         plan.timings.done = Date.now() - plan.began
@@ -321,42 +375,81 @@ export class CloudReturns {
         hostLog("returns", "a Thread came back from the cloud", { move: plan.move, cloudThread: plan.cloudThread, sessions: plan.sessions.length, ...plan.timings })
       }
     } catch (error) {
-      // Only what can't be told yet: a refused step stayed (`#keep`) or was taken back above.
-      const reason = `This Mac couldn't hear the cloud: ${errorMessage({ error })}. It asks again; the Thread runs nowhere until it hears.`
-      hostWarn("returns", "a return is unsettled", { move: plan.move, phase: plan.phase, error: errorMessage({ error }) })
-      step({ kind: "unsettled", reason })
-      return { kind: "unsettled", reason }
+      // Only what can't be told yet: a refused step stayed (`#stay`) or was given back above. What's unsettled says who
+      // it waits on: an answer the cloud didn't give, or this Mac's own work after the cloud let go.
+      const waitsOn: ReturnWaitsOn = error instanceof UnheardError ? "cloud" : "here"
+      const message = errorMessage({ error })
+      const reason = unsettledReason(waitsOn, plan.phase, message)
+      hostWarn("returns", "a return is unsettled", { move: plan.move, phase: plan.phase, waitsOn, error: message })
+      step({ kind: "unsettled", reason, waitsOn })
+      return { kind: "unsettled", reason, waitsOn }
     }
     step({ kind: "back", conversations: plan.sessions.map((session) => session.conversationId) })
     return { kind: "back" }
   }
 
   /**
-   * Steps 1 to 3: the cloud stops taking work, the machine packs, the cloud records it released. Answers a stay when
-   * the machine couldn't pack (the return cancelled); throws only when the cloud can't be heard.
+   * Steps 1 to 3: the cloud stops taking work, the machine packs, the cloud records it released. This Mac keeps its
+   * worktree meanwhile, so one it can't keep cancels the return before the release, as a machine that can't pack does:
+   * either answers a stay. Throws only when the cloud can't be heard.
    */
   async #release(plan: ReturnPlan): Promise<ThreadReturnOutcome | undefined> {
     const account = this.#account()
-    const begun = await account.beginReturn(plan.cloudThread, plan.move)
-    if (begun.phase === "cancelled" || begun.phase === "given-back") return this.#stay(plan, begun.reason)
+    // Beside the cloud's steps, not after them: the copy is taken while the machine packs.
+    const keeping = this.#keep(plan).then((kept) => {
+      // Kept, it's the plan's: a return that stays removes it, one that comes puts it back on a failure.
+      if ("kept" in kept) plan.kept = kept.kept
+      return kept
+    })
+    const begun = await heard(account.beginReturn(plan.cloudThread, plan.move))
+    if (begun.phase === "cancelled" || begun.phase === "given-back") {
+      await keeping
+      return this.#stay(plan, begun.reason)
+    }
     if (begun.phase === "returning") {
-      let departure
       if (!plan.departing) {
         plan.departing = true
         await this.#write(plan)
       }
-      try {
-        departure = ReturnDepartureSchema.parse(decodeRuntimeValue(await this.#options.cloud.callThread(plan.cloudThread, "mako:move-depart", [{ move: plan.move, folder: plan.folder, conversations: plan.sessions.map((session) => session.conversationId), device: plan.device }], plan.asked)))
-      } catch (error) {
-        const reason = errorMessage({ error })
-        const answered = await account.cancelReturn(plan.cloudThread, plan.move, reason)
-        if (answered.phase === "cancelled") return this.#stay(plan, answered.reason)
-        return this.#landed(plan, answered)
-      }
+      // Both settled before the cloud is told anything: a stay must never reach a machine still packing.
+      const [kept, packed] = await Promise.all([
+        keeping,
+        this.#options.cloud.callThread(plan.cloudThread, "mako:move-depart", [{ move: plan.move, folder: plan.folder, conversations: plan.sessions.map((session) => session.conversationId), device: plan.device }], plan.asked)
+          .then((value) => ({ departure: ReturnDepartureSchema.parse(decodeRuntimeValue(value)) }), (error: Error) => ({ error })),
+      ])
+      if ("error" in packed) return this.#cancel(plan, errorMessage({ error: packed.error }))
+      if ("error" in kept) return this.#cancel(plan, `This Mac couldn't keep its worktree as it is before taking the cloud's: ${errorMessage({ error: kept.error })}`)
       plan.timings.packed = Date.now() - plan.began
-      return this.#landed(plan, await account.releaseReturn(plan.cloudThread, plan.move, departure))
+      return this.#landed(plan, await heard(account.releaseReturn(plan.cloudThread, plan.move, packed.departure)))
     }
+    // Released already (a host that stopped after the cloud heard it): what was kept goes with it, if it could be.
+    await keeping
     return this.#landed(plan, begun)
+  }
+
+  /** A return given up before its release: the Thread goes on in the cloud, unless the cloud had released it already. */
+  async #cancel(plan: ReturnPlan, reason: string): Promise<ThreadReturnOutcome | undefined> {
+    const answered = await heard(this.#account().cancelReturn(plan.cloudThread, plan.move, reason))
+    if (answered.phase === "cancelled") return this.#stay(plan, answered.reason)
+    return this.#landed(plan, answered)
+  }
+
+  /** This Mac's worktree as it is, kept beside the return's plan until the return is over; or why it couldn't be. */
+  async #keep(plan: ReturnPlan): Promise<{ kept: Kept } | { error: unknown }> {
+    if (plan.kept) return { kept: plan.kept }
+    let scratch: string | undefined
+    try {
+      await mkdir(this.#options.folder, { recursive: true })
+      scratch = await mkdtemp(join(this.#options.folder, `${plan.move}-kept-`))
+      const captured = await captureMoveCheckpoint(this.#options.git, plan.folder, scratch)
+      const file = join(this.#options.folder, `${plan.move}.kept.bundle`)
+      await rename(captured.file, file)
+      return { kept: { checkpoint: captured.checkpoint, file } }
+    } catch (error) {
+      return { error }
+    } finally {
+      if (scratch) await rm(scratch, { recursive: true, force: true })
+    }
   }
 
   /**
@@ -382,17 +475,16 @@ export class CloudReturns {
     const departure = plan.departure
     if (!departure) throw new Error("the return was released with nothing packed")
     const account = this.#account()
-    await mkdir(this.#options.folder, { recursive: true })
-    if (!plan.kept) {
-      const scratch = await mkdtemp(join(this.#options.folder, `${plan.move}-kept-`))
-      const captured = await captureMoveCheckpoint(this.#options.git, plan.folder, scratch)
-      const file = join(this.#options.folder, `${plan.move}.kept.bundle`)
-      await rename(captured.file, file)
-      await rm(scratch, { recursive: true, force: true })
-      plan.kept = { checkpoint: captured.checkpoint, file }
-      await this.#write(plan)
-    }
     try {
+      if (!plan.kept) {
+        // Released before this Mac kept its worktree (an earlier version kept it only now): made ready and kept now,
+        // or the Thread is given back, as any failure to take it here is.
+        await this.#ready(plan.thread, await this.#forward(plan.thread, cloudRuntimeOf(plan.cloudThread)))
+        const kept = await this.#keep(plan)
+        if ("error" in kept) throw kept.error
+        plan.kept = kept.kept
+        await this.#write(plan)
+      }
       // Each part timed, so a slow way back says where it waited.
       const parts: Record<string, number> = {}
       const timed = async <Value>(part: string, work: () => Promise<Value>): Promise<Value> => {
@@ -444,9 +536,17 @@ export class CloudReturns {
       const cause = error instanceof Error && error.cause !== undefined ? errorMessage({ error: error.cause }) : undefined
       const outdated = error instanceof OutdatedReturnError ? JSON.stringify(error.outdated) : undefined
       hostWarn("returns", "a return couldn't be taken here; the worktree is put back and the Thread given back", { move: plan.move, reason, ...cause !== undefined && { cause }, ...outdated !== undefined && { outdated } })
-      await applyMoveCheckpoint(this.#options.git, plan.folder, plan.kept.file, plan.kept.checkpoint, { replace: true })
+      if (plan.kept) {
+        const kept = plan.kept
+        // A worktree that can't be put back keeps its copy beside the plan, and the Thread still goes back to the cloud.
+        await applyMoveCheckpoint(this.#options.git, plan.folder, kept.file, kept.checkpoint, { replace: true }).catch((restore: Error) => {
+          hostWarn("returns", "this Mac's worktree couldn't be put back as it was; its copy stays", { move: plan.move, file: kept.file, error: errorMessage({ error: restore }) })
+          plan.kept = undefined
+        })
+      }
       if (error instanceof OutdatedReturnError) plan.outdated = error.outdated
-      const given = await account.giveBackReturn(plan.cloudThread, plan.move, reason)
+      if (error instanceof ProjectMissingError) plan.missing = error.missing
+      const given = await heard(account.giveBackReturn(plan.cloudThread, plan.move, reason))
       if (given.phase === "given-back") return this.#stay(plan, given.reason)
       throw new Error(`the cloud reads the return as ${given.phase} after this Mac gave it back`, { cause: error })
     }
@@ -500,9 +600,9 @@ export class CloudReturns {
     // Its machine runs it again once told; until then it's still the cloud's, and a later start tells it.
     await this.#tellStay(plan).catch((error: Error) => hostWarn("returns", "a machine still to be told its Thread stays couldn't be told yet", { move: plan.move, error: error.message }))
     hostLog("returns", "a Thread stayed in the cloud", { move: plan.move, reason })
-    const outdated = plan.outdated
-    this.#options.step(plan.asked, plan.move, { kind: "stayed", reason, ...outdated && { outdated } })
-    return { kind: "stayed", reason, ...outdated && { outdated } }
+    const outcome = stayedOutcome(plan)
+    this.#options.step(plan.asked, plan.move, outcome)
+    return outcome
   }
 
   /** The machine takes back the Thread it released as it packed; nothing to tell when it was never asked to pack. */
@@ -528,6 +628,43 @@ export class CloudReturns {
     await writeFile(`${file}.tmp`, JSON.stringify(ReturnPlanSchema.parse(plan)))
     await rename(`${file}.tmp`, file)
   }
+}
+
+/** How a return that stayed answers, from its plan: why, and what lets it come (an update, the project's folder). */
+function stayedOutcome(plan: ReturnPlan): Extract<ThreadReturnOutcome, { kind: "stayed" }> {
+  const { outdated, missing } = plan
+  return { kind: "stayed", reason: plan.reason ?? "It stayed in the cloud.", ...outdated && { outdated }, ...missing && { missing } }
+}
+
+/** A cloud call whose answer this Mac didn't get: what's unsettled waits on the cloud, not on anything here. */
+class UnheardError extends Error {
+  constructor(cause: unknown) {
+    super(errorMessage({ error: cause }), { cause })
+    this.name = "UnheardError"
+  }
+}
+
+/** A step the cloud answers, marked so a failure reads as the cloud unheard. */
+async function heard<Value>(call: Promise<Value>): Promise<Value> {
+  try {
+    return await call
+  } catch (error) {
+    throw new UnheardError(error)
+  }
+}
+
+/** What an unsettled return says: who it waits on, where the Thread is meanwhile, and what asks again. */
+function unsettledReason(waitsOn: ReturnWaitsOn, phase: ReturnPlan["phase"], message: string): string {
+  const again = "Ask again, or Mako asks when it next starts."
+  if (phase === "claimed")
+    return waitsOn === "cloud"
+      ? `It runs on this Mac, and Mako couldn't tell the cloud it's done: ${message}. Its cloud machine stays until the cloud hears. ${again}`
+      : `It runs on this Mac, and Mako couldn't finish setting up its conversations here: ${message}. ${again}`
+  if (waitsOn === "here")
+    return `This Mac couldn't finish taking the Thread: ${message}. The cloud let it go, so it runs nowhere until this Mac does. ${again}`
+  return phase === "preparing"
+    ? `Mako couldn't hear the cloud: ${message}. Until it does, it can't tell whether the cloud let the Thread go, so it runs nowhere. ${again}`
+    : `Mako couldn't hear the cloud: ${message}. The cloud let the Thread go and this Mac hasn't taken it, so it runs nowhere until Mako hears. ${again}`
 }
 
 /** A return refused because a harness here is older than the one that wrote its sessions in the cloud. */

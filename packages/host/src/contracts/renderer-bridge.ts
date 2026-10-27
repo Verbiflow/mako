@@ -66,7 +66,7 @@ import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-acc
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
-import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOutcome } from "./cloud-threads.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "./cloud-threads.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
 import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
@@ -431,8 +431,11 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** Whether agents at work go to the cloud as this Mac sleeps, and whether it can. */
     handOffSettings: () => invokeTrustedHost<HandOffSettings>("mako:handoff-settings"),
     setHandOffOnSleep: (onSleep: boolean) => invokeTrustedHost<HandOffSettings>("mako:handoff-settings-set", onSleep),
-    /** Brings the Thread of a conversation back from the cloud under `move`; its steps arrive as `thread-return-step` events. */
-    threadReturn: (conversationId: string, move: string) => invokeTrustedHost<ThreadReturnOutcome>("mako:thread-return", conversationId, move),
+    /**
+     * Brings the Thread of a conversation back from the cloud under `move`; its steps arrive as `thread-return-step`
+     * events. `options.project`: the folder its project is in now, when the one its worktree was made from moved.
+     */
+    threadReturn: (conversationId: string, move: string, options?: ThreadReturnOptions) => invokeTrustedHost<ThreadReturnOutcome>("mako:thread-return", conversationId, move, options),
     /** The account has the cloud: this Mac's recent project folders, newest first, offered once for project bases. */
     cloudOfferProjects: (folders: string[]) => invokeTrustedHost<CloudProjectsOffer>("mako:cloud-offer-projects", folders),
 

@@ -2,7 +2,7 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Git } from "@mako/git"
@@ -16,6 +16,7 @@ import { MoveIdSchema, type MoveId } from "@mako/host/contracts/thread-execution
 import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
 import { ThreadStore, type JournalFacts } from "@mako/host/threads/store"
 import { captureMoveCheckpoint } from "@mako/host/workspaces/index"
+import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import { z } from "zod"
 
 /**
@@ -24,7 +25,9 @@ import { z } from "zod"
  * only goes forward). The machine's checkout replaces this Mac's worktree and the Thread runs here again, one
  * generation on; a machine that can't pack cancels it, and the machine is told to keep the Thread; records this Mac
  * can't take put the worktree back exactly and give the Thread back; an answer this Mac can't hear leaves it
- * unsettled until the next host settles it; and asked again, a return answers how it went.
+ * unsettled until the next host settles it; and asked again, a return answers how it went. What this Mac must have is
+ * made sure of before the cloud lets go: a worktree whose project is gone is refused with nothing asked of the cloud,
+ * one whose folder went or whose project moved is made ready again, and one that can't be kept cancels the return.
  */
 /** What the machine is asked to pack: the conversations going back. */
 const DepartAskSchema = z.object({ conversations: z.array(z.string()) }).loose()
@@ -61,23 +64,35 @@ class Cloud {
   }
 }
 
-function setup(name: string) {
+/** The repository a Thread's move recorded, as GitHub names it. */
+const REPOSITORY = "https://github.com/octocat/Hello-World"
+
+/**
+ * `worktree`: the Thread works in a worktree of a project, as a person's Thread does (the project at `project`, the
+ * worktree on `mako/fix`), and the machine's commit wasn't pushed, so its checkpoint carries it and nothing here asks
+ * the remote for it. Otherwise the checkout is a clone of its own.
+ */
+function setup(name: string, options: { worktree?: boolean } = {}) {
   const folder = join(root, name)
   const remote = join(folder, "remote.git")
+  const project = join(folder, "Users", "ada", "project")
   const checkout = join(folder, "Users", "ada", "worktrees", "fix")
   const machine = join(folder, "machine", "fix")
   sh(root, "init", "--bare", "--quiet", remote)
-  sh(root, "clone", "--quiet", remote, checkout)
-  writeFileSync(join(checkout, "a.txt"), "one\n")
-  sh(checkout, "add", ".")
-  sh(checkout, "commit", "--quiet", "-m", "base")
-  sh(checkout, "push", "--quiet", "origin", "main")
+  const main = options.worktree ? project : checkout
+  sh(root, "clone", "--quiet", remote, main)
+  writeFileSync(join(main, "a.txt"), "one\n")
+  sh(main, "add", ".")
+  sh(main, "commit", "--quiet", "-m", "base")
+  sh(main, "push", "--quiet", "origin", "main")
+  if (options.worktree) sh(project, "worktree", "add", "--quiet", "-b", "mako/fix", checkout)
   writeFileSync(join(checkout, "a.txt"), "one, as it left this Mac\n")
   // The machine's clone went on: a commit of the agent's, pushed, and a file it left.
   sh(root, "clone", "--quiet", remote, machine)
+  if (options.worktree) sh(machine, "checkout", "--quiet", "-b", "mako/fix")
   writeFileSync(join(machine, "a.txt"), "one, changed in the cloud\n")
   sh(machine, "commit", "--quiet", "-am", "in the cloud")
-  sh(machine, "push", "--quiet", "origin", "main")
+  if (!options.worktree) sh(machine, "push", "--quiet", "origin", "main")
   writeFileSync(join(machine, "b.txt"), "left by the agent\n")
 
   const threads = new ThreadStore(join(folder, "threads.sqlite"), { now: () => clock++, realPath: (path) => path })
@@ -91,8 +106,9 @@ function setup(name: string) {
   threads.beginMove({ move: forwardMove, thread: placed.thread, target: { kind: "cloud", runtime }, actor: threads.person() })
   const handoff = threads.release({ operationId: randomUUID(), move: forwardMove, actor: threads.person() })
   threads.confirm({ operationId: randomUUID(), receipt: { move: forwardMove, owner: { kind: "cloud", runtime }, sessions: handoff.sessions.map((session) => ({ id: session.id, generation: session.generation + 1 })) }, actor: threads.person() })
+  if (options.worktree) threads.attachWorktree({ path: checkout, thread: placed.thread, repoRoot: project, project, branch: "mako/fix", base: sh(project, "rev-parse", "HEAD") })
   const plan: z.input<typeof MovePlanSchema> = {
-    move: forwardMove, thread: placed.thread, asked: conversation, cloudThread, folder: checkout, repository: { url: "https://github.com/octocat/Hello-World" },
+    move: forwardMove, thread: placed.thread, asked: conversation, cloudThread, folder: checkout, repository: { url: REPOSITORY },
     sessions: [{ session: placed.session, conversationId: conversation, harness: "codex", nativeId: "n-1", path: "/codex/n-1.jsonl" }],
     phase: "started", handoff, began: 1, timings: {},
   }
@@ -110,6 +126,9 @@ function setup(name: string) {
   const nativeThere = new Map<string, string>([[conversation, "n-1"]])
   let restored: ReceivedRecords["restored"] | undefined
   let receiveFails: Error | undefined
+  /** Set to make the claim here fail that many times: this Mac's own work, after the cloud let go. */
+  let claimFails = 0
+  const worktrees = new ThreadWorktreeService(git, join(folder, "Users", "ada", "mako-worktrees"), threads)
   cloud.depart = async () => {
     const scratch = mkdtempSync(join(folder, "pack-"))
     const { checkpoint, file } = await captureMoveCheckpoint(git, machine, scratch)
@@ -141,7 +160,14 @@ function setup(name: string) {
     git,
     account: () => account,
     threads: () => threads,
-    claim: (input) => threads.claim(input),
+    claim: (input) => {
+      if (claimFails > 0) {
+        claimFails -= 1
+        throw new Error("database is locked")
+      }
+      return threads.claim(input)
+    },
+    ready: (input) => worktrees.readyForReturn(input),
     updateOffer: (harness) => ({ kind: "update", runtimeId: harness, label: harness }),
     stageRecords: async (_link, sessions) => {
       if (cloud.aheadFails) throw new Error("the network dropped")
@@ -192,9 +218,10 @@ function setup(name: string) {
     return { session: placedFork.session, conversationId }
   }
   return {
-    returns: make(), fresh: make, cloud, conversation, checkout, steps, released, captured, state, files, device, cloudThread, threads, thread: placed.thread, session: placed.session, tab, fork,
+    returns: make(), fresh: make, cloud, conversation, checkout, project, remote, folder, steps, released, captured, state, files, device, cloudThread, threads, thread: placed.thread, session: placed.session, tab, fork, handoff,
     setRestored: (next: ReceivedRecords["restored"]) => (restored = next),
     failReceive: (error: Error) => (receiveFails = error),
+    failClaim: (times: number) => (claimFails = times),
   }
 }
 
@@ -301,6 +328,8 @@ try {
     }
     const outcome = await s.returns.bringBack(s.conversation, id)
     assert.equal(outcome.kind, "unsettled")
+    assert.equal(outcome.kind === "unsettled" && outcome.waitsOn, "cloud", "it waits on the cloud's answer, and says so")
+    assert.match(outcome.kind === "unsettled" ? outcome.reason : "", /^Mako couldn't hear the cloud: the network is down\./)
     assert.equal(s.cloud.records.get(id)?.phase, "returning", "the cloud never heard the release")
     assert.equal(s.state()?.state, "elsewhere", "nothing taken here meanwhile")
     s.cloud.depart = original
@@ -353,7 +382,140 @@ try {
     assert.equal(late && s.threads.execution(SessionIdSchema.parse(late.session))?.state, "elsewhere")
     assert.deepEqual(s.captured, [])
   }
-  console.log("PASS: a Thread comes back from the cloud with one owner throughout: packed, released, laid over this Mac's worktree and claimed here; a machine that can't pack cancels it and keeps the Thread; records that can't be taken put the worktree back and give it back; an unheard release is settled by the next host; conversations begun in the cloud come back with it, and one begun as it set off gives it back rather than be left behind")
+  // Asked back again under a new id while one is unsettled: the open one goes on, and no second return begins.
+  {
+    const s = setup("open")
+    const first = move()
+    const original = s.cloud.depart
+    s.cloud.depart = async () => {
+      const departure = await original()
+      s.cloud.unreachable = 1
+      return departure
+    }
+    assert.equal((await s.returns.bringBack(s.conversation, first)).kind, "unsettled")
+    s.cloud.depart = original
+    const second = move()
+    assert.deepEqual(await s.returns.bringBack(s.conversation, second), { kind: "back" }, "the open return settles")
+    assert.deepEqual([...s.cloud.records.keys()], [first], "the cloud heard one return of the Thread")
+    assert.deepEqual([s.state()?.state, s.state()?.generation], ["here", 5])
+  }
+
+  // This Mac's own work failing after the cloud let go: unsettled, waiting on this Mac, and asked again it comes.
+  {
+    const s = setup("claim-fails")
+    const id = move()
+    s.failClaim(1)
+    const outcome = await s.returns.bringBack(s.conversation, id)
+    assert.deepEqual(outcome.kind === "unsettled" && [outcome.waitsOn, outcome.reason], ["here", "This Mac couldn't finish taking the Thread: database is locked. The cloud let it go, so it runs nowhere until this Mac does. Ask again, or Mako asks when it next starts."], "said as this Mac's, not the cloud's")
+    assert.deepEqual(s.steps.at(-1), { kind: "unsettled", reason: outcome.kind === "unsettled" ? outcome.reason : "", waitsOn: "here" })
+    assert.deepEqual(await s.returns.bringBack(s.conversation, id), { kind: "back" }, "asked again, it comes")
+    assert.deepEqual([s.state()?.state, s.state()?.generation], ["here", 5])
+  }
+
+  // A worktree that can't be kept as it is (an index with conflicts): cancelled before the cloud let go, the Thread
+  // goes on in the cloud, and the machine keeps it.
+  {
+    const s = setup("unkept")
+    const blob = sh(s.checkout, "hash-object", "-w", "a.txt")
+    sh(s.checkout, "rm", "--cached", "--quiet", "a.txt")
+    execFileSync("git", ["update-index", "--index-info"], { cwd: s.checkout, input: [1, 2, 3].map((stage) => `100644 ${blob} ${stage}\ta.txt`).join("\n") + "\n" })
+    const id = move()
+    const outcome = await s.returns.bringBack(s.conversation, id)
+    assert.equal(outcome.kind, "stayed")
+    assert.match(outcome.kind === "stayed" ? outcome.reason : "", /^This Mac couldn't keep its worktree as it is before taking the cloud's: This checkout has conflicts/)
+    assert.equal(s.cloud.records.get(id)?.phase, "cancelled", "never released")
+    assert.ok(s.cloud.calls.some((call) => call.channel === "mako:move-stay"), "the machine, which packed, keeps it")
+    assert.deepEqual([s.state()?.state, s.state()?.generation], ["elsewhere", 3])
+    assert.deepEqual(readdirSync(join(s.folder, "returns")).filter((name) => !name.endsWith(".json")), [], "nothing left of the attempt beside its plan")
+  }
+
+  // The project the worktree was made from is gone (deleted, or moved away): refused before the cloud is asked
+  // anything, the project named for the window, the Thread running in the cloud as it was.
+  {
+    const s = setup("project-gone", { worktree: true })
+    rmSync(s.project, { recursive: true, force: true })
+    const before = readFileSync(join(s.checkout, "a.txt"), "utf8")
+    const id = move()
+    const outcome = await s.returns.bringBack(s.conversation, id)
+    assert.deepEqual(outcome, { kind: "stayed", reason: `Its project, ${s.project}, isn't on this Mac anymore: it was moved or deleted. It goes on in the cloud.`, missing: { folder: s.checkout, project: s.project } })
+    assert.deepEqual(s.steps, [{ kind: "stayed", reason: outcome.kind === "stayed" ? outcome.reason : "", missing: { folder: s.checkout, project: s.project } }], "no packing: nothing was asked of the cloud")
+    assert.deepEqual([s.cloud.records.size, s.cloud.calls.length], [0, 0], "the cloud heard nothing")
+    assert.deepEqual([s.state()?.state, s.state()?.generation], ["elsewhere", 3])
+    assert.equal(readFileSync(join(s.checkout, "a.txt"), "utf8"), before, "nothing here changed")
+    assert.ok(!existsSync(join(s.folder, "returns", `${id}.json`)), "no plan was written")
+  }
+
+  // The project moved: the person chooses where it is now, the worktree is told, and the Thread comes back into it at
+  // the same folder. A folder of another repository is refused, as before, still naming the project.
+  {
+    const s = setup("project-moved", { worktree: true })
+    const moved = join(s.folder, "Users", "ada", "Code", "project")
+    mkdirSync(join(s.folder, "Users", "ada", "Code"))
+    renameSync(s.project, moved)
+    sh(moved, "remote", "set-url", "origin", REPOSITORY)
+    const refused = await s.returns.bringBack(s.conversation, move())
+    assert.deepEqual(refused.kind === "stayed" && refused.missing, { folder: s.checkout, project: s.project })
+    const other = join(s.folder, "other")
+    sh(root, "init", "--quiet", other)
+    sh(other, "remote", "add", "origin", "https://github.com/octocat/Spoon-Knife")
+    const wrong = await s.returns.bringBack(s.conversation, move(), { project: other })
+    assert.deepEqual(wrong, { kind: "stayed", reason: `${other} isn't a clone of github.com/octocat/Hello-World, the repository this Thread works in. Choose the folder its project is in now.`, missing: { folder: s.checkout, project: s.project } })
+    assert.equal(s.cloud.records.size, 0, "still nothing asked of the cloud")
+    assert.deepEqual(await s.returns.bringBack(s.conversation, move(), { project: moved }), { kind: "back" })
+    assert.equal(s.files()[0], "one, changed in the cloud\n", "the machine's checkout, in the same folder")
+    assert.equal(sh(s.checkout, "symbolic-ref", "--short", "HEAD"), "mako/fix")
+    assert.ok(sh(moved, "worktree", "list", "--porcelain").includes(`worktree ${realpathSync(s.checkout)}`), "a worktree of the project where it is now")
+    assert.deepEqual(s.threads.worktrees().map((each) => [each.path, each.repoRoot, each.project]), [[s.checkout, moved, moved]], "and the Thread store says so")
+    assert.deepEqual([s.state()?.state, s.state()?.generation], ["here", 5])
+  }
+
+  // The project deleted and cloned again: chosen, the worktree, files and all, joins the new clone.
+  {
+    const s = setup("project-recloned", { worktree: true })
+    rmSync(s.project, { recursive: true, force: true })
+    const clone = join(s.folder, "Users", "ada", "again")
+    sh(root, "clone", "--quiet", s.remote, clone)
+    sh(clone, "remote", "set-url", "origin", REPOSITORY)
+    assert.deepEqual(await s.returns.bringBack(s.conversation, move(), { project: clone }), { kind: "back" })
+    assert.equal(s.files()[0], "one, changed in the cloud\n")
+    assert.match(s.files()[1] ?? "", /b\.txt/)
+    assert.ok(!readdirSync(join(s.folder, "Users", "ada", "worktrees")).some((name) => name.includes("mako-reattach")), "nothing left beside it")
+  }
+
+  // The worktree's folder is gone and its project is here: made again from the project, on its branch, and the Thread
+  // comes back into it.
+  {
+    const s = setup("folder-gone", { worktree: true })
+    rmSync(s.checkout, { recursive: true, force: true })
+    assert.deepEqual(await s.returns.bringBack(s.conversation, move()), { kind: "back" })
+    assert.equal(s.files()[0], "one, changed in the cloud\n")
+    assert.equal(sh(s.checkout, "symbolic-ref", "--short", "HEAD"), "mako/fix")
+  }
+
+  // A return an earlier version left released, its worktree never kept, whose project went (the six Threads a proof
+  // left): the next host makes it ready or gives it back, and the machine is told to keep it. It never runs nowhere.
+  {
+    const s = setup("released-unkept", { worktree: true })
+    const id = move()
+    // What the machine packed then, as it packed it.
+    s.cloud.calls.push({ channel: "mako:move-depart", args: [{ move: id, folder: s.checkout, conversations: [s.conversation], device: s.device }] })
+    const departure = await s.cloud.depart()
+    s.cloud.records.set(id, { phase: "released", move: id, at: clock++, departure })
+    mkdirSync(join(s.folder, "returns"), { recursive: true })
+    writeFileSync(join(s.folder, "returns", `${id}.json`), JSON.stringify({
+      move: id, thread: s.thread, asked: s.conversation, cloudThread: s.cloudThread, folder: s.checkout, forward: s.handoff,
+      sessions: [{ session: s.session, conversationId: s.conversation, harness: "codex", nativeId: "n-1", generation: 3 }],
+      phase: "released", device: s.device, departing: true, departure, began: clock++, timings: {},
+    }))
+    rmSync(s.project, { recursive: true, force: true })
+    await s.fresh().settle()
+    assert.equal(s.cloud.records.get(id)?.phase, "given-back", "given back to the cloud")
+    assert.deepEqual(s.cloud.calls.filter((call) => call.channel === "mako:move-stay").map((call) => call.args), [[{ move: id, device: s.device, reason: `Its project, ${s.project}, isn't on this Mac anymore: it was moved or deleted. It goes on in the cloud.` }]], "and its machine runs it again")
+    assert.deepEqual([s.state()?.state, s.state()?.generation], ["elsewhere", 3], "still the cloud's here")
+    assert.deepEqual(await s.returns.bringBack(s.conversation, id), { kind: "stayed", reason: `Its project, ${s.project}, isn't on this Mac anymore: it was moved or deleted. It goes on in the cloud.`, missing: { folder: s.checkout, project: s.project } }, "asked again, it says why, with the project for the window")
+    assert.deepEqual(readdirSync(join(s.folder, "returns")).filter((name) => !name.endsWith(".json")), [], "no copies left beside the plan")
+  }
+  console.log("PASS: a Thread comes back from the cloud with one owner throughout: packed, released, laid over this Mac's worktree and claimed here; a machine that can't pack cancels it and keeps the Thread; records that can't be taken put the worktree back and give it back; an unheard release is settled by the next host; conversations begun in the cloud come back with it, and one begun as it set off gives it back rather than be left behind; asked again under a new id, an open return goes on; this Mac's own failure after the release waits on this Mac, and says so; a worktree that can't be kept cancels before the release; a project gone is refused with nothing asked of the cloud, a moved one is chosen and the worktree joins it, a deleted worktree is made again; and a return left released and unkept is given back by the next host")
 } finally {
   git.close()
   rmSync(root, { recursive: true, force: true })

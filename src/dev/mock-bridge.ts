@@ -6,7 +6,7 @@ import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-cont
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import { fixtureUsageSummary } from "./usage-fixture"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
-import type { HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import type { HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { ConversationSettings } from "@mako/host/contracts/turn-continuation"
 import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
@@ -131,9 +131,15 @@ interface MockConversationSettings { value: ConversationSettings }
 const mockConversationSettings: MockConversationSettings = { value: { continueAfterRestart: false } }
 /**
  * `?return=outdated`: the first way back stays, Codex here being older than the one that wrote it in the cloud;
- * `?return=outdated-devin`: Devin's, which Devin.app updates.
+ * `?return=outdated-devin`: Devin's, which Devin.app updates. `?return=project-gone`: the way back is refused before
+ * the cloud is asked, the project the worktree was made from gone from this Mac, until the folder it moved to is
+ * chosen (the folder chooser answers `MOCK_MOVED_PROJECT`). `?return=unsettled-cloud` and `?return=unsettled-here`: the
+ * first way back is left unsettled, waiting on the cloud's answer or on this Mac's own work; asked again, it comes.
  */
 const mockReturnOutdated = { value: new URLSearchParams(globalThis.location?.search).get("return") ?? "" }
+/** Where the fixture's project moved to, as the person chooses it in the folder chooser. */
+const MOCK_MOVED_PROJECT = "/Users/you/Code/billing-api"
+const MOCK_RETURN_WORKTREE = "/Users/you/.mako/worktrees/billing-api-3f2a91c0/retry-billing-webhooks"
 /**
  * `?harnesses=`: this Mac's harnesses against a cloud on Codex 0.164.0, OpenCode 2.1.4, Devin 3000.11.205 and Grok
  * 1.0.70, as production met them. `behind`: Codex here is older, and Mako updates it; `several`: Codex and OpenCode
@@ -2851,9 +2857,19 @@ export function installMockBridge() {
       return { onSleep }
     },
     /** A fixture's way back: its steps a moment apart, as a real one takes them. */
-    threadReturn: async (conversationId: string, move: string) => {
+    threadReturn: async (conversationId: string, move: string, options?: ThreadReturnOptions) => {
       const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
       const step = (next: ThreadReturnStep) => emit({ type: "thread-return-step", conversationId, move, step: next })
+      if (mockReturnOutdated.value === "project-gone") {
+        // Refused before the cloud is asked anything, until the person chooses where the project is now.
+        if (options?.project !== MOCK_MOVED_PROJECT) {
+          const reason = "Its project, /Users/you/Projects/billing-api, isn't on this Mac anymore: it was moved or deleted. It goes on in the cloud."
+          const missing = { folder: MOCK_RETURN_WORKTREE, project: "/Users/you/Projects/billing-api" }
+          step({ kind: "stayed", reason, missing })
+          return { kind: "stayed" as const, reason, missing }
+        }
+        mockReturnOutdated.value = ""
+      }
       for (const next of [{ kind: "packing" }, { kind: "bringing" }] as const) {
         step(next)
         await pause(900)
@@ -2864,6 +2880,15 @@ export function installMockBridge() {
         const outdated = { harness: "codex", wrote: { version: "0.163.0", source: "record" as const }, installed: "0.159.3", offer: { kind: "update" as const, runtimeId: "codex", label: "Update with npm" } }
         step({ kind: "stayed", reason, outdated })
         return { kind: "stayed" as const, reason, outdated }
+      }
+      if (mockReturnOutdated.value === "unsettled-cloud" || mockReturnOutdated.value === "unsettled-here") {
+        const waitsOn = mockReturnOutdated.value === "unsettled-cloud" ? "cloud" as const : "here" as const
+        mockReturnOutdated.value = ""
+        const reason = waitsOn === "cloud"
+          ? "Mako couldn't hear the cloud: The network connection was lost. The cloud let the Thread go and this Mac hasn't taken it, so it runs nowhere until Mako hears. Ask again, or Mako asks when it next starts."
+          : "This Mac couldn't finish taking the Thread: database is locked. The cloud let it go, so it runs nowhere until this Mac does. Ask again, or Mako asks when it next starts."
+        step({ kind: "unsettled", reason, waitsOn })
+        return { kind: "unsettled" as const, reason, waitsOn }
       }
       if (mockReturnOutdated.value === "outdated-devin") {
         mockReturnOutdated.value = ""
@@ -3047,7 +3072,7 @@ export function installMockBridge() {
       mockTelemetry = { ...mockTelemetry, ...choice }
       return { ...mockTelemetry }
     },
-    pickFolder: async () => null,
+    pickFolder: async () => (mockReturnOutdated.value === "project-gone" ? MOCK_MOVED_PROJECT : null),
     externalEditors: async () => [
       { id: "zed", label: "Zed", available: true },
       { id: "cursor", label: "Cursor", available: true },

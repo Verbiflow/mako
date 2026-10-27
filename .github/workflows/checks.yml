@@ -35,7 +35,7 @@ jobs:
 
   # The protocol's conformance suite, every host call over the socket and the gateway, the host as a cloud
   # machine's runtime, linked by a stand-in for the machine's agent, and where this Mac sends a cloud conversation's
-  # calls as its Thread moves to the cloud and back.
+  # calls as its Thread moves to the cloud and back, and the way back itself.
   cloud-runtime:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -53,6 +53,7 @@ jobs:
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
       - run: npm run test:cloud-conversations
+      - run: npx tsx scripts/test-cloud-returns.ts
 
   # The renderer's and the live state's own suites, in Node without a window: the transcript as live and saved
   # draw it, the stage's thread identity, the live controls and notices, how a message is delivered and recovered,
