@@ -200,8 +200,12 @@ export type CloudConversationsOptions = {
    * recorded: its Session runs where the Thread does, and the way back brings it here with the rest.
    */
   threads?(): AwayThreads | undefined
-  /** Whether a cloud Thread is on its way back to this Mac: it begins no conversation meanwhile. */
-  returning?(cloudThread: string): boolean
+  /**
+   * The return bringing a cloud Thread back to this Mac now, which settles once it's over, however it went; undefined
+   * when none is. It begins no conversation meanwhile, and a call for one of its conversations waits for it, then goes
+   * where the Thread runs after: nothing takes work while a Thread is in transit.
+   */
+  returning?(cloudThread: string): Promise<void> | undefined
   /** The copies other devices keep of their Sessions in the account, read while a device is off. */
   copies?: CloudCopies
   /** How long a device found off is read from its copy before it's asked again (`ASLEEP_MS`); a test's is short. */
@@ -232,11 +236,14 @@ export type AwayThreads = {
 /** What a fork's answer names: the conversation it made, and the Session its host put it in. */
 const ForkAnswerSchema = z.object({ session: z.object({ id: z.string(), harness: z.string() }).loose(), sessionId: z.string().optional() }).loose()
 
-/** A cloud conversation's folder on its machine, as a window reads it: calls answered there, through its Thread. */
+/**
+ * A cloud conversation's folder on its machine, as a window reads it: each call answered where the conversation runs
+ * when it's made, through its Thread then, or `here` once it runs on this Mac again (its Thread came back).
+ */
 export type ElsewhereFolderRoute = {
   conversation: string
   where: string
-  call(channel: string, args: readonly unknown[]): Promise<EncodedValue>
+  call(channel: string, args: readonly unknown[]): Promise<{ value: EncodedValue } | "here">
 }
 
 /** An app's view with an address, as `mako:thread-app` answers for a running one. */
@@ -398,7 +405,7 @@ export class CloudConversations {
     const id = conversationCallId(channel, args)
     if (!id) return { handled: false }
     await this.start()
-    const entry = this.#entries.get(id)
+    const entry = await this.#current(id)
     if (!entry) return { handled: false }
     // Another device's, while it's known to be off: its copy answers a read, and nothing else is tried.
     if (entry.runtime && (this.#asleep.get(entry.runtime) ?? 0) > Date.now()) return { handled: true, value: await this.#offCall(entry, channel, args) }
@@ -636,17 +643,22 @@ export class CloudConversations {
 
   /**
    * The cloud Thread a Session of this Mac's store runs on, when it runs on one this Mac follows: a `+` tab made in a
-   * Thread that moved there. Undefined for a Session that runs here, or in transit (refused where it would start).
+   * Thread that moved there. Undefined for a Session that runs here, or in transit (refused where it would start). On
+   * its way back, asked again once the return settles, as any call for the Thread waits for it (`#current`).
    */
   async #awayThread(session: SessionId): Promise<{ threads: AwayThreads; sibling: Entry; session: SessionId } | undefined> {
-    const threads = this.#options.threads?.()
-    const execution = threads?.execution(session)
-    if (!threads || execution?.state !== "elsewhere" || execution.owner.kind !== "cloud") return undefined
-    await this.start()
-    const runtime = execution.owner.runtime
-    const sibling = [...this.#entries.values()].find((entry) => cloudRuntimeOf(entry.threadId) === runtime)
-    if (!sibling) throw new Error("This Thread runs in the cloud, but this Mac no longer follows it there, so it can't start a conversation in it.")
-    return { threads, sibling, session }
+    for (;;) {
+      const threads = this.#options.threads?.()
+      const execution = threads?.execution(session)
+      if (!threads || execution?.state !== "elsewhere" || execution.owner.kind !== "cloud") return undefined
+      await this.start()
+      const runtime = execution.owner.runtime
+      const sibling = [...this.#entries.values()].find((entry) => cloudRuntimeOf(entry.threadId) === runtime)
+      if (!sibling) throw new Error("This Thread runs in the cloud, but this Mac no longer follows it there, so it can't start a conversation in it.")
+      const returning = this.#options.returning?.(sibling.threadId)
+      if (!returning) return { threads, sibling, session }
+      await returning
+    }
   }
 
   /**
@@ -993,12 +1005,23 @@ export class CloudConversations {
    */
   async adopt(conversation: { conversationId: string; threadId: string; harness: string; repository: CloudRepository }): Promise<void> {
     await this.start()
-    if (this.#entries.has(conversation.conversationId)) return
-    const entry: Entry = { ...conversation, createdAt: Date.now(), created: true, seq: 0 }
-    this.#entries.set(entry.conversationId, entry)
+    const known = this.#entries.get(conversation.conversationId)
+    if (known && !known.listed && known.threadId === conversation.threadId) return
+    // The move's answer is where it runs now. The account's list hears of a move a moment after it, so what it put here
+    // first is taken over: on this Thread, as it stands, still followed; on another (the one that gave it back), gone.
+    let entry: Entry
+    if (known?.listed && known.threadId === conversation.threadId) {
+      entry = known
+      Object.assign(entry, { harness: conversation.harness, repository: conversation.repository, created: true })
+      for (const key of ["listed", "runtime", "capture"] as const) delete entry[key]
+    } else {
+      if (known) this.#forget(known)
+      entry = { ...conversation, createdAt: Date.now(), created: true, seq: 0 }
+      this.#entries.set(entry.conversationId, entry)
+    }
     await this.#save()
     this.#follow(entry)
-    hostLog("cloud-conversations", "a conversation of this Mac's moved to a cloud Thread", { conversationId: entry.conversationId, threadId: entry.threadId, harness: entry.harness })
+    hostLog("cloud-conversations", "a conversation of this Mac's moved to a cloud Thread", { conversationId: entry.conversationId, threadId: entry.threadId, harness: entry.harness, ...known && { took: known.listed ? "listed" : known.threadId } })
   }
 
   /**
@@ -1010,10 +1033,15 @@ export class CloudConversations {
     await this.start()
     const entry = this.#entries.get(conversationId)
     if (!entry) return
-    this.#entries.delete(conversationId)
+    this.#forget(entry)
     await this.#save()
-    if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
     hostLog("cloud-conversations", "a conversation came back from its cloud Thread", { conversationId, threadId: entry.threadId })
+  }
+
+  /** No longer answered here, and its Thread no longer followed once none of its conversations is. */
+  #forget(entry: Entry): void {
+    this.#entries.delete(entry.conversationId)
+    if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
   }
 
   /**
@@ -1061,9 +1089,36 @@ export class CloudConversations {
    */
   async folder(conversationId: string): Promise<ElsewhereFolderRoute | undefined> {
     await this.start()
-    const entry = this.#entries.get(conversationId)
-    if (!entry) return undefined
-    return { conversation: conversationId, where: CLOUD_FOLDER_WHERE, call: (channel, args) => (channel === "mako:thread-app" ? this.#appView(entry, args) : this.#call(entry, channel, args)) }
+    if (!this.#entries.has(conversationId)) return undefined
+    return {
+      conversation: conversationId,
+      where: CLOUD_FOLDER_WHERE,
+      // Asked where it runs at each call, as a call naming the conversation is: a window keeps its folder across a move
+      // or a return until it hears of it, and its calls go where the conversation runs meanwhile, never where it ran.
+      call: async (channel, args) => {
+        const entry = await this.#current(conversationId)
+        if (!entry) {
+          // Back on this Mac, in the folder it moved from, which a moved Thread's machine had at the same path.
+          if (this.#options.threads?.()?.journalPlacement(conversationId)) return "here"
+          throw new Error("This conversation's folder isn't in the cloud any more.")
+        }
+        return { value: await (channel === "mako:thread-app" ? this.#appView(entry, args) : this.#call(entry, channel, args)) }
+      },
+    }
+  }
+
+  /**
+   * Where a conversation's calls go now: its entry, or none when it runs on this Mac. While its Thread is on its way
+   * back, nothing runs it (the cloud refuses the call, and this Mac doesn't have it yet), so a call waits for the
+   * return to settle and goes where the Thread runs after: here once it's back, still the cloud if it stayed.
+   */
+  async #current(conversationId: string): Promise<Entry | undefined> {
+    for (;;) {
+      const entry = this.#entries.get(conversationId)
+      const returning = entry && this.#options.returning?.(entry.threadId)
+      if (!returning) return entry
+      await returning
+    }
   }
 
   /**
@@ -1300,6 +1355,7 @@ export class CloudConversations {
   #reconcile(): void {
     const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string }>()
     for (const row of this.#list.sessions().values()) {
+      if (!this.#listable(row)) continue
       if (row.runsOn.kind === "device") {
         if (row.runsOn.deviceId === this.#device) continue
         const runtime = `d-${row.runsOn.deviceId}`
@@ -1337,6 +1393,18 @@ export class CloudConversations {
     if (listed.length) this.#options.emit(encodeRuntimeEvent({ type: "live-listed", summaries: listed }))
     if (gone.length) this.#options.emit(encodeRuntimeEvent({ type: "live-unlisted", ids: gone }))
     if (listed.length || gone.length) hostLog("cloud-conversations", "the account's list changed what's listed here", { listed: listed.length, unlisted: gone.length, moved: unlisted.length - gone.length })
+  }
+
+  /**
+   * Whether the list may say where a Session runs. One of this Mac's own runs where its Thread store says, and only its
+   * moves and returns route it (`adopt`, `release`): the list hears of each a moment later, and a row from before a
+   * return would send this Mac's calls to the cloud Thread that gave it back. Listed only where the store has it too.
+   */
+  #listable(row: ListedSession): boolean {
+    const session = SessionIdSchema.safeParse(row.session)
+    const execution = session.success ? this.#options.threads?.()?.execution(session.data) : undefined
+    if (!execution) return true
+    return execution.state === "elsewhere" && execution.owner.kind === "cloud" && row.runsOn.kind === "cloud" && execution.owner.runtime === cloudRuntimeOf(row.runsOn.threadId)
   }
 
   async #load(): Promise<void> {

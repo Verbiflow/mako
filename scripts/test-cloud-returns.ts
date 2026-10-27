@@ -204,8 +204,16 @@ try {
     const s = setup("back")
     assert.equal(s.state()?.state, "elsewhere")
     const id = move()
+    // A call for the Thread while it's on its way waits for the return (`CloudConversations`), and finds it here after.
+    const packs = s.cloud.depart
+    let waited: Promise<unknown> | undefined
+    s.cloud.depart = async () => {
+      waited = s.returns.returning(s.cloudThread)?.then(() => [s.state()?.state, s.released, s.returns.returning(s.cloudThread)])
+      return packs()
+    }
     const outcome = await s.returns.bringBack(s.conversation, id)
     assert.deepEqual(outcome, { kind: "back" })
+    assert.deepEqual(await waited, ["here", [s.cloudThread], undefined], "settled once it's here and answered here, and over")
     assert.deepEqual(s.steps.map((step) => step.kind), ["packing", "bringing", "back"])
     assert.deepEqual([s.state()?.state, s.state()?.generation], ["here", 5], "released (2), the cloud's (3), released there (4), claimed here (5)")
     assert.equal(s.files()[0], "one, changed in the cloud\n", "the machine's checkout, over this Mac's")

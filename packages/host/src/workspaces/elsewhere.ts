@@ -10,8 +10,11 @@ export type ElsewhereFolder = {
   conversation: string
   /** Where it is, in words: `a cloud machine`. */
   where: string
-  /** A host call answered in that folder, by the host that has it, with its answer as that host encoded it. */
-  call(channel: string, args: readonly unknown[]): Promise<EncodedValue>
+  /**
+   * A host call answered in that folder by the host that has it when the call is made, with its answer as that host
+   * encoded it; `here` once the folder is this Mac's again (its Thread came back), for this host to answer.
+   */
+  call(channel: string, args: readonly unknown[]): Promise<{ value: EncodedValue } | "here">
 }
 
 /** What a window reads and changes in its folder, answered by the host that has it. */
