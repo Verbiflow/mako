@@ -35,11 +35,12 @@ export function watchWake(
     woke = at
     onWake(source)
   }
+  // Ticking through a start that holds the foreground: a tick held back by one reads its length as time away.
   const stop = jobs.every("watch for the machine waking", tickMs, () => {
     const at = now()
     const gap = at - last
     last = at
     if (gap > tickMs + gapMs) wake("clock")
-  })
+  }, { runsWhileHeld: true })
   return { notify: wake, stop }
 }

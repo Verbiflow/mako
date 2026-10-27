@@ -140,7 +140,7 @@ export type RuntimeFailure = z.infer<typeof RuntimeFailureSchema>
 export type RuntimeValue = Extract<RuntimeReply, { ok: true }>["value"]
 
 /** One call's identity through every hop: the client, the gateway, the runtime and the host's log lines. */
-export const CORRELATION_HEADER = "x-mako-correlation-id"
+export { CORRELATION_HEADER } from "@mako/protocol/gateway-http"
 export const CorrelationIdSchema = z.string().regex(/^[\w=-]{1,128}$/)
 
 /**

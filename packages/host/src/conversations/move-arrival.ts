@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises"
 import { fetch as fetchWith } from "undici"
 import { z } from "zod"
 import type { Git } from "@mako/git"
-import { describeGatewayFailure } from "@mako/protocol/gateway-http"
+import { CORRELATION_HEADER, describeGatewayFailure } from "@mako/protocol/gateway-http"
 import { MoveCheckpointSchema } from "@mako/protocol/moves"
 import { RecordSessionSchema } from "@mako/protocol/records"
 import type { InstalledReading } from "@mako/sessions/record-writers"
@@ -198,12 +198,13 @@ export type MoveStage = { checkpointMs: number; recordsMs: number; staged: Array
 
 /** Reads the move's checkpoint from the cloud into `file`. */
 async function readCheckpoint(link: RecordsLink, sha256: string, file: string): Promise<void> {
-  const response = await fetchWith(`${link.base}/checkpoints/${sha256}`, { headers: { authorization: link.authorization }, signal: AbortSignal.timeout(10 * 60_000) })
+  const sent = crypto.randomUUID()
+  const response = await fetchWith(`${link.base}/checkpoints/${sha256}`, { headers: { authorization: link.authorization, [CORRELATION_HEADER]: sent }, signal: AbortSignal.timeout(10 * 60_000) })
   if (!response.ok || !response.body) {
     // The gateway's own words and correlation ID, so a refusal leads to its log line.
     const problem = z.object({ title: z.string(), correlationId: z.string() }).partial().safeParse(await response.json().catch(() => undefined)).data
-    const correlationId = problem?.correlationId ?? response.headers.get("x-mako-correlation-id")
-    throw new Error(`The move's checkout couldn't be read from the cloud: ${problem?.title ?? "no checkout"} (GET /checkpoints answered ${response.status}${correlationId ? `, correlation ${correlationId}` : ""})`)
+    const correlationId = problem?.correlationId ?? response.headers.get(CORRELATION_HEADER) ?? sent
+    throw new Error(`The move's checkout couldn't be read from the cloud: ${problem?.title ?? "no checkout"} (GET /checkpoints answered ${response.status}, correlation ${correlationId})`)
   }
   await pipeline(Readable.fromWeb(response.body), createWriteStream(file))
 }

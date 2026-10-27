@@ -6,6 +6,7 @@ import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
+import { CORRELATION_HEADER } from "@mako/protocol/gateway-http"
 import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thread-listing"
 import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
 import type { SessionPublishing } from "./machine-runtime.js"
@@ -86,8 +87,6 @@ class FileBody {
 
 /** A call to the cloud slower than this is logged, though it succeeded. */
 const SLOW_REQUEST_MS = 2_000
-/** The cloud logs and traces a call under this ID, so the cloud's side of any call this Mac reports can be found. */
-const CORRELATION_HEADER = "x-mako-correlation-id"
 /** What an account may use beyond this Mac: with it, this Mac is reachable from the account's other devices and the cloud. */
 const CLOUD_ENTITLEMENT = "cloud"
 const REMOVED: CloudSignedOutNotice = {

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { runGatewayConformance, runMediaConformance } from "../dist/conformance.js"
-import { GatewayHttpError } from "../dist/gateway-http.js"
+import { CORRELATION_HEADER, GatewayHttpError, gatewayCalls } from "../dist/gateway-http.js"
+import { recordsOverHttp } from "../dist/records-http.js"
 import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, MoveClaimRequestSchema } from "../dist/moves.js"
 import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
 import { recipesOverHttp } from "../dist/recipes-http.js"
@@ -1391,6 +1392,40 @@ describe("records crossing between stores", () => {
     assert.throws(() => planRecordImport(schema([], [migration]), heldMigration), /went on in two places/, "by default only a schema is the store's")
     // A session's own rows that went on in two places are refused, as ever.
     assert.throws(() => planRecordImport(schema([], [row]), (key) => (key.endsWith("row") ? holding([version(0, [hash(6)], "replace")])() : undefined)), /went on in two places/)
+  })
+})
+
+describe("a call to a gateway over HTTP", () => {
+  test("every try carries the call's one correlation ID, and its trace says it was sent again and what ended each try", async () => {
+    const sent = []
+    const answers = [
+      () => { throw new TypeError("fetch failed", { cause: Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }) }) },
+      () => new Response("{}", { status: 503 }),
+      () => new Response(JSON.stringify({ ok: true, versions: 1, held: 0, through: 1 }), { status: 200 }),
+    ]
+    const fetch = async (_url, init) => {
+      sent.push(init.headers.get(CORRELATION_HEADER))
+      return answers.shift()()
+    }
+    const trace = { tries: 0, failures: [] }
+    const remote = recordsOverHttp({ id: "t", base: "https://gw/v1/threads/t-1/records", authorization: () => "Bearer t", fetch, backoff: [1, 1] })
+    assert.equal((await remote.pushWith({ harness: "claude", nativeId: "s", units: [] }, [], trace)).ok, true)
+    assert.equal(sent.length, 3)
+    assert.ok(sent.every((id) => id === trace.correlationId), "the gateway logs every try under the one ID")
+    assert.equal(trace.tries, 3)
+    assert.equal(trace.failures.length, 2)
+    assert.match(trace.failures[0], /^ECONNRESET after \d+ ms$/)
+    assert.match(trace.failures[1], /^503 after \d+ ms$/)
+  })
+
+  test("a refusal names the call's own correlation ID when the gateway's answer names none", async () => {
+    let sent
+    const fetch = async (_url, init) => {
+      sent = init.headers.get(CORRELATION_HEADER)
+      return new Response(JSON.stringify({ title: "No such Thread" }), { status: 404 })
+    }
+    const call = gatewayCalls({ id: "t", base: "https://gw", authorization: () => "t", fetch })
+    await assert.rejects(call("/sessions"), (error) => error instanceof GatewayHttpError && error.call?.correlationId === sent && error.described.includes(`correlation ${sent}`))
   })
 })
 
