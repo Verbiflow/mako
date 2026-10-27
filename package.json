@@ -268,7 +268,7 @@
     "@mako/lazy": "0.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "@napi-rs/keyring": "2.1.0",
-    "@opencode/client": "2.1.4",
+    "@opencode/client": "2.2.0",
     "@parcel/watcher": "2.6.0",
     "@zip.js/zip.js": "^2.22.0",
     "ai": "7.0.89",

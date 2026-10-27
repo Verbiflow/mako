@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.1.4"
+    "version": "2.2.0"
   },
   "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e8d173abcffeMrjEDok290OwKa",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e82b65da8ffepRj4iowuaCOCZA",
       "known": []
     }
   ]

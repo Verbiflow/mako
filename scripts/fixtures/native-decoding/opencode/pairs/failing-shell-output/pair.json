@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.1.4"
+    "version": "2.2.0"
   },
   "about": "Run exactly this shell command once, with nothing added before or after it: `cat notes.md missing.md`. Then tell me what it printed and how it exited. A shell command that prints output and an error, then exits non-zero.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e8d18cce9ffeRtXVI692edGQIT",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e82b80c6dffePKOUx52w68GXp5",
       "known": []
     }
   ]

@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.1.4"
+    "version": "2.2.0"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e8d174f3bffeEFrCGuT4mDYWkm",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e82b67d87ffenPMrCZYe0tkIHd",
       "known": []
     }
   ]
