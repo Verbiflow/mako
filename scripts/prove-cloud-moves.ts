@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process"
 import { createRequire } from "node:module"
-import { randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { createHash, randomUUID } from "node:crypto"
+import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
@@ -95,10 +95,17 @@ const { values } = parseArgs({
      */
     entropy: { type: "string" },
     devtools: { type: "string" },
+    /**
+     * A Thread of this harness in a project whose recipe carries `.env` (a dummy value) and whose app reads it: copied
+     * to the account's store with the person's word, its app started on the machine reads it; back here it's
+     * unchanged; changed here, the next move's app reads the new one; removed from the cloud, the next start says the
+     * named secret is missing. The values are written to `carried-values.txt` beside the report, for grepping logs.
+     */
+    carried: { type: "string" },
   },
 })
 // With `--handoff` or `--fork-burst` alone, only that runs.
-const HARNESSES = values.harness?.length ? values.harness : values.handoff || values["fork-burst"] || values.entropy ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
+const HARNESSES = values.harness?.length ? values.harness : values.handoff || values["fork-burst"] || values.entropy || values.carried ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
 const dataRoot = values["data-root"] ?? runtimeDataRoot(appDataFolder(), {})
 const { socket } = runtimeLocation(dataRoot)
 const client = randomUUID()
@@ -828,6 +835,148 @@ async function quitThroughWindow(): Promise<string> {
   return `Cmd+Q to the sheet's offer ${((offered - asked) / 1000).toFixed(1)} s, click to the window closed ${((gone - clicked) / 1000).toFixed(1)} s; ${sheet}, ${going}`
 }
 
+/** What the proof's app prints of the value it read: a hash, never the value. */
+const valueHash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 16)
+
+/** The app a carried-files proof runs: it reads `.env` itself, as an app's own loader does, and says only a hash of it. */
+const CARRY_PROOF_APP = `import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
+import { createServer } from "node:http"
+let value
+try {
+  value = /^CARRY_PROOF_TOKEN=(.*)$/m.exec(readFileSync(".env", "utf8"))?.[1]
+} catch {}
+console.log(value ? \`carry-proof sha256 \${createHash("sha256").update(value).digest("hex").slice(0, 16)}\` : "carry-proof missing")
+createServer((_request, response) => response.end("ok")).listen(Number(process.env.PORT))
+`
+
+/**
+ * A project's carried files on a move (\`--carried\`): its recipe carries \`.env\` and names the secret its app reads.
+ * Copied to the account's store with the person's word, it reaches the machine before the app starts there; back
+ * here it's as it was; changed here, the next move's machine has the new one; removed from the cloud in Settings, the
+ * next start there says it's missing.
+ */
+async function carriedProof(harness: string, project: string): Promise<Proved> {
+  const steps: Step[] = []
+  const id = randomUUID()
+  const answered: string[] = []
+  const timed = async (step: string, work: () => Promise<string | undefined>) => {
+    const started = performance.now()
+    try {
+      const detail = await work()
+      const done: Step = { step, ms: Math.round(performance.now() - started), ok: true }
+      if (detail) done.detail = detail
+      steps.push(done)
+    } catch (error) {
+      steps.push({ step, ms: Math.round(performance.now() - started), ok: false, detail: error instanceof Error ? error.message : String(error) })
+    }
+    const last = steps.at(-1)!
+    console.log(`${"carried".padEnd(9)} ${step.padEnd(30)} ${last.ok ? "ok  " : "FAIL"} ${String(last.ms).padStart(7)} ms  ${last.detail ?? ""}`)
+    return last.ok
+  }
+  const proved = (): Proved => ({ steps, conversation: id })
+  const dummies = [`carry-proof-${randomUUID()}`, `carry-proof-${randomUUID()}`]
+  if (values.report) await writeFile(join(dirname(values.report), "carried-values.txt"), `${dummies.join("\n")}\n`, { mode: 0o600 })
+  const envLine = (value: string) => `# the proof's dummy secret\nCARRY_PROOF_TOKEN=${value}\n`
+  let folder = ""
+  let booted = false
+
+  if (!(await timed("a project carrying .env", async () => {
+    await mkdir(join(project, ".mako"), { recursive: true })
+    await writeFile(join(project, ".mako", "recipe.json"), `${JSON.stringify({ processes: { web: { command: "node carry-proof-app.mjs", port: "{port}" } }, carry: [".env"], secretNames: ["CARRY_PROOF_TOKEN"] }, null, 2)}\n`)
+    await writeFile(join(project, "carry-proof-app.mjs"), CARRY_PROOF_APP)
+    await git(project, "add", ".mako/recipe.json", "carry-proof-app.mjs")
+    await git(project, "-c", "user.name=Mako proof", "-c", "user.email=proof@mako.local", "commit", "-q", "-m", "carried-files proof: a recipe carrying .env, and an app reading it")
+    // Ignored on this Mac alone, as a person's own exclude does: the machine's clone has no rule for it of its own.
+    await writeFile(join(project, ".git", "info", "exclude"), ".env\n", { flag: "a" })
+    await writeFile(join(project, ".env"), envLine(dummies[0]!), { mode: 0o600 })
+    return undefined
+  }))) return proved()
+
+  if (!(await timed("start in its worktree", async () => {
+    const first = randomUUID()
+    const mode = widestMode(harness)
+    await call("mako:live-start", [harness, project, { conversationId: id, worktree: true, ...mode && { modeId: mode }, initialRequest: { id: first, text: "Without running anything, reply with the word READY.", attachments: [] } }])
+    const shot = await until(id, (current) => settled(current, first), 300_000, answered)
+    folder = shot.session.cwd ?? ""
+    const here = await readFile(join(folder, ".env"), "utf8")
+    if (here !== envLine(dummies[0]!)) throw new Error("the worktree's .env isn't the main checkout's")
+    return "the worktree got .env from the main checkout, as the recipe carries it"
+  }))) return proved()
+
+  const CarriedSchema = z.object({ decision: z.string(), files: z.array(z.object({ path: z.string(), cloud: z.object({ current: z.boolean() }).nullable(), kept: z.boolean() }).loose()) }).loose()
+  await timed("asked, then allowed", async () => {
+    const before = CarriedSchema.parse(await call("mako:cloud-carried-files", [folder]))
+    if (before.decision !== "unasked" || before.files.some((file) => file.cloud)) throw new Error(`before the person's word: ${JSON.stringify(before)}`)
+    const after = CarriedSchema.parse(await call("mako:cloud-carried-files-decide", [folder, true]))
+    if (after.files.find((file) => file.path === ".env")?.cloud?.current !== true) throw new Error(`after it: ${JSON.stringify(after)}`)
+    return ".env in the account's store"
+  })
+
+  /** Moves the Thread, opens its folder in this run's tab, and starts its app there; answers the app's first line, or why it didn't start. */
+  const moveAndStart = async (): Promise<{ problems: string[]; line: string }> => {
+    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, randomUUID()]))
+    if (outcome.kind !== "moved") throw new Error(`the move: ${outcome.kind}: ${outcome.reason}`)
+    // This run's own tab, opened on the moved folder: its app calls go to the machine, as a window's do.
+    if (!booted) booted = Boolean(await call("mako:boot", []))
+    await call("mako:set-cwd", [folder, id])
+    // A start the recipe's named secrets refuse throws, saying which; the proof reads it as the window shows it.
+    const started = await call("mako:thread-app-start", [folder]).then(
+      (answer) => z.object({ problems: z.array(z.string()) }).parse(answer).problems,
+      (error: Error) => [error.message],
+    )
+    if (started.length) return { problems: started, line: "" }
+    for (const deadline = Date.now() + 120_000; ; await new Promise((resolve) => setTimeout(resolve, 500))) {
+      const output = z.object({ text: z.string() }).loose().parse(await call("mako:thread-app-output", [folder, "process:web"]))
+      const line = /carry-proof (sha256 [0-9a-f]{16}|missing)/.exec(output.text)?.[0]
+      if (line) {
+        await call("mako:thread-app-stop", [folder])
+        return { problems: [], line }
+      }
+      if (Date.now() > deadline) throw new Error(`the app said nothing of .env within two minutes: ${output.text.slice(-300)}`)
+    }
+  }
+  const back = async () => {
+    const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, randomUUID()]))
+    if (outcome.kind !== "back") throw new Error(`the way back: ${JSON.stringify(outcome)}`)
+    await call("mako:set-cwd", [folder])
+  }
+
+  if (!(await timed("moved, its app reads .env", async () => {
+    const { problems, line } = await moveAndStart()
+    if (problems.length) throw new Error(`the app didn't start: ${problems.join("; ")}`)
+    if (line !== `carry-proof sha256 ${valueHash(dummies[0]!)}`) throw new Error(`the app read another value: ${line}`)
+    return line
+  }))) return proved()
+
+  if (!(await timed("back, .env unchanged", async () => {
+    await back()
+    const info = await lstat(join(folder, ".env"))
+    if (!info.isFile()) throw new Error("the worktree's .env isn't a file of its own any more")
+    if ((await readFile(join(folder, ".env"), "utf8")) !== envLine(dummies[0]!)) throw new Error("the worktree's .env changed on the way back")
+    return "the same file, the same value"
+  }))) return proved()
+
+  if (!(await timed("changed here, moved again", async () => {
+    await writeFile(join(project, ".env"), envLine(dummies[1]!))
+    const { problems, line } = await moveAndStart()
+    if (problems.length) throw new Error(`the app didn't start: ${problems.join("; ")}`)
+    if (line !== `carry-proof sha256 ${valueHash(dummies[1]!)}`) throw new Error(`the machine has an older value: ${line}`)
+    await back()
+    return line
+  }))) return proved()
+
+  await timed("removed in Settings, missing", async () => {
+    const kept = CarriedSchema.parse(await call("mako:cloud-carried-files-keep", [folder, ".env", true]))
+    if (!kept.files.find((file) => file.path === ".env")?.kept) throw new Error(`not kept here: ${JSON.stringify(kept)}`)
+    const { problems, line } = await moveAndStart()
+    if (!problems.some((problem) => problem.includes("no value for CARRY_PROOF_TOKEN"))) throw new Error(`the start didn't say it's missing: ${problems.join("; ") || line}`)
+    await back()
+    return problems.join("; ").slice(0, 240)
+  })
+  return proved()
+}
+
 /**
  * A model a turn handed to a machine with no sign-ins can go on with: for OpenCode, one of its free models
  * (`MAKO_OPENCODE_MODEL` choosing), its default first. Undefined for other harnesses: their own default.
@@ -853,6 +1002,7 @@ if (ownHost && places > 0 && here) report["full cloud"] = await fullCloud(places
 if (values.handoff) report["handoff"] = await handOffProof(values.handoff, project)
 if (values["fork-burst"]) report["fork burst"] = await forkBurst(values["tab-harness"] ?? "claude", project, Number(values["fork-burst"]))
 if (values.entropy) report["entropy"] = await entropy(values["tab-harness"] ?? "claude", project, Number(values.entropy))
+if (values.carried) report["carried"] = await carriedProof(values.carried, project)
 // A host this run started signs out as it ends: its device leaves the account, and its credential leaves the keychain.
 if (values["spawn-host"]) await call("mako:cloud-sign-out", [])
 if (values.report) await writeFile(values.report, `${JSON.stringify(report, null, 2)}\n`)

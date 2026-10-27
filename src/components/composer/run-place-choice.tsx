@@ -1,10 +1,13 @@
 import { useState } from "react"
+import type { CarriedFilesView } from "@mako/host/contracts/cloud-carried-files"
 import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon, LoaderCircleIcon } from "lucide-react"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { backgroundWork } from "@mako/host/contracts/background-work"
+import { Action } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useCloudAccount } from "@/state/cloud-account"
+import { decideCarriedFiles, readCarriedFiles, useCarriedFiles } from "@/state/carried-files"
 import { bringBack, moveToCloud, useCloudMoves } from "@/state/cloud-moves"
 import { runPlaceStore, useRunPlace } from "@/state/run-place"
 import { shallowEqual } from "@/state/store"
@@ -59,6 +62,9 @@ function ThreadRunPlace({ thread }: { thread: string }) {
   const moving = useCloudMoves((state) => (live ? Boolean(state.moving[live.key]) : false))
   const returning = useCloudMoves((state) => (live ? Boolean(state.returning[live.key]) : false))
   const [open, setOpen] = useState(false)
+  const [asking, setAsking] = useState(false)
+  const carried = useCarriedFiles((state) => (worktree ? state.byFolder[worktree] : undefined))
+  const carriedBusy = useCarriedFiles((state) => (worktree ? state.busy[worktree] : undefined))
   if (!live) return null
   if (live.elsewhere)
     return (
@@ -103,8 +109,22 @@ function ThreadRunPlace({ thread }: { thread: string }) {
   // At work, it's handed off: its turn pauses, goes along, and continues in the cloud; what it left running in the
   // background stops, and the agent is told there what stopped.
   const handOff = live.running || live.background
+  const move = () => {
+    setOpen(false)
+    setAsking(false)
+    void moveToCloud(live.key, handOff)
+  }
+  // The project's files Git leaves out go too once the person says so, asked here the first time, once per project.
+  const unasked = carried && carried.decision === "unasked" && carried.repository !== null && carried.files.length > 0 ? carried : undefined
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        setAsking(false)
+        if (next && inWorktree && worktree) void readCarriedFiles(worktree)
+      }}
+    >
       <PopoverTrigger asChild>
         <button type="button" data-run-place="local" disabled={moving} aria-label={moving ? "Moving to the cloud" : "Runs on this Mac. Move it to the cloud"} title={moving ? "Moving to the cloud" : "Runs on this Mac"} className={triggerClass}>
           {moving ? <LoaderCircleIcon className="size-3 shrink-0 animate-spin" /> : <LaptopIcon className="size-3 shrink-0" />}
@@ -114,6 +134,12 @@ function ThreadRunPlace({ thread }: { thread: string }) {
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" sideOffset={8} className="w-80 p-1">
+        {asking && unasked ? (
+          <CarriedFilesQuestion view={unasked} busy={carriedBusy} onAnswer={async (allowed) => {
+            if (await decideCarriedFiles(unasked.project, allowed)) move()
+          }} />
+        ) : (
+        <>
         <p className="px-2 py-1.5 text-label text-faint">Where this thread runs</p>
         <button
           type="button"
@@ -121,8 +147,8 @@ function ThreadRunPlace({ thread }: { thread: string }) {
           data-thread-handoff={handOff || undefined}
           disabled={blocked !== undefined}
           onClick={() => {
-            setOpen(false)
-            void moveToCloud(live.key, handOff)
+            if (unasked) setAsking(true)
+            else move()
           }}
           className="pressable flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-60"
         >
@@ -139,7 +165,35 @@ function ThreadRunPlace({ thread }: { thread: string }) {
             </span>
           </span>
         </button>
+        </>
+        )}
       </PopoverContent>
     </Popover>
+  )
+}
+
+/**
+ * Asked once per project, the first time one of its Threads moves to the cloud: whether the files its recipe carries,
+ * which Git leaves out, go too. Either answer moves the Thread; the answer is kept, and Settings › Apps changes it.
+ */
+function CarriedFilesQuestion({ view, busy, onAnswer }: { view: CarriedFilesView; busy: string | undefined; onAnswer: (allowed: boolean) => Promise<void> }) {
+  const paths = view.files.map((file) => file.path)
+  const named = paths.length > 3 ? `${paths.slice(0, 3).join(", ")} and ${paths.length - 3} more` : paths.length > 1 ? `${paths.slice(0, -1).join(", ")} and ${paths.at(-1)}` : paths[0]
+  const one = paths.length === 1
+  return (
+    <div className="flex flex-col gap-2 px-2 pt-1.5 pb-2" data-carried-files-question>
+      <p className="text-ui font-medium text-foreground">Copy {one ? "this file" : "these files"} to the cloud too?</p>
+      <p className="text-label leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
+        Git leaves out {named}, so {one ? "it doesn’t" : "they don’t"} go with the worktree. Mako can keep an encrypted copy in your account and give {one ? "it" : "them"} to this project’s cloud Threads. Agents never see the values. Asked once; change it in Settings › Apps.
+      </p>
+      <div className="mt-1 flex justify-end gap-2">
+        <Action tone="ghost" data-carried-files-answer="no" disabled={busy !== undefined} onClick={() => void onAnswer(false)}>
+          Move without {one ? "it" : "them"}
+        </Action>
+        <Action tone="solid" data-carried-files-answer="yes" disabled={busy !== undefined} onClick={() => void onAnswer(true)}>
+          {busy === "copying" ? "Copying…" : "Copy and move"}
+        </Action>
+      </div>
+    </div>
   )
 }

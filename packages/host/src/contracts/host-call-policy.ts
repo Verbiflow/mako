@@ -122,6 +122,8 @@ const reads = [
   "mako:cloud-browser-sessions",
   /** Reads every harness's sign-in and sends what changed; a repeat finds nothing changed. */
   "mako:cloud-sign-ins",
+  /** A project's carried files and where each stands in the cloud, read, never sent. */
+  "mako:cloud-carried-files",
   /** Waits on a sign-in the host finishes by itself, whoever is waiting. */
   "mako:account-login-wait",
   "mako:native-authoring-catalog",
@@ -221,6 +223,10 @@ const replays = [
   "mako:cloud-sign-out",
   /** Sharing, or not, a second time is the same choice. */
   "mako:cloud-sign-ins-share",
+  /** The same word for a project twice is one: a sync after sends only what changed, by its hash. */
+  "mako:cloud-carried-files-decide",
+  /** Keeping a file on this Mac, or copying it again, a second time is the same end state. */
+  "mako:cloud-carried-files-keep",
   /** Setting the mode a session already has is a no-op. */
   "mako:live-mode",
   /** The ledger keeps one mode per thread; the same write twice is one write. */

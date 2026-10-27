@@ -115,6 +115,34 @@ try {
     machine.close()
   }
 
+  // The project's carried files are placed again from the account's store as the move arrives, after its checkout is
+  // applied (which cleans what Git doesn't track) and before any session opens, so what the person's Mac sent with the
+  // move is what the app reads; one that can't be placed fails nothing.
+  {
+    const move = randomUUID()
+    arrivedMove(move)
+    const { deps, order } = arriving({}, {})
+    let release: () => void = () => undefined
+    deps.refreshCarried = () => {
+      order.push("carried asked")
+      return new Promise<void>((resolve) => { release = () => { order.push("carried placed"); resolve() } })
+    }
+    const arriving_ = arriveMove(deps, input(move))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.ok(!order.includes("open codex"), "no session opens before the files are placed")
+    release()
+    const arrival = await arriving_
+    assert.deepEqual(order, ["carried asked", "receive", "carried placed", "open codex", "open cursor"], "asked once the checkout arrived, beside the records")
+    assert.ok((arrival.parts?.carried ?? -1) >= 0, "its time is one of the arrival's parts")
+
+    const failing = arriving({}, {})
+    failing.deps.refreshCarried = async () => { throw new Error("the agent can't be asked") }
+    const again = randomUUID()
+    arrivedMove(again)
+    await arriveMove(failing.deps, input(again))
+    assert.deepEqual(failing.order, ["receive", "open codex", "open cursor"])
+  }
+
   // One can't start: the arrival fails, naming it; with no sign-in given for it, naming the setting too.
   {
     const move = randomUUID()

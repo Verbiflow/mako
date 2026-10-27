@@ -93,6 +93,12 @@ export type MoveArrivalDeps = {
   signedIn(harness: string): boolean | undefined
   /** The harness's name, as people read it. */
   label(harness: string): string
+  /**
+   * Has the machine's agent place the project's carried files from the account's store again (`.env` and the like),
+   * so what the person's Mac sent with this move is what the Thread's app reads. Never fails the move: a file that
+   * didn't come is said when the app starts.
+   */
+  refreshCarried?(): Promise<void>
   /** A folder of this host's own for the checkpoint while it's applied. */
   scratch: string
   /**
@@ -297,6 +303,9 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
     await rm(stagedMark, { force: true })
     checkout = unchanged ? "staged" : "applied"
   }
+  // The carried files placed once the checkout reads as the device's (its apply cleans what Git doesn't track), beside
+  // the records, and before any session opens.
+  const carrying = timed("carried", async () => deps.refreshCarried?.().catch((error: Error) => hostWarn("moves", "the carried files weren't placed again as a move arrived", { error: error.message })))
   const installed: Record<string, InstalledReading | null> = {}
   for (const session of input.sessions) installed[session.harness] = deps.installed(session.harness)
   // Under the machine's newest credential if the last one lapsed on the way.
@@ -310,6 +319,7 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
     else if (restored.kind === "forked") throw new Error(`${each.harness} here already held another copy of this session.`)
     else throw new Error(restored.reason)
   }
+  await carrying
   // Filed under the device's Thread and Sessions before any opens: a conversation's journal joins its own Session.
   if (input.handoff) deps.take(input.handoff)
   // Opened one at a time: a machine starts one harness much faster than several at once.

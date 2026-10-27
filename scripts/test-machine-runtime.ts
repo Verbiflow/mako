@@ -120,6 +120,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
   const signedIn: string[] = []
   const installs: Array<{ harnesses: string[]; secrets: string }> = []
   const links: Array<MachineGatewayLink | null> = []
+  const carried: string[][] = []
   const runtime = new MachineRuntime({
     agent: hostEnd,
     invoke: async (channel, args, client, _history, correlationId) => {
@@ -153,6 +154,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     profileHost: false,
     now: options.now ?? Date.now,
     linked: async (link) => void links.push(link),
+    carriedFiles: (files) => void carried.push(files.flatMap((file) => file.names)),
     installSignIns: async (signIns, secrets) => {
       installs.push({ harnesses: signIns.map((signIn) => signIn.harness), secrets })
       await new Promise((resolve) => setTimeout(resolve, 20))
@@ -176,6 +178,7 @@ function machineAgent(options: { dataRoot: string; now?: () => number; work?: ()
     signedIn,
     installs,
     links,
+    carried,
     state,
     tell: (message: AgentMessage) => agentEnd.write(`${JSON.stringify(message)}\n`),
     /** A line no agent of this version sends. */
@@ -385,6 +388,35 @@ test("the workspace the agent gives opens once however often it's given, and one
   agent.tellRaw(JSON.stringify({ type: "workspace", path: "relative" }))
   await new Promise((resolve) => setTimeout(resolve, 50))
   assert.equal(opens(), 3, "a folder that isn't absolute is refused")
+})
+
+test("the carried files the agent placed reach the host by name, and a move's arrival asks for them again and waits for the answer", async () => {
+  const agent = machineAgent({ dataRoot: await mkdtemp(join(tmpdir(), "mako-machine-carried-")) })
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello" && message.protocol >= 7))
+  agent.tell({ type: "carried-files", files: [{ path: ".env", names: ["SHOP_TOKEN"] }] })
+  await agent.until("the names given to the host", () => agent.carried.length === 1)
+  assert.deepEqual(agent.carried[0], ["SHOP_TOKEN"])
+
+  const asked = agent.runtime.refreshCarried()
+  await agent.until("the agent asked", () => agent.messages.some((message) => message.type === "carried-files-refresh"))
+  const request = agent.messages.findLast((message) => message.type === "carried-files-refresh")
+  assert.ok(request?.type === "carried-files-refresh")
+  // Another placing's answer isn't this one's.
+  agent.tell({ type: "carried-files", files: [], answers: "someone-else" })
+  agent.tell({ type: "carried-files", files: [{ path: ".env", names: ["SHOP_TOKEN", "NEW_KEY"] }], answers: request.id })
+  assert.deepEqual(await asked, { files: [{ path: ".env", names: ["SHOP_TOKEN", "NEW_KEY"] }] })
+  assert.deepEqual(agent.carried.at(-1), ["SHOP_TOKEN", "NEW_KEY"])
+  await agent.until("the state says what's placed", () => {
+    agent.tell({ type: "inspect" })
+    return agent.state()?.carried?.files.length === 1
+  })
+
+  const failing = agent.runtime.refreshCarried()
+  await agent.until("asked again", () => agent.messages.filter((message) => message.type === "carried-files-refresh").length === 2)
+  const second = agent.messages.findLast((message) => message.type === "carried-files-refresh")
+  assert.ok(second?.type === "carried-files-refresh")
+  agent.tell({ type: "carried-files", files: [], problem: "the gateway answered 503", answers: second.id })
+  assert.deepEqual(await failing, { files: [], problem: "the gateway answered 503" })
 })
 
 test("a base's folder is prepared when the agent asks, and the host says so either way", async () => {

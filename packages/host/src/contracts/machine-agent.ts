@@ -11,9 +11,20 @@ import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall
 /**
  * 2: the host takes `sign-ins`. 3: and `workspace`. 4: and says `warm` once it has loaded what every start loads, which
  * the agent waits for before it calls the host ready. 5: and takes `prepare`, answering `prepared`. 6: and takes
- * `prefetch`, and sends its start's lines as `log`. An agent sends only what the host's `hello` says it takes.
+ * `prefetch`, and sends its start's lines as `log`. 7: and takes `carried-files`, asking for them again as a move
+ * arrives (`carried-files-refresh`). An agent sends only what the host's `hello` says it takes.
  */
-export const MACHINE_AGENT_PROTOCOL = 6
+export const MACHINE_AGENT_PROTOCOL = 7
+
+/**
+ * One of the project's carried files the agent placed in the Thread's checkout (its `.env`, a local settings file):
+ * its path and the variables it defines, never a value. The host checks a recipe's named secrets against them.
+ */
+export const CarriedFileSchema = z.object({
+  path: z.string().min(1).max(300),
+  names: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/)).max(200),
+}).strict()
+export type CarriedFile = z.infer<typeof CarriedFileSchema>
 
 /** What the agent tells the host. */
 export const AgentMessageSchema = z.discriminatedUnion("type", [
@@ -65,6 +76,17 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
    * the start finds it in memory (`startPrefetch`). A hint: another harness's start runs as it would have.
    */
   z.object({ type: z.literal("prefetch"), harness: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/) }).strict(),
+  /**
+   * The project's carried files the agent placed in the Thread's checkout, from the account's secret store: as the
+   * machine starts, and as a move arrives (`answers` the host's `carried-files-refresh`). `problem`: why the store's
+   * couldn't be placed this time; the checkout keeps what it had.
+   */
+  z.object({
+    type: z.literal("carried-files"),
+    files: z.array(CarriedFileSchema).max(40),
+    problem: z.string().min(1).max(2_000).optional(),
+    answers: z.string().max(100).optional(),
+  }).strict(),
 ])
 export type AgentMessage = z.infer<typeof AgentMessageSchema>
 
@@ -89,6 +111,8 @@ export type MachineRuntimeState = {
   lastResume?: { at: string; gapMs: number }
   /** What became of the sign-ins the agent last gave, one per harness. */
   signIns: CloudSignInInstall[]
+  /** The carried files the agent last placed in the checkout: paths and variable names, never values. */
+  carried?: { files: CarriedFile[]; at: string; problem?: string }
   /** The workspace the agent last gave, once the host has opened it or failed to. */
   workspace?: { path: string; status: "opened" | "failed"; at: string; reason?: string }
 }
@@ -111,6 +135,12 @@ export type HostMessage =
    * again, and says how it went as it did the first time (`workspace`, `workspace-failed`).
    */
   | { type: "workspace-retry" }
+  /**
+   * A move arrived: the agent fetches the project's carried files from the account's store again and places them in
+   * the checkout, answering with `carried-files` that `answers` this `id`, so what changed on the person's Mac since the
+   * machine started is what the Thread's app reads.
+   */
+  | { type: "carried-files-refresh"; id: string }
   /**
    * One of the host's lines a machine's timeline shows beside the agent's (`npm run timeline`): each launch's phases,
    * what the machine runtime does, a held event loop, and every warning and error. The agent keeps them with its own.
