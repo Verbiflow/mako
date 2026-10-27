@@ -321,10 +321,14 @@ export class DevinCliProvider implements SessionProvider {
    * What each of a session's subagents spent, call by call. Devin reports a
    * subagent's model calls on its parent's wire as they're made, so live they
    * count in the parent's turn; its subagent's chain is where the store keeps
-   * them (3000.11.205), and its own history counts them there too.
+   * them (3000.11.205), and its own history counts them there too. `chain`
+   * is the session's main chain as the read holds it: one that never ran a
+   * subagent has none to find (`DevinChildLinks.mayHaveChildren`), and
+   * finding them reads the session's whole forest.
    */
-  private subagentSpend(db: DatabaseSync, id: string, path: string): ChildSpend[] {
+  private subagentSpend(db: DatabaseSync, id: string, path: string, chain: readonly MessageRow[]): ChildSpend[] {
     const spend: ChildSpend[] = []
+    if (!this.childLinks.mayHaveChildren(db, id, chain.map((row) => row.chatMessage))) return spend
     // What the subagents spent adds to the conversation; a store whose subagents can't be found still reads without it.
     let children: ChildTranscript[]
     try {
@@ -447,7 +451,8 @@ export class DevinCliProvider implements SessionProvider {
         Object.assign(ref, { nativeId: child.agentId, title: undefined, childOf: { nativeId: id, path: child.parentPath } })
       }
       ref.bytes = cursor
-      const { entries, unread } = translatedMainChain(db, id, cursor, child ? [] : this.subagentSpend(db, id, path))
+      const rows = mainChainRows(db, id, cursor)
+      const { entries, unread } = translatedMainChain(db, id, rows, child ? [] : this.subagentSpend(db, id, path, rows))
       const thread: Thread = { ref, entries }
       if (unread) thread.unread = unread
       return thread
@@ -475,11 +480,12 @@ export class DevinCliProvider implements SessionProvider {
           const nextCursor = child ? this.childLinks.leaf(db, id, child.agentId) : mainChainId(db, id)
           if (nextCursor === cursor) return unchangedUpdate(cursor)
           if (wholeLimit !== undefined && ((await this.recordBytes(path)) ?? 0) >= wholeLimit) return { entries: [], nextByte: cursor, replace: false, reload: true }
-          const spend = child ? [] : this.subagentSpend(db, id, path)
+          const rows = mainChainRows(db, id, nextCursor)
+          const spend = child ? [] : this.subagentSpend(db, id, path, rows)
           if (previous === null) {
-            previous = translatedMainChain(db, id, cursor, spend).entries.map(entryDigest)
+            previous = translatedMainChain(db, id, mainChainRows(db, id, cursor), spend).entries.map(entryDigest)
           }
-          const current = translatedMainChain(db, id, nextCursor, spend).entries
+          const current = translatedMainChain(db, id, rows, spend).entries
           const signatures = current.map(entryDigest)
           let shared = 0
           while (
@@ -597,11 +603,11 @@ interface ChildSpend {
  * opens), as Grok's own ledger counts a subagent that wakes its parent
  * (`GrokWokenSpend`), or with none after it, in the last.
  */
-function translatedMainChain(db: DatabaseSync, sessionId: string, leafId: number, spend: readonly ChildSpend[] = []): TranslatedChain {
+function translatedMainChain(db: DatabaseSync, sessionId: string, rows: readonly MessageRow[], spend: readonly ChildSpend[] = []): TranslatedChain {
   const cwd = sqliteText(db.prepare("SELECT working_directory AS cwd FROM sessions WHERE id = ?").get(sessionId)?.cwd)
   const into = translator(sessionId, storedAcpCalls(db, sessionId), cwd)
   let next = 0
-  for (const row of mainChainRows(db, sessionId, leafId)) {
+  for (const row of rows) {
     for (; next < spend.length && spend[next]!.createdAt < (row.createdAt ?? 0); next++) into.spend(spend[next]!.usage)
     into.push(row)
   }
