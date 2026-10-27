@@ -1,12 +1,15 @@
 import assert from "node:assert/strict"
 import type { AppMark, AppOutputChunk, AppOutputCursor, ThreadAppView } from "@mako/host/contracts/thread-app"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 /**
  * The strip's app control and the dock's output, driven by a host: a click
  * shows its phase at once and holds it until the host catches up, output
  * follows a cursor and starts over on a new run, a host that can't answer
- * hides the control, a folder nothing shows stops being asked about, and
- * the target a folder picked is the one its starts, checks and view are of.
+ * hides the control, a folder nothing shows stops being asked about, the
+ * target a folder picked is the one its starts, checks and view are of, and a
+ * cloud app whose machine sleeps isn't polled: the host's word that the
+ * machine is waking or awake brings the next look, and a click wakes it at once.
  */
 
 const CWD = "/work/shop"
@@ -46,7 +49,12 @@ const chunks: AppOutputChunk[] = [
   { text: "GET /\n", cursor: { file: "1:1", offset: 16 }, reset: false },
   { text: "listening again\n", cursor: { file: "2:2", offset: 16 }, reset: true },
 ]
+const hostListeners: ((event: HostEvent) => void)[] = []
 const bridge = {
+  onEvent: (listener: (event: HostEvent) => void) => {
+    hostListeners.push(listener)
+    return () => {}
+  },
   threadApp: async (cwd: string, target?: string) => {
     assert.equal(cwd, CWD)
     views += 1
@@ -207,4 +215,37 @@ driver.stop(CWD)
 await until(() => targetOf(threadAppStore.get(), CWD) === "web", "the first target again")
 unwatchTargets()
 
-console.log("thread app host driver: a click shows its phase at once and holds it until the host catches up; output follows its cursor and starts over on a new run; a host that can't answer hides the control; a folder nothing shows isn't polled; the sidebar's marks come from one look while the rail shows them, the strip's view of its folder wins, and nothing is asked once the rail goes; a folder's picked target is what it starts, checks and views, and the first target stands in once the recipe drops it")
+// A cloud app whose machine sleeps: shown as the host says, and not looked at again while nothing changes.
+const asleep: Extract<ThreadAppView, { kind: "asleep" }> = {
+  kind: "asleep",
+  project: "shop",
+  where: "a cloud machine",
+  last: { phase: "running", processes: [{ name: "web", state: "running", port: 20_010 }], address: { host: "t.cloud.localhost", port: 51_000 } },
+}
+hostView = asleep
+const unwatchAsleep = driver.watch!(CWD)
+await until(() => phase() === "asleep", "the asleep view")
+const looksAsleep = views
+await wait(4_600)
+assert.equal(views, looksAsleep, "a sleeping machine's app isn't polled as a running one is")
+// Its waking is told: the window looks at once.
+hostView = { ...asleep, waking: true }
+for (const listener of hostListeners) listener({ type: "cloud-machine", conversations: ["c-1"], machine: "waking" })
+await until(() => { const view = threadAppStore.get().byCwd[CWD]; return view?.kind === "asleep" && view.waking === true }, "waking, as soon as the host says")
+hostView = ready("running")
+for (const listener of hostListeners) listener({ type: "cloud-machine", conversations: ["c-1"], machine: "awake" })
+await until(() => phase() === "running", "awake, as soon as the host says")
+// A click on a sleeping machine's app says it's waking before the host answers.
+hostView = asleep
+for (const listener of hostListeners) listener({ type: "cloud-machine", conversations: ["c-1"], machine: "asleep" })
+await until(() => phase() === "asleep", "asleep again")
+holdStart = true
+driver.start(CWD)
+const clicked = threadAppStore.get().byCwd[CWD]
+assert.ok(clicked?.kind === "asleep" && clicked.waking, "the click wakes it, shown at once")
+hostView = ready("running")
+releaseStart!()
+await until(() => phase() === "running", "running once the start answered")
+unwatchAsleep()
+
+console.log("thread app host driver: a click shows its phase at once and holds it until the host catches up; output follows its cursor and starts over on a new run; a host that can't answer hides the control; a folder nothing shows isn't polled; the sidebar's marks come from one look while the rail shows them, the strip's view of its folder wins, and nothing is asked once the rail goes; a folder's picked target is what it starts, checks and views, and the first target stands in once the recipe drops it; a sleeping machine's app isn't polled, the host's word that it's waking or awake brings the next look, and a click on it shows it waking at once")

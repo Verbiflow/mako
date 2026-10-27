@@ -8,7 +8,7 @@ import type { ListedSession, ListedState } from "@mako/protocol/thread-listing"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
-import { hostCallReplay } from "../contracts/host-call-policy.js"
+import { deferredWhenAsleep, hostCallReplay } from "../contracts/host-call-policy.js"
 import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, OwnerUnavailableError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { ForkInputSchema } from "../contracts/conversation-control.js"
 import { sessionAfter, type LiveBatch, type LiveRequest, type LiveSnapshot, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
@@ -17,6 +17,7 @@ import type { QueuedPromptEdit } from "../contracts/live-queue.js"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, splitRuntimeEventLine, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
+import type { CloudMachineState, ThreadAppView } from "../contracts/thread-app.js"
 import { SessionIdSchema, type Actor as StoreActor, type SessionId, type ThreadPlacement } from "../contracts/thread-identity.js"
 import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/index.js"
 import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
@@ -76,6 +77,27 @@ const LiveSummarySchema = z.custom<LiveSummary>((value) => SummaryIdentitySchema
 /** A cloud host's own `LiveBatch`, checked for the revision a summary follows. */
 const LiveBatchSchema = z.custom<LiveBatch>((value) => z.object({ revision: z.number() }).loose().safeParse(value).success)
 
+const AppProcessSchema = z.object({
+  name: z.string(),
+  state: z.enum(["starting", "running", "exited", "stopped"]),
+  port: z.number().int().optional(),
+  exit: z.object({ code: z.number(), afterMs: z.number(), at: z.number() }).optional(),
+})
+
+/**
+ * A cloud app as a window's look last found it, kept only as far as a sleeping machine's app is shown: its project,
+ * and when it was set up, its phase, its processes (their memory isn't, which a pause holds still) and the port on the
+ * machine its address was at. Written when that changes, never for a look that found the same.
+ */
+const KeptReadySchema = z.object({
+  phase: z.enum(["stopped", "preparing", "starting", "running", "crashed", "waiting"]),
+  processes: z.array(AppProcessSchema),
+  startedAt: z.number().optional(),
+  port: z.number().int().optional(),
+})
+const KeptAppSchema = z.object({ project: z.string(), ready: KeptReadySchema.optional() })
+type KeptApp = z.infer<typeof KeptAppSchema>
+
 const EntrySchema = z.object({
   conversationId: z.string(),
   threadId: z.string(),
@@ -107,9 +129,34 @@ const EntrySchema = z.object({
   capture: z.string().optional(),
   /** Its native session, which its device's copy in the account is kept by: read while that device is off. */
   nativeId: z.string().optional(),
+  /** Its folder's app as this Mac last saw its machine awake: what a window is shown while the machine sleeps. */
+  app: KeptAppSchema.optional(),
 })
 
 type Entry = z.infer<typeof EntrySchema>
+
+/** What a look's answer says of the app, read leniently: a view of any kind names its project. */
+const LookedAppSchema = z.object({
+  kind: z.string(),
+  project: z.string(),
+  phase: z.string().optional(),
+  processes: z.array(z.object({ name: z.string(), state: z.string(), port: z.number().optional(), exit: z.unknown().optional() }).loose()).optional(),
+  startedAt: z.number().optional(),
+  address: z.object({ port: z.number().int() }).loose().optional(),
+}).loose()
+type LookedApp = z.infer<typeof LookedAppSchema>
+
+/** The part of a look's view a sleeping machine's app is shown from. */
+function keptApp({ kind, project, phase, processes, startedAt, address }: LookedApp): KeptApp {
+  if (kind !== "ready") return { project }
+  const ready = KeptReadySchema.safeParse({
+    phase,
+    processes: processes?.map(({ name, state, port, exit }) => ({ name, state, ...port !== undefined && { port }, ...exit !== undefined && { exit } })) ?? [],
+    ...startedAt !== undefined && { startedAt },
+    ...address && { port: address.port },
+  })
+  return ready.success ? { project, ready: ready.data } : { project }
+}
 
 /** How a list shows a Session's state, as a session's status: `waiting` is a turn at work, with what it waits on said beside. */
 const LISTED_STATUS = { working: "running", waiting: "running", idle: "ready", failed: "failed", moving: "starting" } as const satisfies Record<ListedState, LiveSummary["session"]["status"]>
@@ -251,6 +298,12 @@ const ReadyAddressSchema = z.object({ kind: z.literal("ready"), address: z.objec
 
 /** Where a cloud conversation's folder is, in words. */
 export const CLOUD_FOLDER_WHERE = "a cloud machine"
+/** The host log's line as a cloud Thread's machine changes, as this Mac knows it. */
+const MACHINE_WORDS = {
+  asleep: "a cloud Thread's machine is asleep",
+  waking: "a call of this Mac's is waking a cloud Thread's machine",
+  awake: "a cloud Thread's machine is awake",
+} as const satisfies Record<CloudMachineState, string>
 /** A window following a cloud conversation's folder reads its Git again at most this often while its agent works. */
 const CHANGED_MS = 1_000
 
@@ -321,8 +374,12 @@ export class CloudConversations {
   readonly #changes = new Map<string, NodeJS.Timeout>()
   /** Each cloud Thread's ports, served on this Mac. */
   readonly #previews: CloudPreviews
-  /** By conversation: the last view of its app a window was given, shown while its machine sleeps. */
-  readonly #views = new Map<string, unknown>()
+  /**
+   * Cloud Threads whose machine this Mac found asleep, by Thread: from a window's look the cloud didn't apply, until
+   * the machine is heard awake (a call answered, or its events came). `calls` counts this Mac's calls to it on their
+   * way meanwhile, each of which wakes it: while there are any, it's waking.
+   */
+  readonly #sleeping = new Map<string, { calls: number }>()
   /** The account's Threads as every device lists them: what puts another device's cloud conversations here. */
   readonly #list = new AccountSessions()
   /** This Mac's device, whose own Sessions are its own, and the names of the account's devices, for where a Session runs. */
@@ -360,7 +417,18 @@ export class CloudConversations {
 
   constructor(options: CloudConversationsOptions) {
     this.#options = options
-    this.#previews = new CloudPreviews({ gateway: () => options.account()?.gateway(), token: async () => options.account()?.token() })
+    this.#previews = new CloudPreviews({
+      gateway: () => options.account()?.gateway(),
+      token: async () => options.account()?.token(),
+      // A preview's request wakes a sleeping machine as a call does, and its answer is the machine up.
+      request: (threadId) => {
+        const ended = this.#calling(threadId)
+        return (answered) => {
+          if (answered) this.#heardAwake(threadId)
+          ended()
+        }
+      },
+    })
     this.controlPreviews = new CloudControlPreviews({ session: async () => (await this.#connected()).session })
   }
 
@@ -1123,23 +1191,73 @@ export class CloudConversations {
 
   /**
    * A window's look at the app in a cloud conversation's folder, which it keeps asking for: asked passively, so a window
-   * left open neither wakes a sleeping machine nor keeps it running; while it sleeps, the last view seen (its app
-   * paused with it, still in memory). The app's address is this Mac's preview of its port, which a click wakes.
+   * left open neither wakes a sleeping machine nor keeps it running. While the machine sleeps the look says so, with the
+   * app as this Mac last saw it awake, kept with the conversation, so a host that restarted meanwhile says the same. The
+   * app's address is this Mac's preview of its port, which a click wakes.
    */
   async #appView(entry: Entry, args: readonly unknown[]): Promise<EncodedValue> {
     let view: unknown
     try {
       view = decodeRuntimeValue(await this.#callThread(entry.threadId, "mako:thread-app", args, { conversationId: entry.conversationId, passive: true }))
-      this.#views.set(entry.conversationId, view)
     } catch (error) {
-      const kept = this.#views.get(entry.conversationId)
-      // Asleep is a call the gateway didn't apply; any other failure is the machine's, said as it is.
-      if (!(error instanceof RuntimeDisconnectedError && !error.unconfirmed) || kept === undefined) throw error
-      view = kept
+      // Asleep is a look the cloud didn't apply; any other failure is the machine's, said as it is. Another device that's
+      // off isn't asleep the same way: no call wakes it.
+      if (entry.runtime || !(error instanceof RuntimeDisconnectedError && !error.unconfirmed)) throw error
+      this.#fellAsleep(entry.threadId)
+      return encodeRuntimeValue(await this.#asleepView(entry))
+    }
+    const looked = LookedAppSchema.safeParse(view)
+    const kept = looked.success ? keptApp(looked.data) : undefined
+    if (kept && JSON.stringify(kept) !== JSON.stringify(entry.app)) {
+      entry.app = kept
+      this.#saveSoon()
     }
     const ready = ReadyAddressSchema.safeParse(view)
     if (!ready.success) return encodeRuntimeValue(view)
     return encodeRuntimeValue({ ...ready.data, address: await this.#previews.address(entry.threadId, ready.data.address.port) })
+  }
+
+  /** The app of a conversation whose machine sleeps, from what this Mac kept of it, and waking while a call of its is. */
+  async #asleepView(entry: Entry): Promise<ThreadAppView> {
+    const view: Extract<ThreadAppView, { kind: "asleep" }> = { kind: "asleep", project: entry.app?.project ?? (entry.repository ? projectName(entry.repository) : ""), where: CLOUD_FOLDER_WHERE }
+    if (this.#sleeping.get(entry.threadId)?.calls) view.waking = true
+    const ready = entry.app?.ready
+    if (ready) {
+      const { port, ...last } = ready
+      view.last = port === undefined ? last : { ...last, address: await this.#previews.address(entry.threadId, port) }
+    }
+    return view
+  }
+
+  /** A look the cloud didn't apply: the Thread's machine sleeps. Windows hear so once, as it falls asleep. */
+  #fellAsleep(threadId: string): void {
+    if (this.#sleeping.has(threadId)) return
+    this.#sleeping.set(threadId, { calls: 0 })
+    this.#tellMachine(threadId, "asleep")
+  }
+
+  /**
+   * A call of this Mac's on its way to a Thread, which wakes its machine if it sleeps: windows hear it's waking, and
+   * when the last such call ended unanswered there, that it may still sleep (their next look says). Answers its end.
+   */
+  #calling(threadId: string): () => void {
+    const sleeping = this.#sleeping.get(threadId)
+    if (!sleeping) return () => {}
+    if (sleeping.calls++ === 0) this.#tellMachine(threadId, "waking")
+    return () => {
+      if (this.#sleeping.get(threadId) === sleeping && --sleeping.calls === 0) this.#tellMachine(threadId, "asleep")
+    }
+  }
+
+  /** The Thread's machine was heard awake: a call answered there, or its events came. */
+  #heardAwake(threadId: string): void {
+    if (this.#sleeping.delete(threadId)) this.#tellMachine(threadId, "awake")
+  }
+
+  #tellMachine(threadId: string, machine: CloudMachineState): void {
+    const conversations = [...this.#entries.values()].filter((entry) => entry.threadId === threadId).map((entry) => entry.conversationId)
+    hostLog("cloud-conversations", MACHINE_WORDS[machine], { threadId, conversations: conversations.length })
+    this.#options.emit(encodeRuntimeEvent({ type: "cloud-machine", conversations, machine }))
   }
 
   /**
@@ -1163,8 +1281,22 @@ export class CloudConversations {
     if (how.passive) calls.passive = true
     if (how.refuseUnstarted) calls.refuseUnstarted = true
     const send = gatewayHostCalls(session, calls).call(channel, args)
-    // A passive look is answered at once, asleep or not; it's never waited out.
+    // A passive look is answered at once, asleep or not; it's never waited out, and never wakes the machine.
     const repeatable = !how.passive && hostCallReplay(channel) !== "never"
+    // A call kept for the machine's next wake (a close) neither wakes it nor, answered by the cloud, says it's awake.
+    const wakes = !deferredWhenAsleep.has(channel)
+    const ended = wakes && !how.passive ? this.#calling(threadId) : undefined
+    try {
+      const value = await this.#sendThread(threadId, channel, send, repeatable, how)
+      if (wakes) this.#heardAwake(threadId)
+      return value
+    } finally {
+      ended?.()
+    }
+  }
+
+  /** `#callThread`'s tries of one call, repeated while the gateway lost it or holds it as the machine wakes. */
+  async #sendThread(threadId: string, channel: string, send: (attempt: number) => Promise<EncodedValue>, repeatable: boolean, how: { conversationId?: string; runtime?: string | undefined }): Promise<EncodedValue> {
     const began = performance.now()
     for (let attempt = 1; ; attempt++) {
       try {
@@ -1273,6 +1405,8 @@ export class CloudConversations {
     if (!parts) return
     const head = LiveBatchHeadSchema.safeParse(JSON.parse(parts.head))
     if (!head.success || head.data.channel !== "event") return
+    // Only its host's events are a runtime's lines: the machine is up (woken by another device, or by its own work).
+    this.#heardAwake(entry.threadId)
     if (head.data.type === "control-activity") {
       // The machine's host emits every conversation's; only this one's is this Thread's to show.
       const event = ControlActivityEventSchema.safeParse(JSON.parse(parts.payload))
@@ -1368,7 +1502,6 @@ export class CloudConversations {
       if (!entry.listed || wanted.get(entry.conversationId)?.threadId === entry.threadId) continue
       this.#entries.delete(entry.conversationId)
       this.controlPreviews.forget(entry.conversationId)
-      this.#views.delete(entry.conversationId)
       this.#capturing.delete(entry.conversationId)
       unlisted.push(entry.conversationId)
       if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()

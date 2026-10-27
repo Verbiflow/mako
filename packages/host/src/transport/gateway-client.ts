@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type { Actor, ClientSession, Payload, Reply } from "@mako/protocol"
+import { problemType, type Actor, type ClientSession, type Payload, type Problem, type Reply } from "@mako/protocol"
 import { deferredWhenAsleep } from "../contracts/host-call-policy.js"
 import { hostCallInput, hostOperationName, hostReplyValue, toHostOperation } from "../contracts/host-operations.js"
 import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
@@ -66,10 +66,17 @@ export function gatewayHostCalls(session: ClientSession, options: GatewayHostCal
           throw new RuntimeDisconnectedError(true)
         }
         const fields = { op: hostOperationName(channel), correlationId, attempt, outcome: reply.ok ? (reply.deferred ? "deferred" : "ok") : reply.problem.type, ms: Date.now() - started }
-        if (!reply.ok) hostWarn("gateway-client", "operation failed", fields)
+        // A passive look the gateway didn't apply because nothing runs the Thread is its answer by design (its machine
+        // sleeps), not a failure: its caller says what it means once, as it changes. Every other refusal is a warning.
+        if (!reply.ok && !(options.passive && passedOver(reply.problem))) hostWarn("gateway-client", "operation failed", fields)
         else if (trace || attempt > 1) hostLog("gateway-client", "operation", fields)
         return hostReplyValue(reply)
       }
     },
   }
+}
+
+/** A passive call's expected refusal: unapplied, as nothing runs its target now. */
+function passedOver(problem: Problem): boolean {
+  return problemType(problem) === "owner-unavailable" && problem.outcome === "not-applied"
 }

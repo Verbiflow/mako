@@ -1,7 +1,7 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { Fragment, useEffect, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { CheckIcon, ChevronDownIcon, HourglassIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, HourglassIcon, LoaderCircleIcon, MoonIcon, PauseIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
 import type { SetupStep } from "@mako/host/contracts/thread-app"
 import { environmentRepairPrompt } from "@mako/host/contracts/thread-environments"
 import {
@@ -63,6 +63,7 @@ import {
 } from "@/state/thread-app"
 
 type Ready = Extract<ThreadAppView, { kind: "ready" }>
+type Asleep = Extract<ThreadAppView, { kind: "asleep" }>
 
 const trigger =
   "pressable flex h-6 shrink-0 items-center overflow-hidden rounded-md px-2 text-label font-medium whitespace-nowrap " +
@@ -111,6 +112,7 @@ export function AppControl({ cwd, focused }: { cwd: string | undefined; focused:
   const target = useThreadApp((state) => (cwd ? targetOf(state, cwd) : undefined))
   useEffect(() => (cwd ? threadAppDriver()?.watch?.(cwd) : undefined), [cwd])
   if (!cwd || !view || hidden) return null
+  if (view.kind === "asleep") return <AsleepControl cwd={cwd} view={view} />
   const state = view.kind === "ready" ? view.phase : view.kind
   const project = view.kind === "ready" ? cwd : view.root
   if (view.kind === "ready" && view.phase === "stopped" && view.elsewhere) {
@@ -221,6 +223,80 @@ function SetupRowItem({ project }: { project: string }) {
   )
 }
 
+/**
+ * A cloud Thread's app while its machine sleeps: a quiet mark on the strip, and a menu that says what sleeps, what
+ * wakes it, and the app as it was. Looking never wakes it; each action here does, and says so.
+ */
+function AsleepControl({ cwd, view }: { cwd: string; view: Asleep }) {
+  const last = view.last
+  const at = last?.phase === "running" ? last.address : undefined
+  // What paused with the machine; an app that wasn't running has nothing to show beyond saying so.
+  const paused = last?.processes.filter((process) => process.state === "running" || process.state === "starting") ?? []
+  return (
+    <Menu modal={false}>
+      <MenuTrigger asChild>
+        <button type="button" data-app-control={view.waking ? "waking" : "asleep"} className={cn(trigger, "mr-0.5", triggerTone(view))}>
+          <TriggerLabel view={view} />
+        </button>
+      </MenuTrigger>
+      <MenuContent align="end" className="w-80" onCloseAutoFocus={(event) => event.preventDefault()}>
+        <Head title={view.waking ? "Waking up" : "Asleep"}>{asleepWords(view)}</Head>
+        {paused.length ? (
+          <>
+            <MenuSeparator />
+            {paused.map((process) => (
+              <div key={process.name} data-app-row={process.name} className="flex min-h-8 items-center gap-2 px-2">
+                {view.waking ? (
+                  <LoaderCircleIcon aria-label="Waking" className="size-3.5 shrink-0 animate-spin text-muted-foreground" strokeWidth={2.25} />
+                ) : (
+                  <PauseIcon aria-label="Paused" className="size-3.5 shrink-0 fill-current text-faint" strokeWidth={2.25} />
+                )}
+                <span className="min-w-0 flex-1 truncate text-foreground">{process.name}</span>
+                <span className="shrink-0 text-label text-faint tabular-nums">{view.waking ? "Waking" : process.port ? `Paused · :${process.port}` : "Paused"}</span>
+              </div>
+            ))}
+          </>
+        ) : null}
+        {view.waking || !last ? null : (
+          <>
+            <MenuSeparator />
+            {at ? (
+              <WakingAction action="open" onSelect={() => void desktop.openUrl(address(at))}>
+                Open in browser
+              </WakingAction>
+            ) : (
+              <WakingAction action="run" onSelect={() => threadAppDriver()?.start(cwd)}>
+                Run app
+              </WakingAction>
+            )}
+          </>
+        )}
+      </MenuContent>
+    </Menu>
+  )
+}
+
+/** What sleeps, how the app was left, and what wakes it, in the person's terms. */
+function asleepWords(view: Asleep): string {
+  const running = view.last?.phase === "running"
+  if (view.waking) return `This Thread runs on ${view.where}, which is waking up.${running ? " Its app comes back as it was." : ""}`
+  const app = !view.last ? "" : running ? " Its app paused with it." : " Its app wasn't running."
+  const wakes = !view.last ? "Sending a message" : running ? "Sending a message or opening the app" : "Sending a message or running the app"
+  return `This Thread runs on ${view.where}, asleep while nothing needs it.${app} ${wakes} wakes it.`
+}
+
+/** An action on a sleeping machine's app, which wakes it first: said beside it, quietly. */
+function WakingAction({ action, onSelect, children }: { action: string; onSelect: () => void; children: ReactNode }) {
+  return (
+    <MenuItem data-app-action={action} className="group gap-3" onSelect={onSelect}>
+      <span className="shrink-0 whitespace-nowrap">{children}</span>
+      <span className="min-w-0 flex-1 truncate text-right text-label text-faint transition-colors duration-100 group-data-[highlighted]:text-muted-foreground">
+        Wakes the machine
+      </span>
+    </MenuItem>
+  )
+}
+
 function triggerTone(view: ThreadAppView): string {
   if (view.kind === "invalid" || (view.kind === "ready" && view.phase === "crashed")) return "text-negative"
   if (view.kind === "ready" && view.phase === "waiting") return "text-caution"
@@ -242,6 +318,8 @@ function TriggerLabel({ view, target }: { view: ThreadAppView; target?: string }
 /** What the control would do or is doing: run, working, running, waiting or failed. */
 function TriggerIcon({ view }: { view: ThreadAppView }) {
   const icon = "size-3 shrink-0"
+  if (view.kind === "asleep")
+    return view.waking ? <LoaderCircleIcon aria-hidden className={cn(icon, "animate-spin")} strokeWidth={2.5} /> : <MoonIcon aria-hidden className={icon} strokeWidth={2.25} />
   switch (view.kind === "ready" ? view.phase : view.kind) {
     case "setting-up":
     case "preparing":
@@ -264,6 +342,7 @@ function triggerParts(view: ThreadAppView, target?: string): [string, boolean] {
   if (view.kind === "none") return ["Run app", false]
   if (view.kind === "invalid") return ["Can't run app", false]
   if (view.kind === "setting-up") return ["Setting up", true]
+  if (view.kind === "asleep") return view.waking ? ["Waking up", true] : ["Asleep", false]
   switch (view.phase) {
     case "stopped":
       return [target ? `Run ${target}` : "Run app", false]
