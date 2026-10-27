@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path"
 import { appDataFor } from "../base/host-environment.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { HOST_LOG_MAX_BYTES } from "../base/host-log.js"
+import { HOST_NODE_OPTIONS } from "../base/process-warnings.js"
 import { ensurePrivateDirectory } from "../base/private-directory.js"
 import { probeRuntime, settleRuntime } from "./connection.js"
 import { nodePlatform } from "../base/platform.js"
@@ -106,7 +107,7 @@ export function hostCommand(input: Pick<RuntimeLaunch, "executable" | "args" | "
   const appRoot = input.args[0] ?? join(dirname(input.executable), "..", "Resources", "app.asar")
   return {
     executable: headlessNodeExecutable(input.executable),
-    args: [join(appRoot, "dist-electron", "entry.js")],
+    args: [...HOST_NODE_OPTIONS, join(appRoot, "dist-electron", "entry.js")],
     env: { ...input.env, MAKO_HOST_EXECUTABLE: input.executable, ELECTRON_RUN_AS_NODE: "1" },
   }
 }
