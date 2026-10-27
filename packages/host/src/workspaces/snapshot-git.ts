@@ -199,6 +199,14 @@ export async function sealSnapshotObjects(
     { write: objects.write }
   )
 }
+/**
+ * What a checkpoint holds: the bytes of the files it wrote (its pack, the
+ * pack's index, the staging index, its ref and ownership record), in the same
+ * unit as every other limit a checkpoint is held to (the changed files' sizes
+ * and Git's object sizes). Not the blocks the file system gave them: a block
+ * per folder and per small file is the file system's grain, not the
+ * checkpoint's, and it made one checkpoint of 27 KB of files 98 KB on ext4 and 59 KB on APFS.
+ */
 export async function snapshotPayloadBytes(directory: string): Promise<number> {
   let bytes = 0
   const pending = [directory]
@@ -209,9 +217,9 @@ export async function snapshotPayloadBytes(directory: string): Promise<number> {
     if (++visited > 100_000)
       throw new Error("Checkpoint storage contains too many files")
     const info = await lstat(path)
-    bytes += Math.max(info.size, info.blocks * 512)
     if (info.isDirectory())
       pending.push(...(await readdir(path)).map((name) => join(path, name)))
+    else bytes += info.size
   }
   return bytes
 }

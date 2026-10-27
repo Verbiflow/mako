@@ -941,7 +941,8 @@ export class WorkspaceSnapshots {
       }
       if (shared?.size) record.shared = [...shared].slice(0, 64)
       if (lifetime === "temporary") return record
-      await this.pruneLocked(scope, gitDir, undefined, payloadBytes)
+      // A pass removes at most 64 checkpoints; this one's room may take more.
+      while (await this.pruneLocked(scope, gitDir, undefined, payloadBytes));
       if (
         (await retainedSnapshotBytes(this.db, this.root, scope)) +
           (this.orphanBytes.get(scope) ?? 0) +

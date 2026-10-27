@@ -77,6 +77,10 @@ jobs:
       - run: npm run test:prompt-delivery
       - run: npm run test:live-prompt-delivery
       - run: npm run test:tuning
+      # The attribution journal and workspace snapshots: per-turn changes, undo, Git operations, and the guard that keeps
+      # every script's scratch repositories away from the one it was started in.
+      - run: npm run test:attribution
+      - run: npm run test:workspace-snapshots
 
   # Every harness's decoders against its recorded pairs (live and saved draw the same, or say why not), and the
   # three readers of spend (live, saved, the store's scan) agreeing on each pair.

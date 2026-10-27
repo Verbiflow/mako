@@ -22,6 +22,7 @@ import {
   snapshotPayloadBytes,
   reclaimSnapshotOrphans,
 } from "@mako/host/workspaces/snapshot-git"
+import { SnapshotRecordSchema } from "@mako/host/workspaces/snapshot-retention"
 
 const gitRunner = new Git()
 
@@ -74,13 +75,25 @@ try {
   )
   assert.equal(git("for-each-ref", "refs/mako/checkpoints"), "")
   let bytes = 0
-  for (const row of db.prepare("SELECT id FROM snapshots").all()) {
+  const kept = db.prepare("SELECT id FROM snapshots").all()
+  for (const row of kept) {
     const id = z.string().uuid().parse(row.id)
-    bytes += await snapshotPayloadBytes(join(storage, id))
+    const payload = await snapshotPayloadBytes(join(storage, id))
+    // 24 KiB of new content, its pack's index, the staging index and a ref. Counted in the file system's
+    // blocks instead, ext4's 4 KiB a folder made it 98 KB, APFS's 59 KB.
+    assert.ok(
+      payload < 28 * 1024,
+      `A checkpoint of 24 KiB of new content counts ${payload} bytes`
+    )
+    bytes += payload
   }
   assert.ok(
     bytes <= policy.maxStorageBytes,
     `Retained snapshot payloads use ${bytes} bytes`
+  )
+  assert.ok(
+    kept.length >= 4,
+    `A 128 KiB budget keeps ${kept.length} checkpoints of 24 KiB, not four`
   )
   assert.ok(latest)
   const expected = readFileSync(join(cwd, "file"))
@@ -198,6 +211,57 @@ try {
     "a missing catalog row does not authorize deleting a completed checkpoint"
   )
   assert.ok(existsSync(activeOrphan), "a live capture is never reclaimed")
+
+  // A cleanup pass removes at most 64 checkpoints. One whose room takes more passes still gets it,
+  // rather than "storage is full" beside checkpoints that could have gone.
+  const crowdedRoot = join(root, "crowded store")
+  const crowded = new WorkspaceSnapshots(gitRunner, crowdedRoot, policy)
+  const crowdedDb = new DatabaseSync(join(crowdedRoot, "snapshots.sqlite"))
+  try {
+    const seed = await crowded.capture(cwd)
+    const template = SnapshotRecordSchema.parse(
+      JSON.parse(
+        z
+          .object({ value: z.string() })
+          .parse(
+            crowdedDb
+              .prepare("SELECT value FROM snapshots WHERE id=?")
+              .get(seed.id)
+          ).value
+      )
+    )
+    crowdedDb.prepare("DELETE FROM snapshots").run()
+    rmSync(join(crowdedRoot, seed.id), { recursive: true })
+    // 500 checkpoints of 256 bytes fill all but 3 KiB of the budget; the next one's 24 KiB needs about 100 gone.
+    for (let i = 0; i < 500; i++) {
+      const record = {
+        ...template,
+        id: randomUUID(),
+        createdAt: template.createdAt - 500 + i,
+        storage: { kind: "private" as const, bytes: 256 },
+      }
+      crowdedDb
+        .prepare("INSERT INTO snapshots VALUES (?, ?)")
+        .run(record.id, JSON.stringify(record))
+    }
+    mock.timers.tick(1)
+    writeFileSync(join(cwd, "file"), randomBytes(24 * 1024))
+    const roomy = await crowded.capture(cwd)
+    const left = crowdedDb
+      .prepare("SELECT json_extract(value, '$.storage.bytes') AS bytes FROM snapshots")
+      .all()
+      .reduce((sum, row) => sum + z.number().parse(row.bytes), 0)
+    assert.ok(left <= policy.maxStorageBytes, `Retained ${left} bytes`)
+    assert.ok(
+      crowdedDb.prepare("SELECT id FROM snapshots WHERE id=?").get(roomy.id)
+    )
+  } finally {
+    crowdedDb.close()
+    crowded.close()
+  }
+  console.log(
+    "PASS: a checkpoint whose room takes several cleanup passes gets it"
+  )
   console.log(
     "PASS: private packs obey a measured byte budget, survive Git GC, retain staged content, reclaim capture crashes, and preserve protected or uncatalogued recovery data"
   )
