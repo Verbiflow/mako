@@ -130,7 +130,7 @@ List what no other harness has in the definition's `unique`: its name, what carr
 - OpenCode, models: no default model: OpenCode's models are the person's own providers, so it starts on the model they configured.
 - Claude Code, versions: tested 2.1.310, no oldest proven, bundled @anthropic-ai/claude-agent-sdk
 - Codex, versions: tested 0.164.0, oldest 0.142.0
-- Cursor, versions: tested 1.0.40, no oldest proven, bundled @cursor/sdk
+- Cursor, versions: tested 1.1.0, no oldest proven, bundled @cursor/sdk
 - OpenCode, versions: tested 2.1.4, oldest 2.0.0
 - Grok, versions: tested 1.0.70, oldest 0.2.97
 - Devin, versions: tested 3000.11.205, no oldest proven
