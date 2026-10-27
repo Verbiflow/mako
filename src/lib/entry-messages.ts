@@ -270,6 +270,7 @@ function toolBlocks(entry: EntryOf<"tool">, turn: number, provider: string | und
   const id = live ? `${turn}:${entry.id}` : `${message}-tool-${entry.id}`
   const call: Block = { type: "toolCall", id, name: tool.name, tool, arguments: tool.input ?? entry.input }
   if (entry.toolKind) call.kind = entry.toolKind
+  if (entry.at !== undefined) call.at = entry.at
   const failed = entry.status === "failed" && !entry.unfinished
   const canceled = /cancel/i.test(entry.status ?? "")
   const finished = liveToolFinished(entry.status)
@@ -288,6 +289,7 @@ function toolBlocks(entry: EntryOf<"tool">, turn: number, provider: string | und
   if (canceled) result.isCanceled = true
   if (entry.unfinished) result.isCutOff = true
   if (live && !finished) result.streaming = true
+  if (entry.endedAt !== undefined && !result.streaming) result.endedAt = entry.endedAt
   if (rest) result.rest = rest
   const media = callMedia(entry, tool)
   if (media.length) result.media = media

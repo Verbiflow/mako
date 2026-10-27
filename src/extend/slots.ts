@@ -104,6 +104,9 @@ export interface ToolCall {
   /** See the `toolResult` block's `isCutOff`. */
   isCutOff?: boolean
   pending: boolean
+  /** When the host saw the call start, and finish: a live call's, on the host's clock. */
+  startedAt?: number
+  endedAt?: number
   /**
    * Present while `result` is only the head of the output. The row asks for
    * the rest when it opens; a tool view can show `rest.length` meanwhile.

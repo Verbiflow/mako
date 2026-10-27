@@ -104,6 +104,8 @@ export type Block =
       /** What the call is, resolved where the harness is known; `pairTools` resolves it otherwise. */
       tool?: ToolIdentity
       arguments?: unknown
+      /** When the host first saw the call, on its clock: a live call's, so calls that ran at once can be told apart from calls in turn. */
+      at?: number
     }
   | {
       type: "toolResult"
@@ -115,6 +117,8 @@ export type Block =
       /** The turn ended while the call ran, so it never returned; `text` says how. Not the call's failure. */
       isCutOff?: boolean
       streaming?: boolean
+      /** When the host first saw the call finished, on the same clock as its call's `at`. */
+      endedAt?: number
       attachments?: AttachmentContent[]
       details?: ToolDetail[]
       /** The media the call produced or showed (`callMedia`); the exchange's shelf merges them. */

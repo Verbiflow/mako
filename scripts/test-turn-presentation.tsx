@@ -3,8 +3,9 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { compactionEvent, modelChangedEvent } from "@mako/sessions/events"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { Exchange } from "../src/components/transcript/exchange"
+import { ToolRow } from "../src/components/transcript/tool-row"
 import { agentGroupWords, groupAgentCalls } from "../src/lib/agent-groups"
-import { TranscriptSourceContext } from "../src/components/transcript/source-context"
+import { TranscriptSourceContext, TurnRunningContext } from "../src/components/transcript/source-context"
 import { callEntryId, entriesToMessages } from "../src/lib/entry-messages"
 import { responseSections, toExchanges, type Exchange as ExchangeData } from "../src/lib/exchanges"
 import { pairTools } from "../src/lib/tools"
@@ -15,8 +16,9 @@ import { setTurnFoldOpen, turnFoldKey } from "../src/state/turn-folds"
 import { TOOL_KINDS } from "@mako/sessions/tool-identity"
 
 /**
- * How a turn's work is drawn: one live row while it runs, one fold once it
- * settles, agents started together as one row, boundaries as dividers.
+ * How a turn's work is drawn: a live row for each call running, its words
+ * under one sweep, one fold once it settles, agents started together as one
+ * row, boundaries as dividers.
  */
 
 const LIVE = "conversation"
@@ -29,7 +31,28 @@ const draw = (exchange: ExchangeData, props: { streaming?: boolean; interrupted?
       <Exchange exchange={exchange} {...props} />
     </TranscriptSourceContext>
   )
-const tool = (id: string, name: string, input: Record<string, string>, status = "completed"): LiveUpdate => ({ kind: "tool", id, title: name, name, status, input: JSON.stringify(input) })
+const tool = (id: string, name: string, input: Record<string, string>, status = "completed", times: { at?: number; endedAt?: number } = {}): LiveUpdate => ({ kind: "tool", id, title: name, name, status, input: JSON.stringify(input), ...times })
+/** The text under each sweep in `html`, each sweep's element whole. */
+const sweeps = (html: string): string[] => {
+  const found: string[] = []
+  for (let start = html.indexOf('class="shimmer-text'); start >= 0; start = html.indexOf('class="shimmer-text', start + 1)) {
+    const open = html.lastIndexOf("<", start)
+    const tag = /^<(\w+)/.exec(html.slice(open))![1]!
+    let depth = 0
+    let index = open
+    do {
+      const next = html.slice(index).search(new RegExp(`<(/?)${tag}[\\s>]`))
+      if (next < 0) break
+      index += next
+      depth += html[index + 1] === "/" ? -1 : 1
+      index += 1
+    } while (depth > 0)
+    found.push(html.slice(open, html.indexOf(">", index) + 1).replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
+  }
+  return found
+}
+/** The live step's own markup, from its element to the end of the turn. */
+const liveStepOf = (html: string): string => html.slice(html.indexOf("data-live-step"))
 const text = (id: string, words: string): LiveUpdate => ({ kind: "text", id, text: words })
 const go: LiveUpdate = { kind: "user", text: "Fix the redirect", at: at(0) }
 
@@ -44,11 +67,52 @@ const go: LiveUpdate = { kind: "user", text: "Fix the redirect", at: at(0) }
   ], true)
   const html = draw(running.at(-1)!, { streaming: true })
   assert.equal(html.match(/data-live-step/g)?.length, 1, "one live row")
-  assert.match(html, /shimmer-text[^>]*>Running</, "the running step's verb sweeps")
-  assert.match(html, />npm test</, "and says what it runs")
+  assert.deepEqual(sweeps(html), ["Running npm test"], "the running call's verb and what it runs sweep as one")
+  assert.doesNotMatch(liveStepOf(html), /activity-orb|activity-mark|<canvas| running</, "the sweep is the row's only running signal: no mark at its end, no count")
+  assert.doesNotMatch(html, /class="[^"]*(changing-label|animate-)[^"]*shimmer-text|class="[^"]*shimmer-text[^"]*(changing-label|animate-)/, "nothing else animates a sweeping element, so nothing replaces its sweep")
   assert.match(html, /data-work-summary[^>]*>[^]*Made an edit, read a file and searched once/, "what finished reads as today's summary")
   assert.doesNotMatch(html, /data-transcript-tool/, "the rows stay unmounted until the list opens")
   assert.match(html, /data-turn-clock/, "the turn's head carries its clock")
+}
+
+// Calls the model made at once each have a row that sweeps; one that returns first settles in its place.
+{
+  const before = [
+    go,
+    text("plan", "Running the suite while I look for the expiry check."),
+    tool("read", "Read", { file_path: "/p/src/guard.ts" }, "completed", { at: at(5), endedAt: at(6) }),
+  ]
+  const suite = tool("suite", "Bash", { command: "npm test -- src/router" }, "in_progress", { at: at(10) })
+  const grep = tool("grep", "Grep", { pattern: "expiresAt", path: "src" }, "in_progress", { at: at(10.2) })
+  const all = draw(exchangesOf([...before, suite, tool("tests", "Read", { file_path: "/p/src/guard.test.ts" }, "in_progress", { at: at(10.1) }), grep], true).at(-1)!, { streaming: true })
+  assert.deepEqual(sweeps(all), ["Running npm test -- src/router", "Reading /p/src/guard.test.ts", "Searching expiresAt · src"], "each running call has its own sweeping row, in the order they began")
+  assert.equal(all.match(/data-live-step="calls"/g)?.length, 1, "one live step stands for them")
+  assert.match(all, /data-work-summary[^>]*>[^]*Read a file/, "the summary holds what finished before them")
+  assert.doesNotMatch(liveStepOf(all), /guard\.ts</, "and the call before them is not in the step")
+  assert.doesNotMatch(all, /Copy answer/, "a running turn offers no whole answer to copy")
+
+  const settling = draw(exchangesOf([...before, suite, tool("tests", "Read", { file_path: "/p/src/guard.test.ts" }, "completed", { at: at(10.1), endedAt: at(12) }), grep], true).at(-1)!, { streaming: true })
+  assert.deepEqual(sweeps(settling), ["Running npm test -- src/router", "Searching expiresAt · src"], "the calls still running sweep on")
+  const step = liveStepOf(settling)
+  assert.ok(step.indexOf("npm test") < step.indexOf("guard.test.ts") && step.indexOf("guard.test.ts") < step.indexOf("expiresAt"), "the finished call keeps its place between them")
+  assert.match(step, /data-transcript-tool="[^"]*tests"[^]*Read[^]*guard\.test\.ts/, "drawn as the row the list will show for it")
+  assert.match(settling, /data-work-summary[^>]*>[^]*Read a file</, "and not counted in the summary twice")
+
+  const settled = draw(exchangesOf([...before, tool("suite", "Bash", { command: "npm test -- src/router" }, "completed", { at: at(10), endedAt: at(40) }), tool("tests", "Read", { file_path: "/p/src/guard.test.ts" }, "completed", { at: at(10.1), endedAt: at(12) }), tool("grep", "Grep", { pattern: "expiresAt", path: "src" }, "completed", { at: at(10.2), endedAt: at(11) }), text("done", "The suite passes.")], false).at(-1)!)
+  assert.deepEqual(sweeps(settled), [], "a finished turn never sweeps")
+  assert.doesNotMatch(settled, /data-live-step/)
+  assert.match(settled, /Copy answer/, "and its answer can be copied whole")
+}
+
+// Only a running turn's calls sweep: a call a finished record left without a result keeps its settled words.
+{
+  const [call] = pairTools(exchangesOf([go, tool("hung", "Bash", { command: "npm run dev" }, "in_progress")], true).at(-1)!.response.flatMap((message) => message.blocks))
+  assert.ok(call?.pending)
+  assert.deepEqual(sweeps(renderToStaticMarkup(<TurnRunningContext value={true}><ToolRow call={call} /></TurnRunningContext>)), ["Running npm run dev"])
+  const still = renderToStaticMarkup(<ToolRow call={call} />)
+  assert.deepEqual(sweeps(still), [], "outside a running turn it does not sweep")
+  assert.match(still, /Shell[^]*npm run dev/, "and reads as its settled row")
+  assert.doesNotMatch(still, /activity-mark|Running/, "with no running mark")
 }
 
 // The same turn settled folds behind one row and leaves the answer in view.
@@ -136,4 +200,4 @@ assert.equal(stoppedWorkWords(["npm run dev"])?.text, "and stopped npm run dev")
 assert.equal(stoppedWorkWords(["npm run dev", "npm run test:watch"])?.text, "and stopped 2 background tasks")
 assert.equal(stoppedWorkWords(["npm run dev", "npm run test:watch"])?.all, "npm run dev\nnpm run test:watch")
 
-console.log("Turn presentation: one live row, a settled fold that keeps its answer and boundaries, agents together, stop words")
+console.log("Turn presentation: one live row per running call under one sweep, a call settling in place, no sweep once finished, a settled fold that keeps its answer and boundaries, agents together, stop words")
