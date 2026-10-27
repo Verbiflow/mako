@@ -905,13 +905,18 @@ async function carriedProof(harness: string, project: string): Promise<Proved> {
   }))) return proved()
 
   const CarriedSchema = z.object({ decision: z.string(), files: z.array(z.object({ path: z.string(), cloud: z.object({ current: z.boolean() }).nullable(), kept: z.boolean() }).loose()) }).loose()
-  await timed("asked, then allowed", async () => {
+  // Every step after needs `.env` in the account's store: one that failed ends the proof with its report.
+  if (!(await timed("asked, then allowed", async () => {
     const before = CarriedSchema.parse(await call("mako:cloud-carried-files", [folder]))
+    // What a project carries is its recipe's list, and a recipe the account keeps for the repository outranks the one
+    // committed here (the account's syncs down by the first read after sign-in): then this proof's isn't in force.
+    if (!before.files.some((file) => file.path === ".env"))
+      throw new Error(`the recipe in force isn't this proof's: it carries ${before.files.map((file) => file.path).join(", ") || "nothing"}, not .env. The account keeps a recipe for ${values.repository}, which outranks the project's committed .mako/recipe.json; run the proof with --repository naming one the account keeps no recipe for`)
     if (before.decision !== "unasked" || before.files.some((file) => file.cloud)) throw new Error(`before the person's word: ${JSON.stringify(before)}`)
     const after = CarriedSchema.parse(await call("mako:cloud-carried-files-decide", [folder, true]))
     if (after.files.find((file) => file.path === ".env")?.cloud?.current !== true) throw new Error(`after it: ${JSON.stringify(after)}`)
     return ".env in the account's store"
-  })
+  }))) return proved()
 
   /** Moves the Thread, opens its folder in this run's tab, and starts its app there; answers the app's first line, or why it didn't start. */
   const moveAndStart = async (): Promise<{ problems: string[]; line: string }> => {

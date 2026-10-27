@@ -27,8 +27,8 @@ import { Git } from "@mako/git"
 import { CloudConversations, folderRepository, type CloudConversationsOptions, type CloudCopies } from "@mako/host/conversations/cloud-conversations"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import { cloudRuntimeOf, namedUuid } from "@mako/host/conversations/cloud-moves"
-import { MoveIdSchema } from "@mako/host/contracts/thread-execution"
-import { SessionIdSchema } from "@mako/host/contracts/thread-identity"
+import { MoveIdSchema, type RuntimeId } from "@mako/host/contracts/thread-execution"
+import { SessionIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { ThreadStore } from "@mako/host/threads/store"
 import type { CloudPrepareLaunch, CloudRepository } from "@mako/host/contracts/cloud-threads"
 import { githubRepositoryUrl } from "@mako/host/contracts/cloud-threads"
@@ -671,7 +671,8 @@ test("a cloud conversation's folder is read on its machine, by its conversation:
     assert.equal(folder?.where, "a cloud machine")
     targets.length = 0
     const status = await folder!.call("mako:git-status", [])
-    assert.deepEqual(decodeRuntimeValue(status), { channel: "mako:git-status" }, "the machine's host answered")
+    assert.ok(status !== "here")
+    assert.deepEqual(decodeRuntimeValue(status.value), { channel: "mako:git-status" }, "the machine's host answered")
     assert.equal(targets.length, 1)
     assert.match(targets[0]!, new RegExp(`^host\\.git-status .*${threadId}`), "the call went to this conversation's Thread")
   }
@@ -697,7 +698,8 @@ test("a cloud app's view is asked passively, its address is this Mac's preview o
   await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }])
   const folder = await router.folder(conversationId)
   const ViewSchema = z.object({ kind: z.string(), phase: z.string(), address: z.object({ host: z.string(), port: z.number() }) }).loose()
-  const view = ViewSchema.parse(decodeRuntimeValue(await folder!.call("mako:thread-app", [CLONE])))
+  const answered = (value: { value: string | undefined } | "here") => (assert.ok(value !== "here"), decodeRuntimeValue(value.value))
+  const view = ViewSchema.parse(answered(await folder!.call("mako:thread-app", [CLONE])))
   assert.equal(view.phase, "running")
   assert.equal(view.address.host, `${machine.created[0]}.cloud.localhost`, "the app at this Mac's preview of its port")
   assert.notEqual(view.address.port, 20000)
@@ -705,7 +707,7 @@ test("a cloud app's view is asked passively, its address is this Mac's preview o
   // The machine goes to sleep: no runtime answers; the window is shown the last view, and nothing waits or wakes.
   await machine.served.close()
   const started = performance.now()
-  const asleep = ViewSchema.parse(decodeRuntimeValue(await folder!.call("mako:thread-app", [CLONE])))
+  const asleep = ViewSchema.parse(answered(await folder!.call("mako:thread-app", [CLONE])))
   assert.deepEqual(asleep, view)
   assert.ok(performance.now() - started < 1_000, "answered at once, never waited out")
   assert.deepEqual(passive, [true, true])
@@ -728,7 +730,7 @@ test("in a Thread that moved to the cloud, a new tab and a fork start on its mac
   store.beginMove({ move, thread: placed.thread, target: { kind: "cloud", runtime }, actor: store.person() })
   const handoff = store.release({ operationId: randomUUID(), move, actor: store.person() })
   store.confirm({ operationId: randomUUID(), receipt: { move, owner: { kind: "cloud", runtime }, sessions: handoff.sessions.map((session) => ({ id: session.id, generation: session.generation + 1 })) }, actor: store.person() })
-  let returning = false
+  let returning: Promise<void> | undefined
   const router = new CloudConversations({ account: () => machine.account, file: join(folder, "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY, threads: () => store, returning: () => returning })
   after(() => router.dispose())
   await router.adopt({ conversationId: moved, threadId: cloudThread, harness: "codex", repository: REPOSITORY })
@@ -782,16 +784,25 @@ test("in a Thread that moved to the cloud, a new tab and a fork start on its mac
   await assert.rejects(router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point, thread: "new" }]), /forks within its Thread there/)
   await assert.rejects(router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point, worktree: true }]), /works in its machine's checkout/)
 
-  // On its way back, the Thread begins nothing more there.
-  returning = true
+  // On its way back nothing runs the Thread, so it begins nothing more there: a start in it and a fork wait for the
+  // return, then go where it runs after, here once it's back, never to the machine that gave it up.
+  let back = () => {}
+  returning = new Promise<void>((resolve) => (back = resolve))
   const late = store.createSession({ operationId: randomUUID(), thread: placed.thread, actor: store.person() })
-  await assert.rejects(router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID(), session: late.session }]), /on its way back to this Mac/)
-  await assert.rejects(router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point }]), /on its way back/)
+  const sentBefore = machine.calls.length
+  const lateStart = router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID(), session: late.session }])
+  const lateFork = router.route("mako:live-fork", [moved, { id: randomUUID(), provider: "codex", point }])
 
-  // A Session that runs here is this Mac's to start.
+  // A Session that runs here is this Mac's to start, whatever else is coming back.
   const local = store.registerJournal({ conversationId: randomUUID(), createdAt: clock++, harness: "codex", bindings: [] }, store.person())
   assert.equal((await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID(), session: local.session }])).handled, false)
+  // Back, as `CloudReturns` brings it: this Mac's store claims it, each conversation is answered here again, and the return is over.
+  claimBack(store, placed.thread, runtime, clock++)
   assert.deepEqual(await router.releaseThread(cloudThread), [moved, conversation, forkId, ownSession, intoParent], "coming back, each is answered here again")
+  returning = undefined
+  back()
+  assert.deepEqual([(await lateStart).handled, (await lateFork).handled], [false, false], "both answered here, where the Thread runs now")
+  assert.equal(machine.calls.length, sentBefore, "nothing went to the machine on the way back")
   assert.equal(router.has(conversation), false)
 
   // A store takes a Session under the ID its Thread's other place gave it (as the machine's does), once.
@@ -1041,6 +1052,171 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
   assert.deepEqual(studioCalls, ["mako:live-snapshot"], "and read on the Studio, not from its copy")
 })
 
+/**
+ * One of this Mac's conversations in a Thread its store has, a router that routes it, the cloud Threads it may move to,
+ * and the account's list, which hears of each move from the cloud a moment after it: moved and brought back as
+ * `CloudMoves` and `CloudReturns` leave this Mac's store, with each call's cloud Thread recorded.
+ */
+async function movingThread(name: string, threadIds: string[]) {
+  const machine = await cloudMachine()
+  const targets: string[] = []
+  const session = machine.account.session
+  machine.account.session = () => {
+    const opened = session()
+    return { ...opened, call: (operation) => (targets.push(operation.target.kind === "thread" ? operation.target.threadId : operation.target.runtimeId), opened.call(operation)) }
+  }
+  const folder = join(scratch, name)
+  await mkdir(folder, { recursive: true })
+  let clock = 1_000
+  const store = new ThreadStore(join(folder, "threads.sqlite"), { now: () => clock++, realPath: (path) => path })
+  after(() => store.close())
+  const conversation = randomUUID()
+  const placed = store.registerJournal({ conversationId: conversation, createdAt: clock++, harness: "opencode", bindings: [{ provider: "opencode", nativeId: "ses-0", path: "/opencode/ses-0.json" }] }, store.person())
+  for (const threadId of threadIds) await machine.account.createThread(threadId, REPOSITORY)
+
+  const myDevice = await machine.account.deviceId()
+  let tell: ((heard: ThreadListHeard | "account-changed") => void) | undefined
+  let seq = 1
+  machine.account.sessionListings = async () => ({ sessions: [], seq })
+  machine.account.devices = async () => ({ devices: [], current: myDevice! })
+  machine.account.onThreadListings = (listener) => ((tell = listener), () => {})
+  const returning = new Map<string, Promise<void>>()
+  const events: RuntimeEvent[] = []
+  const router = new CloudConversations({
+    account: () => machine.account, file: join(folder, "conversations.json"), emit: (event) => events.push(event), repositoryOf: async () => REPOSITORY,
+    threads: () => store, returning: (threadId) => returning.get(threadId),
+  })
+  after(() => router.dispose())
+  await router.start()
+  await until("the list read", () => tell !== undefined)
+
+  return {
+    store, conversation, router, targets, events,
+    /** The account's list says the conversation's Session runs on `threadId`, under `generation`. */
+    listed: (threadId: string, generation: number, title = "Carry .env") => tell?.({ seq: ++seq, event: { type: "sessions-listed", sessions: [{
+      session: placed.session, thread: placed.thread, conversation, harness: "opencode", title, state: "idle", folder: CLONE,
+      createdAt: "2026-10-27T07:20:00.000Z", activityAt: "2026-10-27T07:20:00.000Z", generation, runsOn: { kind: "cloud", threadId }, listedAt: "2026-10-27T07:20:01.000Z",
+    }] } }),
+    /** A move up to the cloud's claim: released here, then the cloud's. The generation the claim gave it. */
+    moveTo: (threadId: string) => {
+      const runtime = cloudRuntimeOf(threadId)
+      const move = MoveIdSchema.parse(randomUUID())
+      store.beginMove({ move, thread: placed.thread, target: { kind: "cloud", runtime }, actor: store.person() })
+      const handoff = store.release({ operationId: randomUUID(), move, actor: store.person() })
+      store.confirm({ operationId: randomUUID(), receipt: { move, owner: { kind: "cloud", runtime }, sessions: handoff.sessions.map((each) => ({ id: each.id, generation: each.generation + 1 })) }, actor: store.person() })
+      return store.execution(placed.session)!.generation
+    },
+    /** The move answers: this Mac follows the conversation on `threadId`, as the machine started it. */
+    moved: async (threadId: string) => {
+      await router.adopt({ conversationId: conversation, threadId, harness: "opencode", repository: REPOSITORY })
+      router.started(conversation, encodeRuntimeValue({ session: { id: conversation, harness: "opencode", cwd: CLONE, status: "ready", nativeId: "ses-0" }, revision: 1, createdAt: 1 }))
+    },
+    /** A return of `threadId` begins: until `over`, nothing runs it. */
+    returnFrom: (threadId: string) => {
+      let over = () => {}
+      returning.set(threadId, new Promise<void>((resolve) => (over = resolve)))
+      return () => {
+        returning.delete(threadId)
+        over()
+      }
+    },
+    /** The return brought it back: this Mac's store claims it, and each conversation is answered here again. */
+    back: async (threadId: string) => {
+      claimBack(store, placed.thread, cloudRuntimeOf(threadId), clock++)
+      assert.deepEqual(await router.releaseThread(threadId), [conversation])
+    },
+    /** The cloud Threads a call went to. */
+    sentTo: async (call: Promise<unknown>) => {
+      targets.length = 0
+      await call
+      return [...targets]
+    },
+    read: () => router.route("mako:live-read", [conversation, { kind: "snapshot" }]),
+    /** What windows heard listed or unlisted. */
+    heard: () => events.filter((event) => event.type === "live-listed" || event.type === "live-unlisted").length,
+  }
+}
+
+test("a Thread moved to the cloud, brought back and moved again: from each move's answer every call goes to the cloud Thread it named, from the return's every call is this Mac's, and the account's list, a moment behind, changes neither", async () => {
+  const [first, second] = ["t-00000000000000b1", "t-00000000000000b2"]
+  const thread = await movingThread("again", [first, second])
+  const { router, conversation, read, sentTo } = thread
+
+  // First move. The cloud's claim reaches the list before the move's answer reaches this Mac, as it did on production.
+  const firstGeneration = thread.moveTo(first)
+  thread.listed(first, firstGeneration)
+  await thread.moved(first)
+  assert.deepEqual(await sentTo(read()), [first])
+  const remembered = z.object({ conversations: z.array(z.object({ conversationId: z.string(), threadId: z.string() }).loose()) }).parse(JSON.parse(await readFile(join(scratch, "again", "conversations.json"), "utf8")))
+  assert.deepEqual(remembered.conversations.map((entry) => [entry.conversationId, entry.threadId]), [[conversation, first]], "the move's, remembered, not a row of the list's")
+  // A window opens its folder there, and keeps it until it hears the conversation moved.
+  const kept = await router.folder(conversation)
+  assert.ok(kept)
+  assert.deepEqual(await sentTo(kept.call("mako:git-status", [])), [first])
+  const heardOfFirst = thread.heard()
+
+  // Brought back. The list still says the cloud Thread runs it: it trails the return, and whatever else it says is heard.
+  await thread.back(first)
+  thread.listed(first, firstGeneration, "Carry .env, changed here")
+  assert.equal(router.has(conversation), false, "its journal here is the one windows list")
+  assert.deepEqual(await sentTo(read()), [], "answered here")
+  assert.deepEqual(await read(), { handled: false })
+  assert.equal(await kept.call("mako:git-status", []), "here", "its folder too")
+  assert.equal(thread.heard(), heardOfFirst, "nothing listed it where it no longer runs")
+
+  // Changed here, moved again, to a new cloud Thread, while the list still names the first: the calls the window makes
+  // as the move answers (its folder's Git, the transcript, the app) go to the second, as does every one after.
+  const secondGeneration = thread.moveTo(second)
+  await thread.moved(second)
+  const opened = await router.folder(conversation)
+  assert.ok(opened)
+  assert.deepEqual(await sentTo(Promise.all([opened.call("mako:git-status", []), read(), opened.call("mako:thread-app-start", [CLONE])])), [second, second, second])
+  assert.deepEqual(await sentTo(kept.call("mako:git-status", [])), [second], "a window that kept its folder from the first move reads the second's")
+  thread.listed(first, firstGeneration, "Carry .env, changed again")
+  assert.deepEqual(await sentTo(read()), [second], "a row from before the return changes nothing")
+  thread.listed(second, secondGeneration)
+  assert.deepEqual(await sentTo(read()), [second], "nor the list catching up")
+  assert.equal(thread.heard(), heardOfFirst, "nor did windows hear of it from the list")
+})
+
+test("a call made while a Thread comes back waits for the return, then goes where the Thread runs after: still the cloud if it stayed, here once it's back", async () => {
+  const cloudThread = "t-00000000000000c1"
+  const thread = await movingThread("meanwhile", [cloudThread])
+  const { router, conversation, read, targets } = thread
+  thread.moveTo(cloudThread)
+  await thread.moved(cloudThread)
+  const folder = await router.folder(conversation)
+  assert.ok(folder)
+  const calls = () => [read(), folder.call("mako:git-status", []), folder.call("mako:thread-app-start", [CLONE])] as const
+  const settled = async (pending: readonly Promise<unknown>[]) => {
+    let done = 0
+    for (const each of pending) void each.then(() => done++, () => done++)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    return done
+  }
+
+  // A return the cloud refused: the Thread stayed, and what waited goes to it there.
+  targets.length = 0
+  let over = thread.returnFrom(cloudThread)
+  let pending = calls()
+  assert.equal(await settled(pending), 0, "each waits while nothing runs the Thread")
+  assert.deepEqual(targets, [], "and nothing reaches the cloud Thread, which refuses work on the way back")
+  over()
+  const [stayedRead, stayedStatus, stayedApp] = await Promise.all(pending)
+  assert.ok(stayedRead.handled && stayedStatus !== "here" && stayedApp !== "here", "answered in the cloud")
+  assert.deepEqual(targets, [cloudThread, cloudThread, cloudThread])
+
+  // A return that brings it back: what waited is answered here, and nothing goes to the machine that gave it up.
+  targets.length = 0
+  over = thread.returnFrom(cloudThread)
+  pending = calls()
+  assert.equal(await settled(pending), 0)
+  await thread.back(cloudThread)
+  over()
+  assert.deepEqual(await Promise.all(pending), [{ handled: false }, "here", "here"], "each answered here")
+  assert.deepEqual(targets, [])
+})
+
 test("a message that waited in the account for this Mac's own Session is taken here once, under its own ID, and the account told; one for a Session this Mac no longer owns is left for its owner", async () => {
   const machine = await cloudMachine()
   const myDevice = await machine.account.deviceId()
@@ -1084,6 +1260,13 @@ test("a message that waited in the account for this Mac's own Session is taken h
   tell?.({ seq: 3, event: { type: "messages-waiting", session: mine, messages: [] } })
   assert.equal(taken.length, 1)
 })
+
+/** This Mac's store takes back a Thread that ran on the cloud runtime `runtime`, as a return's claim does (`CloudReturns`). */
+function claimBack(store: ThreadStore, thread: ThreadId, runtime: RuntimeId, releasedAt: number): void {
+  const here = store.threadHandoff(thread)
+  const handoff = { move: MoveIdSchema.parse(randomUUID()), source: { kind: "cloud" as const, runtime }, target: store.self, releasedAt, thread: here.thread, sessions: here.sessions.map((each) => ({ ...each, generation: each.generation + 1 })) }
+  store.claim({ operationId: randomUUID(), handoff, actor: store.person() })
+}
 
 /** A Session ID for a conversation, the same each time it's asked. */
 function randomUUIDFor(conversation: string): string {

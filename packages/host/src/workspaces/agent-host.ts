@@ -318,8 +318,8 @@ export class AgentHost implements GitTab {
   }
 
   async gitStatus(): Promise<GitStatus> {
-    const elsewhere = this.elsewhereFolder
-    if (elsewhere) return ElsewhereGitStatusSchema.parse(decodeRuntimeValue(await elsewhere.call("mako:git-status", [])))
+    const answered = await this.elsewhereFolder?.call("mako:git-status", [])
+    if (answered && answered !== "here") return ElsewhereGitStatusSchema.parse(decodeRuntimeValue(answered.value))
     return this.workspaceGit.status()
   }
 

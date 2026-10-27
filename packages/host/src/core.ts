@@ -483,7 +483,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           for (const tab of workspaceClients.everyTab()) tab.elsewhereChanged(conversationId)
         },
         threads: () => threads.store ?? undefined,
-        returning: (cloudThread) => late.cloudReturns?.returning(cloudThread) ?? false,
+        returning: (cloudThread) => late.cloudReturns?.returning(cloudThread),
         // A message that waited in the account for one of this Mac's Sessions while it was off: sent here now, under
         // its own ID, through the same call a window's send makes, so it runs once however often it's heard.
         takeWaiting: async (message) => {
@@ -886,7 +886,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       if (tab && elsewhere) {
         const refusal = elsewhereRefusal(channel, elsewhere.where)
         if (refusal) throw new Error(refusal)
-        if (answeredElsewhere(channel, args, tab.workspace)) return { handled: true, value: await elsewhere.call(channel, args) }
+        if (answeredElsewhere(channel, args, tab.workspace)) {
+          const answered = await elsewhere.call(channel, args)
+          // Its Thread came back: the folder is this Mac's again, and this host answers it.
+          if (answered !== "here") return { handled: true, value: answered.value }
+        }
       }
       if (channel === "mako:thread-return" && cloudReturns) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-return`'s schema before routing it.

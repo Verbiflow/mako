@@ -119,8 +119,11 @@ export type CloudReturnsOptions = {
 export class CloudReturns {
   readonly #options: CloudReturnsOptions
   readonly #running = new Map<string, Promise<ThreadReturnOutcome>>()
-  /** The cloud Threads a return of this host's is bringing back now: none begins a conversation meanwhile. */
-  readonly #returning = new Map<string, number>()
+  /**
+   * By cloud Thread, each return of this host's bringing it back now, settled once it's over: none begins a
+   * conversation meanwhile, and a call for one of its conversations waits for it.
+   */
+  readonly #returning = new Map<string, Set<Promise<void>>>()
 
   constructor(options: CloudReturnsOptions) {
     this.#options = options
@@ -135,9 +138,13 @@ export class CloudReturns {
     return work
   }
 
-  /** Whether a return of this host's is bringing the cloud Thread `cloudThread` back now. */
-  returning(cloudThread: string): boolean {
-    return (this.#returning.get(cloudThread) ?? 0) > 0
+  /**
+   * The return of this host's bringing the cloud Thread `cloudThread` back now, which settles once it's over, however
+   * it went; undefined when none is.
+   */
+  returning(cloudThread: string): Promise<void> | undefined {
+    const running = this.#returning.get(cloudThread)
+    return running ? Promise.all(running).then(() => undefined) : undefined
   }
 
   /** Settles every return a stopped host left unsettled, as its plan stands. */
@@ -241,13 +248,18 @@ export class CloudReturns {
   }
 
   async #resume(plan: ReturnPlan): Promise<ThreadReturnOutcome> {
-    this.#returning.set(plan.cloudThread, (this.#returning.get(plan.cloudThread) ?? 0) + 1)
+    let over = () => {}
+    const settled = new Promise<void>((resolve) => (over = resolve))
+    const running = this.#returning.get(plan.cloudThread) ?? new Set()
+    running.add(settled)
+    this.#returning.set(plan.cloudThread, running)
     try {
       return await this.#carry(plan)
     } finally {
-      const left = (this.#returning.get(plan.cloudThread) ?? 1) - 1
-      if (left > 0) this.#returning.set(plan.cloudThread, left)
-      else this.#returning.delete(plan.cloudThread)
+      // Forgotten before it settles, so whatever waited on it finds the Thread where the return left it.
+      running.delete(settled)
+      if (!running.size) this.#returning.delete(plan.cloudThread)
+      over()
     }
   }
 
