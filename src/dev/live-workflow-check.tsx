@@ -268,7 +268,7 @@ function publishQueue(phase: "starting" | "reasoning" | "responding" | keyof typ
  * Each is shaped the way a live Claude conversation reports it.
  */
 const turnId = "66666666-6666-4666-8666-666666666666"
-type TurnScene = "tools" | "agents" | "settled" | "stopped" | "table" | "changed" | "changed-maybe" | "reopened"
+type TurnScene = "tools" | "parallel" | "parallel-settling" | "agents" | "settled" | "stopped" | "table" | "changed" | "changed-maybe" | "reopened"
 
 /**
  * What the journal counted for the fixture's turn: the guard edited, a test
@@ -319,6 +319,24 @@ function turnScene(scene: TurnScene, now: number): Pick<LiveSnapshot, "blocks" |
         requests: [...snapshot.requests, request("dispatching")],
         nativeAgents: undefined,
       }
+    case "parallel":
+    case "parallel-settling": {
+      // Three calls the model made at once, as the host saw them start; in "parallel-settling" the read has returned.
+      const read = scene === "parallel-settling" ? "completed" : "pending"
+      return {
+        session: running,
+        blocks: [
+          ...snapshot.blocks,
+          prompt,
+          ...working,
+          tool("suite", "Bash", { command: "npm test -- src/router src/session --reporter=dot && npm run lint -- src/router src/session" }, "pending", now - 24_000),
+          tool("read-tests", "Read", { file_path: `${cwd}/src/router/guard.test.ts` }, read, now - 23_900, read === "pending" ? "" : "describe(\"guard\", () => { … })"),
+          tool("grep-expiry", "Grep", { pattern: "sessionExpired|expiresAt", path: "src" }, "pending", now - 23_800),
+        ],
+        requests: [...snapshot.requests, request("dispatching")],
+        nativeAgents: undefined,
+      }
+    }
     case "agents": {
       const agent = (id: string, description: string, subagent_type: string, status: string, at: number, output = "") => tool(id, "Task", { description, prompt: `${description}. Report what you find.`, subagent_type }, status, at, output)
       type Agent = NonNullable<LiveSnapshot["nativeAgents"]>["agents"][number]
@@ -568,9 +586,9 @@ export function Fixture() {
               </button>
             ))}
             <button className="pressable rounded border border-hairline px-2 py-1" data-fixture="background" onClick={publishBackground}>Background work</button>
-            {(["tools", "agents", "settled", "stopped", "table", "changed", "changed-maybe", "reopened"] as const).map((scene) => (
+            {(["tools", "parallel", "parallel-settling", "agents", "settled", "stopped", "table", "changed", "changed-maybe", "reopened"] as const).map((scene) => (
               <button key={scene} className="pressable rounded border border-hairline px-2 py-1" data-fixture={`turn-${scene}`} onClick={() => publishTurn(scene)}>
-                {{ tools: "Several tools", agents: "Agents together", settled: "Settled turn", stopped: "Stopped turn", table: "Writing a table", changed: "Turn's changes", "changed-maybe": "Changes, some not sure whose", reopened: "Reopened turn" }[scene]}
+                {{ tools: "Several tools", parallel: "Calls at once", "parallel-settling": "One call of several done", agents: "Agents together", settled: "Settled turn", stopped: "Stopped turn", table: "Writing a table", changed: "Turn's changes", "changed-maybe": "Changes, some not sure whose", reopened: "Reopened turn" }[scene]}
               </button>
             ))}
             <span data-fixture="status-marks" className="flex items-center gap-3">

@@ -8,6 +8,13 @@ export interface TranscriptSource {
 export const TranscriptSourceContext = createContext<TranscriptSource>({})
 export const useTranscriptSource = () => useContext(TranscriptSourceContext)
 
+/**
+ * Whether the turn around it is running now. Only a running turn's calls
+ * sweep: a call a finished record left without a result is not running,
+ * however it reads.
+ */
+export const TurnRunningContext = createContext(false)
+
 /** When the answer around it was finished; undefined while it streams, or outside an answer. */
 export const AnswerTimeContext = createContext<number | undefined>(undefined)
 

@@ -1,19 +1,20 @@
 import { useCopy } from "@/components/ui/use-copy"
-import { ActivityMark } from "@/components/ui/activity-mark"
-import { toolKindActivity, type ToolIdentity } from "@mako/sessions/tool-identity"
-import { memo, useEffect, useState, type ComponentType } from "react"
+import type { ToolIdentity } from "@mako/sessions/tool-identity"
+import { memo, useContext, useEffect, useState, type ComponentType } from "react"
 import { useToolView, type ToolCall } from "@/extend/slots"
 import {
   CODE_KINDS,
   formatToolArguments,
   hasToolArguments,
+  namedByLabel,
   normalizeToolOutput,
   toolLabel,
   toolTarget,
 } from "@/lib/tools"
 import { cn } from "@/lib/utils"
 import { usePrefs } from "@/state/prefs"
-import { useTranscriptSource } from "./source-context"
+import { liveVerb } from "@/state/agent-activity"
+import { TurnRunningContext, useTranscriptSource } from "./source-context"
 import { ToolDetails } from "./tool-details"
 import { TranscriptAttachment } from "./attachment"
 import { viewer } from "@/state/viewer"
@@ -33,6 +34,7 @@ import { Shimmer } from "@/components/ui/shimmer"
  * transcript's rhythm section — it has to stay quiet at a glance and be
  * complete when opened. Every harness and kind draws the same line: glyph,
  * label, target, then whatever is still true about the call at the far end.
+ * While the call runs, its words say so (`ToolWords`).
  */
 export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false)
@@ -42,7 +44,6 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const source = useTranscriptSource()
   const view = useToolView(call)
 
-  const summary = view?.summary ? view.summary(call) : toolTarget(call.tool)
   const openPath = view?.openPath?.(call)
   const Body = view?.body
   const server = toolServer(call.tool)
@@ -76,14 +77,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
           className="pressable flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left text-ui"
         >
           <LeadSlot call={call} open={open} icon={view?.icon} />
-          <span className={cn("shrink-0", call.isError ? "text-negative" : "text-muted-foreground")}>
-            {toolLabel(call.tool)}
-          </span>
-          {summary ? (
-            <span className={cn("min-w-0 truncate text-faint", !view?.summary && CODE_KINDS.has(call.tool.kind) && "font-mono text-label")}>
-              {summary}
-            </span>
-          ) : null}
+          <ToolWords call={call} />
           <span className="flex-1" />
           {server ? <span className="shrink-0 text-label text-faint/70">{server}</span> : null}
           <Status call={call} />
@@ -143,10 +137,48 @@ function toolServer(tool: ToolIdentity): string | undefined {
 }
 
 /**
+ * What a call is and what it acts on, as its row says it: its label and
+ * target, or while it runs, its verb and target ("Running npm test") under
+ * one sweep of light. That sweep is the only running signal a call has: no
+ * spinner in place of its glyph, no mark at the end of its row. When the
+ * call finishes, the same place holds its settled words, so nothing moves.
+ * Only a call of a running turn runs (`TurnRunningContext`): a finished
+ * record's call that never returned keeps its settled words.
+ */
+export function ToolWords({ call }: { call: ToolCall }) {
+  const view = useToolView(call)
+  const turnRunning = useContext(TurnRunningContext)
+  const running = call.pending && turnRunning
+  const summary = view?.summary ? view.summary(call) : toolTarget(call.tool)
+  const target = summary ? (
+    <span className={cn("min-w-0 truncate text-faint", !view?.summary && CODE_KINDS.has(call.tool.kind) && "font-mono text-label")}>
+      {summary}
+    </span>
+  ) : null
+  if (running)
+    return (
+      <Shimmer className="flex min-w-0 items-baseline gap-1.5">
+        <span className="shrink-0">{liveVerb(call.tool.kind)}</span>
+        {namedByLabel(call.tool) ? <span className="shrink-0">{toolLabel(call.tool)}</span> : null}
+        {target}
+      </Shimmer>
+    )
+  return (
+    <>
+      <span className={cn("shrink-0", call.isError ? "text-negative" : "text-muted-foreground")}>
+        {toolLabel(call.tool)}
+      </span>
+      {target}
+    </>
+  )
+}
+
+/**
  * One leading slot, two layers: the tool's glyph, and the chevron whenever
  * the pointer is near or the row is open. The glyph is what makes a row
- * scannable, so it shows from the first frame; the running state is the
- * mark at the end of the row, not a spinner in place of identity.
+ * scannable, so it shows from the first frame, brighter while the call
+ * runs; the running state itself is the sweep over the row's words
+ * (`ToolWords`), not a spinner in place of identity.
  * Crossfaded with CSS alone — no state, no re-render per token, and the row
  * never shifts because the slot is one fixed square.
  */
@@ -190,15 +222,9 @@ function LeadSlot({
   )
 }
 
-/** What is still true about the call, in words; only a running call moves. */
+/** How the call ended, in words, when it ended other than well; a running call says so in its words (`ToolWords`). */
 function Status({ call }: { call: ToolCall }) {
-  if (call.pending) {
-    return (
-      <span role="status" aria-label="Running" className="shrink-0 text-muted-foreground">
-        <ActivityMark state={toolKindActivity(call.tool.kind)} />
-      </span>
-    )
-  }
+  if (call.pending) return null
   if (call.isError) return <span className="shrink-0 text-label text-negative">failed</span>
   if (call.isCutOff) return <span className="shrink-0 text-label text-faint">{call.isCanceled ? "stopped" : "cut off"}</span>
   if (call.isCanceled) return <span className="shrink-0 text-label text-faint">canceled</span>

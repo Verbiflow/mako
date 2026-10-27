@@ -99,6 +99,7 @@ function sameBlock(a: Block, b: Block): boolean {
         b.type === "toolCall" &&
         a.id === b.id &&
         a.name === b.name &&
+        a.at === b.at &&
         (a.arguments === b.arguments ||
           JSON.stringify(a.arguments) === JSON.stringify(b.arguments))
       )
@@ -112,6 +113,7 @@ function sameBlock(a: Block, b: Block): boolean {
         a.isCanceled === b.isCanceled &&
         a.isCutOff === b.isCutOff &&
         a.streaming === b.streaming &&
+        a.endedAt === b.endedAt &&
         JSON.stringify(a.attachments) === JSON.stringify(b.attachments) &&
         JSON.stringify(a.details) === JSON.stringify(b.details)
       )

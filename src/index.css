@@ -1324,11 +1324,16 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 .ref-token .ref-bracket { color: transparent; }
 
 /*
- * Loading text. A crest of light sweeps through the words, rests, and sweeps
- * again: one gradient clipped to the text, so a label is one element however
- * long it is. It moves in 30 steps a cycle, which reads as motion at a
- * fraction of the repaints, and only while `observeVisibleAnimation` says the
- * label is on screen (`src/lib/visible-animation.ts`).
+ * Loading text, and the words of a call while it runs. A crest of light
+ * sweeps through the words, rests, and sweeps again: one gradient clipped to
+ * the text, so a label is one element however long it is and however many
+ * parts it has. Its parts take the sweep's paint, not their own colour. It
+ * moves in 30 steps a cycle, which reads as motion at a fraction of the
+ * repaints, and only while `observeVisibleAnimation` says the label is on
+ * screen (`src/lib/visible-animation.ts`). Nothing else may set `animation`
+ * on the same element: the later rule's shorthand would replace the sweep
+ * and leave the crest standing still. Reduced motion draws the words still,
+ * each part in its own colour.
  */
 
 .shimmer-text {
@@ -1340,7 +1345,7 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
     color: transparent;
     background-image:
       linear-gradient(to right, transparent, var(--foreground), transparent),
-      linear-gradient(color-mix(in oklab, var(--foreground) 45%, transparent), color-mix(in oklab, var(--foreground) 45%, transparent));
+      linear-gradient(var(--muted-foreground), var(--muted-foreground));
     background-size:
       4.5rem 100%,
       100% 100%;
@@ -1350,6 +1355,9 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
     animation: shimmer-sweep 2.2s steps(30) infinite;
     animation-play-state: var(--visible-animation-state, paused);
     will-change: var(--visible-animation-will-change, auto);
+  }
+  .shimmer-text * {
+    color: transparent;
   }
 }
 

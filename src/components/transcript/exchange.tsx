@@ -62,7 +62,7 @@ import { continueTurn } from "@/state/acp-queue"
 import { AUTO_CONTINUE_NOTE, endedAsChosen, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { viewer } from "@/state/viewer"
 import { carriedBecause } from "@/lib/restore-plan"
-import { AnswerRequestContext, AnswerTimeContext, useTranscriptSource } from "./source-context"
+import { AnswerRequestContext, AnswerTimeContext, TurnRunningContext, useTranscriptSource } from "./source-context"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
@@ -221,6 +221,7 @@ export const Exchange = memo(function Exchange({
   }
   return (
     <AnswerTimeContext.Provider value={finishedAt}>
+      <TurnRunningContext value={Boolean(streaming)}>
       {/* One gallery per exchange: every picture and video in the prompt, the answer and its work steps a step apart. */}
       <MediaGalleryScope>
       <AnswerRequestContext.Provider value={exchange.prompt?.requestId}>
@@ -272,12 +273,13 @@ export const Exchange = memo(function Exchange({
       </article>
       </AnswerRequestContext.Provider>
       </MediaGalleryScope>
+      </TurnRunningContext>
     </AnswerTimeContext.Provider>
   )
 })
 
 /** NOTHING running yet: the live row under a prompt, prose or a note says what the turn does without a step of its own. */
-const NOTHING_RUNNING: LiveStepData = { running: 0, thinking: false }
+const NOTHING_RUNNING: LiveStepData = { calls: [], thinking: false }
 
 /** Who is answering, and while the turn runs, for how long: "Claude · Working for 1m 12s". */
 function AgentByline({ provider, workingSince }: { provider?: string; workingSince?: number }) {
@@ -577,14 +579,14 @@ interface WorkSummaryData extends ToolWorkSummary {
   duration?: number
 }
 
-/** `settled`: count only calls that have finished, and none of a running step's (`true`, or the step's own calls). */
+/** With `settled`, the running step's calls: count only calls that have finished, and none of those. */
 function summarizeWork(
   messages: readonly ChatMessage[],
   started?: number,
-  settled?: true | readonly ToolCall[]
+  settled?: readonly ToolCall[]
 ): WorkSummaryData {
   const paired = messages.flatMap((message) => pairTools(message.blocks))
-  const running = new Set(settled === true || !settled ? [] : settled.map((call) => call.id))
+  const running = new Set(settled?.map((call) => call.id))
   const calls = settled ? paired.filter((call) => !call.pending && !running.has(call.id)) : paired
   const summary = summarizeToolWork(calls)
   const agents = Math.max(summary.agents, ...calls.map(reportedSubagentCount))
@@ -603,9 +605,9 @@ function summarizeWork(
  * A stretch of work between two pieces of prose. Settled, it is its rows,
  * folded under a summary from three steps on. While it is the running end of
  * a turn (`live`), it is what it has done so far as that summary, then the
- * one row of the step running now; either opens the whole list, capped and
- * following its newest row. One tree in every state, so a stretch that
- * settles keeps what it had mounted.
+ * step running now, a row for each of its calls; either opens the whole
+ * list, capped and following its newest row. One tree in every state, so a
+ * stretch that settles keeps what it had mounted.
  */
 function WorkSection({
   messages,
@@ -631,13 +633,13 @@ function WorkSection({
     [messages, startedAt]
   )
   const step = useMemo(() => (live ? liveStep(messages) : undefined), [live, messages])
-  // While it runs, the summary says only what has finished; the running step is its own row.
-  const done = useMemo(() => (step ? summarizeWork(messages, undefined, step.group ?? true) : undefined), [step, messages])
+  // While it runs, the summary says only what has finished; the running step is its own rows.
+  const done = useMemo(() => (step ? summarizeWork(messages, undefined, step.calls) : undefined), [step, messages])
   // The open list leaves out what the live row under it says, so the row stays its last entry.
   // The thought is the newest message's only; earlier messages lose only the step's calls.
   const shown = useMemo(() => {
     if (!step) return undefined
-    const calls = new Set((step.group ?? (step.call ? [step.call] : [])).map((call) => call.id))
+    const calls = new Set(step.calls.map((call) => call.id))
     const earlier: LiveShown = { calls, thought: false }
     return { earlier, newest: step.thinking ? { calls, thought: true } : earlier }
   }, [step])
@@ -686,23 +688,22 @@ interface LiveShown {
 }
 
 /**
- * The newest step of a running stretch, from its messages: the newest call
- * still running and how many run beside it, or the thought the model is in
- * the middle of. A thought shows above a call only when it led to it, in
- * the same response.
+ * The newest step of a running stretch, from its messages: the calls
+ * running now with any that ran beside them (`stepCalls`), or the thought
+ * the model is in the middle of. A thought shows above a call only when it
+ * led to it, in the same response.
  */
 function liveStep(messages: readonly ChatMessage[]): LiveStepData {
   let call: ToolCall | undefined
   let group: ToolCall[] | undefined
   let provider: string | undefined
-  let running = 0
   let thought: string | undefined
+  const every: ToolCall[] = []
   for (const message of messages) {
     const calls = pairTools(message.blocks)
     for (const each of calls) {
-      if (!each.pending) continue
-      running += 1
-      call = each
+      every.push(each)
+      if (each.pending) call = each
     }
     if (call && calls.includes(call)) {
       // Agents started together run as one step: the group is the live row.
@@ -716,8 +717,27 @@ function liveStep(messages: readonly ChatMessage[]): LiveStepData {
   }
   const lastBlock = messages.at(-1)?.blocks.at(-1)
   const thinking = lastBlock?.type === "thinking" && Boolean(lastBlock.thinking)
-  if (thinking) return { running: 0, thought, thinking }
-  return { call, group, provider, running, thought: call ? thought : undefined, thinking }
+  if (thinking) return { calls: [], thought, thinking }
+  return { call, calls: call ? stepCalls(every, group) : [], provider, thought: call ? thought : undefined, thinking }
+}
+
+/**
+ * The calls one step stands for, in the order they began: every call
+ * running now, and every call that ran beside them, finished after the
+ * first of them began and begun no later than the last. A call that
+ * finishes among others keeps its place until the whole step is done;
+ * agents started together (`group`) are one step whole. The times are the
+ * host's, so a reopened conversation draws the same step as a watched one.
+ */
+function stepCalls(calls: readonly ToolCall[], group: readonly ToolCall[] = []): ToolCall[] {
+  const starts = calls.flatMap((call) => (call.pending && call.startedAt !== undefined ? [call.startedAt] : []))
+  const first = Math.min(...starts)
+  const last = Math.max(...starts)
+  const together = new Set(group.map((call) => call.id))
+  return calls.filter((call) =>
+    call.pending || together.has(call.id) ||
+    (call.endedAt !== undefined && call.startedAt !== undefined && call.endedAt > first && call.startedAt <= last)
+  )
 }
 
 /** A thought's newest line, without list marks or emphasis, cut from the front past 120 characters. */
@@ -1089,7 +1109,8 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
         <span className="tabular">{formatTime(last.timestamp)}</span>
       ) : null}
       {last?.model ? <span className="truncate">{last.model}</span> : null}
-      {text ? (
+      {/* The whole answer exists once the turn ends; until then the footer keeps its place, empty of it. */}
+      {text && !streaming ? (
         <button
           type="button"
           aria-label="Copy answer"

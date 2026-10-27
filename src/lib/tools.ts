@@ -181,6 +181,7 @@ export function pairTools(blocks: Block[]): ToolCall[] {
         tool,
         arguments: tool.input ?? block.arguments,
         pending: true,
+        ...(block.at !== undefined && { startedAt: block.at }),
       })
       continue
     }
@@ -198,6 +199,7 @@ export function pairTools(blocks: Block[]): ToolCall[] {
       existing.isCanceled = block.isCanceled
       existing.isCutOff = block.isCutOff
       existing.pending = block.streaming === true
+      if (block.endedAt !== undefined) existing.endedAt = block.endedAt
       existing.rest = block.rest
     } else {
       order.push(id)
@@ -429,6 +431,11 @@ export function toolLabel(tool: ToolIdentity): string {
   if (!prefix || !tool.label.startsWith(prefix)) return tool.label
   const name = tool.label.slice(prefix.length)
   return name.charAt(0).toUpperCase() + name.slice(1)
+}
+
+/** Whether a running call's verb ("Using") says nothing of the tool, so its label follows the verb. */
+export function namedByLabel(tool: ToolIdentity): boolean {
+  return tool.kind === "mcp" || tool.kind === "other" || tool.kind === "computer" || tool.kind === "skill"
 }
 
 /** The target, unless it only repeats the tool's own name. */
