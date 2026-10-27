@@ -2,6 +2,7 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
+import { existsSync, readFileSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { createServer, connect, type AddressInfo, type Socket } from "node:net"
 import { tmpdir } from "node:os"
@@ -32,7 +33,10 @@ import { SessionIdSchema, type ThreadId } from "@mako/host/contracts/thread-iden
 import { ThreadStore } from "@mako/host/threads/store"
 import type { CloudPrepareLaunch, CloudRepository } from "@mako/host/contracts/cloud-threads"
 import { githubRepositoryUrl } from "@mako/host/contracts/cloud-threads"
-import { decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
+import { decodeRuntimeEvent, decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
+import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { ThreadAppView } from "@mako/host/contracts/thread-app"
+import { followHostLog } from "@mako/host/base/host-log"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { CloudAccount, ThreadListHeard } from "@mako/host/usage/cloud-account-methods"
 import type { ListedSession, ListedState, SessionListings } from "@mako/protocol/thread-listing"
@@ -77,6 +81,11 @@ interface Ask {
  */
 type ForkFiling = { into: string | undefined; older: boolean }
 
+/** What a stand-in machine's host answers a look at its folder's app. */
+interface MachineApp {
+  view: ThreadAppView
+}
+
 /** A cloud machine's host behind the fake gateway: what it was asked, and its Thread's event outbox. */
 async function cloudMachine(reach: Reach = {}) {
   const gateway = createFakeGateway()
@@ -87,14 +96,15 @@ async function cloudMachine(reach: Reach = {}) {
   const forkSessions = new Map<string, string>()
   /** Set to make the machine's store file the next forks into this Session, as one was seen to (its parent's). */
   const filing: ForkFiling = { into: undefined, older: false }
-  const served = await serveHostThroughGateway(await gateway.connectRuntime(), {
+  const app: MachineApp = { view: { kind: "ready", project: "Hello-World", phase: "running", address: { host: "t.thread.localhost", port: 20000 }, processes: [], checks: [] } }
+  const host: Parameters<typeof serveHostThroughGateway>[1] = {
     runtimeId,
     build: "test",
     threads,
     invoke: async (channel, args) => {
       calls.push({ channel, args })
       if (channel === "mako:boot") return JSON.stringify({ activeTabId: "tab-1", tabs: [{ id: "tab-1", session: { meta: { cwd: CLONE } } }] })
-      if (channel === "mako:thread-app") return JSON.stringify({ kind: "ready", project: "Hello-World", phase: "running", address: { host: "t.thread.localhost", port: 20000 }, processes: [], checks: [] })
+      if (channel === "mako:thread-app") return JSON.stringify(app.view)
       if (channel === "mako:live-start") {
         const [harness, cwd, options] = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string(), session: z.string().optional() }).loose()]).parse(args)
         return JSON.stringify({ session: { id: options.conversationId, harness, cwd, status: "running" }, revision: 1, createdAt: 1, requests: [], ...options.session && { sessionId: options.session } })
@@ -109,8 +119,15 @@ async function cloudMachine(reach: Reach = {}) {
       }
       return JSON.stringify({ channel })
     },
-  })
+  }
+  const served = await serveHostThroughGateway(await gateway.connectRuntime(), host)
   after(() => served.close())
+  /** The machine woken from its pause: its host serves the Thread again. */
+  const wake = async () => {
+    const again = await serveHostThroughGateway(await gateway.connectRuntime(), host)
+    after(() => again.close())
+    return again
+  }
   const deviceId = randomUUID()
   const client = await gateway.connectClient({ kind: "client", client: "desktop", deviceId })
   const network = reach.sockets ? await sleepyNetwork(gateway, deviceId) : undefined
@@ -151,7 +168,7 @@ async function cloudMachine(reach: Reach = {}) {
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, asked, machineState, bases, batch, network, served, forkSessions, filing, gateway }
+  return { account, calls, created, asked, machineState, bases, batch, network, served, wake, app, forkSessions, filing, gateway }
 }
 
 /**
@@ -685,32 +702,94 @@ test("a cloud conversation's folder is read on its machine, by its conversation:
   assert.deepEqual(changed, [first], "five batches, one change, and none for the other conversation")
 })
 
-test("a cloud app's view is asked passively, its address is this Mac's preview of the port, and while its machine sleeps the last one is shown", async () => {
+test("a cloud app's view is asked passively at this Mac's preview of its port; asleep, it's said from what this Mac kept, the same after a restart, and a call waking the machine is told as it wakes", async () => {
   const machine = await cloudMachine()
+  machine.app.view = { kind: "ready", project: "Hello-World", phase: "running", startedAt: 5, address: { host: "t.thread.localhost", port: 20000 }, processes: [{ name: "web", state: "running", port: 20000, memoryBytes: 1024 }], checks: [] }
   const passive: boolean[] = []
   const session = machine.account.session
   machine.account.session = () => {
     const opened = session()
     return { ...opened, call: (operation) => (operation.op === "host.thread-app" && passive.push(operation.passive === true), opened.call(operation)) }
   }
-  const { router } = conversations(machine.account, join(scratch, "app-view", "conversations.json"))
+  const warned: string[] = []
+  const stopHearing = followHostLog((line) => line.level !== "info" && warned.push(`${line.scope} ${line.message}`))
+  after(stopHearing)
+  const file = join(scratch, "app-view", "conversations.json")
+  const { router, events } = conversations(machine.account, file)
+  const machineEvents = () => events.filter((event) => event.type === "cloud-machine").map((event) => decodeRuntimeEvent<Extract<HostEvent, { type: "cloud-machine" }>>(event.payload))
   const conversationId = randomUUID()
   await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }])
-  const folder = await router.folder(conversationId)
-  const ViewSchema = z.object({ kind: z.string(), phase: z.string(), address: z.object({ host: z.string(), port: z.number() }) }).loose()
-  const answered = (value: { value: string | undefined } | "here") => (assert.ok(value !== "here"), decodeRuntimeValue(value.value))
-  const view = ViewSchema.parse(answered(await folder!.call("mako:thread-app", [CLONE])))
-  assert.equal(view.phase, "running")
+  const folder = (await router.folder(conversationId))!
+  const look = async (from = folder) => {
+    const answered = await from.call("mako:thread-app", [CLONE])
+    assert.ok(answered !== "here")
+    // SAFETY: a look's answer is the view the machine's host or this Mac's router made, passed through as encoded.
+    return decodeRuntimeValue(answered.value) as ThreadAppView
+  }
+  const view = await look()
+  assert.ok(view.kind === "ready" && view.address)
   assert.equal(view.address.host, `${machine.created[0]}.cloud.localhost`, "the app at this Mac's preview of its port")
   assert.notEqual(view.address.port, 20000)
   assert.deepEqual(passive, [true], "a window's look, never a person's call")
-  // The machine goes to sleep: no runtime answers; the window is shown the last view, and nothing waits or wakes.
+  assert.deepEqual(machineEvents(), [], "an awake machine is never told of: nothing changed")
+
+  // The machine goes to sleep: the look says so at once, from what this Mac kept, and wakes nothing.
   await machine.served.close()
   const started = performance.now()
-  const asleep = ViewSchema.parse(answered(await folder!.call("mako:thread-app", [CLONE])))
-  assert.deepEqual(asleep, view)
+  const asleep = await look()
   assert.ok(performance.now() - started < 1_000, "answered at once, never waited out")
+  const expected: ThreadAppView = {
+    kind: "asleep",
+    project: "Hello-World",
+    where: "a cloud machine",
+    last: { phase: "running", startedAt: 5, address: view.address, processes: [{ name: "web", state: "running", port: 20000 }] },
+  }
+  assert.deepEqual(asleep, expected, "its processes as they paused, without the memory a pause holds still, at the same preview")
   assert.deepEqual(passive, [true, true])
+  assert.deepEqual(machineEvents().map((event) => [event.machine, event.conversations]), [["asleep", [conversationId]]], "windows hear it fell asleep once")
+  await look()
+  assert.equal(machineEvents().length, 1, "a look finding it still asleep says nothing new")
+  assert.equal(warned.length, 0, `a look the cloud passed over as designed is no warning: ${warned.join("; ")}`)
+
+  // A host that restarts meanwhile knows nothing in memory, and says the same from what was kept with the conversation.
+  await until("the kept app written", () => existsSync(file) && readFileSync(file, "utf8").includes('"app"'))
+  const restarted = conversations(machine.account, file)
+  const again = (await restarted.router.folder(conversationId))!
+  // Each host serves its own preview of the port, at a port of its own.
+  const afterRestart = await look(again)
+  assert.ok(afterRestart.kind === "asleep" && afterRestart.last?.address)
+  assert.deepEqual(afterRestart, { ...expected, last: { ...expected.last, address: { host: view.address.host, port: afterRestart.last.address.port } } }, "live and after a restart, the same")
+
+  // A call that needs the machine wakes it: windows hear it's waking, the look says so, and once it answered, it's awake.
+  const reading = folder.call("mako:git-status", [])
+  await until("waking told", () => machineEvents().at(-1)?.machine === "waking")
+  assert.deepEqual(await look(), { ...expected, waking: true })
+  await machine.wake()
+  await reading
+  await until("awake told", () => machineEvents().at(-1)?.machine === "awake")
+  assert.deepEqual(machineEvents().map((event) => event.machine), ["asleep", "waking", "awake"])
+  const awake = await look()
+  assert.equal(awake.kind, "ready")
+  // The stand-in gateway refuses what the cloud's would hold for the wake: a person's call refused is still a warning.
+  assert.ok(warned.includes("gateway-client operation failed"), "only a passive look's refusal is quiet")
+})
+
+test("a cloud machine woken by something this Mac didn't ask (another device, its own work) is heard awake from its Thread's events", async () => {
+  const machine = await cloudMachine()
+  const { router, events } = conversations(machine.account, join(scratch, "app-woken", "conversations.json"))
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY } }])
+  const folder = (await router.folder(conversationId))!
+  const threadId = machine.created[0]!
+  await machine.served.close()
+  const answered = await folder.call("mako:thread-app", [CLONE])
+  assert.ok(answered !== "here")
+  assert.equal(z.object({ kind: z.string() }).loose().parse(decodeRuntimeValue(answered.value)).kind, "asleep", "never seen awake here: asleep, with nothing kept")
+  const told = () => events.filter((event) => event.type === "cloud-machine").map((event) => decodeRuntimeEvent<Extract<HostEvent, { type: "cloud-machine" }>>(event.payload).machine)
+  assert.deepEqual(told(), ["asleep"])
+  await machine.wake()
+  machine.batch(threadId, conversationId, 2, "running")
+  await until("awake told from its events", () => told().at(-1) === "awake")
 })
 
 test("in a Thread that moved to the cloud, a new tab and a fork start on its machine under the same Session IDs in both stores, so the way back carries them", async () => {

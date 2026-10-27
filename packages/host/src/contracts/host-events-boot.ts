@@ -114,6 +114,11 @@ export type HostEventBody =
   /** Conversations the account no longer lists here: gone from every window. */
   | { type: "live-unlisted"; ids: string[] }
   | { type: "live-owner-connection"; ids: string[]; connected: boolean }
+  /**
+   * A cloud Thread's machine fell asleep, began waking for a call of this Mac's, or was heard awake (it answered, or
+   * its events came): the conversations it runs. A window showing their app looks again now, rather than polling.
+   */
+  | { type: "cloud-machine"; conversations: string[]; machine: import("./thread-app.js").CloudMachineState }
   | { type: "session"; session: SessionState }
   | { type: "meta"; meta: SessionMeta }
   | { type: "messages"; messages: ChatMessage[] }

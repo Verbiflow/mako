@@ -25,7 +25,8 @@ export function appSetupRow(view: ThreadAppView | undefined): { title: string; h
  * message come first.
  */
 export function appSetupContext(view: ThreadAppView | undefined): AppContext | null {
-  if (!view || view.kind === "setting-up") return null
+  // Asleep, the app is known only as it was; what its recipe says waits for the machine.
+  if (!view || view.kind === "setting-up" || view.kind === "asleep") return null
   const project = view.project
   const body =
     view.kind === "none"

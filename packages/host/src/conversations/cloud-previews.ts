@@ -16,6 +16,11 @@ export type CloudPreviewsOptions = {
   gateway(): URL | undefined
   /** A connection token, asked for each request, so a renewed one is used at once. */
   token(): Promise<string | undefined>
+  /**
+   * A request on its way to the Thread's port, which wakes its machine if it sleeps: answers what to call once the
+   * gateway answered it, `true` when the machine did (any status under 500), or it failed on the way.
+   */
+  request?(threadId: string): (answered: boolean) => void
 }
 
 /** Headers about one hop of a request, never passed on to the next; the gateway's host is the target's own. */
@@ -91,13 +96,21 @@ export class CloudPreviews {
     for (const [name, value] of Object.entries(incoming.headers)) if (value !== undefined && !HOP_BY_HOP.has(name)) headers[name] = value
     headers.authorization = `Bearer ${token}`
     const send = target.protocol === "https:" ? httpsRequest : httpRequest
+    // Told once: an error after the answer began (a dropped body) doesn't take back that the machine answered.
+    let told = this.#options.request?.(threadId)
+    const ended = (answered: boolean) => {
+      told?.(answered)
+      told = undefined
+    }
     const upstream = send(target, { method: incoming.method, headers }, (answer) => {
+      ended((answer.statusCode ?? 502) < 500)
       const passed: Record<string, string | string[]> = {}
       for (const [name, value] of Object.entries(answer.headers)) if (value !== undefined && !HOP_BY_HOP.has(name)) passed[name] = value
       outgoing.writeHead(answer.statusCode ?? 502, passed)
       answer.pipe(outgoing)
     })
     upstream.on("error", (error) => {
+      ended(false)
       hostWarn("cloud-previews", "a preview request didn't reach the gateway", { threadId, port, error: error.message })
       if (!outgoing.headersSent) outgoing.writeHead(502, { "content-type": "text/plain; charset=utf-8" })
       outgoing.end("The cloud Thread's app couldn't be reached.")

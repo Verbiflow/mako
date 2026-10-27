@@ -93,6 +93,35 @@ export type ThreadAppView =
        */
       elsewhere?: string
     }
+  /**
+   * The app of a folder on a cloud Thread's machine while that machine sleeps: said by this Mac's host from what it
+   * knows, since a window's look never wakes it. Anything that needs the machine wakes it: a message to its agent,
+   * running or opening the app, a read of its files.
+   */
+  | {
+      kind: "asleep"
+      project: string
+      /** Where the app runs, in words: `a cloud machine`. */
+      where: string
+      /** Set while a call this Mac made to the machine is waking it. */
+      waking?: true
+      /** The app as this Mac last saw it awake, when it had one set up: paused with the machine, it wakes as it was. */
+      last?: AppAsleepLast
+    }
+
+/**
+ * A cloud app as it was when its machine went to sleep: its processes without their memory, which a pause holds
+ * still. `address` is this Mac's preview of the app's port, which opening wakes the machine through.
+ */
+export interface AppAsleepLast {
+  phase: AppPhase
+  processes: AppProcessView[]
+  startedAt?: number
+  address?: { host: string; port: number }
+}
+
+/** Where a cloud Thread's machine stands as this Mac knows it, told to windows as it changes (`cloud-machine`). */
+export type CloudMachineState = "asleep" | "waking" | "awake"
 
 /** A list cut at the probe's limit, with how many it left out. */
 export interface Capped<T> {

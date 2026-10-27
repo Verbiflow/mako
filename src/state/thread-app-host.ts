@@ -9,6 +9,11 @@ const SETTLED_MS = 4_000
 const HIDDEN_MS = 15_000
 /** A host that can't answer (an older one, or no Thread store) isn't asked again soon. */
 const UNAVAILABLE_MS = 60_000
+/**
+ * A cloud app whose machine sleeps: the host tells of its waking and of it awake (`cloud-machine`) for whatever it
+ * hears, so this look is only for a wake it can't hear, another device's opening its app, and costs the machine nothing.
+ */
+const ASLEEP_MS = 30_000
 const OUTPUT_MS = 500
 /** A read this long stopped at the host's limit, so there is more to read straight away. */
 const FULL_READ_CHARS = 128 * 1024
@@ -57,7 +62,7 @@ export function installHostThreadApp(): void {
       else entry.expected = undefined
     }
     putThreadApp(cwd, view)
-    schedule(cwd, document.visibilityState === "hidden" ? HIDDEN_MS : busy(view) ? BUSY_MS : SETTLED_MS)
+    schedule(cwd, view.kind === "asleep" ? ASLEEP_MS : document.visibilityState === "hidden" ? HIDDEN_MS : busy(view) ? BUSY_MS : SETTLED_MS)
   }
 
   const aim = (cwd: string) => targetOf(threadAppStore.get(), cwd)
@@ -71,6 +76,8 @@ export function installHostThreadApp(): void {
       entry.expected = { from: [view.phase, ...(view.phase === "crashed" ? (["stopped"] as const) : [])], to, until: Date.now() + EXPECT_MS }
       putThreadApp(cwd, { ...view, phase: to })
     }
+    // Whatever a click asks of a sleeping machine wakes it first; the host says so too while its call is on the way.
+    if (view?.kind === "asleep") putThreadApp(cwd, { ...view, waking: true })
     schedule(cwd, 300)
     Promise.resolve()
       .then(run)
@@ -201,6 +208,13 @@ export function installHostThreadApp(): void {
         for (const cwd of watched.keys()) schedule(cwd, 0)
       }
     },
+  })
+
+  // A cloud machine heard asleep, waking or awake: each folder followed looks again now. Which folder is whose isn't
+  // known here, and a look at a local one is cheap.
+  mako.onEvent((event) => {
+    if (event.type !== "cloud-machine") return
+    for (const cwd of watched.keys()) schedule(cwd, 0)
   })
 
   document.addEventListener("visibilitychange", () => {

@@ -11,7 +11,8 @@ import { CloudPreviews } from "@mako/host/conversations/cloud-previews"
  * request reaches `/v1/threads/<id>/ports/<port>/…` as this Mac's device, its method, path, query, body and headers as
  * sent; the answer comes back as the port gave it (its status, its cookies, its compressed body untouched); a
  * WebSocket (a dev server's reload) passes both ways; one port is served at one address however often it's asked;
- * and a Mac that isn't signed in says so rather than sending anything.
+ * each request is told once as it goes and once as the gateway answers (what says a sleeping machine woke); and a Mac
+ * that isn't signed in says so rather than sending anything.
  */
 type Seen = { method: string; url: string; authorization: string | undefined; body: string; host: string | undefined }
 const seen: Seen[] = []
@@ -40,7 +41,16 @@ await once(gateway, "listening")
 const at = new URL(`http://127.0.0.1:${(gateway.address() as AddressInfo).port}`)
 
 let token: string | undefined = "connection-token"
-const previews = new CloudPreviews({ gateway: () => at, token: async () => token })
+/** Each request as told: its Thread when it went, then whether the machine answered it. */
+const told: Array<string | boolean> = []
+const previews = new CloudPreviews({
+  gateway: () => at,
+  token: async () => token,
+  request: (threadId) => {
+    told.push(threadId)
+    return (answered) => told.push(answered)
+  },
+})
 try {
   const address = await previews.address("t-0123456789abcdef", 20_000)
   assert.equal(address.host, "t-0123456789abcdef.cloud.localhost")
@@ -68,6 +78,7 @@ try {
   assert.equal(seen.at(-1)?.body, "{\"saved\":true}")
   assert.equal(seen.at(-1)?.authorization, "Bearer connection-token", "the device's own, never a page's")
   assert.equal((await local("/missing")).status, 404, "the app's own answer")
+  assert.deepEqual(told, ["t-0123456789abcdef", true, "t-0123456789abcdef", true, "t-0123456789abcdef", true], "each request told as it went and as the machine answered, a 404 included")
   const gzipped = await local("/gzipped", { headers: { "accept-encoding": "gzip" } })
   assert.equal(gzipped.headers["content-encoding"], "gzip", "compressed as sent, never decoded on the way")
   assert.equal(gzipped.body.subarray(0, 2).toString("hex"), "1f8b")
@@ -83,13 +94,26 @@ try {
   socket.close()
   await once(socket, "close")
 
+  // A gateway that can't be reached: told it went, and that nothing answered.
+  told.length = 0
+  const unreachable = new CloudPreviews({ gateway: () => new URL("http://127.0.0.1:1"), token: async () => "connection-token", request: () => (answered) => told.push(answered) })
+  const nowhere = await unreachable.address("t-0123456789abcdef", 20_000)
+  const failed = await new Promise<number>((resolve, reject) => {
+    const sent = request({ host: "127.0.0.1", port: nowhere.port, path: "/" }, (answer) => (answer.resume(), resolve(answer.statusCode ?? 0)))
+    sent.on("error", reject)
+    sent.end()
+  })
+  await unreachable.close()
+  assert.equal(failed, 502)
+  assert.deepEqual(told, [false], "told once, unanswered")
+
   token = undefined
   const before = seen.length
   const signedOut = await local("/")
   assert.equal(signedOut.status, 503)
   assert.match(signedOut.body.toString(), /isn't signed in/)
   assert.equal(seen.length, before, "nothing sent")
-  console.log("PASS: a cloud Thread's app served on this Mac: each port one address; path, query, body and method through as this Mac's device; the app's status, cookies and compressed body back untouched; a WebSocket both ways; signed out, nothing sent")
+  console.log("PASS: a cloud Thread's app served on this Mac: each port one address; path, query, body and method through as this Mac's device; the app's status, cookies and compressed body back untouched; a WebSocket both ways; each request told as it went and once as it was answered or not; signed out, nothing sent")
 } finally {
   await previews.close()
   sockets.close()

@@ -10,7 +10,9 @@
 // setup (not set up; Set up starts a scripted setup Thread, and the strip
 // follows it to a running app), and
 // setup-fallback (the same, with Codex chosen for setting up but signed out), and
-// setup-asking (not set up, after a setup Thread's turn ended without a recipe), and
+// setup-asking (not set up, after a setup Thread's turn ended without a recipe),
+// asleep (a cloud Thread's machine asleep, its app paused running; Run or Open wakes it),
+// asleep-stopped (the same, the app stopped when it fell asleep), waking (asleep, a call waking it), and
 // rail (running, with four of the api project's Threads in worktrees whose
 // apps run, start, crash and wait, for the sidebar's marks and the Status view's Room).
 import { toast } from "sonner"
@@ -320,8 +322,22 @@ export function installMockThreadApp(): void {
   const running = () =>
     put({ phase: "running", startedAt: Date.now(), prepare: undefined, processes: [{ name: "web", state: "running", port: PORT, memoryBytes: 642 * MB }] })
 
+  /** The machine wakes for a click, as the host's call does, and the app comes back as it was, or starts. */
+  const wake = (view: Extract<ThreadAppView, { kind: "asleep" }>) => {
+    putThreadApp(CWD, { ...view, waking: true })
+    later(2400, () => {
+      if (view.last?.phase === "running") putThreadApp(CWD, { ...ready("running"), startedAt: view.last.startedAt, processes: [{ name: "web", state: "running", port: PORT, memoryBytes: 642 * MB }] })
+      else {
+        putThreadApp(CWD, ready("stopped"))
+        start()
+      }
+    })
+  }
+
   const start = () => {
     cancel()
+    const shown = threadAppStore.get().byCwd[CWD]
+    if (shown?.kind === "asleep") return wake(shown)
     if (scenario === "waiting" && !roomMade) {
       put({ phase: "waiting", room: { apps: 2, bytes: 2.0 * 1024 ** 3 } })
       return
@@ -556,6 +572,22 @@ export function installMockThreadApp(): void {
         emit("check:quick", QUICK_PASS)
       }
       break
+    case "asleep":
+    case "asleep-stopped":
+    case "waking": {
+      const running = scenario !== "asleep-stopped"
+      putThreadApp(CWD, {
+        kind: "asleep",
+        project: "mako",
+        where: "a cloud machine",
+        ...(scenario === "waking" && { waking: true as const }),
+        last: running
+          ? { phase: "running", startedAt: minutes(48), address: { host: HOST, port: PORT }, processes: [{ name: "web", state: "running", port: PORT }] }
+          : { phase: "stopped", processes: [{ name: "web", state: "stopped", port: PORT }] },
+      })
+      emit("check:quick", QUICK_PASS)
+      break
+    }
     case "crashed":
       emit("process:web", [...START, ...EDITS, ...CRASH])
       putThreadApp(CWD, { ...ready("crashed"), processes: [{ name: "web", state: "exited", port: PORT, exit: { code: 1, afterMs: 9_000, at: minutes(0) } }] })
