@@ -106,6 +106,29 @@ jobs:
       # The native-store layer's own suite: every harness's readers, the record store, catalogs and followers.
       - run: npm test -w @mako/sessions
 
+  # Every harness's decode, live host, projection, recorder, merge and saved-open paths, measured beside the commit
+  # this change goes onto, in turns on this runner (`perf-reference.ts`): HEAD^1 is a pull request's base in the merge
+  # commit checked out, and main's previous commit on a push. A row more than 25% slower than that code fails here,
+  # at review, rather than adding up under its baseline's budget until an update's `test:performance` meets it.
+  performance:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      # The rows read `@mako/*` from the packages' builds.
+      - run: npm run build:control-runtime
+      - run: npm run perf:decoders -- --reference HEAD^1
+
   # Codex's own sandbox on the setup the daily harness bump records Codex with, at the tested build: workspace-write
   # writes the workspace and nothing else, read-only writes nothing, and neither reaches the network.
   codex-sandbox:

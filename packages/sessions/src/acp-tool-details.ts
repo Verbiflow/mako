@@ -120,8 +120,12 @@ export type AcpToolUpdate = z.infer<typeof AcpToolUpdateSchema>
  */
 const TerminalExitSchema = z.object({ exit_code: z.number().nullish() }).optional().catch(undefined)
 
-/** A `rawOutput` that is an MCP tool's whole result, as far as its `_meta`. */
-const RawMetaSchema = z.object({ _meta: z.json() })
+/**
+ * A `rawOutput` that is an MCP tool's whole result, as far as its `_meta`.
+ * Read from every call's every update, though few carry one, so it reads as
+ * `undefined` where absent rather than failing a `safeParse`.
+ */
+const RawMetaSchema = z.object({ _meta: z.json() }).optional().catch(undefined)
 
 /** What a harness's tool updates mean beyond ACP's own fields. */
 export interface AcpToolReading {
@@ -186,7 +190,7 @@ export function acpToolFields(update: AcpToolUpdate, reading: AcpToolReading = {
   const output = reading.output?.(update) ?? (text.join("\n") || acpText(update.rawOutput) || (text.length ? "" : undefined))
   if (output !== undefined) fields.output = output
   // An agent that hands on an MCP tool's whole result keeps what it stated of its media.
-  details.push(...mediaDetails(RawMetaSchema.safeParse(update.rawOutput).data?._meta))
+  details.push(...mediaDetails(RawMetaSchema.parse(update.rawOutput)?._meta))
   if (details.length) fields.details = details
   if (update.locations) fields.locations = acpLocationDetails(update.locations)
   if (attachments.length) fields.attachments = attachments

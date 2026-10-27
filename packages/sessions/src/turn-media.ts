@@ -84,8 +84,12 @@ const MediaReportSchema = z.object({
 })
 /** What a tool result states under `MEDIA_META`. */
 export type MediaReport = z.infer<typeof MediaReportSchema>
-/** A result's `_meta`, as far as this reads it. */
-const MediaMetaSchema = z.object({ [MEDIA_META]: MediaReportSchema })
+/**
+ * A result's `_meta`, as far as this reads it. Every call's result is read
+ * through it and few state media, so one that states none reads as
+ * `undefined` rather than failing a `safeParse`, which builds an `Error`.
+ */
+const MediaMetaSchema = z.object({ [MEDIA_META]: MediaReportSchema }).optional().catch(undefined)
 /** A result's `_meta` as its decoder kept it: any JSON. */
 export type ResultMeta = z.infer<ReturnType<typeof z.json>> | undefined
 
@@ -95,7 +99,7 @@ export type ResultMeta = z.infer<ReturnType<typeof z.json>> | undefined
  * saved say the same.
  */
 export function mediaDetails(meta: ResultMeta): ToolDetail[] {
-  const report = MediaMetaSchema.safeParse(meta).data?.[MEDIA_META]
+  const report = MediaMetaSchema.parse(meta)?.[MEDIA_META]
   if (!report) return []
   const files = report.files.filter((file) => mediaKind(file.path))
   if (!files.length) return []

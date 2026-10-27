@@ -22,6 +22,8 @@ import { boundedChildren, type ChildState, type ChildTranscript } from "../child
 /** How much of a task's start tells two tasks apart. */
 const TASK_KEY = 512
 const AGENT = /agent_id=([A-Za-z0-9_-]+)/
+/** The tool that launches a subagent, as a stored call names it: a whole JSON string. */
+const RUN_SUBAGENT = JSON.stringify("run_subagent")
 const ENDED = /(?:Subagent agent_id=[A-Za-z0-9_-]+ (?:completed|failed)|\[Background subagent with agent_id=[A-Za-z0-9_-]+ (?:completed|failed|stopped|cancelled)[^\]]*\])/g
 /** A JSON document kept as text; text that isn't JSON fails the parse. */
 const JsonText = z.string().transform((raw, context) => {
@@ -54,7 +56,12 @@ const Message = JsonText.pipe(z.object({
 const TableRow = z.object({ name: z.string() })
 const HeadRow = z.object({ agent_id: z.string(), chain_node_id: z.number() })
 const LaunchRow = z.object({ node_id: z.number(), message: z.string().nullable(), summary: z.string().nullable() })
-const Summary = JsonText.pipe(z.object({ summarized_from: z.number() }))
+/**
+ * The node a compaction's summary row names its history ending at. Every
+ * other row of 3000.11.205 names none (`null`), which reads as `undefined`
+ * rather than failing a `safeParse`.
+ */
+const Summary = JsonText.pipe(z.object({ summarized_from: z.number() })).optional().catch(undefined)
 
 /** `<sessions.db>#<session>/subagents/<agent>`: a subagent's chain, read like a session's main chain. */
 export function devinChildPath(path: string): { session: string; agentId: string; parentPath: string } | null {
@@ -141,6 +148,25 @@ export class DevinChildLinks {
     return boundedChildren(children).children
   }
 
+  /**
+   * Whether the session can have a subagent: its store heads one, or one of
+   * `chain`'s messages (its main chain, compactions' earlier chains included,
+   * as a read already holds it) holds the JSON string `"run_subagent"`, as
+   * a call to it does. Every subagent `children` lists has a head or a
+   * launch, and a launch is such a call, so a session with neither lists
+   * none, and nothing need read its forest. The system prompt names the
+   * tool too, but only inside its text, where no quote closes the name.
+   */
+  mayHaveChildren(db: DatabaseSync, session: string, chain: Iterable<string | undefined>): boolean {
+    for (const message of chain) if (message?.includes(RUN_SUBAGENT)) return true
+    try {
+      return db.prepare("SELECT 1 FROM subagent_heads WHERE session_id = ? LIMIT 1").get(session) !== undefined
+    } catch {
+      // A database from before `subagent_heads` names no heads.
+      return false
+    }
+  }
+
   /** A subagent's newest node, for reading its chain; -1 when none is found. */
   leaf(db: DatabaseSync, session: string, agentId: string): number {
     const head = headOf(db, session, agentId)
@@ -209,7 +235,7 @@ export class DevinChildLinks {
           const row = LaunchRow.safeParse(raw).data
           if (!row) continue
           if (row.message !== null) messages.push({ at: order.get(row.node_id) ?? 0, text: row.message })
-          if (row.summary !== null) leaf ??= Summary.safeParse(row.summary).data?.summarized_from
+          if (row.summary !== null) leaf ??= Summary.parse(row.summary)?.summarized_from
         }
       }
     }
