@@ -22,6 +22,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { DevinCliProvider } from "../packages/sessions/src/providers/devin-cli.ts"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { usageSummary } from "@mako/host/usage/summary"
+import { usageWindow, type UsageSummary } from "@mako/host/contracts/automations-usage-updates"
 import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { UsageLedger } from "@mako/host/usage/ledger"
 import { decoderFor, readRecording, replayed } from "./native-decoding.ts"
@@ -156,9 +157,13 @@ async function readers(harness: string, folder: string): Promise<Record<Reader, 
   for (const child of children) if (child.path) histories.push((await reader.read(child.path))?.entries ?? [])
   const summary = await usageSummary(harnesses, join(folder, "no-mako-user"), home, undefined, { now: NOW })
   if (summary.truncated) throw new Error(`${folder}: the scanner left records unread`)
-  const { input, output, cacheRead, cacheWrite } = summary.total
+  const { input, output, cacheRead, cacheWrite } = monthTotal(summary)
   return { live: { input: live.input, output: live.output, cacheRead: live.cacheRead, cacheWrite: live.cacheWrite }, saved: sum(histories.flat()), scanned: { input, output, cacheRead, cacheWrite } }
 }
+
+/** The longest window, which every pair's calls fall in. */
+const monthOf = (summary: UsageSummary) => usageWindow(summary, "month")
+const monthTotal = (summary: UsageSummary) => monthOf(summary).total
 
 const failures: string[] = []
 let pairs = 0
@@ -186,7 +191,7 @@ const scratch = await mkdtemp(join(tmpdir(), "mako-harness-usage-"))
 try {
   const empty = join(scratch, "home")
   const spendOf = async (env: NodeJS.ProcessEnv, ledger?: UsageLedger) =>
-    usageSummary(harnesses, join(scratch, "no-mako-user"), empty, undefined, { now: NOW, env, ...ledger && { ledger } })
+    monthOf(await usageSummary(harnesses, join(scratch, "no-mako-user"), empty, undefined, { now: NOW, env, ...ledger && { ledger } }))
 
   const grokPair = join(PAIRS, "grok", "pairs", "read-and-answer")
   const grokStore = ownStore(PairSchema.parse(JSON.parse(await readFile(join(grokPair, "pair.json"), "utf8"))))
@@ -219,7 +224,7 @@ try {
   await mkdir(join(declaring, ".mako"), { recursive: true })
   await writeFile(join(declaring, ".mako", "roots.json"), JSON.stringify({ claude: [join(claudeElsewhere, "projects")] }))
   const claudeDeclared = await usageSummary(harnesses, join(scratch, "no-mako-user"), declaring, undefined, { now: NOW, env: {} })
-  assert.ok(same(claudeDeclared.total, claudeSpent), "the scanner reads a store ~/.mako/roots.json declares")
+  assert.ok(same(monthTotal(claudeDeclared), claudeSpent), "the scanner reads a store ~/.mako/roots.json declares")
   const claudeFile = join(claudeElsewhere, claudeStore.replace(/^\.claude\//, ""))
   assert.ok(new ClaudeProvider(declaring).roots().includes(await realpath(join(claudeElsewhere, "projects"))), "the history reader lists the declared store")
   assert.deepEqual(sum((await new ClaudeProvider(declaring).read(claudeFile))?.entries ?? []), claudeSpent, "and reads the same spend from it")

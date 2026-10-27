@@ -108,9 +108,14 @@ export class UsageLedger {
     this.db.prepare("DELETE FROM sessions WHERE at < ?").run(since)
   }
 
-  /** Sessions with a call at or after `since`, a fork's copy of its parent's calls included; Mako's helper runs are no session. */
-  sessions(since: number): number {
-    return Number(this.db.prepare("SELECT count(*) AS count FROM sessions WHERE at >= ? AND session NOT LIKE 'helper:%'").get(since)?.count ?? 0)
+  /**
+   * Each session with a call at or after `since`, by its source and its last
+   * call, a fork's copy of its parent's calls included; Mako's helper runs
+   * are no session.
+   */
+  *sessions(since: number): Generator<{ source: string; at: number }> {
+    for (const row of this.db.prepare("SELECT source, at FROM sessions WHERE at >= ? AND session NOT LIKE 'helper:%'").iterate(since))
+      yield { source: String(row.source), at: Number(row.at) }
   }
 
   /** Every event at or after `since`, oldest first. */

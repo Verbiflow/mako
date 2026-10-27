@@ -4,6 +4,7 @@ import { SessionSettingsSchema, SettingsPreferenceSchema, type SessionSettings, 
 import { createHook, createStore } from "@/state/store"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { DEFAULT_APPSHOT_SHORTCUT, type AppshotShortcut } from "@mako/host/contracts/appshot-shortcut"
+import { USAGE_WINDOWS, type UsageWindowId } from "@mako/host/contracts/automations-usage-updates"
 
 /**
  * Durable UI preferences. Written through a microtask-batched save so that
@@ -120,6 +121,9 @@ export interface Prefs {
   commitPrompt?: string
   /** How hard a commit draft reads: the diff once, or the diff and the source where it's unclear. */
   commitAnalysis: "fast" | "deep"
+  /** What Settings › Usage measures in, and over which window. */
+  usageMetric: "cost" | "tokens"
+  usageWindow: UsageWindowId
   commitModel?: string
   externalEditor?: string
   /** Desktop banners while Mako is in the background. */
@@ -177,6 +181,8 @@ const defaults: Prefs = {
   wrapDiff: false,
   filesView: "tree",
   commitAnalysis: "fast",
+  usageMetric: "cost",
+  usageWindow: "month",
   newThreadsInWorktree: false,
   selectedDiffs: {},
   pinnedThreads: [],
@@ -405,6 +411,8 @@ function parsePrefs(value: JsonValue): Prefs | null {
     wrapDiff: readBoolean(value.wrapDiff, defaults.wrapDiff),
     filesView: readChoice(value.filesView, ["tree", "folders"], defaults.filesView),
     commitAnalysis: readChoice(value.commitAnalysis, ["fast", "deep"], defaults.commitAnalysis),
+    usageMetric: readChoice(value.usageMetric, ["cost", "tokens"], defaults.usageMetric),
+    usageWindow: readChoice(value.usageWindow, USAGE_WINDOWS, defaults.usageWindow),
     newThreadsInWorktree: readBoolean(value.newThreadsInWorktree, defaults.newThreadsInWorktree),
     selectedDiffs: readStringRecord(value.selectedDiffs),
     pinnedThreads: readStringList(value.pinnedThreads, defaults.pinnedThreads),

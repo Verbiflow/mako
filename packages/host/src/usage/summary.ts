@@ -6,7 +6,7 @@ import { exclusiveTokens, tokenCount } from "@mako/sessions/harnesses"
 import { z } from "zod"
 import { objectValue, stringValue } from "../base/json-values.js"
 import { hostWarn } from "../base/host-log.js"
-import type { UsageSummary, UsageTotals } from "../contracts/automations-usage-updates.js"
+import { USAGE_WINDOWS, type UsageAmount, type UsagePeriod, type UsageSummary, type UsageTotals, type UsageWindow, type UsageWindowId } from "../contracts/automations-usage-updates.js"
 import { HELPER_RUNS } from "./helper-runs.js"
 import { UsageLedger } from "./ledger.js"
 import { priceEstimate } from "./pricing.js"
@@ -95,7 +95,8 @@ async function summarize(
   helperRuns: string | undefined,
   now: number
 ): Promise<UsageSummary> {
-  const since = windowStart(now)
+  const spans = windowSpans(now)
+  const since = spans.at(-1)?.since ?? now
   const unread: Unread[] = []
   const recorded = new Map(harnesses.flatMap((harness) => harness.history ? [] : [[harness.provider, harness.label] as const]))
   await Promise.all([
@@ -110,14 +111,46 @@ async function summarize(
   for (const { source, path, reason } of unread.slice(0, 20)) hostWarn("usage", "Usage record unread", { source, path, reason })
   if (unread.length > 20) hostWarn("usage", "More usage records unread", { count: unread.length - 20 })
   const harnessOf = new Map(harnesses.map(({ provider, label }) => [label, provider]))
-  return aggregate(ledger.events(since), ledger.sessions(since), unread.length > 0 || ledger.unreadFiles() > 0, harnessOf, now)
+  return {
+    windows: aggregate(spans, ledger.events(since), ledger.sessions(since), harnessOf),
+    truncated: unread.length > 0 || ledger.unreadFiles() > 0,
+  }
 }
 
-/** UTC midnight of the summary's first day, so the total covers exactly the days it charts. */
-function windowStart(now: number): number {
-  const today = new Date(now)
-  today.setUTCHours(0, 0, 0, 0)
-  return today.getTime() - (DAYS - 1) * 86_400_000
+/** Where one window starts and ends, and the start of each of its periods, oldest first. */
+interface WindowSpan {
+  id: UsageWindowId
+  since: number
+  until: number
+  resolution: UsageWindow["resolution"]
+  starts: number[]
+}
+
+const HOUR = 3_600_000
+const WINDOW_DAYS = { week: 7, month: DAYS } as const
+
+/**
+ * Each window over this machine's clock, shortest first: the last 24 hours
+ * from the top of each hour, and the last 7 and 30 days from local midnight,
+ * so a day in the chart is the day the person lived. The longest window's
+ * start is what the ledger keeps.
+ */
+export function windowSpans(now: number): WindowSpan[] {
+  return USAGE_WINDOWS.map((id) => {
+    if (id === "day") {
+      const hour = new Date(now)
+      hour.setMinutes(0, 0, 0)
+      const starts = Array.from({ length: 24 }, (_, index) => hour.getTime() - (23 - index) * HOUR)
+      return { id, since: starts[0] ?? now, until: now, resolution: "hour", starts }
+    }
+    const starts = Array.from({ length: WINDOW_DAYS[id] }, (_, index) => {
+      const day = new Date(now)
+      day.setHours(0, 0, 0, 0)
+      day.setDate(day.getDate() - (WINDOW_DAYS[id] - 1 - index))
+      return day.getTime()
+    })
+    return { id, since: starts[0] ?? now, until: now, resolution: "day", starts }
+  })
 }
 
 async function scanSource(
@@ -321,60 +354,143 @@ function readJournal(scan: UsageScan, path: string, conversation: string, record
   }
 }
 
-function aggregate(
-  events: Iterable<UsageEvent>,
-  sessions: number,
-  truncated: boolean,
-  /** Each harness's id by the label its events carry as their source. */
-  harnessOf: ReadonlyMap<string, string>,
-  now: number
-): UsageSummary {
-  const total = empty("total")
-  const days = new Map<string, Bucket>()
-  const models = new Map<string, Bucket>()
-  const projects = new Map<string, Bucket>()
-  const sources = new Map<string, Bucket>()
-  const incomplete = new Set<string>()
+/** One window's buckets while the events pass. */
+interface WindowBuckets {
+  span: WindowSpan
+  total: Bucket
+  periods: { total: UsageAmount; sources: Map<string, UsageAmount> }[]
+  models: Map<string, Bucket & { model: string; source: string }>
+  projects: Map<string, Bucket>
+  sources: Map<string, Bucket>
+  sessions: Map<string, number>
+  incomplete: Set<string>
+  tables: Set<string>
+}
 
-  const tables = new Set<string>()
+/** Every window from one pass over the ledger's events: each event is priced once and added to each window it falls in. */
+function aggregate(
+  spans: readonly WindowSpan[],
+  events: Iterable<UsageEvent>,
+  sessions: Iterable<{ source: string; at: number }>,
+  /** Each harness's id by the label its events carry as their source. */
+  harnessOf: ReadonlyMap<string, string>
+): UsageWindow[] {
+  const windows: WindowBuckets[] = spans.map((span) => ({
+    span,
+    total: empty("total"),
+    periods: span.starts.map(() => ({ total: amount(), sources: new Map() })),
+    models: new Map(),
+    projects: new Map(),
+    sources: new Map(),
+    sessions: new Map(),
+    incomplete: new Set(),
+    tables: new Set(),
+  }))
   for (const event of events) {
-    // The same call contributes to five buckets; price and count it once. An
-    // estimate made when it was recorded keeps its table; otherwise today's.
+    // An estimate made when the call was recorded keeps its table; otherwise today's.
+    const at = Date.parse(event.timestamp)
     const tokens = tokenTotal(event)
     const priced = event.reportedCost === undefined ? event.estimate ?? priceEstimate(event.model, event) : null
-    if (priced) tables.add(priced.table)
     const estimate = priced?.amount ?? null
-    add(total, event, tokens, estimate)
-    addTo(days, dayOf(event.timestamp), event, tokens, estimate)
-    addTo(models, event.model, event, tokens, estimate)
-    addTo(projects, event.cwd, event, tokens, estimate)
-    addTo(sources, event.source, event, tokens, estimate)
-    if (event.incomplete) incomplete.add(event.source)
+    const modelKey = `${event.source}\u0000${event.model}`
+    for (const window of windows) {
+      if (at < window.span.since) continue
+      add(window.total, event, tokens, estimate)
+      const model = window.models.get(modelKey) ?? { ...empty(modelKey), model: event.model, source: event.source }
+      add(model, event, tokens, estimate)
+      window.models.set(modelKey, model)
+      addTo(window.projects, event.cwd, event, tokens, estimate)
+      addTo(window.sources, event.source, event, tokens, estimate)
+      const period = window.periods[periodOf(window.span.starts, at)]
+      if (period) {
+        addAmount(period.total, event, tokens, estimate)
+        const part = period.sources.get(event.source) ?? amount()
+        addAmount(part, event, tokens, estimate)
+        period.sources.set(event.source, part)
+      }
+      if (event.incomplete) window.incomplete.add(event.source)
+      if (priced) window.tables.add(priced.table)
+    }
   }
+  for (const session of sessions)
+    for (const window of windows)
+      if (session.at >= window.span.since) window.sessions.set(session.source, (window.sessions.get(session.source) ?? 0) + 1)
 
-  const summary: UsageSummary = {
-    total: totalsOf(total),
-    days: recentDays(days, now),
-    models: rank(models).map((bucket) => ({
-      model: bucket.key,
-      ...totalsOf(bucket),
-    })),
-    projects: rank(projects).map((bucket) => ({
-      cwd: bucket.key,
-      ...totalsOf(bucket),
-    })),
-    sources: rank(sources).map((bucket) => {
-      const source: NonNullable<UsageSummary["sources"]>[number] = { source: bucket.key, ...totalsOf(bucket) }
-      const harness = harnessOf.get(bucket.key)
-      if (harness) source.harness = harness
-      return source
-    }),
-    sessions,
-    truncated,
+  return windows.map((window) => {
+    const { span } = window
+    const projects = rank(window.projects)
+    const shown = projects.slice(0, PROJECTS_SHOWN)
+    const rest = projects.slice(PROJECTS_SHOWN)
+    const result: UsageWindow = {
+      id: span.id,
+      since: span.since,
+      until: span.until,
+      resolution: span.resolution,
+      total: totalsOf(window.total),
+      sessions: [...window.sessions.values()].reduce((sum, count) => sum + count, 0),
+      periods: span.starts.map((start, index): UsagePeriod => {
+        const period = window.periods[index]
+        return { start, total: period?.total ?? amount(), sources: Object.fromEntries(period?.sources ?? []) }
+      }),
+      sources: rank(window.sources).map((bucket) => {
+        const source: UsageWindow["sources"][number] = { source: bucket.key, sessions: window.sessions.get(bucket.key) ?? 0, ...totalsOf(bucket) }
+        const harness = harnessOf.get(bucket.key)
+        if (harness) source.harness = harness
+        return source
+      }),
+      models: rank(window.models).map((bucket) => ({ model: bucket.model, source: bucket.source, ...totalsOf(bucket) })),
+      projects: shown.map((bucket) => ({ cwd: bucket.key, ...totalsOf(bucket) })),
+    }
+    if (rest.length) {
+      const other = empty("other")
+      for (const bucket of rest) merge(other, bucket)
+      result.otherProjects = { count: rest.length, ...totalsOf(other) }
+    }
+    if (window.incomplete.size) result.incomplete = [...window.incomplete].sort()
+    if (window.total.estimatedCost > 0 && window.tables.size) result.priceTables = [...window.tables].sort()
+    return result
+  })
+}
+
+/** The projects a window lists by name; the rest are summed as one. */
+const PROJECTS_SHOWN = 12
+
+/** The period a moment falls in: the last start at or before it. */
+function periodOf(starts: readonly number[], at: number): number {
+  let low = 0
+  let high = starts.length - 1
+  while (low < high) {
+    const middle = (low + high + 1) >> 1
+    if ((starts[middle] ?? Infinity) <= at) low = middle
+    else high = middle - 1
   }
-  if (incomplete.size) summary.incomplete = [...incomplete].sort()
-  if (total.estimatedCost > 0 && tables.size) summary.priceTables = [...tables].sort()
-  return summary
+  return low
+}
+
+function amount(): UsageAmount {
+  return { cost: 0, estimatedCost: 0, tokens: 0 }
+}
+
+function addAmount(target: UsageAmount, event: UsageEvent, tokens: number, estimate: number | null): void {
+  if (event.reportedCost !== undefined) target.cost += event.reportedCost
+  else if (estimate !== null) {
+    target.cost += estimate
+    target.estimatedCost += estimate
+  }
+  target.tokens += tokens
+}
+
+function merge(target: Bucket, bucket: Bucket): void {
+  target.cost += bucket.cost
+  target.reportedCost += bucket.reportedCost
+  target.estimatedCost += bucket.estimatedCost
+  target.input += bucket.input
+  target.output += bucket.output
+  target.cacheRead += bucket.cacheRead
+  target.cacheWrite += bucket.cacheWrite
+  target.messages += bucket.messages
+  target.pricedTokens += bucket.pricedTokens
+  target.unpricedTokens += bucket.unpricedTokens
 }
 
 function empty(key: string): Bucket {
@@ -433,30 +549,11 @@ function totalsOf(bucket: Bucket): UsageTotals {
   }
 }
 
-function recentDays(days: Map<string, Bucket>, now: number): UsageSummary["days"] {
-  const result: UsageSummary["days"] = []
-  const today = new Date(now)
-  today.setUTCHours(0, 0, 0, 0)
-  for (let offset = DAYS - 1; offset >= 0; offset -= 1) {
-    const date = new Date(today)
-    date.setUTCDate(date.getUTCDate() - offset)
-    const key = date.toISOString().slice(0, 10)
-    result.push({ date: key, ...totalsOf(days.get(key) ?? empty(key)) })
-  }
-  return result
-}
-
-function rank(buckets: Map<string, Bucket>): Bucket[] {
-  return [...buckets.values()]
-    .sort(
-      (left, right) =>
-        right.cost - left.cost ||
-        right.pricedTokens + right.unpricedTokens -
-          (left.pricedTokens + left.unpricedTokens)
-    )
-    .slice(0, 12)
-}
-
-function dayOf(timestamp: string): string {
-  return timestamp.slice(0, 10)
+function rank<T extends Bucket>(buckets: Map<string, T>): T[] {
+  return [...buckets.values()].sort(
+    (left, right) =>
+      right.cost - left.cost ||
+      right.pricedTokens + right.unpricedTokens -
+        (left.pricedTokens + left.unpricedTokens)
+  )
 }
