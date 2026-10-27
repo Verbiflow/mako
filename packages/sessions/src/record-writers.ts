@@ -1,6 +1,6 @@
 import { z } from "zod"
 import type { RecordRow, RecordValue } from "./harness-records.js"
-import { compareVersions } from "./runtime-version.js"
+import { compareVersions, namesBuild } from "./runtime-version.js"
 
 /**
  * Which build of a harness wrote a session's records, kept with each
@@ -80,7 +80,13 @@ export type WriterEvidence = z.infer<typeof WriterEvidenceSchema>
 /** The evidence rules' version: 2 added release timelines, Mako's pins and Devin.app's launch logs. */
 export const EVIDENCE_RULES = 2
 
-/** Every version that wrote a session, by where each is known from, oldest first as they were captured, and the evidence beside the store where neither says. */
+/**
+ * Every version that wrote a session, by where each is known from, oldest
+ * first as they were captured, and the evidence beside the store where
+ * neither says. A store kept before Mako asked Devin's executable for its
+ * version holds `0.0.0-dev`, its ACP handshake's, among `observed`: read
+ * through `writersOf`, which leaves out a version that names no build.
+ */
 export const SessionWritersSchema = z.object({
   record: z.array(z.string()),
   observed: z.array(z.string()),
@@ -114,10 +120,10 @@ export interface RecordWriterRule {
   installed?: true
 }
 
-/** A version a record may state: digits and dots, then a prerelease or build, at most 64 characters. */
-const VersionSchema = z.string().max(64).regex(/^\d+(?:\.\d+)+(?:[-+.][\w.+-]*)?$/)
+/** A version a record may state: digits and dots, then a prerelease or build, at most 64 characters, naming a build (`namesBuild`). */
+const VersionSchema = z.string().max(64).regex(/^\d+(?:\.\d+)+(?:[-+.][\w.+-]*)?$/).refine(namesBuild)
 
-/** The version a record's field states, or null for anything else it holds. */
+/** The version a record's field states, or null for anything else it holds, a version that names no build (`0.0.0-dev`) included. */
 export function statedVersion(value: RecordValue | undefined): string | null {
   const parsed = VersionSchema.safeParse(value)
   return parsed.success ? parsed.data : null
@@ -162,7 +168,7 @@ export function fieldScan(marker: string, pattern: RegExp, reach: { before: numb
 /** The stream line a driver writes once its harness reports its version (`NativeStream.runtime`): `{"at":"…","runtime":"<version>",…}`. */
 export const STREAM_RUNTIME_SCAN = fieldScan('","runtime":"', /^\{"at":"[^"]{10,40}","runtime":"([^"]{1,64})"/m, { before: 48, after: 72 })
 
-/** Every version a session's writers name, newest last by `compareVersions`. */
+/** Every version a session's writers name, newest last by `compareVersions`; one that names no build (`namesBuild`) names no writer. */
 export function writersOf(writers: SessionWriters | null | undefined): RecordWriter[] {
   if (!writers) return []
   const all = new Map<string, RecordWriter>()
@@ -171,7 +177,7 @@ export function writersOf(writers: SessionWriters | null | undefined): RecordWri
   for (const version of writers.observed) all.set(version, { version, source: "observed" })
   // A version the records state is known from them, whatever else saw it run.
   for (const version of writers.record) all.set(version, { version, source: "record" })
-  return [...all.values()].sort((a, b) => compareVersions(a.version, b.version))
+  return [...all.values()].filter((writer) => namesBuild(writer.version)).sort((a, b) => compareVersions(a.version, b.version))
 }
 
 /** The newest version that wrote a session's records, or null when none is known. */
@@ -239,6 +245,11 @@ export type RestoreGate =
 /** An install as a restore is given it: a version alone, or a whole reading. */
 const GivenInstallSchema = z.union([z.string().transform((version): InstalledReading => ({ version })), InstalledReadingSchema]).nullable()
 
+/** The version of the install a restore is given, or null when it's given none. */
+export function givenVersion(installed: string | InstalledReading | null | undefined): string | null {
+  return GivenInstallSchema.parse(installed ?? null)?.version ?? null
+}
+
 export function restoreGate(writers: SessionWriters | null | undefined, installed: string | InstalledReading | null | undefined): RestoreGate {
   const wrote = newestWriter(writers)
   const given = GivenInstallSchema.parse(installed ?? null)
@@ -273,6 +284,12 @@ export const OutdatedRuntimeSchema = z.object({
   line: z.string().optional(),
   /** What reads them here when it isn't that program, `installed` being its place in the program's numbering (`InstalledReading.reader`). */
   reader: z.string().optional(),
+  /**
+   * Columns the records' rows hold that the store here has no place for, as
+   * `table.column`: a store an older build made, whatever the versions say.
+   * The restore reads the store's schema before it writes (`RestoreReport.outdated`).
+   */
+  lacks: z.array(z.string()).optional(),
 })
 export type OutdatedRuntime = z.infer<typeof OutdatedRuntimeSchema>
 
@@ -287,6 +304,10 @@ export function outdatedOf(gate: RestoreGate): OutdatedRuntime | null {
 /** The sentence a refused restore gets wherever it's said, honest about what Mako can't tell. */
 export function outdatedText(label: string, outdated: OutdatedRuntime): string {
   const program = outdated.line ?? label
+  if (outdated.lacks?.length) {
+    const here = outdated.installed === null ? "" : `, and this Mac has ${program} ${outdated.installed}`
+    return `${program}'s store here has no ${outdated.lacks.join(", ")}, which this session's records hold: a newer ${program} wrote it${here}.`
+  }
   if (outdated.reader !== undefined) {
     const reads = `${outdated.reader}, may not read it`
     if (outdated.wrote) return `${program} ${outdated.wrote.version} wrote this session, and ${reads}.`

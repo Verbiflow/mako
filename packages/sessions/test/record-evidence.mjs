@@ -305,6 +305,13 @@ try {
     await store.noteEvidence("grok", "ranged", { source: "range", upTo: "1.0.46", why: "x", at: later, rules: EVIDENCE_RULES })
     assert.deepEqual(store.sessionsWithoutWriters().map((session) => session.nativeId).sort(), ["old-rules"], "evidence from older rules is looked at again")
     assert.deepEqual(store.sessionsWithoutWriters({ unknownBefore: later + 1 }).map((session) => session.nativeId).sort(), ["old-rules", "unknown"], "nothing found before newer release dates were read: looked at again")
+    // Stamped with Devin's handshake's `0.0.0-dev` before Mako asked its executable: no writer, so the pass looks for one.
+    for (const [id, observed] of [["handshake", "0.0.0-dev"], ["asked", "3000.10.23"]]) {
+      const own = join(root, `${id}.jsonl`)
+      await writeFile(own, "{}\n")
+      await store.capture({ harness: "devin", nativeId: id, home: root, records: { ...records, files: [own] }, path: own, observed })
+    }
+    assert.deepEqual(store.sessionsWithoutWriters().map((session) => session.nativeId).sort(), ["handshake", "old-rules"], "a version that names no build names no writer")
     await store.close()
   }
 

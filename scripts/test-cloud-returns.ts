@@ -109,6 +109,7 @@ function setup(name: string) {
   /** What the machine knows of each conversation it runs: the native session it started there. */
   const nativeThere = new Map<string, string>([[conversation, "n-1"]])
   let restored: ReceivedRecords["restored"] | undefined
+  let receiveFails: Error | undefined
   cloud.depart = async () => {
     const scratch = mkdtempSync(join(folder, "pack-"))
     const { checkpoint, file } = await captureMoveCheckpoint(git, machine, scratch)
@@ -147,7 +148,7 @@ function setup(name: string) {
       cloud.ahead.push(sessions.map((session) => session.nativeId))
       return sessions.map((session) => ({ harness: session.harness, nativeId: session.nativeId, versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1 }))
     },
-    receiveRecords: async (_link, sessions) => sessions.map((session) => ({ harness: session.harness, nativeId: session.nativeId, pulled: { versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1 }, restored: restored ?? { kind: "restored", path: `/${session.harness}/${session.nativeId}.jsonl`, files: 1, rows: 0, ms: 1 } })),
+    receiveRecords: async (_link, sessions) => receiveFails ? Promise.reject(receiveFails) : sessions.map((session) => ({ harness: session.harness, nativeId: session.nativeId, pulled: { versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1 }, restored: restored ?? { kind: "restored", path: `/${session.harness}/${session.nativeId}.jsonl`, files: 1, rows: 0, ms: 1 } })),
     cloud: {
       callThread: async (_threadId, channel, args): Promise<EncodedValue> => {
         cloud.calls.push({ channel, args })
@@ -193,6 +194,7 @@ function setup(name: string) {
   return {
     returns: make(), fresh: make, cloud, conversation, checkout, steps, released, captured, state, files, device, cloudThread, threads, thread: placed.thread, session: placed.session, tab, fork,
     setRestored: (next: ReceivedRecords["restored"]) => (restored = next),
+    failReceive: (error: Error) => (receiveFails = error),
   }
 }
 
@@ -266,6 +268,24 @@ try {
     assert.deepEqual(s.files(), before, "this Mac's worktree exactly as it was")
     assert.deepEqual([s.state()?.state, s.state()?.generation], ["elsewhere", 3])
     assert.ok(s.cloud.calls.some((call) => call.channel === "mako:move-stay"))
+  }
+
+  // A store whose schema has no place for the records' columns: refused as outdated, the columns carried for the window and the log.
+  {
+    const s = setup("lacks")
+    s.setRestored({ kind: "outdated", installed: "0.150.0", lacks: ["threads.memory_mode"] })
+    const outcome = await s.returns.bringBack(s.conversation, move())
+    assert.deepEqual(outcome.kind === "stayed" ? outcome.outdated : undefined, { harness: "codex", installed: "0.150.0", lacks: ["threads.memory_mode"], offer: { kind: "update", runtimeId: "codex", label: "codex" } })
+  }
+
+  // A write the store failed: the person reads what failed, not the store's own words, which go to the log.
+  {
+    const s = setup("store-failed")
+    s.failReceive(new Error("Mako couldn't write Devin's session lean-fact into Devin's store here.", { cause: new Error("table tool_call_state has no column named source_node_ids") }))
+    const before = s.files()
+    const outcome = await s.returns.bringBack(s.conversation, move())
+    assert.equal(outcome.kind === "stayed" ? outcome.reason : "", "Mako couldn't write Devin's session lean-fact into Devin's store here.")
+    assert.deepEqual(s.files(), before, "this Mac's worktree exactly as it was")
   }
 
   // The release unheard: unsettled, nothing taken; the next host hears it and finishes.

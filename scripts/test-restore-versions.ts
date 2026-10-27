@@ -10,7 +10,7 @@ import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 import { Git } from "@mako/git"
 import { MAKO_PINS, pinnedBy } from "@mako/sessions/record-pins"
 import { outdatedOf, outdatedText, restoreGate, type WriterEvidence } from "@mako/sessions/record-writers"
-import { carriedBecause, outdatedLine, restoreNotice, updateResolves } from "../src/lib/restore-plan.ts"
+import { carriedBecause, outdatedLine, restoreNotice, returnNotice, updateResolves } from "../src/lib/restore-plan.ts"
 import { unreadRowWords, unreadSummary } from "../src/lib/unread-records.ts"
 import { registeredHarnessIds } from "./registered-harnesses.ts"
 
@@ -52,6 +52,15 @@ try {
   assert.deepEqual(updates.restoreRuntime("claude"), { harness: "claude", version: "2.1.283", offer: { kind: "owner", owner: "Mako" }, lines: { claude: { version: "2.1.300", sole: true } } }, "Claude resumes under the Agent SDK's build, whatever CLI is installed beside it; Mako's update moves it")
   assert.deepEqual(updates.restoreRuntime("cursor"), { harness: "cursor", version: "1.0.31", offer: { kind: "owner", owner: "Mako" }, lines: { "cursor-agent": { version: "2026.09.03", reader: "Mako's @cursor/sdk 1.0.31, published 2026.09.03" } } }, "Cursor resumes under the SDK Mako ships, which imports cursor-agent's stores: they're compared with the day npm published it, whatever cursor-agent is installed")
   assert.deepEqual(updates.restoreRuntime("nothing"), { harness: "nothing", version: null, offer: { kind: "manual" } }, "a harness with no runtime blocks nothing")
+  // Devin.app's own copy of the CLI: the app updates it, and the words name the app, not "Devin through Devin".
+  const appPath = join(root, "runtime-updates-app.json")
+  await writeFile(appPath, JSON.stringify({ version: 2, updates: { devin: { provider: "devin", binary: "/Applications/Devin.app/Contents/Resources/app/extensions/windsurf/devin/bin/devin", installed: "3000.10.23", channel: "app", managedBy: "Devin.app", checkedAt: 1 } }, signatures: {} }))
+  const app = new RuntimeUpdates({ sources: () => sources, processes: new DiscoveryProcesses(), path: appPath, emit: () => {} })
+  await app.load()
+  const offer = app.restoreRuntime("devin").offer
+  assert.deepEqual(offer, { kind: "owner", owner: "Devin" }, "Devin.app updates its own Devin")
+  const back = returnNotice("Devin", { harness: "devin", installed: "3000.10.23", wrote: { version: "3000.11.205", source: "observed" }, offer })
+  assert.equal(`${back.line} ${back.detail}`, "Devin 3000.11.205 wrote its latest turns in the cloud; this Mac has 3000.10.23. Update Devin through the Devin app, then bring it back. Until then it goes on in the cloud.")
 } finally {
   await rm(root, { recursive: true, force: true })
 }
@@ -61,6 +70,7 @@ assert.equal(restoreGate({ record: ["2.1.300"], observed: [] }, "2.1.283").kind,
 assert.equal(restoreGate({ record: ["2.1.283"], observed: ["2.1.283"] }, "2.1.283").kind, "same-or-newer")
 assert.equal(restoreGate({ record: [], observed: ["1.0.62"] }, "1.0.62").kind, "same-or-newer")
 assert.equal(restoreGate({ record: ["0.154.0"], observed: [] }, "0.154.0-alpha.6.2").kind, "older", "a prerelease of the version that wrote it is older")
+assert.deepEqual(outdatedOf(restoreGate({ record: [], observed: ["0.0.0-dev"] }, "3000.10.23")), { installed: "3000.10.23" }, "Devin's handshake's 0.0.0-dev names no build, so nothing shows 3000.10.23 reads what it wrote")
 
 // A store another program wrote, which Mako's bundled build imports: compared in that program's numbering with the day the build was published.
 const sdk = { version: "1.0.31", lines: { "cursor-agent": { version: "2026.09.03", reader: "Mako's @cursor/sdk 1.0.31, published 2026.09.03" } } }
@@ -98,6 +108,14 @@ assert.equal(restoreNotice("Claude Code", { ...outdated, offer: { kind: "owner",
 assert.equal(restoreNotice("Devin", { ...outdated, offer: { kind: "owner", owner: "Zed" } }).detail, "Update Devin through Zed to resume it here, or reply now to go on from its transcript.")
 assert.equal(restoreNotice("OpenCode", { ...outdated, offer: { kind: "manual", command: "npm i -g opencode-ai" } }).detail, "Update OpenCode from a terminal to resume it here, or reply now to go on from its transcript.")
 assert.equal(carriedBecause("Codex", outdated), "Codex 0.159.3 here is older than 0.163.0")
+// A store whose schema has no place for the rows' columns: an older build made it, so an update settles it.
+const lacking = { harness: "devin", installed: "3000.10.23", lacks: ["tool_call_state.source_node_ids"], offer: { kind: "owner" as const, owner: "Devin" } }
+assert.equal(outdatedLine("Devin", lacking), "A newer Devin wrote this session; this Mac has 3000.10.23.")
+assert.equal(restoreNotice("Devin", lacking).detail, "Update Devin through the Devin app to resume it here, or reply now to go on from its transcript.")
+assert.equal(updateResolves(lacking), true)
+assert.equal(carriedBecause("Devin", lacking), "Devin 3000.10.23 here is older than the one that wrote it")
+assert.equal(returnNotice("Devin", lacking).line, "A newer Devin wrote its latest turns in the cloud; this Mac has 3000.10.23.")
+assert.equal(outdatedText("Devin", lacking), "Devin's store here has no tool_call_state.source_node_ids, which this session's records hold: a newer Devin wrote it, and this Mac has Devin 3000.10.23.")
 const imported = { harness: "cursor", installed: "2026.09.03", line: "cursor-agent", reader: "Mako's @cursor/sdk 1.0.31, published 2026.09.03", offer: { kind: "owner" as const, owner: "Mako" } }
 assert.equal(outdatedLine("Cursor", { ...imported, wrote: { version: "2026.10.14-0f9edde", source: "install" } }), "cursor-agent 2026.10.14-0f9edde wrote this session; Mako's @cursor/sdk 1.0.31, published 2026.09.03, may not read it.")
 assert.equal(outdatedLine("Cursor", { ...imported, upTo: "2026.10.15" }), "Mako can't tell which cursor-agent version wrote this session, only that it was 2026.10.15 or older; Mako's @cursor/sdk 1.0.31, published 2026.09.03, may not read it.")

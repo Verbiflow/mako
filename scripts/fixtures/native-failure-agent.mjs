@@ -45,7 +45,8 @@ const results = {
     "thread/start": (params) => ({ thread: { id: "standin-thread", cwd: params.cwd } }),
   },
   acp: {
-    initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: "standin", version } }),
+    // Devin's handshake names no build (`0.0.0-dev`); its executable does, asked with `--version`.
+    initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: "standin", version: process.env.MAKO_STANDIN_HANDSHAKE_VERSION ?? version } }),
     "session/new": () => {
       const modes = JSON.parse(process.env.MAKO_STANDIN_MODES ?? "[]")
       return { sessionId: "standin-session", ...(modes.length && { modes: { currentModeId: modes[0].id, availableModes: modes } }) }

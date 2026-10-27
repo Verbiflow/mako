@@ -4,4 +4,4 @@
  * host's continuation plan and the window's rows all order versions with
  * one function.
  */
-export { compareVersions, parseVersion, versionBehind } from "@mako/sessions/runtime-version"
+export { compareVersions, namesBuild, parseVersion, versionBehind } from "@mako/sessions/runtime-version"

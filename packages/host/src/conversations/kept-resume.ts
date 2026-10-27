@@ -98,9 +98,12 @@ export function restoringResume(deps: KeptResumeDeps): (binding: ProviderBinding
     if (holder) return { kind: "held", by: holder }
     const label = deps.label(binding.provider)
     const installed = deps.installed(binding.provider)
-    const restored = await deps.restore(ref.path, installedReading(installed)).catch((error: Error): KeptRestore => ({
-      kind: "refused", reason: `Mako couldn't restore this session for ${label}: ${error.message}`,
-    }))
+    // A store that failed as it was written: the person reads what failed, the log the store's own words too.
+    let failure: string | undefined
+    const restored = await deps.restore(ref.path, installedReading(installed)).catch((error: Error): KeptRestore => {
+      failure = error.message
+      return { kind: "refused", reason: `Mako couldn't put this session back into ${label}'s store here.` }
+    })
     switch (restored.kind) {
       case "restored":
         hostLog("records", "a session its harness deleted was restored for it to resume", { harness: binding.provider, nativeId: binding.nativeId, files: restored.files, rows: restored.rows, ms: restored.ms })
@@ -114,7 +117,7 @@ export function restoringResume(deps: KeptResumeDeps): (binding: ProviderBinding
         return outdatedVerdict(binding, label, installed, OutdatedRuntimeSchema.parse(restored), "a session's records may be newer than its harness here, so they weren't restored")
       }
       case "refused":
-        hostWarn("records", "a session its harness deleted could not be restored", { harness: binding.provider, nativeId: binding.nativeId, reason: restored.reason })
+        hostWarn("records", "a session its harness deleted could not be restored", { harness: binding.provider, nativeId: binding.nativeId, reason: restored.reason, ...failure !== undefined && { error: failure } })
         return { kind: "unavailable", reason: restored.reason }
     }
   }

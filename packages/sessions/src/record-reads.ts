@@ -144,7 +144,8 @@ export class RecordReads {
         await rm(home, { recursive: true, force: true })
         report = await this.store.restore(restore)
       }
-      if (report.diverged.length) return null
+      // Rows the captured schema has no column for (`RestoreReport.outdated`): nothing was written, so nothing reads back.
+      if (report.diverged.length || report.outdated) return null
       const deferred = report.deferred ?? []
       await mkdir(home, { recursive: true })
       this.deferred.set(home, new Set(deferred))
@@ -169,7 +170,7 @@ export class RecordReads {
           await rm(target, { force: true })
           report = await this.store.restore(restore)
         }
-        if (report.diverged.length) return false
+        if (report.diverged.length || report.outdated) return false
         this.deferred.get(home)?.delete(target)
         const capturedAt = MarkSchema.safeParse(JSON.parse(await readFile(join(home, MARK), "utf8").catch(() => "null"))).data?.capturedAt
         if (capturedAt !== undefined) await this.mark(home, capturedAt)

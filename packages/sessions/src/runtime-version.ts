@@ -54,6 +54,18 @@ function split(version: string): [number[], string[]] {
   ]
 }
 
+/**
+ * Whether a version names a build: false for what a build reports when its
+ * version was never stamped into it, every number zero with no number after
+ * (`0.0.0`, `0.0.0-dev`). Devin's ACP handshake reports `0.0.0-dev` from
+ * every release, which would order below every real build. OpenCode's dev
+ * channel numbers its builds after the zeros (`0.0.0-dev-20840`): those do.
+ */
+export function namesBuild(version: string): boolean {
+  const [core, pre] = split(version)
+  return core.some((part) => part !== 0) || pre.some((part) => /\d/.test(part))
+}
+
 /** Whether a public version is newer than the installed one; `null` when either is unknown. */
 export function versionBehind(
   installed: string | undefined,

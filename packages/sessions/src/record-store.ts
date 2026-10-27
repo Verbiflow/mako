@@ -19,8 +19,9 @@ import { declareStoreFormat, guardStoreWrites, inspectStoreFormat, NewerStoreErr
 import { STREAMS_ROOT } from "./record-streams.js"
 import { DROPPED, repackStore, type RepackOptions, type RepackReport } from "./record-repack.js"
 import { IntentOwner } from "./record-intents.js"
-import { EVIDENCE_RULES, mergeWriters, outdatedOf, restoreGate, STREAM_RUNTIME_SCAN, writersOf, type InstalledReading, type OutdatedRuntime, type RecordWriter, type RecordWriterRule, type SessionWriters, SessionWritersSchema, type WriterEvidence, type WriterScan, type WriterSource } from "./record-writers.js"
+import { EVIDENCE_RULES, givenVersion, mergeWriters, outdatedOf, restoreGate, STREAM_RUNTIME_SCAN, writersOf, type InstalledReading, type OutdatedRuntime, type RecordWriter, type RecordWriterRule, type SessionWriters, SessionWritersSchema, type WriterEvidence, type WriterScan, type WriterSource } from "./record-writers.js"
 import type { RecordRef } from "./entries.js"
+import { namesBuild } from "./runtime-version.js"
 
 export { decodeRow, encodeRow, taggedRow } from "./record-rows.js"
 
@@ -92,6 +93,10 @@ const ExportVersionSchema = z.object({
 const HEAD_BYTES = 1024 * 1024
 /** How many files a restore writes at once. */
 const FILES_AT_ONCE = 8
+/** Rows a restore's plan reads at once for the columns they hold: each read is a small one of a pack, mostly waiting. */
+const ROWS_READ_AT_ONCE = 16
+/** The most of those rows' bytes a plan keeps for its write, which reads the rest again. */
+const ROW_BYTES_KEPT = 64 * 1024 * 1024
 /** How long a restore waits for a running harness to release its database's write lock. */
 const WRITE_BUSY_TIMEOUT_MS = 30_000
 /** How far back from an append cursor a capture checks that nothing before it was rewritten. */
@@ -285,7 +290,11 @@ export interface RestoreReport {
   /** Values in rows that named a path in one of the session's roots, moved to where the root is in the destination. */
   movedPaths: number
   written: boolean
-  /** The destination's harness is older than the newest version that wrote the records (`RestoreInput.installed`): nothing was written. */
+  /**
+   * The destination's harness is older than the newest version that wrote
+   * the records (`RestoreInput.installed`), or its store has no column for
+   * one the rows hold (`OutdatedRuntime.lacks`): nothing was written.
+   */
   outdated?: OutdatedRuntime
   /** Where the files `RestoreInput.files` left out would have gone. */
   deferred?: string[]
@@ -970,7 +979,7 @@ export class RecordStore {
           report.diverged.push({ unit: name, reason: "Mako's first capture of this database never finished, so it holds only part of the session's rows" })
           continue
         }
-        const plan = databases.get(name) ?? { schema: null, rows: [], moves: layout.paths[name] ?? {}, resolved: new Set<string>(), bytes: 0 }
+        const plan = databases.get(name) ?? { schema: null, rows: [], moves: layout.paths[name] ?? {}, resolved: new Set<string>(), lacks: [], bytes: 0 }
         databases.set(name, plan)
         if (unit.role === "schema") plan.schema = { id: unit.id, head: unit.head }
         else {
@@ -1292,7 +1301,8 @@ export class RecordStore {
       FROM sessions s ORDER BY captured DESC`).all(WRITERS))
     return rows.flatMap((row) => {
       const writers = row.writers ? SessionWritersSchema.parse(JSON.parse(row.writers)) : null
-      if (writers && (writers.record.length || writers.observed.length)) return []
+      // A version that names no build (Devin's handshake's `0.0.0-dev`) names no writer: the evidence beside the store is read for it.
+      if (writers && [...writers.record, ...writers.observed].some(namesBuild)) return []
       const evidence = writers?.evidence
       // Named versions stand. A range or nothing is looked at again once the session is captured anew, once the rules learn more, or, for nothing, once there's newer evidence to read (`unknownBefore`: the release dates were read again).
       const settled = evidence && (evidence.source === "log" || evidence.source === "install")
@@ -2563,6 +2573,13 @@ export class RecordStore {
         if (!report.diverged.length) forkPlan = await this.planFork(owners, places, plan.own, own.units, report)
       }
     }
+    // A row the store here has no column for is one an older build of the harness can't hold, whatever the versions
+    // said: refused as the gate refuses, before anything is written, a dry run included.
+    const lacks = [...new Set([...plan.rowPlans.values()].flatMap((rows) => rows.lacks))]
+    if (lacks.length) {
+      report.outdated = { installed: givenVersion(input.installed), lacks }
+      return report
+    }
     if (report.diverged.length || report.fork?.diverged.length || input.dryRun) return report
     if (await input.held?.()) {
       report.diverged.push({ unit: nativeId, reason: "Something on this machine holds the session open" })
@@ -3215,14 +3232,23 @@ export class RecordStore {
     const path = places.place(name)
     const db = existsSync(path) ? openReadOnly(path, { timeout: 5_000 }).database : null
     const moving = places.moving && Object.keys(paths).length > 0
-    const plan: DatabasePlan = { schema: null, rows: [], moves: moving ? paths : {}, resolved: new Set() }
+    const plan: DatabasePlan = { schema: null, rows: [], moves: moving ? paths : {}, resolved: new Set(), lacks: [] }
     const lookups = new Map<string, StatementSync>()
     const tallies = new Map<string, RestoreRows>()
+    /** Rows to write whose columns are still to be read: after the rows are planned, several at a time. */
+    const unread: { row: DatabasePlan["rows"][number]; table: string }[] = []
     let closeIdentities = () => {}
     try {
       const tables = new Set(db ? TableNameSchema.array().parse(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map((row) => row.name) : [])
       const identity = await this.rowIdentities(name, db, tables)
       closeIdentities = identity.close
+      const fits = (table: string, row: RecordRow) => {
+        const columns = identity.columns(table)
+        for (const column of Object.keys(row)) {
+          const lacking = `${table}.${column}`
+          if (!columns?.has(column) && !plan.lacks.includes(lacking)) plan.lacks.push(lacking)
+        }
+      }
       /** A row unit, found at the destination by `found`: as `key` names it, or as its content does. */
       const consider = async (unit: z.infer<typeof UnitHeadSchema>, key: RowKey, found: RowKey): Promise<void> => {
         if (forking) {
@@ -3258,8 +3284,14 @@ export class RecordStore {
           rows[action] += 1
           if (action === "insert" || action === "replace") rows.bytes += unit.size
           if (action !== "skip") {
-            plan.rows.push({ id: unit.id, head: unit.head, delete: action === "delete", replace: action === "replace" })
+            const planned: DatabasePlan["rows"][number] = { id: unit.id, head: unit.head, delete: action === "delete", replace: action === "replace" }
+            plan.rows.push(planned)
             if (newest && moved) report.movedPaths += Object.keys(newest).filter((column) => newest[column] !== moved[column]).length
+            // A row goes in whole, every column it was captured with: one the table here has no place for fails the write.
+            if (action !== "delete") {
+              if (newest) fits(key.table, newest)
+              else unread.push({ row: planned, table: key.table })
+            }
           }
         }
       }
@@ -3296,6 +3328,20 @@ export class RecordStore {
         plan.resolved.add(named)
         await consider(unit, key, found)
       }
+      // Asked as the plan is made, so a dry run sees it too, and a restore it refuses writes nothing (`RestoreReport.outdated`).
+      // What's read is kept for the write, up to a bound, so a restore reads each row once.
+      let next = 0
+      let kept = 0
+      await Promise.all(Array.from({ length: Math.min(ROWS_READ_AT_ONCE, unread.length) }, async () => {
+        for (let each = unread[next++]; each; each = unread[next++]) {
+          const bytes = await this.versionBytes(each.row.id, each.row.head)
+          fits(each.table, decodeRow(bytes))
+          if (kept + bytes.length <= ROW_BYTES_KEPT) {
+            kept += bytes.length
+            each.row.bytes = bytes
+          }
+        }
+      }))
     } finally {
       db?.close()
       closeIdentities()
@@ -3308,7 +3354,7 @@ export class RecordStore {
    * How a row of each table is found and written (`rowIdentity`): as the destination's table declares it, else, for a
    * table it lacks, as the schema the rows were captured under does, read into a database of its own.
    */
-  private async rowIdentities(name: string, db: DatabaseSync | null, tables: ReadonlySet<string>): Promise<{ of: (table: string) => ForkIdentity | null; close: () => void }> {
+  private async rowIdentities(name: string, db: DatabaseSync | null, tables: ReadonlySet<string>): Promise<{ of: (table: string) => ForkIdentity | null; columns: (table: string) => ReadonlySet<string> | null; close: () => void }> {
     const schema = this.schemaUnit(name)
     let captured: DatabaseSync | null = null
     let capturedTables = new Set<string>()
@@ -3318,11 +3364,23 @@ export class RecordStore {
       capturedTables = new Set(TableNameSchema.array().parse(captured.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map((row) => row.name))
     }
     const found = new Map<string, ForkIdentity | null>()
+    const columns = new Map<string, ReadonlySet<string> | null>()
+    /** Where a table's rows are written: the destination's table, else the one the restore makes from the captured schema. */
+    const holder = (table: string) => (db && tables.has(table) ? db : captured && capturedTables.has(table) ? captured : null)
     return {
       of: (table) => {
-        if (!found.has(table))
-          found.set(table, db && tables.has(table) ? rowIdentity(db, table) : captured && capturedTables.has(table) ? rowIdentity(captured, table) : null)
+        if (!found.has(table)) {
+          const at = holder(table)
+          found.set(table, at && rowIdentity(at, table))
+        }
         return found.get(table) ?? null
+      },
+      columns: (table) => {
+        if (!columns.has(table)) {
+          const at = holder(table)
+          columns.set(table, at && new Set(TableNameSchema.array().parse(at.prepare("SELECT name FROM pragma_table_xinfo(?)").all(table)).map((column) => column.name)))
+        }
+        return columns.get(table) ?? null
       },
       close: () => captured?.close(),
     }
@@ -3384,7 +3442,7 @@ export class RecordStore {
           if (found) statement(`DELETE FROM ${quoted(key.table)} WHERE ${where(found.columns)}`).run(...movedKey(places, found, moves))
           continue
         }
-        const decoded = decodeRow(await this.versionBytes(row.id, row.head))
+        const decoded = decodeRow(row.bytes ?? await this.versionBytes(row.id, row.head))
         const values = moves ? moveRow(places, decoded, moves) : decoded
         if (!alias) {
           const names = Object.keys(values)
@@ -3472,12 +3530,17 @@ interface LinesPlan {
 
 interface DatabasePlan {
   schema: { id: number; head: number } | null
-  /** Each row to write or delete by its unit and newest version, its key read again when it's written: a session can own millions. */
-  rows: { id: number; head: number; delete: boolean; replace?: boolean }[]
+  /**
+   * Each row to write or delete by its unit and newest version, its key read again when it's written: a session can own
+   * millions. `bytes`: the version as the plan read it for its columns, while they fit `ROW_BYTES_KEPT`.
+   */
+  rows: { id: number; head: number; delete: boolean; replace?: boolean; bytes?: Buffer }[]
   /** The unit keys, by identity, of the rows of tables with a rowid alias, for what the destination holds that Mako saw. */
   resolved: Set<string>
   /** Path columns by table, moved as the plan compared them. */
   moves: Record<string, string[]>
+  /** Columns the rows to write hold that the table they go into has no place for, as `table.column` (`OutdatedRuntime.lacks`). */
+  lacks: string[]
 }
 
 /** What a restore writes to the session's own place, and, when forking, the units it leaves for the fork. */

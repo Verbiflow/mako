@@ -10,6 +10,7 @@ import { RecordStore } from "../dist/record-store.js"
 import { STREAMS_ROOT, streamPath, streamsRoot, withStreams } from "../dist/record-streams.js"
 import { observedInstall } from "../dist/record-observed.js"
 import { fieldScan, mergeWriters, newestWriter, restoreGate, STREAM_RUNTIME_SCAN, writersOf } from "../dist/record-writers.js"
+import { namesBuild } from "../dist/runtime-version.js"
 
 /**
  * Which harness version wrote what the record store captures: stated by the
@@ -37,6 +38,22 @@ try {
     const runtime = STREAM_RUNTIME_SCAN()
     runtime.push(Buffer.from('{"capture":1,"harness":"grok"}\n{"at":"2026-10-17T09:00:25.199Z","message":{"runtime":"7.7.7"}}\n{"at":"2026-10-17T09:00:25.200Z","runtime":"1.0.46","via":"ACP initialize.agentInfo"}\n'))
     assert.deepEqual(runtime.end(), ["1.0.46"], "only the driver's own runtime line names the version that ran")
+  }
+
+  // A version that names no build names no writer: Devin's ACP handshake says `0.0.0-dev` from every release, which
+  // ordered below every real build and let a newer Devin's session into an older Devin's store.
+  {
+    assert.equal(namesBuild("0.0.0-dev"), false)
+    assert.equal(namesBuild("0.0.0"), false)
+    assert.equal(namesBuild("0.0.0-dev-20840"), true, "OpenCode's dev channel numbers its builds after the zeros")
+    assert.equal(namesBuild("3000.10.23"), true)
+    const runtime = STREAM_RUNTIME_SCAN()
+    runtime.push(Buffer.from('{"at":"2026-10-27T07:32:11.300Z","runtime":"0.0.0-dev","via":"ACP initialize.agentInfo"}\n'))
+    assert.deepEqual(runtime.end(), [], "a stream line a build without a version wrote names nothing")
+    const kept = { record: [], observed: ["0.0.0-dev"] }
+    assert.deepEqual(writersOf(kept), [], "what a store kept before Mako asked Devin's executable names no writer")
+    assert.equal(restoreGate(kept, "3000.10.23").kind, "unproven", "so nothing shows 3000.10.23 reads it")
+    assert.deepEqual(newestWriter({ record: [], observed: ["0.0.0-dev", "3000.11.205"] }), { version: "3000.11.205", source: "observed" })
   }
 
   // The gate: records go only into the version that wrote them or a newer one; an unknown version blocks nothing.

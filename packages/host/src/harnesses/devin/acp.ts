@@ -86,6 +86,10 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
       return {
         command: devinExecutable() ?? "devin",
         args: ["acp"],
+        // Its handshake's `agentInfo.version` is `0.0.0-dev` from every release (3000.10.23 and 3000.11.205 alike), which
+        // names no build; `devin --version` names it (`devin 3000.11.205 (6dea39440ae3)`), in about 10 ms. The version a
+        // launch runs is what Mako stamps the session's records with, which a restore weighs (`restoreGate`).
+        versionArgs: ["--version"],
         configureEnvironment: configureDevinEnvironment,
         prepareMcp: prepareDevinMcp,
         async prepareApprovals({ previous, publish }) {

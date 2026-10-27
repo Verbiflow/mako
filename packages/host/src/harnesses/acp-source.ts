@@ -39,7 +39,7 @@ export interface AcpLaunchOptions {
 }
 
 export interface AcpLaunch {
-  /** Explicit fallback only when initialize omits agentInfo.version. */
+  /** Asked of the executable only when initialize names no build: it omits agentInfo.version, or reports one that names none (`namesBuild`). */
   versionArgs?: string[]
   command: string
   args: string[]
