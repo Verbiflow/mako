@@ -144,14 +144,21 @@ export function npmInstall(name: string, version = "latest"): HarnessUpdateComma
  * whose postinstall finishes the install (Claude copies its native binary
  * over a stub) is left broken while the update reports success. This one
  * package's scripts are allowed; npm 11 accepts the flag silently.
+ *
+ * `prefix` is the npm prefix the installed copy lives under. An update names
+ * it: npm's own prefix comes from its config, which can name another tree
+ * than the one the running binary is in (an `.npmrc` with
+ * `prefix=/opt/homebrew` under nvm's node), and the update would then add a
+ * second copy there and leave the one Mako runs as it was.
  */
-export function npmUpdate(name: string): HarnessUpdateCommand {
+export function npmUpdate(name: string, prefix?: string): HarnessUpdateCommand {
   return {
     label: "Update with npm",
     command: "npm",
     args: [
       "install",
       "-g",
+      ...prefix === undefined ? [] : ["--prefix", prefix],
       `--allow-scripts=${name.slice(0, name.lastIndexOf("@"))}`,
       name,
     ],

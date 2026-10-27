@@ -9,7 +9,7 @@ import { returnNotice } from "@/lib/restore-plan"
 import { MoveSteps as Steps } from "./move-steps"
 import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
-import { bringBack, checkHarnessesAgain, dismissHarnessUpdate, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, type HarnessUpdating } from "@/state/cloud-moves"
+import { bringBack, checkHarnesses, dismissHarnessUpdate, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, type HarnessUpdating } from "@/state/cloud-moves"
 
 /** A move's steps in the order they're taken, each in the words its step says. */
 const STEPS = [
@@ -80,7 +80,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   const waitsElsewhere = Boolean(outdated) || (check?.kind === "known" && check.behind.some((behind) => behind.offer.kind !== "update"))
   useEffect(() => {
     if (!key || !waitsElsewhere) return
-    const again = () => void checkHarnessesAgain(key)
+    const again = () => void checkHarnesses(key)
     window.addEventListener("focus", again)
     return () => window.removeEventListener("focus", again)
   }, [key, waitsElsewhere])
@@ -208,7 +208,7 @@ function outdatedReturn(conversationId: string, entry: { outdated: OutdatedResto
           ? { label: "Copy command", onClick: () => void navigator.clipboard.writeText(offer.command ?? "") }
           : undefined
   // Updated outside Mako: weighed again as the window is focused, or now.
-  const again: ComposerNoticeAction | undefined = offer.kind === "update" ? undefined : { label: "Check again", onClick: () => void checkHarnessesAgain(conversationId) }
+  const again: ComposerNoticeAction | undefined = offer.kind === "update" ? undefined : { label: "Check again", onClick: () => void checkHarnesses(conversationId) }
   const elsewhere = offer.kind === "update" ? "" : " Mako checks again when you come back to this window."
   return {
     id: "thread-move",

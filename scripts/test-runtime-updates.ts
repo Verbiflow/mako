@@ -80,13 +80,14 @@ assert.deepEqual(
   ),
   {
     channel: "npm",
+    npmRoot: { prefix: "/Users/me/.nvm/versions/node/v24.19.0", bin: "/Users/me/.nvm/versions/node/v24.19.0/bin" },
     update: {
       label: "Update with npm",
       command: "npm",
-      args: ["install", "-g", "--allow-scripts=@openai/codex", "@openai/codex@latest"],
+      args: ["install", "-g", "--prefix", "/Users/me/.nvm/versions/node/v24.19.0", "--allow-scripts=@openai/codex", "@openai/codex@latest"],
     },
   },
-  "an nvm symlink resolves into lib/node_modules and updates through npm at @latest with its scripts allowed"
+  "an nvm symlink resolves into lib/node_modules and updates through npm at @latest with its scripts allowed, into the prefix it lives under, whatever npm's own config names"
 )
 assert.deepEqual(
   resolveRuntimeChannel(codex, "/Applications/ChatGPT.app/Contents/Resources/codex", "/Applications/ChatGPT.app/Contents/Resources/codex"),
@@ -95,11 +96,17 @@ assert.deepEqual(
 )
 assert.deepEqual(
   resolveRuntimeChannel(codex, "/opt/homebrew/bin/codex", "/opt/homebrew/Cellar/codex/0.154.0/bin/codex"),
-  { channel: "brew", update: { label: "Update with Homebrew", command: "brew", args: ["upgrade", "codex"] } }
+  { channel: "brew", update: { label: "Update with Homebrew", command: "/opt/homebrew/bin/brew", args: ["upgrade", "codex"] } },
+  "a formula upgrades through the brew of the Homebrew that holds it"
+)
+assert.equal(
+  resolveRuntimeChannel(codex, "/usr/local/bin/codex", "/usr/local/Cellar/codex/0.154.0/bin/codex").update?.command,
+  "/usr/local/bin/brew",
+  "an Intel Homebrew's keg beside Apple silicon's upgrades through its own brew"
 )
 assert.deepEqual(
   resolveRuntimeChannel(claude, "/opt/homebrew/bin/claude", "/opt/homebrew/Caskroom/claude-code/2.1.236/claude"),
-  { channel: "brew", update: { label: "Update with Homebrew", command: "brew", args: ["upgrade", "--cask", "claude-code"] } },
+  { channel: "brew", update: { label: "Update with Homebrew", command: "/opt/homebrew/bin/brew", args: ["upgrade", "--cask", "claude-code"] } },
   "a cask upgrades as a cask"
 )
 assert.deepEqual(
@@ -134,8 +141,18 @@ assert.deepEqual(
   "a path Mako cannot place is shown and left alone"
 )
 assert.deepEqual(
-  resolveRuntimeChannel(codex, "/Users/me/.nvm/versions/node/v24.19.0/lib/node_modules/.bin/codex", "/Users/me/.nvm/versions/node/v24.19.0/lib/node_modules/@openai/codex/bin/codex.js").channel,
-  "npm"
+  resolveRuntimeChannel(codex, "/Users/me/.nvm/versions/node/v24.19.0/lib/node_modules/.bin/codex", "/Users/me/.nvm/versions/node/v24.19.0/lib/node_modules/@openai/codex/bin/codex.js").update?.args.slice(2, 4),
+  ["--prefix", "/Users/me/.nvm/versions/node/v24.19.0"]
+)
+assert.deepEqual(
+  resolveRuntimeChannel(codex, "C:/Users/me/AppData/Roaming/npm/codex.cmd", "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.js").npmRoot,
+  { prefix: "C:/Users/me/AppData/Roaming/npm", bin: "C:/Users/me/AppData/Roaming/npm" },
+  "Windows' npm prefix holds its commands itself"
+)
+assert.deepEqual(
+  resolveRuntimeChannel(codex, "/Users/me/project/node_modules/.bin/codex", "/Users/me/project/node_modules/@openai/codex/bin/codex.js"),
+  { channel: "npm" },
+  "a project's own node_modules is no global install: npm -g would add a copy elsewhere, so none is offered"
 )
 
 // The service: readings, caching by binary signature, the registry's TTL, events, persistence, updates.
@@ -148,6 +165,8 @@ interface Fake {
   spawned: string[]
   fetched: string[]
   ran: Array<{ command: string; args: string[] }>
+  /** The PATH each run had. */
+  runPaths: Array<string | undefined>
   runResult: { code: number | null; output: string }
   onRun?: () => void
   clock: number
@@ -179,6 +198,7 @@ function fake(): Fake {
     spawned: [],
     fetched: [],
     ran: [],
+    runPaths: [],
     runResult: { code: 0, output: "changed 2 packages" },
     clock: 1_000_000,
     emitted: [],
@@ -212,8 +232,9 @@ function service(world: Fake, path: string, options: { startDelayMs?: number } =
       if (!answer) throw new Error("npm registry answered 404")
       return answer
     },
-    run: async (command, args) => {
+    run: async (command, args, env) => {
       world.ran.push({ command, args })
+      world.runPaths.push(env.PATH)
       world.onRun?.()
       return world.runResult
     },
@@ -364,7 +385,11 @@ try {
   next.runResult = { code: 0, output: "success without replacing the selected installation" }
   const wrongCopy = await second.update("codex")
   assert.equal(wrongCopy.result?.outcome, "failed", "updating a different copy cannot claim this one is current")
-  assert.match(wrongCopy.result?.message ?? "", /still 0.154.0/)
+  assert.equal(
+    wrongCopy.result?.message,
+    "npm installed codex 0.155.0 into /Users/me/.nvm/versions/node/v24.19.0, but Mako runs /Users/me/.nvm/versions/node/v24.19.0/bin/codex, still 0.154.0.",
+    "the failure names where the update went and what Mako runs"
+  )
   next.ran.length = 0
 
   // An update: the plan runs under the channel lock, the binary is read again, the receipt names both versions.
@@ -386,9 +411,10 @@ try {
   assert.match(next.ran[0].command, /npm$/, "the plan's command is resolved on the host's PATH")
   assert.deepEqual(
     next.ran[0].args,
-    ["install", "-g", "--allow-scripts=@openai/codex", "@openai/codex@latest"],
-    "the plan ran as declared"
+    ["install", "-g", "--prefix", "/Users/me/.nvm/versions/node/v24.19.0", "--allow-scripts=@openai/codex", "@openai/codex@latest"],
+    "the plan ran as declared, into the prefix the binary Mako runs lives under"
   )
+  assert.equal(next.runPaths.at(-1)?.split(":")[0], "/Users/me/.nvm/versions/node/v24.19.0/bin", "that prefix's npm and node come first")
   assert.equal(done.installed, "0.155.0")
   assert.equal(done.phase, undefined)
   assert.deepEqual(done.result, { at: next.clock, outcome: "updated", from: "0.154.0", to: "0.155.0" })
@@ -408,7 +434,7 @@ try {
   next.runResult = { code: 0, output: "up to date" }
   const unchanged = await second.update("codex")
   assert.equal(unchanged.result?.outcome, "unchanged")
-  await assert.rejects(second.update("devin"), /does not update through Mako/)
+  await assert.rejects(second.update("devin"), /^Error: devin isn't installed here$/, "a refusal says why")
   await assert.rejects(second.update("unknown"), /does not update through Mako/)
 
   // A missing runtime offers the first installer whose command exists here, and only while it is missing.

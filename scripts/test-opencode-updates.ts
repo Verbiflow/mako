@@ -99,7 +99,9 @@ try {
   assert.equal(newer.versions?.standing, "newer")
   assert.equal(runtimeRowView(newer).detail, "Newer than Mako has tested", "a fast upgrader gets a quiet line and nothing else")
   assert.equal(runtimeRowView(newer).action, undefined)
-  await assert.rejects(runtime.update("opencode"), /does not update/)
+  const kept = await runtime.update("opencode")
+  assert.deepEqual(kept.result && { outcome: kept.result.outcome, to: kept.result.to }, { outcome: "unchanged", to: later(3) }, "asked to update a newer install, nothing runs: it's already past what an update brings")
+  assert.equal(ran.length, 1)
   versions[stable] = OPENCODE_RELEASE
   await runtime.check("opencode", { force: true, latest: true })
   assert.equal(
@@ -122,7 +124,7 @@ try {
   assert.equal(mismatch.latest, undefined)
   assert.equal(mismatch.update, undefined)
   assert.match(mismatch.latestError ?? "", /different release channel/)
-  await assert.rejects(runtime.update("opencode:opencode2"), /does not update/)
+  await assert.rejects(runtime.update("opencode:opencode2"), /^Error: Mako has no version of OpenCode 2 · beta to update to: The published release belongs to a different release channel$/, "a refusal says why")
   beta = new Error("Offline")
   const offline = await runtime.check("opencode:opencode2", { latest: true })
   assert.equal(offline.installed, "0.0.0-beta-19826")
@@ -174,6 +176,8 @@ try {
   assert.deepEqual((await packaged.refresh()).opencode.update?.args, [
     "install",
     "-g",
+    "--prefix",
+    "/opt",
     "--allow-scripts=@opencode/cli",
     "@opencode/cli@0.0.0-dev-20843",
   ])
@@ -209,7 +213,7 @@ try {
   assert.equal(cached.snapshot().opencode, undefined, "cached v1 reading must not flash on startup")
   assert.ok(cached.snapshot()["opencode:opencode2"], "supported installation remains visible")
   cached.stop()
-  await assert.rejects(runtime.update("opencode"), /does not update/)
+  await assert.rejects(runtime.update("opencode"), /^Error: Mako can't update OpenCode 2: OpenCode 2 does not support this installed version$|^Error: Mako can't update opencode: .*does not support/)
   versions[stable] = "2.0.2"
   assert.throws(() => openCodeRelease("3.0.0", stable, stable, env), /not an OpenCode 2 release/)
   await writeFile(v2, '#!/bin/sh\nexec "$(dirname "$0")/opencode" "$@"\n', {

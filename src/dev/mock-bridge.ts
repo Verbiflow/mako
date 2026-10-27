@@ -1922,6 +1922,9 @@ export function installMockBridge() {
         const reading = { provider, binary: `/Users/you/.nvm/versions/node/v24.19.0/bin/${provider}`, channel: "npm" as const, checkedAt: Date.now() }
         if (mockHarnessScene === "failing")
           return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: "npm error code EACCES: permission denied, mkdir '/usr/local/lib/node_modules/@openai'" } }
+        // The updater finished, but the binary Mako runs didn't move: the host names where the update went and what Mako runs.
+        if (mockHarnessScene === "elsewhere")
+          return { ...reading, installed: from, result: { at: Date.now() - 1_200, outcome: "failed" as const, from, message: `npm installed Codex ${cloud} into /opt/homebrew, but Mako runs ${reading.binary}, still ${from}.` } }
         mockHarnessesHere.set(provider, cloud)
         return { ...reading, installed: cloud, result: { at: Date.now() - 1_200, outcome: "updated" as const, from, to: cloud }, versions: { tested: cloud, standing: "tested" as const } }
       }

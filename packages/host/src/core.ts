@@ -594,6 +594,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     account: () => late.cloud,
     writers: (path) => catalog.recordWriters(path),
     installed: (harness) => harnesses.updates.restoreRuntime(harness),
+    reread: (harness) => harnesses.updates.reread(harness),
     updates: () => harnesses.updates.snapshot(),
     label: (harness) => opened.harnessLabel(harness),
   })

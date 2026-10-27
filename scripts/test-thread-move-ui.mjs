@@ -278,7 +278,7 @@ async function checkWindow() {
   await click('[data-run-place="local"]')
   await until(`document.querySelector('[data-harness-behind="move"]') !== null`, "several harnesses behind")
   assert.equal(await evaluate(`document.querySelectorAll('[data-harness-behind-row]').length`), 4)
-  assert.match(await text('[data-harness-behind]'), /Harnesses here are older than the cloud's[\s\S]*Update it through Devin; Mako checks again when you come back to this window[\s\S]*A newer Mako brings Grok 1\.0\.70: update Mako first[\s\S]*Update Codex and OpenCode, then move[\s\S]*Check again[\s\S]*Move anyway/)
+  assert.match(await text('[data-harness-behind]'), /Harnesses here are older than the cloud's[\s\S]*Update it through the Devin app; Mako checks again when you come back to this window[\s\S]*A newer Mako brings Grok 1\.0\.70: update Mako first[\s\S]*Update Codex and OpenCode, then move[\s\S]*Check again[\s\S]*Move anyway/)
   await both("harness-skew-move-several", [popover])
   await click("[data-harness-anyway]")
   await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved anyway")
@@ -300,6 +300,19 @@ async function checkWindow() {
   await both("harness-skew-update-failed", ['[data-harness-update]'])
   await clickText('[data-harness-update]', "Move anyway")
   await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved anyway after the failed update")
+
+  // 10b. An update that finished without moving the binary Mako runs: the strip names where it went and what Mako runs.
+  await startThread("&harnesses=elsewhere")
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  await click('[data-run-place="local"]')
+  await until(`document.querySelector('[data-harness-update-then]') !== null`, "the update offer")
+  await click("[data-harness-update-then]")
+  await until(`document.querySelector('[data-harness-update="failed"]') !== null`, "the update that landed elsewhere")
+  assert.match(await text('[data-harness-update]'), /Codex wasn't updated[\s\S]*npm installed Codex 0\.164\.0 into \/opt\/homebrew, but Mako runs \/Users\/you\/\.nvm\/versions\/node\/v24\.19\.0\/bin\/codex, still 0\.159\.3\./)
+  assert.ok(await evaluate(`document.querySelector('[data-run-place="local"]') !== null`), "it stays on this Mac")
+  await both("harness-update-elsewhere", ['[data-harness-update]'])
+  await clickText('[data-harness-update]', "Move anyway")
+  await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved anyway after the update that landed elsewhere")
 
   // 11. A Session a newer Codex wrote here than the cloud runs: the move is refused in the popover, with when it can go.
   await startThread("&harnesses=ahead")
@@ -324,7 +337,7 @@ async function checkWindow() {
   await until(`document.querySelector('[data-harness-behind="back"]') !== null`, "the way back's Devin")
   await click("[data-harness-anyway]")
   await until(`document.querySelector('[data-thread-return="outdated"]') !== null`, "the way back stayed")
-  assert.match(await text('[data-thread-return="outdated"]'), /stayed in the cloud[\s\S]*Update Devin through Devin, then bring it back[\s\S]*Check again/)
+  assert.match(await text('[data-thread-return="outdated"]'), /stayed in the cloud[\s\S]*Update Devin through the Devin app, then bring it back[\s\S]*Check again/)
   await both("harness-skew-return-devin", ['[data-thread-return]'])
   await evaluate(`import('/src/dev/mock-bridge.ts').then((mock) => { mock.mockHarnessesHere.set('devin', '3000.11.205'); window.dispatchEvent(new Event('focus')); return true })`)
   await until(`document.querySelector('[data-thread-return="ready"]') !== null`, "ready once Devin.app updated it")

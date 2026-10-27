@@ -126,7 +126,9 @@ function without<Value>(record: Record<string, Value>, key: string): Record<stri
 
 /**
  * Weighs the Thread of `conversationId`'s harnesses against the cloud's again (`mako:thread-harness-check`), and keeps
- * what the host said for the window. Nothing is kept for a Thread that couldn't move at all: its chip says why.
+ * what the host said for the window. Nothing is kept for a Thread that couldn't move at all: its chip says why. The
+ * host takes its harnesses' installed readings again first, so one the person just updated, in Mako or elsewhere (another
+ * app's install, a command), is weighed as it is now: this is also "Check again", and what the window does as they come back to it.
  */
 export async function checkHarnesses(conversationId: string): Promise<ThreadHarnessCheck | undefined> {
   if (!hasBridge()) return undefined
@@ -186,15 +188,6 @@ export async function updateThen(conversationId: string, after: "move" | "back",
 /** The person put a failed update away: the Thread stays where it is. */
 export function dismissHarnessUpdate(conversationId: string): void {
   cloudMovesStore.set((state) => ({ ...state, updating: without(state.updating, conversationId) }))
-}
-
-/**
- * A harness Mako can't update itself (another app's install, a command to run) is updated by the person elsewhere:
- * the readings are taken again and the Thread weighed again, as they come back to the window or ask.
- */
-export async function checkHarnessesAgain(conversationId: string): Promise<void> {
-  await providers.loadRuntimeUpdates(true)
-  await checkHarnesses(conversationId)
 }
 
 /**

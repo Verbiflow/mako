@@ -573,8 +573,13 @@ back then waiting for the update), and in the Cloud chip's with "Update
 Codex and bring it back". Mako's update installs this Mako's `tested`, so
 when that's older than the cloud's, the offer is a newer Mako. An offer
 Mako can't run (another app's install, a command) says what to do and is
-weighed again when the window is focused. `scripts/test-harness-check.ts`
-covers the weighing and `test:moves-ui` the window. `tsx scripts/records.ts
+weighed again when the window is focused or on "Check again". Every weighing
+takes the harnesses' installed readings again first (`RuntimeUpdates.reread`:
+a `stat`, a spawn only for a binary that changed, no registry), so one
+updated a moment ago, in Mako or a terminal, counts. `scripts/test-harness-check.ts`
+covers the weighing, `scripts/test-harness-update-flow.ts` the one step
+(update then move or bring back) over the host's own readings, and
+`test:moves-ui` the window. `tsx scripts/records.ts
 archive` shows migrated, kept and pending (`--migrate` runs a pass), and
 `npm run bench:archive-migration` measures it on a clone of this Mac's
 archive.
@@ -3124,7 +3129,10 @@ version itself. The host reads every runtime five seconds after it starts,
 when a window asks and the reading is over ten minutes old, hourly for the
 public version, and after an update; each reading is pushed to every window
 as `runtime-updates` and kept in `~/.mako/runtime-updates.json` so the next
-host paints the last reading before its own lands. Settings > Agents
+host paints the last reading before its own lands. A window that asks for a
+refresh (`mako:harness-updates` with `true`) gets the reading taken after
+its ask, so a refresh right after an update or a terminal's install never
+answers the old version. Settings > Agents
 therefore shows versions the moment it opens, and opening the model picker
 runs nothing. Before this the card was one IPC that spawned five CLIs and
 ran `npm view` for each on every open of Settings, read "No runtimes found"
@@ -3146,16 +3154,31 @@ window and the record store's restore gate, so `0.154.0-alpha.6.2` is behind `0.
 everywhere. The channel is read off the binary's real path in evidence
 order — another app's registry, an app bundle, the CLI's own install root,
 bun, pnpm, npm, Homebrew, else `manual` — and the plan follows: `npm install
--g --allow-scripts=<pkg> <pkg>@latest` (npm 12 blocks install scripts and
-still exits 0, leaving Claude's native binary a stub), `bun add -g`, `pnpm
-add -g`, `brew upgrade [--cask]` only for a declared formula, or the
-resolved binary's own `update`. Updates run one per channel at a time and
-one per provider, under a five-minute deadline, and the receipt names
-`from`, `to` and the updater's last words on failure; the row reads
+-g --prefix <prefix> --allow-scripts=<pkg> <pkg>@latest` (npm 12 blocks
+install scripts and still exits 0, leaving Claude's native binary a stub),
+`bun add -g`, `pnpm add -g`, `<prefix>/bin/brew upgrade [--cask]` only for a
+declared formula, or the resolved binary's own `update`. An update goes where
+the binary Mako runs lives: npm's prefix is read off the package's real path
+(`<prefix>/lib/node_modules/<pkg>`) and passed explicitly, with that prefix's
+`npm` and `node` first on PATH, because npm's own config can name another
+tree (an `.npmrc` with `prefix=/opt/homebrew` under nvm's node put a second
+Codex there and left the one Mako runs as it was); a project's own
+`node_modules` gets no update at all. The update has worked only when the
+binary Mako runs reports the version the plan installs; short of that the
+receipt fails with both named ("npm installed Codex 0.164.0 into …, but
+Mako runs …/codex, still 0.159.3"). The plan run is the one the reading
+offers: a click doesn't ask the registry again inside its hour, so a slow
+registry can't take back the update a person was just shown, and a reading
+already at the target answers `unchanged`. Updates run one per channel at a
+time and one per provider, under a five-minute deadline, and the receipt
+names `from`, `to` and the updater's last words on failure; the row reads
 "Updating…" in every window meanwhile and a runtime with no plan is refused
-by its owner's name. `scripts/test-runtime-updates.ts` covers the ladder,
-the signature cache, the registry TTL, persistence, the locks, the receipts
-and the row's words (`src/lib/runtime-updates.ts`).
+with why, by name. `scripts/test-runtime-updates.ts` covers the ladder, the
+signature cache, the registry TTL, persistence, the locks, the receipts and
+the row's words (`src/lib/runtime-updates.ts`);
+`scripts/test-harness-update-paths.ts` runs a real npm against a scratch
+prefix, home and registry with a misleading `.npmrc`, and holds every
+harness's offer to the update it runs on every kind of install.
 
 Each harness declares its versions once (`<harness>/versions.ts`, shape in
 `packages/host/src/contracts/harness-versions.ts`): `oldest`, the oldest
