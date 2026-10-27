@@ -1,3 +1,4 @@
+import "./lib/scratch-git.mjs"
 /**
  * A project's carried files kept in Mako Cloud: the recipe's `carry` read from the main checkout, sent only with the
  * person's word for the project, each file only when it changed (by its hash) or the cloud holds another version, a
