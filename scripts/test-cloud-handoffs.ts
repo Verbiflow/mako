@@ -263,7 +263,7 @@ try {
     writeFileSync(join(root, "stale.json"), JSON.stringify({ version: 1, threads: { "local-1": { ...kept.threads["local-1"], at: Date.now() - 25 * 60_000 } } }))
     assert.equal(await stale.take("local-1", folder, repository), undefined, "not taken: the move makes its own")
     assert.equal(JSON.parse(readFileSync(join(root, "stale.json"), "utf8")).threads["local-1"], undefined, "and forgotten here")
-    assert.equal(await readiness.take("local-1", folder, repository), standing, "the move takes the cloud Thread standing by")
+    assert.deepEqual(await readiness.take("local-1", folder, repository), { cloudThread: standing, checkpoint: checkpoints.at(-1) }, "the move takes the cloud Thread standing by, with the checkpoint last sent, which the cloud keeps")
     assert.equal(await readiness.take("local-1", folder, repository), undefined, "once")
     const before = made.length
     await readiness.refresh()

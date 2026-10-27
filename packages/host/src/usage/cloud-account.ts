@@ -63,6 +63,7 @@ import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
 import { CloudHarnessesSchema, type CloudHarnesses } from "../contracts/cloud-harnesses.js"
 import { errorMessage } from "../base/error-message.js"
 import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from "../base/secrets.js"
+import { RequestTraces } from "./request-trace.js"
 import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
 
 /** How long a browser sign-in may take; the cloud's sign-in request lasts as long. */
@@ -273,6 +274,8 @@ export class CloudAccounts {
    * TCP's retransmissions (seconds) before it's refused and retried on a new one.
    */
   #pool = new Agent()
+  /** How far each call got, for the log line of one that fails or is slow. */
+  readonly #traces = new RequestTraces(CORRELATION_HEADER)
   #closed = false
   #ready: Promise<void>
 
@@ -974,20 +977,25 @@ export class CloudAccounts {
   async #fetch(route: CloudRoute, url: URL, init: CloudRequest): Promise<CloudResponse> {
     const correlationId = randomUUID()
     const started = performance.now()
-    const report = (outcome: DiagnosticEvents["cloud.request"]["outcome"], status?: number) => {
+    const report = (outcome: DiagnosticEvents["cloud.request"]["outcome"], status: number | undefined, how: { error?: string; reached: string }) => {
       const ms = Math.round(performance.now() - started)
       this.#options.onRequest?.({ route, outcome, ...(status !== undefined && { status }), ms, correlationId })
       // A slow answer is said too: after a wake, how long the cloud took is what tells a stalled network apart.
-      if (outcome !== "ok" || ms >= SLOW_REQUEST_MS) this.#options.log?.("cloud request", { route, outcome, ...(status !== undefined && { status }), ms, correlationId })
+      if (outcome !== "ok" || ms >= SLOW_REQUEST_MS) this.#options.log?.("cloud request", { route, outcome, ...(status !== undefined && { status }), ms, ...how, correlationId })
     }
+    const trace = this.#traces.follow(correlationId)
     let response: CloudResponse
     try {
       response = await fetchWith(url, { ...init, headers: { ...init.headers, [CORRELATION_HEADER]: correlationId }, dispatcher: this.#pool })
     } catch (error) {
-      report("unreachable")
+      // How far it got: whether it ever left this Mac, and on which connection, which the cloud's log can't say.
+      report("unreachable", undefined, { error: errorMessage({ error }), reached: trace.describe() })
+      if (error instanceof Error && error.name === "TimeoutError") throw new CloudAccountError(`The Mako cloud didn't answer within ${Math.round((performance.now() - started) / 1000)} seconds.`)
       throw error
+    } finally {
+      trace.end()
     }
-    report(response.ok ? "ok" : response.status < 500 ? "refused" : "failed", response.status)
+    report(response.ok ? "ok" : response.status < 500 ? "refused" : "failed", response.status, { reached: trace.describe() })
     return response
   }
 
