@@ -1536,7 +1536,12 @@ const inputs = {
       z.string().optional(),
     ]),
   "mako:thread-restore-plan": () => z.tuple([z.string()]),
-  "mako:thread-return": () => z.tuple([z.string(), z.string()]),
+  "mako:thread-return": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z.object({ project: z.string().optional() }).optional(),
+    ]),
   "mako:thread-run": () => z.tuple([z.string()]),
   "mako:thread-stop": () =>
     z.tuple([

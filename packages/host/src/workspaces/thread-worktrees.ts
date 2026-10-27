@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
-import { basename, dirname, isAbsolute, join, matchesGlob, relative } from "node:path"
+import { basename, dirname, isAbsolute, join, matchesGlob, relative, resolve } from "node:path"
 import { z } from "zod"
 import type { ThreadStore } from "../threads/index.js"
 import type { ThreadId } from "../contracts/thread-identity.js"
@@ -17,6 +17,8 @@ import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
 import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type MoveLedger, type MovePlan } from "./worktree-move.js"
 import type { MoveOutcome, MoveShares } from "../contracts/workspace-moves.js"
 import { hostLog } from "../base/host-log.js"
+import { githubRepositoryUrl } from "../contracts/cloud-threads.js"
+import { ProjectMissingError, reattachWorktree, workingCheckout } from "./worktree-reattach.js"
 
 /** Git's own markers for work under way, which a removal would throw away. */
 const UNDER_WAY: readonly (readonly [string, string])[] = [
@@ -382,6 +384,41 @@ export class ThreadWorktreeService {
     const path = worktreeCheckout(first)
     const project = path === first.path ? first.repoRoot : first.project
     return { path, project, branch: first.branch, worktrees: worktrees.filter((worktree) => worktreeCheckout(worktree) === path) }
+  }
+
+  /**
+   * Makes `folder`, a Thread's worktree here, ready to take the Thread back from the cloud, before the cloud is asked
+   * to let it go: as it is when Git reads it; told where its project is now when the project moved; made again from
+   * its project, on `branch`, when the folder itself is gone. `project`: the folder the person chose as the project's
+   * now, which must be a clone of `repository`. Throws `ProjectMissingError` when there's no project here to come
+   * back into, having changed nothing.
+   */
+  async readyForReturn(input: { thread: ThreadId; folder: string; branch?: string; repository: string; project?: string }): Promise<void> {
+    const { folder, project } = input
+    if (project === undefined && (await workingCheckout(this.git, folder))) return
+    const row = this.threads.worktrees().find((worktree) => worktree.path === folder)
+    const recorded = row?.repoRoot ?? (await this.receiptsList()).find(({ receipt }) => membersOf(receipt).some((member) => member.path === folder))?.receipt.repoRoot
+    let repoRoot = recorded
+    if (project !== undefined) {
+      // The folder as the person named it, or the repository it's inside.
+      const up = await this.git.output(project, ["rev-parse", "--show-cdup"]).catch(() => undefined)
+      repoRoot = up === undefined ? undefined : up ? resolve(project, up) : project
+      const named = repoRoot ? githubRepositoryUrl(await this.git.output(repoRoot, ["remote", "get-url", "origin"]).catch(() => "")) : undefined
+      if (!repoRoot || named !== input.repository)
+        throw new ProjectMissingError(`${project} isn't a clone of ${input.repository.replace(/^https:\/\//, "")}, the repository this Thread works in. Choose the folder its project is in now.`, { folder, ...recorded && { project: recorded } })
+    }
+    if (!repoRoot) throw new ProjectMissingError(`Mako has no record of the project ${folder} was made from, so it has nowhere to come back to. It goes on in the cloud.`, { folder })
+    if (!(await this.git.succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])))
+      throw new ProjectMissingError(`Its project, ${repoRoot}, isn't on this Mac anymore: it was moved or deleted. It goes on in the cloud.`, { folder, project: repoRoot })
+    await reattachWorktree(this.git, repoRoot, folder, input.branch ?? row?.branch)
+    if (row && row.repoRoot !== repoRoot) {
+      const inside = relative(row.repoRoot, row.project)
+      this.threads.rehomeWorktree(folder, repoRoot, inside && !inside.startsWith("..") ? join(repoRoot, inside) : repoRoot)
+    } else if (!row) {
+      const base = await this.git.output(folder, ["rev-parse", "HEAD"])
+      this.threads.attachWorktree({ path: folder, thread: input.thread, repoRoot, project: repoRoot, branch: input.branch ?? (await this.git.output(folder, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "")), base })
+    }
+    hostLog("worktrees", "a Thread's worktree was made ready to come back into", { folder, repoRoot, ...recorded !== repoRoot && { was: recorded ?? "unrecorded" } })
   }
 
   /**

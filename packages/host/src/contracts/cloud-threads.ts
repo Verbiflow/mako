@@ -111,6 +111,23 @@ export type HandOffSettings = {
  */
 export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string } | { kind: "released"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
 
+/**
+ * A way back refused before the cloud let go, because the Thread's worktree here has no project to come back into:
+ * `project`, the repository its worktree was made from, isn't on this Mac anymore (moved or deleted), and `folder` is
+ * the worktree. Bringing it back with the project's folder as it is now (`ThreadReturnOptions.project`) brings it there.
+ */
+export const ReturnProjectMissingSchema = z.object({ folder: z.string(), project: z.string().optional() })
+export type ReturnProjectMissing = z.infer<typeof ReturnProjectMissingSchema>
+
+/** How a person asks a Thread back: `project`, the folder its project is in now, when the one it was made from moved. */
+export type ThreadReturnOptions = { project?: string }
+
+/**
+ * Who a return is waiting on, when it's unsettled: `cloud`, an answer this Mac didn't hear; `here`, work of this Mac's
+ * own that failed after the cloud let go. Either way it's asked again by the same return.
+ */
+export type ReturnWaitsOn = "cloud" | "here"
+
 /** A Thread coming back from the cloud, step by step, as the window it was asked from shows it. */
 export type ThreadReturnStep =
   /** Its machine stops taking work and packs the checkout and the records. */
@@ -119,9 +136,15 @@ export type ThreadReturnStep =
   | { kind: "bringing" }
   /** Every conversation of the Thread runs here again, under its own id. */
   | { kind: "back"; conversations: string[] }
-  /** `outdated`: a harness here is older than the one that wrote its sessions in the cloud; updating it lets it come. */
-  | { kind: "stayed"; reason: string; outdated?: OutdatedRestore }
-  | { kind: "unsettled"; reason: string }
+  /**
+   * `outdated`: a harness here is older than the one that wrote its sessions in the cloud; updating it lets it come.
+   * `missing`: its project isn't on this Mac; choosing where it is now lets it come.
+   */
+  | { kind: "stayed"; reason: string; outdated?: OutdatedRestore; missing?: ReturnProjectMissing }
+  | { kind: "unsettled"; reason: string; waitsOn: ReturnWaitsOn }
 
 /** What `mako:thread-return` came to: the Thread runs here again, or it stayed in the cloud, and why. */
-export type ThreadReturnOutcome = { kind: "back" } | { kind: "stayed"; reason: string; outdated?: OutdatedRestore } | { kind: "unsettled"; reason: string }
+export type ThreadReturnOutcome =
+  | { kind: "back" }
+  | { kind: "stayed"; reason: string; outdated?: OutdatedRestore; missing?: ReturnProjectMissing }
+  | { kind: "unsettled"; reason: string; waitsOn: ReturnWaitsOn }

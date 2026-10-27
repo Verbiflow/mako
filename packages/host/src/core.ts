@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { encodeRuntimeValue } from "./contracts/runtime-value.js"
-import { githubRepositoryUrl, type ThreadHandOff } from "./contracts/cloud-threads.js"
+import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
 import { stat } from "node:fs/promises"
 import { mediaExecutable } from "@mako/control-runtime/media"
@@ -638,6 +638,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return catalog.receiveRecords(link, sessions, installed)
     },
     stageRecords: (link, sessions) => catalog.stageRecords(link, sessions),
+    ready: async (input) => {
+      const worktrees = workspaces.worktrees
+      if (!worktrees) throw new Error("Mako's worktrees didn't open, so a Thread can't come back into one.")
+      await worktrees.readyForReturn(input)
+    },
     updateOffer: (harness) => harnesses.updates.restoreRuntime(harness).offer,
     cloud: cloudConversations,
     capture: async (conversationId, path) => void (await live.capture(conversationId, path)),
@@ -904,8 +909,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       }
       if (channel === "mako:thread-return" && cloudReturns) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-return`'s schema before routing it.
-        const [conversationId, move] = args as [string, string]
-        return { handled: true, value: encodeRuntimeValue(await cloudReturns.bringBack(conversationId, move)) }
+        const [conversationId, move, options] = args as [string, string, ThreadReturnOptions | undefined]
+        return { handled: true, value: encodeRuntimeValue(await cloudReturns.bringBack(conversationId, move, options)) }
       }
       if (channel === "mako:thread-harness-check" && cloudMoves && harnessCheck) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-harness-check`'s schema before routing it.

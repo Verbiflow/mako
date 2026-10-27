@@ -18,7 +18,10 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
  * move" or "Move anyway", its update's progress and failure above the
  * composer; one the cloud can't resume refuses the move in the popover; and a
  * way back waiting on Devin.app's update turns ready as the window is focused
- * again. Screenshots of each, dark and light, stay in the printed directory.
+ * again. A way back whose project isn't on this Mac stays in the cloud and
+ * offers the folder the project moved to; one left unsettled says whether it
+ * waits on the cloud or this Mac, and asks again. Screenshots of each, dark
+ * and light, stay in the printed directory.
  */
 
 if (process.versions.electron) {
@@ -346,6 +349,53 @@ async function checkWindow() {
   await clickText('[data-thread-return="ready"]', "Bring it back")
   await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-return]')`, "back after Devin.app's update")
 
+  // 13. The project the Thread's worktree was made from isn't on this Mac: the way back is refused before the cloud is
+  // asked, the strip says so and offers the folder it moved to; chosen, the Thread comes back.
+  await startThread("&return=project-gone")
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  await click('[data-run-place="local"]')
+  await until(`document.querySelector('[data-thread-move-offer]') !== null`, "the move offer")
+  await click('[data-thread-move-offer]')
+  await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved")
+  await click('[data-run-place="cloud"]')
+  await until(`document.querySelector('[data-thread-return-offer]') !== null`, "the return offer")
+  await click('[data-thread-return-offer]')
+  await until(`document.querySelector('[data-thread-return="missing-project"]') !== null`, "the missing project notice")
+  assert.match(await text('[data-thread-return="missing-project"]'), /Its project isn't on this Mac[\s\S]*Still in the cloud[\s\S]*Locate project…/)
+  assert.equal(await evaluate(`document.querySelector('[data-thread-return="missing-project"] button[aria-label="Keep in the cloud"]') !== null`), true, "putting it away keeps it in the cloud")
+  assert.ok(await evaluate(`document.querySelector('[data-run-place="cloud"]') !== null`), "the Thread stays in the cloud meanwhile")
+  await both("return-project-missing", ['[data-thread-return]', '[data-run-place]'])
+  // What it says in full: the project the host named, and the worktree it comes back into.
+  await click('[data-thread-return="missing-project"] button[aria-label="More about this"]')
+  await until(`document.querySelector(${JSON.stringify(popover)})?.innerText.includes('/Users/you/Projects/billing-api')`, "the missing project's detail")
+  assert.match(await text(popover), /Its project, \/Users\/you\/Projects\/billing-api, isn't on this Mac anymore[\s\S]*locate it where it is now[\s\S]*retry-billing-webhooks/)
+  await both("return-project-missing-detail", [popover, '[data-thread-return]'])
+  await escape()
+  await clickText('[data-thread-return="missing-project"]', "Locate project")
+  await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-return]')`, "back into the chosen project")
+
+  // 14. A way back left unsettled says who it waits on, the cloud or this Mac, and asking again settles it.
+  for (const waitsOn of ["cloud", "here"]) {
+    await startThread(`&return=unsettled-${waitsOn}`)
+    await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+    await click('[data-run-place="local"]')
+    await until(`document.querySelector('[data-thread-move-offer]') !== null`, "the move offer")
+    await click('[data-thread-move-offer]')
+    await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved")
+    await click('[data-run-place="cloud"]')
+    await until(`document.querySelector('[data-thread-return-offer]') !== null`, "the return offer")
+    await click('[data-thread-return-offer]')
+    await until(`document.querySelector('[data-thread-return="unsettled"][data-waits-on="${waitsOn}"]') !== null`, `unsettled, waiting on ${waitsOn}`)
+    assert.match(await text('[data-thread-return="unsettled"]'), waitsOn === "cloud" ? /Waiting for the cloud's answer[\s\S]*Nothing runs it yet[\s\S]*Ask again/ : /Couldn't finish coming back[\s\S]*Nothing runs it yet[\s\S]*Ask again/)
+    await both(`return-unsettled-${waitsOn}`, ['[data-thread-return]', '[data-run-place]'])
+    await click('[data-thread-return="unsettled"] button[aria-label="More about this"]')
+    await until(`document.querySelector(${JSON.stringify(popover)})?.innerText.includes('Ask again, or Mako asks when it next starts')`, "the unsettled detail")
+    await both(`return-unsettled-${waitsOn}-detail`, [popover, '[data-thread-return]'])
+    await escape()
+    await clickText('[data-thread-return="unsettled"]', "Ask again")
+    await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-return]')`, "back once asked again")
+  }
+
   // 7. Settings: handing off as this Mac sleeps, and what quitting does while agents work.
   await evaluate(`window.dispatchEvent(new CustomEvent("mako:settings", { detail: "account" })), true`)
   await until(`document.querySelector('[data-handoff-settings]') !== null && document.querySelector('[data-handoff-settings] [role="switch"]')?.getAttribute('aria-checked') === 'true'`, "the handoff settings, on by default")
@@ -356,7 +406,7 @@ async function checkWindow() {
   await clickText('[data-handoff-settings]', "Hand off")
   await until(`document.querySelector('[data-handoff-settings] [aria-pressed="true"]')?.innerText.includes('Hand off')`, "quitting hands off")
   await both("handoff-settings-changed", ['[data-handoff-settings]'])
-  console.log("Thread move UI: offered from a worktree Thread's Local chip, three steps above the composer, Cloud once moved; brought back from its Cloud chip in two steps, Local once back; a busy Thread kept here; a Thread at work handed off with its turn paused, and one with only background work; an outdated way back updated and brought back in one choice; harnesses here older than the cloud's said before the move with the update that settles them, its progress and its failure, a Session the cloud can't resume refused before anything moves, and a way back waiting on Devin.app ready once it's updated; and the handoff settings")
+  console.log("Thread move UI: offered from a worktree Thread's Local chip, three steps above the composer, Cloud once moved; brought back from its Cloud chip in two steps, Local once back; a busy Thread kept here; a Thread at work handed off with its turn paused, and one with only background work; an outdated way back updated and brought back in one choice; a way back whose project isn't here refused before the cloud is asked and brought into the folder the project moved to; an unsettled way back saying who it waits on and settled by asking again; harnesses here older than the cloud's said before the move with the update that settles them, its progress and its failure, a Session the cloud can't resume refused before anything moves, and a way back waiting on Devin.app ready once it's updated; and the handoff settings")
   clearTimeout(watchdog)
   app.exit(0)
 }

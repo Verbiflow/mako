@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { createHash, randomUUID } from "node:crypto"
-import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, readdir, readFile, rename, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
@@ -27,7 +27,8 @@ import { holdHostLease } from "@mako/host/base/host-idle"
  * With `--handoff <harness>`, a Thread of that harness is then handed off while its agent runs a long command: the
  * turn must pause here, go on and finish on the machine, and the file it wrote there come back with the Thread.
  *
- * Prints no secret; writes a JSON report. The Threads stay, on their cloud machines, to be looked at.
+ * Prints no secret; writes a JSON report. The Threads stay, on their cloud machines, to be looked at, and so does the
+ * project their worktrees were made from, so any of them can come back: in the data root on a host of its own.
  *
  *   npx tsx scripts/prove-cloud-moves.ts [--harness claude --harness codex …] [--report <file>]
  *
@@ -102,10 +103,17 @@ const { values } = parseArgs({
      * named secret is missing. The values are written to `carried-values.txt` beside the report, for grepping logs.
      */
     carried: { type: "string" },
+    /**
+     * A Thread of this harness in a project of its own, moved to the cloud, whose project is then moved away on this
+     * Mac: the way back must be refused before the cloud is asked anything, naming the project, the Thread going on in
+     * the cloud (a turn runs there); then, brought back with the folder the project moved to, it comes back into its
+     * worktree at the same folder, with what it wrote.
+     */
+    "project-gone": { type: "string" },
   },
 })
 // With `--handoff` or `--fork-burst` alone, only that runs.
-const HARNESSES = values.harness?.length ? values.harness : values.handoff || values["fork-burst"] || values.entropy || values.carried ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
+const HARNESSES = values.harness?.length ? values.harness : values.handoff || values["fork-burst"] || values.entropy || values.carried || values["project-gone"] ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
 const dataRoot = values["data-root"] ?? runtimeDataRoot(appDataFolder(), {})
 const { socket } = runtimeLocation(dataRoot)
 const client = randomUUID()
@@ -222,8 +230,8 @@ const OutcomeSchema = z.discriminatedUnion("kind", [
 ])
 const ReturnOutcomeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("back") }),
-  z.object({ kind: z.literal("stayed"), reason: z.string(), outdated: z.object({ harness: z.string(), installed: z.string().nullable(), offer: z.object({ kind: z.string() }).loose() }).loose().optional() }),
-  z.object({ kind: z.literal("unsettled"), reason: z.string() }),
+  z.object({ kind: z.literal("stayed"), reason: z.string(), outdated: z.object({ harness: z.string(), installed: z.string().nullable(), offer: z.object({ kind: z.string() }).loose() }).loose().optional(), missing: z.object({ folder: z.string(), project: z.string().optional() }).optional() }),
+  z.object({ kind: z.literal("unsettled"), reason: z.string(), waitsOn: z.string().optional() }),
 ])
 const ReturnTimingsSchema = z.object({ phase: z.string(), timings: z.record(z.string(), z.number()), sessions: z.array(z.object({ conversationId: z.string(), begun: z.boolean().optional() }).loose()).default([]) }).loose()
 const PlacementSchema = z.object({ thread: z.string(), session: z.string() })
@@ -736,6 +744,75 @@ async function forkBurst(harness: string, project: string, count: number): Promi
 }
 
 /**
+ * A Thread whose project moves away while it runs in the cloud, as a person moving or deleting the project folder does.
+ * In a clone of its own, so the move touches no other proof's Threads.
+ */
+async function projectGoneProof(harness: string): Promise<Proved> {
+  const steps: Step[] = []
+  const id = randomUUID()
+  const answered: string[] = []
+  const timed = async (step: string, work: () => Promise<string>) => {
+    const started = performance.now()
+    const done: Step = await work().then(
+      (detail) => ({ step, ms: Math.round(performance.now() - started), ok: true, detail }),
+      (error: Error) => ({ step, ms: Math.round(performance.now() - started), ok: false, detail: error.message }),
+    )
+    steps.push(done)
+    console.log(`${"gone".padEnd(9)} ${step.padEnd(30)} ${done.ok ? "ok  " : "FAIL"} ${String(done.ms).padStart(7)} ms  ${done.detail ?? ""}`)
+    return done.ok
+  }
+  const own = join(scratch, "gone-project")
+  const moved = join(scratch, "moved-project")
+  await run("git", ["clone", "-q", values.repository, own])
+  const token = `gone-proof-${randomUUID().slice(0, 8)}`
+  const first = randomUUID()
+  const mode = widestMode(harness)
+  let folder = ""
+  if (!(await timed("a Thread, moved", async () => {
+    const model = await freeModel(harness, own)
+    await call("mako:live-start", [harness, own, { conversationId: id, worktree: true, ...mode && { modeId: mode }, ...model && { tuning: { model } }, initialRequest: { id: first, text: `Create a file named gone-proof.txt in the current folder containing exactly one line: ${token}\nDo not commit it. Then reply with one short sentence that includes the word WRITTEN.`, attachments: [] } }])
+    const shot = await until(id, (current) => settled(current, first), 300_000, answered)
+    folder = shot.session.cwd ?? ""
+    if ((await readFile(join(folder, "gone-proof.txt"), "utf8").catch(() => "")).trim() !== token) throw new Error(`no gone-proof.txt in ${folder}`)
+    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, randomUUID()]))
+    if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    return outcome.cloudThread
+  }))) return { steps, conversation: id }
+  await rename(own, moved)
+  const refused = randomUUID()
+  if (!(await timed("refused, its project gone", async () => {
+    const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, refused]))
+    if (outcome.kind !== "stayed") throw new Error(`${outcome.kind}${outcome.kind === "unsettled" ? `: ${outcome.reason}` : ""}`)
+    if (outcome.missing?.project !== own || outcome.missing.folder !== folder) throw new Error(`stayed without naming the project: ${JSON.stringify(outcome)}`)
+    // Refused before the cloud was asked: no plan was written, so nothing was begun.
+    if (await lstat(join(dataRoot, "cloud", "returns", `${refused}.json`)).then(() => true, () => false)) throw new Error("a return was planned and begun")
+    return outcome.reason
+  }))) return { steps, conversation: id }
+  // Still the cloud's: a turn runs on its machine, which is Linux, at the same folder.
+  await timed("a turn in the cloud after", async () => {
+    const turn = randomUUID()
+    const before = (await snapshot(id)).blocks.length
+    await call("mako:live-prompt", [id, turn, "Run the shell command `uname -s; pwd` and show its output, then reply with the word STILL.", []])
+    const shot = await until(id, (current) => settled(current, turn), 300_000, answered)
+    const status = shot.requests.find((request) => request.id === turn)?.status
+    if (status !== "completed") throw new Error(`the turn ended ${ended(shot, turn)}`)
+    const said = blockText(shot, before)
+    if (!said.includes("Linux") || !said.includes(folder)) throw new Error(`it didn't run on its machine: ${said.replace(/\s+/g, " ").slice(0, 300)}`)
+    return "on its machine (Linux), at the same folder"
+  })
+  await timed("back into the moved project", async () => {
+    const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, randomUUID(), { project: moved }]))
+    if (outcome.kind !== "back") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    const written = (await readFile(join(folder, "gone-proof.txt"), "utf8")).trim()
+    if (written !== token) throw new Error(`gone-proof.txt holds ${JSON.stringify(written.slice(0, 80))}`)
+    const common = await git(folder, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    if (!common.startsWith(moved)) throw new Error(`its worktree belongs to ${common}`)
+    return `its worktree at the same folder, of ${moved.replace(scratch, "…")}`
+  })
+  return { steps, conversation: id }
+}
+
+/**
  * Machines cloned from one image, each asked for fresh randomness: a new process's random UUID, the kernel's boot id
  * and whether the kernel has a VM generation counter (which reseeds it as a snapshot is restored). Two machines that
  * print the same UUID draw the same randomness, and so mint the same IDs.
@@ -994,8 +1071,12 @@ async function freeModel(harness: string, cwd: string): Promise<string | undefin
   return free.find((id) => id === profile.defaultModel) ?? free[0]
 }
 
-// A clone of the repository as a person's project: the Threads take worktrees of it.
-const scratch = await mkdtemp(join(tmpdir(), "mako-move-proof-"))
+// A clone of the repository as a person's project: the Threads take worktrees of it. A host of its own keeps it in its
+// data root, for as long as the worktrees made of it: a Thread the run leaves in the cloud comes back into its worktree
+// later, which needs its project, and the data root goes whole when it's cleaned up.
+const projects = ownHost ? join(dataRoot, "proof-projects") : tmpdir()
+await mkdir(projects, { recursive: true, mode: 0o700 })
+const scratch = await mkdtemp(join(projects, "mako-move-proof-"))
 const project = join(scratch, "project")
 await run("git", ["clone", "-q", values.repository, project])
 const report: Record<string, Awaited<ReturnType<typeof prove>>> = {}
@@ -1008,11 +1089,10 @@ if (values.handoff) report["handoff"] = await handOffProof(values.handoff, proje
 if (values["fork-burst"]) report["fork burst"] = await forkBurst(values["tab-harness"] ?? "claude", project, Number(values["fork-burst"]))
 if (values.entropy) report["entropy"] = await entropy(values["tab-harness"] ?? "claude", project, Number(values.entropy))
 if (values.carried) report["carried"] = await carriedProof(values.carried, project)
+if (values["project-gone"]) report["project gone"] = await projectGoneProof(values["project-gone"])
 // A host this run started signs out as it ends: its device leaves the account, and its credential leaves the keychain.
 if (values["spawn-host"]) await call("mako:cloud-sign-out", [])
 if (values.report) await writeFile(values.report, `${JSON.stringify(report, null, 2)}\n`)
-// A host of its own is throwaway, and so is the clone its Threads' worktrees were made from.
-if (ownHost) await rm(scratch, { recursive: true, force: true })
 
 const stepNames = [...new Set(Object.values(report).flatMap(({ steps }) => steps.map((step) => step.step)))]
 console.log(`\n${["harness", ...stepNames.map((name) => name.split(" ").slice(0, 3).join(" "))].map((name) => name.padEnd(16)).join(" ")}`)
@@ -1022,6 +1102,7 @@ for (const [harness, { steps }] of Object.entries(report))
     return step ? `${step.ok ? "" : "✗ "}${(step.ms / 1000).toFixed(1)} s` : "–"
   })].map((cell) => cell.padEnd(16)).join(" "))
 const failed = Object.entries(report).flatMap(([harness, { steps }]) => steps.filter((step) => !step.ok).map((step) => `${harness}: ${step.step}: ${step.detail}`))
-console.log(`\nThreads (conversation ids): ${Object.entries(report).map(([harness, { conversation }]) => `${harness} ${conversation}`).join(", ")}`)
+console.log(`\nProject (kept for the Threads left in the cloud): ${project}`)
+console.log(`Threads (conversation ids): ${Object.entries(report).map(([harness, { conversation }]) => `${harness} ${conversation}`).join(", ")}`)
 console.log(failed.length ? `\n${failed.length} step${failed.length === 1 ? "" : "s"} failed:\n${failed.join("\n")}` : "\nEvery step passed on every harness.")
 process.exit(failed.length ? 1 : 0)

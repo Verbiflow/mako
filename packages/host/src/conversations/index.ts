@@ -38,7 +38,7 @@ import { ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews
 import type { ForkInput, TransferInput } from "../contracts/conversation-control.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
-import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
+import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
 import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, MoveStageInputSchema, readyForMove, stageMove, type MoveArrivalDeps, type MoveArrivalWire, type MoveReadyInput, type MoveStageInput } from "./move-arrival.js"
 import { departMove, MoveDepartureInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveStayInput } from "./move-departure.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
@@ -540,7 +540,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   const setNoHandOffs: (onSleep: boolean) => HandOffSettings = () => noHandOffs
   methods.handle("mako:handoff-settings-set", setNoHandOffs)
   /** Where no person's Mac brings Threads back (a cloud machine, the fixture desk); on a Mac, `CloudReturns` answers first. */
-  const returnNowhere: (conversationId: string, move: string) => ThreadReturnOutcome = () => ({ kind: "stayed", reason: "This Mako doesn't bring Threads back from the cloud." })
+  const returnNowhere: (conversationId: string, move: string, options?: ThreadReturnOptions) => ThreadReturnOutcome = () => ({ kind: "stayed", reason: "This Mako doesn't bring Threads back from the cloud." })
   methods.handle("mako:thread-return", returnNowhere)
   /** Before a device releases a Thread: on a cloud machine, once its folder is cloned. */
   methods.handle("mako:move-ready", (input: MoveReadyInput) => {

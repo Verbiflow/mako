@@ -846,6 +846,16 @@ export class ThreadStore {
     return found ? environmentValues(EnvironmentRowSchema.parse(found)) : undefined
   }
 
+  /**
+   * A worktree whose main checkout moved: the repository it belongs to now, and the folder its Thread was started
+   * from, at the same place inside it.
+   */
+  rehomeWorktree(path: string, repoRoot: string, project: string): void {
+    this.write(() => {
+      this.sql("UPDATE thread_worktrees SET repo_root = ?, project = ? WHERE path = ? AND device_id = ?").run(repoRoot, project, path, this.deviceId)
+    })
+  }
+
   /** Forget a worktree; a checkout of several repositories goes with the last of its worktrees, or at once by its own folder. */
   detachWorktree(path: string): void {
     this.write(() => {
