@@ -1,14 +1,20 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.310"
+    "version": "2.1.311"
   },
   "about": "Run exactly one subagent in the background (do not wait for it) whose whole task is to reply with a marker, then end your turn at once. A subagent left running in the background reports after the turn that started it; the harness runs a turn of its own on the report, or takes it into the turn still running.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/321b67be-801f-42a9-b543-4df21c0c9fee.jsonl",
-      "known": []
+      "path": ".claude/projects/-tmp-mako-pair-project/aeab5545-a137-40c1-81d9-33366c48a2d2.jsonl",
+      "known": [
+        {
+          "side": "+",
+          "line": "note: Unread record: record tools-used — not a kind Mako reads",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

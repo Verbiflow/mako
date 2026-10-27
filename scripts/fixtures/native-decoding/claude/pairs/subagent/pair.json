@@ -1,14 +1,25 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.310"
+    "version": "2.1.311"
   },
   "about": "Start one subagent to read notes.md and docs/plan.md and report which day the release ships and when the branch freezes. Don't read the files yourself; answer with what it reports. A subagent that reads two files and reports back, whose own calls are its progress while it runs, then the answer from its report.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/cf22e0dc-af07-4879-9c3e-e748d7241eb0.jsonl",
-      "known": []
+      "path": ".claude/projects/-tmp-mako-pair-project/9edaceee-05a7-4990-aea1-bc8f0db3392a.jsonl",
+      "known": [
+        {
+          "side": "+",
+          "line": "note: Unread record: record tools-used — not a kind Mako reads",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "note: Unread record: record tools-used — not a kind Mako reads",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

@@ -1,14 +1,20 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.310"
+    "version": "2.1.311"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / Without reading anything, which day did notes.md name? A turn, a manual compaction, then a turn that leans on the summary.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/7f5ce47e-0b1e-4cd8-bebd-5738561361bf.jsonl",
-      "known": []
+      "path": ".claude/projects/-tmp-mako-pair-project/f494696c-3ffc-4fac-991f-687b17a37698.jsonl",
+      "known": [
+        {
+          "side": "+",
+          "line": "note: Unread record: record tools-used — not a kind Mako reads",
+          "reason": ""
+        }
+      ]
     }
   ]
 }
