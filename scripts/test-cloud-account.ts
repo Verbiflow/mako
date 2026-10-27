@@ -16,6 +16,8 @@ import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { after, test } from "node:test"
+import diagnosticsChannel from "node:diagnostics_channel"
+import { Pool, fetch as undiciFetch } from "undici"
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws"
 import { z } from "zod"
 import {
@@ -38,6 +40,7 @@ import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } f
 import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
 import { declareCloudAccountMethods } from "@mako/host/usage/cloud-account-methods"
+import { RequestTraces } from "@mako/host/usage/request-trace"
 import { HostMethods } from "@mako/host/transport/methods"
 import { unwatchedWork } from "@mako/host/base/event-loop"
 import { CloudSignInSync } from "@mako/host/harnesses/cloud-sign-ins"
@@ -464,7 +467,8 @@ async function sleepyProxy(port: number) {
 test("after a sleep, a call to the cloud never waits on a pooled connection the network dropped", async () => {
   const cloud = await fakeCloud()
   const network = await sleepyProxy(Number(new URL(cloud.url).port))
-  const mac = await signedIn(cloud, { url: network.url })
+  const logged: Array<Record<string, string | number | boolean>> = []
+  const mac = await signedIn(cloud, { url: network.url, log: (message, fields) => message === "cloud request" && fields && void logged.push(fields) })
   // The pool settles: each call made while it was awake is answered and its connection idle again.
   for (let call = 0; call < 3; call++) {
     await mac.accounts.signIns()
@@ -481,6 +485,45 @@ test("after a sleep, a call to the cloud never waits on a pooled connection the 
   console.log(`  a call to the cloud right after waking: ${ms.toFixed(0)} ms`)
   assert.ok(ms < 1_000, `answered on a new connection in ${ms.toFixed(0)} ms`)
   assert.equal(await stalled, "dropped", "the call stranded before the wake ends rather than hanging")
+  // Its log line says how far it got, which the cloud can't: it went out, on a connection kept from earlier calls, and
+  // nothing came back.
+  const stranded = logged.find((fields) => fields.outcome === "unreachable")
+  assert.match(String(stranded?.reached), /^went out after \d+ ms on a connection kept from \d+ calls \(open \d+ ms, quiet \d+ ms since its last answer\); no answer in \d+ ms$/, JSON.stringify(stranded))
+})
+
+test("a call that fails says whether it ever left this Mac, and on which connection", async () => {
+  // A server that takes connections and never answers, behind a pool of one connection: the first call goes out on a
+  // new connection and hears nothing; the second never goes out at all.
+  const silent = createTcpServer((socket) => socket.on("data", () => undefined))
+  silent.listen(0, "127.0.0.1")
+  await once(silent, "listening")
+  const sockets = new Set<Socket>()
+  silent.on("connection", (socket) => sockets.add(socket))
+  after(() => {
+    for (const socket of sockets) socket.destroy()
+    silent.close()
+  })
+  // SAFETY: listening on a TCP host and port, so the address is an AddressInfo.
+  const url = `http://127.0.0.1:${(silent.address() as AddressInfo).port}/v1/threads/t-1/records/checkpoints/abc`
+  const pool = new Pool(new URL(url).origin, { connections: 1 })
+  after(() => pool.destroy())
+  const traces = new RequestTraces("x-test-correlation")
+  const call = async (id: string) => {
+    const trace = traces.follow(id)
+    try {
+      await undiciFetch(url, { method: "HEAD", headers: { "x-test-correlation": id }, dispatcher: pool, signal: AbortSignal.timeout(400) })
+      return "answered"
+    } catch {
+      return trace.describe()
+    } finally {
+      trace.end()
+    }
+  }
+  const [first, second] = await Promise.all([call(randomUUID()), call(randomUUID())])
+  assert.match(first, /^went out after \d+ ms on a new connection; no answer in \d+ ms$/)
+  assert.match(second, /^waited \d+ ms and never went out: no connection took it$/)
+  // A call no trace follows is left alone, and nothing listens once none is on its way.
+  assert.equal(diagnosticsChannel.channel("undici:request:create").hasSubscribers, false)
 })
 
 test("a build without a cloud, or with one it may not reach, offers no sign-in", async () => {

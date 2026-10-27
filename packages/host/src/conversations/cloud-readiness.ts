@@ -37,6 +37,9 @@ const ReadyFileSchema = z.object({ version: z.literal(1), threads: z.record(z.st
 /** What keeping a Thread ready asks of the account: a cloud Thread standing by, its checkpoints and its records. */
 export type ReadinessAccount = Pick<CloudAccount, "createThread" | "sendCheckpoint" | "threadRecords">
 
+/** A cloud Thread kept ready, as a move takes it: and the checkpoint the cloud keeps for it, by its hash. */
+export type TakenReady = { cloudThread: string; checkpoint?: string }
+
 /** What a move of a Thread would carry, read as its plan reads it: refused when it couldn't move. */
 export type ReadyPlan = { thread: string; folder: string; repository: CloudRepository; paths: string[]; harness: string }
 
@@ -93,9 +96,10 @@ export class CloudReadiness {
 
   /**
    * The cloud Thread standing by for `thread`, for a move of it to take, when it stands by for the same folder and
-   * repository: once taken, it's this move's alone. Waits for a round still sending to it.
+   * repository: once taken, it's this move's alone, with the hash of the checkpoint last sent for it, which the cloud
+   * keeps already. Waits for a round still sending to it.
    */
-  async take(thread: string, folder: string, repository: CloudRepository): Promise<string | undefined> {
+  async take(thread: string, folder: string, repository: CloudRepository): Promise<TakenReady | undefined> {
     await this.#rounds.get(thread)?.catch(() => undefined)
     const entries = await this.#load()
     const entry = entries[thread]
@@ -111,7 +115,7 @@ export class CloudReadiness {
     delete entries[thread]
     await this.#save()
     hostLog("readiness", "a move takes the cloud Thread kept ready for it", { thread, cloudThread: entry.cloudThread, readyForMs: Date.now() - entry.at })
-    return entry.cloudThread
+    return { cloudThread: entry.cloudThread, ...entry.checkpoint && { checkpoint: entry.checkpoint } }
   }
 
   #round(working: WorkingThread): Promise<void> {

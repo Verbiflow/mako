@@ -18,7 +18,7 @@ import { executionRefusal, HandoffSchema, MoveIdSchema, RuntimeIdSchema, type Cl
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "../contracts/thread-identity.js"
 import type { CloudAccount } from "../usage/index.js"
 import { captureMoveCheckpoint } from "../workspaces/index.js"
-import type { ReadyPlan } from "./cloud-readiness.js"
+import type { ReadyPlan, TakenReady } from "./cloud-readiness.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 import type { CheckedSession } from "./harness-check.js"
 import { MoveNotQuietError } from "./live-moves.js"
@@ -131,6 +131,11 @@ export const MovePlanSchema = z.object({
   sessions: z.array(PlanSessionSchema).min(1),
   phase: PhaseSchema,
   checkpoint: MoveCheckpointSchema.optional(),
+  /**
+   * The checkpoint the cloud keeps already, by its hash: the one sent while the Thread was kept ready, then each this
+   * move sent. One the same isn't asked about again.
+   */
+  held: z.string().optional(),
   handoff: HandoffSchema.optional(),
   /** A move that pauses running turns to take them along (`ThreadHandOff`), and what it paused. */
   handingOff: z.object({
@@ -200,7 +205,7 @@ export type CloudMovesOptions = {
    */
   carried?(folder: string, why: string): Promise<void>
   /** A cloud Thread kept ready for this Thread (`CloudReadiness.take`), which the move takes in place of a new one. */
-  ready?: { take(thread: string, folder: string, repository: CloudRepository): Promise<string | undefined> }
+  ready?: { take(thread: string, folder: string, repository: CloudRepository): Promise<TakenReady | undefined> }
   /**
    * The Thread's harnesses here weighed against the cloud's (`HarnessCheck`): a Session the cloud can't resume refuses
    * the move here, before anything is made, rather than as it arrives.
@@ -333,7 +338,8 @@ export class CloudMoves {
       // Kept ready while it worked: its records and checkout are there already, and only the last seconds go.
       const ready = await this.#options.ready?.take(plan.thread, plan.folder, plan.repository).catch(() => undefined)
       if (ready) {
-        plan.cloudThread = ready
+        plan.cloudThread = ready.cloudThread
+        if (ready.checkpoint) plan.held = ready.checkpoint
         plan.timings.standby = 0
       }
     } catch (error) {
@@ -628,7 +634,8 @@ export class CloudMoves {
     const scratch = await mkdtemp(join(this.#options.folder, `${plan.move}-`))
     try {
       const { checkpoint, file } = await captureMoveCheckpoint(this.#options.git, plan.folder, scratch)
-      if (checkpoint.sha256 !== plan.checkpoint?.sha256) await this.#account().sendCheckpoint(plan.cloudThread, checkpoint, file)
+      if (checkpoint.sha256 !== plan.held) await this.#account().sendCheckpoint(plan.cloudThread, checkpoint, file)
+      plan.held = checkpoint.sha256
       plan.checkpoint = checkpoint
     } finally {
       await rm(scratch, { recursive: true, force: true })

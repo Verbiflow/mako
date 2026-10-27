@@ -11,6 +11,8 @@ import { decodeOperation } from "@mako/protocol"
 import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest } from "@mako/protocol/moves"
 import { fromHostOperation } from "@mako/host/contracts/host-operations"
 import { CloudMoves, cloudRuntimeOf, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
+import type { TakenReady } from "@mako/host/conversations/cloud-readiness"
+import { captureMoveCheckpoint } from "@mako/host/workspaces/move-checkpoint"
 import { MoveNotQuietError } from "@mako/host/conversations/live-moves"
 import type { ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 import { encodeRuntimeValue, type EncodedValue } from "@mako/host/contracts/runtime-value"
@@ -47,6 +49,8 @@ let clock = 1_000
 class Gateway {
   readonly made: Array<{ threadId: string; folder: string | undefined; harness: string | undefined }> = []
   readonly checkpoints = new Map<string, number>()
+  /** Each checkpoint the move asked the cloud about, by its hash: whether it keeps it, and its bytes if not. */
+  readonly asked: string[] = []
   readonly sentRecords: string[][] = []
   readonly answers = new Map<string, MoveAnswer>()
   readonly calls: Array<{ channel: string; args: readonly unknown[]; options?: { refuseUnstarted?: boolean } }> = []
@@ -77,7 +81,7 @@ class Gateway {
 
 type Setup = { moves: CloudMoves; fresh(): CloudMoves; gateway: Gateway; threads: ThreadStore; steps: ThreadMoveStep[]; conversation: string; thread: string; session: string; checkout: string; busy: { reasons: string[]; late: string[] }; folder: string; started: string[]; work: Work }
 
-function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMovesOptions["harnesses"] } = {}): Setup {
+function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMovesOptions["harnesses"]; ready?: TakenReady } = {}): Setup {
   const folder = join(root, name)
   const remote = join(folder, "remote.git")
   const checkout = join(folder, "Users", "ada", "worktrees", "fix")
@@ -117,6 +121,7 @@ function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMov
     },
     askBases: async () => undefined,
     sendCheckpoint: async (_threadId, checkpoint: MoveCheckpoint) => {
+      gateway.asked.push(checkpoint.sha256)
       const sent = !gateway.checkpoints.has(checkpoint.sha256)
       gateway.checkpoints.set(checkpoint.sha256, checkpoint.bytes)
       return { sent }
@@ -230,6 +235,7 @@ function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMov
     step: (_conversationId, _move, step) => steps.push(step),
     newCloudThread: () => `t-${name.padEnd(16, "0").slice(0, 16).replace(/[^0-9a-f]/g, "a")}`,
     ...options.harnesses && { harnesses: options.harnesses },
+    ...options.ready && { ready: { take: async () => options.ready } },
   })
   return { moves: make(), fresh: make, gateway, threads, steps, conversation, thread: placed.thread, session: placed.session, checkout, busy, folder, started, work }
 }
@@ -277,6 +283,28 @@ try {
     assert.deepEqual(await s.moves.move(s.conversation, move()), { kind: "kept-here", reason: "This Thread runs in the cloud already. Bring it back to this Mac first to move it again." }, "a new move of a Thread in the cloud says where it is")
     assert.equal(s.gateway.made.length, made, "and makes nothing")
     assert.equal(s.gateway.calls.filter((call) => call.channel === "mako:live-start").length, 1)
+  }
+
+  // Taking the cloud Thread kept ready: the checkout readiness sent last isn't asked about again, since the cloud keeps
+  // it (one call fewer on the way, and the one a move once stalled on); one that changed since goes as any would.
+  {
+    const scratch = mkdtempSync(join(root, "ready-checkpoint-"))
+    // As readiness last sent it: this very checkout's checkpoint.
+    const ready: TakenReady = { cloudThread: "t-ready0000000000" }
+    const s = setup("ready-unchanged", { ready })
+    ready.checkpoint = (await captureMoveCheckpoint(git, s.checkout, scratch)).checkpoint.sha256
+    const id = move()
+    assert.deepEqual(await s.moves.move(s.conversation, id), { kind: "moved", cloudThread: "t-ready0000000000" }, "moved to the cloud Thread kept ready")
+    assert.deepEqual(s.gateway.asked, [], "the checkpoint readiness sent isn't asked about, ahead or after the release")
+    assert.equal(plan(s, id).checkpoint?.sha256, ready.checkpoint, "and it's the checkpoint the machine arrives with")
+    const earlier: TakenReady = { cloudThread: "t-ready0000000001" }
+    const changed = setup("ready-changed", { ready: earlier })
+    earlier.checkpoint = (await captureMoveCheckpoint(git, changed.checkout, scratch)).checkpoint.sha256
+    writeFileSync(join(changed.checkout, "a.txt"), "changed since readiness sent it\n")
+    assert.equal((await changed.moves.move(changed.conversation, move())).kind, "moved")
+    assert.equal(changed.gateway.asked.length, 1, "a checkout that changed since goes once")
+    assert.notEqual(changed.gateway.asked[0], earlier.checkpoint)
+    rmSync(scratch, { recursive: true, force: true })
   }
 
   // Busy: refused before anything is made in the cloud, so no machine starts for a move that can't go.
