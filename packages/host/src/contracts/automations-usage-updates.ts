@@ -61,23 +61,73 @@ export const UsageTotalsSchema = z.object({
 })
 export type UsageTotals = z.infer<typeof UsageTotalsSchema>
 
-/** Local usage from every supported session format on this machine. */
-export const UsageSummarySchema = z.object({
+/** What one period of a window's chart spent: its cost (an estimate wherever `estimatedCost` is above zero) and its tokens. */
+export const UsageAmountSchema = z.object({
+  cost: z.number(),
+  estimatedCost: z.number(),
+  tokens: z.number(),
+})
+export type UsageAmount = z.infer<typeof UsageAmountSchema>
+
+/** One hour or one local day of a window, whole and by source, so the chart and its readout read the same numbers. */
+export const UsagePeriodSchema = z.object({
+  /** When the period starts, in milliseconds since the epoch: an hour, or midnight of a day on this machine's clock. */
+  start: z.number(),
+  total: UsageAmountSchema,
+  /** Each source's part, under the name `UsageWindow.sources` lists it by; a source that spent nothing in the period is absent. */
+  sources: z.record(z.string(), UsageAmountSchema),
+})
+export type UsagePeriod = z.infer<typeof UsagePeriodSchema>
+
+/** The windows Settings › Usage reads, shortest first; the ledger keeps the longest. */
+export const USAGE_WINDOWS = ["day", "week", "month"] as const
+export type UsageWindowId = (typeof USAGE_WINDOWS)[number]
+
+/**
+ * Local usage over one window, every figure summed by the host in one pass
+ * over the ledger, so no view adds up a total of its own. `day` is the last
+ * 24 hours by the hour; `week` and `month` are the last 7 and 30 days by the
+ * day, from midnight on this machine's clock.
+ */
+export const UsageWindowSchema = z.object({
+  id: z.enum(USAGE_WINDOWS),
+  since: z.number(),
+  until: z.number(),
+  resolution: z.enum(["hour", "day"]),
   total: UsageTotalsSchema,
-  days: z.array(UsageTotalsSchema.extend({ date: z.string() })),
-  models: z.array(UsageTotalsSchema.extend({ model: z.string() })),
-  projects: z.array(UsageTotalsSchema.extend({ cwd: z.string() })),
-  /** `harness` names the harness a source counts, whose `usage.outsideMako` says whether its sessions outside Mako are in it. */
-  sources: z.array(UsageTotalsSchema.extend({ source: z.string(), harness: z.string().optional() })).optional(),
+  /** Sessions with a call in the window, Mako's own helper runs left out. */
   sessions: z.number(),
-  /** True when some records in the window could not be read, so the totals may be low; the host log names them. */
-  truncated: z.boolean(),
+  /** Every period of the window, oldest first, the empty ones included. */
+  periods: z.array(UsagePeriodSchema),
+  /** `harness` names the harness a source counts, whose `usage.outsideMako` says whether its sessions outside Mako are in it. */
+  sources: z.array(UsageTotalsSchema.extend({ source: z.string(), harness: z.string().optional(), sessions: z.number() })),
+  /** Each model under each source that called it, all of them, by cost. */
+  models: z.array(UsageTotalsSchema.extend({ model: z.string(), source: z.string() })),
+  /** The projects that spent most; `otherProjects` sums the rest, so the list and the total agree. */
+  projects: z.array(UsageTotalsSchema.extend({ cwd: z.string() })),
+  otherProjects: UsageTotalsSchema.extend({ count: z.number() }).optional(),
   /** Harnesses whose own records say some of their usage in the window is missing, so the totals may be low. */
   incomplete: z.array(z.string()).optional(),
   /** The `PriceTable`s the estimated part of the cost was priced from; absent when nothing was estimated. */
   priceTables: z.array(z.string()).optional(),
 })
+export type UsageWindow = z.infer<typeof UsageWindowSchema>
+
+/** Local usage from every supported session format on this machine, over each of `USAGE_WINDOWS`. */
+export const UsageSummarySchema = z.object({
+  /** One per `USAGE_WINDOWS` entry, in that order. */
+  windows: z.array(UsageWindowSchema),
+  /** True when some records in the window could not be read, so the totals may be low; the host log names them. */
+  truncated: z.boolean(),
+})
 export type UsageSummary = z.infer<typeof UsageSummarySchema>
+
+/** A summary's window by its id; a summary holds every one of `USAGE_WINDOWS`. */
+export function usageWindow(summary: UsageSummary, id: UsageWindowId): UsageWindow {
+  const window = summary.windows.find((candidate) => candidate.id === id)
+  if (!window) throw new Error(`The usage summary has no ${id} window`)
+  return window
+}
 
 /**
  * A saved prompt, with an optional trigger.

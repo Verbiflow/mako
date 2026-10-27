@@ -24,6 +24,7 @@ import { HarnessIcon, ProviderIcon } from "../src/components/ui/provider-icon.ts
 import { threadsStore } from "../src/state/thread-store.ts"
 import { renderHarnessDescriptors } from "./harness-descriptors.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { usageWindow } from "@mako/host/contracts/automations-usage-updates"
 
 const nativeStores = new NativeStores(false)
 
@@ -217,7 +218,7 @@ const usage = usageHarnesses(host).find(({ provider }) => provider === "seventh"
 assert.deepEqual(usage && { label: usage.label, history: usage.history }, { label: "Seventh Agent", history: undefined })
 const root = await mkdtemp(join(tmpdir(), "mako-seventh-"))
 try {
-  const summary = await usageSummary(usageHarnesses(host), join(root, "mako"), join(root, "home"), join(root, "conversations"))
+  const summary = usageWindow(await usageSummary(usageHarnesses(host), join(root, "mako"), join(root, "home"), join(root, "conversations")), "month")
   assert.equal(summary.sessions, 0)
 } finally {
   await rm(root, { recursive: true, force: true })

@@ -61,6 +61,7 @@ import type { JsonValue } from "@mako/host/contracts/json"
 import { nativeStream } from "@mako/host/harnesses/native-stream"
 import { streamDifferences } from "@mako/sessions/harnesses"
 import { MAX_STREAM_DIFFERENCES, mergeStream, recordSpan } from "@mako/sessions/stream-merge"
+import { usageWindow } from "@mako/host/contracts/automations-usage-updates"
 
 const BASELINE = join(import.meta.dirname, "perf-decoders-baseline.json")
 const ALLOWED_REGRESSION = 1.25
@@ -320,7 +321,7 @@ if (values.real) {
       unit: "scan",
       repetitions: 2,
       run: async () => {
-        const summary = await usageSummary([usage], userRoot, home, undefined, { ledger: new UsageLedger() })
+        const summary = usageWindow(await usageSummary([usage], userRoot, home, undefined, { ledger: new UsageLedger() }), "month")
         return summary.sessions + 1
       },
     })

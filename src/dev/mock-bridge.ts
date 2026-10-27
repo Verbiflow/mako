@@ -4,6 +4,7 @@ import { mockAuthoring } from "./mock-authoring"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
 import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-continuation"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
+import { fixtureUsageSummary } from "./usage-fixture"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
 import type { HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { ConversationSettings } from "@mako/host/contracts/turn-continuation"
@@ -2859,21 +2860,7 @@ export function installMockBridge() {
         models: [],
       },
     abortThreadRun: async () => {},
-    usage: async () => ({
-      total: {
-        cost: 36.63,
-        input: 2_400_000,
-        output: 180_000,
-        cacheRead: 9_100_000,
-        cacheWrite: 210_000,
-        messages: 285,
-      },
-      days: [],
-      models: [],
-      projects: [],
-      sessions: 12,
-      truncated: false,
-    }),
+    usage: async () => fixtureUsageSummary(),
     automations: async () => [
       {
         id: "a1",

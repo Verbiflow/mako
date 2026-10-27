@@ -5,7 +5,8 @@
 // reported cost, Mako's estimate, its own helper runs and the changes agents made. `?theme=dark` draws
 // the dark theme, anything else the light one. No host, account or harness is touched.
 import { createRoot } from "react-dom/client"
-import { UsageDetails } from "@/components/composer/context-meter"
+import { ContextMeter, UsageDetails } from "@/components/composer/context-meter"
+import { ConversationScopeContext } from "@/state/conversation-scope"
 import { useAccountLimitNotice } from "@/components/composer/account-notice"
 import { ProducedNotice } from "@/components/composer/composer-notices"
 import { UsageSection } from "@/components/settings/usage-section"
@@ -13,12 +14,13 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { threadsStore } from "@/state/thread-store"
 import { accountsStore } from "@/state/accounts"
 import { acpStore, type LiveAcpConversation } from "@/state/acp"
-import type { ContextBreakdown, LiveRequest, LiveSessionUsage, UsageSummary } from "@/lib/types"
+import type { ContextBreakdown, LiveRequest, LiveSessionUsage } from "@/lib/types"
 import type { ChangeUsage } from "@mako/host/contracts/thread-changes"
 import type { ChangeCounts, TurnSpend } from "@mako/host/contracts/usage-ledger"
 import { changeCounts } from "@/state/thread-changes"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
+import { fixtureUsageSummary } from "./usage-fixture"
 import "../index.css"
 
 // The app is dark unless `light` is on the root.
@@ -27,28 +29,7 @@ document.documentElement.classList.toggle("light", new URLSearchParams(location.
 installMockBridge()
 const day = 86_400_000
 const now = Date.now()
-const totals = (cost: number, reported: number, input: number, output: number, cacheRead: number, cacheWrite: number, messages: number) =>
-  ({ cost, reportedCost: reported, estimatedCost: cost - reported, input, output, cacheRead, cacheWrite, messages, pricedTokens: input + output + cacheRead + cacheWrite, unpricedTokens: 0 })
-const summary: UsageSummary = {
-  total: { ...totals(96.42, 31.18, 2_400_000, 410_000, 88_000_000, 1_900_000, 1_284), pricedTokens: 89_610_000, unpricedTokens: 3_100_000 },
-  days: Array.from({ length: 30 }, (_, index) => ({ date: new Date(now - (29 - index) * day).toISOString().slice(0, 10), ...totals(index % 6 === 0 ? 1.2 : 2 + ((index * 7) % 5), 0.8, 80_000, 12_000, 2_900_000, 60_000, 40) })),
-  models: [
-    { model: "gpt-6.1-sol", ...totals(48.1, 0, 1_200_000, 200_000, 41_000_000, 0, 520) },
-    { model: "claude-opus-5-5", ...totals(31.18, 31.18, 900_000, 160_000, 40_000_000, 1_800_000, 610) },
-    { model: "anthropic/claude-haiku-4-5", ...totals(0.42, 0, 210_000, 9_000, 0, 0, 14) },
-  ],
-  projects: [{ cwd: "~/projects/billing", ...totals(70.3, 22.1, 1_700_000, 300_000, 60_000_000, 1_200_000, 900) }],
-  sources: [
-    { source: "Codex", harness: "codex", ...totals(48.1, 0, 1_200_000, 200_000, 41_000_000, 0, 520) },
-    { source: "Claude Code", harness: "claude", ...totals(31.18, 31.18, 900_000, 160_000, 40_000_000, 1_800_000, 610) },
-    { source: "Devin", harness: "devin", ...totals(0, 0, 90_000, 20_000, 3_000_000, 0, 140), unpricedTokens: 3_110_000, pricedTokens: 0 },
-    { source: "Mako: Commit messages", ...totals(0.41, 0, 205_000, 8_800, 0, 0, 12) },
-    { source: "Mako: Model connection checks", ...totals(0.01, 0, 5_000, 200, 0, 0, 2) },
-  ],
-  sessions: 12,
-  truncated: false,
-  priceTables: ["2026-10-06"],
-}
+const summary = fixtureUsageSummary(now)
 const changes: ChangeUsage = {
   days: 14,
   total: { files: 1_284, added: 48_210, removed: 17_932, threads: 23 },
@@ -114,7 +95,30 @@ const conversation: LiveAcpConversation = {
   session: { id: "fixture-codex", harness: "codex", cwd: "/fixture", status: "ready", connection: "connected", modes: [], currentMode: null, configOptions: [] },
   requests: codexTurns, permission: null, sending: false, canceling: false, blocks: [], queued: [], hiddenUserPrompt: null, createdAt: 0, updatedAt: 0,
 }
-acpStore.set({ activeKey: conversation.key, conversations: { [conversation.key]: conversation } })
+// A long Claude Code session, its meter at the window's foot: the popover must stop at the window's top and scroll inside.
+const longClaude: LiveAcpConversation = {
+  ...conversation, key: "fixture-claude-long", draftKey: "fixture-claude-long", harness: "claude",
+  session: { ...conversation.session, id: "fixture-claude-long", harness: "claude", usage: { used: 171_000, size: 200_000, native: { tokens: tokens(91_000, 48_000_000, 1_400_000, 610_000), cost: 61.4 } } },
+  requests: Array.from({ length: 60 }, (_, index) => turn({ provider: "claude", model: "claude-opus-5-5", at: now - (60 - index) * 300_000, tokens: tokens(800, 160_000, 4_000, 3_100, 900), cost: 0.42 }, index + 1)),
+}
+const longBreakdown: ContextBreakdown = {
+  used: 171_000,
+  size: 200_000,
+  categories: [
+    { name: "System prompt", tokens: 3_100, kind: "used" }, { name: "System tools", tokens: 14_600, kind: "used" },
+    { name: "MCP tools", tokens: 21_800, kind: "used" }, { name: "Custom agents", tokens: 2_900, kind: "used" },
+    { name: "Memory files", tokens: 9_400, kind: "used" }, { name: "Skills", tokens: 6_300, kind: "used" },
+    { name: "Messages", tokens: 112_900, kind: "used" }, { name: "Free space", tokens: 0, kind: "free" },
+    { name: "Autocompact buffer", tokens: 29_000, kind: "buffer" },
+  ],
+  items: [
+    ...["linear", "github", "posthog", "notion", "sentry", "figma"].map((name, index) => ({ group: "mcp" as const, name, tokens: 6_000 - index * 700 })),
+    ...["~/project/CLAUDE.md", "~/project/AGENTS.md", "~/.claude/CLAUDE.md", "~/project/docs/CLAUDE.md"].map((name, index) => ({ group: "memory" as const, name, tokens: 4_000 - index * 900 })),
+    ...["reviewer", "explorer", "planner"].map((name, index) => ({ group: "agents" as const, name, tokens: 1_200 - index * 200 })),
+    ...["frontend-design", "dataviz", "research", "unslop", "shadcn", "ux-copy"].map((name, index) => ({ group: "skills" as const, name, tokens: 1_400 - index * 150 })),
+  ],
+}
+acpStore.set({ activeKey: conversation.key, conversations: { [conversation.key]: conversation, [longClaude.key]: longClaude } })
 const weekly = (usedPercent: number) => ({ usedPercent, windowMinutes: 7 * 24 * 60, resetsAt: now + 2 * day })
 accountsStore.set({
   providers: [{ provider: "codex", label: "Codex", mode: "selectable", loginCommand: "codex login" }],
@@ -138,7 +142,7 @@ if (bridge) window.mako = {
   changeUsage: async () => changes,
   accounts: async () => ({ providers: accountsStore.get().providers, accounts: accountsStore.get().accounts.map((account) => ({ ...account, dir: "" })) }),
   accountUsage: async (harness, name) => accountsStore.get().usage[`${harness}:${name}`] ?? { status: "unavailable" },
-  liveContextBreakdown: async (id) => id === "fixture-cursor" ? cursorBreakdown : bridge.liveContextBreakdown(id),
+  liveContextBreakdown: async (id) => id === "fixture-cursor" ? cursorBreakdown : id === longClaude.key ? longBreakdown : bridge.liveContextBreakdown(id),
 }
 
 function Fixture() {
@@ -161,6 +165,12 @@ function Fixture() {
         </section>
         <section className="w-[720px]" data-fixture-settings>
           <UsageSection />
+        </section>
+        <section className="fixed right-6 bottom-6 flex items-center gap-2 rounded-lg bg-surface py-1 pr-1 pl-3 ring-1 ring-hairline" data-fixture-bounded>
+          <span className="text-label text-faint">A long Claude Code session&rsquo;s meter</span>
+          <ConversationScopeContext.Provider value={{ kind: "live", key: longClaude.key }}>
+            <ContextMeter />
+          </ConversationScopeContext.Provider>
         </section>
       </main>
     </TooltipProvider>

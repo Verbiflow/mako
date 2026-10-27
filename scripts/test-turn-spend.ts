@@ -16,6 +16,7 @@ import { usageSummary } from "@mako/host/usage/summary"
 import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { usageWindow } from "@mako/host/contracts/automations-usage-updates"
 
 // Every token the conversation's meter reads belongs to one turn: spend
 // between turns (a background subagent working while its parent is idle)
@@ -149,8 +150,8 @@ try {
 
   // Settings › Usage counts them for a harness whose store keeps no counts.
   const measured = usageHarnesses(providerHost).map((harness) => harness.provider === "cursor" ? { provider: harness.provider, label: harness.label } : harness)
-  const summary = await usageSummary(measured, join(root, "no-mako-user"), join(root, "home"), conversations)
-  const cursor = summary.sources?.find((source) => source.source === "Cursor")
+  const summary = usageWindow(await usageSummary(measured, join(root, "no-mako-user"), join(root, "home"), conversations), "month")
+  const cursor = summary.sources.find((source) => source.source === "Cursor")
   assert.equal(cursor?.input, 210, "every turn's spend, the harness's own included")
   assert.equal(cursor?.messages, 4)
   console.log("Turn spend: spend between turns counts in the next, a turn the harness runs is kept with its spend, spend after the last turn is kept when the process goes, and the panel, the journal and Settings › Usage sum every token the meter read")

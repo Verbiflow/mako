@@ -5,7 +5,7 @@ import { basename, dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { zstdCompressSync } from "node:zlib"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
-import type { UsageSummary } from "@mako/host/contracts/automations-usage-updates"
+import { usageWindow, type UsageSummary, type UsageWindow } from "@mako/host/contracts/automations-usage-updates"
 import { usageSummary, type UsageHarness } from "@mako/host/usage/summary"
 import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { UsageLedger } from "@mako/host/usage/ledger"
@@ -161,30 +161,30 @@ try {
 
   const summary = await usageSummary(usageHarnesses(providerHost), userRoot, homeRoot, undefined, { now: AUGUST_25 })
 
-  assert.equal(summary.total.messages, 11)
-  assert.equal(summary.sessions, 9)
-  assert.equal(summary.total.input, 243)
-  assert.equal(summary.total.output, 97)
-  assert.equal(summary.total.cacheRead, 213)
-  assert.equal(summary.total.cacheWrite, 49)
-  assert.equal(summary.total.reportedCost, 0.393)
-  assert.ok(Math.abs((summary.total.estimatedCost ?? 0) - 0.000958875) < 1e-12)
-  assert.equal(summary.total.pricedTokens, 585)
-  assert.equal(summary.total.unpricedTokens, 17)
+  assert.equal(month(summary).total.messages, 11)
+  assert.equal(month(summary).sessions, 9)
+  assert.equal(month(summary).total.input, 243)
+  assert.equal(month(summary).total.output, 97)
+  assert.equal(month(summary).total.cacheRead, 213)
+  assert.equal(month(summary).total.cacheWrite, 49)
+  assert.equal(month(summary).total.reportedCost, 0.393)
+  assert.ok(Math.abs((month(summary).total.estimatedCost ?? 0) - 0.000958875) < 1e-12)
+  assert.equal(month(summary).total.pricedTokens, 585)
+  assert.equal(month(summary).total.unpricedTokens, 17)
   assert.deepEqual(
-    summary.sources?.map((source) => source.source).sort(),
+    month(summary).sources.map((source) => source.source).sort(),
     ["Claude Code", "Codex", "Mako", "OpenCode"]
   )
 
-  const claude = summary.sources?.find((source) => source.source === "Claude Code")
+  const claude = month(summary).sources.find((source) => source.source === "Claude Code")
   assert.equal(claude?.messages, 2)
   assert.equal(claude?.output, 18)
-  const codex = summary.sources?.find((source) => source.source === "Codex")
+  const codex = month(summary).sources.find((source) => source.source === "Codex")
   assert.equal(codex?.messages, 3)
   assert.equal(codex?.input, 105)
   assert.equal(codex?.cacheRead, 70)
   assert.equal(codex?.cacheWrite, 15)
-  const openCode = summary.sources?.find((source) => source.source === "OpenCode")
+  const openCode = month(summary).sources.find((source) => source.source === "OpenCode")
   assert.equal(openCode?.messages, 5)
   assert.equal(openCode?.input, 29)
   assert.equal(openCode?.output, 24)
@@ -195,17 +195,17 @@ try {
   assert.equal(openCode?.pricedTokens, 63)
   assert.equal(openCode?.unpricedTokens, 7)
   assert.equal(
-    summary.projects?.find((project) => project.cwd === "/work/opencode-current")
+    month(summary).projects.find((project) => project.cwd === "/work/opencode-current")
       ?.messages,
     3
   )
   assert.equal(
-    summary.projects?.find((project) => project.cwd === "/work/opencode-legacy")
+    month(summary).projects.find((project) => project.cwd === "/work/opencode-legacy")
       ?.messages,
     1
   )
   assert.equal(
-    summary.projects?.find((project) => project.cwd === "/work/opencode-v2")
+    month(summary).projects.find((project) => project.cwd === "/work/opencode-v2")
       ?.messages,
     1
   )
@@ -240,15 +240,15 @@ try {
   await putJsonl(join(hashed, "grok-2", "updates.jsonl"), [turn("p3", 1_787_000_200, { "grok-build": { inputTokens: 10, outputTokens: 0 } })])
   await writeFile(join(hashed, ".cwd"), "/a/very/long/workspace\n")
   const grokSummary = await usageSummary(usageHarnesses(providerHost), join(root, "no-mako-user"), grokHome, undefined, { now: AUGUST_25 })
-  const grok = grokSummary.sources?.find((source) => source.source === "Grok")
+  const grok = month(grokSummary).sources.find((source) => source.source === "Grok")
   assert.equal(grok?.messages, 3, "one event per model per turn; a repeated turn, other files and subagents add nothing")
   assert.equal(grok?.input, 150, "cached input is counted apart from fresh input")
   assert.equal(grok?.cacheRead, 800)
   assert.equal(grok?.cacheWrite, 100)
   assert.equal(grok?.output, 60)
   assert.ok(Math.abs((grok?.reportedCost ?? 0) - 0.026) < 1e-12, "cost ticks are ten-billionths of a dollar")
-  assert.deepEqual(grokSummary.projects?.map((project) => project.cwd).sort(), ["/a/very/long/workspace", "/work/grok"])
-  assert.deepEqual(grokSummary.models?.map((model) => model.model).sort(), ["grok-build", "grok-fast"])
+  assert.deepEqual(month(grokSummary).projects.map((project) => project.cwd).sort(), ["/a/very/long/workspace", "/work/grok"])
+  assert.deepEqual(month(grokSummary).models.map((model) => model.model).sort(), ["grok-build", "grok-fast"])
   console.log("Grok usage: per-model turn totals, cache apart from input, cost from ticks, subagents once, project from the store path or its .cwd")
 
   await cursorUsage(join(root, "cursor-home"))
@@ -302,7 +302,7 @@ async function cursorUsage(homeRoot: string): Promise<void> {
   ])
   const ledger = new UsageLedger(join(homeRoot, "ledger.sqlite"))
   try {
-    const read = async () => (await usageSummary(usageHarnesses(providerHost), join(homeRoot, ".mako"), homeRoot, undefined, { now: AUGUST_25, ledger })).sources?.find((source) => source.source === "Cursor")
+    const read = async () => month(await usageSummary(usageHarnesses(providerHost), join(homeRoot, ".mako"), homeRoot, undefined, { now: AUGUST_25, ledger })).sources.find((source) => source.source === "Cursor")
     const first = await read()
     assert.equal(first?.messages, 3, "a finished run, a failed run that kept its usage, and another program's run; neither the running nor the month-old run")
     assert.equal(first?.input, 500, "Cursor's input includes what the cache supplied, which is counted apart")
@@ -324,7 +324,7 @@ async function cursorUsage(homeRoot: string): Promise<void> {
   // An isolated host's user root holds its own agents: the home's `.mako/cursor-sdk` isn't its, while another program's store under `~/.cursor` is still read.
   const isolated = new UsageLedger(join(homeRoot, "isolated-ledger.sqlite"))
   try {
-    const own = (await usageSummary(usageHarnesses(providerHost), join(homeRoot, "isolated-data"), homeRoot, undefined, { now: AUGUST_25, ledger: isolated })).sources?.find((source) => source.source === "Cursor")
+    const own = month(await usageSummary(usageHarnesses(providerHost), join(homeRoot, "isolated-data"), homeRoot, undefined, { now: AUGUST_25, ledger: isolated })).sources.find((source) => source.source === "Cursor")
     assert.equal(own?.messages, 1, "only the other program's run: the person's state root is not an isolated host's")
   } finally {
     isolated.close()
@@ -350,7 +350,7 @@ async function invalidLedgerState(root: string): Promise<void> {
   const harnesses = usageHarnesses(providerHost).filter((harness) => harness.provider === "codex")
   const summarize = () => usageSummary(harnesses, join(root, "no-mako-user"), home, undefined, { now, ledger })
   try {
-    assert.equal((await summarize()).total.input, 10)
+    assert.equal(month(await summarize()).total.input, 10)
     const saved = db.prepare("SELECT state, offset FROM files WHERE source = 'Codex'").get()
     assert.ok(saved)
     const update = db.prepare("UPDATE files SET state = ? WHERE source = 'Codex' AND offset = ?")
@@ -364,18 +364,23 @@ async function invalidLedgerState(root: string): Promise<void> {
       update.run(state, saved.offset)
       const summary = await summarize()
       assert.equal(summary.truncated, true)
-      assert.equal(summary.total.input, 17, "another file is counted while the damaged file stays unread")
+      assert.equal(month(summary).total.input, 17, "another file is counted while the damaged file stays unread")
     }
     update.run(saved.state, saved.offset)
     const repaired = await summarize()
     assert.equal(repaired.truncated, false)
-    assert.equal(repaired.total.input, 27, "repair continues from the held cursor and counts the pending call once")
-    assert.equal((await summarize()).total.input, 27)
+    assert.equal(month(repaired).total.input, 27, "repair continues from the held cursor and counts the pending call once")
+    assert.equal(month(await summarize()).total.input, 27)
     console.log("Usage cursor validation: malformed JSON and invalid reader state stay unread; other files continue; repaired state resumes once")
   } finally {
     db.close()
     ledger.close()
   }
+}
+
+/** The longest window, which every fixture's calls fall in. */
+function month(summary: UsageSummary): UsageWindow {
+  return usageWindow(summary, "month")
 }
 
 /**
@@ -387,14 +392,18 @@ async function keptLedger(root: string): Promise<void> {
   const home = join(root, "home")
   const now = Date.now()
   const today = new Date(now).setUTCHours(0, 0, 0, 0)
-  const since = today - 29 * 86_400_000
+  // The month starts at midnight on this machine's clock, 29 days before today's.
+  const first = new Date(now)
+  first.setHours(0, 0, 0, 0)
+  first.setDate(first.getDate() - 29)
+  const since = first.getTime()
   const at = (ms: number) => new Date(ms).toISOString()
   const sessions = join(home, ".codex", "sessions")
   await mkdir(sessions, { recursive: true })
   const ledger = new UsageLedger(join(root, "ledger.sqlite"))
   const summarize = () => usageSummary(usageHarnesses(providerHost), join(root, "no-mako-user"), home, undefined, { now, ledger })
   const codexOf = (summary: UsageSummary) => {
-    const codex = summary.sources?.find((source) => source.source === "Codex")
+    const codex = month(summary).sources.find((source) => source.source === "Codex")
     return { messages: codex?.messages ?? 0, input: codex?.input ?? 0, cacheRead: codex?.cacheRead ?? 0, output: codex?.output ?? 0 }
   }
   const prefix = (id: string) => [
@@ -416,8 +425,8 @@ async function keptLedger(root: string): Promise<void> {
     let summary = await summarize()
     assert.deepEqual(codexOf(summary), { messages: 2, input: 300, cacheRead: 1_800, output: 90 })
     assert.equal(summary.truncated, false)
-    assert.ok(Math.abs((summary.total.estimatedCost ?? 0) - 0.00168) < 1e-12, "gpt-6.1-sol is priced")
-    assert.equal(summary.sessions, 1)
+    assert.ok(Math.abs((month(summary).total.estimatedCost ?? 0) - 0.00168) < 1e-12, "gpt-6.1-sol is priced")
+    assert.equal(month(summary).sessions, 1)
 
     // A call still being written is left for the next read, then counted once.
     const third = codexUsage(at(today + 180_000), rawCodex(2_600, 2_200, 0, 100), rawCodex(500, 400, 0, 10))
@@ -442,8 +451,17 @@ async function keptLedger(root: string): Promise<void> {
     ])
     summary = await summarize()
     assert.deepEqual(codexOf(summary), { messages: 5, input: 507, cacheRead: 2_200, output: 101 })
-    assert.equal(summary.days?.[0]?.date, at(since).slice(0, 10), "the chart starts where the total does")
-    assert.equal(summary.days?.[0]?.messages, 1)
+    const days = month(summary).periods
+    assert.equal(days.length, 30)
+    assert.equal(days[0]?.start, since, "the chart starts where the total does")
+    assert.equal(days[0]?.sources.Codex?.tokens, 7, "the window's first instant is its first day's")
+    const sum = (window: UsageWindow) => window.periods.reduce((total, period) => total + period.total.tokens, 0)
+    for (const window of summary.windows) {
+      const total = window.total.input + window.total.output + window.total.cacheRead + window.total.cacheWrite
+      assert.equal(sum(window), total, `the ${window.id} chart adds up to its total`)
+      assert.equal(window.sources.reduce((count, source) => count + source.sessions, 0), window.sessions, `the ${window.id} sessions by source add up`)
+    }
+    assert.deepEqual(summary.windows.map((window) => [window.id, window.resolution, window.periods.length]), [["day", "hour", 24], ["week", "day", 7], ["month", "day", 30]])
 
     // A rollout Codex archives is the same calls, and keeps its reader's state when it grows there.
     const archived = join(home, ".codex", "archived_sessions")
@@ -455,7 +473,7 @@ async function keptLedger(root: string): Promise<void> {
     await appendFile(join(archived, "rollout-b.jsonl"), `${codexUsage(at(today + 360_000), rawCodex(40, 0, 0, 4), rawCodex(10, 0, 0, 1))}\n`)
     summary = await summarize()
     assert.deepEqual(codexOf(summary), { ...before, messages: 7, input: before.input + 10, output: before.output + 1 })
-    assert.equal(summary.sessions, 3)
+    assert.equal(month(summary).sessions, 3)
 
     // A line too long to hold is skipped without a word when it cannot hold usage, and said when it can.
     await putJsonl(join(sessions, "rollout-c.jsonl"), [
@@ -491,7 +509,7 @@ async function keptLedger(root: string): Promise<void> {
       request.run(id, JSON.stringify({ id, spend: { provider: harness.provider, model: "gpt-6.1-sol", at: ms, tokens } }))
     spend("request-1", today + 60_000, { input: 100_000, cacheRead: 200_000, cacheWrite: 0, output: 100_000 })
     spend("request-old", since - 1, { input: 9_999, cacheRead: 0, cacheWrite: 0, output: 0 })
-    const recordedSummary = (summary: UsageSummary) => summary.sources?.find((source) => source.source === harness.label)
+    const recordedSummary = (summary: UsageSummary) => month(summary).sources.find((source) => source.source === harness.label)
     const withJournals = () => usageSummary(harnesses, join(root, "no-mako-user"), home, conversations, { now, ledger })
     let recorded = recordedSummary(await withJournals())
     assert.equal(recorded?.messages, 1)

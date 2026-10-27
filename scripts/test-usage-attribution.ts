@@ -15,6 +15,7 @@ import { HelperRuns } from "@mako/host/usage/helper-runs"
 import { priceEstimate } from "@mako/host/usage/pricing"
 import { usageSummary } from "@mako/host/usage/summary"
 import { auditSnapshot } from "./performance-audit-fixtures.ts"
+import { usageWindow } from "@mako/host/contracts/automations-usage-updates"
 
 /**
  * MH-32's accounting: occupancy, spend and the harness's own total stay
@@ -131,8 +132,8 @@ try {
     assert.deepEqual(listed.map((entry) => entry.id), ["older", "later", "failed", "check", "draft"])
     assert.equal(listed.find((entry) => entry.id === "draft")?.estimate?.table, CURRENT_PRICE_TABLE.id, "priced from the table current when it was written")
     assert.equal(listed.find((entry) => entry.id === "failed")?.estimate, undefined, "a run with no tokens reported has no price")
-    const summary = await usageSummary([], join(root, "mako"), join(root, "home"), undefined, { helperRuns: join(root, "usage", "helper-runs"), env: {} })
-    assert.deepEqual(summary.sources?.map((source) => source.source).sort(), ["Mako: Commit messages", "Mako: Model connection checks"])
+    const summary = usageWindow(await usageSummary([], join(root, "mako"), join(root, "home"), undefined, { helperRuns: join(root, "usage", "helper-runs"), env: {} }), "month")
+    assert.deepEqual(summary.sources.map((source) => source.source).sort(), ["Mako: Commit messages", "Mako: Model connection checks"])
     assert.equal(summary.sessions, 0, "helper runs are no sessions")
     assert.equal(summary.total.messages, 4, "a run with no tokens adds no event")
     assert.deepEqual(summary.priceTables, ["2026-01-01", CURRENT_PRICE_TABLE.id].sort())

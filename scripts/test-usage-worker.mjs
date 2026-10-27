@@ -89,7 +89,7 @@ try {
   try {
     await assert.rejects(recovery.read(), /unable to open database/)
     await mkdir(missing)
-    assert.equal((await recovery.read()).total.messages, 0)
+    assert.equal((await recovery.read()).windows.at(-1)?.total.messages, 0)
   } finally { await recovery.close() }
 
   const closing = new UsageReader(worker, data)

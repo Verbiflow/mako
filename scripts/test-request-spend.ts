@@ -15,6 +15,7 @@ import { usageSummary } from "@mako/host/usage/summary"
 import { usageHarnesses } from "@mako/host/harnesses/usage-harnesses"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { usageWindow } from "@mako/host/contracts/automations-usage-updates"
 
 const nativeStores = new NativeStores(false)
 
@@ -112,18 +113,18 @@ try {
   await owner.close(id)
 
   // Cursor's spend is read from its own SDK index (`cursorUsageHistory`), never also from the journal.
-  const fromStore = await usageSummary(usageHarnesses(providerHost), join(root, "no-mako-user"), join(root, "home"), conversations)
-  assert.equal(fromStore.sources?.find((source) => source.source === "Cursor"), undefined, "a harness that reads its own store isn't counted again from Mako's journals")
+  const fromStore = usageWindow(await usageSummary(usageHarnesses(providerHost), join(root, "no-mako-user"), join(root, "home"), conversations), "month")
+  assert.equal(fromStore.sources.find((source) => source.source === "Cursor"), undefined, "a harness that reads its own store isn't counted again from Mako's journals")
   // A harness whose store keeps no counts is counted from what the journal measured.
   const measured = usageHarnesses(providerHost).map((harness) => harness.provider === "cursor" ? { provider: harness.provider, label: harness.label } : harness)
-  const summary = await usageSummary(measured, join(root, "no-mako-user"), join(root, "home"), conversations)
-  const cursor = summary.sources?.find((source) => source.source === "Cursor")
+  const summary = usageWindow(await usageSummary(measured, join(root, "no-mako-user"), join(root, "home"), conversations), "month")
+  const cursor = summary.sources.find((source) => source.source === "Cursor")
   assert.equal(cursor?.harness, "cursor", "so Settings › Usage reads what the harness declares about sessions outside Mako")
   assert.equal(cursor?.messages, 1)
   assert.equal(cursor?.input, 60)
   assert.equal(cursor?.cacheRead, 40)
   assert.equal(cursor?.output, 15)
-  assert.equal(summary.models?.[0]?.model, "composer-2")
+  assert.equal(summary.models[0]?.model, "composer-2")
   assert.deepEqual(summary.incomplete, ["Cursor"], "so the summary says its totals may be low")
   console.log("Request spend: a Cursor turn records what it spent from the meter, and the usage summary counts it, saying when the harness left spend out")
 } catch (error) {

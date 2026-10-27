@@ -1,4 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
+import { ChevronRightIcon } from "lucide-react"
 import { useEffect, useState, type ReactNode } from "react"
 import { CompactionControl } from "./compaction-control"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -102,7 +103,13 @@ export function ContextMeter() {
         </TooltipTrigger>
         <TooltipContent side="top">{summary}</TooltipContent>
       </Tooltip>
-      <PopoverContent side="top" align="end" sideOffset={8} className="w-80 p-0">
+      <PopoverContent
+        side="top"
+        align="end"
+        sideOffset={8}
+        collisionPadding={12}
+        className="max-h-[min(40rem,var(--radix-popover-content-available-height))] w-80 overflow-hidden p-0"
+      >
         <ConversationUsageDetails usage={usage} harness={harness} conversationId={conversationId} onCompact={() => setOpen(false)} />
       </PopoverContent>
     </Popover>
@@ -206,8 +213,8 @@ export function UsageDetails({
   const before = measures ? compactedFrom(usage) : undefined
   const spend = conversationSpend(requests, usage, harness, outside)
   return (
-    <div className="flex flex-col" data-usage-details>
-      <section className="flex flex-col gap-2 px-3 pt-3 pb-2.5">
+    <div className="flex min-h-0 flex-col" data-usage-details>
+      <section className="flex shrink-0 flex-col gap-2 px-3 pt-3 pb-2.5">
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-ui">Context</span>
           <span className="text-label text-faint tabular-nums">
@@ -231,10 +238,13 @@ export function UsageDetails({
           </span>
         )}
       </section>
-      {breakdown && fraction !== undefined ? <Categories breakdown={breakdown} /> : null}
-      {reports(declared.tokens) || reports(declared.cost) ? <Spent spend={spend} declared={declared} harness={harness} sideQuestions={sideQuestions} changes={changes} /> : null}
-      {usage.native ? <HarnessTotal native={usage.native} declared={declared} harness={harness} /> : null}
-      <div className="border-t border-hairline p-1">
+      {/* The reading above and Compact below stay put; what a long session grows scrolls between them. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain" data-usage-scroll>
+        {breakdown && fraction !== undefined ? <Categories breakdown={breakdown} /> : null}
+        {reports(declared.tokens) || reports(declared.cost) ? <Spent spend={spend} declared={declared} harness={harness} sideQuestions={sideQuestions} changes={changes} /> : null}
+        {usage.native ? <HarnessTotal native={usage.native} declared={declared} harness={harness} /> : null}
+      </div>
+      <div className="shrink-0 border-t border-hairline p-1">
         <CompactionControl onStart={onCompact} />
       </div>
     </div>
@@ -338,12 +348,20 @@ function Categories({ breakdown }: { breakdown: ContextBreakdown }) {
         </Row>
       ))}
       {groups.map((group) => (
-        <div key={group.label} className="mt-1.5 flex flex-col gap-0.5">
-          <span className="text-label text-faint">{group.label}</span>
-          {group.items.map((item) => (
-            <Row key={item.name} label={basename(item.name)} title={item.name} value={formatTokens(item.tokens)} faint />
-          ))}
-        </div>
+        <details key={group.label} className="group/items mt-1 flex flex-col" data-context-group>
+          <summary className="pressable -mx-1 flex cursor-pointer list-none items-center gap-1.5 rounded-sm px-1 py-0.5 text-label text-faint tabular-nums hover:bg-fill-hover hover:text-muted-foreground [&::-webkit-details-marker]:hidden">
+            <ChevronRightIcon aria-hidden className="size-3 shrink-0 transition-transform duration-150 ease-(--ease-out) group-open/items:rotate-90" />
+            <span className="min-w-0 flex-1 truncate">
+              {group.label} · {group.items.length}
+            </span>
+            <span>{formatTokens(group.items.reduce((sum, item) => sum + item.tokens, 0))}</span>
+          </summary>
+          <div className="flex flex-col gap-0.5 pt-0.5 pl-[1.125rem]">
+            {group.items.map((item) => (
+              <Row key={item.name} label={basename(item.name)} title={item.name} value={formatTokens(item.tokens)} faint />
+            ))}
+          </div>
+        </details>
       ))}
     </section>
   )
