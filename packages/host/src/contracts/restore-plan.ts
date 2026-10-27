@@ -36,6 +36,8 @@ export const OutdatedRestoreSchema = z.object({
   line: z.string().optional(),
   /** What reads them here when it isn't that program: the build Mako ships that imports them, in words ("Mako's @cursor/sdk 1.0.31, published 2026.09.03"). */
   reader: z.string().optional(),
+  /** Columns the records' rows hold that the store here has no place for (`OutdatedRuntime.lacks`): an older build made it, whatever the versions say. */
+  lacks: z.array(z.string()).optional(),
   offer: RuntimeUpdateOfferSchema,
 })
 export type OutdatedRestore = z.infer<typeof OutdatedRestoreSchema>

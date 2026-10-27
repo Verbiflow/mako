@@ -14,7 +14,16 @@ export interface RestoreNotice {
   detail: string
 }
 
-type Versions = Pick<OutdatedRestore, "wrote" | "upTo" | "installed" | "line" | "reader">
+type Versions = Pick<OutdatedRestore, "wrote" | "upTo" | "installed" | "line" | "reader" | "lacks">
+
+/**
+ * The app an install comes with, as an update offer names it: `Zed`, or, for
+ * Devin.app's own copy of Devin, `the Devin app`, so the words never read
+ * "update Devin through Devin".
+ */
+export function ownerName(label: string, owner: string): string {
+  return owner === label ? `the ${owner} app` : owner
+}
 
 /** What's installed here, in words: `this Mac has 0.159.3`, or that the program isn't installed. */
 function here(program: string, outdated: Versions): string {
@@ -41,15 +50,17 @@ export function outdatedLine(label: string, outdated: Versions): string {
     return `${program} ${outdated.wrote.version} ${verb} this session; ${here(program, outdated)}.`
   }
   if (outdated.upTo) return `Mako can't tell which ${program} version wrote this session, only that it was ${outdated.upTo} or older; ${here(program, outdated)}.`
+  // Its rows hold columns the store here has no place for: whichever version it was, it was newer.
+  if (outdated.lacks?.length) return `A newer ${program} wrote this session; ${here(program, outdated)}.`
   return `Mako can't tell which ${program} version wrote this session; ${here(program, outdated)}.`
 }
 
 export function restoreNotice(label: string, outdated: OutdatedRestore): RestoreNotice {
   const program = outdated.line ?? label
   const reply = "or reply now to go on from its transcript"
-  // Nothing names the writer or bounds it: no version here can be shown to read it, so an update can't settle it.
-  if (!outdated.wrote && !outdated.upTo) return { line: outdatedLine(label, outdated), detail: "A reply goes on from its transcript in a new session." }
-  const target = outdated.wrote?.version ?? outdated.upTo!
+  // Nothing names the writer, bounds it or shows it newer: no version here can be shown to read it, so an update can't settle it.
+  if (!outdated.wrote && !outdated.upTo && !outdated.lacks?.length) return { line: outdatedLine(label, outdated), detail: "A reply goes on from its transcript in a new session." }
+  const target = outdated.wrote?.version ?? outdated.upTo
   const offer = outdated.offer
   const detail =
     outdated.reader !== undefined
@@ -59,18 +70,18 @@ export function restoreNotice(label: string, outdated: OutdatedRestore): Restore
       : offer.kind === "update"
         ? `Update ${label} to resume it here, ${reply}.`
         : offer.kind === "owner" && offer.owner === "Mako"
-          ? `A newer Mako brings ${label} ${target}. Update Mako to resume it here, ${reply}.`
+          ? `A newer Mako brings ${target === undefined ? `a newer ${label}` : `${label} ${target}`}. Update Mako to resume it here, ${reply}.`
           : offer.kind === "owner"
-            ? `Update ${label} through ${offer.owner} to resume it here, ${reply}.`
+            ? `Update ${label} through ${ownerName(label, offer.owner)} to resume it here, ${reply}.`
             : offer.command
               ? `Update ${label} from a terminal to resume it here, ${reply}.`
               : `Update ${label} to resume it here, ${reply}.`
   return { line: outdatedLine(label, outdated), detail }
 }
 
-/** Whether Update could settle it: a version, or a bound, the install can reach, of the program Mako updates. */
+/** Whether Update could settle it: a version, or a bound, the install can reach, or a store an older build made, of the program Mako updates. */
 export function updateResolves(outdated: OutdatedRestore): boolean {
-  return Boolean((outdated.wrote || outdated.upTo) && outdated.line === undefined && outdated.reader === undefined)
+  return Boolean((outdated.wrote || outdated.upTo || outdated.lacks?.length) && outdated.line === undefined && outdated.reader === undefined)
 }
 
 /** What the line above a reply that went on from the transcript adds: why the harness didn't resume its own session. */
@@ -79,6 +90,7 @@ export function carriedBecause(label: string, outdated: Versions): string {
   if (outdated.reader !== undefined) return `${outdated.reader}, may not read what ${program} wrote`
   if (outdated.installed === null) return `${program} isn't installed here`
   if (outdated.wrote) return `${program} ${outdated.installed} here is older than ${outdated.wrote.version}`
+  if (outdated.lacks?.length) return `${program} ${outdated.installed} here is older than the one that wrote it`
   if (outdated.upTo) return `Mako can't tell if ${program} ${outdated.installed} here reads it`
   return `Mako can't tell which ${program} wrote it`
 }
@@ -97,7 +109,7 @@ export function returnNotice(label: string, outdated: OutdatedRestore): RestoreN
       : offer.kind === "owner" && offer.owner === "Mako"
         ? `A newer Mako brings a newer ${label}. Update Mako, then bring it back. Until then it goes on in the cloud.`
         : offer.kind === "owner"
-          ? `Update ${label} through ${offer.owner}, then bring it back. Until then it goes on in the cloud.`
+          ? `Update ${label} through ${ownerName(label, offer.owner)}, then bring it back. Until then it goes on in the cloud.`
           : `Update ${label} from a terminal, then bring it back. Until then it goes on in the cloud.`
   return { line, detail }
 }

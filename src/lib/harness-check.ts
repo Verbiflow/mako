@@ -1,4 +1,5 @@
 import type { HarnessBehind } from "@mako/host/contracts/cloud-harnesses"
+import { ownerName } from "./restore-plan"
 
 /**
  * What the window says when a Thread's harnesses here are older than the cloud's (`ThreadHarnessCheck.behind`),
@@ -26,7 +27,7 @@ function todo(behind: HarnessBehind, label: string): string | undefined {
   const offer = behind.offer
   if (offer.kind === "update") return undefined
   if (offer.kind === "owner" && offer.owner === "Mako") return `A newer Mako brings ${label} ${behind.cloud}: update Mako first.`
-  if (offer.kind === "owner") return `Update it through ${offer.owner}; Mako checks again when you come back to this window.`
+  if (offer.kind === "owner") return `Update it through ${ownerName(label, offer.owner)}; Mako checks again when you come back to this window.`
   return offer.command ? `Update it from a terminal: ${offer.command}` : `Update it to ${behind.cloud} or newer; Mako checks again when you come back to this window.`
 }
 

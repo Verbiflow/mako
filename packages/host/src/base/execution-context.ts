@@ -1,6 +1,6 @@
 import type { ExecutionContext, NativeIdentityCapability } from "../contracts/execution-context.js"
 import { versionsCompatible } from "../contracts/harness-versions.js"
-import { parseVersion } from "../contracts/runtime-version.js"
+import { namesBuild, parseVersion } from "../contracts/runtime-version.js"
 
 export function launchContext(
   transport: string,
@@ -21,11 +21,17 @@ export function launchContext(
   }
 }
 
-/** Missing versions remain missing; never substitute the host's package version. */
+/**
+ * Missing versions remain missing; never substitute the host's package
+ * version. One that names no build (`namesBuild`: Devin's ACP handshake
+ * says `0.0.0-dev` from every release) is missing too, so a launch asks the
+ * executable instead (`AcpLaunch.versionArgs`) and nothing is stamped with it.
+ */
 export function reportedRuntime(version: string | undefined, via: string): ExecutionContext["runtime"] {
-  return version?.trim()
+  if (!version?.trim()) return { kind: "unavailable", reason: `The native ${via} response did not report a runtime version.` }
+  return namesBuild(version)
     ? { kind: "reported", version, via }
-    : { kind: "unavailable", reason: `The native ${via} response did not report a runtime version.` }
+    : { kind: "unavailable", reason: `The native ${via} response reported ${version.trim()}, which names no build.` }
 }
 
 /** An API key/backend is not a named native principal. */

@@ -168,7 +168,7 @@ const options: Pick<HarnessCheckOptions, "writers" | "installed" | "updates"> = 
   assert.equal(several.detail, "It comes back once Codex, OpenCode, Devin, Grok and seventh here are as new as the cloud's.")
   assert.equal(several.update, "Update Codex and OpenCode, then bring it back")
   assert.equal(several.anyway, "Bring back anyway")
-  assert.deepEqual(several.rows.map((row) => row.todo), [undefined, undefined, "Update it through Devin; Mako checks again when you come back to this window.", "A newer Mako brings Grok 1.0.70: update Mako first.", "Update it from a terminal: seventh upgrade"])
+  assert.deepEqual(several.rows.map((row) => row.todo), [undefined, undefined, "Update it through the Devin app; Mako checks again when you come back to this window.", "A newer Mako brings Grok 1.0.70: update Mako first.", "Update it from a terminal: seventh upgrade"])
   assert.equal(behindWords([{ harness: "devin", here: "3000.10.23", cloud: "3000.11.205", offer: { kind: "owner", owner: "Devin" } }], label, "back").update, undefined, "nothing for Mako to update: no update choice")
 }
 

@@ -86,27 +86,43 @@ async function main() {
   }
 
   const { createAcpEngine } = await load("acp.js")
-  const acpStandIn = (provider, source) => {
+  /**
+   * `handshake`: the version its `initialize` says, where it isn't the build's. The source's own launch's `versionArgs`
+   * then ask the executable, which is the stand-in behind a script of its own, as Codex's is.
+   */
+  const acpStandIn = (provider, source, handshake) => {
     let env = {}
+    let executable
     const acp = createAcpEngine({
       ...source,
       provider: `failure-${provider}`,
       resume: { kind: "unavailable", reason: "A failure stand-in's sessions are never reopened" },
       available: () => true,
-      launch: async () => ({
-        command: process.execPath,
-        args: [fixture],
+      launch: async (options) => ({
+        command: executable ?? process.execPath,
+        args: executable ? [] : [fixture],
+        ...handshake && { versionArgs: (await source.launch(options)).versionArgs },
         configureEnvironment(target) {
           Object.assign(target, env, { ELECTRON_RUN_AS_NODE: "1", MAKO_STANDIN_PROTOCOL: "acp",
-            MAKO_STANDIN_MODES: JSON.stringify((source.nativeModes ?? []).map(({ id, name }) => ({ id, name }))) })
+            MAKO_STANDIN_MODES: JSON.stringify((source.nativeModes ?? []).map(({ id, name }) => ({ id, name }))),
+            ...handshake && { MAKO_STANDIN_HANDSHAKE_VERSION: handshake } })
         },
       }),
     }, { processes: providerHost.discovery, servesMcp: () => false, appRoot: repo, approvalRoot: join(root, "approval-evidence") })
     return {
-      prepare: (settings) => { env = settings.env },
+      async prepare(settings) {
+        env = settings.env
+        if (!handshake) return
+        executable = join(settings.dir, provider)
+        const variables = Object.entries({ ...settings.env, MAKO_STANDIN_PROTOCOL: "acp" }).map(([key, value]) => `${key}='${value}'`).join(" ")
+        await writeFile(executable, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 ${variables} exec "${process.execPath}" "${fixture}" "$@"\n`)
+        await chmod(executable, 0o755)
+      },
       start: acp.start,
       prompt: acp.prompt,
       close: acp.close,
+      // The version the launch read out of what `--version` printed (`standin-9.9.9`), not the handshake's.
+      ...handshake && { runtime: "9.9.9" },
     }
   }
   const { createGrokAcpSource } = await load("grok/acp.js")
@@ -129,7 +145,7 @@ async function main() {
       }
     })(),
     grok: acpStandIn("grok", createGrokAcpSource()),
-    devin: acpStandIn("devin", createDevinAcpSource(nativeStores)),
+    devin: acpStandIn("devin", createDevinAcpSource(nativeStores), "0.0.0-dev"),
     claude: await (async () => {
       const { createClaudeSdkDriver } = await load("claude/sdk-driver.js")
       const { query } = await import(join(repo, "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"))
@@ -259,7 +275,7 @@ async function main() {
       assert.ok(!evidence.includes("accepted"), `${provider}: delivery is never claimed for an unacknowledged prompt`)
       // Claude names its version when a turn opens, the others at startup.
       const runtime = exit.event.session.executionContext?.runtime
-      assert.deepEqual(runtime && { kind: runtime.kind, version: runtime.version }, { kind: "reported", version: VERSION }, `${provider}: the reported runtime version is recorded`)
+      assert.deepEqual(runtime && { kind: runtime.kind, version: runtime.version }, { kind: "reported", version: standIns[provider].runtime ?? VERSION }, `${provider}: the reported runtime version is recorded`)
       results.push({ provider, setupCancel: "passed", exitAfterHandoff: prompt.ok ? "resolved" : "rejected", exitReportMs: Math.round(exit.at - handedAt), evidence, runtime: runtime.version })
       trace(`${provider}: closing`)
       await run.standIn.close(run.id)

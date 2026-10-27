@@ -1801,9 +1801,17 @@ export class SessionCatalog {
       await this.forgetFresh(store, fresh)
       throw error
     }
-    for (const { provider, harness, nativeId, pulled } of pulls) {
+    for (const [at, { provider, harness, nativeId, pulled }] of pulls.entries()) {
       const started = performance.now()
       const report = await store.restore({ harness, nativeId, home: this.recordsHome, ...ownRoots(provider, store.rootNames(harness, nativeId), this.streams), stores: this.harnessStores, ...provider.fork && { fork: provider.fork }, ...installed[harness] !== undefined && { installed: installed[harness] } })
+        .catch(async (error: Error) => {
+          // Every refusal the dry run could foresee was said before this: what's left is the store failing as it was
+          // written, said in words of what failed, the store's own beneath (`cause`). What this store never held of the
+          // sessions not yet written goes, as a refusal's does.
+          const unwritten = new Set(pulls.slice(at).map((each) => `${each.harness}\0${each.nativeId}`))
+          await this.forgetFresh(store, fresh.filter((each) => unwritten.has(`${each.harness}\0${each.nativeId}`)))
+          throw new Error(`Mako couldn't write ${provider.displayName}'s session ${nativeId} into ${provider.displayName}'s store here.`, { cause: error })
+        })
       if (report.written || report.fork?.written) provider.storeWritten?.()
       const restored: KeptRestore = report.outdated
         ? { kind: "outdated", ...report.outdated }

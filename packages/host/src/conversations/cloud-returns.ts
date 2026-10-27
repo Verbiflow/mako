@@ -430,7 +430,7 @@ export class CloudReturns {
         if (restored.kind === "outdated")
           throw new OutdatedReturnError(`${each.harness} here is older than the version that wrote this session in the cloud; update it, then bring the Thread back.`, {
             harness: each.harness, installed: restored.installed, offer: this.#options.updateOffer(each.harness),
-            ...restored.wrote && { wrote: restored.wrote }, ...restored.upTo && { upTo: restored.upTo },
+            ...restored.wrote && { wrote: restored.wrote }, ...restored.upTo && { upTo: restored.upTo }, ...restored.lacks && { lacks: restored.lacks },
           })
         if (restored.kind === "forked") throw new Error(`${each.harness} here holds a copy of this session that went on without the cloud's turns.`)
         if (restored.kind === "refused") throw new Error(restored.reason)
@@ -439,7 +439,11 @@ export class CloudReturns {
       this.#everyConversationCarried(plan)
     } catch (error) {
       const reason = errorMessage({ error })
-      hostWarn("returns", "a return couldn't be taken here; the worktree is put back and the Thread given back", { move: plan.move, reason })
+      // What the person reads is the reason; what lay beneath it (a store's own error, the versions and columns a
+      // refusal weighed) is for the log alone.
+      const cause = error instanceof Error && error.cause !== undefined ? errorMessage({ error: error.cause }) : undefined
+      const outdated = error instanceof OutdatedReturnError ? JSON.stringify(error.outdated) : undefined
+      hostWarn("returns", "a return couldn't be taken here; the worktree is put back and the Thread given back", { move: plan.move, reason, ...cause !== undefined && { cause }, ...outdated !== undefined && { outdated } })
       await applyMoveCheckpoint(this.#options.git, plan.folder, plan.kept.file, plan.kept.checkpoint, { replace: true })
       if (error instanceof OutdatedReturnError) plan.outdated = error.outdated
       const given = await account.giveBackReturn(plan.cloudThread, plan.move, reason)
