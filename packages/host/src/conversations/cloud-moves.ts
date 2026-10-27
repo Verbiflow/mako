@@ -19,6 +19,8 @@ import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type Threa
 import type { CloudAccount } from "../usage/index.js"
 import { captureMoveCheckpoint } from "../workspaces/index.js"
 import type { ReadyPlan } from "./cloud-readiness.js"
+import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
+import type { CheckedSession } from "./harness-check.js"
 import { MoveNotQuietError } from "./live-moves.js"
 
 /**
@@ -199,6 +201,11 @@ export type CloudMovesOptions = {
   carried?(folder: string, why: string): Promise<void>
   /** A cloud Thread kept ready for this Thread (`CloudReadiness.take`), which the move takes in place of a new one. */
   ready?: { take(thread: string, folder: string, repository: CloudRepository): Promise<string | undefined> }
+  /**
+   * The Thread's harnesses here weighed against the cloud's (`HarnessCheck`): a Session the cloud can't resume refuses
+   * the move here, before anything is made, rather than as it arrives.
+   */
+  harnesses?: { check(sessions: readonly CheckedSession[]): Promise<ThreadHarnessCheck> }
 }
 
 export class CloudMoves {
@@ -280,6 +287,15 @@ export class CloudMoves {
     }
   }
 
+  /**
+   * What the Thread of `conversationId`'s harnesses here and in the cloud mean for moving it (`HarnessCheck`), read
+   * without making or changing anything; throws, saying why, when it couldn't move for any other reason.
+   */
+  async harnessCheck(conversationId: string): Promise<ThreadHarnessCheck> {
+    const plan = await this.#plan(conversationId, MoveIdSchema.parse(randomUUID()), { why: "asked" }, false)
+    return this.#options.harnesses?.check(plan.sessions) ?? { kind: "unknown", reason: "This Mako doesn't weigh harness versions." }
+  }
+
   /** What a move of the Thread of `conversationId` would carry, for keeping it ready; throws, saying why, when it couldn't move. */
   async readyPlan(conversationId: string): Promise<ReadyPlan> {
     const plan = await this.#plan(conversationId, MoveIdSchema.parse(randomUUID()), { why: "asked" })
@@ -330,7 +346,7 @@ export class CloudMoves {
   }
 
   /** What a move carries, read before anything changes: refused, with the reason, when the Thread can't move. */
-  async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined): Promise<Plan> {
+  async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses = true): Promise<Plan> {
     const account = this.#options.account()
     if (!account || !(await account.id())) throw new Error("Moving to the cloud needs this Mac signed in to Mako Cloud.")
     const threads = this.#options.threads()
@@ -370,6 +386,8 @@ export class CloudMoves {
       sessions.push(planned)
     }
     if (!sessions.length) throw new Error("This Thread has no sessions to move.")
+    const check = weighHarnesses ? await this.#options.harnesses?.check(sessions) : undefined
+    if (check?.kind === "known" && check.refusal) throw new Error(check.refusal)
     const plan: Plan = { move, thread: placed.thread, asked: conversationId, cloudThread: this.#options.newCloudThread(), folder, repository, sessions, phase: "preparing", began: Date.now(), timings: {} }
     if (handOff) plan.handingOff = { why: handOff.why, ...handOff.releaseBy !== undefined && { releaseBy: handOff.releaseBy }, paused: [] }
     return plan

@@ -46,6 +46,7 @@ import type { FileReadPurpose } from "../contracts/git-workspace-search.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
 import { declareTranscriptMethods } from "./transcript-methods.js"
 import type { ConversationSettings } from "../contracts/turn-continuation.js"
+import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
@@ -55,6 +56,7 @@ export { SessionUploads, uploadScope, type UploadSources } from "./session-uploa
 export { CloudReadiness, READY_EVERY_MS } from "./cloud-readiness.js"
 export { SleepHandOff, sleepWatchHelper } from "./sleep-handoff.js"
 export { CloudReturns } from "./cloud-returns.js"
+export { HarnessCheck } from "./harness-check.js"
 export { installedReading } from "./kept-resume.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
@@ -525,6 +527,9 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   /** Where no person's Mac moves Threads to the cloud (a cloud machine, the fixture desk); on a Mac, `CloudMoves` answers first. */
   const moveNowhere: (conversationId: string, move: string, handOff?: ThreadHandOff) => ThreadMoveOutcome = () => ({ kind: "kept-here", reason: "This Mako doesn't move Threads to the cloud." })
   methods.handle("mako:thread-move", moveNowhere)
+  /** Where no person's Mac moves Threads to the cloud, nothing is weighed; on a Mac, `HarnessCheck` answers first. */
+  const weighNothing: (conversationId: string) => ThreadHarnessCheck = () => ({ kind: "unknown", reason: "This Mako doesn't move Threads to the cloud." })
+  methods.handle("mako:thread-harness-check", weighNothing)
   /** Handing agents at work to the cloud: on a person's Mac `CloudHandOffs` answers first; elsewhere there's nothing to hand. */
   const nothingToHand: () => HandOffCandidate[] = () => []
   methods.handle("mako:handoff-candidates", nothingToHand)

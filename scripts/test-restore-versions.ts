@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { cloudRuntime, type HarnessVersions } from "@mako/host/contracts/harness-versions"
+import type { HarnessVersions } from "@mako/host/contracts/harness-versions"
 import type { HarnessUpdateInfo } from "@mako/host/contracts/harness-updates"
 import { RuntimeUpdates } from "@mako/host/harnesses/runtime-updates"
 import { scriptInstall, type ProviderUpdateSource } from "@mako/host/harnesses/update-source"
@@ -88,16 +88,6 @@ for (const [version, at] of pinned) assert.ok(MAKO_PINS.some((pin) => pin.packag
 for (const pin of MAKO_PINS) assert.equal(pinned.get(pin.version) && Date.parse(pinned.get(pin.version)!), Date.parse(pin.since), `${pin.package} ${pin.version} was first pinned when MAKO_PINS says`)
 assert.equal(pinnedBy("@cursor/sdk", Date.parse("2026-09-13T22:00:00-07:00")), null, "no pin before the first")
 assert.equal(pinnedBy("@cursor/sdk", Date.parse("2026-10-17T00:00:00Z"))?.version, "1.0.31")
-
-// What a cloud machine installs for a session's records.
-const codexVersions = versions("0.159.3", { oldest: "0.146.0" })
-assert.deepEqual(cloudRuntime(codexVersions, "0.163.0", "0.159.3"), { version: "0.163.0", why: "wrote" }, "the version that wrote the records")
-assert.deepEqual(cloudRuntime(codexVersions, "0.159.3", "0.163.0"), { version: "0.163.0", why: "laptop" }, "or the laptop's, when that's newer, so the session moved back finds what it left")
-assert.deepEqual(cloudRuntime(codexVersions, "0.140.0", "0.141.0"), { version: "0.146.0", why: "oldest" }, "never below what Mako's client speaks")
-assert.deepEqual(cloudRuntime(codexVersions, null, null), { version: "0.159.3", why: "tested" }, "with nothing known, what images install")
-assert.deepEqual(cloudRuntime(codexVersions, "not a version", "v0.160.0"), { version: "0.160.0", why: "laptop" }, "a reading that isn't a version is no answer")
-assert.deepEqual(cloudRuntime(versions("2.1.283", { bundled: { package: "@anthropic-ai/claude-agent-sdk", version: "0.3.283" } }), "2.1.300", "2.1.283"), { version: "2.1.283", why: "bundled" }, "a bundled runtime is Mako's: a newer writer waits for a newer Mako there too")
-assert.deepEqual(cloudRuntime(versions("1.0.46"), "1.0.62", null), { version: "1.0.62", why: "wrote" }, "a newer build than tested is installed when it wrote the records")
 
 // The window's words.
 const outdated = { harness: "codex", wrote: { version: "0.163.0", source: "record" as const }, installed: "0.159.3", offer: { kind: "update" as const, runtimeId: "codex", label: "Update with npm" } }

@@ -1,12 +1,15 @@
+import { useEffect } from "react"
+import type { ThreadHarnessCheck } from "@mako/host/contracts/cloud-harnesses"
 import type { ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { ComposerNotice, ComposerNoticeAction } from "@/extend/notices"
+import { HarnessIcon } from "@/components/ui/provider-icon"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { returnNotice } from "@/lib/restore-plan"
 import { MoveSteps as Steps } from "./move-steps"
 import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
-import { dismissOutdatedReturn, updateAndBringBack, useCloudMoves } from "@/state/cloud-moves"
+import { bringBack, checkHarnessesAgain, dismissHarnessUpdate, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, type HarnessUpdating } from "@/state/cloud-moves"
 
 /** A move's steps in the order they're taken, each in the words its step says. */
 const STEPS = [
@@ -71,6 +74,17 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   const moving = useCloudMoves((state) => (key ? state.moving[key] : undefined))
   const returning = useCloudMoves((state) => (key ? state.returning[key] : undefined))
   const outdated = useCloudMoves((state) => (key ? state.outdated[key] : undefined))
+  const updating = useCloudMoves((state) => (key ? state.updating[key] : undefined))
+  const check = useCloudMoves((state) => (key ? state.harnesses[key] : undefined))
+  // A harness the person updates outside Mako (another app's, a command) is weighed again as they come back to the window.
+  const waitsElsewhere = Boolean(outdated) || (check?.kind === "known" && check.behind.some((behind) => behind.offer.kind !== "update"))
+  useEffect(() => {
+    if (!key || !waitsElsewhere) return
+    const again = () => void checkHarnessesAgain(key)
+    window.addEventListener("focus", again)
+    return () => window.removeEventListener("focus", again)
+  }, [key, waitsElsewhere])
+  if (updating && !moving && !returning && key) return harnessUpdate(key, updating)
   if (moving) {
     const unsettled = moving.step.kind === "unsettled"
     const handOff = moving.handOff === true
@@ -90,7 +104,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
       data: { "data-thread-move": moving.step.kind, "data-thread-handoff": handOff || undefined },
     }
   }
-  if (!returning) return key && outdated ? outdatedReturn(key, outdated) : null
+  if (!returning) return key && outdated ? outdatedReturn(key, outdated, check) : null
   const unsettled = returning.step.kind === "unsettled"
   const at = RETURN_STEPS.findIndex((each) => each.kind === returning.step.kind)
   return {
@@ -108,31 +122,104 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   }
 }
 
+/** Updating each harness before the Thread moves or comes back, then the move's or the way back's own first step. */
+function updateSteps(updating: HarnessUpdating) {
+  return [
+    ...updating.harnesses.map((harness) => ({ kind: harness, words: `Updating ${harnessLabel(harness)}` })),
+    updating.after === "move" ? { kind: "move", words: updating.handOff ? "Handing off to the cloud" : "Moving to the cloud" } : { kind: "back", words: "Bringing it back" },
+  ]
+}
+
+/**
+ * The one choice that updates this Mac's harnesses before a Thread moves or comes back: each update as it runs, then
+ * the move's own steps. One that fails says which and why; the Thread stays where it is, and the person tries again,
+ * moves anyway, or puts it away.
+ */
+function harnessUpdate(conversationId: string, updating: HarnessUpdating): ComposerNotice {
+  const steps = updateSteps(updating)
+  const failed = updating.failed
+  const label = harnessLabel(failed?.harness ?? updating.harnesses[updating.at] ?? "")
+  const where = updating.after === "move" ? "It's still on this Mac." : "It's still in the cloud, where it goes on."
+  if (failed) {
+    const retry: ComposerNoticeAction = { label: "Try again", primary: true, onClick: () => void updateThen(conversationId, updating.after, updating.handOff) }
+    const anyway: ComposerNoticeAction = { label: updating.handOff ? "Hand off anyway" : "Move anyway", onClick: () => {
+      dismissHarnessUpdate(conversationId)
+      void moveToCloud(conversationId, updating.handOff)
+    } }
+    return {
+      id: "thread-move",
+      tone: "danger",
+      icon: <HarnessIcon harness={failed.harness} />,
+      title: `${label} wasn't updated`,
+      description: failed.reason,
+      detail: <p>{`${failed.reason} ${where}`}</p>,
+      actions: updating.after === "move" ? [retry, anyway] : [retry],
+      onDismiss: () => dismissHarnessUpdate(conversationId),
+      data: { "data-harness-update": "failed" },
+    }
+  }
+  return {
+    id: "thread-move",
+    tone: "progress",
+    icon: <HarnessIcon harness={updating.harnesses[updating.at] ?? ""} />,
+    title: `Updating ${label}`,
+    description: updating.after === "move" ? (updating.handOff ? "Then it hands off to the cloud" : "Then it moves to the cloud") : "Then it comes back to this Mac",
+    detail: (
+      <>
+        <p>{`Mako updates ${label} to the version the cloud runs, so the Thread can come back. ${where}`}</p>
+        <Steps steps={steps} at={updating.at} />
+      </>
+    ),
+    data: { "data-harness-update": "updating" },
+  }
+}
+
 /**
  * A way back that stayed because a harness here is older than the one that wrote the Thread's sessions in the cloud:
  * which versions, and the one choice that settles it, updating the harness and bringing the Thread back. It stays
  * until that's done or the person puts it away; the Thread goes on in the cloud meanwhile.
  */
-function outdatedReturn(conversationId: string, entry: { outdated: OutdatedRestore; updating?: boolean; failed?: string }): ComposerNotice {
+function outdatedReturn(conversationId: string, entry: { outdated: OutdatedRestore }, check: ThreadHarnessCheck | undefined): ComposerNotice {
   const label = harnessLabel(entry.outdated.harness)
   const words = returnNotice(label, entry.outdated)
   const offer = entry.outdated.offer
+  // Weighed again since it stayed (an update elsewhere, seen as the window was focused): nothing here is older now.
+  if (check?.kind === "known" && !check.behind.length && offer.kind !== "update") {
+    return {
+      id: "thread-move",
+      tone: "info",
+      icon: <HarnessIcon harness={entry.outdated.harness} />,
+      title: "Ready to come back",
+      description: `${label} here is as new as the cloud's now.`,
+      actions: [{ label: "Bring it back", primary: true, onClick: () => {
+        dismissOutdatedReturn(conversationId)
+        void bringBack(conversationId)
+      } }],
+      onDismiss: () => dismissOutdatedReturn(conversationId),
+      data: { "data-thread-return": "ready" },
+    }
+  }
   const action: ComposerNoticeAction | undefined =
     offer.kind === "update"
-      ? { label: entry.updating ? `Updating ${label}…` : entry.failed ? "Try again" : `Update ${label} and bring it back`, primary: true, disabled: entry.updating, onClick: () => void updateAndBringBack(conversationId) }
+      ? { label: `Update ${label} and bring it back`, primary: true, onClick: () => void updateThen(conversationId, "back") }
       : offer.kind === "owner" && offer.owner === "Mako"
         ? { label: "Open Updates", onClick: () => application.openUpdates() }
         : offer.kind === "manual" && offer.command
           ? { label: "Copy command", onClick: () => void navigator.clipboard.writeText(offer.command ?? "") }
           : undefined
+  // Updated outside Mako: weighed again as the window is focused, or now.
+  const again: ComposerNoticeAction | undefined = offer.kind === "update" ? undefined : { label: "Check again", onClick: () => void checkHarnessesAgain(conversationId) }
+  const elsewhere = offer.kind === "update" ? "" : " Mako checks again when you come back to this window."
   return {
     id: "thread-move",
-    tone: entry.failed ? "danger" : "caution",
+    tone: "caution",
+    icon: <HarnessIcon harness={entry.outdated.harness} />,
     title: "It stayed in the cloud",
-    description: entry.failed ? `${label} wasn't updated: ${entry.failed}` : words.line,
-    detail: <p>{`${words.line} ${words.detail}`}</p>,
-    actions: action ? [action] : undefined,
-    onDismiss: entry.updating ? undefined : () => dismissOutdatedReturn(conversationId),
+    // What to do leads where Mako can't do it; the versions lead where its update can.
+    description: offer.kind === "update" ? words.line : words.detail,
+    detail: <p>{`${words.line} ${words.detail}${elsewhere}`}</p>,
+    actions: [action, again].filter((each) => each !== undefined),
+    onDismiss: () => dismissOutdatedReturn(conversationId),
     data: { "data-thread-return": "outdated" },
   }
 }
