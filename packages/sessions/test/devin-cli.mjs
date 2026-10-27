@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite"
 import { SessionCatalog } from "../dist/catalog.js"
 import { CATALOG_CACHE_VERSION } from "../dist/catalog-cache.js"
 import { DevinCliProvider } from "../dist/providers/devin-cli.js"
+import { DevinChildLinks } from "../dist/providers/devin-cli-children.js"
 import { proposedPlan } from "../dist/entries.js"
 import { keepCopies } from "./fixtures/archive-copies.mjs"
 import { NativeStores } from "../dist/read-only-sqlite.js"
@@ -423,6 +424,58 @@ try {
     { id: "1037", text: "Which day again?", steeringFor: undefined },
   ], "a message made before the step it follows was steered into that turn; one made after a turn that ended on a tool opens its own")
   console.log("Devin steered messages read as steering the turn they arrived during")
+
+  // A read counts its subagents' spend, and finds them by reading the
+  // session's whole forest; a session that never called `run_subagent` has
+  // none, though its system prompt names the tool, and is read without it.
+  const spending = new DatabaseSync(join(dir, "sessions.db"))
+  const spendNode = spending.prepare("INSERT INTO message_nodes (row_id, session_id, node_id, parent_node_id, chat_message, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+  const spendSession = spending.prepare("INSERT INTO sessions (id, hidden, last_activity_at, working_directory, model, title, created_at, main_chain_id) VALUES (?, 0, ?, ?, ?, ?, ?, ?)")
+  const metrics = (output) => ({ metrics: { input_tokens: 10, output_tokens: output, cache_read_tokens: 0, cache_creation_tokens: 0 } })
+  const profiles = JSON.stringify({ role: "system", content: "Available subagent profiles for the `run_subagent` tool. Choose the most appropriate profile." })
+  spendSession.run("session-5", 50, "/work", "swe-1-6", "No subagents", 41, 43)
+  spendNode.run(1041, "session-5", 41, null, profiles, 41)
+  spendNode.run(1042, "session-5", 42, 41, JSON.stringify({ role: "user", content: "Say hi" }), 42)
+  spendNode.run(1043, "session-5", 43, 42, JSON.stringify({ role: "assistant", content: "Hi.", metadata: metrics(5) }), 43)
+  const task = "Read notes.md and report the release day."
+  spendSession.run("session-6", 60, "/work", "swe-1-6", "One subagent", 51, 56)
+  spendNode.run(1051, "session-6", 51, null, profiles, 51)
+  spendNode.run(1052, "session-6", 52, 51, JSON.stringify({ role: "user", content: "Ask a subagent for the release day" }), 52)
+  spendNode.run(1053, "session-6", 53, 52, JSON.stringify({ role: "assistant", content: "", tool_calls: [{ id: "run:1", name: "run_subagent", arguments: { title: "Release day", task } }], metadata: metrics(5) }), 53)
+  spendNode.run(1061, "session-6", 61, null, JSON.stringify({ role: "system", content: "You are a subagent of Devin." }), 54)
+  spendNode.run(1062, "session-6", 62, 61, JSON.stringify({ role: "user", content: task }), 54)
+  spendNode.run(1063, "session-6", 63, 62, JSON.stringify({ role: "assistant", content: "Friday.", metadata: metrics(700) }), 54)
+  spendNode.run(1054, "session-6", 54, 53, JSON.stringify({ role: "tool", tool_call_id: "run:1", content: "Subagent agent_id=helper-1 completed successfully: Friday." }), 55)
+  spendNode.run(1055, "session-6", 55, 54, JSON.stringify({ role: "assistant", content: "Friday.", metadata: metrics(5) }), 56)
+  spendNode.run(1056, "session-6", 56, 55, JSON.stringify({ role: "user", content: "Thanks" }), 57)
+  spending.close()
+  const analysed = []
+  const children = DevinChildLinks.prototype.children
+  DevinChildLinks.prototype.children = function (db, session, parentPath) {
+    analysed.push(session)
+    return children.call(this, db, session, parentPath)
+  }
+  try {
+    const spent = async (session) => {
+      const read = await provider.read(`${join(dir, "sessions.db")}#${session}`)
+      return read.entries.reduce((total, entry) => total + (entry.usage?.output ?? 0), 0)
+    }
+    assert.equal(await spent("session-5"), 5)
+    assert.deepEqual(analysed, [], "a session whose chain calls no subagent and whose store heads none is read without looking for subagents")
+    assert.equal(await spent("session-6"), 710, "a session that ran a subagent counts its calls in the parent's turns")
+    assert.deepEqual(analysed, ["session-6"])
+  } finally {
+    DevinChildLinks.prototype.children = children
+  }
+  const heads = new DatabaseSync(join(dir, "sessions.db"))
+  const links = new DevinChildLinks()
+  assert.equal(links.mayHaveChildren(heads, "session-5", [profiles]), false, "a store from before `subagent_heads` heads none")
+  assert.equal(links.mayHaveChildren(heads, "session-6", [JSON.stringify({ role: "assistant", tool_calls: [{ function: { name: "run_subagent" } }] })]), true)
+  heads.exec("CREATE TABLE subagent_heads (session_id TEXT NOT NULL, agent_id TEXT NOT NULL, chain_node_id INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (session_id, agent_id))")
+  heads.prepare("INSERT INTO subagent_heads VALUES (?, ?, ?, ?)").run("session-5", "rewound", 41, 50)
+  assert.equal(links.mayHaveChildren(heads, "session-5", [profiles]), true, "a subagent its store heads is looked for, whatever the chain says")
+  heads.close()
+  console.log("Devin reads look for subagents' spend only in sessions that ran one")
   provider.close()
   console.log("Devin CLI tests clean: streamed rows, tools, thinking, locks, and incremental follow verified.")
 } finally {

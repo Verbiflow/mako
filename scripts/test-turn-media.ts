@@ -170,6 +170,11 @@ assert.deepEqual(turnMedia(codexEntries, "codex").map(({ evidence, caption }) =>
 
 // ACP: an agent that hands on the whole MCP result keeps its `_meta`.
 assert.deepEqual(acpToolFields({ status: "completed", rawOutput: { content: [], _meta: { [MEDIA_META]: report } } }).details?.[0]?.type, "media")
+// Nearly every result states no media, as no `_meta`, another kind of output or a malformed report, and reads as none.
+const statesNone: (JsonValue | undefined)[] = [undefined, "printed", ["a"], { output: "x" }, { _meta: { other: 1 } }, { _meta: { [MEDIA_META]: { via: "show" } } }]
+for (const rawOutput of statesNone)
+  assert.equal(acpToolFields({ status: "completed", rawOutput }).details, undefined)
+for (const meta of [undefined, null, "text", 1, [report], { [MEDIA_META]: null }]) assert.deepEqual(mediaDetails(meta), [])
 
 // mako-computer states the files a cell made.
 assert.deepEqual(producedMedia({ action: "screenshot", screenshot_out_file: "/tmp/shots/a.png" }, { width: 10 }), ["/tmp/shots/a.png"])

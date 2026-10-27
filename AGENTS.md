@@ -3300,7 +3300,15 @@ row fails the row as before, with the reason. The rows read `@mako/*` from
 stale code. `--update` records `at` only on a committed tree, so it names
 the code it measured; re-record a row only when its cost changed on purpose,
 on an A/B (`--rows <keys> --ab`, or `--reference <commit>`), never on one
-loaded run. `npm run update:local` runs no `test:performance`; Settings >
+loaded run. CI's `performance` job measures every kept row beside the commit
+a change goes onto (`perf:decoders -- --reference HEAD^1`), so a change that
+slows a row fails at review, beside the code just before it. The budgets
+alone don't: a baseline recorded long before, on older recordings, leaves
+room for regressions to add up unnoticed on a quiet machine until a slower
+one goes over and compares the row with that old commit. Devin's saved open
+crossed at a person's update that way, +69% over its baseline's commit, from
+two changes neither over budget: a subagent analysis on every read, and the
+media `_meta` parses below. `npm run update:local` runs no `test:performance`; Settings >
 Updates does, in a copy without `.git`, alongside `test:application` and
 `test:renderer-assets`, and names its source in `MAKO_BUILD_SOURCE` for the
 export. An installed app from before that variable doesn't pass it, so a copy
@@ -3314,7 +3322,12 @@ already passes (`RecordedLine`), and scope one for a synchronous call with
 projection a fifth of its time, each a property definition under tsx
 (`EntryDrawing` holds them as methods); a schema parse that fails on nearly
 every message builds an `Error` each time (Grok's MCP startup read every
-update that way); and a reference copied whole per update grows with its
+update that way, and the media a tool result states in `_meta` every call's
+result: about 7 µs each, the decode and host rows' third or more; read such
+a schema with `.optional().catch(undefined)`); work a read needs for only
+some sessions runs only when what the read already holds says it applies
+(Devin's subagent analysis reads the session's whole forest, and runs when
+its chain calls `run_subagent` or its store heads a subagent); and a reference copied whole per update grows with its
 stream (`joinedRanges` shares the ranges before the last). The full run
 warms these paths with earlier rows, so measure a suspect row alone beside
 its reference (`--rows … --ab`) before trusting that it held.

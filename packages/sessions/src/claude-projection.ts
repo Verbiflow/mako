@@ -51,9 +51,10 @@ const ReadInputSchema = z.object({ file_path: z.string().min(1) })
 /**
  * The MCP result's `_meta` Claude Code passes its SDK host beside a tool's
  * result and keeps in its transcript as `mcpMeta` (`savedMessage` reads it
- * into the same field); never the model's.
+ * into the same field); never the model's. Most results carry none, which
+ * reads as `undefined` rather than failing a `safeParse`.
  */
-const McpMetaSchema = z.object({ mcp_meta: z.object({ _meta: z.json() }).loose() })
+const McpMetaSchema = z.object({ mcp_meta: z.object({ _meta: z.json() }).loose() }).optional().catch(undefined)
 
 /** The file a `Read` call's input names. */
 function readPath(input: string): string | undefined {
@@ -348,7 +349,7 @@ export class ClaudeProjection {
         }
         const call = this.calls.get(block.tool_use_id)
         if (single) {
-          const details = mediaDetails(McpMetaSchema.safeParse(message).data?.mcp_meta._meta)
+          const details = mediaDetails(McpMetaSchema.parse(message)?.mcp_meta._meta)
           if (details.length) update.details = details
         }
         if (call) {
