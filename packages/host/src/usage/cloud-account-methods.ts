@@ -18,6 +18,7 @@ import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import type { HostEnvironment } from "../base/host-environment.js"
+import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog } from "../base/host-log.js"
 import type { DomainSecrets } from "../base/host-secrets.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
@@ -163,7 +164,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   request,
   harnessSignIns,
   sessions,
-  files,
+  signedFiles,
+  jobs,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
@@ -176,8 +178,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   harnessSignIns?: (options: { dataRoot: string; store: HarnessSignInStore; onChange: (signIns: CloudSignInsState) => void }) => HarnessSignInSharing
   /** What tells the account's list of this Mac's Sessions over its runtime's link (`SessionPublisher`). */
   sessions?: SessionPublishing
-  /** This Mac's signed files, as its window reads them: what a phone's transcript draws its media from. */
-  files?: (request: Request) => Promise<Response>
+  /** This Mac's signed files and nothing else (`readSignedFile`): what a phone's transcript draws its media from. */
+  signedFiles?: (request: Request) => Promise<Response>
+  /** The host's recurring work: the account's word on whether the person is at this Mac runs there. */
+  jobs: Pick<HostJobs, "every">
 }): CloudAccount {
   let status: string | undefined
   /** What the sign-ins depend on in the account: who it is and whether it has the cloud. */
@@ -253,7 +257,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
         }
         if (watch) options.watch = watch
         // A phone opening a Thread's website reaches it through this link, and only the ports this Mac's apps serve on.
-        options.ports = new PortRelay({ allowed: () => appPorts((channel, args, client, history) => methods.invoke(channel, args, client, history)), files })
+        options.ports = new PortRelay({ allowed: () => appPorts((channel, args, client, history) => methods.invoke(channel, args, client, history)), signedFiles })
         return serveHostThroughGateway(link, options)
       },
     },
@@ -263,7 +267,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   const attention = attendable(machine, onMac())
     ? new CloudAttention({ idle: macIdleSeconds, say: (attending) => cloud.attend(attending), signedIn: () => status === "signed-in", log: (message, fields) => hostLog("cloud", message, fields) })
     : undefined
-  attention?.start()
+  attention?.start(jobs)
 
   methods.handle("mako:cloud-account", () => cloud.ready())
   methods.handle("mako:cloud-sign-in", () => cloud.signIn())

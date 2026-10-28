@@ -122,6 +122,13 @@ conversations?.live`) rather than a domain importing another's files.
   `setInterval`: each job is named, runs on an unreferenced timer that varies
   by a tenth either way, skips a run while the last is still going, logs a
   failure as `jobs <name> failed`, and stops with the host.
+- **Two file readers** (`workspaces/file-readers.ts`). `readSignedFile` serves
+  only a `mako-file://asset/…` URL this host signed; it is the one thing the
+  gateway's link (`PortRelay`: phones, other devices, cloud machines) reads
+  files through, and the relay itself passes on nothing but `/file/asset/…`.
+  `readWindowFile` also opens any path in a workspace, absolute ones included,
+  so it is for a window on this Mac alone; handing it to the link lets anyone
+  on the account read the Mac's files.
 - **No module-level state.** What the host holds lives in what `createHost`
   builds, so a test makes the one domain it needs. `check-host-module-state.mjs`
   (in `npm run lint`) fails on any module-level `let` and any empty

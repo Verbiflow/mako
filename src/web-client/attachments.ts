@@ -70,7 +70,30 @@ export async function readPicked(file: File): Promise<Picked> {
   return picked
 }
 
-/** Lets go of what the chips drew. */
-export function releasePicked(picked: readonly Picked[]): void {
-  for (const each of picked) if (each.preview) URL.revokeObjectURL(each.preview)
+/**
+ * The pictures a composer's chips draw, each an object URL held until its attachment is thrown away: removed, sent, or
+ * the composer gone. A message that didn't go keeps its attachments, so their pictures stay too.
+ */
+export class HeldPreviews {
+  readonly #held = new Map<string, string>()
+
+  hold(picked: Picked): void {
+    if (picked.preview) this.#held.set(picked.id, picked.preview)
+  }
+
+  /** Lets go of these attachments' pictures; one not held (already let go) is left alone. */
+  release(picked: readonly Picked[]): void {
+    for (const each of picked) {
+      const preview = this.#held.get(each.id)
+      if (preview === undefined) continue
+      this.#held.delete(each.id)
+      URL.revokeObjectURL(preview)
+    }
+  }
+
+  /** The composer is gone: every picture it still held. */
+  releaseAll(): void {
+    for (const preview of this.#held.values()) URL.revokeObjectURL(preview)
+    this.#held.clear()
+  }
 }

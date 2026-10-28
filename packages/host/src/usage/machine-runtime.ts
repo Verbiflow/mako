@@ -42,8 +42,8 @@ type SignIns = Extract<AgentMessage, { type: "sign-ins" }>
 export type MachineRuntimeOptions = {
   /** The agent's end: a socket carrying a JSON message per line each way. */
   agent: NodeJS.ReadWriteStream
-  /** The machine's signed files, as a window reads them: what a phone's transcript draws its media from (`PortRelay`). */
-  files?: (request: Request) => Promise<Response>
+  /** The machine's signed files and nothing else (`readSignedFile`): what a phone's transcript draws its media from (`PortRelay`). */
+  signedFiles?: (request: Request) => Promise<Response>
   invoke: HostInvoke
   version: string
   build: string
@@ -549,7 +549,7 @@ export class MachineRuntime {
       } else if (frame.type !== "operation" && !MEDIA_FRAMES.has(frame.type)) this.#changed()
     }
     // A phone reaches this machine's Threads' apps and signed files through the same link, as it does a Mac's.
-    const ports = new PortRelay({ allowed: () => appPorts(this.#options.invoke), files: this.#options.files })
+    const ports = new PortRelay({ allowed: () => appPorts(this.#options.invoke), signedFiles: this.#options.signedFiles })
     serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, ports, onFrame, watch: (conversations) => this.#options.sessions?.watch(runtimeLink, conversations) }).then(
       (served) => {
         if (closed) return served.close()
