@@ -70,6 +70,17 @@ function prepareCloud(cwd: string, text: string, now: number): void {
   )
 }
 
+/**
+ * A cloud Thread in `cwd` made ahead now, not after the first words: when starting one is the person's whole intent
+ * (turning the cloud on's Start, or a pointer resting on it). Asked at most every half minute, as the composer does.
+ */
+export function prepareCloudNow(cwd: string, now = Date.now()): void {
+  const key = `cloud\0${cwd}`
+  if (!due(key, now)) return
+  composingSince.set(cwd, composingSince.get(cwd) ?? now)
+  void composerLaunch().then((launch) => getMako().cloudPrepare(cwd, 0, launch)).catch(() => signalled.delete(key))
+}
+
 /** The harness and settings a send from the composer would start with now (`launch` in `acp-start.ts`). */
 async function composerLaunch(): Promise<CloudPrepareLaunch> {
   const harness = threadsStore.get().composerHarness

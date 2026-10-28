@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { existsSync, readFileSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createServer, connect, type AddressInfo, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -469,6 +469,18 @@ test("onboarding offers this Mac's recent projects for project bases once per ac
   assert.deepEqual(machine.bases, [REPOSITORY, { url: "https://github.com/octocat/Spoon-Knife" }], "each repository once, newest first; a folder off GitHub is left out")
   assert.equal(await offer(["/Users/me/mako"]), "already", "once per account on this Mac")
   assert.equal(machine.bases.length, 2)
+  const accountId = await machine.account.id()
+  assert.ok(accountId)
+  assert.deepEqual(await router.offeredProjects(accountId), [
+    { folder: "/Users/me/mako", repository: REPOSITORY },
+    { folder: "/Users/me/spoon", repository: { url: "https://github.com/octocat/Spoon-Knife" } },
+  ], "which projects were offered, for turning the cloud on to follow")
+  // Offered by a build that didn't keep which: they're noted at the next offer, without asking again.
+  await writeFile(join(scratch, "onboarding", "projects-offered.json"), `${JSON.stringify({ accounts: [accountId] })}\n`)
+  assert.equal(await router.offeredProjects(accountId), undefined, "not known yet, rather than none")
+  assert.equal(await offer(["/Users/me/spoon"]), "already")
+  assert.deepEqual(await router.offeredProjects(accountId), [{ folder: "/Users/me/spoon", repository: { url: "https://github.com/octocat/Spoon-Knife" } }])
+  assert.equal(machine.bases.length, 2, "nothing asked again")
 })
 
 test("a Mac that isn't signed in makes nothing ahead", async () => {

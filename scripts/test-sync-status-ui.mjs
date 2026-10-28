@@ -167,7 +167,7 @@ async function checkWindow() {
 
   // 5. No cloud on the account: no Sync at all.
   await openAccount("&cloud=signed-in")
-  await until(`document.body.innerText.includes("Mako's cloud is invite-only for now")`, "the account")
+  await until(`document.body.innerText.includes("Invite-only for now")`, "the account")
   assert.equal(await evaluate(`document.querySelector('${section}')`), null)
   console.log("Sync status UI: catching up by tier with the backfill said, all in sync, waiting for power, a failure in the cloud's words with its correlation ID, and nothing without the cloud")
   clearTimeout(watchdog)

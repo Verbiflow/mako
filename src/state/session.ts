@@ -29,6 +29,7 @@ import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
 import { cloudAccountStore, heardAccountEvent } from "@/state/cloud-account"
 import { offerCloudProjects } from "@/state/cloud-projects"
+import { cloudTurnOn } from "@/state/cloud-turn-on"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
@@ -368,6 +369,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "cloud-sign-ins") {
     cloudAccountStore.set({ signIns: event.signIns })
+    return
+  }
+  if (event.type === "cloud-turn-on") {
+    cloudTurnOn.heard(event.turnOn)
     return
   }
   if (event.type === "handoff-settings") {

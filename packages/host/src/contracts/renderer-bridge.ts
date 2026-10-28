@@ -65,6 +65,7 @@ import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
 import type { SyncStatus } from "./sync-status.js"
+import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
@@ -451,6 +452,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     cloudAccount: () => invokeTrustedHost<CloudAccount>("mako:cloud-account"),
     /* How this device's Sessions stand in the account: what's there, what's catching up, and what failed. */
     syncStatus: () => invokeTrustedHost<SyncStatus>("mako:sync-status"),
+    cloudTurnOn: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on"),
+    cloudTurnOnCheck: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on-check"),
+    cloudTurnOnRetryBases: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on-retry-bases"),
     cloudSignIn: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in"),
     cloudSignInCancel: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in-cancel"),
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),

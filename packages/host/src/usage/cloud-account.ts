@@ -56,7 +56,8 @@ import {
   type CloudSignInHarness,
   type CloudSignInListing,
 } from "../contracts/cloud-sign-ins.js"
-import type { CloudRepository } from "../contracts/cloud-threads.js"
+import { CloudRepositorySchema, type CloudRepository } from "../contracts/cloud-threads.js"
+import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
@@ -109,6 +110,16 @@ const EnrollmentSchema = z.object({
 /** `credential`: a successor to this Mac's credential, once it's due to rotate; the old one works until it's used. */
 const RefreshSchema = EnrollmentSchema.omit({ credential: true }).extend({ credential: z.string().regex(/^mako_dc_[\w-]{43}$/).optional() })
 const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z.string() })
+/** Read leniently: a state this build doesn't know reads as the cloud not saying. */
+const BaseStandingSchema = z.union([
+  z.object({ state: z.literal("ready"), madeAt: z.string() }),
+  z.object({ state: z.literal("making"), since: z.string() }),
+  z.object({ state: z.literal("waiting"), message: z.string().optional(), retryAt: z.string().optional(), reason: z.literal("no-access").optional().catch(undefined) }),
+  z.object({ state: z.literal("failed"), message: z.string(), reason: z.literal("no-access").optional().catch(undefined) }),
+  z.object({ state: z.literal("none") }),
+  z.object({ state: z.literal("unknown") }),
+]).catch({ state: "unknown" as const })
+const BaseStandingsSchema = z.object({ bases: z.array(z.object({ repository: CloudRepositorySchema, standing: BaseStandingSchema })) })
 /** What the account says of a Session's waiting messages after a change to one. */
 const WaitingAnswerSchema = z.object({ messages: z.array(WaitingMessageSchema) })
 const BrowserSessionsSchema = z.object({ sessions: z.array(CloudBrowserSessionSchema) })
@@ -640,6 +651,29 @@ export class CloudAccounts {
    */
   async askBases(repositories: CloudRepository[]): Promise<void> {
     await this.#call("bases.ask", "POST", "/v1/bases", { repositories })
+  }
+
+  /**
+   * How the cloud stands each of these repositories' bases, read without asking for them again: one it hasn't heard of
+   * reads `unknown`. Null from a cloud older than saying it.
+   */
+  async baseStandings(repositories: CloudRepository[]): Promise<Array<{ repository: CloudRepository; standing: BaseStanding }> | null> {
+    if (!repositories.length) return []
+    const response = await this.#call("bases.standing", "POST", "/v1/bases/standing", { repositories }, false, [404])
+    if (response.status === 404) return null
+    return BaseStandingsSchema.parse(await response.json()).bases
+  }
+
+  /**
+   * Asks the cloud again what the account has, now rather than at the next connection token: an invite, or later a
+   * payment, reaches this Mac at once when the person asks. The answer comes as the account's state changes.
+   */
+  async checkPlan(): Promise<CloudAccount> {
+    await this.#ready
+    if (this.#state.status !== "signed-in") return this.account()
+    this.#token = undefined
+    await this.#connectionToken()
+    return this.account()
   }
 
   /** This Mac's device in the account, while it's signed in. */

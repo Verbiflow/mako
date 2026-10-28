@@ -46,7 +46,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -562,6 +562,30 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (snapshot) emit({ type: "thread-archives", snapshot })
   }
   late.cloudConversations = cloudConversations
+  // Turning the cloud on, as one line every window shows: followed from what owns each step while it's under way.
+  const turnOn = cloudConversations && uploads && new CloudTurnOnFollower({
+    file: join(environment.dataRoot, "cloud", "turn-on.json"),
+    emit: (state) => {
+      if (!shell.closing()) emit({ type: "cloud-turn-on", turnOn: state })
+    },
+    sources: {
+      account: async () => late.cloud?.account?.(),
+      signIns: async () => late.cloud?.signIns?.(),
+      sync: async () => uploads.status(),
+      projects: (accountId) => cloudConversations.offeredProjects(accountId),
+      standings: async (repositories) => (await late.cloud?.baseStandings?.(repositories)) ?? null,
+      askBases: (repositories) => cloudConversations.askBasesAgain(repositories),
+      checkPlan: async () => void (await late.cloud?.checkPlan?.()),
+      firstThread: () => cloudConversations.firstCloudThread(),
+      machine: (repository) => cloudConversations.preparedMachine(repository),
+      now: Date.now,
+    },
+  })
+  declareTurnOnMethods(methods, turnOn)
+  if (turnOn) {
+    const following = turnOn
+    shell.jobs.every("follow turning the cloud on", 1_500, () => following.tick())
+  }
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
   const residency = new ControlResidency({
     sessions: control.sessions,
