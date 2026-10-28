@@ -8,7 +8,8 @@ import { WAITING_PER_SESSION, WaitingMessageSchema } from "./waiting.js"
  * numbered by the account's one object and kept, so every device following it hears of each in order, and a device
  * that was off hears of what happened meanwhile when it comes back. A device that joined, from where and how; a
  * device that left, and why; Sessions listed or changed, each whole (`sessions-listed`, `thread-listing.ts`), and
- * Sessions that left the list. An event of a type a client doesn't know is skipped, never refused.
+ * Sessions that left the list; a device gone quiet, or back. An event of a type a client doesn't know is skipped, never
+ * refused.
  */
 
 /** Where a request came from, as the cloud read its address: never the address. */
@@ -37,6 +38,11 @@ export const AccountEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sessions-listed"), sessions: z.array(ListedSessionSchema).min(1).max(LISTED_PER_FRAME) }),
   /** Sessions that left the list: closed, older than it keeps, or on a device that left the account. */
   z.object({ type: z.literal("sessions-unlisted"), sessions: z.array(z.uuid()).min(1).max(LISTED_PER_FRAME) }),
+  /**
+   * A device went quiet (`QuietDeviceSchema`: the cloud last heard from it at `since`), or, with `since` null, was heard
+   * from again: what the list shows of its rows changes, the rows themselves don't.
+   */
+  z.object({ type: z.literal("device-quiet"), deviceId: z.uuid(), since: z.iso.datetime().nullable() }),
   /** A Session's messages waiting for its owner (`waiting.ts`), all of them as they stand now; none once each was taken or taken back. */
   z.object({ type: z.literal("messages-waiting"), session: z.uuid(), messages: z.array(WaitingMessageSchema).max(WAITING_PER_SESSION) }),
 ])

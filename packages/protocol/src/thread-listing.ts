@@ -13,7 +13,8 @@ import { WaitingMessageSchema } from "./waiting.js"
  * taking a report only at a generation at least the row's (one from another owner at the same generation is refused).
  * So a Session that moves is listed where it is, in transit while it's moving, and never twice. `GET /v1/sessions`
  * lists them with the account stream's number, and the stream says each change (`sessions-listed`,
- * `sessions-unlisted`), so a Session one device starts shows on every other at once.
+ * `sessions-unlisted`), so a Session one device starts shows on every other at once. A device the cloud can't hear
+ * from is said once, not on each of its rows (`QuietDeviceSchema`, `device-quiet`).
  */
 
 /**
@@ -80,6 +81,16 @@ export const ListedSessionSchema = ReportedSessionSchema.extend({
 }).strip()
 export type ListedSession = z.infer<typeof ListedSessionSchema>
 
+/**
+ * A device the cloud hasn't heard from for longer than a reconnect takes (the cloud says when; two minutes): its
+ * runtime's link closed, or its token ran out unrenewed (a Mac asleep or off the network), and it didn't come back.
+ * `since` is when the cloud last heard from it. Its rows stand as it last reported them; a list doesn't show one of them
+ * at work or waiting on a person, since nothing on a device that can't be reached runs or answers for anyone else. A
+ * message to one waits in the account (`waiting.ts`).
+ */
+export const QuietDeviceSchema = z.object({ deviceId: z.uuid(), since: z.iso.datetime() })
+export type QuietDevice = z.infer<typeof QuietDeviceSchema>
+
 /** At most this many rows in one frame or event, well under a message's megabyte. */
 export const LISTED_PER_FRAME = 200
 /** An owner lists at most this many Sessions: the last 30 days' and any older one at work. */
@@ -109,6 +120,8 @@ export const SessionListingsSchema = z.object({
   seq: z.number().int().nonnegative(),
   /** Messages waiting for Sessions whose owner is off (`waiting.ts`), as they stood at `seq`. */
   waiting: z.array(WaitingMessageSchema).optional(),
+  /** The account's devices that were quiet at `seq` (`QuietDeviceSchema`); the stream says each change after it (`device-quiet`). */
+  quiet: z.array(QuietDeviceSchema).optional(),
 })
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
