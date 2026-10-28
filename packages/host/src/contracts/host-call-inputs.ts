@@ -90,6 +90,7 @@ const inputs = {
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
   "mako:check-updates": () => z.tuple([]),
+  "mako:check-update-source": () => z.tuple([z.boolean()]),
   "mako:checkout-heads": () => z.tuple([z.array(z.string())]),
   "mako:choose-file-reference": () =>
     z.tuple([
@@ -1731,6 +1732,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:change-usage", "attribution"],
   ["mako:chat-folders", "threads"],
   ["mako:check-updates", "application"],
+  ["mako:check-update-source", "application"],
   ["mako:checkout-heads", "workspaces"],
   ["mako:choose-file-reference", "attribution"],
   ["mako:clear-crashes", "application"],

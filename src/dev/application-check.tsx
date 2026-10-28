@@ -6,7 +6,7 @@ import { bindTheme, prefsStore } from "@/state/prefs"
 import { getMako } from "@/lib/bridge"
 import { installMockBridge } from "./mock-bridge"
 import { threadMoveStepped } from "@/state/cloud-moves"
-import type { LifecycleState, LifecycleWork, LocalBuildState, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
+import type { LifecycleState, LifecycleWork, LocalBuildState, RevisionChanges, UpdateInstallation, UpdateSource } from "@mako/host/contracts/app-lifecycle"
 import type { HandOffCandidate, HandOffResult, ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 import "../index.css"
 
@@ -23,6 +23,65 @@ let installation: UpdateInstallation = {
   build: identity,
   source: "/Users/developer/Projects/mako",
   local: { kind: "idle" },
+  checkout: null,
+  reading: false,
+  installed: null,
+}
+
+/** The installed revision and origin/main 21 merged pull requests later, as on the day the updater built what was already installed. */
+const INSTALLED = "9a7a5c0c4c9be872bbbbab91721f326d461fa830"
+const UPSTREAM = "079f9b315af4593fec599bf9926fad1797dbec64"
+const LOCAL = "4be1d02a7e93c5f18a0d6b2c97e4f3a1d8c0b5e6"
+const CHANGES: RevisionChanges = {
+  from: INSTALLED,
+  count: 21,
+  titles: [
+    "Proofs and tests run harnesses in a home of their own: nothing they start reaches the person's sidebar (#189)",
+    "Sync the last 30 days whole, the newest first, from one truth per Session (#188)",
+    "A turn's work reads as one calm column: running calls sweep their own row, agents are named while they run and wear their harness's mark, and \"working\" is an ellipsis (#187)",
+    "Allowing a tool draws nothing over the composer: no empty bar for an answer handed over at once (#186)",
+    "Cursor: finish a turn the SDK's resumes fail after it ended; contain closed exec-stream writes (#185)",
+    "Archiving a cloud Thread ends it in the cloud, for every device; restoring brings it back to its Mac (#182)",
+    "The rail says when a quiet device was last seen: \"seen 3h\" on its Thread's row, and \"last seen 3 hours ago\" in its tip (#184)",
+    "A quiet device is said once, not on each of its rows: nothing it lists shows at work or waiting while the account can't hear it (#183)",
+  ],
+}
+const installedBuild = { id: "b9c5c96a71e04f0d", builtAt: "2026-10-28T08:22:00.000Z", revision: INSTALLED, dirty: false }
+const reading = (overrides: Partial<Extract<UpdateSource, { kind: "checkout" }>>): UpdateSource => ({
+  kind: "checkout",
+  head: INSTALLED,
+  branch: "main",
+  upstream: { name: "origin/main", commit: UPSTREAM, branch: "main" },
+  ahead: 0,
+  behind: 21,
+  changed: 0,
+  untracked: 0,
+  fetch: { kind: "fetched" },
+  plan: { kind: "fast-forward" },
+  target: UPSTREAM,
+  changes: CHANGES,
+  readAt: "2026-10-28T08:20:00.000Z",
+  ...overrides,
+})
+/**
+ * The source checkout's states, as Settings › Updates draws them: behind and clean, already installed, kept from the
+ * update by local changes, on another branch, offline, mid-build, ready, and the build that installed it.
+ */
+export const SOURCE_SCENES = {
+  behind: { checkout: reading({}) },
+  current: { checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "current" }, changes: { from: UPSTREAM, count: 0, titles: [] } }), build: { ...installedBuild, id: "c41e7d2f9a0b3e65", revision: UPSTREAM } },
+  changes: { checkout: reading({ changed: 3, untracked: 1, plan: { kind: "as-is", why: "changes", installed: false }, target: INSTALLED, changes: { from: INSTALLED, count: 0, titles: [] } }) },
+  branch: { checkout: reading({ head: LOCAL, branch: "approval-bar", ahead: 2, plan: { kind: "as-is", why: "branch", installed: false }, target: LOCAL, changes: { from: INSTALLED, count: 2, titles: ["Approve in place (#190)", "Name the waiting tool"] } }) },
+  diverged: { checkout: reading({ head: LOCAL, ahead: 2, plan: { kind: "as-is", why: "diverged", installed: false }, target: LOCAL, changes: { from: INSTALLED, count: 2, titles: ["Local experiment", "Local fix"] } }) },
+  offline: { checkout: reading({ fetch: { kind: "failed", reason: "origin didn't answer in 15 seconds" }, behind: 4, upstream: { name: "origin/main", commit: "d9da1b16a8e2f3c4b5a6978877665544332211ff", branch: "main" }, target: "d9da1b16a8e2f3c4b5a6978877665544332211ff", changes: { ...CHANGES, count: 4, titles: CHANGES.titles.slice(4) } }) },
+  building: { checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "as-is", why: "level", installed: false } }), local: { kind: "building", phase: "checking", revision: UPSTREAM } },
+  ready: { checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "as-is", why: "level", installed: false } }), local: { kind: "ready", build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, changes: CHANGES, forwarded: { branch: "main", from: INSTALLED, to: UPSTREAM } } },
+  installed: { checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "current" }, changes: { from: UPSTREAM, count: 0, titles: [] } }), build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, installed: CHANGES },
+} satisfies Record<string, Partial<UpdateInstallation>>
+export function sourceScene(name: keyof typeof SOURCE_SCENES) {
+  lifecycle = { ...lifecycle, work: [], operation: { kind: "idle" } }
+  installation = { ...installation, build: installedBuild, local: { kind: "idle" }, reading: false, installed: null, ...SOURCE_SCENES[name] }
+  applicationStore.set({ installation, lifecycle, busy: false, dialog: null, error: null })
 }
 const WORK: LifecycleWork[] = [
     {
@@ -66,6 +125,7 @@ export const calls = {
   checked: 0,
   acknowledged: 0,
   handedOff: 0,
+  sourceChecks: 0,
 }
 
 /**
@@ -89,7 +149,7 @@ export function setLocal(local: LocalBuildState) {
   applicationStore.set({ installation })
 }
 export function ready() {
-  setLocal({ kind: "ready", build: { ...identity, id: "8fc69a47318e520b" } })
+  setLocal({ kind: "ready", build: { ...identity, id: "8fc69a47318e520b" }, changes: null, forwarded: null })
 }
 export function idle() {
   lifecycle = { ...lifecycle, work: [], operation: { kind: "idle" } }
@@ -116,6 +176,10 @@ window.mako = {
   installationState: async () => installation,
   selectUpdateSource: async (source) => {
     installation = { ...installation, source }
+    return installation
+  },
+  checkUpdateSource: async () => {
+    calls.sourceChecks++
     return installation
   },
   pickFolder: async () => "/Users/developer/Projects/mako",

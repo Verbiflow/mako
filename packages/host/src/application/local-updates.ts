@@ -18,11 +18,15 @@ import { z } from "zod"
 import { createHash } from "node:crypto"
 import {
   BuildIdentitySchema,
+  CHANGE_TITLES,
   type BuildIdentity,
   type LocalBuildState,
+  type RevisionChanges,
+  type UpdateSource,
 } from "../contracts/app-lifecycle.js"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { unregisterBundle } from "./local-update-installer.js"
+import { bringForward, changesSince, readUpdateSource } from "./local-update-source.js"
 import type { Git } from "@mako/git"
 
 const execute = promisify(execFile)
@@ -138,6 +142,18 @@ export async function buildCopyBytes(source: string): Promise<number> {
   return total
 }
 
+const revisionChanges = z.object({
+  from: z.string().nullable(),
+  count: z.number().int().nonnegative(),
+  titles: z.array(z.string()).max(CHANGE_TITLES),
+})
+/** What a build brought, kept beside it so the build it becomes can say so once it runs. */
+const BUILD_CHANGES = "build-changes.json"
+const buildChanges = z.object({ build: z.string(), changes: revisionChanges })
+
+/** A reading younger than this answers a check without fetching again; Check again and Build always fetch. */
+const FETCH_EVERY_MS = 60_000
+
 export interface LocalUpdateOptions {
   /**
    * Pass `MAKO_BUILD_SOURCE` to the build's checks. Updaters released before
@@ -156,6 +172,12 @@ export class LocalUpdates {
   private job: Promise<void> | null = null
   private stamp: string | null = null
   private lastReady: LocalBuildState | null = null
+  /** The source against its upstream, as last read, and the reading under way. */
+  private reading: UpdateSource | null = null
+  private pendingRead: Promise<UpdateSource> | null = null
+  private fetchedAt = 0
+  /** What the running build brought, when Settings built and installed it. */
+  private installed: RevisionChanges | null = null
   private readonly git: Git
   private readonly root: string
   private readonly identity: string
@@ -191,6 +213,8 @@ export class LocalUpdates {
             "The saved source selection could not be read. Choose the checkout again.",
         }
     }
+    const kept = await readFile(join(this.root, BUILD_CHANGES), "utf8").then((text) => buildChanges.parse(JSON.parse(text))).catch(() => null)
+    if (kept && kept.build === this.running?.id) this.installed = kept.changes
     const receiptPath = join(this.root, "install-result.json")
     const receipt = await readFile(receiptPath, "utf8").catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return null
@@ -215,7 +239,37 @@ export class LocalUpdates {
   }
 
   snapshot() {
-    return { source: this.source, local: this.state }
+    return { source: this.source, local: this.state, checkout: this.reading, reading: this.pendingRead !== null, installed: this.installed }
+  }
+
+  /**
+   * Read the source against its upstream. `fetch` asks the remote first,
+   * unless a fetch answered within the last minute and `force` isn't set.
+   * Readings asked for while one runs share it; `force` waits it out and
+   * reads afresh.
+   */
+  async check({ fetch, force = false }: { fetch: boolean; force?: boolean }): Promise<UpdateSource | null> {
+    const source = this.source
+    if (!source) return null
+    while (this.pendingRead) {
+      if (!force) return this.pendingRead
+      await this.pendingRead.catch(() => undefined)
+    }
+    const fetching = fetch && (force || Date.now() - this.fetchedAt >= FETCH_EVERY_MS)
+    const installed = this.running ? { revision: this.running.revision, dirty: this.running.dirty } : null
+    const read = readUpdateSource(this.git, source, { fetch: fetching, installed })
+      .then((reading) => {
+        if (fetching) this.fetchedAt = Date.now()
+        if (this.source === source) this.reading = reading
+        return reading
+      })
+      .finally(() => {
+        this.pendingRead = null
+        this.changed()
+      })
+    this.pendingRead = read
+    this.changed()
+    return read
   }
 
   /**
@@ -271,8 +325,11 @@ export class LocalUpdates {
     this.candidate = null
     this.stamp = null
     this.lastReady = null
+    this.reading = null
+    this.fetchedAt = 0
     this.state = { kind: "idle" }
     this.changed()
+    void this.check({ fetch: true }).catch(() => undefined)
   }
 
   start(): void {
@@ -313,7 +370,8 @@ export class LocalUpdates {
   private phase(
     phase: Extract<LocalBuildState, { kind: "building" }>["phase"]
   ): void {
-    this.state = { kind: "building", phase }
+    const revision = this.state.kind === "building" ? this.state.revision : undefined
+    this.state = { kind: "building", phase, ...revision && { revision } }
     this.changed()
   }
 
@@ -322,8 +380,20 @@ export class LocalUpdates {
     const npm = resolveExecutable("npm")
     if (!node || !npm)
       throw new Error("Node.js and npm are required to build Mako.")
+    // What's available decides what's built: fetch, bring the checkout
+    // forward when it can be, and don't rebuild what is already installed.
+    const reading = await this.check({ fetch: true, force: true })
+    if (reading?.kind === "unreadable") throw new Error(reading.reason)
+    if (reading?.kind === "checkout" && (reading.plan.kind === "current" || (reading.plan.kind === "as-is" && reading.plan.installed))) {
+      this.state = { kind: "idle" }
+      return
+    }
     await mkdir(this.root, { recursive: true, mode: 0o700 })
     await ensureBuildSpace(this.root, await buildCopyBytes(source), this.options.statfs)
+    const forwarded = reading ? await bringForward(this.git, source, reading) : null
+    const built = forwarded ? await this.check({ fetch: false, force: true }) : reading
+    if (built?.kind === "checkout") this.state = { kind: "building", phase: "copying", revision: built.head }
+    this.changed()
     const checkout = join(this.root, "checkout")
     const job = await mkdtemp(join(this.root, "build-"))
     const output = join(job, "output")
@@ -406,7 +476,10 @@ export class LocalUpdates {
       }
       this.preparedRoot = job
       this.candidate = candidate
-      this.state = { kind: "ready", build }
+      // Counted to the revision the build stamped, whatever moved in the checkout meanwhile.
+      const changes = this.running?.revision && build.revision ? await changesSince(this.git, source, this.running.revision, build.revision) : null
+      if (changes) await writeFile(join(this.root, BUILD_CHANGES), JSON.stringify({ build: build.id, changes } satisfies z.infer<typeof buildChanges>), { mode: 0o600 })
+      this.state = { kind: "ready", build, changes, forwarded }
       this.lastReady = this.state
       this.stamp = stamp
     } finally {

@@ -63,12 +63,23 @@ export class Updates {
     if (!this.environment.packaged || !onMac() || packagedDistribution(this.environment.appRoot) !== "local" || !identity) return
     const local = new LocalUpdates(this.git, join(this.environment.dataRoot, "updates"), identity, () => this.installationChanged(), this.environment.build.makoBuild ?? null)
     this.local = local
-    void local.load().then(() => this.installationChanged()).catch(() => this.emit({ type: "notice", level: "error", message: "The saved update state could not be read. Choose the source checkout again in Settings > Updates." }))
+    void local.load().then(() => {
+      this.installationChanged()
+      // Where the checkout stands, from what it last fetched; Settings › Updates fetches when it opens.
+      void local.check({ fetch: false }).catch((error: Error) => hostWarn("updates", "the source checkout couldn't be read", { reason: error.message }))
+    }).catch(() => this.emit({ type: "notice", level: "error", message: "The saved update state could not be read. Choose the source checkout again in Settings > Updates." }))
   }
 
   installation(): UpdateInstallation {
     const distribution = this.environment.packaged ? packagedDistribution(this.environment.appRoot) : "development"
-    return { distribution, build: this.environment.build.makoBuild ?? null, ...this.local?.snapshot() ?? { source: null, local: { kind: "idle" } } }
+    return { distribution, build: this.environment.build.makoBuild ?? null, ...this.local?.snapshot() ?? { source: null, local: { kind: "idle" }, checkout: null, reading: false, installed: null } }
+  }
+
+  /** Read the source checkout against its upstream, fetching unless a fetch answered within the last minute; `force` fetches regardless. */
+  async checkSource(force: boolean): Promise<UpdateInstallation> {
+    if (!this.local) throw new Error(UNAVAILABLE)
+    await this.local.check({ fetch: true, force })
+    return this.installation()
   }
 
   async selectSource(path: string): Promise<UpdateInstallation> {

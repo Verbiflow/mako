@@ -147,6 +147,7 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
       )
     return updates.selectSource(path)
   })
+  methods.handle("mako:check-update-source", (force: boolean) => updates.checkSource(force))
   methods.handle("mako:build-update", () => {
     if (
       lifecycle.snapshot().operation.kind !== "idle" &&

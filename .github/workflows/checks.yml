@@ -80,6 +80,8 @@ jobs:
       - run: npm run test:prompt-delivery
       - run: npm run test:live-prompt-delivery
       - run: npm run test:tuning
+      # What a local update builds from: its checkout against origin, fetched, and how Settings › Updates says it.
+      - run: npm run test:update-source
       # The attribution journal and workspace snapshots: per-turn changes, undo, Git operations, and the guard that keeps
       # every script's scratch repositories away from the one it was started in.
       - run: npm run test:attribution

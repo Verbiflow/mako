@@ -54,6 +54,8 @@ const reads = [
   "mako:pull-branches",
   "mako:lifecycle-state",
   "mako:installation-state",
+  /** Fetches the update source's upstream into its remote-tracking branch and reads the checkout; asked twice, the same answer. */
+  "mako:check-update-source",
   "mako:update-state",
   "mako:threads",
   "mako:thread-page",

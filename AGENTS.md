@@ -3474,6 +3474,26 @@ Packaged tests must check full host shutdown as well as client Quit/reopen;
 `BrowserWindow.close()` is asynchronous, so final client exit belongs to the
 last window's `closed` event.
 
+A local build never takes the checkout on trust. Before anything is copied,
+`local-update-source.ts` fetches the remote's default branch (15 s, no
+credential prompts; offline is said and the last fetch is used) and reads the
+checkout against it. Only a checkout on the branch that tracks it, behind it,
+with no changes to tracked files, is fast-forwarded (`fastForward` in
+`@mako/git`: `merge --ff-only --no-autostash` under the repository's write
+queue, refused if HEAD moved since the reading); anything else (changes,
+diverged, another branch, detached, no remote) is built as it is and the
+reading says why. Nothing is stashed, no branch is switched, and untracked
+files stay (Git refuses rather than overwrite one). A build that would carry
+the installed, clean revision doesn't run: Settings says "You're already on
+<rev>". The installed revision is the bundle's `makoBuild`; the available one
+is the reading's upstream. Settings › Updates and `npm run update:local` say
+it in the same words (`contracts/update-source-text.ts`), and what a build
+brought (`build-changes.json`, keyed by build id) shows under the revision
+once that build runs. A checkout 21 commits behind once built and installed
+the revision already running, and the update read as done. `npm run
+test:update-source` covers it against scratch repositories and a local bare
+remote, and draws every state.
+
 `npm run test:application` covers the lifecycle state machine, draft-close
 acknowledgements, source-copy isolation, replacement rollback, real Electron
 private-socket clients, and the production Settings/dialog/palette components.

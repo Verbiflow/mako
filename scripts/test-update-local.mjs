@@ -1,10 +1,12 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
-import { mkdir, mkdtemp, readdir, rename, rm, symlink, utimes, writeFile } from "node:fs/promises"
+import { execFileSync } from "node:child_process"
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, symlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createPackage, extractFile } from "@electron/asar"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
-import { selectLocalSigner, sweepLocalUpdates, updateLocal } from "./update-local.mjs"
+import { prepareSource, selectLocalSigner, sweepLocalUpdates, updateLocal } from "./update-local.mjs"
 
 const identity = "A".repeat(40)
 const options = {
@@ -17,6 +19,10 @@ function fixture(overrides = {}) {
   let checks = 0
   const dependencies = {
     say: () => {},
+    source: async () => {
+      calls.push({ command: "source" })
+      return true
+    },
     ensureSpace: async () => {
       calls.push({ command: "space" })
     },
@@ -58,27 +64,36 @@ const success = fixture()
 await updateLocal(options, success.dependencies)
 assert.deepEqual(
   success.calls.map((call) => call.command),
-  ["space", "npm", "reserve", "prepare", "wait", "wait", process.execPath, "open", "verify-startup", "release", "remove"]
+  ["space", "source", "npm", "reserve", "prepare", "wait", "wait", process.execPath, "open", "verify-startup", "release", "remove"]
 )
 // Installing copied the app into /Applications; the output goes last.
 assert.equal(success.calls.at(-1).path, options.output)
-assert.deepEqual(success.calls[1].args, [
+assert.deepEqual(success.calls[2].args, [
   "run",
   "package:mac:local",
   "--",
   `--output=${options.output}`,
 ])
-assert.equal(success.calls[1].env.MAKO_LOCAL_SIGNING_IDENTITY, identity)
+assert.equal(success.calls[2].env.MAKO_LOCAL_SIGNING_IDENTITY, identity)
 assert.deepEqual(success.calls.find((call) => call.command === process.execPath).args, [
   join(options.project, "scripts/install-local-mac.mjs"),
   join(options.output, "mac-arm64/Mako.app"),
   "--install",
 ])
+// The installed app already carries what the checkout holds: nothing is built, and the empty output still goes.
+const current = fixture({
+  source: async () => {
+    current.calls.push({ command: "source" })
+    return false
+  },
+})
+await updateLocal(options, current.dependencies)
+assert.deepEqual(current.calls.map((call) => call.command), ["space", "source", "remove"])
 const declined = fixture({ confirm: async () => false })
 await updateLocal(options, declined.dependencies)
 assert.deepEqual(
   declined.calls.map((call) => call.command),
-  ["space", "npm", "remove"]
+  ["space", "source", "npm", "remove"]
 )
 const badSigner = fixture({ verify: async () => "B".repeat(40) })
 await assert.rejects(
@@ -87,7 +102,7 @@ await assert.rejects(
 )
 assert.deepEqual(
   badSigner.calls.map((call) => call.command),
-  ["space", "npm", "remove"]
+  ["space", "source", "npm", "remove"]
 )
 const interrupted = fixture({
   wait: async () => {
@@ -100,7 +115,7 @@ await assert.rejects(
 )
 assert.deepEqual(
   interrupted.calls.map((call) => call.command),
-  ["space", "npm", "reserve", "prepare", "cancel", "release", "remove"]
+  ["space", "source", "npm", "reserve", "prepare", "cancel", "release", "remove"]
 )
 const masked = fixture({
   running: async () => [],
@@ -153,7 +168,7 @@ const failed = fixture({
   },
 })
 await assert.rejects(updateLocal(options, failed.dependencies), /Build failed/)
-assert.deepEqual(failed.calls.map((call) => call.command), ["space", "remove"])
+assert.deepEqual(failed.calls.map((call) => call.command), ["space", "source", "remove"])
 const full = fixture({
   ensureSpace: async () => {
     throw new Error("Not enough free disk space to build Mako")
@@ -280,8 +295,47 @@ try {
     await selectLocalSigner({ project: root, installed }, async () => identity),
     identity
   )
+
+  // The CLI reads the checkout as Settings does: behind and clean, it offers the fast-forward and takes it on yes;
+  // declined, it builds what's there; already installed, it builds nothing.
+  const gitConfigFile = join(root, "gitconfig")
+  await writeFile(gitConfigFile, "")
+  const gitEnv = { ...process.env, GIT_CONFIG_GLOBAL: gitConfigFile, GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@example.invalid", GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@example.invalid" }
+  Object.assign(process.env, { GIT_CONFIG_GLOBAL: gitConfigFile, GIT_CONFIG_NOSYSTEM: "1" })
+  const runGit = (cwd, ...args) => execFileSync("git", args, { cwd, env: gitEnv, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+  const bareRemote = join(root, "remote.git")
+  const upstreamWriter = join(root, "writer")
+  const sourceCheckout = join(root, "checkout")
+  runGit(root, "init", "-q", "--bare", "-b", "main", bareRemote)
+  runGit(root, "init", "-q", "-b", "main", upstreamWriter)
+  runGit(upstreamWriter, "remote", "add", "origin", bareRemote)
+  await writeFile(join(upstreamWriter, "app.txt"), "one\n")
+  runGit(upstreamWriter, "add", "app.txt")
+  runGit(upstreamWriter, "commit", "-qm", "First (#1)")
+  runGit(upstreamWriter, "push", "-q", "origin", "main")
+  runGit(root, "clone", "-q", bareRemote, sourceCheckout)
+  const firstRevision = runGit(sourceCheckout, "rev-parse", "HEAD")
+  await writeFile(join(upstreamWriter, "app.txt"), "two\n")
+  runGit(upstreamWriter, "commit", "-qam", "Second (#2)")
+  runGit(upstreamWriter, "push", "-q", "origin", "main")
+  const secondRevision = runGit(upstreamWriter, "rev-parse", "HEAD")
+  const sourceLines = []
+  const sourcePrompts = []
+  const readSource = (installed, answer) => prepareSource({ project: sourceCheckout, installed, say: (line) => sourceLines.push(line), ask: async (prompt) => (sourcePrompts.push(prompt), answer) })
+  assert.equal(await readSource({ revision: firstRevision, dirty: false }, false), true)
+  assert.match(sourcePrompts.at(-1), new RegExp(`^Update to main ${secondRevision.slice(0, 8)} \\(1 new change\\)\\? \\[Y/n\\] $`))
+  assert.equal(runGit(sourceCheckout, "rev-parse", "HEAD"), firstRevision, "declined, the checkout stays")
+  assert.match(sourceLines.at(-1), /^Building main as it is, at /)
+  assert.equal(await readSource({ revision: firstRevision, dirty: false }, true), true)
+  assert.equal(runGit(sourceCheckout, "rev-parse", "HEAD"), secondRevision)
+  assert.equal(await readFile(join(sourceCheckout, "app.txt"), "utf8"), "two\n")
+  assert.match(sourceLines.at(-1), new RegExp(`^Moved main forward from ${firstRevision.slice(0, 8)} to ${secondRevision.slice(0, 8)}\\.$`))
+  const promptsBefore = sourcePrompts.length
+  assert.equal(await readSource({ revision: secondRevision, dirty: false }, true), false, "the installed revision isn't rebuilt")
+  assert.match(sourceLines.at(-1), new RegExp(`^You're already on ${secondRevision.slice(0, 8)} \\(main at ${secondRevision.slice(0, 8)} · origin/main at ${secondRevision.slice(0, 8)}\\)\\.`))
+  assert.equal(sourcePrompts.length, promptsBefore, "nothing to ask")
   console.log(
-    "One-command update: removed build output on install, decline and failure, disk refusal before building, stale output sweep, fresh metadata after archive replacement, verified signer reuse, no fallback from a bad installed signature, ambiguity refusal, ordered build/install, confirmation, wait cancellation, failures, and literal paths passed"
+    "One-command update: reads the checkout against origin and fast-forwards it on yes, removed build output on install, decline and failure, disk refusal before building, stale output sweep, fresh metadata after archive replacement, verified signer reuse, no fallback from a bad installed signature, ambiguity refusal, ordered build/install, confirmation, wait cancellation, failures, and literal paths passed"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

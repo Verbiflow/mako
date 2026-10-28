@@ -256,6 +256,37 @@ async function review() {
     "document.querySelector('[data-testid=updates-section]') !== null"
   )
   await screenshot("updates-light.png")
+  // What a local update takes from its checkout, said before Build runs; opening Updates asked for it.
+  assert.ok((await fixture("return f.calls.sourceChecks")) > 0, "opening Updates reads the source checkout")
+  const sourceScenes = {
+    behind: "21 new changes on origin/main",
+    current: "You're already on 079f9b31",
+    changes: "so Mako won't move it",
+    branch: "The checkout is on approval-bar",
+    offline: "Couldn't reach origin",
+    building: "Building 079f9b31",
+    ready: "Moved main forward from",
+    installed: "21 changes in this build",
+  }
+  for (const theme of ["light", "dark"]) {
+    await fixture(`f.theme('${theme}')`)
+    for (const [scene, text] of Object.entries(sourceScenes)) {
+      await fixture(`f.sourceScene('${scene}')`)
+      await until(`document.querySelector('[data-testid=updates-section]')?.textContent.includes(${JSON.stringify(text)})`)
+      await screenshot(`updater-${scene}-${theme}.png`)
+    }
+  }
+  const built = await fixture("return f.calls.build")
+  await fixture("f.sourceScene('behind')")
+  await click("Update to main 079f9b31 (21 new changes)")
+  await until(`import('/src/dev/application-check.tsx').then(f => f.calls.build === ${built + 1})`)
+  await fixture("f.sourceScene('current')")
+  assert.equal(
+    await evaluate("[...document.querySelectorAll('[data-testid=updates-section] button')].some(b => /^(Build|Update)/.test(b.textContent.trim()))"),
+    false,
+    "the installed revision offers no build"
+  )
+  await fixture("f.theme('light')")
   await fixture("f.published()")
   await click("Check for updates")
   await until('document.body.textContent.includes("You\'re up to date.")')
