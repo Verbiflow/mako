@@ -9,7 +9,7 @@ import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { ROW_ACTIONS, ROW_ACTIONS_BESIDE_MARK, ROW_SURFACE, SessionCount } from "@/components/rail/thread-row"
 import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
-import { workspaceName } from "@/lib/format"
+import { copyAge, formatRelative, workspaceName } from "@/lib/format"
 import {
   FOLD_GLYPHS,
   foldedThreadState,
@@ -65,6 +65,9 @@ export function LiveAgentRow({
     )
   )
   const lit = draftOpen || (viewedMember ?? liveOnScreen)
+  // Its device can't be heard: nothing there is shown at work, and the row says when it was last seen instead.
+  const lastSeen = presence.quietSince === undefined ? undefined : `last seen ${copyAge(presence.quietSince)}`
+  const where = presence.elsewhere ? `on ${presence.elsewhere}${lastSeen ? `, ${lastSeen}` : ""}` : undefined
   const label =
     presence.status === "needs-permission"
       ? (presence.waitingOn ?? "Needs your approval")
@@ -124,14 +127,14 @@ export function LiveAgentRow({
         onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); open() } }}
         aria-label={[
           title,
-          presence.elsewhere ? `on ${presence.elsewhere}` : undefined,
+          where,
           setup ? "setup Thread" : undefined,
           foldState
             ? `${foldState.sessions.length} sessions: ${foldState.sessions.map((session) => `${harnessLabel(session.harness)} ${sessionStateText(session.status)}`).join(", ")}`
             : label,
         ].filter(Boolean).join(", ")}
         data-thread-row
-        data-tip={presence.elsewhere ? `${title} · on ${presence.elsewhere}${presence.waitingOn ? ` · ${presence.waitingOn}` : ""}` : undefined}
+        data-tip={where ? `${title} · ${where}${presence.waitingOn ? ` · ${presence.waitingOn}` : ""}` : undefined}
         data-flip-key={presence.key}
         data-conversation-id={presence.key}
         data-thread-indent={indent || undefined}
@@ -177,6 +180,11 @@ export function LiveAgentRow({
           <ThreadStatusMark status={foldState.status} />
         ) : presence.status === "background" ? (
           <ThreadStatusMark status={presenceThreadStatus(presence)} />
+        ) : presence.quietSince !== undefined && presence.status === "ready" ? (
+          <span data-last-seen title={`Last seen ${copyAge(presence.quietSince)}`} className="tabular shrink-0 text-label text-faint">
+            {/* "seen", so it doesn't read as an idle row's time of its last change. */}
+            seen {formatRelative(presence.quietSince)}
+          </span>
         ) : (
           <span role="img" aria-label={label} title={label} className="flex shrink-0 text-muted-foreground">
             <ActivityMark state={state} size={20} />

@@ -1127,9 +1127,11 @@ test("a quiet device's rows are listed as it left them, but none at work or wait
   const states = () => [working, waiting, failed, inCloud].map((each) => [shown(each)?.session.status, shown(each)?.waitingOn])
   await until("the list read and listed here", () => shown(working)?.elsewhere === "Studio")
   assert.deepEqual(states(), [["ready", undefined], ["ready", undefined], ["failed", undefined], ["running", undefined]], "nothing on the quiet Studio shown at work or asking; the cloud machine's is")
+  assert.deepEqual([working, failed, inCloud].map((each) => shown(each)?.quietSince), [Date.parse(since), Date.parse(since), undefined], "and when the Studio was last heard from, for the rail to say")
 
   say({ seq: 4, event: { type: "device-quiet", deviceId: studio, since: null } })
   assert.deepEqual(states(), [["running", undefined], ["running", "Approve: npm test"], ["failed", undefined], ["running", undefined]], "back: each as it last said")
+  assert.equal(shown(working)?.quietSince, undefined)
   say({ seq: 5, event: { type: "device-quiet", deviceId: studio, since } })
   assert.deepEqual(states().slice(0, 2), [["ready", undefined], ["ready", undefined]], "and quiet again")
 })
