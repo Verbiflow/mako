@@ -5,10 +5,11 @@ import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { Exchange } from "../src/components/transcript/exchange"
 import { ToolRow } from "../src/components/transcript/tool-row"
 import { agentGroupWords, groupAgentCalls } from "../src/lib/agent-groups"
-import { TranscriptSourceContext, TurnRunningContext } from "../src/components/transcript/source-context"
+import { AgentGroup } from "../src/components/transcript/agent-group"
+import { HarnessContext, TranscriptSourceContext, TurnRunningContext } from "../src/components/transcript/source-context"
 import { callEntryId, entriesToMessages } from "../src/lib/entry-messages"
 import { responseSections, toExchanges, type Exchange as ExchangeData } from "../src/lib/exchanges"
-import { pairTools } from "../src/lib/tools"
+import { argumentsSoFar, entryToolIdentity, pairTools, relativeTo } from "../src/lib/tools"
 import { turnFolds } from "../src/lib/turn-fold"
 import { liveVerb } from "../src/state/agent-activity"
 import { stoppedWorkWords } from "../src/state/prompt-delivery"
@@ -16,9 +17,10 @@ import { setTurnFoldOpen, turnFoldKey } from "../src/state/turn-folds"
 import { TOOL_KINDS } from "@mako/sessions/tool-identity"
 
 /**
- * How a turn's work is drawn: a live row for each call running, its words
- * under one sweep, one fold once it settles, agents started together as one
- * row, boundaries as dividers.
+ * How a turn's work is drawn: one column of rows, a summary of what finished
+ * with one glyph, then a row for each call running (the transcript's own
+ * row, its words under one sweep), one fold once it settles, agents started
+ * together as one row with their harness's mark, boundaries as dividers.
  */
 
 const LIVE = "conversation"
@@ -71,8 +73,23 @@ const go: LiveUpdate = { kind: "user", text: "Fix the redirect", at: at(0) }
   assert.doesNotMatch(liveStepOf(html), /activity-orb|activity-mark|<canvas| running</, "the sweep is the row's only running signal: no mark at its end, no count")
   assert.doesNotMatch(html, /class="[^"]*(changing-label|animate-)[^"]*shimmer-text|class="[^"]*shimmer-text[^"]*(changing-label|animate-)/, "nothing else animates a sweeping element, so nothing replaces its sweep")
   assert.match(html, /data-work-summary[^>]*>[^]*Made an edit, read a file and searched once/, "what finished reads as today's summary")
-  assert.doesNotMatch(html, /data-transcript-tool/, "the rows stay unmounted until the list opens")
+  assert.equal(html.match(/data-transcript-tool=/g)?.length, 1, "the finished rows stay unmounted until the list opens")
+  assert.match(liveStepOf(html), /data-transcript-tool="[^"]*test"[^>]*>[^]*data-pending="true"/, "the running call is the transcript's own row for it, so nothing is swapped when it returns")
   assert.match(html, /data-turn-clock/, "the turn's head carries its clock")
+  // One column: the summary's single glyph over the rows' glyphs, nothing hung on a rail, no chevron at a row's end.
+  const summary = /<button[^>]*data-work-summary[^]*?<\/button>/.exec(html)![0]
+  assert.equal(summary.match(/<svg/g)?.length, 2, "the summary has one glyph, and the chevron that takes its place under the pointer")
+  assert.ok(summary.indexOf("lucide-chevron-right") < summary.indexOf("Made an edit"), "its chevron is in the glyph's column, not after its words")
+  assert.match(summary, /lucide-layers/, "steps of several kinds read as a stack of steps")
+  assert.doesNotMatch(html, /data-work-log[^>]*border-l/, "the steps are not indented on a rail")
+}
+
+// Between steps, the live row says "Working" with the ellipsis, the one mark for work in progress; no heartbeat.
+{
+  const waiting = draw(exchangesOf([go, tool("read", "Read", { file_path: "/p/src/guard.ts" })], true).at(-1)!, { streaming: true })
+  assert.deepEqual(sweeps(liveStepOf(waiting)), ["Working"])
+  assert.match(liveStepOf(waiting), /lucide-ellipsis/)
+  assert.doesNotMatch(waiting, /lucide-activity|activity-meter/, "no heartbeat, no meter")
 }
 
 // Calls the model made at once each have a row that sweeps; one that returns first settles in its place.
@@ -111,8 +128,58 @@ const go: LiveUpdate = { kind: "user", text: "Fix the redirect", at: at(0) }
   assert.deepEqual(sweeps(renderToStaticMarkup(<TurnRunningContext value={true}><ToolRow call={call} /></TurnRunningContext>)), ["Running npm run dev"])
   const still = renderToStaticMarkup(<ToolRow call={call} />)
   assert.deepEqual(sweeps(still), [], "outside a running turn it does not sweep")
-  assert.match(still, /Shell[^]*npm run dev/, "and reads as its settled row")
+  assert.match(still, /<span class="min-w-0 truncate text-muted-foreground"><span>npm run dev<\/span><\/span>/, "and reads as its settled row: a command is its own words")
+  assert.doesNotMatch(still, />Shell</, "not \"Shell npm run dev\"")
+  assert.doesNotMatch(still, /font-mono/, "in the row's one face; the command reads in code when the row opens")
   assert.doesNotMatch(still, /activity-mark|Running/, "with no running mark")
+}
+
+// A row reads a path from the conversation's folder; a path elsewhere, or the folder alone, stays whole.
+assert.equal(relativeTo("/work/app", "/work/app/src/guard.ts"), "src/guard.ts")
+assert.equal(relativeTo("/work/app/", "/work/app/a.ts → /work/app/b.ts"), "a.ts → b.ts")
+assert.equal(relativeTo("/work/app", "returnTo · /work/app/src"), "returnTo · src")
+assert.equal(relativeTo("/work/app", "/other/work/app/x"), "/other/work/app/x", "only where a path begins")
+assert.equal(relativeTo("/work/a.p", "/work/axp/q"), "/work/axp/q", "the folder is matched as written")
+assert.equal(relativeTo("/work/app", "/work/app"), "/work/app")
+assert.equal(relativeTo(undefined, "/work/app/x"), "/work/app/x")
+
+// An agent is named by what it was asked to do from its first characters, while the model still writes its call.
+{
+  const full = JSON.stringify({ description: "Map every protected route", prompt: "Read \"every\" route", subagent_type: "Explore", n: 12, ok: true, list: [1, { a: "b" }] })
+  assert.deepEqual(argumentsSoFar(full), JSON.parse(full), "a whole input reads whole")
+  assert.deepEqual(argumentsSoFar(full.slice(0, full.indexOf("Read") + 8)), { description: "Map every protected route", prompt: "Read \"e" }, "a string cut mid-way keeps what it has")
+  assert.deepEqual(argumentsSoFar(full.slice(0, full.indexOf("Read") + 6)), { description: "Map every protected route", prompt: "Read " }, "and drops half an escape")
+  assert.deepEqual(argumentsSoFar(full.slice(0, full.indexOf("prompt") + 4)), { description: "Map every protected route" }, "a key with no value yet is left out")
+  assert.deepEqual(argumentsSoFar(full.slice(0, full.indexOf("12") + 1)), { description: "Map every protected route", prompt: "Read \"every\" route", subagent_type: "Explore", n: 1 })
+  assert.equal(argumentsSoFar("npm test"), undefined, "input that isn't an object names nothing")
+  const writing = { type: "tool" as const, id: "agent-1", name: "Agent", status: "pending", input: full.slice(0, 50) }
+  assert.equal(entryToolIdentity(writing, "claude").target, "Map every protected route", "a running agent whose input is still arriving is named")
+  assert.equal(entryToolIdentity({ ...writing, status: "completed" }, "claude").target, undefined, "a finished call is read from its whole input only")
+}
+
+// An agent's glyph is its harness's mark, never a robot, in the group and on each agent's row.
+{
+  const running = exchangesOf([
+    go,
+    tool("a1", "Agent", { description: "Map routes", prompt: "x", subagent_type: "Explore" }, "in_progress", { at: at(1) }),
+    tool("a2", "Agent", { description: "Trace refresh", prompt: "x", subagent_type: "Explore" }, "in_progress", { at: at(1) }),
+    tool("a3", "Agent", { description: "Find tests", prompt: "x", subagent_type: "Explore" }, "completed", { at: at(1), endedAt: at(20) }),
+  ], true).at(-1)!
+  const calls = running.response.flatMap((message) => pairTools(message.blocks))
+  const group = renderToStaticMarkup(
+    <HarnessContext value="claude"><TurnRunningContext value={true}><AgentGroup calls={calls} /></TurnRunningContext></HarnessContext>
+  )
+  assert.deepEqual(sweeps(group), ["Running 3 agents"], "while they run, the title sweeps and says so")
+  assert.match(group, /1 done/)
+  assert.doesNotMatch(group, /\d working/, "\"working\" is the title's word, not a count beside it")
+  assert.doesNotMatch(group, /lucide-bot|activity-mark|activity-orb|<canvas/, "the harness's mark, no robot, no mark at the end")
+  const settled = renderToStaticMarkup(<HarnessContext value="claude"><AgentGroup calls={calls.map((call) => ({ ...call, pending: false }))} /></HarnessContext>)
+  assert.deepEqual(sweeps(settled), [])
+  const row = renderToStaticMarkup(<HarnessContext value="claude"><TurnRunningContext value={true}><ToolRow call={calls[0]!} /></TurnRunningContext></HarnessContext>)
+  assert.deepEqual(sweeps(row), ["Map routes"], "a running agent's row is what it was asked to do, swept")
+  assert.doesNotMatch(row, /lucide-bot|>Agent</)
+  assert.match(renderToStaticMarkup(<ToolRow call={calls[0]!} />), /lucide-bot/, "with no harness known, the agent glyph")
+  assert.match(draw(running, { streaming: true }), /data-agent-group="3"/, "the live step is the group")
 }
 
 // The same turn settled folds behind one row and leaves the answer in view.
@@ -200,4 +267,4 @@ assert.equal(stoppedWorkWords(["npm run dev"])?.text, "and stopped npm run dev")
 assert.equal(stoppedWorkWords(["npm run dev", "npm run test:watch"])?.text, "and stopped 2 background tasks")
 assert.equal(stoppedWorkWords(["npm run dev", "npm run test:watch"])?.all, "npm run dev\nnpm run test:watch")
 
-console.log("Turn presentation: one live row per running call under one sweep, a call settling in place, no sweep once finished, a settled fold that keeps its answer and boundaries, agents together, stop words")
+console.log("Turn presentation: one column of work, one live row per running call under one sweep, a call settling in place, the ellipsis for working, paths from the folder, agents named while they run with their harness's mark, no sweep once finished, a settled fold that keeps its answer and boundaries, stop words")

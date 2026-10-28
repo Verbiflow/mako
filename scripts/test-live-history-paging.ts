@@ -389,3 +389,29 @@ console.log("PASS: conditional refresh owner/epoch and eviction fences")
   }
   console.log("PASS: a large call's preview keeps the media facts of what it made")
 }
+
+{
+  // An agent started with a long prompt is named on its row while it runs, live and saved: its preview's input still parses.
+  const prompt = "Read every route and report which ones are protected. ".repeat(80)
+  const call: Entry = { type: "tool", id: "agent-routes", name: "Agent", status: "pending",
+    input: JSON.stringify({ description: "Map every protected route", prompt, subagent_type: "Explore" }), output: "" }
+  const patch: Entry = { type: "tool", id: "raw-patch", name: "apply_patch", status: "completed", input: "*** Begin Patch\n" + "+line\n".repeat(600), output: "Done" }
+  const snapshot = auditSnapshot(0)
+  snapshot.session = { ...snapshot.session, id: auditId(7200) }
+  snapshot.blocks = [{ type: "user", id: "u", text: "Map the routes" }, call, patch]
+  snapshot.base = { ref: { harness: "claude", nativeId: "agents", path: "fixture" }, start: 0, total: 1, hasEarlier: false, entries: [{ ...call, id: "saved-agent-routes" }] }
+  const view = new LiveHistoryReader().capture(snapshot)
+  const live = view.blocks.find((block) => block.type === "tool" && block.id === "agent-routes")
+  const saved = view.base!.entries.find((entry) => entry.type === "tool")
+  for (const preview of [live, saved]) {
+    assert.ok(preview?.type === "tool" && (preview.historyRest || preview.contentOmitted), "the call is a preview")
+    assert.ok(preview.input!.length <= 2048, "within the preview's size")
+    const args = z.object({ description: z.string(), prompt: z.string(), subagent_type: z.string() }).parse(JSON.parse(preview.input!))
+    assert.equal(args.description, "Map every protected route", "its description whole")
+    assert.equal(args.subagent_type, "Explore")
+    assert.ok(args.prompt.endsWith("…") && prompt.startsWith(args.prompt.slice(0, -1)), "its prompt's head, marked cut")
+  }
+  const raw = view.blocks.find((block) => block.type === "tool" && block.id === "raw-patch")
+  assert.ok(raw?.type === "tool" && raw.input === patch.input!.slice(0, 2048), "input that isn't JSON keeps its head")
+  console.log("PASS: a large call's preview keeps its input's JSON, so an agent with a long prompt is named while it runs")
+}

@@ -1,20 +1,25 @@
 import { useCopy } from "@/components/ui/use-copy"
 import type { ToolIdentity } from "@mako/sessions/tool-identity"
-import { memo, useContext, useEffect, useState, type ComponentType } from "react"
+import { memo, useContext, useEffect, useState, type ComponentType, type ReactNode } from "react"
 import { useToolView, type ToolCall } from "@/extend/slots"
 import {
-  CODE_KINDS,
   formatToolArguments,
   hasToolArguments,
   namedByLabel,
   normalizeToolOutput,
+  relativeTo,
   toolLabel,
   toolTarget,
 } from "@/lib/tools"
+import { callEntryId } from "@/lib/entry-messages"
 import { cn } from "@/lib/utils"
+import { useAcp } from "@/state/acp"
 import { usePrefs } from "@/state/prefs"
-import { liveVerb } from "@/state/agent-activity"
-import { TurnRunningContext, useTranscriptSource } from "./source-context"
+import { liveVerb, QUIET_AFTER_MS, quietDuration } from "@/state/agent-activity"
+import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
+import { HarnessIcon } from "@/components/ui/provider-icon"
+import { Ticking } from "@/components/ui/ticking"
+import { HarnessContext, TurnRunningContext, useTranscriptSource } from "./source-context"
 import { ToolDetails } from "./tool-details"
 import { TranscriptAttachment } from "./attachment"
 import { viewer } from "@/state/viewer"
@@ -33,8 +38,10 @@ import { Shimmer } from "@/components/ui/shimmer"
  * One tool invocation, collapsed to a single line by default. The row is the
  * transcript's rhythm section — it has to stay quiet at a glance and be
  * complete when opened. Every harness and kind draws the same line: glyph,
- * label, target, then whatever is still true about the call at the far end.
- * While the call runs, its words say so (`ToolWords`).
+ * then its words in one face and size, then whatever is still true about the
+ * call at the far end. While the call runs, its words say so (`ToolWords`),
+ * and the same row is the running step and, once it returns, the settled
+ * one: nothing is swapped when a call finishes.
  */
 export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
   const [open, setOpen] = useState(false)
@@ -67,7 +74,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
 
   return (
     <div data-transcript-tool={call.id}>
-      <div className="group/tool -mx-1.5 flex min-w-0 items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
+      <div className="group/row -mx-1.5 flex min-w-0 items-center rounded-md transition-colors duration-100 hover:bg-fill-hover">
         <button
           type="button"
           aria-expanded={open}
@@ -76,7 +83,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
           onClick={() => setOpen((value) => !value)}
           className="pressable flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 text-left text-ui"
         >
-          <LeadSlot call={call} open={open} icon={view?.icon} />
+          <LeadSlot open={open} glyph={<CallGlyph call={call} icon={view?.icon} />} />
           <ToolWords call={call} />
           <span className="flex-1" />
           {server ? <span className="shrink-0 text-label text-faint/70">{server}</span> : null}
@@ -95,7 +102,7 @@ export const ToolRow = memo(function ToolRow({ call }: { call: ToolCall }) {
                 source.liveId
               )
             }
-            className="pressable mr-1 rounded p-1 text-faint opacity-0 transition-opacity duration-100 group-hover/tool:opacity-100 hover:text-foreground focus:opacity-100"
+            className="pressable mr-1 rounded p-1 text-faint opacity-0 transition-opacity duration-100 group-hover/row:opacity-100 hover:text-foreground focus:opacity-100"
           >
             <FileTextIcon className="size-3" />
           </button>
@@ -140,86 +147,111 @@ function toolServer(tool: ToolIdentity): string | undefined {
  * What a call is and what it acts on, as its row says it: its label and
  * target, or while it runs, its verb and target ("Running npm test") under
  * one sweep of light. That sweep is the only running signal a call has: no
- * spinner in place of its glyph, no mark at the end of its row. When the
- * call finishes, the same place holds its settled words, so nothing moves.
- * Only a call of a running turn runs (`TurnRunningContext`): a finished
- * record's call that never returned keeps its settled words.
+ * spinner in place of its glyph, no mark at the end of its row. A command is
+ * its own words, so its row is the command alone ("npm test", not "Shell npm
+ * test"), and an agent is what it was asked to do, its harness's mark in
+ * front saying it is an agent (running, "Map every protected route" sweeps
+ * with no verb). Every part is in the row's one face and size; code reads in full,
+ * in the code face, when the row opens. A path inside the conversation's
+ * folder reads from there. A call that has run a minute says for how long
+ * ("for 4m"), counted in minutes, so it rarely repaints. When the call
+ * finishes, the same place holds its settled words. Only a call of a running
+ * turn runs (`TurnRunningContext`): a finished record's call that never
+ * returned keeps its settled words.
  */
 export function ToolWords({ call }: { call: ToolCall }) {
   const view = useToolView(call)
   const turnRunning = useContext(TurnRunningContext)
+  const cwd = useTranscriptCwd()
   const running = call.pending && turnRunning
-  const summary = view?.summary ? view.summary(call) : toolTarget(call.tool)
-  const target = summary ? (
-    <span className={cn("min-w-0 truncate text-faint", !view?.summary && CODE_KINDS.has(call.tool.kind) && "font-mono text-label")}>
-      {summary}
-    </span>
-  ) : null
+  const command = call.tool.kind === "shell"
+  const summary = view?.summary ? view.summary(call) : command ? toolTarget(call.tool) : relativeTo(cwd, toolTarget(call.tool))
+  // A command and an agent are named by what they do; the label would only repeat the glyph.
+  const named = Boolean(summary) && (command || call.tool.kind === "agent")
+  const label = named ? undefined : toolLabel(call.tool)
+  // One line of words with plain spaces between its parts, truncated as one, so every row's words sit alike.
   if (running)
     return (
-      <Shimmer className="flex min-w-0 items-baseline gap-1.5">
-        <span className="shrink-0">{liveVerb(call.tool.kind)}</span>
-        {namedByLabel(call.tool) ? <span className="shrink-0">{toolLabel(call.tool)}</span> : null}
-        {target}
-      </Shimmer>
+      <>
+        <Shimmer className="min-w-0 truncate">
+          {named && !command ? null : `${liveVerb(call.tool.kind)} `}
+          {namedByLabel(call.tool) ? `${toolLabel(call.tool)} ` : null}
+          {summary}
+        </Shimmer>
+        {call.startedAt !== undefined ? <RunningFor since={call.startedAt} /> : null}
+      </>
     )
+  const tone = call.isError ? "text-negative" : "text-muted-foreground"
   return (
-    <>
-      <span className={cn("shrink-0", call.isError ? "text-negative" : "text-muted-foreground")}>
-        {toolLabel(call.tool)}
-      </span>
-      {target}
-    </>
+    <span className={cn("min-w-0 truncate", tone)}>
+      {label}
+      {label && summary ? " " : null}
+      {summary ? <span className={label ? "text-faint" : undefined}>{summary}</span> : null}
+    </span>
+  )
+}
+
+/** "for 4m" after work that has run a minute or more; nothing before that. */
+export function RunningFor({ since }: { since: number }) {
+  return <Ticking words={(now) => (now - since >= QUIET_AFTER_MS ? `for ${quietDuration(now - since)}` : "")} className="shrink-0 text-faint empty:hidden" />
+}
+
+/** The folder the conversation runs in: a live conversation's own, else the one the workspace shows. */
+function useTranscriptCwd(): string | undefined {
+  const { liveId } = useTranscriptSource()
+  const live = useAcp((state) => {
+    const conversation = liveId ? state.conversations[liveId] : undefined
+    return conversation?.kind === "live" ? conversation.session.cwd : undefined
+  })
+  const focus = useWorkspaceFocus()
+  return live ?? focus.cwd
+}
+
+/**
+ * The row's first column: what the row is, as a glyph; where the row opens,
+ * a chevron takes its place under the pointer and while it is open. One
+ * fixed square crossfaded in CSS, so the row never shifts and nothing
+ * re-renders. The row's hover surface carries `group/row`.
+ */
+export function LeadSlot({ glyph, open = false, opens = true }: { glyph: ReactNode; open?: boolean; opens?: boolean }) {
+  const layer = "absolute inset-0 m-auto flex size-3.5 items-center justify-center [transition:opacity_150ms_var(--ease-out),transform_150ms_var(--ease-out)]"
+  return (
+    <span className="relative size-3.5 shrink-0">
+      <span className={cn(layer, opens && (open ? "opacity-0" : "group-hover/row:opacity-0"))}>{glyph}</span>
+      {opens ? (
+        <ChevronRightIcon aria-hidden className={cn(layer, "text-faint", open ? "rotate-90 opacity-100" : "opacity-0 group-hover/row:opacity-100")} />
+      ) : null}
+    </span>
   )
 }
 
 /**
- * One leading slot, two layers: the tool's glyph, and the chevron whenever
- * the pointer is near or the row is open. The glyph is what makes a row
- * scannable, so it shows from the first frame, brighter while the call
- * runs; the running state itself is the sweep over the row's words
- * (`ToolWords`), not a spinner in place of identity.
- * Crossfaded with CSS alone — no state, no re-render per token, and the row
- * never shifts because the slot is one fixed square.
+ * A call's glyph: its kind's, brighter while it runs. An agent's is the mark
+ * of the harness that runs it (`AgentMark`). The running state itself is the
+ * sweep over the words.
  */
-function LeadSlot({
-  call,
-  open,
-  icon,
-}: {
-  call: ToolCall
-  open: boolean
-  icon?: ComponentType<{ className?: string }>
-}) {
-  const layer =
-    "absolute inset-0 m-auto [transition:opacity_150ms_var(--ease-out),transform_150ms_var(--ease-out)]"
-  return (
-    <span className="relative size-3.5 shrink-0">
-      <ToolGlyph
-        kind={call.tool.kind}
-        override={icon}
-        className={cn(
-          layer,
-          "size-3.5",
-          call.isError
-            ? "text-negative"
-            : call.pending
-              ? "text-foreground/80"
-              : "text-faint",
-          open ? "opacity-0" : "opacity-100 group-hover/tool:opacity-0"
-        )}
-      />
-      <ChevronRightIcon
-        className={cn(
-          layer,
-          "size-3.5 text-faint",
-          open
-            ? "rotate-90 opacity-100"
-            : "opacity-0 group-hover/tool:opacity-100"
-        )}
-      />
-    </span>
-  )
+export function CallGlyph({ call, icon }: { call: ToolCall; icon?: ComponentType<{ className?: string }> }) {
+  const tone = call.isError ? "text-negative" : call.pending ? "text-foreground/80" : "text-faint"
+  if (call.tool.kind === "agent" && !icon) return <AgentMark callId={call.id} className={cn("size-3.5", tone)} />
+  return <ToolGlyph kind={call.tool.kind} override={icon} className={cn("size-3.5", tone)} />
+}
+
+/**
+ * The mark of the harness that runs an agent: the one named (`harness`), else
+ * the roster's word for the agent call `callId` started, else the harness
+ * answering in the transcript around it. An agent another harness runs shows
+ * that harness. With none known, the agent glyph.
+ */
+export function AgentMark({ callId, harness, className }: { callId?: string; harness?: string; className?: string }) {
+  const { liveId } = useTranscriptSource()
+  const answering = useContext(HarnessContext)
+  const listed = useAcp((state) => {
+    if (harness || !callId || !liveId) return undefined
+    const native = callEntryId(callId)
+    return state.conversations[liveId]?.nativeAgents?.agents.find((agent) => agent.toolId === native)?.provider
+  })
+  const runs = harness ?? listed ?? answering
+  return runs ? <HarnessIcon harness={runs} className={className} /> : <ToolGlyph kind="agent" className={className} />
 }
 
 /** How the call ended, in words, when it ended other than well; a running call says so in its words (`ToolWords`). */

@@ -21,6 +21,7 @@ import {
 import type { EventTone } from "@mako/sessions/events"
 import type { ToolKind } from "@mako/sessions/tool-identity"
 import { Collapse } from "@/components/ui/collapse"
+import { AgentMark } from "./tool-row"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import type { EventGlyph, EventWords } from "@/lib/transcript-events"
 import { formatTime } from "@/lib/format"
@@ -69,6 +70,8 @@ function isToolGlyph(glyph: EventGlyph): glyph is keyof typeof TOOL_GLYPHS {
 }
 
 export function EventGlyphIcon({ glyph, icon, className }: { glyph?: EventGlyph; icon?: Icon; className?: string }) {
+  // An agent's line wears its harness's mark, as the agent's own row does.
+  if (glyph === "agent" && !icon) return <AgentMark className={className} />
   if (glyph && isToolGlyph(glyph)) return <ToolGlyph kind={TOOL_GLYPHS[glyph]} className={className} />
   const Glyph = icon ?? (glyph ? ICONS[glyph] : InfoIcon)
   return <Glyph className={className} />

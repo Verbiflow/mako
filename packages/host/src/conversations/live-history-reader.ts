@@ -16,6 +16,8 @@ import { hostLog } from "../base/host-log.js"
 const PAGE_CHARS = 192 * 1024
 const PAGE_ITEMS = 80
 const TOOL_PREVIEW = 2048
+/** How much of each string a preview's input keeps (`previewInput`). */
+const INPUT_STRING_PREVIEW = 256
 /** A conversation's newest views: the one its windows hold, and ones a read still in flight names. */
 const VIEWS_PER_CONVERSATION = 4
 /** What views keep alive beyond what memory holds of their conversations anyway. */
@@ -402,7 +404,7 @@ export class LiveHistoryReader {
 function previewLive(block: Entry, index: number): Entry {
   if (block.type !== "tool" || !largeTool(block)) return block
   // What the turn made stays: its shelf reads the preview's media facts.
-  return { ...block, input: block.input?.slice(0, TOOL_PREVIEW), output: block.output?.slice(0, TOOL_PREVIEW),
+  return { ...block, input: previewInput(block.input), output: block.output?.slice(0, TOOL_PREVIEW),
     details: undefined, attachments: undefined, effects: undefined, ...mediaFacts(block, TOOL_PREVIEW),
     historyRest: { index, length: block.output?.length ?? 0 } }
 }
@@ -416,10 +418,38 @@ function previewSaved(entry: Entry): Entry {
     return preview
   }
   if (entry.type !== "tool" || !largeTool(entry)) return entry
-  return { ...entry, input: entry.input?.slice(0, TOOL_PREVIEW), output: entry.output?.slice(0, TOOL_PREVIEW) ?? "",
+  return { ...entry, input: previewInput(entry.input), output: entry.output?.slice(0, TOOL_PREVIEW) ?? "",
     outputLength: entry.outputLength ?? entry.output?.length ?? 0, contentOmitted: true,
     details: undefined, attachments: undefined, effects: undefined, ...mediaFacts(entry, TOOL_PREVIEW) }
 }
+
+/**
+ * A large call's input as a preview carries it: still the call's own JSON,
+ * each long string cut to its head, so what names the call (an agent's
+ * description, a command, a path) reads on its row before the rest is
+ * fetched. A plain cut at the preview's length left JSON that no longer
+ * parsed, and an agent started with a long prompt read only "Agent" while it
+ * ran. Input that isn't JSON, or is still too long once cut, keeps its head.
+ * The row's detail reads the whole (`detail`).
+ */
+function previewInput(input: string | undefined): string | undefined {
+  if (input === undefined || input.length <= TOOL_PREVIEW) return input
+  try {
+    const parsed = PreviewJson.safeParse(JSON.parse(input))
+    const cut = parsed.success ? JSON.stringify(parsed.data) : undefined
+    if (cut !== undefined && cut.length <= TOOL_PREVIEW) return cut
+  } catch {
+    // Not JSON: a raw command line, a patch. Its head is what there is to show.
+  }
+  return input.slice(0, TOOL_PREVIEW)
+}
+
+type JsonValue = z.infer<ReturnType<typeof z.json>>
+/** A JSON value with each string past `INPUT_STRING_PREVIEW` cut to its head and marked so. */
+const PreviewJson: z.ZodType<JsonValue> = z.lazy(() => z.union([
+  z.string().transform((text) => (text.length > INPUT_STRING_PREVIEW ? `${text.slice(0, INPUT_STRING_PREVIEW)}…` : text)),
+  z.number(), z.boolean(), z.null(), z.array(PreviewJson), z.record(z.string(), PreviewJson),
+]))
 
 function isPartial(entry: Entry): boolean {
   if (entry.type === "unread") return Boolean(entry.rawOmitted)

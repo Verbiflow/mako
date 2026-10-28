@@ -15,6 +15,12 @@ export const useTranscriptSource = () => useContext(TranscriptSourceContext)
  */
 export const TurnRunningContext = createContext(false)
 
+/**
+ * The harness answering in the transcript around it: whose mark an agent it
+ * started shows when the roster doesn't name another (`AgentMark`).
+ */
+export const HarnessContext = createContext<string | undefined>(undefined)
+
 /** When the answer around it was finished; undefined while it streams, or outside an answer. */
 export const AnswerTimeContext = createContext<number | undefined>(undefined)
 

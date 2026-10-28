@@ -1047,10 +1047,6 @@ diffs-container {
 .activity-mark[data-state="waiting"] { color: var(--caution); }
 .activity-mark[data-state="complete"] { color: var(--muted-foreground); }
 .activity-idle { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: 0.45; }
-.activity-meter { display: flex; align-items: end; gap: 2px; height: 11px; }
-.activity-meter > i { width: 2px; height: 65%; background: currentColor; border-radius: 1px; }
-.activity-meter > i:nth-child(2) { height: 100%; }
-.activity-meter > i:nth-child(3) { height: 40%; }
 .activity-orb { contain: layout paint; }
 
 /*
