@@ -1,5 +1,6 @@
+import { z } from "zod"
 import { normalizeToolOutput } from "@mako/sessions/tool-output"
-import { identifyTool, toolKindWork, type ToolIdentity, type ToolKind, type ToolSource } from "@mako/sessions/tool-identity"
+import { identifyTool, toolKindWork, type ToolArguments as CallArguments, type ToolIdentity, type ToolKind, type ToolSource } from "@mako/sessions/tool-identity"
 import type { Block, ChatMessage } from "@/lib/types"
 import type { ToolCall } from "@/extend/slots"
 import type { Entry } from "@mako/sessions/entries"
@@ -42,12 +43,73 @@ export function cachedToolIdentity(owner: Block, source: ToolSource): ToolIdenti
 export function entryToolIdentity(block: Extract<Entry, { type: "tool" }>, harness: string | undefined): ToolIdentity {
   const cached = identities.get(block)
   if (cached) return cached
-  const identity = identifyTool({ harness, name: block.name, acpKind: block.toolKind, title: block.title, input: block.input })
+  const source = { harness, name: block.name, acpKind: block.toolKind, title: block.title, input: block.input }
+  let identity = identifyTool(source)
+  // A call the model is still writing has only the head of its input: what names it is often there already.
+  if (!identity.target && block.status === "pending" && block.input) {
+    const args = argumentsSoFar(block.input)
+    if (args) identity = identifyTool({ ...source, args })
+  }
   const title = (block.title ?? "").trim()
   const named = [identity.name, identity.label, identity.server && identity.tool ? `${identity.server}: ${identity.tool}` : undefined]
   if (!identity.target && title && !named.includes(title)) identity.target = title
   identities.set(block, identity)
   return identity
+}
+
+/**
+ * The arguments a call's input holds so far, while the model is still
+ * writing it: the head of a JSON object, closed where it stops. A string cut
+ * mid-way keeps what it has; a key with no value yet is left out. Only for
+ * naming a running call: what it does is read from its whole input, once
+ * there is one.
+ */
+const CallArgumentsSchema = z.record(z.string(), z.json())
+
+export function argumentsSoFar(input: string): CallArguments | undefined {
+  const text = input.trimStart()
+  if (!text.startsWith("{")) return undefined
+  // Where a value has just ended, and what was open there; then try the latest that parses.
+  const ends: Array<{ at: number; open: string }> = []
+  const open: string[] = []
+  let inString = false
+  let escaped = false
+  let key = false
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index]!
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') {
+        inString = false
+        if (!key) ends.push({ at: index + 1, open: open.join("") })
+      }
+      continue
+    }
+    if (char === '"') {
+      inString = true
+      // A string is a key where an object expects one: after `{` or `,` inside an object.
+      const before = text.slice(0, index).trimEnd().at(-1)
+      key = open.at(-1) === "{" && (before === "{" || before === ",")
+    } else if (char === "{" || char === "[") open.push(char)
+    else if (char === "}" || char === "]") {
+      open.pop()
+      ends.push({ at: index + 1, open: open.join("") })
+    } else if (/[\d.eEtrufalsn-]/.test(char) && !/[\d.eEtrufalsn-]/.test(text[index + 1] ?? "")) ends.push({ at: index + 1, open: open.join("") })
+  }
+  const close = (open: string) => [...open].reverse().map((each) => (each === "{" ? "}" : "]")).join("")
+  // A string cut mid-escape drops the escape's half.
+  const candidates = inString && !key ? [`${escaped ? text.slice(0, -1) : text}"${close(open.join(""))}`] : []
+  for (const end of ends.slice(-16).reverse()) candidates.push(text.slice(0, end.at) + close(end.open))
+  for (const candidate of candidates) {
+    try {
+      const parsed = CallArgumentsSchema.safeParse(JSON.parse(candidate))
+      if (parsed.success) return parsed.data
+    } catch {
+      // Cut inside a number or a word: an earlier end parses.
+    }
+  }
+  return undefined
 }
 
 /** Arguments as `identifyTool` reads them: the JSON text, or a script's source. */
@@ -436,6 +498,18 @@ export function toolLabel(tool: ToolIdentity): string {
 /** Whether a running call's verb ("Using") says nothing of the tool, so its label follows the verb. */
 export function namedByLabel(tool: ToolIdentity): boolean {
   return tool.kind === "mcp" || tool.kind === "other" || tool.kind === "computer" || tool.kind === "skill"
+}
+
+/**
+ * `text` with every absolute path inside `cwd` read from there:
+ * "/work/app/src/guard.ts" in `/work/app` is "src/guard.ts". Paths elsewhere,
+ * and the folder itself, stay as they are.
+ */
+export function relativeTo(cwd: string | undefined, text: string): string {
+  if (!cwd || cwd === "/") return text
+  const folder = (cwd.endsWith("/") ? cwd : `${cwd}/`).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  // Only where a path begins: at the start, or after a space, a quote, a bracket or `=`.
+  return text.replace(new RegExp(`(?<=^|[\\s"'(\\[=:,])${folder}`, "g"), "")
 }
 
 /** The target, unless it only repeats the tool's own name. */

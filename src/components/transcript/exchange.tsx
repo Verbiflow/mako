@@ -16,11 +16,11 @@ import { ReviewFindings, ReviewRequest } from "./review-card"
 import { TranscriptAttachments } from "./attachment-collection"
 import { memo, useContext, useMemo, useState, type ReactNode } from "react"
 import { Prose } from "@/components/transcript/markdown"
-import { ToolRow } from "@/components/transcript/tool-row"
+import { Shimmer } from "@/components/ui/shimmer"
+import { AgentMark, LeadSlot, ToolRow } from "@/components/transcript/tool-row"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { ExchangeFailure, TurnError } from "@/components/transcript/failure-row"
 import { FailedRequestsContext } from "@/components/transcript/failed-requests"
-import { ActivityMark } from "@/components/ui/activity-mark"
 import { AgentGroup } from "./agent-group"
 import { groupAgentCalls } from "@/lib/agent-groups"
 import { FollowingList, LiveRow, TurnClock, type LiveStepData } from "./live-step"
@@ -62,7 +62,7 @@ import { continueTurn } from "@/state/acp-queue"
 import { AUTO_CONTINUE_NOTE, endedAsChosen, savedMakoPrompt, stoppedWorkWords, turnStopLabel, type CarriedHistory, type MakoPrompt, type TurnStop } from "@/state/prompt-delivery"
 import { viewer } from "@/state/viewer"
 import { carriedBecause } from "@/lib/restore-plan"
-import { AnswerRequestContext, AnswerTimeContext, TurnRunningContext, useTranscriptSource } from "./source-context"
+import { AnswerRequestContext, AnswerTimeContext, HarnessContext, TurnRunningContext, useTranscriptSource } from "./source-context"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
@@ -84,6 +84,7 @@ import {
   GitBranchIcon,
   GitForkIcon,
   HistoryIcon,
+  LayersIcon,
   PencilIcon,
   PlayIcon,
   RefreshCwIcon,
@@ -222,6 +223,7 @@ export const Exchange = memo(function Exchange({
   return (
     <AnswerTimeContext.Provider value={finishedAt}>
       <TurnRunningContext value={Boolean(streaming)}>
+      <HarnessContext value={provider}>
       {/* One gallery per exchange: every picture and video in the prompt, the answer and its work steps a step apart. */}
       <MediaGalleryScope>
       <AnswerRequestContext.Provider value={exchange.prompt?.requestId}>
@@ -273,6 +275,7 @@ export const Exchange = memo(function Exchange({
       </article>
       </AnswerRequestContext.Provider>
       </MediaGalleryScope>
+      </HarnessContext>
       </TurnRunningContext>
     </AnswerTimeContext.Provider>
   )
@@ -605,9 +608,12 @@ function summarizeWork(
  * A stretch of work between two pieces of prose. Settled, it is its rows,
  * folded under a summary from three steps on. While it is the running end of
  * a turn (`live`), it is what it has done so far as that summary, then the
- * step running now, a row for each of its calls; either opens the whole
- * list, capped and following its newest row. One tree in every state, so a
- * stretch that settles keeps what it had mounted.
+ * step running now, a row for each of its calls. The summary opens the whole
+ * list, capped and following its newest row while the turn runs. Every row
+ * of it, the summary, the steps and the running step, stands in one column:
+ * glyphs over glyphs, words over words, nothing indented under anything, so
+ * the stretch reads as one log. One tree in every state, so a stretch that
+ * settles keeps what it had mounted.
  */
 function WorkSection({
   messages,
@@ -663,20 +669,14 @@ function WorkSection({
       ) : null}
       <Collapse open={live ? open : !summarized || open}>
         <FollowingList capped={live}>
-          <div
-            data-work-log
-            className={cn(
-              "flex flex-col",
-              (summarized || live) && "mt-1.5 ml-[6.5px] border-l border-hairline pb-1 pl-4"
-            )}
-          >
+          <div data-work-log className="flex flex-col">
             {messages.map((message) => (
               <Response key={message.id} message={message} showWork live={message === messages.at(-1) ? shown?.newest : shown?.earlier} />
             ))}
           </div>
         </FollowingList>
       </Collapse>
-      {step ? <LiveRow step={step} open={open} onToggle={step.call || step.thinking || summarized ? toggle : undefined} /> : null}
+      {step ? <LiveRow step={step} open={open} /> : null}
     </div>
   )
 }
@@ -753,8 +753,10 @@ function thoughtLine(text: string): string {
 
 /**
  * A settled turn's work behind one row: "Worked for 3m 12s", then what it
- * did in the transcript's words, the kinds of step as glyphs in front. Its
- * answer stays below it. A stretch after a steer "Continued for"; a turn
+ * did in the transcript's words. The row is a fold and nothing else, so its
+ * first column is the fold's chevron, where the glyph of every row of work
+ * stands; its body hangs from that chevron on a hairline. Its answer stays
+ * below it. A stretch after a steer "Continued for"; a turn
  * that was stopped says so ("Stopped after 2m", "Interrupted after 2m"). A
  * note that wants attention or marks a boundary stays in view while the
  * fold is closed. Whether it is open is kept per turn (`turn-folds.ts`).
@@ -762,7 +764,7 @@ function thoughtLine(text: string): string {
 function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; foldKey: string; stop?: boolean | TurnStop; kept: ReactNode[]; children: ReactNode }) {
   const open = useTurnFolds((state) => state.open.has(foldKey))
   const work = useMemo(() => summarizeWork(fold.messages), [fold.messages])
-  const { glyphs, text } = describeWork(work)
+  const { text } = describeWork(work)
   const duration = fold.from !== undefined && fold.to !== undefined && fold.to >= fold.from ? formatDuration(fold.to - fold.from) : undefined
   const yours = stop === true || (stop !== undefined && stop !== false && endedAsChosen(stop.reason))
   const cut = Boolean(stop) && !yours
@@ -781,23 +783,16 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
           cut ? "text-caution" : "text-muted-foreground hover:text-foreground aria-expanded:text-foreground"
         )}
       >
-        {glyphs.length ? (
-          <span aria-hidden className="flex shrink-0 items-center gap-1 text-faint transition-colors duration-100 group-hover/fold:text-muted-foreground">
-            {glyphs.map((glyph) => (
-              <ToolGlyph key={glyph} kind={glyph} className="size-3.5" />
-            ))}
-          </span>
-        ) : null}
-        <span className="shrink-0">{title}</span>
-        {detail ? <span className="min-w-0 truncate text-faint">{detail}</span> : null}
-        <WorkEndings work={work} />
         <ChevronRightIcon
           aria-hidden
           className={cn(
-            "size-3 shrink-0 transition-[transform,opacity] duration-200 ease-[var(--ease-out)]",
-            open ? "rotate-90 opacity-80" : "opacity-40 group-hover/fold:opacity-80"
+            "size-3.5 shrink-0 text-faint transition-[transform,color] duration-200 ease-[var(--ease-out)] group-hover/fold:text-muted-foreground",
+            open && "rotate-90"
           )}
         />
+        <span className="shrink-0">{title}</span>
+        {detail ? <span className="min-w-0 truncate text-faint">{detail}</span> : null}
+        <WorkEndings work={work} />
       </button>
       <Collapse open={open}>
         <div data-turn-fold-body className="mt-1.5 ml-[6.5px] flex flex-col gap-4 border-l border-hairline pt-1 pb-1 pl-4">
@@ -822,9 +817,9 @@ function WorkEndings({ work }: { work: Pick<WorkSummaryData, "failed" | "stopped
 
 /**
  * What a folded stretch of tool calls did, said the way the transcript says
- * everything else: "Ran 5 commands and read a file". The glyphs in front
- * are the kinds of step, in the same order, so the row can be read at a
- * glance without the words; the open log hangs from them on a hairline.
+ * everything else: "Ran 5 commands and read a file". One glyph in front,
+ * where each step's own stands: the kind's, when every step was one kind (an
+ * agent's is its harness's mark), else the stack of steps.
  */
 const WORK_PHRASES = [
   { glyph: "edit", count: (work) => work.edits, phrase: (n) => `made ${n === 1 ? "an edit" : `${n} edits`}` },
@@ -856,7 +851,14 @@ function describeWork(work: WorkSummaryData) {
     parts.length > 1
       ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`
       : (parts[0] ?? `used ${work.tools} tools`)
-  return { glyphs: shown.map((entry) => entry.glyph), text }
+  return { kinds: done.map((entry) => entry.glyph), text }
+}
+
+/** The summary's one glyph (see `WORK_PHRASES`). */
+function SummaryGlyph({ kinds, className }: { kinds: readonly ToolKind[]; className?: string }) {
+  const [only] = kinds
+  if (kinds.length !== 1 || !only) return <LayersIcon className={className} />
+  return only === "agent" ? <AgentMark className={className} /> : <ToolGlyph kind={only} className={className} />
 }
 
 function WorkSummary({
@@ -874,7 +876,7 @@ function WorkSummary({
 }) {
   const elapsed =
     work.duration !== undefined ? formatDuration(work.duration) : undefined
-  const { glyphs, text } = describeWork(work)
+  const { kinds, text } = describeWork(work)
   const troubled = interrupted || failed
   const stop = interrupted ? "Interrupted" : "Failed"
   return (
@@ -884,7 +886,7 @@ function WorkSummary({
       aria-expanded={open}
       data-work-summary
       className={cn(
-        "pressable group/work -mx-1.5 flex h-7 max-w-full items-center gap-2 self-start rounded-md px-1.5 text-ui transition-colors duration-100 hover:bg-fill-hover",
+        "pressable group/row -mx-1.5 flex h-7 max-w-full items-center gap-2 self-start rounded-md px-1.5 text-ui transition-colors duration-100 hover:bg-fill-hover",
         interrupted
           ? "text-caution"
           : failed
@@ -892,15 +894,10 @@ function WorkSummary({
             : "text-muted-foreground hover:text-foreground aria-expanded:text-foreground"
       )}
     >
-      {troubled ? (
-        <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
-      ) : (
-        <span aria-hidden className="flex shrink-0 items-center gap-1 text-faint transition-colors duration-100 group-hover/work:text-muted-foreground">
-          {glyphs.map((glyph) => (
-            <ToolGlyph key={glyph} kind={glyph} className="size-3.5" />
-          ))}
-        </span>
-      )}
+      <LeadSlot
+        open={open}
+        glyph={troubled ? <TriangleAlertIcon aria-hidden className="size-3.5" /> : <SummaryGlyph kinds={kinds} className="size-3.5 text-faint" />}
+      />
       <span className="min-w-0 truncate">
         {troubled ? (
           <>
@@ -918,13 +915,6 @@ function WorkSummary({
       {elapsed && !troubled ? (
         <span className="shrink-0 text-label text-faint tabular">{elapsed}</span>
       ) : null}
-      <ChevronRightIcon
-        aria-hidden
-        className={cn(
-          "size-3 shrink-0 transition-[transform,opacity] duration-200 ease-[var(--ease-out)]",
-          open ? "rotate-90 opacity-80" : "opacity-40 group-hover/work:opacity-80"
-        )}
-      />
     </button>
   )
 }
@@ -1010,7 +1000,6 @@ function Response({
 function Thinking({ text, live }: { text: string; live: boolean }) {
   const [open, setOpen] = useState(false)
   const summary = thoughtLine(text)
-  const layer = "absolute inset-0 m-auto size-3.5 [transition:opacity_150ms_var(--ease-out),transform_150ms_var(--ease-out)]"
   return (
     <div>
       <button
@@ -1018,25 +1007,12 @@ function Thinking({ text, live }: { text: string; live: boolean }) {
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         aria-label={`${live ? "Reasoning in progress" : "Reasoning"}${summary ? `: ${summary}` : ""}`}
-        className="pressable group/think -mx-1.5 flex h-7 w-[calc(100%+12px)] min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-ui transition-colors duration-100 hover:bg-fill-hover"
+        className="pressable group/row -mx-1.5 flex h-7 w-[calc(100%+12px)] min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-ui transition-colors duration-100 hover:bg-fill-hover"
       >
-        <span className="relative size-3.5 shrink-0">
-          <ToolGlyph
-            kind="think"
-            className={cn(layer, live ? "text-foreground/80" : "text-faint", open ? "opacity-0" : "group-hover/think:opacity-0")}
-          />
-          <ChevronRightIcon
-            className={cn(layer, "text-faint", open ? "rotate-90 opacity-100" : "opacity-0 group-hover/think:opacity-100")}
-          />
-        </span>
-        <span className="shrink-0 text-muted-foreground">Thought process</span>
+        <LeadSlot open={open} glyph={<ToolGlyph kind="think" className={cn("size-3.5", live ? "text-foreground/80" : "text-faint")} />} />
+        {/* A thought still coming sweeps, as a running call's words do; nothing at the row's end says it again. */}
+        {live ? <Shimmer text="Thinking" className="shrink-0" /> : <span className="shrink-0 text-muted-foreground">Thought process</span>}
         {summary && !open ? <span className="min-w-0 truncate text-faint">{summary}</span> : null}
-        <span className="flex-1" />
-        {live ? (
-          <span role="status" aria-label="Reasoning" className="shrink-0 text-muted-foreground">
-            <ActivityMark state="reasoning" />
-          </span>
-        ) : null}
       </button>
       {open ? (
         <div className="ml-1.75 border-l border-hairline py-1.5 pl-3.75 text-muted-foreground">
@@ -1105,10 +1081,11 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
   return (
     <div className="mt-1.5 flex min-h-6 items-center gap-2.5 text-label text-muted-foreground">
       {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
-      {last?.timestamp ? (
+      {/* The answer's time and model are the finished answer's: a running turn's newest step is not its answer. */}
+      {last?.timestamp && !streaming ? (
         <span className="tabular">{formatTime(last.timestamp)}</span>
       ) : null}
-      {last?.model ? <span className="truncate">{last.model}</span> : null}
+      {last?.model && !streaming ? <span className="truncate">{last.model}</span> : null}
       {/* The whole answer exists once the turn ends; until then the footer keeps its place, empty of it. */}
       {text && !streaming ? (
         <button

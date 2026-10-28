@@ -1,11 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
-import { ActivityIcon, ChevronRightIcon, PauseIcon, RefreshCwIcon } from "lucide-react"
+import { PauseIcon, RefreshCwIcon } from "lucide-react"
 import { toolKindActivity } from "@mako/sessions/tool-identity"
 import { durationText } from "@mako/sessions/events"
 import { useToolView, type ToolCall } from "@/extend/slots"
+import { WorkingIcon } from "@/components/ui/activity-mark"
 import { groupAgentCalls } from "@/lib/agent-groups"
 import { formatDuration } from "@/lib/format"
-import { cn } from "@/lib/utils"
 import { useAcp } from "@/state/acp"
 import { agentActivity, QUIET_AFTER_MS, quietDuration, type AgentActivity, type AgentActivityKind } from "@/state/agent-activity"
 import { promptDelivery } from "@/state/prompt-delivery"
@@ -15,8 +15,8 @@ import { Ticking } from "@/components/ui/ticking"
 import { AgentGroup } from "./agent-group"
 import { EventLine } from "./event-line"
 import { useTranscriptSource } from "./source-context"
-import { CODE_KINDS, namedByLabel, toolLabel, toolTarget } from "@/lib/tools"
-import { ToolRow, ToolWords } from "./tool-row"
+import { namedByLabel, toolLabel, toolTarget } from "@/lib/tools"
+import { ToolRow } from "./tool-row"
 import { ToolGlyph } from "./tool-views"
 
 /**
@@ -103,19 +103,21 @@ export function TurnClock({ since, bare = false }: { since: number; bare?: boole
 }
 
 /**
- * The newest step's rows. A call that runs is its glyph in the tool column
- * and its words, verb and target, under one sweep of light (`ToolWords`):
- * that sweep is the only running signal, so the row has no mark at its end.
- * Calls that run at once each have their row; one that finishes first
- * settles in its place into the row the list will show for it, the same
+ * The newest step's rows. A call that runs is the row the transcript keeps
+ * for it (`ToolRow`): its glyph and its words, verb and target, under one
+ * sweep of light, the only running signal, so the row has no mark at its end
+ * and nothing is swapped when the call returns. Calls that run at once each
+ * have their row; one that finishes first settles in its place, the same
  * height, so nothing under it moves. A wait, the provider's own report or
- * the model thinking is one row of the same shape. `onToggle` opens the
- * turn's whole list of steps; without it the row is only a line (nothing
- * has run yet to list). Under an answer that is still being written
- * (`answering`) the words are the news, so the row stays away unless the
- * turn has something else to say.
+ * the model thinking or between steps is one row of the same shape, its
+ * glyph in the same column: "Working" is the ellipsis (`WorkingIcon`), the
+ * mark Mako uses for work in progress everywhere. The live rows open
+ * nothing of their own: the summary above them opens the steps so far, and
+ * while it is `open` the newest thought is in that list, not above the row.
+ * Under an answer that is still being written (`answering`) the words are
+ * the news, so the row stays away unless the turn has something else to say.
  */
-export function LiveRow({ step, open, onToggle, answering = false }: { step: LiveStepData; open?: boolean; onToggle?: () => void; answering?: boolean }) {
+export function LiveRow({ step, open = false, answering = false }: { step: LiveStepData; open?: boolean; answering?: boolean }) {
   const status = useLiveTurnStatus()
   const quiet = useQuietSince(status.kind === "idle" || status.native ? undefined : status.activityAt)
   if (status.kind === "connecting") return null
@@ -125,7 +127,6 @@ export function LiveRow({ step, open, onToggle, answering = false }: { step: Liv
   if (answering && !waiting && !native && !quiet) return null
   const call = step.call
   const kind: AgentActivityKind = waiting ? "waiting" : native ? "working" : call ? toolKindActivity(call.tool.kind) : step.thinking ? "reasoning" : "working"
-  const quietFor = quiet && !waiting && status.activityAt !== undefined ? <QuietFor since={status.activityAt} /> : null
   const thought = step.thought && call && !open && !waiting && !native ? <ThoughtLine text={step.thought} /> : null
   const items = call && !waiting && !native ? groupAgentCalls(step.calls) : []
   if (items.length)
@@ -133,19 +134,11 @@ export function LiveRow({ step, open, onToggle, answering = false }: { step: Liv
       <div role="status" data-agent-activity={kind} data-live-step={items.length > 1 ? "calls" : items[0]!.kind === "agents" ? "agents" : ""} className="flex min-w-0 flex-col">
         {thought}
         {items.map((item) =>
-          item.kind === "agents" ? (
-            <AgentGroup key={item.id} calls={item.calls} provider={step.provider} live />
-          ) : item.call.pending ? (
-            <LiveLine key={item.call.id} onToggle={onToggle} open={open} glyph={<ToolGlyph kind={item.call.tool.kind} className="size-3.5 text-foreground/80" />}>
-              <ToolWords call={item.call} />
-              {item.call === call ? quietFor : null}
-            </LiveLine>
-          ) : (
-            <ToolRow key={item.call.id} call={item.call} />
-          )
+          item.kind === "agents" ? <AgentGroup key={item.id} calls={item.calls} provider={step.provider} /> : <ToolRow key={item.call.id} call={item.call} />
         )}
       </div>
     )
+  const quietFor = quiet && !waiting && status.activityAt !== undefined ? <QuietFor since={status.activityAt} /> : null
   const words: ReactNode = waiting || native ? (
     <>
       {waiting ? <span className="shrink-0 text-foreground">{status.label}</span> : <Shimmer text={status.label} className="shrink-0" />}
@@ -156,7 +149,7 @@ export function LiveRow({ step, open, onToggle, answering = false }: { step: Liv
   ) : (
     <Shimmer className="flex min-w-0 items-baseline gap-1.5">
       <span className="shrink-0">{step.thinking ? "Thinking" : "Working"}</span>
-      {step.thinking && step.thought ? <span className="min-w-0 truncate text-faint">{step.thought}</span> : null}
+      {step.thinking && step.thought ? <span className="min-w-0 truncate">{step.thought}</span> : null}
     </Shimmer>
   )
   const glyph = waiting ? (
@@ -168,50 +161,16 @@ export function LiveRow({ step, open, onToggle, answering = false }: { step: Liv
   ) : step.thinking ? (
     <ToolGlyph kind="think" className="size-3.5 text-foreground/80" />
   ) : (
-    <ActivityIcon className="size-3.5 text-foreground/80" />
+    <WorkingIcon className="size-3.5 text-foreground/80" />
   )
   return (
     <div role="status" data-agent-activity={kind} data-live-step="" className="flex min-w-0 flex-col">
-      <LiveLine onToggle={onToggle} open={open} glyph={glyph}>
+      <div className="flex h-7 min-w-0 items-center gap-2 text-ui">
+        <span className="flex size-3.5 shrink-0 items-center justify-center">{glyph}</span>
         <span className="flex min-w-0 items-baseline gap-1.5">{words}</span>
         {quietFor}
-      </LiveLine>
+      </div>
     </div>
-  )
-}
-
-/**
- * One row of the live step: the tool column, then its words; a button that
- * opens the turn's steps when there are steps to open. The height of a
- * transcript's tool row, so a call that settles in it moves nothing. A row
- * arrives with the step it stands for; the arrival is the row's own
- * animation, never its words', which sweep.
- */
-function LiveLine({ glyph, onToggle, open, children }: { glyph: ReactNode; onToggle?: () => void; open?: boolean; children: ReactNode }) {
-  const row = "motion-safe:animate-[label-arrive_160ms_var(--ease-out)] -mx-1.5 flex h-7 w-[calc(100%+12px)] min-w-0 items-center gap-2 rounded-md px-1.5 text-left text-ui"
-  const line = (
-    <>
-      <LeadGlyph glyph={glyph} toggles={Boolean(onToggle)} open={Boolean(open)} />
-      {children}
-    </>
-  )
-  return onToggle ? (
-    <button type="button" aria-expanded={open} aria-label={open ? "Hide the steps so far" : "Show the steps so far"} onClick={onToggle} className={cn(row, "pressable group/live transition-colors duration-100 hover:bg-fill-hover")}>
-      {line}
-    </button>
-  ) : (
-    <div className={row}>{line}</div>
-  )
-}
-
-/** The tool column's glyph, giving way to a chevron where the row opens. */
-function LeadGlyph({ glyph, toggles, open }: { glyph: ReactNode; toggles: boolean; open: boolean }) {
-  const layer = "absolute inset-0 m-auto flex items-center justify-center [transition:opacity_150ms_var(--ease-out),transform_150ms_var(--ease-out)]"
-  return (
-    <span className="relative size-3.5 shrink-0">
-      <span className={cn(layer, toggles && (open ? "opacity-0" : "group-hover/live:opacity-0"))}>{glyph}</span>
-      {toggles ? <ChevronRightIcon aria-hidden className={cn(layer, "size-3.5 text-faint", open ? "rotate-90 opacity-100" : "opacity-0 group-hover/live:opacity-100")} /> : null}
-    </span>
   )
 }
 
@@ -223,22 +182,22 @@ function CallObject({ call }: { call: ToolCall }) {
   return (
     <>
       {label ? <span className="shrink-0 text-muted-foreground">{label}</span> : null}
-      {summary ? <span className={cn("min-w-0 truncate text-faint", !view?.summary && CODE_KINDS.has(call.tool.kind) && "font-mono text-label")}>{summary}</span> : null}
+      {summary ? <span className="min-w-0 truncate text-faint">{summary}</span> : null}
     </>
   )
 }
 
-/** One line of the model's newest thought, above the step it led to. */
+/** One line of the model's newest thought, above the step it led to: a row of the list, the thought's glyph in front. */
 function ThoughtLine({ text }: { text: string }) {
   return (
-    <p data-live-thought className="flex h-6 min-w-0 items-center gap-2 text-ui text-faint">
-      <span aria-hidden className="size-3.5 shrink-0" />
+    <p data-live-thought className="flex h-7 min-w-0 items-center gap-2 text-ui text-faint">
+      <ToolGlyph kind="think" className="size-3.5 shrink-0" />
       <span className="min-w-0 truncate">{text}</span>
     </p>
   )
 }
 
-/** "No output for 4m" beside a step that has said nothing for a while; minutes, so it counts without rendering. */
+/** "No output for 4m" beside a wait or a thought that has said nothing for a while; minutes, so it counts without rendering. A call says how long it has run instead (`ToolWords`). */
 function QuietFor({ since }: { since: number }) {
   return <Ticking words={(now) => `· no output for ${quietDuration(now - since)}`} className="shrink-0 text-faint" />
 }

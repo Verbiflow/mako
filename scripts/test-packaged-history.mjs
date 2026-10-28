@@ -95,7 +95,7 @@ async function checkReadingAndDraft(item) {
   // exits follow mode before tool expansion changes the transcript's height.
   await command('Input.dispatchMouseEvent', { type: 'mouseWheel', ...scroll, deltaX: 0, deltaY: -100 })
   await delay(300)
-  const toolSelector = '[class~="group/tool"] button[aria-expanded]'
+  const toolSelector = '[data-transcript-tool] button[aria-expanded]'
   // Use visible controls, like a reader. Hidden logs retain mounted rows and
   // virtualized rows can disappear if automation scrolls a stale node into view.
   const findControl = `(()=>{const visible=b=>{const r=b.getBoundingClientRect();return r.width>0 && r.height>0 && b.contains(document.elementFromPoint(r.left+r.width/2,r.top+r.height/2))};const tools=[...document.querySelectorAll(${JSON.stringify(toolSelector)})];const tool=tools.find(visible);const b=tool??[...document.querySelectorAll('button[data-work-summary][aria-expanded="false"]')].find(visible);if(!b)return null;const r=b.getBoundingClientRect();if(tool)window.proofTool=tool;return{x:r.left+r.width/2,y:r.top+r.height/2,tool:Boolean(tool),expanded:b.getAttribute('aria-expanded')}})()`

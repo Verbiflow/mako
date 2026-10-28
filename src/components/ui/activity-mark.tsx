@@ -1,10 +1,18 @@
 import type { OrbState, OrbSize } from "thinking-orbs"
 import { Orb } from "@/components/ui/orb/orb"
-import { CheckIcon, CircleAlertIcon, PauseIcon, SearchIcon, PencilIcon, TerminalIcon, BrainIcon, TextCursorInputIcon } from "lucide-react"
+import { CheckIcon, CircleAlertIcon, EllipsisIcon, PauseIcon, SearchIcon, PencilIcon, TerminalIcon, BrainIcon, TextCursorInputIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { AgentActivityKind } from "@/state/agent-activity"
 
 export type ActivityState = AgentActivityKind
+
+/**
+ * Work in progress that names no step: the agent between steps, or a turn
+ * Mako can only say is "Working". An ellipsis, still, the way a sentence that
+ * isn't finished reads: what moves is the sweep over the words beside it,
+ * never the mark. Every place that says "working" without an orb draws this.
+ */
+export const WorkingIcon = EllipsisIcon
 
 const orbStates = {
   working: "working", connecting: "connecting", reasoning: "solving",
@@ -27,7 +35,7 @@ export function ActivityMark({ className, state = "working", size }: { className
         : state === "reasoning" ? <BrainIcon />
         : state === "responding" ? <TextCursorInputIcon />
         : state === "idle" ? <span className="activity-idle" />
-        : <span className="activity-meter"><i /><i /><i /></span>}
+        : <WorkingIcon />}
     </span>
   )
 }

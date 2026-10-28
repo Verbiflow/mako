@@ -83,7 +83,7 @@ const WorkItem = memo(function WorkItem({ agent }: { agent: NativeAgent }) {
   const uses = agent.usage?.toolUses
   return (
     <div data-native-work={agent.work ?? "agent"} className="flex min-w-0 items-center gap-2 pl-7 text-label text-faint">
-      <WorkGlyph work={agent.work} className="size-3 shrink-0" />
+      <WorkGlyph work={agent.work} provider={agent.provider} className="size-3 shrink-0" />
       <span className="min-w-0 shrink truncate text-muted-foreground">{agent.title || agent.detail}</span>
       {said ? <span className="min-w-0 flex-1 truncate">· {said}</span> : <span className="flex-1" />}
       {uses ? <span className="tabular shrink-0">{uses} {uses === 1 ? "tool use" : "tool uses"}</span> : null}

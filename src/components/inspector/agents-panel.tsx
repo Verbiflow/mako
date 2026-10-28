@@ -13,6 +13,7 @@ import { durationText } from "@mako/sessions/events"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ToolGlyph } from "@/components/transcript/tool-views"
+import { HarnessIcon } from "@/components/ui/provider-icon"
 import { useSecondClock } from "@/components/ui/second-clock"
 import { formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -54,8 +55,12 @@ function activity(agent: NativeAgent): string | undefined {
   }
 }
 
-/** The kind's glyph, the one the transcript's tool rows and event lines use for it. */
-export function WorkGlyph({ work, className }: { work: NativeWork | undefined; className?: string }) {
+/**
+ * The kind's glyph, the one the transcript's tool rows and event lines use
+ * for it. An agent's is the mark of the harness that runs it (`provider`),
+ * as its row in the transcript shows it; the agent glyph only when none is known.
+ */
+export function WorkGlyph({ work, provider, className }: { work: NativeWork | undefined; provider?: string; className?: string }) {
   switch (work ?? "agent") {
     case "command":
       return <ToolGlyph kind="shell" className={className} />
@@ -66,7 +71,7 @@ export function WorkGlyph({ work, className }: { work: NativeWork | undefined; c
     case "task":
       return <HourglassIcon className={className} />
     case "agent":
-      return <ToolGlyph kind="agent" className={className} />
+      return provider ? <HarnessIcon harness={provider} className={className} /> : <ToolGlyph kind="agent" className={className} />
   }
 }
 
@@ -230,7 +235,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation }: { agent:
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="flex h-5 shrink-0 items-center text-muted-foreground">
-          {active ? <WorkGlyph work={work} className="size-3.5" /> : <ActivityMark state={marks[agent.state.kind]} />}
+          {active ? <WorkGlyph work={work} provider={agent.provider} className="size-3.5" /> : <ActivityMark state={marks[agent.state.kind]} />}
         </span>
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex h-5 min-w-0 items-center gap-2">
