@@ -6,6 +6,7 @@ import { FailedRequestsContext } from "@/components/transcript/failed-requests"
 import { agentActivity, startLabel } from "@/state/agent-activity"
 import { shallowEqual } from "@/state/store"
 import { ActivityMark } from "@/components/ui/activity-mark"
+import { useLasting } from "@/components/ui/use-lasting"
 import { Shimmer } from "@/components/ui/shimmer"
 import { durationText } from "@mako/sessions/events"
 import { loadEarlierLive } from "@/state/live-recovery"
@@ -301,9 +302,9 @@ function AcpActivity({
     const current = scopedAcp(state, scope)
     return current?.kind === "starting" ? current.worktreeStep : undefined
   })
-  const makingWorktree = useLasting(Boolean(making), MAKING_WORKTREE_SHOWN_AFTER_MS)
+  const makingWorktree = useLasting(making, MAKING_WORKTREE_SHOWN_AFTER_MS)
   const conversationKey = useAcp((state) => scopedAcp(state, scope)?.key)
-  const slowWorktree = useLasting(Boolean(making), SLOW_WORKTREE_MS)
+  const slowWorktree = useLasting(making, SLOW_WORKTREE_MS)
   const labels = useHarnessLabels()
   const startingAs = useAcp((state) => {
     const current = scopedAcp(state, scope)
@@ -403,20 +404,6 @@ function NativeClock({ since, retryAt }: { since: number; retryAt?: number }) {
 const MAKING_WORKTREE_SHOWN_AFTER_MS = 400
 /** A start still making its worktree after this offers to go ahead in the project folder. */
 const SLOW_WORKTREE_MS = 2_000
-
-/** `value`, once it has held for `ms`; false again as soon as it stops. */
-function useLasting(value: boolean, ms: number): boolean {
-  const [lasted, setLasted] = useState(false)
-  useEffect(() => {
-    if (!value) return
-    const timer = setTimeout(() => setLasted(true), ms)
-    return () => {
-      clearTimeout(timer)
-      setLasted(false)
-    }
-  }, [value, ms])
-  return value && lasted
-}
 
 /** Time since `activityAt`, read again when it moves and every few seconds while it is set. */
 function useQuietFor(activityAt: number | undefined): number {

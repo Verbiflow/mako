@@ -45,6 +45,9 @@ import { renderToStaticMarkup } from "react-dom/server"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
 import { LiveActionStatus } from "../src/components/viewer/live-action-status"
 import { AcpPanel } from "../src/components/viewer/acp-panel"
+import { ProducedNotice } from "../src/components/composer/composer-notices"
+import { useApprovalStatusNotice } from "../src/components/viewer/approval-status-notice"
+import type { ApprovalResponse } from "@mako/host/contracts/approval-response"
 import { folderTrustRequest } from "@mako/host/harnesses/grok/folder-trust"
 import { AccessModeList, LiveComposerControls, NextSessionModePicker } from "../src/components/composer/live-controls"
 import { ContextMeter, UsageDetails } from "../src/components/composer/context-meter"
@@ -113,6 +116,23 @@ assert.match(trustMarkup, /data-request-detail[^>]*>Grok ignores the MCP servers
 assert.match(trustMarkup, /Trust project/)
 assert.match(trustMarkup, /Not now/)
 assert.doesNotMatch(trustMarkup, /Choose how long to allow it/)
+// Answering a tool approval: the host saves the answer as sending and, for a connection that takes it at once, as handed
+// over in the same moment. Nothing above the composer says the sending: a bar there would be drawn for a frame, empty
+// as it faded in. What still needs the person after the hold, or ever, is said in words.
+{
+  const origin = { nativeRequestId: "call-1", bindingId: id, epoch: "fixture", generation: 1, connectionGeneration: 1 }
+  const asked = { id: "33333333-3333-4333-8333-333333333333", sessionId: id, kind: "execute", title: "npm test -- --run src/router", origin,
+    options: [{ optionId: "once", name: "Allow once", kind: "allow_once" as const }, { optionId: "always", name: "Always allow", kind: "allow_always" as const }] }
+  const answered = (state: ApprovalResponse["state"], permission: typeof asked | null) => {
+    const receipt: ApprovalResponse = { id: asked.id, origin, digest: "a".repeat(64), createdAt: 1, state }
+    acpStore.set({ activeKey: id, conversations: { [id]: { ...conversation, session: { ...conversation.session, status: "running" }, permission, control: { ...control, approvalResponses: [receipt] } } } })
+    return renderToStaticMarkup(<ProducedNotice use={useApprovalStatusNotice} />)
+  }
+  assert.equal(answered({ kind: "dispatching" }, asked), "", "an answer just sent draws no bar above the composer")
+  assert.equal(answered({ kind: "submitted", source: "callback" }, null), "", "an answer handed over draws nothing")
+  assert.match(answered({ kind: "uncertain", reason: "Lost" }, asked), /data-approval-recovery[^>]*>.*Answer delivery unknown/s, "an answer that may not have arrived says so, in words")
+  assert.match(answered({ kind: "not-submitted", pending: false, reason: "request-ended" }, null), /Approval is no longer waiting/)
+}
 conversation.permission = null
 conversation.session = { ...conversation.session, status: "ready", connection: "connected" }
 for (const descriptor of fixtureHarnesses) {

@@ -2217,6 +2217,16 @@ project's `permission.toml` (`grok/approval-observer.ts`,
 `test-grok-approvals-live.ts`). An answer no record tells apart stays
 unconfirmed.
 
+Answering a card hides it at once, and the live step names the call that now
+runs. The host saves the answer as sending, then as handed over, and every
+harness that asks hands it over in the same moment. The receipt's notice above
+the composer (`approval-status-notice.tsx`) therefore stays away while the
+answer is sending, unless that lasts past `APPROVAL_SENDING_SHOWN_AFTER_MS`;
+otherwise it would draw a bar for one frame. It speaks only for an answer that
+is still on its way, uncertain, refused, no longer waiting, or recorded as a
+different decision. `npm run test:approval-answer-ui` checks this for each
+harness that asks, live and reopened.
+
 Each ACP provider declares its placement in `access` on its `ProviderAcpSource`
 (`native`, `launch`, `base`); `packages/host/src/harnesses/acp-access.ts` builds the mode
 list and resolves a selection, and `acp.ts` applies it. Verified on 2026-09-11

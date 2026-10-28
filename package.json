@@ -116,6 +116,7 @@
     "test:cloud-conversations": "tsx scripts/test-cloud-conversations.ts && tsx scripts/test-account-threads.ts && tsx scripts/test-cloud-previews.ts",
     "test:moves": "tsx --tsconfig tsconfig.app.json scripts/test-harness-check.ts && tsx --tsconfig tsconfig.scripts.json scripts/test-harness-update-flow.ts && tsx scripts/test-machine-workspace.ts && tsx scripts/test-cloud-carried-files.ts && tsx scripts/test-move-checkpoint.ts && tsx scripts/test-git-index-copy.ts && tsx scripts/test-move-arrival.ts && tsx scripts/test-move-stage.ts && tsx scripts/test-move-departure.ts && tsx scripts/test-cloud-moves.ts && tsx scripts/test-cloud-returns.ts && tsx scripts/test-cloud-handoffs.ts",
     "test:moves-ui": "node scripts/test-thread-move-ui.mjs",
+    "test:approval-answer-ui": "node scripts/test-approval-answer-ui.mjs",
     "test:carried-files-ui": "node scripts/test-carried-files-ui.mjs",
     "test:account-threads-ui": "node scripts/test-account-threads-ui.mjs",
     "test:cloud-archive-ui": "node scripts/test-cloud-archive-ui.mjs",
