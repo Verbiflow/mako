@@ -4,22 +4,25 @@ import { mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { localRuntime } from "./install-local-mac.mjs"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
 import { invokeRuntime } from "@mako/host/transport/connection"
+import { runtimeLocation } from "@mako/host/transport/service"
+import { PackagedApp } from "./lib/packaged-app.mjs"
 import { startCocoaFixture } from "./lib/cocoa-fixture.mjs"
 import { sampleFrontmost } from "./lib/control-fixture.mjs"
 
-// Opt-in paid provider acceptance through the user's running installed host.
-// Only this script's conversation and disposable AppKit window are changed.
+// Opt-in paid provider acceptance through the installed build, run on a
+// profile and a home of its own (`PackagedApp`): its conversation, session and
+// harness stores are the run's, never the person's, whose own Mako keeps
+// running untouched. Only the disposable AppKit window is shared.
 const provider = process.argv[2]
 const model = process.argv[3]
 assert.ok(provider && model, "Use test-installed-control-agent.mjs <provider> <model>")
 const root = await mkdtemp(join(tmpdir(), "mako-installed-control-agent-"))
-const runtime = await localRuntime()
-assert.ok(runtime.host, "Start installed Mako first")
+const installed = new PackagedApp({ executable: "/Applications/Mako.app/Contents/MacOS/Mako", root, workspace: root })
+await installed.start()
 const client = randomUUID(), id = randomUUID()
-const call = (channel, ...args) => invokeRuntime(runtime.socket, client, channel, args)
+const call = (channel, ...args) => invokeRuntime(runtimeLocation(installed.profile).socket, client, channel, args)
 const expected = readLocalAppMetadata("/Applications/Mako.app").makoBuild
 assert.equal((await call("mako:installation-state")).build?.id, expected.id)
 const descriptors = await call("mako:harness-descriptors")
@@ -131,6 +134,7 @@ try {
     report.cleanupError = error.message; report.status = "failed"; process.exitCode = 1
   })
   fixture?.stop()
+  await installed.stop({ graceful: true })
   await writeFile(join(root, "result.json"), JSON.stringify(report, null, 2), { mode: 0o600 })
   console.log(JSON.stringify(report))
 }

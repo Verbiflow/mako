@@ -266,9 +266,10 @@ cloud machine's agent starts its host on its user's `~/.mako`, so a machine
 is never isolated, and `test:host-linux` starts its host the same way; a
 proof that wants the shared reader with a private `HOME` puts its profile in
 that home's application-data folder (`test-packaged-reader-recovery.mjs`).
-What it still shares with the person is
+What it would still share with the person is
 what it runs as: their harness logins and stores (the Keychain items and
-`~/.claude`, `~/.codex` and the like). Accounts are `AccountRoot`
+`~/.claude`, `~/.codex` and the like), so a test's or a proof's host runs as
+a home of its own (`scratchHostHome`, below), never the person's. Accounts are `AccountRoot`
 (`<user root>/accounts`), which `createProviderHost` makes from the
 context's user root and every harness's account capability is handed; no
 path to them is built from the home folder. So an isolated host starts with
@@ -2164,17 +2165,42 @@ startup, so a default Mako read from the first can be a model it no longer
 routes: the driver treats `models-dev.refreshed` and `integration.updated` as
 catalog changes, and a session still on the default it was given moves to the
 refreshed default before its next prompt.
-Provider checks run against the user's real provider stores, so every session
-they create is a real entry in Codex, Cursor, Claude, or Grok history. The e2e
-deletes the sessions it created through `SessionCatalog.remove` before it ends
-(`--keep-native` retains them); each `SessionProvider.remove` deletes only its
-own session under its own roots and never a Cursor Desktop chat.
+No test, probe or proof runs a real harness in the person's own home. A
+session it starts there is a real entry in their Codex, Cursor, Claude or
+Grok history, and their own Mako lists it and keeps a copy: deleting the
+native session afterwards leaves the row in their sidebar. On 2026-10-27
+the moves proofs, packaged-app proofs and session flows had left 585 such
+rows there. So each runs in a scratch home (`scripts/scratch-harness-home.ts`):
+a CLI or an in-process driver in `scratchHarnessHome` or `enterScratchHome`,
+a Mako host or app it starts in `scratchHostHome` (`PackagedApp` does so
+itself, in `<root>/home`), each harness signed in with access alone (an
+access token with no refresh token, or an API key), the person's CLIs on
+`PATH`, and on macOS a keychain of the home's own, where a host keeps its
+secrets: macOS finds a login keychain under `HOME`, so the person's is out of
+reach. The copies live only as long as their run: 0600 files in 0700 folders,
+never inside a Git checkout, removed by the process that made them however it
+ends (`ScratchHome.dispose`; a `keep` home such as a moves proof's data root
+loses only its sign-ins and keychain), and a run killed outright is swept by
+the next one through a registry under the temporary folder. A proof that drives a running host takes a host of its own
+(`--data-root`, `scripts/lib/proof-host.ts`), never this Mac's own Mako or
+one of its profiles, and checks that host's catalog lists nothing from the
+person's harness stores (`harnessStoreRoots`). `scripts/test-scratch-home.ts`
+holds every script to it: one that starts a harness session in a host, app or
+SDK it runs, or spawns a harness CLI, does so in a scratch or sealed home, or
+is named there with why no real harness runs. `SessionCatalog.remove` still
+takes a run's sessions out of its scratch stores (`--keep-native` retains
+them); each `SessionProvider.remove` deletes only its own session under its
+own roots and never a Cursor Desktop chat.
 `npm run clean:fixture-sessions` lists sessions left in fixture-named temporary
 directories by earlier runs and removes them with `--delete`: a temporary
-directory named `mako-…`, as every test's `mkdtemp` prefix is. A probe that
-opens a real provider session must run it in one, and remove what it made
-before it ends; ad hoc probes in `/tmp/grok-bg-probe` and the like once left
-136 sessions in the rail that nothing recognised.
+directory named `mako-…`, as every test's `mkdtemp` prefix is.
+`scripts/archive-proof-sessions.ts` lists the rows a running Mako shows in
+any proof folder (`scripts/lib/proof-folders.ts`: those, the moves proof's
+runs and a Thread's data folder) and, given that list, archives them through
+the sidebar's own archive, which the person can undo from Archived. Mako
+itself lists such sessions like any other: a folder's name or place never
+hides a session, since `claude --resume` there lists it, and a second Mako on
+this Mac keeps its Threads' worktrees in its own data root.
 
 Normal desktop Quit closes the client, leaving the shared host and provider
 processes running. Force Quit of the host and system shutdown are different: journals
@@ -2345,9 +2371,10 @@ old `localStorage` record is handed to the host once, then deleted.
 
 `npm run probe:plan-turn -- <harness>` runs one minimal real planning turn and
 its build through the live driver, keeping its stream, printing only shapes
-and ids; it spends model usage. Run it in the real HOME: copying a sign-in that
-refreshes can sign the user out. `--start-only` is free and shows launch
-notices.
+and ids; it spends model usage. It runs in a scratch home signed in with access
+alone (`scratchHostHome`): a copy holding a refresh token could rotate it and
+sign the user out, and the session never reaches their stores. `--start-only`
+is free and shows launch notices.
 
 How a catalogued thread is continued is the host's decision, not the
 renderer's. `packages/host/src/contracts/thread-continuation.ts` turns one ref plus

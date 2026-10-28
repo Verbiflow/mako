@@ -45,7 +45,9 @@ const server = await createServer({
 })
 await server.listen()
 const url = server.resolvedUrls.local[0]
-const child = spawnHost({ ...process.env, MAKO_DATA_ROOT: userData, MAKO_WEB_SOCKET: socket }, { checkout: repository, stdio: ["ignore", "pipe", "pipe"] })
+// A person of its own (`scratchHostHome`): the harnesses keep their sessions in `<root>/home`, never in the person's stores.
+const { env: scratch } = (await import("./scratch-harness-home.ts")).scratchHostHome(root)
+const child = spawnHost({ ...scratch, MAKO_DATA_ROOT: userData, MAKO_WEB_SOCKET: socket }, { checkout: repository, stdio: ["ignore", "pipe", "pipe"] })
 const chunks = []
 child.stdout.on("data", (chunk) => {
   chunks.push(chunk)

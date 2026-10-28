@@ -5,9 +5,9 @@
 // `--prompt <text>` asks something else, in a folder holding a copy of `--files <dir>`, and
 // `--foreground` waits only for that turn: a decode pair's scenario that needs the harness's own
 // model, such as `subagent`, recorded the same way.
-// Runs in the real HOME, as Mako does, or with `--scratch <dir>` in a scratch home made there
-// (`scratchHarnessHome`: the harness's sign-in without what renews it, so the person's own stays
-// theirs), running the harness build first on PATH. The stream of the wire it heard is
+// Runs in a scratch home (`scratchHarnessHome`: the harness's sign-in without what renews it, so
+// the person's own stays theirs, and its sessions stay out of their stores), the run's own or, with
+// `--scratch <dir>`, one made there, running the harness build first on PATH. The stream of the wire it heard is
 // kept beside report.json for `npm run decode -- <stream> --compare <store>`. Prints what each provider-started turn and marker said
 // and how long it took to come, never a credential.
 import { spawn } from "node:child_process"
@@ -30,11 +30,11 @@ const PROMPTS = {
   claude: "Use the Monitor tool to watch this command: `sleep 4; echo tick-one; sleep 2; echo tick-two`. While it runs, run `sleep 9` in the shell in the foreground. Then reply with one short sentence about what the watch reported.",
 }
 
-/** A scratch home's environment, with npm's own variables left out and this PATH first, so its build runs. */
+/** A scratch home's environment, with npm's own variables left out; its PATH has this one first, so its build runs. */
 async function scratchEnvironment(root) {
   const { assertScratchEnvironment, scratchHarnessHome } = await import("./scratch-harness-home.ts")
   const { env } = await scratchHarnessHome(root, [])
-  const scratch = Object.fromEntries(Object.entries({ ...env, PATH: `${process.env.PATH}:${env.PATH}` }).filter(([name]) => !/^npm_/i.test(name)))
+  const scratch = Object.fromEntries(Object.entries(env).filter(([name]) => !/^npm_/i.test(name)))
   assertScratchEnvironment(scratch, "probe-provider-turn")
   return scratch
 }
@@ -49,7 +49,7 @@ if (!process.versions.electron) {
   const root = mkdtempSync(join(tmpdir(), `mako-live-test-turn-${harness}-`))
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "probe-provider-turn", main: fileURLToPath(import.meta.url) }))
   const env = {
-    ...values.scratch ? await scratchEnvironment(resolve(values.scratch)) : process.env,
+    ...await scratchEnvironment(values.scratch ? resolve(values.scratch) : root),
     PROBE_HARNESS: harness,
     PROBE_ROOT: root,
     PROBE_OUT: resolve(values.out ?? join(tmpdir(), "probe-provider-turns", harness)),

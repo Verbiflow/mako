@@ -5,27 +5,34 @@ import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { z } from "zod"
 import { invokeRuntime } from "@mako/host/transport/connection"
-import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { runtimeLocation } from "@mako/host/transport/service"
+import { assertOwnHarnessStores, proofDataRoot } from "./lib/proof-host.ts"
 
 /**
- * The recipe kept by the account, live, from this Mac's own host: one cloud Thread's agent saves and publishes a
+ * The recipe kept by the account, live, from a host of this Mac's: one cloud Thread's agent saves and publishes a
  * recipe (numbered by the account, proved on its machine as it's published); a second cloud Thread of the same
  * repository, on a machine with nothing of its own, reads that version by the same number with the first machine's
  * proof, and its publish with no draft says where the published version was proved. Each conversation is closed at
  * the end. Spends two short turns; prints no secret.
  *
- *   npx tsx scripts/prove-cloud-recipes.ts [--harness claude] [--repository https://github.com/octocat/Hello-World]
+ *   npx tsx scripts/prove-cloud-recipes.ts --data-root <dir> [--harness claude] [--repository https://github.com/octocat/Hello-World]
+ *
+ * Only on a host of its own (`--data-root`: a packaged app's scratch profile, `PackagedApp`), never this Mac's own Mako,
+ * whose sidebar its Threads would join; the run checks the host's harnesses run in a home of their own.
  */
 const { values } = parseArgs({
   options: {
     harness: { type: "string", default: "claude" },
     repository: { type: "string", default: "https://github.com/octocat/Hello-World" },
+    "data-root": { type: "string" },
   },
 })
 const harness = values.harness
-const { socket } = runtimeLocation(runtimeDataRoot(appDataFolder(), {}))
+const dataRoot = proofDataRoot(values["data-root"], "the cloud recipes proof")
+const { socket } = runtimeLocation(dataRoot)
 const client = randomUUID()
 const call = (channel: string, args: unknown[]) => invokeRuntime(socket, client, channel, args)
+await assertOwnHarnessStores(call, dataRoot)
 
 const SnapshotSchema = z.object({
   session: z.object({ status: z.string() }).loose(),

@@ -2,6 +2,7 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
 import { createServer } from "node:http"
+import { createRequire } from "node:module"
 import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
@@ -21,8 +22,8 @@ import { codexHookHash, codexHookKey } from "@mako/host/harnesses/codex/authorin
 import { parseHookEntryId } from "@mako/host/tools/authoring-hooks"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { resolveExecutable } from "@mako/host/base/executable"
-import { invokeRuntime } from "@mako/host/transport/connection"
-import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { invokeRuntime, runtimeInfo } from "@mako/host/transport/connection"
+import { hostCommand, runtimeLocation } from "@mako/host/transport/service"
 import { openTools } from "@mako/host/tools/index"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { toolHarnesses } from "@mako/host/harnesses/tool-harnesses"
@@ -36,6 +37,7 @@ import { ProviderLaunchTrace } from "@mako/host/harnesses/provider-launch"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { codexBinary } from "./harness-binaries.ts"
 import { authoringWorld, type AuthoringWorld } from "./native-authoring-world.ts"
+import { enterScratchHome } from "./scratch-harness-home.ts"
 
 /**
  * What Mako writes, read back by the harness itself, in scratch homes with
@@ -50,15 +52,14 @@ import { authoringWorld, type AuthoringWorld } from "./native-authoring-world.ts
  *   opens.
  * - Devin 3000.10: `devin mcp disable` and `enable` write what Mako writes.
  *
- * - Cursor SDK 1.0.31, when `MAKO_LIVE_PROFILE` names a running profile
- *   host (`MAKO_PROFILE=<name> node electron/start.mjs --web`): a real agent
- *   through Mako's Cursor driver, which hands the SDK child the person's API
- *   key as `CURSOR_API_KEY`. Hooks and servers load when an agent's turn
- *   starts, so the leg runs two tiny turns through the host, which holds the
- *   key (`~/.mako/secrets`, opened by the keychain item every profile host
- *   shares), in a scratch repository in the real home: the person's own
- *   `~/.cursor/hooks.json` runs too, and the SDK's `~/.cursor/projects/<slug>`
- *   for the scratch repository is removed after. The project hooks Mako added
+ * - Cursor SDK 1.0.31, when this Mac is signed in to Cursor (the CLI's key,
+ *   or `CURSOR_API_KEY`): a real agent through Mako's Cursor driver, which
+ *   hands the SDK child that key as `CURSOR_API_KEY`. Hooks and servers load
+ *   when an agent's turn starts, so the leg runs two tiny turns through a host
+ *   of its own, started from this checkout's build (`npm run build:electron`)
+ *   in a scratch home that holds the key (`enterScratchHome`), as does this
+ *   process: the agent's session, the SDK's `~/.cursor/projects/<slug>` and
+ *   Mako's Cursor store stay there, and go with it, never the person's. The project hooks Mako added
  *   run, the server Mako copied into `.cursor/mcp.json` answers, and once Mako
  *   turns it off the SDK never starts it.
  *
@@ -340,7 +341,7 @@ async function opencode(): Promise<string> {
   } finally { await world.cleanup() }
 }
 
-/** A running profile host, called as the renderer calls it; each answer is parsed where it arrives. */
+/** A running host, called as the renderer calls it; each answer is parsed where it arrives. */
 function profileHost(socket: string) {
   const client = randomUUID()
   return {
@@ -378,24 +379,35 @@ async function cursorTurn(host: ProfileHost, cwd: string, model: string | undefi
 }
 
 async function cursor(): Promise<string> {
-  const profile = process.env.MAKO_LIVE_PROFILE
-  if (!profile) return "Cursor: skipped, MAKO_LIVE_PROFILE doesn't name a running profile host, which holds the Cursor API key the agent runs under"
-  const { socket } = runtimeLocation(runtimeDataRoot(appDataFolder(), { MAKO_PROFILE: profile }))
-  if (!existsSync(socket)) return `Cursor: skipped, profile ${profile} has no running host`
-  const host = profileHost(socket)
-  const models = (await host.read(CursorModels, "mako:harness-tuning", "cursor")).models.map((candidate) => candidate.id)
-  const model = process.env.MAKO_LIVE_CURSOR_MODEL ?? ["gemini-3.8-flash", "composer-2.5"].find((id) => models.includes(id))
   const root = await realpath(await mkdtemp(join(tmpdir(), "mako-authoring-cursor-live-")))
+  // From here on this process, and the host it starts, run as the scratch home: the last leg, so no other leg moves.
+  const { env, dispose } = enterScratchHome(root)
+  if (!env["CURSOR_API_KEY"]) {
+    dispose()
+    await rm(root, { recursive: true, force: true })
+    return "Cursor: skipped, this Mac isn't signed in to Cursor (no CLI key, no CURSOR_API_KEY)"
+  }
+  const dataRoot = join(root, "data")
+  const { socket } = runtimeLocation(dataRoot)
+  // SAFETY: the electron package's main export is the path of its executable.
+  const electron = createRequire(import.meta.url)("electron") as string
+  const command = hostCommand({ executable: electron, args: [process.cwd()], env: { ...env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_SCREENLESS: "1" } })
+  const child = spawn(command.executable, command.args, { env: command.env, stdio: "ignore" })
   const project = join(root, "project"), marker = join(root, "marker"), state = join(homedir(), ".cursor", "projects", cursorProjectSlug(project))
-  await Promise.all([mkdir(project), mkdir(marker)])
-  await run("git", ["init", "-q", project])
-  const token = `MAKO-AUTHORING-${randomUUID().slice(0, 8)}`
-  const server = join(root, "probe.mjs")
-  await writeProbeServer(server, join(marker, "server-starts"), token)
-  // The real home, as Mako's host reads it, with backups kept in the scratch folder.
-  const tools = openTools(toolHarnesses(createHarnessHost(detachedHarnessContext(new NativeStores(false)))), join(root, "backups"))
-  const act = async (target: AuthoringTarget, change: AuthoringChange) => tools.authoring.apply(project, target, change, (await tools.authoring.preview(project, target, change)).revision)
   try {
+    for (const deadline = Date.now() + 60_000; !(await runtimeInfo(socket).catch(() => null)); await delay(250))
+      assert.ok(Date.now() < deadline, `the leg's host started within a minute; its log is in ${join(dataRoot, "logs", "host.log")}`)
+    const host = profileHost(socket)
+    const models = (await host.read(CursorModels, "mako:harness-tuning", "cursor")).models.map((candidate) => candidate.id)
+    const model = process.env.MAKO_LIVE_CURSOR_MODEL ?? ["gemini-3.8-flash", "composer-2.5"].find((id) => models.includes(id))
+    await Promise.all([mkdir(project), mkdir(marker)])
+    await run("git", ["init", "-q", project])
+    const token = `MAKO-AUTHORING-${randomUUID().slice(0, 8)}`
+    const server = join(root, "probe.mjs")
+    await writeProbeServer(server, join(marker, "server-starts"), token)
+    // The scratch home, as the leg's host reads it, with backups kept in the scratch folder.
+    const tools = openTools(toolHarnesses(createHarnessHost(detachedHarnessContext(new NativeStores(false)))), join(root, "backups"))
+    const act = async (target: AuthoringTarget, change: AuthoringChange) => tools.authoring.apply(project, target, change, (await tools.authoring.preview(project, target, change)).revision)
     const hooks = { provider: "cursor", family: "hooks" as const, cwd: project }
     const source = (await tools.authoring.view(project, hooks)).sources.find((candidate) => candidate.scope === "project")!
     assert.equal(source.path, join(project, ".cursor", "hooks.json"))
@@ -425,8 +437,9 @@ async function cursor(): Promise<string> {
     assert.equal((await readFile(join(marker, "server-starts"), "utf8")).split("\n").filter(Boolean).length, 1, "Cursor didn't start the server Mako turned off")
     return `Cursor: with ${model ?? "the host's default model"}, the SDK ran the project hooks Mako added, called the server Mako copied into .cursor/mcp.json, and left it unstarted once Mako turned it off`
   } finally {
+    child.kill("SIGTERM")
+    dispose()
     await rm(root, { recursive: true, force: true })
-    await rm(state, { recursive: true, force: true })
   }
 }
 

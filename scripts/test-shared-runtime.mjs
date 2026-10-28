@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises"
-import { tmpdir, homedir } from "node:os"
+import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { once } from "node:events"
 import { createRequire } from "node:module"
@@ -23,10 +23,13 @@ await server.listen()
 const url = server.resolvedUrls.local[0]
 const executable = createRequire(import.meta.url)("electron")
 const transportOnly = process.argv.includes("--transport-only")
-// The transport check starts no provider, so it needs nothing of the person's: a scratch home keeps every keychain item out of reach.
-const home = transportOnly ? join(root, "home") : homedir()
+// A home of its own either way: the transport check starts no provider, so it needs nothing of the person's, and a bare
+// home keeps every keychain item out of reach; the Devin turn's runs in a scratch home signed in with access alone
+// (`scratchHostHome`), so its session never reaches the person's stores.
+const scratch = transportOnly ? undefined : (await import("./scratch-harness-home.ts")).scratchHostHome(root)
+const home = scratch?.home ?? join(root, "home")
 if (transportOnly) await mkdir(home)
-const env = {...process.env, HOME:home, MAKO_DATA_ROOT:dataRoot, VITE_DEV_SERVER_URL:url}
+const env = {...(scratch?.env ?? process.env), HOME:home, MAKO_DATA_ROOT:dataRoot, VITE_DEV_SERVER_URL:url}
 for (const key of ["ELECTRON_RUN_AS_NODE","MAKO_PROFILE","MAKO_PROD","MAKO_WEB_SOCKET"]) delete env[key]
 const processes = []
 const connectId=randomUUID()
@@ -146,7 +149,7 @@ try {
   await a.evaluate(`window.mako.liveStart('devin',${JSON.stringify(workspace)},{...${JSON.stringify({conversationId:conversation,title:"Shared runtime verification",modeId:"ask",tuning:{model:"gpt-6-astra-high"},initialRequest:{id:requestId,text:prompt,attachments:[]}})},threadPath:undefined,displayPrompt:undefined,resume:undefined})`)
   const snapshot=()=>call("mako:live-snapshot",conversation)
   const waiting=await until(snapshot,state=>state.permissions.some(p=>p.questions?.length),"provider question")
-  const providerPid=Number((await readFile(join(homedir(),".local/share/devin/cli/session_locks",`${waiting.session.nativeId}.lock`),"utf8")).trim())
+  const providerPid=Number((await readFile(join(home,".local/share/devin/cli/session_locks",`${waiting.session.nativeId}.lock`),"utf8")).trim())
   assert.ok(providerPid>0)
   const rowSelector = `[data-conversation-id="${conversation}"]`
   for (const page of [a,b]) {
@@ -163,7 +166,7 @@ try {
   assert.equal(await b.evaluate("document.querySelector('.composer-input').value"),"Draft B remains private")
   await until(()=>a.evaluate("document.querySelector('[data-model-picker]')?.dataset.harness ?? null").catch(()=>null),harness=>harness==="devin","Reload must retain the active conversation's provider")
   assert.equal((await snapshot()).session.nativeId,waiting.session.nativeId)
-  assert.equal(Number((await readFile(join(homedir(),".local/share/devin/cli/session_locks",`${waiting.session.nativeId}.lock`),"utf8")).trim()),providerPid)
+  assert.equal(Number((await readFile(join(home,".local/share/devin/cli/session_locks",`${waiting.session.nativeId}.lock`),"utf8")).trim()),providerPid)
   await a.capture("before-closing-clients.png")
   await a.close()
   await b.close()

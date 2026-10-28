@@ -5,16 +5,18 @@ import { dirname } from "node:path"
 import { z } from "zod"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { storeReader } from "./decode-compare.ts"
+import { assertScratchEnvironment } from "./scratch-harness-home.ts"
 
 /**
  * Each harness's CLI, driven headless on this machine's sign-ins, for the
- * record-store proofs. `env` runs it in another home
- * (`scratch-harness-home.ts`); unset, it runs in the shell's own.
+ * record-store proofs. `env` is a scratch home's (`scratch-harness-home.ts`):
+ * a CLI run in the person's own home would write its session into their
+ * stores, which their Mako lists, so `run` refuses one.
  */
 export interface Harness {
   /** Starts a session in `cwd`; its native id. */
-  start(cwd: string, prompt: string, env?: NodeJS.ProcessEnv): Promise<{ id: string; out: string }>
-  resume(cwd: string, id: string, prompt: string, env?: NodeJS.ProcessEnv): Promise<string>
+  start(cwd: string, prompt: string, env: NodeJS.ProcessEnv): Promise<{ id: string; out: string }>
+  resume(cwd: string, id: string, prompt: string, env: NodeJS.ProcessEnv): Promise<string>
   /** The session's transcript is an append-only file. */
   appends?: true
 }
@@ -22,9 +24,10 @@ export interface Harness {
 const devin = devinExecutable() ?? "devin"
 const DevinSessionsSchema = z.array(z.object({ id: z.string() }))
 
-export function run(command: string, argv: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
+export function run(command: string, argv: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, argv, { cwd, env: env ?? process.env, stdio: ["ignore", "pipe", "pipe"], timeout: 600_000 })
+    assertScratchEnvironment(env, `${command} ${argv[0] ?? ""}`)
+    const child = spawn(command, argv, { cwd, env, stdio: ["ignore", "pipe", "pipe"], timeout: 600_000 })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk))
@@ -74,10 +77,10 @@ export const HARNESSES = {
   opencode: {
     async start(cwd, prompt, env) {
       // A home of its own runs a private server: the background service's port is the person's.
-      const out = await run("opencode", ["run", ...(env ? ["--standalone"] : []), "--format", "json", prompt], cwd, env)
+      const out = await run("opencode", ["run", "--standalone", "--format", "json", prompt], cwd, env)
       return { id: jsonLines(out).find((event) => event.sessionID)?.sessionID, out }
     },
-    resume: async (cwd, id, prompt, env) => jsonLines(await run("opencode", ["run", ...(env ? ["--standalone"] : []), "--format", "json", "-s", id, prompt], cwd, env))
+    resume: async (cwd, id, prompt, env) => jsonLines(await run("opencode", ["run", "--standalone", "--format", "json", "-s", id, prompt], cwd, env))
       .filter((event) => event.type === "text").map((event) => event.part?.text ?? "").join("\n"),
   },
   grok: {

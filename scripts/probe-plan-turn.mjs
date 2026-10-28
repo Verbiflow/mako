@@ -1,8 +1,8 @@
 // One minimal real planning turn through a harness's live driver, then its build.
 // Spends real model usage. Usage:
 //   npm run build:electron && node scripts/probe-plan-turn.mjs <harness> [--launch access:auto] [--start-only] [--out dir]
-// Runs in the real HOME, as Mako does: sign-ins that refresh rotate their tokens, so a copy
-// can sign the user out. Prints modes, plan card ids and sizes, request shapes and notices,
+// Runs in a scratch home (`scratchHostHome`), signed in with access alone: no copy holds a
+// refresh token to rotate, and its session never reaches the person's stores. Prints modes, plan card ids and sizes, request shapes and notices,
 // never content. The launch's stream lands in --out beside report.json.
 import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
@@ -28,8 +28,10 @@ if (!process.versions.electron) {
   if (!harness) throw new Error("Name a harness: claude, codex, cursor, devin, grok or opencode")
   const root = mkdtempSync(join(tmpdir(), `probe-plan-${harness}-`))
   writeFileSync(join(root, "package.json"), JSON.stringify({ name: "probe-plan-turn", main: fileURLToPath(import.meta.url) }))
+  // A person of its own (`scratchHostHome`): the harnesses keep their sessions in `<root>/home`, never in the person's stores.
+  const { env: scratch } = (await import("./scratch-harness-home.ts")).scratchHostHome(root)
   const env = {
-    ...process.env,
+    ...scratch,
     PROBE_HARNESS: harness,
     PROBE_ROOT: root,
     PROBE_OUT: resolve(values.out ?? join(tmpdir(), "probe-plan-turns", harness)),

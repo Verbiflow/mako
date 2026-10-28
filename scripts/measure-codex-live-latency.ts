@@ -11,6 +11,7 @@ import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import { admitted } from "./fixtures/admitted-start.ts"
 import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
+import { scratchHarnessHome } from "./scratch-harness-home.ts"
 
 /**
  * How soon Mako's Codex engine shows a turn: its first streamed token, each
@@ -20,7 +21,8 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  *   npx tsx --tsconfig tsconfig.app.json scripts/measure-codex-live-latency.ts
  *       a shell call, a patch and an answer against the scripted model, sealed, five runs
  *   npx tsx --tsconfig tsconfig.app.json scripts/measure-codex-live-latency.ts --model gpt-5.6-luna --runs 1
- *       tiny real turns on the person's own Codex sign-in and home
+ *       tiny real turns on the person's own Codex sign-in, in a scratch home (`scratchHarnessHome`): the
+ *       sessions never reach their `~/.codex`
  *
  * Beside each row's time it prints when the app-server's own item for the
  * call started, from the engine's native capture of the same run: when a
@@ -127,14 +129,16 @@ function report(results: Run[]): void {
 }
 
 if (realModel) {
-  const project = await realpath(await mkdtemp(join(tmpdir(), "mako-codex-latency-project-")))
-  await mkdir(join(project, ".git"))
+  const root = await realpath(await mkdtemp(join(tmpdir(), "mako-codex-latency-")))
+  const project = join(root, "project")
+  await mkdir(join(project, ".git"), { recursive: true })
   try {
+    const { env } = await scratchHarnessHome(root, [])
     const results: Run[] = []
-    for (let index = 0; index < runs; index++) results.push(await measure(project, process.env, realModel))
+    for (let index = 0; index < runs; index++) results.push(await measure(project, env, realModel))
     report(results)
   } finally {
-    await rm(project, { recursive: true, force: true })
+    await rm(root, { recursive: true, force: true })
   }
 } else {
   const root = await realpath(await mkdtemp(join(tmpdir(), "mako-codex-latency-sealed-")))

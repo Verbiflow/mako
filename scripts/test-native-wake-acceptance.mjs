@@ -17,7 +17,9 @@ if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-native-wake-"))
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-native-wake", main: fileURLToPath(import.meta.url) }))
   console.log(`Native acceptance artifacts: ${root}`)
-  const env = { ...process.env, MAKO_WAKE_ROOT: root, MAKO_WAKE_REPO: resolve(".") }
+  // A person of its own (`scratchHostHome`): the harnesses keep their sessions in `<root>/home`, never in the person's stores.
+  const { env: scratch } = (await import("./scratch-harness-home.ts")).scratchHostHome(root)
+  const env = { ...scratch, MAKO_WAKE_ROOT: root, MAKO_WAKE_REPO: resolve(".") }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(resolve("node_modules/.bin/electron"), [root], { env, stdio: "inherit" })
   const [code] = await once(child, "exit")

@@ -7,6 +7,7 @@ import WebSocket from "ws"
 import { clientRoot, runtimeLocation } from "@mako/host/transport/service"
 import { probeRuntime } from "@mako/host/transport/connection"
 import { threadDebugPort } from "../thread-debug-port.mjs"
+import { assertScratchEnvironment, harnessPath, scratchHostHome } from "../scratch-harness-home.ts"
 
 const PROBE_CLIENT = "packaged-probe"
 
@@ -15,13 +16,18 @@ const PROBE_CLIENT = "packaged-probe"
  * over its window's DevTools protocol; the desktop starts that profile's own
  * host, as Node, as it always does. It never reaches the user's Mako: its own
  * data root and client folder, a mock keychain, a dead backend, and only the
- * desktop it spawned and that profile's host are ever signalled.
+ * desktop it spawned and that profile's host are ever signalled. Nor their
+ * harness stores: it runs as a home of its own, `root/home`
+ * (`scratchHostHome`), signed in to each harness with access alone, so the
+ * sessions its Threads start land there and never in the person's sidebar.
  */
 export class PackagedApp {
   /**
    * `args` and `env` run a built checkout instead of a package: its Electron
    * as `executable`, the checkout in `args` and `MAKO_PROD` in `env`. A key
    * set to undefined in `env` is left out of the desktop's, and so its host's.
+   * A `HOME` in `env` is a private home the caller prepared, taken instead of
+   * `root/home`; the person's own is refused.
    * @param {{ executable: string, root: string, workspace: string, args?: string[], env?: Record<string, string | undefined>, onStdoutLine?: (line: string) => void }} options
    */
   constructor({ executable, root, workspace, args = [], env = {}, onStdoutLine }) {
@@ -37,10 +43,35 @@ export class PackagedApp {
     this.counter = 0
     this.callbacks = new Map()
     this.launchError = undefined
+    this.scratch = undefined
   }
 
   get profile() {
     return join(this.root, "profile")
+  }
+
+  /**
+   * The environment the desktop and its host run with: a home of its own,
+   * the person's harness CLIs on `PATH`, and none of the launching Mako's
+   * variables (a probe started from inside a Mako Thread inherits that
+   * Mako's control session, ports and data folder; none may reach the
+   * package). Refused before anything starts when its home is the person's.
+   */
+  environment() {
+    // Its sessions stay between a stop and the next start; its sign-ins and keychain go at each stop.
+    if (this.extraEnv.HOME === undefined) this.scratch = scratchHostHome(this.root, { keep: true })
+    const base = this.scratch?.env ?? process.env
+    const env = {
+      ...Object.fromEntries(Object.entries(base).filter(([key]) => !key.startsWith("MAKO_"))),
+      MAKO_DATA_ROOT: this.profile,
+      MAKO_CLIENT_ID: PROBE_CLIENT,
+      ...this.extraEnv,
+    }
+    env.PATH = harnessPath(undefined, env.PATH)
+    delete env.ELECTRON_RUN_AS_NODE
+    delete env.VITE_DEV_SERVER_URL
+    assertScratchEnvironment(env, `the packaged app at ${this.root}`)
+    return env
   }
 
   /** The desktop's own folder beside the profile: its renderer storage, DevTools port and log. */
@@ -110,16 +141,7 @@ export class PackagedApp {
   async start() {
     await rm(join(this.clientFolder, "DevToolsActivePort"), { force: true })
     this.launchError = undefined
-    // A probe started from inside a Mako Thread inherits that Mako's control
-    // session, ports and data folder; none of them may reach the package.
-    const env = {
-      ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("MAKO_"))),
-      MAKO_DATA_ROOT: this.profile,
-      MAKO_CLIENT_ID: PROBE_CLIENT,
-      ...this.extraEnv,
-    }
-    delete env.ELECTRON_RUN_AS_NODE
-    delete env.VITE_DEV_SERVER_URL
+    const env = this.environment()
     const debugPort = await threadDebugPort()
     const child = spawn(
       this.executable,
@@ -199,6 +221,16 @@ export class PackagedApp {
    * to close its providers itself.
    */
   async stop({ graceful = false } = {}) {
+    try {
+      await this.#stop(graceful)
+    } finally {
+      // The host is gone: nothing reads its home's sign-ins, which go now rather than when this process ends.
+      this.scratch?.dispose()
+      this.scratch = undefined
+    }
+  }
+
+  async #stop(graceful) {
     this.socket?.close()
     this.socket = undefined
     const child = this.child

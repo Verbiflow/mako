@@ -7,6 +7,7 @@ import { query } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
 import type { AuthoringChange, AuthoringTarget } from "@mako/host/contracts/native-authoring"
 import { authoringWorld } from "./native-authoring-world.ts"
+import { assertScratchEnvironment } from "./scratch-harness-home.ts"
 
 const execute = promisify(execFile)
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
@@ -15,9 +16,12 @@ const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
  * What Mako writes for Claude Code, read back by the Claude Code the SDK
  * bundles, with no model request: the SDK lists a command Mako created, and
  * the CLI's init-only run executes a SessionStart hook Mako added, with
- * Claude's own event on its stdin.
+ * Claude's own event on its stdin. Both run as the world's scratch home, so
+ * the session the init-only run opens is never the person's.
  */
 const world = await authoringWorld("claude")
+const env: NodeJS.ProcessEnv = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("CLAUDE") && !/^npm_config_prefix$/i.test(name))), HOME: world.home, CLAUDE_CONFIG_DIR: join(world.home, ".claude") }
+assertScratchEnvironment(env, "Claude Code's authoring read-back")
 const apply = async (target: AuthoringTarget, change: AuthoringChange) => {
   const plan = await world.authoring.preview(world.project, target, change)
   await world.authoring.apply(world.project, target, change, plan.revision)
@@ -30,7 +34,7 @@ try {
   const commands = { provider: "claude", family: "commands" as const, cwd: world.project }
   const project = (await world.authoring.view(world.project, commands)).sources.find((source) => source.scope === "project")!
   await apply(commands, { kind: "create", sourceId: project.id, draft: { kind: "command", invocation: "mako:proof", text: "---\ndescription: Native authoring discovery acceptance\n---\nReview $ARGUMENTS.\n" } })
-  const session = query({ prompt: (async function* () { await input.promise; yield* [] })(), options: { cwd: world.project, settingSources: ["project"], strictMcpConfig: true, abortController: controller } })
+  const session = query({ prompt: (async function* () { await input.promise; yield* [] })(), options: { cwd: world.project, env, settingSources: ["project"], strictMcpConfig: true, abortController: controller } })
   try {
     await session.initializationResult()
     const listed = await session.supportedCommands()
@@ -45,7 +49,7 @@ try {
   const settings = (await world.authoring.view(world.project, hooks)).sources.find((source) => source.scope === "project")!
   await apply(hooks, { kind: "create", sourceId: settings.id, draft: { kind: "hook", event: "SessionStart", type: "command", run: `${shellQuote(process.execPath)} -e ${shellQuote(script)}` } })
   const binary = join(process.cwd(), "node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude")
-  await execute(binary, ["--init-only", "--setting-sources", "project", "--strict-mcp-config"], { cwd: world.project, timeout: 20_000, maxBuffer: 256 * 1024 })
+  await execute(binary, ["--init-only", "--setting-sources", "project", "--strict-mcp-config"], { cwd: world.project, env, timeout: 20_000, maxBuffer: 256 * 1024 })
   const event = z.object({ hook_event_name: z.literal("SessionStart"), cwd: z.string(), session_id: z.string().min(1) }).parse(JSON.parse(await readFile(proof, "utf8")))
   assert.equal(event.cwd, await realpath(world.project))
   assert.match(await readFile(settings.path, "utf8"), /"permissions"/, "the project's other settings stay beside the hook")
