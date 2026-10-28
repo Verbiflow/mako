@@ -49,7 +49,37 @@ const draw = (installation: Partial<UpdateInstallation>) => {
   })
   return renderToStaticMarkup(<UpdatesSection />).replaceAll("&#x27;", "'")
 }
-const buttons = (html: string) => [...html.matchAll(/<button[^>]*>(.*?)<\/button>/g)].map((match) => match[1]!.replace(/<[^>]+>/g, ""))
+const ENTITIES = new Map([["&lt;", "<"], ["&gt;", ">"], ["&quot;", '"'], ["&#x27;", "'"], ["&amp;", "&"]])
+/** Text as the page reads it: each entity decoded once, in one pass. */
+const decode = (text: string) => text.replace(/&(?:lt|gt|quot|#x27|amp);/g, (entity) => ENTITIES.get(entity) ?? entity)
+/**
+ * Each button's label, read tag by tag. React escapes `<` and `>` in every
+ * text node and attribute value it renders, so in its markup each `<` opens
+ * a tag and the next `>` closes it; the text between tags inside a button is
+ * its label.
+ */
+function buttons(html: string): string[] {
+  const labels: string[] = []
+  let label: string | null = null
+  for (let at = 0; at < html.length; ) {
+    if (html[at] === "<") {
+      const end = html.indexOf(">", at)
+      assert.notEqual(end, -1, "every tag React renders closes")
+      const tag = html.slice(at + 1, end)
+      if (tag === "/button") {
+        if (label !== null) labels.push(decode(label).trim())
+        label = null
+      } else if (tag === "button" || tag.startsWith("button ")) label = ""
+      at = end + 1
+    } else {
+      const next = html.indexOf("<", at)
+      const stop = next === -1 ? html.length : next
+      if (label !== null) label += html.slice(at, stop)
+      at = stop
+    }
+  }
+  return labels
+}
 
 // The day this was written: 21 merged pull requests on origin/main, the checkout clean and behind.
 const behind = draw({ checkout: reading() })
