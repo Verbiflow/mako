@@ -138,10 +138,16 @@
   }
 
   /* New, in the thumb's reach. */
+  /* The list's foot: New 20px in from the corner, and the install offer, when it shows, across the bottom under it. */
+  .web-list-foot {
+    @apply pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-end gap-3;
+    padding: 0 calc(env(safe-area-inset-right) + 12px) calc(env(safe-area-inset-bottom) + 12px) calc(env(safe-area-inset-left) + 12px);
+  }
+  .web-list-foot > * {
+    pointer-events: auto;
+  }
   .web-fab {
-    @apply absolute flex size-14 items-center justify-center rounded-full bg-foreground text-surface;
-    right: calc(env(safe-area-inset-right) + 20px);
-    bottom: calc(env(safe-area-inset-bottom) + 20px);
+    @apply mr-2 mb-2 flex size-14 shrink-0 items-center justify-center rounded-full bg-foreground text-surface;
     box-shadow:
       0 1px 0 0 color-mix(in oklab, var(--foreground) 12%, transparent) inset,
       0 10px 28px -8px rgb(0 0 0 / 0.5),
@@ -149,8 +155,13 @@
   }
 
   .web-install {
-    @apply bg-raised ring-1 ring-hairline;
+    @apply self-stretch bg-raised ring-1 ring-hairline;
+    box-shadow: 0 12px 32px -12px rgb(0 0 0 / 0.35);
     animation: web-rise 320ms var(--ease-out) both;
+  }
+  /* With the offer under it, New sits the foot's gap above it rather than 20px off the edge. */
+  .web-list-foot:has(.web-install) .web-fab {
+    @apply mb-0;
   }
   .web-step {
     @apply flex size-6 shrink-0 items-center justify-center rounded-full bg-fill-selected text-label font-semibold text-foreground;
