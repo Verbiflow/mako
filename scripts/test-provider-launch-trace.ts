@@ -54,7 +54,7 @@ assert.ok(!JSON.stringify(records).includes("/private/path"))
 const spans: string[] = []
 const open = new Set<string>()
 const watched = new ProviderLaunchTrace({ provider: "grok", conversation: "1a2b3c4d-5e6f-7a8b" }, {
-  now: () => now, report: () => {}, work: { begin: label => { spans.push(label); open.add(label); return () => open.delete(label) } },
+  now: () => now, report: () => {}, work: { begin: label => { spans.push(label); open.add(label); return () => open.delete(label) }, run: (_label, fn) => fn(), current: () => undefined },
 })
 await watched.step("launch", async () => {
   watched.sync("spawn", () => assert.deepEqual([...open], ["launch grok 1a2b3c4d: spawn"], "a phase is open while it runs"))

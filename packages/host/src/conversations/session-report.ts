@@ -8,6 +8,7 @@ import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId, type Th
 import { Payload, SESSIONS_VERSION, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
+import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.js"
 import { namedUuid } from "./cloud-moves.js"
 import { syncTier } from "./sync-window.js"
 
@@ -30,8 +31,11 @@ export type ReportSources = {
   work(): readonly LifecycleWork[]
   /** What a conversation waits on, in a line, while it waits. */
   waitingOn(conversationId: string): string | undefined
-  /** Whether a conversation is archived here: its owner's word, so every other device's list drops it too. */
-  archived(conversationId: string): boolean
+  /**
+   * The keys of everything archived here (`ThreadArchives.snapshot().keys`), read once a report: a conversation whose
+   * listing names one (`liveArchiveKeys`) is its owner's word, so every other device's list drops it too.
+   */
+  hidden(): ReadonlySet<string>
   /** When a conversation last moved (its journal's last write), if known; read again only once its revision moved. */
   lastMoved(conversationId: string, revision: number): number | undefined
   placement(conversationId: string): ThreadPlacement | undefined
@@ -88,10 +92,12 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     if (summary.threadPath) opened.add(summary.threadPath)
     for (const path of summary.nativePaths ?? []) opened.add(path)
   }
+  const hidden = sources.hidden()
   for (const summary of summaries) {
     const { session } = summary
-    // A closed conversation is the person's still: another device's message reopens it (`reopenClosed`).
-    if (sources.archived(session.id)) continue
+    // A closed conversation is the person's still: another device's message reopens it (`reopenClosed`). An archived one
+    // is read off the listing, never by loading the journal: this is a pure function of what the host already holds.
+    if (archivedByKeys(liveArchiveKeys(summary), hidden, undefined)) continue
     const placed = sources.placement(session.id)
     if (!placed) continue
     const execution = sources.execution(placed.session)

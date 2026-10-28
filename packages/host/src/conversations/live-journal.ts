@@ -361,6 +361,7 @@ function metadataChanged(previous: LiveSnapshot, next: LiveSnapshot): boolean {
     baseSupplied: previous.baseSupplied !== next.baseSupplied,
     threadPath: previous.threadPath !== next.threadPath,
     nativePaths: previous.nativePaths !== next.nativePaths,
+    nativeIds: previous.nativeIds !== next.nativeIds,
     hasSessionQuestions: previous.hasSessionQuestions !== next.hasSessionQuestions,
     epoch: previous.epoch !== next.epoch,
     createdAt: previous.createdAt !== next.createdAt,
@@ -405,6 +406,9 @@ export function journalSummary(metadata: string) {
     nativeBindings: control?.bindings ?? [{ provider: session.harness, nativeId: session.nativeId }],
     nativePaths: control?.bindings.flatMap((binding) =>
       binding.path ? [binding.path] : []
+    ),
+    nativeIds: control?.bindings.flatMap((binding) =>
+      binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []
     ),
   }
 }

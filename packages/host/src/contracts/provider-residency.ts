@@ -50,4 +50,8 @@ export interface ConversationMemory {
   /** The part of `bytes` that is running or waiting and cannot go. */
   pinnedBytes: number
   budget: number
+  /** Who read conversations in from disk this host life, most first: the work that was running (`HostWork.current`). */
+  loads: { by: string; count: number }[]
+  /** The largest conversations in memory, with who read each in. */
+  held: { conversation: string; title?: string; bytes: number; pinned: boolean; by?: string }[]
 }

@@ -1,5 +1,6 @@
 import { noteCarried } from "@mako/sessions/record-carried"
 import type { Foreground } from "../base/foreground.js"
+import type { HostWork } from "../base/event-loop.js"
 import { makoRecords } from "@mako/sessions/record-streams"
 import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
@@ -119,6 +120,8 @@ export interface ConversationsDeps {
   admission: Admission
   /** Held while a harness starts, so routine work waits for it. */
   foreground: Foreground
+  /** What the host is doing, named (`base/event-loop.ts`): who reads a conversation in is counted to it. */
+  work: HostWork
   /** Mako's streams of the live transports (`native-stream.ts`), which an entry's original reads; none on a host that keeps none. */
   streams?: string
   /** A cloud machine's host: nobody is at it to sign a harness in. */
@@ -147,6 +150,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const live = new LiveConversations({
     unattended: deps.unattended,
     foreground: deps.foreground,
+    work: deps.work,
     turns: deps.telemetry.turns,
     memory: memory ?? undefined,
     threads: threads.store ?? undefined,

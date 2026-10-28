@@ -172,6 +172,21 @@ export function DiagnosticsSection() {
               or waiting) of a {formatBytes(residency.memory.budget)} budget.{" "}
               {residency.memory.unloaded} more were unloaded and load again when opened.
             </p>
+            {residency.memory.held.length > 0 ? (
+              <p className="mt-1 text-label leading-relaxed text-faint">
+                Largest in memory:{" "}
+                {residency.memory.held
+                  .slice(0, 5)
+                  .map((held) => `${held.title ?? held.conversation.slice(0, 8)} (${formatBytes(held.bytes)}${held.pinned ? ", running or waiting" : ""}${held.by ? `, read in by ${held.by}` : ""})`)
+                  .join(" · ")}
+              </p>
+            ) : null}
+            {residency.memory.loads.length > 0 ? (
+              <p className="mt-1 text-label leading-relaxed text-faint">
+                Read in from disk since the host started:{" "}
+                {residency.memory.loads.map((load) => `${load.by}: ${load.count} ${load.count === 1 ? "conversation" : "conversations"}`).join(" · ")}
+              </p>
+            ) : null}
           </div>
           {residency.entries.length > 0 ? (
             <div className="max-h-56 overflow-auto border-t border-hairline">

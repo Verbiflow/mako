@@ -18,7 +18,7 @@ export const PROVIDER_IDLE_MS = 10 * 60_000
 export const PROVIDER_WARM_LIMIT = 2
 
 type HibernationAccess = Pick<LiveAccess,
-  "dependencies" | "residents" | "load" | "flush" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
+  "dependencies" | "residents" | "resident" | "load" | "flush" | "drain" | "moves" | "retireFromAccount" | "locateNativePath" |
   "failedStart" | "returnFromRemovedWorktree" | "driverEvents">
 
 /**
@@ -136,7 +136,8 @@ export class LiveHibernation {
   }
 
   setArchived(id: string, archived: boolean): void {
-    const resident = this.access.load(id)
+    // One not in memory has no provider to retire or wake: archiving reads no journal in.
+    const resident = this.access.resident(id)
     if (!resident) return
     resident.retireWhenIdle = archived
     if (archived) {
