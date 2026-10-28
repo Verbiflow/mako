@@ -27,6 +27,8 @@ export interface AcpPresence {
   waitingOn?: string
   /** Its Thread's name as the device it runs on has it, when it runs elsewhere. */
   threadTitle?: string
+  /** When the device it runs on was last heard from, while the account can't hear it. */
+  quietSince?: number
 }
 
 export function selectAcpPresence(state: AcpState): AcpPresence[] {
@@ -82,6 +84,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       if (conversation.elsewhere) presence.elsewhere = conversation.elsewhere
       if (conversation.waitingOn) presence.waitingOn = conversation.waitingOn
       if (conversation.threadTitle) presence.threadTitle = conversation.threadTitle
+      if (conversation.quietSince !== undefined) presence.quietSince = conversation.quietSince
       return [presence]
     })
     .sort((left, right) => right.createdAt - left.createdAt)
@@ -112,6 +115,7 @@ export function sameAcpPresence(
         candidate.elsewhere === presence.elsewhere &&
         candidate.waitingOn === presence.waitingOn &&
         candidate.threadTitle === presence.threadTitle &&
+        candidate.quietSince === presence.quietSince &&
         candidate.background === presence.background
       )
     })

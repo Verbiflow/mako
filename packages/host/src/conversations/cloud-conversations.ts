@@ -171,7 +171,8 @@ const QUIET_STATUS = { ...LISTED_STATUS, working: "ready", waiting: "ready" } as
  * that takes its owner. Opening it reads the rest there, as it would any cloud conversation's. A row of a quiet device
  * is listed as that device left it, but not at work.
  */
-function listedSummary(row: ListedSession, where: string, quiet: boolean): LiveSummary {
+function listedSummary(row: ListedSession, where: string, quietSince: string | undefined): LiveSummary {
+  const quiet = quietSince !== undefined
   const summary: LiveSummary = {
     session: {
       id: row.conversation,
@@ -192,6 +193,7 @@ function listedSummary(row: ListedSession, where: string, quiet: boolean): LiveS
   if (row.title) summary.session.title = row.title
   if (row.threadTitle) summary.threadTitle = row.threadTitle
   if (row.waitingOn && !quiet) summary.waitingOn = row.waitingOn
+  if (quiet) summary.quietSince = Date.parse(quietSince)
   return summary
 }
 
@@ -1502,7 +1504,7 @@ export class CloudConversations {
    * nothing wakes a machine or reaches a Mac until one opens.
    */
   #reconcile(): void {
-    const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string; quiet: boolean }>()
+    const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string; quietSince: string | undefined }>()
     for (const row of this.#list.sessions().values()) {
       if (!this.#listable(row)) continue
       if (row.runsOn.kind === "device") {
@@ -1510,9 +1512,8 @@ export class CloudConversations {
         const runtime = `d-${row.runsOn.deviceId}`
         const name = this.#deviceNames.get(row.runsOn.deviceId)
         if (name === undefined) this.#nameDevice(row.runsOn.deviceId)
-        const quiet = this.#list.quietSince(row.runsOn.deviceId) !== undefined
-        wanted.set(row.conversation, { row, threadId: sessionStream(runtime, row.conversation), runtime, where: name ?? "another computer", quiet })
-      } else if (!this.#options.returning?.(row.runsOn.threadId)) wanted.set(row.conversation, { row, threadId: row.runsOn.threadId, where: CLOUD_FOLDER_WHERE, quiet: false })
+        wanted.set(row.conversation, { row, threadId: sessionStream(runtime, row.conversation), runtime, where: name ?? "another computer", quietSince: this.#list.quietSince(row.runsOn.deviceId) })
+      } else if (!this.#options.returning?.(row.runsOn.threadId)) wanted.set(row.conversation, { row, threadId: row.runsOn.threadId, where: CLOUD_FOLDER_WHERE, quietSince: undefined })
     }
     const unlisted: string[] = []
     // Deleting from a Map as it's walked is safe: the walk goes on past what went.
@@ -1525,10 +1526,10 @@ export class CloudConversations {
       if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
     }
     const listed: LiveSummary[] = []
-    for (const [id, { row, threadId, runtime, where, quiet }] of wanted) {
+    for (const [id, { row, threadId, runtime, where, quietSince }] of wanted) {
       const known = this.#entries.get(id)
       if (known && (!known.listed || this.#following.has(known.threadId))) continue
-      const summary = listedSummary(row, where, quiet)
+      const summary = listedSummary(row, where, quietSince)
       if (known?.summary && JSON.stringify(known.summary) === JSON.stringify(summary)) continue
       const entry: Entry = known ?? { conversationId: id, threadId, harness: row.harness, createdAt: summary.createdAt, created: true, seq: 0, listed: true }
       if (runtime) entry.runtime = runtime
