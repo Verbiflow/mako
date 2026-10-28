@@ -20,6 +20,13 @@ import { webHarnessDescriptors } from "./labels"
 const RESUBSCRIBE_MS = [250, 1_000, 2_000, 5_000, 10_000] as const
 /** What `mako:resolve-file-references` names first: the conversation whose transcript's words are being resolved. */
 const FileReferencesSourceSchema = z.object({ liveId: z.string().optional() })
+/** A file read's signed URLs: what a browser can't load as they are. */
+const SignedFileSchema = z.object({ previewUrl: z.string().optional(), posterUrl: z.string().optional(), thumbnailUrl: z.string().optional() }).loose()
+const SIGNED_FILES = "mako-file://asset/"
+/** What `POST /v1/previews` answers. */
+const FilesGrantSchema = z.object({ url: z.string().url() })
+/** An address for an owner's files is asked again after this: it ends an hour after its last use. */
+const FILES_KEPT_MS = 30 * 60_000
 /** The head of an owner's stream line: which conversation's event it carries, and what kind. */
 const LineHeadSchema = z.object({ channel: z.string().optional(), type: z.string().optional(), conversation: z.string().optional() })
 
@@ -37,6 +44,8 @@ export class WebConversations {
   readonly #listeners = new Set<(event: HostEvent) => void>()
   /** Sessions a terminal or another app runs, opened on their owner as the list named them, by conversation. */
   readonly #captures = new Map<string, Promise<Json | undefined>>()
+  /** Where each owner's signed files are served to this browser, by owner, and when that was asked. */
+  readonly #files = new Map<string, { at: number; origin: Promise<string> }>()
   /** The owner streams followed, by stream: one follow per stream, however many of its conversations are open. */
   readonly #follows = new Map<string, { subscription?: Subscription; conversations: Set<string>; stopped: boolean }>()
 
@@ -72,6 +81,7 @@ export class WebConversations {
       if (isClientCall(channel)) return answerClientCall(answers, channel, undefined, inputs.of(channel).parse(args))
       if (channel === "mako:harness-descriptors") return webHarnessDescriptors()
       const conversation = conversationCallId(channel, args) ?? this.#ownerAsked(channel, args)
+      if (conversation && channel === "mako:read-live-file") return this.#readable(conversation, await this.call(conversation, channel, args))
       if (conversation) return this.call(conversation, channel, args)
       // No owner to ask: the null the bridge declares, so links are drawn as they are, unchecked (`file-references.ts`).
       if (channel === "mako:resolve-file-references") return null
@@ -156,6 +166,34 @@ export class WebConversations {
       stop()
       if (acpStore.get().activeKey === conversation) acp.deactivate()
     }
+  }
+
+  /**
+   * A file its owner read, as this browser can load it: the owner signed its media for its own windows
+   * (`mako-file://asset/…`, each URL a capability for one file), and the gateway serves them to this person from an
+   * address of their own for that owner's files (`POST /v1/previews` with `files`), through the owner's link.
+   */
+  async #readable(conversation: string, value: Json | undefined): Promise<Json | undefined> {
+    const read = SignedFileSchema.safeParse(value)
+    if (!read.success) return value
+    const signed = [read.data.previewUrl, read.data.posterUrl, read.data.thumbnailUrl].some((url) => url?.startsWith(SIGNED_FILES))
+    const row = this.#row(conversation)
+    if (!signed || !row) return value
+    const origin = await this.#filesOrigin(listedOwner(row))
+    const rewrite = (url: string | undefined) => (url?.startsWith(SIGNED_FILES) ? `${origin}file/asset/${url.slice(SIGNED_FILES.length)}` : url)
+    // SAFETY: the same file the owner answered, its signed URLs only changed to where this browser reaches them.
+    return { ...(value as Record<string, Json>), ...Object.fromEntries((["previewUrl", "posterUrl", "thumbnailUrl"] as const).flatMap((key) => (read.data[key] ? [[key, rewrite(read.data[key])!]] : []))) }
+  }
+
+  /** The address the gateway serves an owner's signed files from, asked once and kept a while: it lasts while it's used. */
+  #filesOrigin(owner: ListedOwner): Promise<string> {
+    const key = owner.kind === "cloud" ? `t:${owner.threadId}` : `d:${owner.deviceId}`
+    const kept = this.#files.get(key)
+    if (kept && Date.now() - kept.at < FILES_KEPT_MS) return kept.origin
+    const origin = this.#gateway.rest("POST", "/v1/previews", owner.kind === "cloud" ? { threadId: owner.threadId, files: true } : { deviceId: owner.deviceId, files: true }).then((answer) => FilesGrantSchema.parse(answer).url)
+    this.#files.set(key, { at: Date.now(), origin })
+    origin.catch(() => this.#files.delete(key))
+    return origin
   }
 
   /** Follows an owner's stream for one conversation's batches; the stream is shared by every open conversation on it. */

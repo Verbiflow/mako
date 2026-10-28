@@ -4,25 +4,30 @@ import { Toaster } from "@/components/ui/sonner"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
+import { useKeyboardInset } from "./keyboard"
 import { ThreadList } from "./list"
-import { useRoute, useWide, type WebRoute } from "./route"
+import { StartSheet } from "./new-thread"
+import { routeHref, useRoute, useWide, type ScreenRoute } from "./route"
+import { ScreenStack } from "./screens"
+import { startedFromHere } from "./started"
 import { ThreadScreen } from "./thread"
 
 /** What the service worker says when a notice is tapped: the app's address to go to. */
 const OpenNoticeSchema = z.object({ type: z.literal("mako:open"), url: z.string().min(1) })
 
-/** Each its own chunk, read when first opened: the list paints without them. */
-const NewThread = lazy(() => import("./new-thread").then((module) => ({ default: module.NewThread })))
+/** Its own chunk, read when first opened: the list paints without it. */
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
 
 /**
- * The web app: the account's Threads, one open, a new one, and Settings. On a phone each fills the screen and Back goes
- * back; on a tablet the list stays beside what's open.
+ * The web app: the account's Threads, one open, a new one, and Settings. On a phone the list stays under and what's
+ * open slides over it (Back is the edge swipe, or the system's); a new Thread is a sheet over whatever is open. On a
+ * tablet the list stays beside what's open.
  */
 export function WebApp() {
   const client = useWebClient()
-  const [route, navigate] = useRoute(client.options.base)
+  const [route, navigate, back] = useRoute(client.options.base)
   const wide = useWide()
+  useKeyboardInset()
   const signedOut = useAccountList((state) => state.phase === "signed-out")
   useEffect(() => {
     if (signedOut) location.assign(client.options.signInUrl(location.pathname + location.search))
@@ -40,42 +45,56 @@ export function WebApp() {
     worker.addEventListener("message", heard)
     return () => worker.removeEventListener("message", heard)
   }, [])
-  const back = () => (history.length > 1 ? history.back() : navigate({ kind: "list" }, { replace: true }))
-  const open = (next: WebRoute) => navigate(next, { replace: wide && route.kind !== "list" })
+  // A new Thread is a sheet over what's open, with an address of its own, so Back closes it.
+  const under: ScreenRoute = route.kind === "new" ? (route.over ?? { kind: "list" }) : route
+  const open = (next: ScreenRoute) => navigate(next, { replace: wide && under.kind !== "list" })
   const list = (
     <ThreadList
       wide={wide}
-      selected={route.kind === "thread" ? route.thread : undefined}
+      selected={under.kind === "thread" ? under.thread : undefined}
       onOpen={(thread) => open({ kind: "thread", thread: thread.id })}
-      onNew={() => open({ kind: "new" })}
+      onNew={() => navigate({ kind: "new", over: under })}
       onSettings={() => open({ kind: "settings" })}
     />
   )
   const detail =
-    route.kind === "thread" ? (
+    under.kind === "thread" ? (
       <ThreadScreen
-        key={route.thread}
-        threadId={route.thread}
-        sessionId={route.session}
+        key={under.thread}
+        threadId={under.thread}
+        sessionId={under.session}
         wide={wide}
         onBack={back}
-        onSession={(session) => navigate({ kind: "thread", thread: route.thread, session }, { replace: true })}
+        onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })}
       />
-    ) : route.kind === "new" ? (
-      <NewThread onBack={back} onStarted={(started) => navigate({ kind: "thread", thread: started.threadId }, { replace: true })} />
-    ) : route.kind === "settings" ? (
-      <Settings onBack={back} />
+    ) : under.kind === "settings" ? (
+      <Suspense fallback={null}>
+        <Settings onBack={back} />
+      </Suspense>
     ) : null
+  const sheet = (
+    <StartSheet
+      open={route.kind === "new"}
+      onDismiss={back}
+      onStarted={(started, where) => {
+        startedFromHere(started.threadId, where)
+        navigate({ kind: "thread", thread: started.threadId }, { replace: true })
+      }}
+    />
+  )
   return (
-    <div className="web-app flex h-dvh w-full overflow-hidden bg-shell text-foreground">
+    <div className="web-app flex w-full overflow-hidden bg-shell text-foreground">
       {wide ? (
         <>
           <div className="flex w-[min(380px,40vw)] shrink-0 flex-col border-r border-hairline">{list}</div>
-          <main className="flex min-w-0 flex-1 flex-col"><Suspense fallback={null}>{detail ?? <NothingOpen />}</Suspense></main>
+          <main className="flex min-w-0 flex-1 flex-col">{detail ?? <NothingOpen />}</main>
         </>
       ) : (
-        <main className="flex min-w-0 flex-1 flex-col"><Suspense fallback={null}>{detail ?? list}</Suspense></main>
+        <main className="flex min-w-0 flex-1 flex-col">
+          <ScreenStack under={list} top={detail} topKey={detail ? routeHref(under, client.options.base).split("?")[0] : undefined} onBack={back} />
+        </main>
       )}
+      {sheet}
       <Toaster position="top-center" offset={{ top: "calc(env(safe-area-inset-top) + 8px)" }} />
     </div>
   )

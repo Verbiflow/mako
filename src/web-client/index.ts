@@ -5,6 +5,7 @@ import { Starting, Unreachable } from "./start-screens"
 import { WebApp } from "./app"
 import { WebClient, WebClientContext, type WebClientOptions } from "./client"
 import { SignedOutError } from "./gateway"
+import { holdInstallPrompt } from "./install"
 import { applyTheme, followSystemTheme } from "./theme"
 
 export { SignedOutError, type WebAccount, type WebConnection } from "./gateway"
@@ -17,6 +18,7 @@ export type { WebClientOptions } from "./client"
 export async function startWebApp(element: HTMLElement, options: WebClientOptions): Promise<void> {
   applyTheme()
   followSystemTheme()
+  holdInstallPrompt()
   const root = createRoot(element)
   root.render(createElement(Starting))
   let client: WebClient

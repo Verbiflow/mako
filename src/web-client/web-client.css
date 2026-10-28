@@ -1,16 +1,17 @@
 /*
- * The web app's own pieces, on the desk's tokens: bars, rows, fields and the composer at a phone's size. Everything
- * else (the transcript, approvals, questions, the queue) is the desk's own CSS. Touch targets are 44px; every bar keeps
- * clear of the notch and the home indicator (`env(safe-area-inset-*)`).
+ * The web app's own pieces, on the desk's tokens: bars, rows, sheets, the composer and their motion at a phone's size.
+ * Everything else (the transcript, approvals, questions, the queue) is the desk's own CSS. Touch targets are 44px;
+ * every bar keeps clear of the notch and the home indicator (`env(safe-area-inset-*)`).
+ *
+ * Motion is the desk's: `--ease-out` arriving, `--ease-swift` leaving, on transform and opacity. A press answers on
+ * touch-down, at once, and lets go in 160 ms. Under reduced motion nothing slides or scales.
  */
 @layer components {
-  .web-icon-button:active:not(:disabled),
-  .web-button:active:not(:disabled),
-  .web-send:active:not(:disabled) {
-    transform: scale(0.95);
-  }
-
   .web-app {
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+    position: fixed;
+    inset: 0 0 auto 0;
+    height: var(--app-height, 100dvh);
     -webkit-tap-highlight-color: transparent;
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
@@ -30,9 +31,42 @@
     }
   }
 
+  /* Press: on touch-down, at once; let go, back in 160 ms. */
+  .web-icon-button,
+  .web-button,
+  .web-quiet-button,
+  .web-send,
+  .web-chip,
+  .web-tab,
+  .web-fab,
+  .web-attachment-remove {
+    transition:
+      transform 160ms var(--ease-out),
+      background-color 160ms ease,
+      color 160ms ease,
+      opacity 160ms ease;
+  }
+  .web-icon-button:active:not(:disabled),
+  .web-button:active:not(:disabled),
+  .web-quiet-button:active:not(:disabled),
+  .web-send:active:not(:disabled),
+  .web-chip:active:not(:disabled),
+  .web-tab:active:not(:disabled),
+  .web-attachment-remove:active {
+    transform: scale(0.94);
+    transition-duration: 40ms;
+  }
+  .web-fab:active {
+    transform: scale(0.92);
+    transition-duration: 40ms;
+  }
+
   .web-bar {
     min-height: calc(52px + env(safe-area-inset-top));
     padding-top: env(safe-area-inset-top);
+  }
+  .web-bar-thread {
+    @apply border-b border-hairline bg-surface/85 backdrop-blur-xl;
   }
 
   .web-scroll {
@@ -46,17 +80,26 @@
 
   .web-icon-button {
     @apply flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground;
-    transition: background-color 120ms ease, color 120ms ease, transform var(--duration-press) var(--ease-out);
-  }
-  .web-icon-button:hover:not(:disabled) {
-    @apply bg-fill-hover text-foreground;
   }
   .web-icon-button:disabled {
     @apply opacity-40;
   }
 
+  /* A row lights on touch-down and fades back after: the press is seen even on a quick tap. */
   .web-row {
-    transition: background-color 120ms ease;
+    transition: background-color 220ms ease;
+  }
+  .web-row:active {
+    @apply bg-fill-selected;
+    transition-duration: 0ms;
+  }
+  @media (hover: hover) {
+    .web-icon-button:hover:not(:disabled) {
+      @apply bg-fill-hover text-foreground;
+    }
+    .web-row:hover {
+      @apply bg-fill-hover;
+    }
   }
   /* Rows part with a hairline under their words, not under their mark, as a phone's lists do. */
   li + li > .web-row::before {
@@ -64,7 +107,7 @@
     position: absolute;
     top: 0;
     right: 0;
-    left: 74px;
+    left: 68px;
     border-top: 1px solid var(--hairline);
   }
   /* What needs the person sits on a card of its own, at the head of the list. */
@@ -75,36 +118,42 @@
     @apply pl-3.5;
   }
   .web-needs li + li > .web-row::before {
-    left: 64px;
-  }
-  .web-needs .web-row > span:first-child {
-    @apply bg-surface;
-  }
-  /* A Thread's harnesses overlap, each ringed in its avatar's own colour. */
-  .web-mark {
-    background: inherit;
-  }
-  .web-badge {
-    box-shadow: 0 0 0 2.5px var(--surface);
-  }
-  .web-needs .web-badge {
-    box-shadow: 0 0 0 2.5px color-mix(in oklab, var(--raised) 70%, var(--surface));
-  }
-  .web-row:active {
-    @apply bg-fill-selected;
-  }
-  @media (hover: hover) {
-    .web-row:hover {
-      @apply bg-fill-hover;
-    }
+    left: 62px;
   }
 
   .web-button {
     @apply inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-ui font-medium text-primary-foreground;
-    transition: opacity 120ms ease, transform var(--duration-press) var(--ease-out);
   }
   .web-button:disabled {
     @apply opacity-40;
+  }
+  .web-button-negative {
+    @apply bg-negative text-white;
+  }
+  .web-quiet-button {
+    @apply inline-flex h-11 items-center justify-center rounded-xl px-4 text-ui text-muted-foreground;
+  }
+  .web-quiet-button:active {
+    @apply bg-fill-selected;
+  }
+
+  /* New, in the thumb's reach. */
+  .web-fab {
+    @apply absolute flex size-14 items-center justify-center rounded-full bg-foreground text-surface;
+    right: calc(env(safe-area-inset-right) + 20px);
+    bottom: calc(env(safe-area-inset-bottom) + 20px);
+    box-shadow:
+      0 1px 0 0 color-mix(in oklab, var(--foreground) 12%, transparent) inset,
+      0 10px 28px -8px rgb(0 0 0 / 0.5),
+      0 2px 6px rgb(0 0 0 / 0.18);
+  }
+
+  .web-install {
+    @apply bg-raised ring-1 ring-hairline;
+    animation: web-rise 320ms var(--ease-out) both;
+  }
+  .web-step {
+    @apply flex size-6 shrink-0 items-center justify-center rounded-full bg-fill-selected text-label font-semibold text-foreground;
   }
 
   .web-field {
@@ -117,37 +166,155 @@
     @apply ring-ring;
   }
 
+  /* Screens: the list under, what's open sliding over it from the right. */
+  .web-screen {
+    @apply absolute inset-0 flex min-h-0 flex-col;
+  }
+  .web-screen-top {
+    @apply bg-surface;
+    box-shadow:
+      -1px 0 0 var(--hairline),
+      -16px 0 40px -12px rgb(0 0 0 / 0.35);
+  }
+  .web-screen-shade {
+    @apply pointer-events-none absolute inset-0;
+    background: rgb(0 0 0 / 0.28);
+    opacity: 0;
+  }
+  :root.light .web-screen-shade {
+    background: rgb(0 0 0 / 0.1);
+  }
+
+  /* Sheets from the bottom. */
+  .web-sheet-layer {
+    @apply fixed inset-x-0 top-0 z-50;
+    height: var(--app-height, 100dvh);
+  }
+  .web-sheet-backdrop {
+    @apply absolute inset-0;
+    background: rgb(0 0 0 / 0.45);
+  }
+  :root.light .web-sheet-backdrop {
+    background: rgb(0 0 0 / 0.22);
+  }
+  .web-sheet {
+    @apply absolute inset-x-0 flex flex-col bg-popover text-popover-foreground;
+    bottom: 0;
+    max-height: calc(var(--app-height, 100dvh) - env(safe-area-inset-top) - 12px);
+    border-radius: 22px 22px 0 0;
+    box-shadow:
+      0 -1px 0 var(--hairline),
+      0 -16px 48px -16px rgb(0 0 0 / 0.45);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .web-sheet-tall {
+    height: calc((var(--app-height, 100dvh) - env(safe-area-inset-top)) * 0.86);
+  }
+  /* A new Thread's composer has room for a paragraph: the field starts four lines tall. */
+  .web-start-sheet .web-composer-input {
+    min-height: 96px;
+  }
+  .web-start-sheet .web-composer-field {
+    @apply rounded-[20px];
+  }
+  .web-preview-sheet {
+    height: calc(var(--app-height, 100dvh) - env(safe-area-inset-top) - 8px);
+  }
+  .web-sheet-grab {
+    @apply flex h-6 shrink-0 cursor-grab items-center justify-center;
+    touch-action: none;
+  }
+  .web-sheet-grab > span {
+    @apply h-[5px] w-9 rounded-full bg-foreground/20;
+  }
+  .web-sheet[data-dragging] .web-sheet-grab {
+    @apply cursor-grabbing;
+  }
+
+  .web-chip {
+    @apply inline-flex h-8 max-w-[44vw] shrink-0 items-center gap-1 rounded-full bg-fill-hover px-3 text-label font-medium text-foreground ring-1 ring-hairline;
+  }
+  .web-chip:disabled {
+    @apply text-muted-foreground;
+  }
+  .web-chip-tab[aria-selected="true"] {
+    @apply bg-foreground text-surface ring-transparent;
+  }
+  .web-choice {
+    @apply flex min-h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-ui;
+    transition: background-color 220ms ease;
+  }
+  .web-choice:active:not(:disabled) {
+    @apply bg-fill-selected;
+    transition-duration: 0ms;
+  }
+  .web-choice:disabled {
+    @apply opacity-45;
+  }
+
+  .web-tab {
+    @apply flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-label font-medium text-muted-foreground ring-1 ring-hairline;
+  }
+  .web-tab-on {
+    @apply bg-fill-selected text-foreground ring-border;
+  }
+  .web-tab-add {
+    @apply w-8 justify-center px-0;
+  }
+
   .web-live {
     /* The renderer's conversation reads its column; on a phone it is the screen's width less a margin. */
     --container-content: 760px;
   }
   .web-dock {
     @apply bg-surface;
-    padding-bottom: env(safe-area-inset-bottom);
+    /* The home indicator's room, not taken twice while the keyboard covers it. */
+    padding-bottom: max(0px, calc(env(safe-area-inset-bottom) - var(--keyboard, 0px)));
   }
 
   .web-composer {
-    @apply mx-auto flex w-full max-w-content items-end gap-2 px-3 pt-2 pb-2.5;
+    @apply mx-auto flex w-full max-w-content items-end gap-1 px-2 pt-1.5 pb-2;
+  }
+  .web-composer-add {
+    @apply size-11 text-muted-foreground;
+  }
+  .web-composer-field {
+    @apply flex min-h-11 min-w-0 flex-1 items-end gap-1 rounded-[22px] bg-raised py-1 pr-1 pl-4 ring-1 ring-hairline;
+    transition: box-shadow 160ms ease;
+  }
+  .web-composer-field:focus-within {
+    @apply ring-ring;
   }
   .web-composer-input {
-    @apply min-h-11 flex-1 resize-none rounded-[22px] bg-raised px-4 py-[11px] text-foreground ring-1 ring-hairline outline-none placeholder:text-faint;
+    @apply min-w-0 flex-1 resize-none bg-transparent py-[6px] text-foreground outline-none placeholder:text-faint;
     font-size: max(16px, var(--text-ui));
     line-height: 22px;
     max-height: 180px;
   }
-  .web-composer-input:focus {
-    @apply ring-ring;
-  }
-
   .web-send {
-    @apply flex size-11 shrink-0 items-center justify-center rounded-full bg-foreground text-surface;
-    transition: opacity 120ms ease, transform var(--duration-press) var(--ease-out);
+    @apply flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground text-surface;
   }
   .web-send:disabled {
     @apply bg-fill-selected text-faint;
   }
   .web-stop {
-    @apply bg-raised text-foreground ring-1 ring-border;
+    @apply bg-foreground text-surface;
+  }
+  .web-mic {
+    @apply bg-transparent text-muted-foreground;
+  }
+  .web-mic-on {
+    @apply bg-negative text-white;
+    animation: web-listening 1.6s ease-in-out infinite;
+  }
+
+  .web-attachment {
+    @apply relative size-16 shrink-0 overflow-hidden rounded-xl bg-raised ring-1 ring-hairline;
+    animation: web-pop 220ms var(--ease-out) both;
+  }
+  .web-attachment-remove {
+    @apply absolute top-1 right-1 flex size-5 items-center justify-center rounded-full bg-black/65 text-white;
   }
 
   .web-switch {
@@ -168,6 +335,33 @@
   .web-switch:disabled {
     @apply opacity-40;
   }
+
+  .web-waiting {
+    animation: web-rise 260ms var(--ease-out) both;
+  }
+}
+
+@keyframes web-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+}
+@keyframes web-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.88);
+  }
+}
+/* The mic while it listens: a ring that breathes, slow enough to read as listening, not as an alarm. */
+@keyframes web-listening {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--negative) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 7px color-mix(in oklab, var(--negative) 0%, transparent);
+  }
 }
 
 /*
@@ -180,8 +374,12 @@
 .web-live [data-transcript-action] {
   display: none;
 }
-/* An approval is the one thing a phone is opened for: a card above the composer, its answers a thumb's size. */
-.web-live [data-permission] {
+/*
+ * An approval is the one thing a phone is opened for: a card that rises from the composer, its answers a thumb's
+ * size. Answered, a picture of it (`.web-approval-ghost`) sinks away while the transcript takes the room.
+ */
+.web-live [data-permission],
+.web-approval-ghost {
   margin: 0 12px 8px;
   border: 0;
   border-radius: 18px;
@@ -191,15 +389,61 @@
     0 0 0 1px var(--hairline),
     0 10px 30px -14px rgb(0 0 0 / 0.45);
 }
-.web-live [data-permission] > div:last-child {
+.web-live [data-permission] {
+  animation: web-rise 260ms var(--ease-out) both;
+}
+.web-approval-ghost {
+  z-index: 40;
+  pointer-events: none;
+}
+.web-live [data-permission] > div:last-child,
+.web-approval-ghost > div:last-child {
   flex-direction: column;
   gap: 8px;
   padding-top: 4px;
 }
-.web-live [data-permission-option] {
-  min-height: 44px;
+.web-live [data-permission-option],
+.web-approval-ghost [data-permission-option] {
+  min-height: 46px;
   width: 100%;
   justify-content: center;
   border-radius: 12px;
   font-size: var(--text-ui);
+  transition:
+    transform 160ms var(--ease-out),
+    background-color 160ms ease,
+    opacity 160ms ease;
+}
+.web-live [data-permission-option]:active {
+  transform: scale(0.97);
+  transition-duration: 40ms;
+}
+.web-approval-ghost [data-permission-option]:not([data-chosen]) {
+  opacity: 0.35;
+}
+.web-approval-ghost [data-chosen] {
+  transform: scale(0.98);
+}
+/* The live step and the questions card arrive as the approval does. */
+.web-live [data-question] {
+  animation: web-rise 260ms var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-app *,
+  .web-approval-ghost,
+  .web-live [data-permission] {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .web-icon-button:active,
+  .web-button:active,
+  .web-quiet-button:active,
+  .web-send:active,
+  .web-chip:active,
+  .web-tab:active,
+  .web-fab:active,
+  .web-live [data-permission-option]:active {
+    transform: none !important;
+  }
 }

@@ -23,7 +23,8 @@ import type { DomainSecrets } from "../base/host-secrets.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { CloudHarnesses } from "../contracts/cloud-harnesses.js"
 import type { MethodTable } from "../base/methods.js"
-import { type GatewayHostOptions, type HostMethods, serveHostThroughGateway } from "../transport/index.js"
+import { type GatewayHostOptions, type HostMethods, PortRelay, serveHostThroughGateway } from "../transport/index.js"
+import { appPorts } from "./app-ports.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac, systemName, systemVersion } from "../base/platform.js"
 
@@ -162,6 +163,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   request,
   harnessSignIns,
   sessions,
+  files,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
@@ -174,6 +176,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   harnessSignIns?: (options: { dataRoot: string; store: HarnessSignInStore; onChange: (signIns: CloudSignInsState) => void }) => HarnessSignInSharing
   /** What tells the account's list of this Mac's Sessions over its runtime's link (`SessionPublisher`). */
   sessions?: SessionPublishing
+  /** This Mac's signed files, as its window reads them: what a phone's transcript draws its media from. */
+  files?: (request: Request) => Promise<Response>
 }): CloudAccount {
   let status: string | undefined
   /** What the sign-ins depend on in the account: who it is and whether it has the cloud. */
@@ -248,6 +252,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
           invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
         }
         if (watch) options.watch = watch
+        // A phone opening a Thread's website reaches it through this link, and only the ports this Mac's apps serve on.
+        options.ports = new PortRelay({ allowed: () => appPorts((channel, args, client, history) => methods.invoke(channel, args, client, history)), files })
         return serveHostThroughGateway(link, options)
       },
     },

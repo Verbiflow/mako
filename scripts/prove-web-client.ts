@@ -25,9 +25,12 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  *
  * No harness runs on anything of the person's: the home is the scratch one, Codex's sign-in an API key the stand-in takes.
  *
- *   npx tsx --tsconfig tsconfig.scripts.json scripts/prove-web-client.ts --root <scratch> --cloud http://127.0.0.1:20021 [--keep]
+ * With `--app`, `api` has an app of its own: a recipe that serves a small page on the Thread's port, started once the
+ * host is ready, for a phone to open through the gateway.
+ *
+ *   npx tsx --tsconfig tsconfig.scripts.json scripts/prove-web-client.ts --root <scratch> --cloud http://127.0.0.1:20021 [--keep] [--app]
  */
-const { values } = parseArgs({ options: { root: { type: "string" }, cloud: { type: "string" }, keep: { type: "boolean", default: false } } })
+const { values } = parseArgs({ options: { root: { type: "string" }, cloud: { type: "string" }, keep: { type: "boolean", default: false }, app: { type: "boolean", default: false } } })
 if (!values.root || !values.cloud) throw new Error("--root and --cloud are required")
 const root = values.root
 const home = join(root, "home")
@@ -35,6 +38,23 @@ const dataRoot = join(home, "Library", "Application Support", "mako-web-proof", 
 const MINUTE = 60_000
 
 if ((await readdir(root).catch(() => [])).length) throw new Error(`${root} isn't empty: give the proof a folder of its own`)
+
+/** The `api` project's app with `--app`: one page, what a development server answers, with a request counter to show it's live. */
+const APP_SERVER = `import { createServer } from "node:http"
+let served = 0
+const page = (count) => \`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Payments</title>
+<style>body{margin:0;font:16px/1.45 -apple-system,system-ui,sans-serif;background:#f6f5f2;color:#1d1b18}main{padding:28px 22px}h1{font-size:26px;margin:0 0 4px}p{color:#6b665e;margin:0 0 22px}
+.card{background:#fff;border-radius:16px;padding:16px 18px;margin-bottom:12px;box-shadow:0 1px 0 rgba(0,0,0,.04),0 6px 20px -12px rgba(0,0,0,.25)}.row{display:flex;justify-content:space-between}.ok{color:#2f7d4f;font-weight:600}</style></head>
+<body><main><h1>Payments</h1><p>Served by the Thread's own app · request \${count}</p>
+<div class="card row"><span>retry.test.ts</span><span class="ok">20/20 passed</span></div>
+<div class="card row"><span>charge.test.ts</span><span class="ok">20/20 passed</span></div>
+<div class="card row"><span>refund.test.ts</span><span class="ok">20/20 passed</span></div></main></body></html>\`
+createServer((request, response) => {
+  served++
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+  response.end(page(served))
+}).listen(Number(process.env.PORT), "127.0.0.1")
+`
 
 /** One exchange of a Codex session, as its rollout keeps it: a message, its reasoning, a command and its output, an answer. */
 type Turn = { ask: string; thought: string; command?: { line: string; output: string }; answer: string }
@@ -123,22 +143,27 @@ const ANSWERS: Array<{ heard: RegExp; steps: ScriptedReply[] }> = [
     ],
   },
   { heard: /changelog/i, steps: [{ reasoning: "One line, in the project's own voice.", text: "Here's the line for the changelog, under **Fixed**:\n\n> The payments retry test no longer fails on slow CI runners: its backoff runs on a fake clock." }] },
+  {
+    heard: /screenshot/i,
+    steps: [
+      { reasoning: "Copy the build's icon where the person can see it.", text: "Taking it now.", call: { id: "call_shot", name: "exec_command", arguments: { cmd: `mkdir -p shots && cp '${join(process.cwd(), "mako-icons", "light", "desktop-1024.png")}' shots/icon.png` } } },
+      { text: `Here's the icon the build ships:\n\n![The desktop icon](${join(home, "projects", "api", "shots", "icon.png")})` },
+    ],
+  },
   { heard: /whole suite/i, steps: [{ reasoning: "Run everything once more.", text: "Running the whole suite once more.", call: { id: "call_suite", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 200" } } }, { text: "The whole suite passed." }] },
 ]
-let answering: ScriptedReply[] = []
-let answered: (typeof ANSWERS)[number] | undefined
 const model = await scriptedModel({
   reply: (heard) => {
-    // A request carries the whole conversation: what the person said last is the script whose words come latest in it.
-    // Its steps go one per request; the script's own words never start it again, as it stays the latest.
+    // A request carries the whole conversation: what the person said last is the script whose words come latest in it,
+    // and how far it has gone is how many of its calls the conversation already carries after those words. Nothing is
+    // kept between requests, so Threads asked the same thing run their scripts apart.
     const latest = ANSWERS.map((answer) => ({ answer, at: Math.max(...[...heard.matchAll(new RegExp(answer.heard, "gi"))].map((match) => match.index), -1) }))
       .filter(({ at }) => at >= 0)
-      .sort((left, right) => right.at - left.at)[0]?.answer
-    if (latest !== answered) {
-      answered = latest
-      answering = [...(latest?.steps ?? [{ text: "Done." }])]
-    }
-    return answering.shift()
+      .sort((left, right) => right.at - left.at)[0]
+    if (!latest) return { text: "Done." }
+    const after = heard.slice(latest.at)
+    const done = latest.answer.steps.filter((step) => step.call && after.includes(step.call.id)).length
+    return latest.answer.steps[done] ?? { text: "Done." }
   },
 })
 
@@ -164,6 +189,11 @@ await rollout("billing-service", 3 * 60, Array.from({ length: LONG_TURNS }, (_, 
 const api = join(home, "projects", "api")
 await mkdir(join(api, ".git"), { recursive: true })
 await mkdir(join(api, "test"), { recursive: true })
+if (values.app) {
+  await mkdir(join(api, ".mako"), { recursive: true })
+  await writeFile(join(api, ".mako", "recipe.json"), JSON.stringify({ processes: { web: { command: "node server.mjs", port: "{port}", values: { PORT: "{port}" } } } }, null, 2))
+  await writeFile(join(api, "server.mjs"), APP_SERVER)
+}
 await writeFile(join(api, "test", "payments.mjs"), `const runs = Number(process.argv.at(-1)) || 1\nfor (let run = 1; run <= runs; run++) await new Promise((done) => setTimeout(done, 100))\nconsole.log(\`✓ 412 passed (\${runs} runs)\`)\n`)
 
 // The host, screenless, from this checkout's build, on the scratch home.
@@ -192,9 +222,12 @@ for (const deadline = Date.now() + 5 * 60_000; !(account.state.status === "signe
   await new Promise((resolve) => setTimeout(resolve, 500))
   account = AccountSchema.parse(await call("mako:cloud-account", []))
 }
+if (values.app) await call("mako:thread-app-start", [api])
 console.log(`READY ${JSON.stringify({ dataRoot, sessions: SESSIONS.length + 1 })}`)
 
 const stop = async () => {
+  // Its app is a process of its own: stopped here, or it outlives the host.
+  if (values.app) await call("mako:thread-app-stop", [api]).catch(() => undefined)
   await call("mako:cloud-sign-out", []).catch(() => undefined)
   host.kill("SIGTERM")
   await release()

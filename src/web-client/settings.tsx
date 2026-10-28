@@ -7,6 +7,8 @@ import { cn } from "@/lib/utils"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
 import type { PushStanding, QuietHours } from "./push"
+import { install, onIos, useInstallWay } from "./install"
+import { IosInstallSheet } from "./install-card"
 import { useTheme, type WebTheme } from "./theme"
 
 const DEFAULT_QUIET: QuietHours = { start: "22:00", end: "07:00" }
@@ -15,9 +17,9 @@ export function Settings({ onBack }: { onBack: () => void }) {
   const client = useWebClient()
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-shell">
-      <header className="web-bar flex shrink-0 items-center gap-1 px-2">
+      <header className="web-bar flex shrink-0 items-center gap-1 px-1.5">
         <button type="button" aria-label="Back to threads" onClick={onBack} className="web-icon-button">
-          <ChevronLeftIcon className="size-5" />
+          <ChevronLeftIcon className="size-6" strokeWidth={2} />
         </button>
         <h1 className="flex-1 text-ui font-semibold">Settings</h1>
       </header>
@@ -34,21 +36,46 @@ export function Settings({ onBack }: { onBack: () => void }) {
           </Group>
           <Notifications />
           <Appearance />
-          <Group title="This browser">
-            <Row label="Signed in as a device of your account" detail="Signing out here, or from a Mac's Settings › Account, ends it at once." icon={<SmartphoneIcon className="size-4" />} />
-            <button
-              type="button"
-              onClick={() => void client.signOut()}
-              className="web-row flex h-12 w-full items-center gap-3 px-4 text-left text-ui text-negative"
-            >
-              <LogOutIcon className="size-4" />
-              Sign out
-            </button>
-          </Group>
+          <ThisBrowser />
           <Diagnostics />
         </div>
       </div>
     </div>
+  )
+}
+
+/** This browser as a device: on the Home Screen or not, and signing it out, confirmed in place. */
+function ThisBrowser() {
+  const client = useWebClient()
+  const way = useInstallWay()
+  const [steps, setSteps] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  return (
+    <Group title="This browser" footer="Signing out here, or from a Mac's Settings › Account, ends it at once.">
+      {way !== "none" ? (
+        <button type="button" onClick={() => (way === "prompt" ? void install() : setSteps(true))} className="web-row flex min-h-12 w-full items-center gap-3 px-4 text-left text-ui">
+          <SmartphoneIcon className="size-4 text-muted-foreground" />
+          Add to Home Screen
+        </button>
+      ) : null}
+      {confirming ? (
+        <div className="flex min-h-12 items-center gap-2 px-4 py-2">
+          <p className="min-w-0 flex-1 text-ui">Sign out of Mako on this {onIos() || navigator.maxTouchPoints > 0 ? "phone" : "browser"}?</p>
+          <button type="button" className="web-quiet-button h-9 px-3" onClick={() => setConfirming(false)}>
+            Cancel
+          </button>
+          <button type="button" className="web-button web-button-negative h-9 px-3" onClick={() => void client.signOut()}>
+            Sign out
+          </button>
+        </div>
+      ) : (
+        <button type="button" onClick={() => setConfirming(true)} className="web-row flex h-12 w-full items-center gap-3 px-4 text-left text-ui text-negative">
+          <LogOutIcon className="size-4" />
+          Sign out
+        </button>
+      )}
+      <IosInstallSheet open={steps} onDismiss={() => setSteps(false)} />
+    </Group>
   )
 }
 

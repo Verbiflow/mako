@@ -1,170 +1,330 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { CheckIcon, ChevronLeftIcon, CloudIcon, GitBranchIcon } from "lucide-react"
-import { WebHarnessIcon } from "./harness-icon"
-import { Orb } from "@/components/ui/orb/orb"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon } from "lucide-react"
+import { modelByIdentity } from "@mako/sessions/settings"
+import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
+import { Spinner } from "@/components/ui/spinner"
+import { copyAge, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { titleFromPrompt } from "@/state/acp-start"
-import { accountProjects, cloudHarnesses, startCloudThread, typedRepository, type StartStep, type WebProject } from "./account"
+import { accountProjects, cloudHarnesses, typedRepository } from "./account"
+import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
-import { SendGlyph } from "./glyphs"
-import { WEB_HARNESSES, webHarnessLabel } from "./labels"
+import { Composer } from "./composer"
+import { WebHarnessIcon } from "./harness-icon"
+import { webHarnessLabel } from "./labels"
+import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, places, readStartMemory, rememberStart, startable, type Place, type StartProject } from "./places"
+import { Sheet, SheetScroll } from "./sheet"
+import { WEB_HARNESSES } from "./labels"
+import { addSession, cloudCatalog, macCatalog, macWorktrees, startInCloud, startOnMac, type Catalog, type CloudStep, type OfferedHarness, type Owner, type Started } from "./start"
 
-const STEP_WORDS = {
-  making: "Making its Thread",
-  preparing: "Starting its machine and cloning the project",
-  starting: "Starting the harness",
-} satisfies Record<StartStep, string>
 const CLOUD_ENTITLEMENT = "cloud"
+const CLOUD_STEPS = { making: "Making its Thread…", preparing: "Starting a machine…", starting: "Starting the harness…" } satisfies Record<CloudStep, string>
+
+/** A Session added to a Thread that's already running somewhere: its place and folder are the Thread's. */
+export interface AddingTo {
+  thread: string
+  folder: string
+  owner: Owner
+  /** Where it runs, in words, for the sheet's line. */
+  where: string
+}
+
+/** The sheet's chips' own sheets: one open at a time, over the composer. */
+type Picking = "place" | "project" | "loadout" | undefined
 
 /**
- * A new Thread in the cloud, from the phone: a project, a harness, the first message. It starts as a Mac's cloud start
- * does, and opens as soon as its machine has it; every device lists it from its machine's own report.
+ * New: one composer, its keyboard up, and above the field the three things a start needs, each already chosen: where
+ * it runs, the project, the harness and model. So the common start is New, a sentence, Send. Each chip opens a sheet of
+ * its own. Adding a Session to a Thread is the same sheet with the Thread's place and project fixed.
  */
-export function NewThread({ onBack, onStarted }: { onBack: () => void; onStarted: (conversation: { threadId: string; conversationId: string }) => void }) {
+export function StartSheet({ open, onDismiss, onStarted, adding }: { open: boolean; onDismiss: () => void; onStarted: (started: Started, where: string) => void; adding?: AddingTo }) {
+  return (
+    <Sheet open={open} onDismiss={onDismiss} label={adding ? "Add a Session" : "New thread"} className="web-start-sheet">
+      {open ? <StartForm onStarted={onStarted} adding={adding} /> : null}
+    </Sheet>
+  )
+}
+
+function StartForm({ onStarted, adding }: { onStarted: (started: Started, where: string) => void; adding?: AddingTo }) {
   const client = useWebClient()
-  const [projects, setProjects] = useState<WebProject[] | undefined>(undefined)
-  const [offered, setOffered] = useState<readonly string[]>(WEB_HARNESSES)
-  const [project, setProject] = useState<string | undefined>(undefined)
-  const [typed, setTyped] = useState("")
-  const [harness, setHarness] = useState(() => localStorage.getItem("mako:web:harness") ?? "claude")
-  const [text, setText] = useState("")
-  const [step, setStep] = useState<StartStep | undefined>(undefined)
+  const list = useAccountList((state) => state)
+  const cloud = client.account.entitlements.includes(CLOUD_ENTITLEMENT)
+  const memory = useMemo(() => readStartMemory(), [])
+  const all = useMemo(() => places(list, cloud), [list, cloud])
+  const [chosenPlace, setChosenPlace] = useState<string | undefined>(() => {
+    if (adding) return adding.owner.kind === "cloud" ? CLOUD_PLACE : adding.owner.deviceId
+    const first = defaultPlace(all, memory.place)
+    return first ? placeKey(first) : undefined
+  })
+  const place = all.find((each) => placeKey(each) === chosenPlace) ?? (adding?.owner.kind === "cloud" ? ({ kind: "cloud" } as const) : undefined)
+  const key = place ? placeKey(place) : undefined
+  const remembered = key ? memory.loadouts[key] : undefined
+
+  const [projects, setProjects] = useState<StartProject[] | undefined>(undefined)
+  const [catalog, setCatalog] = useState<Catalog | undefined>(undefined)
+  const [pickedProject, setPickedProject] = useState<string | undefined>(undefined)
+  const [picked, setPicked] = useState<{ harness: string; model: string | undefined } | undefined>(undefined)
+  const [picking, setPicking] = useState<Picking>(undefined)
+  const [status, setStatus] = useState<string | undefined>(undefined)
   const [failure, setFailure] = useState<string | undefined>(undefined)
-  const input = useRef<HTMLTextAreaElement>(null)
-  const entitled = client.account.entitlements.includes(CLOUD_ENTITLEMENT)
 
+  // What the place offers, asked of it as the place changes: its projects and its harnesses. What else the effect
+  // reads (the list's rows, the Macs) is as it stands when the place is asked; the list changing doesn't ask again.
+  const asked = useRef({ place, all, rows: list.rows, adding })
   useEffect(() => {
-    void accountProjects(client.gateway).then(
-      (found) => {
-        setProjects(found)
-        setProject((chosen) => chosen ?? found[0]?.url)
-      },
-      () => setProjects([])
-    )
-    void cloudHarnesses(client.gateway).then((found) => {
-      if (found.length) setOffered(WEB_HARNESSES.filter((each) => found.includes(each)))
-    })
-  }, [client])
-  useLayoutEffect(() => {
-    const node = input.current
-    if (!node) return
-    node.style.height = "auto"
-    node.style.height = `${Math.min(Math.max(node.scrollHeight, 96), 240)}px`
-  }, [text])
+    asked.current = { place, all, rows: list.rows, adding }
+  })
+  useEffect(() => {
+    const { place: at, all: every, rows, adding: into } = asked.current
+    if (!at || !startable(at)) return
+    let current = true
+    const mac = at.kind === "mac" ? at : every.find((each): each is Extract<Place, { kind: "mac" }> => each.kind === "mac" && startable(each))
+    if (at.kind === "mac") void macCatalog(client.gateway, client.deviceId, at.deviceId, into?.folder, (found) => current && setCatalog(found))
+    else {
+      // The cloud's harnesses, with the models the person's most recent Mac lists for each.
+      let macs: Catalog | undefined
+      let cloudHarnessList: string[] | undefined
+      const tell = () => current && cloudHarnessList && setCatalog(cloudCatalog(cloudHarnessList, macs))
+      void cloudHarnesses(client.gateway).then((found) => {
+        cloudHarnessList = found.length ? found : [...WEB_HARNESSES]
+        tell()
+      })
+      if (mac)
+        void macCatalog(client.gateway, client.deviceId, mac.deviceId, undefined, (found) => {
+          macs = found
+          tell()
+        }).catch(() => undefined)
+    }
+    if (!into) {
+      const projectsAsked =
+        at.kind === "mac"
+          ? macWorktrees(client.gateway, client.deviceId, at.deviceId).then((worktrees) => macProjects(rows, at.deviceId, worktrees), () => macProjects(rows, at.deviceId, undefined))
+          : accountProjects(client.gateway).then((found) => found.map((each) => ({ id: each.url, name: each.name, usedAt: Date.parse(each.usedAt) })))
+      projectsAsked.then(
+        (found) => current && setProjects(found),
+        () => current && setProjects([])
+      )
+    }
+    return () => {
+      current = false
+    }
+  }, [key, client])
 
-  const repository = useMemo(() => (typed.trim() ? typedRepository(typed) : project ? typedRepository(project) : undefined), [typed, project])
-  const ready = entitled && repository !== undefined && text.trim().length > 0 && step === undefined
-  const start = async () => {
-    if (!repository || !ready) return
+  // The project and the loadout as they stand: the person's pick, else the one last started there, else the first
+  // project and the desk's first harness with its own default model.
+  const project = adding?.folder ?? (pickedProject && (projects?.some((each) => each.id === pickedProject) || typedRepository(pickedProject)) ? pickedProject : (projects?.find((each) => each.id === remembered?.project) ?? projects?.[0])?.id)
+  const offered = useMemo(() => (catalog ? orderedHarnesses(catalog, list.rows) : []), [catalog, list.rows])
+  // The one to start on: the person's pick, else the last started here, else the desk's first; one still being asked
+  // there is held rather than passed over, so the chip doesn't change under the person as the answers arrive.
+  const usable = offered.filter((each) => each.available || each.pending)
+  const preferred = usable.find((each) => each.harness === picked?.harness) ?? usable.find((each) => each.harness === remembered?.harness) ?? usable[0]
+  const chosenHarness = preferred?.available ? preferred : undefined
+  const harness = chosenHarness?.harness
+  const model = chosenHarness
+    ? picked?.harness === chosenHarness.harness
+      ? picked.model
+      : ((remembered?.harness === chosenHarness.harness ? modelByIdentity(chosenHarness.models, remembered.model)?.id : undefined) ?? chosenHarness.defaultModel)
+    : undefined
+  const modelLabel = chosenHarness ? (modelByIdentity(chosenHarness.models, model)?.label ?? (chosenHarness.models.length ? undefined : "Default model")) : undefined
+  const projectName = adding ? adding.folder.split("/").filter(Boolean).at(-1) : (projects?.find((each) => each.id === project)?.name ?? (project ? typedRepository(project)?.url.split("/").slice(-2).join("/") : undefined))
+  const ready = place !== undefined && startable(place) && project !== undefined && harness !== undefined && status === undefined
+
+  const start = async (text: string, attachments: PromptAttachment[]): Promise<boolean> => {
+    if (!place || !project || !harness) return false
+    if (!text && !attachments.length) return false
     setFailure(undefined)
-    localStorage.setItem("mako:web:harness", harness)
+    const message = { text, attachments, title: titleFromPrompt(text || attachments[0]?.name || "New thread") }
     try {
-      // Named from the first message, as the desk names every Thread it starts; the harness's own title replaces it.
-      const title = titleFromPrompt(text.trim())
-      const started = await startCloudThread(client.gateway, client.deviceId, { repository, harness, text: text.trim(), title }, setStep)
-      onStarted(started)
+      let started: Started
+      if (adding) {
+        setStatus(`Starting ${webHarnessLabel(harness)} in this Thread…`)
+        started = await addSession(client.gateway, client.deviceId, adding.owner, { thread: adding.thread, folder: adding.folder, harness, model, message })
+      } else if (place.kind === "mac") {
+        setStatus(`Starting on ${place.name}…`)
+        started = await startOnMac(client.gateway, client.deviceId, place.deviceId, { folder: project, harness, model, message })
+      } else {
+        const repository = typedRepository(project)
+        if (!repository) throw new Error("That isn't a GitHub repository: owner/repository")
+        started = await startInCloud(client.gateway, client.deviceId, { repository, harness, model, message }, (step) => setStatus(CLOUD_STEPS[step]))
+      }
+      if (!adding) rememberStart(placeKey(place), { project, harness, model })
+      setStatus(undefined)
+      onStarted(started, adding ? adding.where : place.kind === "cloud" ? "the cloud" : place.name)
+      return true
     } catch (error) {
+      setStatus(undefined)
       setFailure(error instanceof Error ? error.message : String(error))
-      setStep(undefined)
+      return false
     }
   }
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col bg-surface">
-      <header className="web-bar flex shrink-0 items-center gap-1 border-b border-hairline px-2">
-        <button type="button" aria-label="Back to threads" onClick={onBack} className="web-icon-button">
-          <ChevronLeftIcon className="size-5" />
-        </button>
-        <h1 className="flex flex-1 items-center gap-1.5 text-ui font-semibold">
-          <CloudIcon className="size-4 text-muted-foreground" />
-          New thread in the cloud
-        </h1>
-      </header>
-      <form
-        className="web-scroll min-h-0 flex-1 overflow-y-auto px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+20px)]"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void start()
-        }}
-      >
-        <div className="mx-auto flex max-w-[560px] flex-col gap-6">
-          {!entitled ? (
-            <p className="rounded-xl bg-raised px-4 py-3 text-ui text-muted-foreground ring-1 ring-hairline">This account's plan doesn't include the cloud yet. Threads on your Macs still show here, live.</p>
-          ) : null}
-          <fieldset className="flex flex-col gap-2" disabled={step !== undefined}>
-            <legend className="pb-2 text-label font-medium text-faint">Project</legend>
-            {projects === undefined ? (
-              <span className="skeleton h-11 rounded-xl" aria-hidden />
-            ) : projects.length ? (
-              <div className="flex flex-col overflow-hidden rounded-xl ring-1 ring-hairline">
-                {projects.slice(0, 6).map((each) => (
-                  <button
-                    key={each.url}
-                    type="button"
-                    aria-pressed={project === each.url && !typed.trim()}
-                    onClick={() => {
-                      setProject(each.url)
-                      setTyped("")
-                    }}
-                    className="web-row flex h-12 items-center gap-3 border-b border-hairline px-3.5 text-left last:border-b-0"
-                  >
-                    <GitBranchIcon className="size-4 shrink-0 text-faint" />
-                    <span className="min-w-0 flex-1 truncate text-ui">{each.name}</span>
-                    {project === each.url && !typed.trim() ? <CheckIcon className="size-4 text-foreground" /> : null}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-            <input
-              value={typed}
-              onChange={(event) => setTyped(event.target.value)}
-              placeholder={projects?.length ? "Or another: owner/repository" : "A GitHub repository: owner/repository"}
-              aria-label="GitHub repository"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              inputMode="url"
-              className={cn("web-field", typed.trim() && !typedRepository(typed) && "ring-negative/60")}
-            />
-          </fieldset>
-          <fieldset className="flex flex-col gap-2" disabled={step !== undefined}>
-            <legend className="pb-2 text-label font-medium text-faint">Harness</legend>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {offered.map((each) => (
-                <button
-                  key={each}
-                  type="button"
-                  aria-pressed={harness === each}
-                  onClick={() => setHarness(each)}
-                  className={cn("pressable flex h-11 items-center gap-2 rounded-xl px-3 text-ui ring-1", harness === each ? "bg-fill-selected font-medium ring-border" : "text-muted-foreground ring-hairline")}
-                >
-                  <WebHarnessIcon harness={each} className="size-4" />
-                  <span className="truncate">{webHarnessLabel(each)}</span>
-                </button>
-              ))}
-            </div>
-          </fieldset>
-          <label className="flex flex-col gap-2">
-            <span className="text-label font-medium text-faint">First message</span>
-            <textarea ref={input} value={text} onChange={(event) => setText(event.target.value)} placeholder="What should it work on?" className="web-field min-h-24 resize-none py-3 leading-relaxed" disabled={step !== undefined} />
-          </label>
-          {failure ? (
-            <p role="alert" className="rounded-xl bg-negative/10 px-4 py-3 text-ui text-negative">
-              {failure}
-            </p>
-          ) : null}
-          {step ? (
-            <p role="status" className="flex items-center gap-2.5 text-ui text-muted-foreground">
-              <Orb state="working" size={20} />
-              {STEP_WORDS[step]}…
-            </p>
-          ) : null}
-          <button type="submit" disabled={!ready} className="web-button h-12 justify-center">
-            <SendGlyph />
-            Start in the cloud
-          </button>
-        </div>
-      </form>
+  const chips = (
+    <div className="web-scroll flex gap-1.5 overflow-x-auto px-3 pt-1 pb-2" role="group" aria-label="Where and with what">
+      <Chip label="Where it runs" disabled={Boolean(adding)} onClick={() => setPicking("place")}>
+        {place?.kind === "cloud" ? <CloudIcon className="size-3.5" /> : <LaptopIcon className="size-3.5" />}
+        <span>{adding ? adding.where : place ? (place.kind === "cloud" ? "Cloud" : place.name) : "Choose"}</span>
+      </Chip>
+      <Chip label="Project" disabled={Boolean(adding)} onClick={() => setPicking("project")}>
+        <FolderIcon className="size-3.5" />
+        {projectName ? <span>{projectName}</span> : projects === undefined && place && startable(place) ? <span className="skeleton h-3 w-12 rounded" /> : <span>Choose</span>}
+      </Chip>
+      <Chip label="Harness and model" onClick={() => setPicking("loadout")}>
+        {preferred ? <WebHarnessIcon harness={preferred.harness} className="size-3.5" /> : null}
+        {chosenHarness ? <span>{modelLabel ?? webHarnessLabel(chosenHarness.harness)}</span> : preferred?.pending || !catalog ? <span className="skeleton h-3 w-16 rounded" /> : <span>Choose</span>}
+      </Chip>
     </div>
+  )
+
+  return (
+    <div className="flex min-h-0 flex-col pb-[env(safe-area-inset-bottom)]">
+      <h2 className="sr-only">{adding ? "Add a Session" : "New thread"}</h2>
+      {status ? (
+        <p role="status" className="flex items-center gap-2 px-4 pb-1 text-label text-muted-foreground">
+          <Spinner aria-hidden className="size-3.5" />
+          {status}
+        </p>
+      ) : failure ? (
+        <p role="alert" className="px-4 pb-1 text-label text-negative">
+          {failure}
+        </p>
+      ) : null}
+      <Composer autoFocus placeholder="What should it work on?" accessory={chips} sendable={ready} onSend={start} sendLabel="Start" />
+      <PlaceSheet open={picking === "place"} onDismiss={() => setPicking(undefined)} all={all} chosen={chosenPlace} onPick={(next) => {
+        if (next !== chosenPlace) {
+          setProjects(undefined)
+          setCatalog(undefined)
+          setPickedProject(undefined)
+        }
+        setChosenPlace(next)
+        setPicking(undefined)
+      }} />
+      <ProjectSheet open={picking === "project"} onDismiss={() => setPicking(undefined)} place={place} projects={projects} chosen={project} onPick={(next) => {
+        setPickedProject(next)
+        setPicking(undefined)
+      }} />
+      <LoadoutSheet open={picking === "loadout"} onDismiss={() => setPicking(undefined)} offered={offered} harness={preferred?.harness} model={model} onPick={(nextHarness, nextModel) => {
+        setPicked({ harness: nextHarness, model: nextModel })
+        setPicking(undefined)
+      }} />
+    </div>
+  )
+}
+
+function Chip({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" aria-label={label} disabled={disabled} onClick={onClick} className="web-chip">
+      <span className="flex min-w-0 items-center gap-1.5 [&>span:last-child]:truncate">{children}</span>
+      {disabled ? null : <ChevronDownIcon aria-hidden className="size-3 opacity-60" />}
+    </button>
+  )
+}
+
+function Choice({ chosen, disabled, onClick, children, detail }: { chosen: boolean; disabled?: boolean; onClick: () => void; children: React.ReactNode; detail?: string }) {
+  return (
+    <button type="button" aria-pressed={chosen} disabled={disabled} onClick={onClick} className="web-choice">
+      <span className="flex min-w-0 flex-1 items-center gap-3">{children}</span>
+      {detail ? <span className="shrink-0 text-label text-faint">{detail}</span> : null}
+      <CheckIcon aria-hidden className={cn("size-4 shrink-0 text-foreground", !chosen && "invisible")} />
+    </button>
+  )
+}
+
+function PlaceSheet({ open, onDismiss, all, chosen, onPick }: { open: boolean; onDismiss: () => void; all: Place[]; chosen: string | undefined; onPick: (place: string) => void }) {
+  return (
+    <Sheet open={open} onDismiss={onDismiss} label="Where it runs">
+      <h3 className="px-5 pb-2 text-title font-semibold">Where it runs</h3>
+      <SheetScroll className="flex flex-col px-2 pb-[calc(env(safe-area-inset-bottom)+12px)]">
+        {all.length === 0 ? <p className="px-3 py-4 text-ui text-muted-foreground">No Mac is signed in to this account yet, and the cloud isn't on for it.</p> : null}
+        {all.map((place) => (
+          <Choice key={placeKey(place)} chosen={chosen === placeKey(place)} disabled={!startable(place)} onClick={() => onPick(placeKey(place))} detail={place.kind === "mac" && place.quietSince ? `Off · ${copyAge(Date.parse(place.quietSince))}` : undefined}>
+            {place.kind === "cloud" ? <CloudIcon className="size-[18px] text-muted-foreground" /> : <LaptopIcon className="size-[18px] text-muted-foreground" />}
+            <span className="truncate">{place.kind === "cloud" ? "Cloud" : place.name}</span>
+          </Choice>
+        ))}
+      </SheetScroll>
+    </Sheet>
+  )
+}
+
+function ProjectSheet({ open, onDismiss, place, projects, chosen, onPick }: { open: boolean; onDismiss: () => void; place: Place | undefined; projects: StartProject[] | undefined; chosen: string | undefined; onPick: (project: string) => void }) {
+  const [typed, setTyped] = useState("")
+  const repository = typed.trim() ? typedRepository(typed) : undefined
+  return (
+    <Sheet open={open} onDismiss={onDismiss} label="Project" tall>
+      <h3 className="px-5 pb-2 text-title font-semibold">Project</h3>
+      <SheetScroll className="flex flex-col px-2 pb-[calc(env(safe-area-inset-bottom)+12px)]">
+        {projects === undefined ? (
+          <span className="mx-3 my-2 flex items-center gap-2 text-ui text-muted-foreground">
+            <Spinner className="size-3.5" />
+            Reading its projects…
+          </span>
+        ) : projects.length === 0 && place?.kind === "mac" ? (
+          <p className="px-3 py-4 text-ui text-muted-foreground">No project on {place.name} has a Thread yet. Start one there first, and it's offered here after.</p>
+        ) : null}
+        {projects?.map((each) => (
+          <Choice key={each.id} chosen={chosen === each.id} onClick={() => onPick(each.id)} detail={each.usedAt ? formatRelative(each.usedAt) : undefined}>
+            <FolderIcon className="size-[18px] text-muted-foreground" />
+            <span className="truncate">{each.name}</span>
+          </Choice>
+        ))}
+        {place?.kind === "cloud" ? (
+          <form
+            className="flex gap-2 px-2 pt-3"
+            onSubmit={(event) => {
+              event.preventDefault()
+              if (repository) onPick(repository.url)
+            }}
+          >
+            <input value={typed} onChange={(event) => setTyped(event.target.value)} placeholder="owner/repository" aria-label="Another GitHub repository" autoCapitalize="off" autoCorrect="off" spellCheck={false} inputMode="url" className={cn("web-field", typed.trim() && !repository && "ring-negative/60")} />
+            <button type="submit" disabled={!repository} className="web-button shrink-0">
+              Use
+            </button>
+          </form>
+        ) : null}
+      </SheetScroll>
+    </Sheet>
+  )
+}
+
+function LoadoutSheet({ open, onDismiss, offered, harness, model, onPick }: { open: boolean; onDismiss: () => void; offered: OfferedHarness[]; harness: string | undefined; model: string | undefined; onPick: (harness: string, model: string | undefined) => void }) {
+  // The harness whose models are shown: the chosen one until another is tapped, and again each time it opens.
+  const [tapped, setTapped] = useState<string | undefined>(undefined)
+  const shown = tapped ?? harness
+  const current = offered.find((each) => each.harness === shown)
+  const close = () => {
+    setTapped(undefined)
+    onDismiss()
+  }
+  const pick = (next: string, nextModel: string | undefined) => {
+    setTapped(undefined)
+    onPick(next, nextModel)
+  }
+  return (
+    <Sheet open={open} onDismiss={close} label="Harness and model" tall>
+      <h3 className="px-5 pb-2 text-title font-semibold">Harness and model</h3>
+      <div className="web-scroll flex shrink-0 gap-1.5 overflow-x-auto px-4 pb-3" role="tablist" aria-label="Harness">
+        {offered.map((each) => (
+          <button key={each.harness} type="button" role="tab" aria-selected={each.harness === shown} disabled={!each.available && !each.pending} onClick={() => (each.models.length ? setTapped(each.harness) : pick(each.harness, undefined))} className="web-chip web-chip-tab">
+            <WebHarnessIcon harness={each.harness} className="size-4" />
+            {webHarnessLabel(each.harness)}
+          </button>
+        ))}
+      </div>
+      <SheetScroll className="flex flex-col px-2 pb-[calc(env(safe-area-inset-bottom)+12px)]">
+        {current && !current.available ? <p className="px-3 py-2 text-ui text-muted-foreground">{current.pending ? "Still checking this harness there…" : (current.error ?? "Not signed in there.")}</p> : null}
+        {current?.available
+          ? current.models.map((each) => (
+              <Choice key={each.id} chosen={current.harness === harness && (model ?? current.defaultModel) === each.id} onClick={() => pick(current.harness, each.id)} detail={each.id === current.defaultModel ? "Default" : undefined}>
+                <span className="truncate">{each.label}</span>
+              </Choice>
+            ))
+          : null}
+        {current?.available && current.models.length === 0 ? (
+          <Choice chosen={current.harness === harness} onClick={() => pick(current.harness, undefined)}>
+            <span className="truncate">Its default model</span>
+          </Choice>
+        ) : null}
+      </SheetScroll>
+    </Sheet>
   )
 }

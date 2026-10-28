@@ -1,6 +1,4 @@
-import { bootFolder, CloudRepositorySchema, githubRepositoryUrl, type CloudRepository } from "@mako/host/contracts/cloud-threads"
-import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
-import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
+import { CloudRepositorySchema, githubRepositoryUrl, type CloudRepository } from "@mako/host/contracts/cloud-threads"
 import { z } from "zod"
 import type { Gateway } from "./gateway"
 
@@ -22,15 +20,6 @@ const CloudHarnessesSchema = z.object({
   harnesses: z.union([z.array(z.object({ harness: z.string().optional(), name: z.string().optional() })), z.record(z.string(), z.json())]),
 })
 
-/** What a phone's start of a cloud Thread made: the Thread, and the conversation its first message went to. */
-export interface StartedThread {
-  threadId: string
-  conversationId: string
-}
-
-/** The steps of a start, as the sheet says them: the Thread made, its machine up and its folder read, the harness started. */
-export type StartStep = "making" | "preparing" | "starting"
-
 /** The repository a person typed: a GitHub address in any of the shapes Git takes, or `owner/name`. */
 export function typedRepository(text: string): CloudRepository | undefined {
   const trimmed = text.trim().replace(/\/+$/, "")
@@ -44,32 +33,6 @@ export function typedRepository(text: string): CloudRepository | undefined {
 export async function accountProjects(gateway: Gateway): Promise<WebProject[]> {
   const { projects } = ProjectsSchema.parse(await gateway.rest("GET", "/v1/projects"))
   return projects
-}
-
-/**
- * Starts a Thread in the cloud from this browser, as a Mac's cloud start does (`CloudConversations.#start`): the Thread
- * made with its repository, its machine's folder read from its boot, then the harness started there with the first
- * message as its first request. Its machine reports it to the account's list, so every device lists it as it starts.
- */
-export async function startCloudThread(
-  gateway: Gateway,
-  deviceId: string,
-  start: { repository: CloudRepository; harness: string; text: string; title?: string; modeId?: string },
-  step: (step: StartStep) => void
-): Promise<StartedThread> {
-  step("making")
-  const threadId = `t-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`
-  await gateway.rest("POST", "/v1/threads", { threadId, home: "cloud", repository: start.repository, harness: start.harness })
-  const calls = gatewayHostCalls(gateway.session, { threadId, actor: { kind: "client", client: "web", deviceId }, history: true })
-  step("preparing")
-  const cwd = bootFolder(await sendWithRepeats("mako:boot", calls.call("mako:boot", []), { threadId }))
-  step("starting")
-  const conversationId = crypto.randomUUID()
-  const options: LiveStartOptions = { conversationId, initialRequest: { id: crypto.randomUUID(), text: start.text, attachments: [] } }
-  if (start.title) options.title = start.title
-  if (start.modeId) options.modeId = start.modeId
-  await sendWithRepeats("mako:live-start", calls.call("mako:live-start", [start.harness, cwd, options]), { threadId, conversationId })
-  return { threadId, conversationId }
 }
 
 /** The harnesses this cloud's machines run, by name; empty when the cloud names no image (a local one). */

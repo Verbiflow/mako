@@ -26,6 +26,10 @@ import {
   gatewayOverSockets,
   LINK_VERSION,
   MEDIA_MESSAGE_LIMIT,
+  PORT_BODY_LIMIT,
+  PORTS_VERSION,
+  decodePortHead,
+  encodePortHead,
   MediaTooLargeError,
   decodeMediaMessage,
   mediaStreamOf,
@@ -81,7 +85,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 6)
+    assert.equal(SUPPORTED_VERSIONS.max, 7)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -1159,6 +1163,64 @@ describe("a runtime's media", () => {
       await runtime.done
       await gateway.close()
     }
+  })
+})
+
+describe("a runtime's port requests", () => {
+  /** A runtime on a link the test plays the gateway's side of, agreed at `version`, with a port handler that records. */
+  async function served(version, options = {}) {
+    const link = { ...scriptedLink(), media: [] }
+    link.sendMedia = (message) => link.media.push(decodeMediaMessage(message))
+    const calls = []
+    const senders = new Map()
+    const ports = {
+      open: (stream, request, sender) => {
+        calls.push(["open", stream, request])
+        senders.set(stream, sender)
+      },
+      acked: (stream, received) => calls.push(["acked", stream, received]),
+      closed: (stream) => calls.push(["closed", stream]),
+    }
+    link.push({ ...enrolled, version })
+    const runtime = await serveRuntime(link, { runtimeId: "d-laptop", build: "test", handle: async (operation) => answer(operation, null), ports: options.noPorts ? undefined : ports })
+    return { link, runtime, calls, senders }
+  }
+  const request = { to: { kind: "port", port: 3000 }, method: "GET", path: "/assets/app.js?v=2", headers: [["accept", "*/*"]] }
+
+  test("a request reaches the handler, its answer goes back on its stream, paced by the gateway and stopped by it", async () => {
+    const { link, runtime, calls, senders } = await served(PORTS_VERSION)
+    link.push(decodeGatewayFrame(encodeGatewayFrame({ type: "port-open", stream: "port-req-1", ...request })))
+    while (!calls.length) await settle()
+    assert.deepEqual(calls, [["open", "port-req-1", request]])
+    const sender = senders.get("port-req-1")
+    assert.equal(sender.send(encodePortHead({ status: 200, headers: [["content-type", "text/javascript"]] })), true)
+    assert.equal(sender.send(Uint8Array.of(1, 2, 3)), true)
+    assert.deepEqual(decodePortHead(link.media[0].data), { status: 200, headers: [["content-type", "text/javascript"]] })
+    assert.deepEqual([link.media[1].stream, [...link.media[1].data]], ["port-req-1", [1, 2, 3]])
+    link.push({ type: "media-ack", stream: "port-req-1", received: 3 })
+    link.push({ type: "media-unwatch", stream: "port-req-1" })
+    while (calls.length < 3) await settle()
+    assert.deepEqual(calls.slice(1), [["acked", "port-req-1", 3], ["closed", "port-req-1"]])
+    assert.equal(sender.send(Uint8Array.of(4)), false, "nothing more once the gateway stopped it")
+    runtime.close()
+    await runtime.done
+  })
+
+  test("a runtime with no handler, or on a link before ports, ends the request at once; a body crosses in its frame", async () => {
+    for (const [version, options] of [[PORTS_VERSION, { noPorts: true }], [PORTS_VERSION - 1, {}]]) {
+      const { link, runtime, calls } = await served(version, options)
+      link.push({ type: "port-open", stream: "port-req-1", ...request })
+      while (!link.sent.some((frame) => frame.type === "media-end")) await settle()
+      assert.equal(problemType(link.sent.find((frame) => frame.type === "media-end").problem), "unsupported-version")
+      assert.deepEqual(calls, [])
+      runtime.close()
+      await runtime.done
+    }
+    const posted = { ...request, method: "POST", body: Buffer.from("{}").toString("base64") }
+    assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame({ type: "port-open", stream: "port-req-2", ...posted })), { type: "port-open", stream: "port-req-2", ...posted })
+    assert.throws(() => GatewayFrameEnvelopeSchema.parse({ type: "port-open", stream: "port-req-3", ...request, body: "x".repeat(PORT_BODY_LIMIT * 2) }))
+    const files = { to: { kind: "files" }, method: "GET", path: "/file/asset/abc/def/shot.png", headers: [["range", "bytes=0-"]] }
+    assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame({ type: "port-open", stream: "port-req-4", ...files })), { type: "port-open", stream: "port-req-4", ...files })
   })
 })
 
