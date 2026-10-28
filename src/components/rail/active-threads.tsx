@@ -1,5 +1,6 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { useState } from "react"
+import { CloudIcon, LaptopIcon } from "lucide-react"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
@@ -23,6 +24,7 @@ import { ReadyBesideMark, ThreadStatusMark } from "@/components/rail/thread-stat
 import { threadStatus, useThreads } from "@/state/threads"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { acp, acpForThread, useAcp } from "@/state/acp"
+import { CLOUD_WHERE } from "@/state/cloud-moves"
 import type { AcpPresence } from "@/state/acp-presence"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useThreadPurposes } from "@/state/thread-purposes"
@@ -93,8 +95,9 @@ export function LiveAgentRow({
   // Session's state; this conversation's own mark is for when it's the news.
   const otherSession = foldState && foldState.status.kind !== "idle" && foldState.sessions[0]?.status !== foldState.status
   const named = useThreadTitles((titles) => (thread ? titles.byThread[thread]?.title : undefined))
+  // A Thread's name titles its row, this Mac's from its store, another device's from the account's list.
   const title =
-    named ?? presence.title ?? `New ${harnessLabel(presence.harness)} conversation`
+    named ?? presence.threadTitle ?? presence.title ?? `New ${harnessLabel(presence.harness)} conversation`
   const open = () => {
     if (folded) openFoldedThread(folded.thread, folded.members)
     else acp.activate(presence.key)
@@ -154,6 +157,7 @@ export function LiveAgentRow({
           {title}
         </span>
         <ThreadPurposeChip thread={thread} starting={presence.purpose} />
+        {presence.elsewhere ? <ElsewhereMark where={presence.elsewhere} /> : null}
         {folded ? <SessionCount count={folded.members.length} /> : null}
         {!indent ? (
           <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint">
@@ -181,4 +185,10 @@ export function LiveAgentRow({
       </div>
     </ThreadContextMenu>
   )
+}
+
+/** Where a Thread that isn't on this Mac runs, at a glance: a cloud machine, or another of your computers. The row's tip names it. */
+function ElsewhereMark({ where }: { where: string }) {
+  const Icon = where === CLOUD_WHERE ? CloudIcon : LaptopIcon
+  return <Icon aria-hidden data-elsewhere={where === CLOUD_WHERE ? "cloud" : "device"} className="size-3 shrink-0 text-faint/80" />
 }

@@ -295,6 +295,14 @@ try {
     "newest snapshot"
   )
   assert.ok(!threads.list().some((ref) => ref.path === "removed"))
+  // Another Mako on this Mac lists this Mac's own sessions too: the catalog says which it keeps, by harness, native ID
+  // and folder, in step with each row it hears.
+  assert.equal(threads.keepsNative("claude", "0b7e", "/Users/ana/api"), false, "a session the catalog hasn't heard of isn't kept here")
+  for (const listener of client.events) listener({ event: "updated", ref: { harness: "claude", nativeId: "0b7e", path: "/claude/0b7e.jsonl", cwd: "/Users/ana/api", title: "Retry" } })
+  assert.equal(threads.keepsNative("claude", "0b7e", "/Users/ana/api"), true, "one it heard of is, at once")
+  assert.equal(threads.keepsNative("claude", "0b7e", "/Users/bo/api"), false, "the same ID in another folder is another computer's")
+  for (const listener of client.events) listener({ event: "removed", path: "/claude/0b7e.jsonl" })
+  assert.equal(threads.keepsNative("claude", "0b7e", "/Users/ana/api"), false, "and once it's gone, it isn't")
   state.list = null
 
   // Losing the worker temporarily removes the reader; requests share its one restart.

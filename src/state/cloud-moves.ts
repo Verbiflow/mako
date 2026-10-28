@@ -49,7 +49,7 @@ export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, return
 export const useCloudMoves = createHook(cloudMovesStore)
 
 /** Where a moved conversation's folder is, as the cloud router names a cloud Thread's (`CLOUD_FOLDER_WHERE`). */
-const CLOUD_WHERE = "a cloud machine"
+export const CLOUD_WHERE = "a cloud machine"
 
 /**
  * Asks the host to move the Thread of `conversationId` to the cloud; its steps arrive as events. `handOff`: its agents

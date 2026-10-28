@@ -17,6 +17,7 @@ import {
   leaveSessionDraft,
   openSessionDraft,
   putSessionDraft,
+  rowStarted,
   rowThread,
   threadGroupsStore,
   useThreadGroups,
@@ -120,8 +121,9 @@ export type SessionTab =
  * A Thread's tabs in the Thread's order, the new tab last. A Session with
  * neither a catalog row nor a live conversation has nothing to show and is
  * left out; an empty one is reused by the next new tab. So is an archived
- * one, unless it is the Session on screen. A row that names this Thread
- * before the group's event arrives is shown after the rest.
+ * one, unless it is the Session on screen. Sessions the group doesn't name
+ * (a row that names this Thread before the group's event arrives, or every
+ * Session of a Thread another device runs) follow, oldest first.
  */
 export function threadSessionTabs(input: {
   thread: string
@@ -139,19 +141,21 @@ export function threadSessionTabs(input: {
     (row.sessionId !== undefined && grouped.has(row.sessionId)) || rowThread(row, threadOf) === thread
   const refs = new Map<string, ThreadRef>()
   const presences = new Map<string, AcpPresence>()
-  const order = [...grouped]
+  const unnamed = new Map<string, number>()
   for (const ref of input.refs) {
     if (!ref.sessionId || refs.has(ref.sessionId) || !belongs(ref)) continue
     if (archived && ref.sessionId !== shown && archivedThread(ref, archived)) continue
     refs.set(ref.sessionId, ref)
-    if (!grouped.has(ref.sessionId)) order.push(ref.sessionId)
+    if (!grouped.has(ref.sessionId)) unnamed.set(ref.sessionId, rowStarted(ref))
   }
   for (const presence of input.presences) {
     if (!presence.sessionId || presences.has(presence.sessionId) || !belongs(presence)) continue
     if (archived && presence.sessionId !== shown && archivedLive(presence, archived)) continue
     presences.set(presence.sessionId, presence)
-    if (!grouped.has(presence.sessionId) && !refs.has(presence.sessionId)) order.push(presence.sessionId)
+    if (!grouped.has(presence.sessionId) && !refs.has(presence.sessionId)) unnamed.set(presence.sessionId, rowStarted(presence))
   }
+  // The rail's fold orders a Thread's Sessions the same way (`foldThreads`): the group's, then the rest oldest first.
+  const order = [...grouped, ...[...unnamed].sort((left, right) => left[1] - right[1]).map(([id]) => id)]
   const tabs = order.flatMap((id): SessionTab[] => {
     const ref = refs.get(id)
     const presence = presences.get(id)

@@ -175,8 +175,14 @@ async function checkWindow() {
     await until(`Boolean(document.querySelector('[data-copy-notice]'))`, "the copy's notice above the composer")
     const notice = await evaluate(`document.querySelector('[data-copy-notice]').innerText`)
     assert.match(notice, /Studio is off/, "where it runs, and that it's off")
-    assert.match(notice, /copy it keeps in your account, from 4 minutes ago/, "what's on screen, and how old")
-    assert.match(notice, /A message you send waits in your account and runs on Studio once it's back/, "and that a message waits for it")
+    assert.match(notice, /reading its copy from 4 minutes ago/, "what's on screen, and how old")
+    // The notice is one line; the rest is a click away.
+    await click("[data-copy-notice] [aria-label='More about this']")
+    const more = `[...document.querySelectorAll('[data-radix-popper-content-wrapper]')].map(node => node.innerText).join(' ')`
+    await until(`${more}.includes('A message you send')`, "the notice's detail")
+    assert.match(await evaluate(more), /copy it keeps in your account, from 4 minutes ago\. A message you send waits in your account and runs on Studio once it's back/, "and that a message waits for it")
+    await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+    await until(`!${more}.includes('A message you send')`, "the detail closed")
     await until(`document.body.innerText.includes('Waiting on CI.')`, "the copy's history on screen")
     assert.equal(await evaluate(`document.querySelector('textarea')?.getAttribute('placeholder')`), "Message — waits for Studio to come back", "the composer says a message waits")
     // Its panels ask nothing of the Studio: each says it's off, once, instead of waiting on it.
@@ -219,6 +225,60 @@ async function checkWindow() {
     await until(`document.body.innerText.includes('That conversation left the cloud')`, "the one on screen says it left")
     await both("unlisted", ["[data-sonner-toast]", "[data-thread-row]"])
     console.log("Account Threads UI: another device's cloud conversation is listed in the rail at once, unopened, changes as the list does, and leaves it, saying so on screen")
+  }
+
+  {
+    // The sidebar lists Threads, wherever they run: this Mac's Thread with two Sessions, another Mac's with three and a
+    // cloud machine's with two are one row each, its Sessions folded under it, saying where it runs.
+    await window.loadURL(`${base}?mock&cloud=signed-in&invited&events&app=rail`)
+    await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 300, theme: 'dark'}))`)
+    await until(`Boolean(document.querySelector('[data-thread-row]')) && Boolean(globalThis.makoMockHost)`, "the rail and the fixture's host")
+    await until(`(document.querySelectorAll('[data-sonner-toast] [data-close-button]').forEach(button => button.click()), !document.querySelector('[data-sonner-toast]'))`, "the fixture's toasts closed")
+    const now = Date.now()
+    const session = (id, harness, title, status, minutes, extra) => ({
+      session: { id, harness, cwd: "/Users/you/api", title, status, connection: "hibernated", modes: [], currentMode: null, configOptions: [] },
+      revision: 0,
+      createdAt: now - minutes * 60_000,
+      ...extra,
+    })
+    const studioThread = "5c3e8a10-7b2d-4f6e-9a1c-0d2e4f6a8b13"
+    const cloudThread = "9a7b5c3d-1e2f-4a6b-8c0d-2e4f6a8b0c15"
+    const onStudio = (id, sessionId, harness, title, status, minutes, extra = {}) => session(id, harness, title, status, minutes, { elsewhere: "Studio", threadId: studioThread, sessionId, threadTitle: "Flaky upload on Linux", ...extra })
+    const inCloud = (id, sessionId, harness, title, status, minutes) => session(id, harness, title, status, minutes, { elsewhere: "a cloud machine", threadId: cloudThread, sessionId })
+    await hostEvent({ type: "live-listed", summaries: [
+      onStudio("8f0e2a14-1c3b-4d5e-8f7a-9b0c1d2e3f41", "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c51", "codex", "Bisect the upload timeout", "ready", 95),
+      onStudio("8f0e2a14-1c3b-4d5e-8f7a-9b0c1d2e3f42", "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c52", "cursor", "Write the regression test", "running", 40, { waitingOn: "Approve: npm test -- upload" }),
+      onStudio("8f0e2a14-1c3b-4d5e-8f7a-9b0c1d2e3f40", "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c50", "claude", "Reproduce the flaky upload on Linux", "ready", 180),
+      inCloud("8f0e2a14-1c3b-4d5e-8f7a-9b0c1d2e3f44", "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c54", "claude", "Review the migration before it ships", "ready", 20),
+      inCloud("8f0e2a14-1c3b-4d5e-8f7a-9b0c1d2e3f43", "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c53", "codex", "Migrate the billing tables to the ledger", "running", 70),
+    ] })
+    const rowsSaying = (text) => `[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].filter(row => row.innerText.includes(${JSON.stringify(text)}))`
+    await until(`${rowsSaying("Flaky upload on Linux")}.length > 0 && ${rowsSaying("Migrate the billing tables")}.length > 0`, "the listed Threads in the rail")
+    await settle()
+    const rail = () => evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].map(row => ({ text: row.innerText.replace(/\\s+/g, ' ').trim(), label: row.getAttribute('aria-label'), where: row.querySelector('[data-elsewhere]')?.dataset.elsewhere }))`)
+    const listedTitles = ["Bisect the upload timeout", "Write the regression test", "Reproduce the flaky upload on Linux", "Review the migration", "Migrate the billing tables"]
+    const shown = await rail()
+    const studio = shown.filter((row) => row.text.includes("Flaky upload on Linux"))
+    assert.equal(studio.length, 1, `another Mac's Thread is one row: ${JSON.stringify(shown)}`)
+    assert.match(studio[0].label, /on Studio/, "saying where it runs")
+    assert.equal(studio[0].where, "device", "and showing it: another of your computers")
+    assert.match(studio[0].label, /3 sessions: Claude[^,]* idle, Codex[^,]* idle, Cursor[^,]* needs your approval/, "its Sessions in the order they started, the one waiting on you said")
+    const cloud = shown.filter((row) => listedTitles.slice(3).some((title) => row.text.includes(title)))
+    assert.equal(cloud.length, 1, `a cloud Thread is one row: ${JSON.stringify(shown)}`)
+    assert.match(cloud[0].text, /Migrate the billing tables/, "named by its first Session, as this Mac's are without a name")
+    assert.match(cloud[0].label, /on a cloud machine/)
+    assert.equal(cloud[0].where, "cloud")
+    assert.match(cloud[0].label, /2 sessions: Codex[^,]* working, Claude[^,]* idle/)
+    assert.equal(shown.filter((row) => listedTitles.slice(0, 3).some((title) => row.text.includes(title))).length, 0, "no Session of another Mac's Thread has a row of its own")
+    // Its first Session is idle; the Thread waits on you all the same, and its project says so.
+    assert.equal(await evaluate(`document.querySelector('.thread-jump-scope [data-folder-activity]')?.dataset.folderActivity`), "waiting", "the project counts the Thread, not its first Session")
+    // This Mac's own folded row says nothing of where it runs; its count says its two Sessions.
+    const local = await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].filter(row => !row.dataset.tip?.includes(' · on ')).map(row => row.querySelector('[aria-label$=" sessions"]')?.getAttribute('aria-label')).filter(Boolean)`)
+    assert.deepEqual(local, ["2 sessions"], `this Mac's Thread with two Sessions is one row: ${JSON.stringify(shown)}`)
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 40 })
+    await settle()
+    await both("sidebar-threads", [".thread-jump-scope"])
+    console.log("Account Threads UI: the sidebar lists Threads, one row each, this Mac's, another Mac's and a cloud machine's, saying where each runs")
   }
   clearTimeout(watchdog)
   app.exit(0)

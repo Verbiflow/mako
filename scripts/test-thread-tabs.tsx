@@ -70,7 +70,25 @@ assert.deepEqual([...fold.byLead.keys()], [parent.path], "the first Session's ro
 assert.deepEqual(fold.byLead.get(parent.path)?.members.map((row) => row.key), [parent.path, fork.key], "members in tab order")
 assert.deepEqual([...fold.hidden].sort(), [alias.path, fork.key].sort(), "the fork and the alias leave the list")
 assert.equal(foldThreads(rows.slice(0, 1), groups, threadOf).byLead.size, 0, "a Thread with one row visible stays an ordinary row")
-assert.equal(foldThreads(rows, {}, {}), EMPTY_FOLD, "no groups, nothing folds")
+assert.equal(foldThreads([{ kind: "native", key: "/solo", ref: { harness: "claude", nativeId: "solo", path: "/solo" } }], {}, {}), EMPTY_FOLD, "a row in no Thread folds nothing")
+
+// A Thread another device runs, or a cloud machine: this Mac's store has no group for it, and the account's list names
+// its Thread on each Session. One row all the same, its Sessions oldest first, whatever order the rows came in.
+const theirs = randomUUID()
+const away = (key: string, harness: string, createdAt: number, elsewhere: string): AcpPresence =>
+  ({ key, harness, cwd: "/Users/ana/api", createdAt, status: "ready", threadId: theirs, sessionId: randomUUID(), elsewhere })
+const studio = [away("s-3", "cursor", 3_000, "Studio"), away("s-1", "claude", 1_000, "Studio"), away("s-2", "codex", 2_000, "Studio")]
+const remote = foldThreads([...rows, ...studio.map((row): FoldRow => ({ kind: "live", key: row.key, presence: row }))], groups, threadOf)
+assert.deepEqual([...remote.byLead.keys()].sort(), [parent.path, "s-1"].sort(), "this Mac's Thread and the Studio's are one row each")
+assert.deepEqual(remote.byLead.get("s-1")?.members.map((row) => row.key), ["s-1", "s-2", "s-3"], "the Studio's Sessions oldest first, its first standing for it")
+assert.ok(remote.hidden.has("s-2") && remote.hidden.has("s-3") && !remote.hidden.has("s-1"))
+// The tab strip files the same Sessions in the same order: one rule for which Sessions make a Thread.
+const studioTabs = threadSessionTabs({ thread: theirs, refs: [], presences: studio, draft: undefined })
+assert.deepEqual(studioTabs.map((tab) => tab.kind === "session" && tab.presence?.key), ["s-1", "s-2", "s-3"], "its tabs, in the fold's order")
+// A Session the account lists from another device that this Mac's store files in its own Thread follows the store.
+const placedHere = { ...away("here", "grok", 500, "a cloud machine"), sessionId: third }
+const filed = foldThreads([...rows, { kind: "live", key: placedHere.key, presence: placedHere }], groups, threadOf)
+assert.deepEqual(filed.byLead.get(parent.path)?.members.map((row) => row.key), [parent.path, fork.key, "here"], "in the group's place")
 
 const members = fold.byLead.get(parent.path)?.members ?? []
 const read = foldedThreadState(members, () => ({ kind: "review", at: 1, unread: false }))

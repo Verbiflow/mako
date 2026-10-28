@@ -338,10 +338,10 @@ export type MakoLogEntry = Omit<z.infer<typeof LogRowSchema>, "value"> & MakoLog
 
 /**
  * Kept in their own tables, or by this host only; `revision` is in `progress`, which every flush moves; `wakeAt` is
- * read from `requests`. `elsewhere` and
+ * read from `requests`. `elsewhere`, `waitingOn`, `threadTitle` and
  * `copy` are a cloud router's word on a conversation it relays or reads from the account's copy, never a journal's.
  */
-type UnstoredMetadata = "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "copy" | "wakeAt"
+type UnstoredMetadata = "blocks" | "requests" | "harnessTurns" | "spentThrough" | "base" | "revision" | "activityAt" | "nativeActivity" | "side" | "historyFailure" | "elsewhere" | "waitingOn" | "threadTitle" | "copy" | "wakeAt"
 
 /**
  * Whether `next` holds metadata `previous` did not. Fields are compared by

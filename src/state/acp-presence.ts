@@ -25,6 +25,8 @@ export interface AcpPresence {
   elsewhere?: string
   /** What a conversation on another device waits on there, in a line ("Approve: npm test"). */
   waitingOn?: string
+  /** Its Thread's name as the device it runs on has it, when it runs elsewhere. */
+  threadTitle?: string
 }
 
 export function selectAcpPresence(state: AcpState): AcpPresence[] {
@@ -79,6 +81,7 @@ export function selectAcpPresence(state: AcpState): AcpPresence[] {
       if (presence.status === "background" && work) presence.background = work.count
       if (conversation.elsewhere) presence.elsewhere = conversation.elsewhere
       if (conversation.waitingOn) presence.waitingOn = conversation.waitingOn
+      if (conversation.threadTitle) presence.threadTitle = conversation.threadTitle
       return [presence]
     })
     .sort((left, right) => right.createdAt - left.createdAt)
@@ -108,6 +111,7 @@ export function sameAcpPresence(
         candidate.status === presence.status &&
         candidate.elsewhere === presence.elsewhere &&
         candidate.waitingOn === presence.waitingOn &&
+        candidate.threadTitle === presence.threadTitle &&
         candidate.background === presence.background
       )
     })

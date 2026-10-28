@@ -37,7 +37,7 @@ import {
   type BoardSection as BoardSectionData,
 } from "@/lib/thread-board"
 import { useRowFlip } from "@/components/rail/use-row-flip"
-import { EMPTY_FOLD, foldThreads, foldedThreadState, unreadReview, type FoldRow, type ThreadFold } from "@/lib/thread-fold"
+import { EMPTY_FOLD, foldThreads, foldedThreadState, presenceStatusOf, unreadReview, type FoldRow, type ThreadFold } from "@/lib/thread-fold"
 import { useThreadGroups } from "@/state/thread-groups"
 import { RailTip } from "@/components/rail/rail-tip"
 import { railRanksStore } from "@/state/rail-ranks"
@@ -281,16 +281,15 @@ export function AgentThreads() {
     )
   }, [all, cwd, deferred, filter, scope, archiveKeys, grouping, attention, working, externalActivity])
 
-  // A Thread with several Sessions is one row: its first Session's row
-  // stands for the rest, which leave the list before anything counts or
-  // ranks them.
+  // A Thread with several Sessions is one row, wherever they run: its first
+  // Session's row stands for the rest, which leave the list before anything
+  // counts or ranks them.
   const groups = useThreadGroups((state) => state.groups)
   const threadOf = useThreadGroups((state) => state.threadOf)
   const fold = useMemo((): ThreadFold => {
-    const grouped = (session?: string) => session !== undefined && threadOf[session] !== undefined
     const rows: FoldRow[] = [
-      ...matched.flatMap((ref): FoldRow[] => (grouped(ref.sessionId) ? [{ kind: "native", key: ref.path, ref }] : [])),
-      ...unboundLiveAgents.flatMap((presence): FoldRow[] => (grouped(presence.sessionId) ? [{ kind: "live", key: presence.key, presence }] : [])),
+      ...matched.map((ref): FoldRow => ({ kind: "native", key: ref.path, ref })),
+      ...unboundLiveAgents.map((presence): FoldRow => ({ kind: "live", key: presence.key, presence })),
     ]
     return rows.length ? foldThreads(rows, groups, threadOf) : EMPTY_FOLD
   }, [matched, unboundLiveAgents, groups, threadOf])
@@ -303,7 +302,7 @@ export function AgentThreads() {
     [fold, unboundLiveAgents]
   )
 
-  const { priorities, threadActivity, statuses } = useMemo(() => {
+  const { priorities, threadActivity, statuses, countedLive } = useMemo(() => {
     const state = {
       ...threadsStore.get(),
       attention,
@@ -332,19 +331,26 @@ export function AgentThreads() {
         observed: sessions.some((session) => session.kind === "observed"),
       }
     }
-    return { priorities: nextPriorities, threadActivity: nextActivity, statuses: nextStatuses }
-  }, [attention, externalActivity, fold, shownRefs, observed, working])
+    // A folded Thread whose row is a conversation's counts as the Thread: one of its Sessions waiting on you is the
+    // folder's to say, whichever Session leads it.
+    const live = shownLive.map((presence) => {
+      const folded = fold.byLead.get(presence.key)
+      const standing = folded && presenceStatusOf(foldedThreadState(folded.members, (member) => threadStatus(member, state)).status)
+      return standing && standing !== presence.status ? { ...presence, status: standing } : presence
+    })
+    return { priorities: nextPriorities, threadActivity: nextActivity, statuses: nextStatuses, countedLive: live }
+  }, [attention, externalActivity, fold, shownRefs, shownLive, observed, working])
 
   const asks = useMemo((): RailAsk[] => [
     ...shownRefs.flatMap((ref): RailAsk[] => {
       const kind = statuses[ref.path]?.kind
       return kind === "needs-permission" || kind === "failed" ? [{ key: ref.path, title: ref.title ?? "A thread", kind }] : []
     }),
-    ...shownLive.flatMap((presence): RailAsk[] =>
+    ...countedLive.flatMap((presence): RailAsk[] =>
       presence.status === "needs-permission" || presence.status === "failed"
         ? [{ key: presence.key, title: presence.title ?? "A conversation", kind: presence.status }]
         : []),
-  ], [shownRefs, shownLive, statuses])
+  ], [shownRefs, countedLive, statuses])
 
   // Ranks from the last render decide this one, so a thread that is busy
   // keeps its place instead of climbing on every appended byte.
@@ -366,7 +372,7 @@ export function AgentThreads() {
     () =>
       groupThreadFolders({
         refs: shownRefs,
-        live: shownLive,
+        live: countedLive,
         currentCwd: cwd,
         pinnedThreads: pinned,
         pinnedFolders: pinnedProjects,
@@ -376,7 +382,7 @@ export function AgentThreads() {
         sortBy,
         folderMap,
       }),
-    [cwd, shownRefs, shownLive, pinned, pinnedProjects, priorities, shownRanks, sortBy, threadActivity, folderMap]
+    [cwd, shownRefs, countedLive, pinned, pinnedProjects, priorities, shownRanks, sortBy, threadActivity, folderMap]
   )
   // A folder takes its place when first seen and keeps it until you work
   // there. Agent output never moves one.
@@ -408,15 +414,15 @@ export function AgentThreads() {
           item: { kind: "native" as const, ref },
         }
       }),
-      ...shownLive.map((presence) => ({
+      ...shownLive.map((presence, index) => ({
         key: presence.key,
-        bucket: liveBoardBucket(presence.status),
+        bucket: liveBoardBucket(countedLive[index]?.status ?? presence.status),
         at: new Date(presence.createdAt).toISOString(),
         item: { kind: "live" as const, presence },
       })),
     ]
     return groupThreadBoard(items)
-  }, [grouping, shownRefs, statuses, shownRanks, shownLive])
+  }, [grouping, shownRefs, statuses, shownRanks, shownLive, countedLive])
 
   const searchActive = Boolean(deferred.trim())
   useRowFlip(scroller, `${grouping}:${searchActive}`)

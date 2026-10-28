@@ -1,6 +1,7 @@
 import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
 import type { ThreadRef } from "@/lib/types"
 import type { AcpPresence } from "@/state/acp-presence"
+import { rowStarted, rowThread } from "@/state/thread-groups"
 import { sameThreadStatus, threadStatusPriority, type ThreadStatus } from "@/state/thread-status"
 
 /** A rail row as the fold sees it: a catalog row, or a live conversation with none. */
@@ -36,39 +37,54 @@ export function foldRowHarness(row: FoldRow): string {
   return row.kind === "native" ? row.ref.harness : row.presence.harness
 }
 
+function foldRowStarted(row: FoldRow): number {
+  return rowStarted(row.kind === "native" ? row.ref : row.presence)
+}
+
 /**
- * Fold rows that share a multi-Session Thread into the row of its first
- * Session. Catalog rows come before live ones, so when a Session has both
- * the catalog row stands for it. A Thread with only one row visible stays
- * an ordinary row.
+ * Fold rows that share a Thread into the row of its first Session: a Thread
+ * is one row however many Sessions it has, wherever they run. A row's Thread
+ * is the one the tab strip shows it in (`rowThread`): this Mac's store's
+ * group, else the Thread its row names, which is how a Thread another device
+ * or a cloud machine runs is known, from the account's list. Its Sessions go
+ * in the group's order, then the rest oldest first. A Session with two rows
+ * (a catalog row and a live one, or one per harness it moved through) shows
+ * once: the first row stands for it, and catalog rows come first. A Thread
+ * with one row visible stays an ordinary row.
  */
 export function foldThreads(
   rows: Iterable<FoldRow>,
   groups: Readonly<Record<string, ThreadGroup>>,
   threadOf: Readonly<Record<string, string>>
 ): ThreadFold {
-  const bySession = new Map<string, FoldRow>()
-  const duplicates: string[] = []
-  const threads = new Set<string>()
+  const sessions = new Set<string>()
+  const byThread = new Map<string, FoldRow[]>()
+  const hidden = new Set<string>()
   for (const row of rows) {
     const session = foldRowSession(row)
-    const thread = session === undefined ? undefined : threadOf[session]
+    const thread = session === undefined ? undefined : rowThread(row.kind === "native" ? row.ref : row.presence, threadOf)
     if (session === undefined || thread === undefined) continue
-    if (bySession.has(session)) duplicates.push(row.key)
-    else bySession.set(session, row)
-    threads.add(thread)
+    if (sessions.has(session)) {
+      hidden.add(row.key)
+      continue
+    }
+    sessions.add(session)
+    const members = byThread.get(thread)
+    if (members) members.push(row)
+    else byThread.set(thread, [row])
   }
-  if (!threads.size) return EMPTY_FOLD
   const byLead = new Map<string, FoldedThread>()
-  const hidden = new Set(duplicates)
-  for (const thread of threads) {
-    const members = groups[thread]?.sessions.flatMap((session) => bySession.get(session.id) ?? []) ?? []
+  for (const [thread, rowsOfThread] of byThread) {
+    if (rowsOfThread.length < 2) continue
+    const order = new Map<string, number>(groups[thread]?.sessions.map((session, index) => [session.id, index]))
+    const rank = (row: FoldRow) => order.get(foldRowSession(row) ?? "") ?? order.size
+    const members = rowsOfThread.toSorted((left, right) => rank(left) - rank(right) || foldRowStarted(left) - foldRowStarted(right))
     const [lead, ...rest] = members
-    if (!lead || !rest.length) continue
+    if (!lead) continue
     byLead.set(lead.key, { thread, lead: lead.key, members })
     for (const row of rest) hidden.add(row.key)
   }
-  return { byLead, hidden }
+  return byLead.size || hidden.size ? { byLead, hidden } : EMPTY_FOLD
 }
 
 /** A live conversation's state in the rail's status vocabulary. */
@@ -79,6 +95,27 @@ export function presenceThreadStatus(presence: AcpPresence): ThreadStatus {
     return { kind: "working", since: presence.createdAt }
   if (presence.status === "background") return { kind: "background", count: presence.background ?? 1 }
   return { kind: "idle" }
+}
+
+/**
+ * A folded Thread's state in a live row's vocabulary, for a Thread whose row
+ * is a conversation's (one on another device, or in the cloud): its folder's
+ * chip and the rail's asks count the Thread, not only its first Session.
+ */
+export function presenceStatusOf(status: ThreadStatus): AcpPresence["status"] | undefined {
+  switch (status.kind) {
+    case "needs-permission":
+      return "needs-permission"
+    case "failed":
+      return "failed"
+    case "working":
+    case "external-active":
+      return "running"
+    case "background":
+      return "background"
+    default:
+      return undefined
+  }
 }
 
 /** One Session of a folded Thread, as its row reports it. */
