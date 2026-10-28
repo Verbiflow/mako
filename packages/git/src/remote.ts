@@ -92,3 +92,26 @@ export async function push(repository: Repository, branch: string, signal?: Abor
     }
   })
 }
+
+/**
+ * Moves `expected.branch` forward to `to` as `git merge --ff-only` does, so
+ * the index and the files move with it. Refused, with nothing changed, when
+ * HEAD or the branch moved since `expected`, a merge or rebase is under way,
+ * or a tracked file has uncommitted changes. Untracked files stay: Git
+ * refuses rather than overwrite one, and nothing is ever stashed.
+ */
+export async function fastForward(repository: Repository, expected: ExpectedHead, to: string, signal?: AbortSignal): Promise<void> {
+  await repository.write(async () => {
+    try {
+      const status = await repository.status()
+      if (expected.branch !== status.head.branch || expected.head !== status.head.oid)
+        throw new GitError({ kind: "moved", message: `${expected.branch} moved since it was read. Check again before updating.` })
+      idle(repository)
+      const changed = status.entries.filter((entry) => !entry.untracked).length
+      if (changed) throw new GitError({ kind: "local_changes", message: `${expected.branch} has uncommitted changes in ${changed === 1 ? "1 file" : `${changed} files`}.` })
+      await repository.git.run({ cwd: repository.root, args: ["merge", "--ff-only", "--no-autostash", "--no-stat", to], timeoutMs: NETWORK_TIMEOUT_MS, signal })
+    } finally {
+      repository.changedAll(`fast-forwarded to ${to}`)
+    }
+  })
+}

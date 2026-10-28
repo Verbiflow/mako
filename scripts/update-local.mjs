@@ -80,6 +80,7 @@ export async function updateLocal(options, dependencies) {
 async function install(options, dependencies) {
   const app = join(options.output, "mac-arm64/Mako.app")
   await dependencies.ensureSpace()
+  if (!(await dependencies.source())) return
   dependencies.say("Building Mako. Running agents are not stopped.")
   await dependencies.run(
     "npm",
@@ -143,6 +144,50 @@ async function install(options, dependencies) {
     throw error
   } finally {
     await release()
+  }
+}
+
+/**
+ * Read the checkout against its upstream as Settings › Updates does, say
+ * where it stands in the same words, and bring it forward when it can be and
+ * the person agrees. False when there is nothing to build: the installed app
+ * already carries what the checkout would.
+ */
+export async function prepareSource({ project, installed, say, ask }) {
+  const { Git } = await import("@mako/git")
+  const { readUpdateSource, bringForward } = await import("@mako/host/application/local-update-source")
+  const { updateSourceText, shortRevision } = await import("@mako/host/contracts/update-source-text")
+  const git = new Git()
+  try {
+    const reading = await readUpdateSource(git, project, { fetch: true, installed })
+    if (reading.kind === "unreadable") {
+      say(`${reading.reason} Building it as it is.`)
+      return true
+    }
+    const text = updateSourceText(reading)
+    say(`${text.title} (${text.standing}). ${text.detail}`)
+    if (text.offline) say(text.offline)
+    if (!text.action) return false
+    if (reading.plan.kind !== "fast-forward") return true
+    if (!(await ask(`${text.action}? [Y/n] `))) {
+      say(`Building ${reading.branch} as it is, at ${shortRevision(reading.head)}.`)
+      return true
+    }
+    const moved = await bringForward(git, project, reading)
+    if (moved) say(`Moved ${moved.branch} forward from ${shortRevision(moved.from)} to ${shortRevision(moved.to)}.`)
+    return true
+  } finally {
+    git.close()
+  }
+}
+
+/** The installed app's revision, when it is a local build that recorded one. */
+function installedRevision(app) {
+  try {
+    const build = z.object({ makoBuild: z.object({ revision: z.string().nullable(), dirty: z.boolean() }) }).parse(readLocalAppMetadata(app)).makoBuild
+    return { revision: build.revision, dirty: build.dirty }
+  } catch {
+    return null
   }
 }
 
@@ -362,7 +407,7 @@ async function main() {
   )
   if (args.includes("--help")) {
     console.log(
-      "npm run update:local\n\nBuilds a locally signed Mako, asks before installing, waits for Mako to close safely, installs, and reopens it. Never force-stops agents. Refuses to build when the disk is short of space, and removes the build output when it finishes.\n\n--check  Verify signer selection and report running processes without building or installing."
+      "npm run update:local\n\nFetches origin and, when this checkout is on the branch that tracks it, behind it and without uncommitted changes, offers to fast-forward it first; otherwise builds it as it is and says why. Stops when the installed app already carries that revision. Builds a locally signed Mako, asks before installing, waits for Mako to close safely, installs, and reopens it. Never force-stops agents. Refuses to build when the disk is short of space, and removes the build output when it finishes.\n\n--check  Verify signer selection and report running processes without building or installing."
     )
     return
   }
@@ -398,11 +443,30 @@ async function main() {
   const abort = new AbortController()
   const cancel = () => abort.abort()
   process.once("SIGINT", cancel)
+  const question = async (prompt) => {
+    const terminal = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    })
+    terminal.once("SIGINT", cancel)
+    try {
+      return (await terminal.question(prompt, { signal: abort.signal })).trim()
+    } finally {
+      terminal.close()
+    }
+  }
   try {
     await updateLocal(
       { project, output, identity },
       {
         say: console.log,
+        source: () =>
+          prepareSource({
+            project,
+            installed: installedRevision("/Applications/Mako.app"),
+            say: console.log,
+            ask: async (prompt) => /^(?:y(?:es)?)?$/i.test(await question(prompt)),
+          }),
         ensureSpace: async () => {
           // The build compiles in place and packages one app; it copies no checkout.
           const { ensureBuildSpace } =
@@ -413,25 +477,12 @@ async function main() {
         run: (command, args, env) => run(command, args, env, abort.signal),
         verify: resolveLocalIdentity,
         verifyStarted,
-        confirm: async () => {
-          const terminal = createInterface({
-            input: process.stdin,
-            output: process.stdout,
-          })
-          terminal.once("SIGINT", cancel)
-          try {
-            return /^y(?:es)?$/i.test(
-              (
-                await terminal.question(
-                  "Install this build once agents finish? The previous app will be kept. [y/N] ",
-                  { signal: abort.signal }
-                )
-              ).trim()
+        confirm: async () =>
+          /^y(?:es)?$/i.test(
+            await question(
+              "Install this build once agents finish? The previous app will be kept. [y/N] "
             )
-          } finally {
-            terminal.close()
-          }
-        },
+          ),
         prepareToClose: () => {
           abort.signal.throwIfAborted()
           return prepareToClose()

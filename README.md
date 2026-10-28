@@ -176,7 +176,11 @@ thread never starts an agent. Sending a prompt does.
 A source checkout can also produce a locally signed build with
 `npm run update:local`, which builds, waits for running agents to finish,
 installs, and reopens Mako. Locally signed installs can rebuild and reinstall
-themselves from Settings > Updates.
+themselves from Settings > Updates. Both fetch `origin` first: a checkout on
+the branch that tracks it, behind it and without uncommitted changes, is
+fast-forwarded before building; anything else is built as it is, and Mako
+says why. When the installed app already carries that revision, nothing is
+rebuilt.
 
 ## Keyboard
 

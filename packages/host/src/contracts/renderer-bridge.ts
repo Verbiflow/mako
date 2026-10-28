@@ -871,6 +871,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<UpdateInstallation>("mako:installation-state"),
     selectUpdateSource: (path: string) =>
       invokeTrustedHost<UpdateInstallation>("mako:select-update-source", path),
+    /** Fetches the source checkout's upstream and reads where the checkout stands; `force` fetches even within a minute of the last. */
+    checkUpdateSource: (force: boolean) =>
+      invokeTrustedHost<UpdateInstallation>("mako:check-update-source", force),
     buildUpdate: () => invokeTrustedHost<void>("mako:build-update"),
     updateState: () => invokeTrustedHost<UpdateState>("mako:update-state"),
     checkUpdates: () => invokeTrustedHost<UpdateState>("mako:check-updates"),

@@ -164,6 +164,19 @@ export const application = {
         })
     })
   },
+  /**
+   * Where the source checkout stands against its upstream, fetched first.
+   * Opening Updates asks without `force`, so a fetch within the last minute
+   * answers; Check again forces one. The host publishes the reading as it
+   * starts and ends, so nothing waits on it here and other actions stay open.
+   */
+  async checkSource(force = false): Promise<void> {
+    try {
+      applicationStore.set({ installation: await getMako().checkUpdateSource(force) })
+    } catch (error) {
+      applicationStore.set({ error: error instanceof Error ? error.message : "Mako couldn't read the source checkout." })
+    }
+  },
   build(): Promise<void> {
     application.openUpdates()
     return perform(async () => {
