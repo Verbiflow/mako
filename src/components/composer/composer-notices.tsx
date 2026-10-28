@@ -124,6 +124,8 @@ function NoticeStack({ entries }: { entries: readonly Entry[] }) {
   const rest = entries.filter((entry) => entry !== front)
   const next = rest.find((entry) => !leaving.has(entry.notice.id))
   const expanded = (open || detailOpen !== null) && rest.length > 0
+  // The stack arrives whole, its bar and words together; only a later front fades its words in, in a bar already there.
+  const [arrival] = useState(front.notice.id)
 
   useEffect(() => () => clearTimeout(fold.current), [])
   // A notice that went away on its own takes its open detail with it.
@@ -151,6 +153,7 @@ function NoticeStack({ entries }: { entries: readonly Entry[] }) {
       key={entry.notice.id}
       notice={entry.notice}
       place={place}
+      replacing={place === "front" && entry.notice.id !== arrival}
       leaving={leaving.has(entry.notice.id)}
       more={place === "front" && !expanded ? rest.length : 0}
       onMore={() => setOpen(true)}
@@ -208,16 +211,20 @@ function NoticeStack({ entries }: { entries: readonly Entry[] }) {
           className={cn("absolute inset-x-5 top-[3px] h-3 rounded-t-md transition-colors duration-150", LIPS[next.notice.tone])}
         />
       ) : null}
-      <div className="relative rounded-lg bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+      <div className={cn("relative rounded-lg bg-raised [box-shadow:inset_0_0_0_0.5px_var(--hairline)]", ARRIVE)}>
         {row(front, "front")}
       </div>
     </div>
   )
 }
 
+/** How a notice comes in: up from the composer as it fades in. */
+const ARRIVE = "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-[var(--ease-out)]"
+
 function NoticeRow({
   notice,
   place,
+  replacing,
   leaving,
   more,
   onMore,
@@ -228,6 +235,8 @@ function NoticeRow({
 }: {
   notice: ComposerNotice
   place: "front" | "list"
+  /** The front notice that took another's place, in a bar already drawn. */
+  replacing: boolean
   leaving: boolean
   more: number
   onMore(): void
@@ -254,7 +263,7 @@ function NoticeRow({
       className={cn(
         "flex min-h-9 min-w-0 items-center gap-2 rounded-md py-1 pr-1 pl-2.5 text-ui",
         "transition-[opacity,translate] duration-200 ease-[var(--ease-swift)]",
-        place === "front" && "motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1 motion-safe:duration-200 motion-safe:ease-[var(--ease-out)]",
+        replacing && ARRIVE,
         leaving && "-translate-y-1 opacity-0"
       )}
     >
