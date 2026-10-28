@@ -1,14 +1,20 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.310"
+    "version": "2.1.312"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/65ddca11-9b82-48c2-a925-7dbc51d649ce.jsonl",
-      "known": []
+      "path": ".claude/projects/-tmp-mako-pair-project/2f684f67-98f3-4487-9c3d-ffeff9d09c4e.jsonl",
+      "known": [
+        {
+          "side": "+",
+          "line": "note: Unread record: record tools-used — not a kind Mako reads",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

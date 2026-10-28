@@ -1,14 +1,20 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.310"
+    "version": "2.1.312"
   },
   "about": "Read notes.md, then tell me in one sentence what its second line says, citing the file and that line. An answer that cites a file and a line of it, which Devin 3000.10.23's model marks up for its client to link.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/54acc41a-b9c1-4801-8da2-f7863397d99a.jsonl",
-      "known": []
+      "path": ".claude/projects/-tmp-mako-pair-project/8cfb4d6e-c530-4da4-aff0-d80fb9f05df7.jsonl",
+      "known": [
+        {
+          "side": "+",
+          "line": "note: Unread record: record tools-used — not a kind Mako reads",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

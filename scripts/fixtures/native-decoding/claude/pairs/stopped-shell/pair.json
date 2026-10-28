@@ -1,14 +1,19 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.310"
+    "version": "2.1.312"
   },
   "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/babdb27b-d402-464b-8ca1-7ddc6220c0fe.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/0202d59c-405b-4aad-b82f-e8797dbcea40.jsonl",
       "known": [
+        {
+          "side": "+",
+          "line": "note: Unread record: record tools-used — not a kind Mako reads",
+          "reason": ""
+        },
         {
           "side": "+",
           "line": "note: Interrupted",
