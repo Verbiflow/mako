@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.164.0"
+    "version": "0.165.0"
   },
   "about": "Ask me with your question tool, once, whether the release should ship on Friday or Monday, then tell me what I picked. Don't run commands. A question with two options, answered with the first, then the answer.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T02-53-23-01a1727a-a6f0-7730-9a7b-b6ef8ae24cf2.jsonl",
+      "path": ".codex/sessions/2026/10/28/rollout-2026-10-28T12-56-15-01a18295-2611-7b32-bba3-8bde7501a98e.jsonl",
       "known": []
     }
   ]

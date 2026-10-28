@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.164.0"
+    "version": "0.165.0"
   },
   "about": "Run exactly this shell command once, with nothing added before or after it: `cat notes.md missing.md`. Then tell me what it printed and how it exited. A shell command that prints output and an error, then exits non-zero.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T02-53-19-01a1727a-96db-7581-b4c1-6ff79d7e2a2e.jsonl",
+      "path": ".codex/sessions/2026/10/28/rollout-2026-10-28T12-56-10-01a18295-122c-7511-a4c5-31a55220d3e1.jsonl",
       "known": []
     }
   ]
