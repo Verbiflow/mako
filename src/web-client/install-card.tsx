@@ -5,7 +5,7 @@ import { install, noteVisit, readOffer, shouldOffer, SNOOZE_MS, useInstallWay, w
 import { Sheet } from "./sheet"
 
 /**
- * The offer to add Mako to the Home Screen, at the foot of the list, once it has earned it: Chrome's own prompt where
+ * The offer to add Mako to the Home Screen, floating at the foot of the list under New, once it has earned it: Chrome's own prompt where
  * the browser has one, the two steps of the Share menu on an iPhone. Never inside the installed app.
  */
 export function InstallCard() {
@@ -20,7 +20,7 @@ export function InstallCard() {
   }
   return (
     <>
-      <aside aria-label="Add to Home Screen" className="web-install mx-3 mt-6 flex items-start gap-3 rounded-2xl p-3.5">
+      <aside aria-label="Add to Home Screen" className="web-install flex items-start gap-3 rounded-2xl p-3.5">
         <span className="flex size-10 shrink-0 items-center justify-center rounded-[11px] bg-shell ring-1 ring-hairline">
           <MakoMark className="size-5" />
         </span>

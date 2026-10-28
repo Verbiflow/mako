@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { ArchiveIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MessageSquareTextIcon, MoonIcon, PlusIcon, Settings2Icon } from "lucide-react"
 import { useRowFlip } from "@/components/rail/use-row-flip"
 import { MarkStack, StackedMark } from "@/components/ui/mark-stack"
@@ -37,6 +37,18 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide }: { sele
   const [showArchived, setShowArchived] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
+  const dock = useRef<HTMLDivElement>(null)
+  // The list scrolls clear of what floats at its foot: its last row ends above New and the install offer, however tall.
+  useEffect(() => {
+    const floating = dock.current
+    const rows = content.current
+    if (!floating || !rows) return
+    const fit = () => rows.style.setProperty("--dock", `${floating.getBoundingClientRect().height}px`)
+    const observer = new ResizeObserver(fit)
+    observer.observe(floating)
+    fit()
+    return () => observer.disconnect()
+  }, [])
   const pull = usePullToRefresh(scroller, content, () => client.list.refresh())
   useRowFlip(scroller, showArchived ? "archived" : "threads")
   const named = macCount(list) > 1
@@ -55,7 +67,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide }: { sele
       </header>
       <div ref={scroller} className="web-scroll relative min-h-0 flex-1 overflow-y-auto">
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
-        <div ref={content} className="pb-[calc(env(safe-area-inset-bottom)+96px)]">
+        <div ref={content} className="pb-[calc(var(--dock,96px)+16px)]">
           {threads.length === 0 && archived.length === 0 ? (
             <EmptyList phase={list.phase} onNew={onNew} />
           ) : (
@@ -106,12 +118,16 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide }: { sele
               ) : null}
             </section>
           ) : null}
-          <InstallCard />
         </div>
       </div>
-      <button type="button" aria-label="New thread" onClick={onNew} className="web-fab">
-        <PlusIcon className="size-6" strokeWidth={2.2} />
-      </button>
+      {/* What floats at the foot of the list, stacked so nothing covers anything: New, and under it the install offer
+          while it shows, each above the Home indicator. */}
+      <div ref={dock} className="web-list-foot">
+        <button type="button" aria-label="New thread" onClick={onNew} className="web-fab">
+          <PlusIcon className="size-6" strokeWidth={2.2} />
+        </button>
+        <InstallCard />
+      </div>
     </div>
   )
 }
