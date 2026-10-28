@@ -364,6 +364,11 @@ export interface LiveSummary {
   /** The Thread and Session this conversation belongs to, the same IDs a catalog row carries. */
   threadId?: string
   sessionId?: string
+  /**
+   * Its Thread's name, for a conversation listed from another device: the name the person or Mako gave the Thread
+   * there, which titles the Thread's row as this Mac's own Threads' names title theirs.
+   */
+  threadTitle?: string
 }
 
 /** A native session, as the catalog reads it. */

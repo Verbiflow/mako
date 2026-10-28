@@ -400,10 +400,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       else {
         railRows = undefined
         railPaths = undefined
+        late.cloudConversations?.nativeChanged()
       }
     } else if (event.type === "threads" || event.type === "thread-removed") {
       railRows = undefined
       railPaths = undefined
+      late.cloudConversations?.nativeChanged()
     }
     else if (event.type !== "thread-activity") return
     sessions.changed()
@@ -484,6 +486,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         },
         threads: () => threads.store ?? undefined,
         returning: (cloudThread) => late.cloudReturns?.returning(cloudThread),
+        keepsNative: (harness, nativeId, folder) => catalog.keepsNative(harness, nativeId, folder),
         // A message that waited in the account for one of this Mac's Sessions while it was off: sent here now, under
         // its own ID, through the same call a window's send makes, so it runs once however often it's heard.
         takeWaiting: async (message) => {

@@ -127,6 +127,12 @@ export function rowThread(row: { threadId?: string; sessionId?: string }, thread
   return (row.sessionId === undefined ? undefined : threadOf[row.sessionId]) ?? row.threadId
 }
 
+/** When a row's Session started, as a conversation (`createdAt`) or a catalog row (`startedAt`) says: a Thread's Sessions its group doesn't name go oldest first. */
+export function rowStarted(row: { createdAt?: number; startedAt?: string }): number {
+  const started = row.createdAt ?? (row.startedAt === undefined ? Number.NaN : Date.parse(row.startedAt))
+  return Number.isFinite(started) ? started : Number.MAX_SAFE_INTEGER
+}
+
 function withChange(groups: Readonly<Record<string, ThreadGroup>>, change: ThreadGroupChange) {
   const next = { ...groups }
   delete next[change.thread]

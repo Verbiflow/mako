@@ -270,6 +270,11 @@ export interface ThreadCatalog {
   /** Recovery must not depend on the sidebar's ordering or visible result cap. */
   nativePath(identity: NativeSourceIdentity): string | undefined
   /**
+   * Whether this Mac's harness stores keep the native session `nativeId` of `harness`, run in `folder`, past the rail's
+   * cap too: another Mako reading the same stores lists it as well (`CloudConversations`' `keepsNative`).
+   */
+  keepsNative(harness: string, nativeId: string, folder: string | undefined): boolean
+  /**
    * Read a file for a catalogued thread's viewer. Relative paths resolve
    * against the thread's workspace; absolute ones open as they are, so a file
    * the agent wrote outside the project and linked from its answer opens too.
@@ -484,6 +489,25 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   const mirror = new Map<string, ThreadRef>()
   let activityIndex: ActivityIndex | null = null
 
+  /** Every catalogued native session's folders, by harness and ID: built when first asked, kept in step with each row. */
+  let nativeFolders: Map<string, Set<string | undefined>> | null = null
+  const nativeKey = (harness: string, nativeId: string) => `${harness}\n${nativeId}`
+  function noteNativeFolder(folders: Map<string, Set<string | undefined>>, ref: ThreadRef): void {
+    const key = nativeKey(ref.harness, ref.nativeId)
+    const known = folders.get(key)
+    if (known) known.add(ref.cwd)
+    else folders.set(key, new Set([ref.cwd]))
+  }
+
+  function keepsNative(harness: string, nativeId: string, folder: string | undefined): boolean {
+    if (!nativeFolders) {
+      const folders = new Map<string, Set<string | undefined>>()
+      for (const ref of daemon ? mirror.values() : (catalog?.list() ?? [])) noteNativeFolder(folders, ref)
+      nativeFolders = folders
+    }
+    return nativeFolders.get(nativeKey(harness, nativeId))?.has(folder) === true
+  }
+
   function invalidateActivityRef(ref: ThreadRef): void {
     const old = activityIndex?.byPath.get(ref.path)
     if (!old || threadIdentity(old) !== threadIdentity(ref)) activityIndex = null
@@ -523,8 +547,14 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   }
 
   function emit(event: HostEvent): void {
-    if (event.type === "thread-ref") invalidateActivityRef(event.ref)
-    if (event.type === "threads" || event.type === "thread-removed") activityIndex = null
+    if (event.type === "thread-ref") {
+      invalidateActivityRef(event.ref)
+      if (nativeFolders) noteNativeFolder(nativeFolders, event.ref)
+    }
+    if (event.type === "threads" || event.type === "thread-removed") {
+      activityIndex = null
+      nativeFolders = null
+    }
     deps.emit(event)
     for (const subscriber of threadEventSubscribers) subscriber(event)
   }
@@ -680,12 +710,14 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   function applyDaemonEvent(event: DaemonEvent, announce: boolean): void {
     if (event.event === "added" || event.event === "updated") {
       invalidateActivityRef(event.ref)
+      if (nativeFolders) noteNativeFolder(nativeFolders, event.ref)
       noteStoreWrite(event.ref, mirror.get(event.ref.path))
       mirror.set(event.ref.path, event.ref)
       if (announce) emit({ type: "thread-ref", ref: annotate(event.ref) })
       reconcileProviderActivity()
     } else if (event.event === "removed") {
       activityIndex = null
+      nativeFolders = null
       mirror.delete(event.path)
       forgetStore(event.path)
       if (announce) emit({ type: "thread-removed", path: event.path })
@@ -829,6 +861,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         if (daemon !== client) return
         mirror.clear()
         activityIndex = null
+        nativeFolders = null
         for (const ref of refs) {
           noteStoreWrite(ref, undefined)
           mirror.set(ref.path, ref)
@@ -1176,6 +1209,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     void stopCatalogWorker()
     mirror.clear()
     activityIndex = null
+    nativeFolders = null
     transcriptArtifacts.clear()
   }
 
@@ -1623,6 +1657,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     ref: catalogRef,
     readRef: readThreadRef,
     nativePath: nativePathForSession,
+    keepsNative,
     readFile: readThreadFile,
     page: pageThread,
     hold: holdThread,

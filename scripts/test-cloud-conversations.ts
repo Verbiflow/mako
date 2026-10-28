@@ -1025,6 +1025,57 @@ test("every Session the account lists is listed here, unopened and waking nothin
   await until("the new account's list read", () => reads > reading && shown(cloudConversation) !== undefined && shown(studioConversation) === undefined)
 })
 
+test("a second Mako on this Mac, which lists this Mac's own sessions as its own, adds no rows here; another device's rows say its name once it's heard of, and their Thread's name", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  // Another profile on this Mac, reading the same harness stores, and the Studio, a Mac enrolled after the list was read.
+  const profile = "2d7c5e10-4f3a-4b6e-9c8d-1a2b3c4d5e6f"
+  const studio = "8e4b1f20-6a7c-4d9e-b0f1-2c3d4e5f6a7b"
+  const folder = "/Users/ana/api"
+  const row = (runsOn: ListedSession["runsOn"], extra: Partial<ListedSession> = {}): ListedSession => ({
+    session: randomUUID(), thread: randomUUID(), conversation: randomUUID(), harness: "claude", title: "Retry the webhooks", state: "idle", folder,
+    createdAt: "2026-10-27T07:20:00.000Z", activityAt: "2026-10-27T07:20:00.000Z", generation: 1, runsOn, listedAt: "2026-10-27T07:20:01.000Z", ...extra,
+  })
+  // The profile's catalog found a terminal's session in the stores this Mac reads too, and a conversation it opened
+  // wrote its session there as well: this Mac keeps both, in the same folder, under Sessions of its own.
+  const terminal = row({ kind: "device", deviceId: profile }, { nativeId: "0b7e", capture: { path: "/Users/ana/.claude/projects/-Users-ana-api/0b7e.jsonl" } })
+  const opened = row({ kind: "device", deviceId: profile }, { harness: "cursor", nativeId: "4c1d" })
+  // A session of the same harness and ID in another folder is another computer's own.
+  const same = row({ kind: "device", deviceId: profile }, { nativeId: "0b7e", folder: "/Users/bo/api" })
+  // The Studio's Thread, two Sessions under the name it was given there.
+  const studioThread = randomUUID()
+  const onStudio = [row({ kind: "device", deviceId: studio }, { thread: studioThread, threadTitle: "Webhook retries", nativeId: "9f2a" }), row({ kind: "device", deviceId: studio }, { thread: studioThread, threadTitle: "Webhook retries", harness: "codex" })]
+  // A Session that moved to a cloud machine runs there, whatever copy of its session is left on this Mac.
+  const inCloud = row({ kind: "cloud", threadId: "t-00000000000000ab" }, { nativeId: "0b7e" })
+  const kept = new Set([`claude\n0b7e\n${folder}`, `cursor\n4c1d\n${folder}`])
+  machine.account.sessionListings = async () => ({ sessions: [terminal, opened, same, ...onStudio, inCloud], seq: 1 })
+  let deviceReads = 0
+  machine.account.devices = async () => ({ devices: [{ id: profile, name: "Ana's MacBook Pro (2)" }, ...(deviceReads++ ? [{ id: studio, name: "Studio" }] : [])], current: myDevice! })
+  machine.account.onThreadListings = () => () => {}
+  const events: RuntimeEvent[] = []
+  const router = new CloudConversations({
+    account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-listed-here-")), "conversations.json"), emit: (event) => events.push(event), repositoryOf: async () => REPOSITORY,
+    keepsNative: (harness, nativeId, at) => kept.has(`${harness}\n${nativeId}\n${at}`),
+  })
+  after(() => router.dispose())
+  await router.start()
+  const shown = (id: string) => router.summaries().find((summary) => summary.session.id === id)
+  await until("the list read and listed here", () => shown(inCloud.conversation) !== undefined)
+  assert.equal(shown(terminal.conversation), undefined, "a session this Mac keeps is listed once, as this Mac's")
+  assert.equal(shown(opened.conversation), undefined, "a conversation the other profile opened too")
+  assert.equal(shown(same.conversation)?.elsewhere, "Ana's MacBook Pro (2)", "the same ID in another folder is that computer's own")
+  assert.equal(shown(inCloud.conversation)?.elsewhere, "a cloud machine")
+  await until("the Studio named, its devices read again", () => shown(onStudio[0]!.conversation)?.elsewhere === "Studio")
+  assert.equal(deviceReads, 2, "read again once, for the device it hadn't heard of")
+  assert.deepEqual(onStudio.map((each) => [shown(each.conversation)?.elsewhere, shown(each.conversation)?.threadId, shown(each.conversation)?.threadTitle]), [["Studio", studioThread, "Webhook retries"], ["Studio", studioThread, "Webhook retries"]], "both filed under the Studio's Thread, by its name")
+
+  // The session leaves this Mac's stores (its harness deleted it here): the other profile's row is listed.
+  kept.delete(`cursor\n4c1d\n${folder}`)
+  router.nativeChanged()
+  assert.equal(shown(opened.conversation)?.elsewhere, "Ana's MacBook Pro (2)")
+  assert.equal(shown(terminal.conversation), undefined)
+})
+
 test("another Mac's conversation while that Mac is off reads from the copy it keeps in the account, saying so, a page at a time; anything else is refused, saying why", async () => {
   const machine = await cloudMachine()
   const myDevice = await machine.account.deviceId()

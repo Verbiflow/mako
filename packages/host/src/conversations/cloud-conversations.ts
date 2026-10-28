@@ -184,6 +184,7 @@ function listedSummary(row: ListedSession, where: string): LiveSummary {
     sessionId: row.session,
   }
   if (row.title) summary.session.title = row.title
+  if (row.threadTitle) summary.threadTitle = row.threadTitle
   if (row.waitingOn) summary.waitingOn = row.waitingOn
   return summary
 }
@@ -263,6 +264,12 @@ export type CloudConversationsOptions = {
    * owner takes it), `later` when the host can't take one yet.
    */
   takeWaiting?(message: WaitingMessage): Promise<"taken" | "not-mine" | "later">
+  /**
+   * Whether this Mac's own harness stores keep this native session, in this folder: the one this Mac lists itself. A
+   * second Mako on this Mac (another profile, a build being tried) reads the same stores and lists the same sessions
+   * as its own, under Sessions of its own; listed here too, each would show twice.
+   */
+  keepsNative?(harness: string, nativeId: string, folder: string | undefined): boolean
 }
 
 /** Copies another device keeps of its Sessions in the account (`ReadingCopies`), by that device, read here (`HostCatalog.copyPage`). */
@@ -385,6 +392,8 @@ export class CloudConversations {
   /** This Mac's device, whose own Sessions are its own, and the names of the account's devices, for where a Session runs. */
   #device: string | undefined
   readonly #deviceNames = new Map<string, string>()
+  /** Devices the list named that this Mac hadn't heard of, each asked the account about once (`#nameDevice`). */
+  readonly #askedNames = new Set<string>()
   #unlisten: (() => void) | undefined
   #listing: Promise<void> | undefined
   /**
@@ -1491,9 +1500,11 @@ export class CloudConversations {
     for (const row of this.#list.sessions().values()) {
       if (!this.#listable(row)) continue
       if (row.runsOn.kind === "device") {
-        if (row.runsOn.deviceId === this.#device) continue
+        if (row.runsOn.deviceId === this.#device || this.#keptHere(row)) continue
         const runtime = `d-${row.runsOn.deviceId}`
-        wanted.set(row.conversation, { row, threadId: sessionStream(runtime, row.conversation), runtime, where: this.#deviceNames.get(row.runsOn.deviceId) ?? "another computer" })
+        const name = this.#deviceNames.get(row.runsOn.deviceId)
+        if (name === undefined) this.#nameDevice(row.runsOn.deviceId)
+        wanted.set(row.conversation, { row, threadId: sessionStream(runtime, row.conversation), runtime, where: name ?? "another computer" })
       } else if (!this.#options.returning?.(row.runsOn.threadId)) wanted.set(row.conversation, { row, threadId: row.runsOn.threadId, where: CLOUD_FOLDER_WHERE })
     }
     const unlisted: string[] = []
@@ -1526,6 +1537,35 @@ export class CloudConversations {
     if (listed.length) this.#options.emit(encodeRuntimeEvent({ type: "live-listed", summaries: listed }))
     if (gone.length) this.#options.emit(encodeRuntimeEvent({ type: "live-unlisted", ids: gone }))
     if (listed.length || gone.length) hostLog("cloud-conversations", "the account's list changed what's listed here", { listed: listed.length, unlisted: gone.length, moved: unlisted.length - gone.length })
+  }
+
+  /** The sessions this Mac's harness stores keep changed: another device's rows that are this Mac's own go, or come back. */
+  nativeChanged(): void {
+    if (this.#list.known && this.#options.keepsNative) this.#reconcile()
+  }
+
+  /**
+   * Another device's row for a session this Mac's own harness stores keep in the same folder: a second Mako on this Mac
+   * reading the same stores, listing what this Mac lists already. One session, one row: this Mac's, read from its own
+   * disk. A cloud machine's row is never one: a Session that moved there runs there, whatever copy is left here.
+   */
+  #keptHere(row: ListedSession): boolean {
+    return row.nativeId !== undefined && this.#options.keepsNative?.(row.harness, row.nativeId, row.folder) === true
+  }
+
+  /**
+   * A device enrolled since the list was first read (another profile signed in, a new Mac) runs Sessions the list names:
+   * the account's devices are read again, once for each such device, and its rows say its name.
+   */
+  #nameDevice(device: string): void {
+    const account = this.#options.account()
+    if (this.#askedNames.has(device) || !account?.devices) return
+    this.#askedNames.add(device)
+    void account.devices().then((devices) => {
+      const unheard = devices.devices.filter((known) => this.#deviceNames.get(known.id) !== known.name)
+      for (const known of unheard) this.#deviceNames.set(known.id, known.name)
+      if (unheard.length && !this.#closed) this.#reconcile()
+    }, () => {})
   }
 
   /**
@@ -1587,6 +1627,7 @@ function summaryOf(snapshot: LiveSummary): LiveSummary {
   // A Thread moved from this Mac has the same IDs in both stores: a window places its tabs by them.
   if (snapshot.threadId) summary.threadId = snapshot.threadId
   if (snapshot.sessionId) summary.sessionId = snapshot.sessionId
+  if (snapshot.threadTitle) summary.threadTitle = snapshot.threadTitle
   if (snapshot.epoch) summary.epoch = snapshot.epoch
   if (snapshot.threadPath) summary.threadPath = snapshot.threadPath
   if (snapshot.nativePaths) summary.nativePaths = snapshot.nativePaths
