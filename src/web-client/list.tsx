@@ -157,8 +157,8 @@ function EmptyList({ phase, onNew }: { phase: AccountListState["phase"]; onNew: 
   )
 }
 
-/** Marks a stack draws at a phone's size: one is read at a glance, three still fit the row's mark column. */
-const STACK_SIZES = [20, 18, 15] as const
+/** Marks a stack draws at a phone's size: one is read at a glance, three still fit side by side in the row's mark column. */
+const STACK_SIZES = [20, 18, 12] as const
 
 /** The harnesses of a Thread's Sessions, one mark each, as the rail stacks them. */
 export function HarnessMarks({ thread, size }: { thread: WebThread; size?: number }) {
@@ -192,7 +192,7 @@ export function ThreadRow({ thread, selected, named, onOpen }: { thread: WebThre
       data-standing={thread.standing}
       className={cn("web-row group relative flex w-full items-center gap-3 py-3 pr-4 pl-5 text-left", selected && "bg-fill-selected", thread.quietSince && "opacity-60")}
     >
-      <span className="flex w-9 shrink-0 items-center justify-center">
+      <span className="flex w-10 shrink-0 items-center justify-center">
         <HarnessMarks thread={thread} />
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-[3px]">

@@ -14,7 +14,7 @@ import { capabilityText, harnessLacks, liveCapabilities, makoLacks, LIVE_CAPABIL
 import { HARNESS_USAGE_KEYS } from "@mako/host/contracts/harness-usage"
 import { HARNESS_FEATURE_KEYS, HARNESS_FEATURES, makosOwn, native, shownAs, TOOL_ROWS, type FeatureDeclarations } from "@mako/host/contracts/harness-features"
 import type { ProviderRegistry, ProviderCapability } from "@mako/host/harnesses/registry"
-import { GENERATED_PATH, renderHarnessDescriptors } from "./harness-descriptors.ts"
+import { FACES_PATH, GENERATED_PATH, renderHarnessDescriptors, renderHarnessFaces } from "./harness-descriptors.ts"
 import { GENERATED_PATH as CHECKLIST_PATH, missingSteps, renderHarnessChecklist } from "./harness-checklist.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { VOCABULARIES } from "@mako/sessions/harnesses"
@@ -61,6 +61,7 @@ const registry = (family: HarnessFamily): CapabilityLookup => providerHost[famil
 
 const harnesses = providerHost.harnesses.list()
 assert.equal(readFileSync(GENERATED_PATH, "utf8"), renderHarnessDescriptors(providerHost), "src/dev/harness-descriptors.ts is behind the definitions; run npm run harness:descriptors")
+assert.equal(readFileSync(FACES_PATH, "utf8"), renderHarnessFaces(providerHost), "src/dev/harness-faces.ts is behind the definitions; run npm run harness:descriptors")
 assert.deepEqual(new Set(readableHarnesses()), new Set(harnesses.map((entry) => entry.provider)), "every installed harness has a saved-history reader in @mako/sessions, and every reader a harness")
 assert.ok(harnesses.length > 0)
 assert.equal(new Set(harnesses.map((entry) => entry.provider)).size, harnesses.length)

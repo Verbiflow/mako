@@ -1,22 +1,76 @@
-import { lazy, Suspense, useEffect } from "react"
+import { lazy, Suspense, useEffect, useState, useSyncExternalStore } from "react"
 import { z } from "zod"
-import { Toaster } from "@/components/ui/sonner"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
 import { useKeyboardInset } from "./keyboard"
 import { ThreadList } from "./list"
-import { StartSheet } from "./new-thread"
 import { routeHref, useRoute, useWide, type ScreenRoute } from "./route"
 import { ScreenStack } from "./screens"
 import { startedFromHere } from "./started"
-import { ThreadScreen } from "./thread"
 
 /** What the service worker says when a notice is tapped: the app's address to go to. */
 const OpenNoticeSchema = z.object({ type: z.literal("mako:open"), url: z.string().min(1) })
 
-/** Its own chunk, read when first opened: the list paints without it. */
+/**
+ * A chunk of the app the list paints without, read once: its module as soon as it has arrived, and until then nothing.
+ * Read without suspending, so a screen whose code is already here draws in the frame it's asked for (a Suspense
+ * boundary would hold its reveal back for a beat).
+ */
+function chunk<Module>(load: () => Promise<Module>) {
+  let module: Module | undefined
+  let reading: Promise<Module> | undefined
+  const listeners = new Set<() => void>()
+  const read = (): Promise<Module> => {
+    reading ??= load().then((loaded) => {
+      module = loaded
+      for (const listener of listeners) listener()
+      return loaded
+    })
+    // Not here (offline before the service worker kept it): asked again next time.
+    reading.catch(() => {
+      reading = undefined
+    })
+    return reading
+  }
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener)
+    return () => {
+      listeners.delete(listener)
+    }
+  }
+  return { read, use: () => useSyncExternalStore(subscribe, () => module) }
+}
+
+/**
+ * What the list paints without, each a chunk of its own: a Thread (its screen, then its transcript, the desk's live
+ * state and its conversations), New, Settings and the toasts. A Thread's and New's are read as soon as the list has
+ * painted (`afterFirstPaint`), so they're there by the time one is tapped, and at once when the app opens on one.
+ */
+const threadChunk = chunk(() => import("./thread"))
+const transcriptChunk = chunk(() => import("./live-session"))
+const conversationsChunk = chunk(() => import("./conversations"))
+const startChunk = chunk(() => import("./new-thread"))
+const Toaster = lazy(() => import("@/components/ui/sonner").then((module) => ({ default: module.Toaster })))
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
+
+/** A Thread's code first, the screen most often opened next, then New's: one after the other, each has the line to itself. */
+async function readNextScreens(): Promise<void> {
+  await Promise.allSettled([threadChunk.read(), transcriptChunk.read(), conversationsChunk.read()])
+  await startChunk.read().catch(() => undefined)
+}
+
+/** Runs `then` in a task of its own once the list's first frame is on screen: work the first paint shouldn't wait on. */
+function afterFirstPaint(then: () => void): () => void {
+  let task: number | undefined
+  const frame = requestAnimationFrame(() => {
+    task = window.setTimeout(then, 0)
+  })
+  return () => {
+    cancelAnimationFrame(frame)
+    clearTimeout(task)
+  }
+}
 
 /**
  * The web app: the account's Threads, one open, a new one, and Settings. On a phone the list stays under and what's
@@ -29,6 +83,39 @@ export function WebApp() {
   const wide = useWide()
   useKeyboardInset()
   const signedOut = useAccountList((state) => state.phase === "signed-out")
+  // The list paints first: what it doesn't need is read after (the page's own work too, such as its service worker).
+  const painted = useAccountList((state) => state.phase !== "starting" && state.phase !== "signed-out")
+  const [settled, setSettled] = useState(false)
+  // Opened again, the app's files are on this device (its service worker keeps them): a Thread's are read at once, as
+  // the list paints from the list kept here. The first time, they wait for the list, which has the network to itself.
+  useEffect(() => {
+    if (navigator.serviceWorker?.controller) void readNextScreens()
+  }, [])
+  useEffect(() => {
+    if (!painted || settled) return
+    return afterFirstPaint(() => {
+      setSettled(true)
+      // Then the page's own work, so a service worker keeping these files finds them already fetched.
+      void readNextScreens()
+        .catch(() => undefined)
+        .then(() => client.options.painted?.())
+    })
+  }, [painted, settled, client])
+  // New's sheet is mounted from its first opening on, so it leaves on its own path when closed.
+  const [startOpened, setStartOpened] = useState(false)
+  if (route.kind === "new" && !startOpened) setStartOpened(true)
+  // A screen asked for before its code arrived (opened from an address, or tapped at once) reads it now.
+  const threadCode = threadChunk.use()
+  const startCode = startChunk.use()
+  const wantsThread = route.kind === "thread" || (route.kind === "new" && route.over?.kind === "thread")
+  useEffect(() => {
+    if (!wantsThread || threadCode) return
+    void transcriptChunk.read().catch(() => undefined)
+    void threadChunk.read().catch(() => undefined)
+  }, [wantsThread, threadCode])
+  useEffect(() => {
+    if (startOpened && !startCode) void startChunk.read().catch(() => undefined)
+  }, [startOpened, startCode])
   useEffect(() => {
     if (signedOut) location.assign(client.options.signInUrl(location.pathname + location.search))
   }, [signedOut, client])
@@ -59,29 +146,34 @@ export function WebApp() {
   )
   const detail =
     under.kind === "thread" ? (
-      <ThreadScreen
-        key={under.thread}
-        threadId={under.thread}
-        sessionId={under.session}
-        wide={wide}
-        onBack={back}
-        onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })}
-      />
+      threadCode ? (
+        <threadCode.ThreadScreen
+          key={under.thread}
+          threadId={under.thread}
+          sessionId={under.session}
+          wide={wide}
+          onBack={back}
+          onSession={(session) => navigate({ kind: "thread", thread: under.thread, session }, { replace: true })}
+        />
+      ) : (
+        <div data-thread-loading className="flex-1 bg-surface" />
+      )
     ) : under.kind === "settings" ? (
       <Suspense fallback={null}>
         <Settings onBack={back} />
       </Suspense>
     ) : null
-  const sheet = (
-    <StartSheet
-      open={route.kind === "new"}
-      onDismiss={back}
-      onStarted={(started, where) => {
-        startedFromHere(started.threadId, where)
-        navigate({ kind: "thread", thread: started.threadId }, { replace: true })
-      }}
-    />
-  )
+  const sheet =
+    startOpened && startCode ? (
+      <startCode.StartSheet
+        open={route.kind === "new"}
+        onDismiss={back}
+        onStarted={(started, where) => {
+          startedFromHere(started.threadId, where)
+          navigate({ kind: "thread", thread: started.threadId }, { replace: true })
+        }}
+      />
+    ) : null
   return (
     <div className="web-app flex w-full overflow-hidden bg-shell text-foreground">
       {wide ? (
@@ -95,7 +187,11 @@ export function WebApp() {
         </main>
       )}
       {sheet}
-      <Toaster position="top-center" offset={{ top: "calc(env(safe-area-inset-top) + 8px)" }} />
+      {settled ? (
+        <Suspense fallback={null}>
+          <Toaster position="top-center" offset={{ top: "calc(env(safe-area-inset-top) + 8px)" }} />
+        </Suspense>
+      ) : null}
     </div>
   )
 }
