@@ -17,7 +17,8 @@ import { makoRecords } from "@mako/sessions/record-streams"
 import { recordWritersAt } from "@mako/sessions/record-store"
 import type { InstalledReading, SessionWriters } from "@mako/sessions/record-writers"
 import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "@mako/sessions/record-sync"
-import type { CopyPage, CopyScope } from "@mako/sessions/reading-copies"
+import type { CopyPage } from "@mako/sessions/reading-copies"
+import type { CatalogSyncStatus, SyncScope } from "@mako/sessions/scoped-uploads"
 import { isReplyEntry } from "@mako/sessions/entries"
 import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 import { existsSync } from "node:fs"
@@ -300,11 +301,20 @@ export interface ThreadCatalog {
    */
   syncRecords(link: RecordsLink | null): Promise<void>
   /**
-   * On a device: its reading copies of the Sessions its account lists, kept in step in its records in the account
-   * (`SessionCatalog.syncCopies`, `scopeCopies`), the most wanted first. Kept across a restart of the catalog's reader.
+   * On a device: the Sessions its account lists, kept in step in the account, the most wanted first (`scopeSync`):
+   * each as Mako draws it, at its reading copies (`SessionCatalog.syncCopies`), and as its harness wrote it, at its
+   * originals (`SessionCatalog.syncOriginals`). Kept across a restart of the catalog's reader.
    */
   syncCopies(link: RecordsLink | null): Promise<void>
-  scopeCopies(scope: CopyScope): Promise<void>
+  syncOriginals(link: RecordsLink | null): Promise<void>
+  scopeSync(scope: SyncScope): Promise<void>
+  /** How that stands, as the catalog's stores know the account holds them (`SessionCatalog.syncStatus`). */
+  syncStatus(): Promise<CatalogSyncStatus>
+  /**
+   * The catalogued rows the sync window may take: each moved at or after `since`, and each other Session of a Thread
+   * one of those is in, placed in their Threads and Sessions; never cut to the rail's length.
+   */
+  recent(since: string): ThreadRef[]
   /** A page of the copy another device keeps of a Session, at its records in the account (`SessionCatalog.copyPage`). */
   copyPage(link: RecordsLink, harness: string, nativeId: string, before: number | undefined, limit: number): Promise<CopyPage | null>
   /** One entry of such a copy (`SessionCatalog.copyEntry`). */
@@ -519,10 +529,11 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   /** Where records are kept in step, given again to whichever reader serves next. */
   let recordsLink: RecordsLink | null = null
   let copiesLink: RecordsLink | null = null
-  let copyScope: CopyScope | null = null
+  let originalsLink: RecordsLink | null = null
+  let syncScope: SyncScope | null = null
 
   async function awaitCatalogReady(): Promise<{
-    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept" | "syncRecords" | "syncCopies" | "scopeCopies" | "copyPage" | "copyEntry" | "sendRecords" | "receiveRecords" | "stageRecords">
+    source: Pick<SessionCatalog, "page" | "open" | "entry" | "original" | "children" | "hold" | "restoreKept" | "syncRecords" | "syncCopies" | "syncOriginals" | "scopeSync" | "syncStatus" | "copyPage" | "copyEntry" | "sendRecords" | "receiveRecords" | "stageRecords">
     signal: AbortSignal
   }> {
     const signal = catalogLifetime?.signal
@@ -839,8 +850,9 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     daemon = client
     daemonKind = kind
     refreshFollowForReader(client)
-    if (copyScope) void client.scopeCopies(copyScope).catch((error: Error) => hostWarn("threads", "copies' scope not given to the catalog", { error: error.message }))
+    if (syncScope) void client.scopeSync(syncScope).catch((error: Error) => hostWarn("threads", "the sync scope not given to the catalog", { error: error.message }))
     if (copiesLink) void client.syncCopies(copiesLink).catch((error: Error) => hostWarn("threads", "copies' link not given to the catalog", { error: error.message }))
+    if (originalsLink) void client.syncOriginals(originalsLink).catch((error: Error) => hostWarn("threads", "originals' link not given to the catalog", { error: error.message }))
     if (recordsLink) void client.syncRecords(recordsLink).catch((error: Error) => hostWarn("threads", "records link not given to the catalog", { error: error.message }))
     const started = performance.now()
     let hydrated = false
@@ -1133,8 +1145,9 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       catalog = source
       refreshFollowForReader(source)
       if (recordsLink) source.syncRecords(recordsLink)
-      if (copyScope) source.scopeCopies(copyScope)
+      if (syncScope) source.scopeSync(syncScope)
       if (copiesLink) source.syncCopies(copiesLink)
+      if (originalsLink) source.syncOriginals(originalsLink)
       source.onEvent((event) => {
         if (signal.aborted || catalog !== source) return
         if (event.type === "removed") {
@@ -1349,11 +1362,37 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return source.copyEntry(link, harness, nativeId, id)
   }
 
-  async function scopeCopies(scope: CopyScope): Promise<void> {
-    copyScope = scope
+  async function syncOriginals(link: RecordsLink | null): Promise<void> {
+    originalsLink = link
     const { source, signal } = await awaitCatalogReady()
     signal.throwIfAborted()
-    await source.scopeCopies(scope)
+    await source.syncOriginals(link)
+  }
+
+  async function scopeSync(scope: SyncScope): Promise<void> {
+    syncScope = scope
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    await source.scopeSync(scope)
+  }
+
+  async function syncStatus(): Promise<CatalogSyncStatus> {
+    const { source, signal } = await awaitCatalogReady()
+    signal.throwIfAborted()
+    return source.syncStatus()
+  }
+
+  function recentThreads(since: string): ThreadRef[] {
+    const refs = catalogRefs({})
+    const listed = annotateAll(refs.filter((ref) => (ref.updatedAt ?? "") >= since))
+    if (!threadStore || refs.length <= listed.length) return listed
+    // Each other Session of a Thread in the window: the window takes a Thread whole.
+    const missing = unlistedThreadSessions(listed, threadStore.groups())
+    if (!missing.size) return listed
+    const paths = new Set(listed.map((ref) => ref.path))
+    const companions = withThreadPlacements(refs.filter((ref) => !paths.has(ref.path) && (ref.updatedAt ?? "") < since))
+      .filter((ref) => ref.sessionId !== undefined && missing.has(ref.sessionId))
+    return [...listed, ...annotateAll(companions)]
   }
 
   async function sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]> {
@@ -1664,7 +1703,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     restoreKept,
     syncRecords,
     syncCopies,
-    scopeCopies,
+    syncOriginals,
+    scopeSync,
+    syncStatus,
+    recent: recentThreads,
     copyPage,
     copyEntry,
     sendRecords,

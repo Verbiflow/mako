@@ -21,6 +21,7 @@ import { handOff, useHandOff } from "@/state/handoff"
 import { setPref, usePrefs } from "@/state/prefs"
 import { useThreads } from "@/state/thread-store"
 import { useDeskIdentity } from "@/components/identity/desk-identity"
+import { SyncSection } from "@/components/settings/sync-section"
 import { formatDay, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { CloudAccountState, CloudBrowserSession, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow } from "@/lib/types"
@@ -225,6 +226,7 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
         </ListCard>
       </div>
 
+      {invited ? <SyncSection /> : null}
       {invited ? <CloudSignIns /> : null}
       {invited ? <HandOffSettings /> : null}
 

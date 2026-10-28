@@ -44,13 +44,14 @@ import { z } from "zod"
 
 /** A move's calls and its way back's, which these conversations never make (`test-cloud-moves.ts` covers them). */
 const unused = () => Promise.reject(new Error("no move in this test"))
-const movesUnused: Pick<CloudAccount, "sendCheckpoint" | "handOverMove" | "refuseMove" | "moveAnswer" | "threadRecords" | "deviceRecords" | "readCheckpoint" | "beginReturn" | "releaseReturn" | "cancelReturn" | "giveBackReturn" | "finishReturn" | "archiveReturn" | "returnState"> = {
+const movesUnused: Pick<CloudAccount, "sendCheckpoint" | "handOverMove" | "refuseMove" | "moveAnswer" | "threadRecords" | "deviceRecords" | "deviceOriginals" | "readCheckpoint" | "beginReturn" | "releaseReturn" | "cancelReturn" | "giveBackReturn" | "finishReturn" | "archiveReturn" | "returnState"> = {
   sendCheckpoint: unused,
   handOverMove: unused,
   refuseMove: unused,
   moveAnswer: unused,
   threadRecords: unused,
   deviceRecords: unused,
+  deviceOriginals: unused,
   readCheckpoint: unused,
   beginReturn: unused,
   releaseReturn: unused,

@@ -65,7 +65,8 @@ import { RecordReads, RESTORED, type ReadBack, type RestoredSession } from "./re
 import type { ReaderPlace } from "./readers.js"
 import { RecordStore, type RestoreInput } from "./record-store.js"
 import type { RecordRoot } from "./harness-records.js"
-import { ReadingCopies, ReceivedCopies, type CopyPage, type CopyScope } from "./reading-copies.js"
+import { ReadingCopies, ReceivedCopies, type CopyPage } from "./reading-copies.js"
+import { ScopedUploads, countTiers, type CatalogSyncStatus, type SyncScope } from "./scoped-uploads.js"
 import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { GatewayHttpError } from "@mako/protocol/gateway-http"
@@ -73,6 +74,11 @@ import type { RecordRemote } from "@mako/protocol/records"
 import { readOriginal, type EntryOriginal } from "./record-original.js"
 import { STREAMS_ROOT, streamOwner, streamsRoot } from "./record-streams.js"
 import { FolderWatches, type RootWatch } from "./root-watch.js"
+
+/** How often the originals look for what was captured since, in any process: a Session at work goes this soon after. */
+const ORIGINALS_LOOK_MS = 5_000
+/** Catching up on originals goes at no more than this, beside the copies' own: a month of records never fills the connection. */
+const ORIGINALS_BYTES_PER_SECOND = 1024 * 1024
 
 export type CatalogEvent =
   | { type: "added"; ref: ThreadRef }
@@ -400,6 +406,10 @@ export class SessionCatalog {
   private readingCopies: ReadingCopies | null = null
   /** Copies other devices keep, read here (`copyPage`); made when first read. */
   private receivedCopies: ReceivedCopies | null = null
+  /** This device's records of the Sessions in its scope, kept in step at its originals in the account (`syncOriginals`). */
+  private originals: { uploads: ScopedUploads; link: { current: RecordsLink }; timer: ReturnType<typeof setInterval> } | null = null
+  /** The device's sync scope, most wanted first: what both its copies and its originals go up in (`scopeSync`). */
+  private syncScope: SyncScope | null = null
   /** Where the record store is kept, which the reading copies keep theirs beside; null for a catalog that writes nothing. */
   private readonly recordsFolder: string | null
   /** Where each session last read back from the record store was restored, which its entries' records name. */
@@ -694,6 +704,11 @@ export class SessionCatalog {
   /** The backfill's pass running, or the last one this catalog ran; null without a backfill. */
   get backfillProgress() {
     return this.backfill?.progress ?? null
+  }
+
+  /** One backfill pass now, without watching the stores (`mako-syncd --backfill`); settles once it ends. */
+  backfillNow(): Promise<void> {
+    return this.backfill?.wake("start") ?? Promise.resolve()
   }
 
   /**
@@ -1664,13 +1679,59 @@ export class SessionCatalog {
     this.copies()?.link(link)
   }
 
-  scopeCopies(scope: CopyScope): void {
-    this.copies()?.scope(scope)
+  /**
+   * Where this device's records go in the account (its originals): each Session in scope, as its harness wrote it,
+   * whole, so it can be continued anywhere. Pushed from the record store in the scope's order as captures land, from
+   * this process or the backfill's (`ScopedUploads`), catching up at no more than `ORIGINALS_BYTES_PER_SECOND`.
+   * A renewed credential goes on where it was; null stops.
+   */
+  syncOriginals(link: RecordsLink | null): void {
+    const held = this.originals
+    if (link && held && !this.stopped && held.link.current.id === link.id && held.link.current.base === link.base) {
+      held.link.current = link
+      return
+    }
+    held?.uploads.stop()
+    if (held) clearInterval(held.timer)
+    this.originals = null
+    const store = this.recordWriter
+    if (!link || !store || this.stopped) return
+    const log = (level: "info" | "warn", message: string, fields: Record<string, string | number>) => (level === "warn" ? console.warn : console.info)(`Session originals: ${message}`, JSON.stringify(fields))
+    const current = { current: link }
+    const uploads = new ScopedUploads(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => current.current.authorization }), log, { bytesPerSecond: ORIGINALS_BYTES_PER_SECOND })
+    const timer = setInterval(() => uploads.look(), ORIGINALS_LOOK_MS)
+    timer.unref?.()
+    this.originals = { uploads, link: current, timer }
+    if (this.syncScope) uploads.scope(this.syncScope)
+    uploads.look()
   }
 
-  /** How keeping the copies has gone; null when they aren't kept. */
-  copiesStatus(): ReturnType<ReadingCopies["status"]> {
-    return this.readingCopies?.status() ?? null
+  /** Which Sessions this device keeps in the account, the most wanted first: its copies and its originals alike. */
+  scopeSync(scope: SyncScope): void {
+    this.syncScope = scope
+    this.copies()?.scope(scope)
+    this.originals?.uploads.scope(scope)
+  }
+
+  /**
+   * How this device's sync stands: its copies and its originals, each as the store it pushes from knows the account
+   * holds them; null for one not kept. With the backfill's last pass, which takes Sessions into the records first.
+   */
+  async syncStatus(): Promise<CatalogSyncStatus> {
+    const scope = this.syncScope ?? { sessions: [], paused: false }
+    const copies = this.readingCopies
+    const originals = this.originals?.uploads
+    return {
+      paused: scope.paused,
+      tiers: countTiers(scope, {
+        readable: (session) => copies?.readable(session) ?? false,
+        held: (session) => originals?.held(session.harness, session.nativeId) ?? false,
+        whole: (session) => originals?.inCloud(session.harness, session.nativeId) ?? false,
+      }),
+      stale: copies ? scope.sessions.filter((session) => !copies.current(session)).length : 0,
+      copies: copies?.status() ?? null,
+      originals: originals?.status() ?? null,
+    }
   }
 
   /**
@@ -1841,6 +1902,9 @@ export class SessionCatalog {
 
   async stop(): Promise<void> {
     this.recordPushes?.stop()
+    this.originals?.uploads.stop()
+    if (this.originals) clearInterval(this.originals.timer)
+    this.originals = null
     this.readingCopies?.stop()
     this.receivedCopies?.close()
     this.stopped = true

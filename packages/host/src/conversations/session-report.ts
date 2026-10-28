@@ -8,9 +8,7 @@ import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId, type Th
 import { Payload, SESSIONS_VERSION, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
 import { runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { namedUuid } from "./cloud-moves.js"
-
-/** A Session moved within this long is listed; an older one only while it works or waits. */
-export const LISTED_FOR_MS = 30 * 24 * 60 * 60_000
+import { syncTier } from "./sync-window.js"
 
 /** A rail row as the report reads it: a session one of this Mac's harnesses keeps, placed in its Thread and Session. */
 export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived">
@@ -20,8 +18,9 @@ export type ReportSources = {
   /** Every conversation this host has, loaded or not (`LiveConversations.summaries`). */
   summaries(): readonly LiveSummary[]
   /**
-   * The rail's rows: every session this Mac's harnesses keep, the ones a terminal or another app runs included, each
-   * with the Thread and Session the catalog placed it in. A Mako conversation's own session is among them.
+   * Every session this Mac's harnesses keep that the sync window may take (`HostCatalog.recent`: moved within it, or a
+   * Session of a Thread that did), the ones a terminal or another app runs included, each with the Thread and Session
+   * the catalog placed it in; never cut to the rail's length. A Mako conversation's own session is among them.
    */
   native(): readonly NativeRow[]
   /** What a native session's process is doing, by its path, as the activity engine reads it. */
@@ -48,19 +47,30 @@ export function nativeConversation(session: string): string {
   return namedUuid(`mako native session conversation\0${session}`)
 }
 
+/** Whether a row's Session is at work: it goes first, and is listed whatever its age. */
+export const busyRow = (row: Pick<ReportedSession, "state">) => row.state === "working" || row.state === "waiting" || row.state === "moving"
+
 /** How a list ranks two rows of one Session: one at work over one at rest, then the one that moved last. */
 function preferred(left: ReportedSession, right: ReportedSession): ReportedSession {
-  const busy = (row: ReportedSession) => row.state === "working" || row.state === "waiting" || row.state === "moving"
-  if (busy(left) !== busy(right)) return busy(left) ? left : right
+  if (busyRow(left) !== busyRow(right)) return busyRow(left) ? left : right
   return right.activityAt > left.activityAt ? right : left
 }
 
+/** Each Thread's last activity, as the newest of its rows': a Thread is in the window whole, its older Sessions too. */
+export function threadActivity(rows: readonly Pick<ReportedSession, "thread" | "activityAt">[]): Map<string, string> {
+  const newest = new Map<string, string>()
+  for (const row of rows) if ((newest.get(row.thread) ?? "") < row.activityAt) newest.set(row.thread, row.activityAt)
+  return newest
+}
+
 /**
- * The Sessions this host owns, as the account's list shows them, one row each: its conversations, and the sessions its
- * harnesses keep that Mako hasn't opened (a terminal's Claude Code, Cursor's editor, Codex's CLI), each filed under a
- * Session whose owner is here (or which is leaving here, or released and not yet claimed: `moving`), at the generation
- * the store holds, moved within 30 days or at work now, newest first. A Session that runs elsewhere is the other
- * owner's to say; a closed or archived conversation isn't listed, nor is a session its harness deleted or archived.
+ * The Sessions this host owns, as the account's list shows them, one row each: its conversations, closed ones
+ * included, and the sessions its harnesses keep that Mako hasn't opened (a terminal's Claude Code, Cursor's editor,
+ * Codex's CLI), each filed under a Session whose owner is here (or which is leaving here, or released and not yet
+ * claimed: `moving`), at the generation the store holds. Those of every Thread in the sync window, whole, and any at
+ * work now (`syncTier`): the ones at work first, then by their Thread's last activity, then their own, newest first.
+ * A Session that runs elsewhere is the other owner's to say; an archived conversation isn't listed, nor is a session
+ * its harness deleted or archived.
  */
 export function ownedSessions(sources: ReportSources): ReportedSession[] {
   const work = new Map(sources.work().map((item) => [item.id, item.status]))
@@ -79,7 +89,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
   }
   for (const summary of summaries) {
     const { session } = summary
-    if (session.status === "closed" || sources.archived(session.id)) continue
+    // A closed conversation is the person's still: another device's message reopens it (`reopenClosed`).
+    if (sources.archived(session.id)) continue
     const placed = sources.placement(session.id)
     if (!placed) continue
     const execution = sources.execution(placed.session)
@@ -92,7 +103,6 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
       : session.status === "running" || session.status === "starting" ? "working"
       : "idle"
     const movedAt = Math.max(summary.createdAt, sources.lastMoved(session.id, summary.revision) ?? 0)
-    if (now - movedAt > LISTED_FOR_MS && state !== "working" && state !== "waiting") continue
     const row: ReportedSession = {
       session: placed.session,
       thread: placed.thread,
@@ -132,7 +142,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
       : activity?.status === "active" ? "working"
       : "idle"
     const movedAt = Date.parse(ref.updatedAt)
-    if (!Number.isFinite(movedAt) || (now - movedAt > LISTED_FOR_MS && state !== "working" && state !== "waiting")) continue
+    if (!Number.isFinite(movedAt)) continue
     const startedAt = ref.startedAt ? Date.parse(ref.startedAt) : Number.NaN
     const row: ReportedSession = {
       session: sessionId.data,
@@ -154,7 +164,17 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const parsed = ReportedSessionSchema.safeParse(row)
     if (parsed.success) add(parsed.data)
   }
-  return [...bySession.values()].sort((left, right) => (left.activityAt < right.activityAt ? 1 : left.activityAt > right.activityAt ? -1 : 0)).slice(0, LISTED_PER_OWNER)
+  const rows = [...bySession.values()]
+  const threads = threadActivity(rows)
+  const tiered = rows.filter((row) => syncTier(Date.parse(threads.get(row.thread) ?? row.activityAt), busyRow(row), now) !== undefined)
+  return tiered.sort((left, right) => syncOrder(left, right, threads)).slice(0, LISTED_PER_OWNER)
+}
+
+/** The order Sessions go in: the ones at work first, then by their Thread's last activity, then their own, newest first. */
+export function syncOrder(left: ReportedSession, right: ReportedSession, threads: ReadonlyMap<string, string>): number {
+  if (busyRow(left) !== busyRow(right)) return busyRow(left) ? -1 : 1
+  const byThread = (threads.get(right.thread) ?? right.activityAt).localeCompare(threads.get(left.thread) ?? left.activityAt)
+  return byThread || right.activityAt.localeCompare(left.activityAt)
 }
 
 /** Whether two rows say the same, so an unchanged one isn't sent again. */

@@ -64,6 +64,7 @@ import type { ConversationSettings } from "./turn-continuation.js"
 import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
+import type { SyncStatus } from "./sync-status.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
@@ -448,6 +449,8 @@ export function createMakoBridge(transport: BridgeTransport) {
 
     /* This Mac's Mako account; the host pushes `cloud-account` events as it changes. */
     cloudAccount: () => invokeTrustedHost<CloudAccount>("mako:cloud-account"),
+    /* How this device's Sessions stand in the account: what's there, what's catching up, and what failed. */
+    syncStatus: () => invokeTrustedHost<SyncStatus>("mako:sync-status"),
     cloudSignIn: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in"),
     cloudSignInCancel: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in-cancel"),
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),

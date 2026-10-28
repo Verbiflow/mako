@@ -119,6 +119,8 @@ const reads = [
   "mako:accounts",
   /** Answers from memory once a saved sign-in has been read back. */
   "mako:cloud-account",
+  /** How this device's Sessions stand in the account, as last read. */
+  "mako:sync-status",
   /** May refresh the connection token, which another caller would have refreshed the same way. */
   "mako:cloud-devices",
   "mako:cloud-browser-sessions",

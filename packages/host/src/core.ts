@@ -46,7 +46,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -377,11 +377,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   declareUnreadRecordMethods(methods, { views, records, live: () => unknown.kinds(), since: Date.now(), streams })
   // This host's Sessions on the account's list, and a watched conversation's live updates to another device.
-  // The rail's rows, read again only once the catalog says its list changed: a sweep finds nothing new otherwise, and a
-  // session being written (a terminal's at work) changes its own row in place rather than the whole rail being read.
-  let railRows: ThreadRef[] | undefined
-  /** The rail's rows by native session, read again with the rail: where the reading copies read each Session. */
-  let railPaths: Map<string, string> | undefined
+  // The rows the sync window may take, read again only once the catalog says its list changed: a sweep finds nothing new
+  // otherwise, and a session being written (a terminal's at work) changes its own row in place rather than every row
+  // being read again.
+  let windowRows: ThreadRef[] | undefined
+  /** The rows by native session, read again with them: where the uploads read each Session. */
+  let windowPaths: Map<string, string> | undefined
   const sessions = new SessionPublisher({
     rows: () => {
       const live = late.conversations?.live
@@ -391,7 +392,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       const activity = catalog.activity()
       return ownedSessions({
         summaries: () => live.summaries(),
-        native: () => (railRows ??= catalog.rail()),
+        native: () => (windowRows ??= catalog.recent(windowStart(Date.now()))),
         activity: (path) => activity[path],
         work: () => application.lifecycle.snapshot().work,
         waitingOn: (id) => live.waitingOn(id),
@@ -406,16 +407,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   catalog.subscribe((event) => {
     if (event.type === "thread-ref") {
-      const at = railRows?.findIndex((row) => row.path === event.ref.path) ?? -1
-      if (railRows && at >= 0) railRows[at] = event.ref
+      const at = windowRows?.findIndex((row) => row.path === event.ref.path) ?? -1
+      if (windowRows && at >= 0) windowRows[at] = event.ref
       else {
-        railRows = undefined
-        railPaths = undefined
+        windowRows = undefined
+        windowPaths = undefined
         late.cloudConversations?.nativeChanged()
       }
     } else if (event.type === "threads" || event.type === "thread-removed") {
-      railRows = undefined
-      railPaths = undefined
+      windowRows = undefined
+      windowPaths = undefined
       late.cloudConversations?.nativeChanged()
       // A catalog row of an archived cloud Thread's Session (one this Mac had before it moved) shows archived too.
       late.archivedKeys?.()
@@ -425,25 +426,34 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   late.sessions = sessions
   shell.jobs.every("tell the account this host's Sessions", 1_000, () => late.cloud?.reportSessions?.())
-  // This Mac's listed Sessions' history, kept in step in the account's copy, the ones at work first, so another device
-  // reads one with this Mac off. A cloud machine keeps its Thread's records instead; a fixture desk sends nothing.
+  // This Mac's Sessions in the sync window, kept in step in the account, the ones at work first: as Mako draws each, so
+  // another device reads one with this Mac off, and as its harness wrote it, so it continues anywhere. A cloud machine
+  // keeps its Thread's records instead; a fixture desk sends nothing.
+  let uploads: SessionUploads | undefined
   if (!fixtureDesk && config.machineAgentFd === undefined) {
-    const uploads = new SessionUploads({
+    uploads = new SessionUploads({
       rows: () => sessions.listed(),
-      path: (harness, nativeId) => (railPaths ??= new Map((railRows ??= catalog.rail()).map((ref) => [`${ref.harness}\n${ref.nativeId}`, ref.path]))).get(`${harness}\n${nativeId}`),
-      link: async () => {
+      path: (harness, nativeId) => (windowPaths ??= new Map((windowRows ??= catalog.recent(windowStart(Date.now()))).map((ref) => [`${ref.harness}\n${ref.nativeId}`, ref.path]))).get(`${harness}\n${nativeId}`),
+      links: async () => {
         const cloud = late.cloud
-        if (!cloud?.cloudBlocked || (await cloud.cloudBlocked()) !== undefined) return undefined
+        const blocked = cloud?.cloudBlocked ? await cloud.cloudBlocked() : "signed-out"
+        if (!cloud || blocked) return { state: "off", reason: blocked ?? "signed-out" }
         const device = await cloud.deviceId()
-        return device ? cloud.deviceRecords(device) : undefined
+        if (!device) return { state: "off", reason: "signed-out" }
+        return { state: "on", copies: await cloud.deviceRecords(device), originals: await cloud.deviceOriginals(device) }
       },
       power: readPower,
-      scope: (scope) => catalog.scopeCopies(scope),
-      sync: (link) => catalog.syncCopies(link),
+      scope: (scope) => catalog.scopeSync(scope),
+      copies: (link) => catalog.syncCopies(link),
+      originals: (link) => catalog.syncOriginals(link),
+      status: () => catalog.syncStatus(),
+      backfill: () => readBackfill(records),
       now: Date.now,
     })
-    shell.jobs.every("keep this Mac's Sessions' history in the account", 5_000, () => uploads.tick())
+    const ticking = uploads
+    shell.jobs.every("keep this Mac's Sessions in the account", 5_000, () => ticking.tick())
   }
+  declareSyncMethods(methods, uploads)
   late.cloud = declareCloudAccountMethods(methods, {
     sessions,
     environment,
@@ -515,7 +525,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           if (execution && execution.state !== "here") return "not-mine"
           if (!live.summaries().some((summary) => summary.session.id === message.conversation)) {
             // A session a terminal ran, which Mako here hasn't opened: opened as the conversation the list named.
-            const ref = (railRows ??= catalog.rail()).find((row) => row.sessionId === message.session)
+            const ref = (windowRows ??= catalog.recent(windowStart(Date.now()))).find((row) => row.sessionId === message.session)
             if (!ref) return "not-mine"
             await methods.invoke("mako:live-capture", [message.conversation, ref.path])
           }

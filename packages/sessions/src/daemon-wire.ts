@@ -1,5 +1,6 @@
 import { ReceivedRecordsSchema, ReceivingSessionSchema, RecordsLinkSchema, SentRecordsSchema, StagedRecordsSchema, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords } from "./record-sync.js"
-import { CopyPageSchema, CopyScopeSchema, type CopyPage, type CopyScope } from "./reading-copies.js"
+import { CopyPageSchema, type CopyPage } from "./reading-copies.js"
+import { CatalogSyncStatusSchema, SyncScopeSchema, type CatalogSyncStatus, type SyncScope } from "./scoped-uploads.js"
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
 import {
@@ -128,8 +129,12 @@ export type DaemonRequestFrame =
   | { id: number; op: "records"; link: RecordsLink | null }
   /** Where this device's reading copies go (`SessionCatalog.syncCopies`); null stops them. */
   | { id: number; op: "copies"; link: RecordsLink | null }
-  /** Which Sessions it keeps copies of, most wanted first (`SessionCatalog.scopeCopies`). */
-  | { id: number; op: "copy-scope"; scope: CopyScope }
+  /** Where this device's originals go (`SessionCatalog.syncOriginals`); null stops them. */
+  | { id: number; op: "originals"; link: RecordsLink | null }
+  /** Which Sessions it keeps in the account, most wanted first: copies and originals (`SessionCatalog.scopeSync`). */
+  | { id: number; op: "sync-scope"; scope: SyncScope }
+  /** How its sync stands (`SessionCatalog.syncStatus`). */
+  | { id: number; op: "sync-status" }
   /** Sends sessions' records to a remote store now (`SessionCatalog.sendRecords`). */
   | { id: number; op: "send-records"; link: RecordsLink; paths: string[] }
   /** Takes sessions' records from a remote store into their harnesses' stores here (`SessionCatalog.receiveRecords`). */
@@ -158,6 +163,7 @@ export type DaemonResponseFrame =
         | ReceivedRecords[]
         | StagedRecords[]
         | CopyPage
+        | CatalogSyncStatus
         | boolean
         | null
     }
@@ -248,6 +254,11 @@ interface CopyPagePending extends PendingBase {
   resolve: (page: CopyPage | null) => void
 }
 
+interface SyncStatusPending extends PendingBase {
+  kind: "sync-status"
+  resolve: (status: CatalogSyncStatus) => void
+}
+
 interface AckPending extends PendingBase {
   kind: "ack"
   resolve: () => void
@@ -267,6 +278,7 @@ export type PendingRequest =
   | ReceiveRecordsPending
   | StageRecordsPending
   | CopyPagePending
+  | SyncStatusPending
   | AckPending
 
 export type ParsedDaemonResponse =
@@ -283,6 +295,7 @@ export type ParsedDaemonResponse =
   | { kind: "receive-records"; pending: ReceiveRecordsPending; result: ReceivedRecords[] }
   | { kind: "stage-records"; pending: StageRecordsPending; result: StagedRecords[] }
   | { kind: "copy-page"; pending: CopyPagePending; result: CopyPage | null }
+  | { kind: "sync-status"; pending: SyncStatusPending; result: CatalogSyncStatus }
   | { kind: "ack"; pending: AckPending }
   | { kind: "error"; pending: PendingRequest; error: Error }
 
@@ -373,10 +386,17 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       const link = RecordsLinkSchema.safeParse(record.link)
       return link.success ? { id, op, link: link.data } : null
     }
-    case "copy-scope": {
-      const scope = CopyScopeSchema.safeParse(record.scope)
+    case "originals": {
+      if (record.link === null) return { id, op, link: null }
+      const link = RecordsLinkSchema.safeParse(record.link)
+      return link.success ? { id, op, link: link.data } : null
+    }
+    case "sync-scope": {
+      const scope = SyncScopeSchema.safeParse(record.scope)
       return scope.success ? { id, op, scope: scope.data } : null
     }
+    case "sync-status":
+      return { id, op }
     case "send-records": {
       const parsed = z.object({ link: RecordsLinkSchema, paths: z.array(z.string().min(1)) }).safeParse(record)
       return parsed.success ? { id, op, ...parsed.data } : null
@@ -479,6 +499,10 @@ export function parseDaemonResponse(
       if (record.result === null) return { kind: "copy-page", pending, result: null }
       const result = CopyPageSchema.safeParse(record.result)
       return result.success ? { kind: "copy-page", pending, result: result.data } : null
+    }
+    case "sync-status": {
+      const result = CatalogSyncStatusSchema.safeParse(record.result)
+      return result.success ? { kind: "sync-status", pending, result: result.data } : null
     }
     case "ack":
       return record.result === null ? { kind: "ack", pending } : null

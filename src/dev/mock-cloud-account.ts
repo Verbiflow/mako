@@ -1,3 +1,4 @@
+import type { SyncStatus, SyncTier } from "@mako/host/contracts/sync-status"
 import type { CloudAccount, CloudBrowserSession, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow, CloudSignInsState, HostEvent } from "@/lib/types"
 
 type CloudSignInHarness = CloudSignInRow["harness"]
@@ -126,8 +127,10 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
   if (params.has("joined"))
     setTimeout(() => emit({ type: "cloud-account-event", seq: 1, at: new Date().toISOString(), mine: false, event: { type: "device-joined", device: { id: "d4f5a6b7-1c2d-4e3f-8a9b-0c1d2e3f4a5b", kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: "Hesse", country: "DE" } } } }), 1_500)
 
+  const sync = mockSyncStatus(params.get("sync"))
   return {
     cloudAccount: async () => account,
+    syncStatus: async () => (account.state.status === "signed-in" ? (person.entitlements.includes("cloud") ? sync() : { state: "off", reason: "no-cloud" }) : { state: "off", reason: "signed-out" }) satisfies SyncStatus,
     cloudSignIns: async () => signIns,
     cloudSignInsShare: async (sharing: boolean) => {
       await new Promise((resolve) => setTimeout(resolve, 500))
@@ -164,5 +167,47 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
       return ended
     },
     cloudSignOut: async () => signedOut(),
+  }
+}
+
+/**
+ * This Mac's sync in each state Settings shows (`sync=`): catching up (the default), a little more each read, as a
+ * first upload goes, the Thread at work and today's first; `synced`; `paused` on a low battery; `failing`, with the
+ * cloud's words and correlation IDs; `starting`.
+ */
+function mockSyncStatus(state: string | null): () => SyncStatus {
+  const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000
+  const tier = (name: SyncTier["tier"], threads: number, sessions: number, readable: number, whole: number, held = sessions): SyncTier => {
+    const inCloud = Math.min(readable, whole)
+    return { tier: name, threads, sessions, readable, held, whole, inCloud, threadsInCloud: inCloud === sessions ? threads : Math.floor((threads * inCloud) / sessions) }
+  }
+  const whole = [tier("now", 2, 3, 3, 3), tier("day", 9, 14, 14, 14), tier("week", 31, 58, 58, 58), tier("month", 74, 129, 129, 129)]
+  if (state === "starting") return () => ({ state: "starting", sessions: 204 })
+  if (state === "synced")
+    return () => ({ state: "synced", sessions: 204, tiers: whole, sending: 0, stale: 0, lastSuccessAt: minutesAgo(0.2), failures: [], backfill: { sessions: 5_012, done: 5_012, startedAt: minutesAgo(40), endedAt: minutesAgo(12) } })
+  if (state === "paused")
+    return () => ({ state: "paused", sessions: 204, tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 58, 41), tier("month", 74, 129, 96, 12, 88)], sending: 0, stale: 2, lastSuccessAt: minutesAgo(3), failures: [] })
+  if (state === "failing")
+    return () => ({
+      state: "failing", sessions: 204, tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 57, 50), tier("month", 74, 129, 129, 101)], sending: 1, stale: 0, lastSuccessAt: minutesAgo(6),
+      failures: [
+        { at: minutesAgo(2), harness: "codex", nativeId: "019a2b7c-5d1e-7f20-9a3b-4c5d6e7f8091", message: "The archive's storage couldn't be read; try again (POST /sessions/with-chunks answered 503, 4 tries, correlation 6f1c2d3e-8b9a-4c7d-a1e2-f3b4c5d6e7f8)", correlationId: "6f1c2d3e-8b9a-4c7d-a1e2-f3b4c5d6e7f8" },
+        { at: minutesAgo(5), harness: "claude", nativeId: "8d0c3a1e-2f4b-4c6d-9e8f-7a6b5c4d3e2f", message: "The gateway answered 500 (PUT /chunks answered 500, correlation 0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d)", correlationId: "0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d" },
+      ],
+    })
+  let reads = 0
+  return () => {
+    reads += 1
+    const step = Math.min(reads, 20)
+    return {
+      state: "syncing",
+      sessions: 204,
+      tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 58, Math.min(58, 39 + step)), tier("month", 74, 129, Math.min(129, 92 + step * 2), Math.min(129, 8 + step), Math.min(129, 102 + step))],
+      sending: 2,
+      stale: 1,
+      lastSuccessAt: minutesAgo(0.1),
+      failures: [],
+      backfill: { sessions: 5_012, done: Math.min(5_012, 1_840 + step * 40), startedAt: minutesAgo(8) },
+    }
   }
 }

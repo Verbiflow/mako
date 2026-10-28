@@ -7,6 +7,8 @@ import { zstdDecompressSync } from "node:zlib"
 import { RecordConflictError, planRecordImport } from "@mako/protocol/records"
 import { NativeStores } from "../dist/read-only-sqlite.js"
 import { RecordStore } from "../dist/record-store.js"
+import { GatewayHttpError } from "@mako/protocol/gateway-http"
+import { ScopedUploads, countTiers, pacedRemote } from "../dist/scoped-uploads.js"
 import { RECORDS_LINK_REFUSED, RecordPushes, RecordSync, RecordSyncConflictError, RecordsLinkRefusedError, describeSync, linkRefused, splitBundle, withFreshLink } from "../dist/record-sync.js"
 
 /**
@@ -248,39 +250,93 @@ try {
   const parts = splitBundle({ harness: "x", nativeId: "y", layout: { home: "/", roots: {}, paths: {} }, marks: {}, units: [{ key: "k", role: "file", path: null, places: null, versions: Array.from({ length: 25_000 }, (_, seq) => ({ seq, kind: "append", at: 0, size: 1, digest: null, tail: null, chunks: "", detail: null, writer: null, writerSource: null })) }] })
   assert.deepEqual(parts.map((part) => part.units[0].versions.map((version) => version.seq).filter((_, at, all) => at === 0 || at === all.length - 1)), [[0, 9999], [10000, 19999], [20000, 24999]])
 
-  // A device keeps only what its account lists in step, the most wanted first; catching up waits on a low battery,
-  // while a session in scope being written still goes up as it's captured, and one out of scope never does.
+  // A device keeps its scope in step, the most wanted first (`ScopedUploads`): catching up waits on a low battery,
+  // while a Session at work still goes up as it's captured, and one out of scope never does. What the account holds is
+  // the store's own mark, so another instance (a restart) knows it without pushing, and a capture made by another
+  // process goes up once it's read from the store.
   {
     const home = join(root, "scoped")
     const own = (name) => join(home, "sessions", `${name}.jsonl`)
     await mkdir(join(home, "sessions"), { recursive: true })
-    for (const name of ["s3", "s4"]) await writeFile(own(name), line(name === "s3" ? 3 : 4, 4))
+    for (const name of ["s3", "s4", "s5"]) await writeFile(own(name), line(Number(name.slice(1)), 4))
     const store = new RecordStore(join(root, "scoped-store"), stores)
     const recordsOf = (name) => ({ roots: [{ name: "synthetic", path: home }], files: [own(name)], databases: [] })
-    for (const name of ["s3", "s4"]) await store.capture({ harness: "synthetic", nativeId: name, home, records: recordsOf(name) })
+    for (const name of ["s3", "s4", "s5"]) await store.capture({ harness: "synthetic", nativeId: name, home, records: recordsOf(name) })
     const scoped = new MemoryRemote("gateway/d-1")
     const order = []
     const pushWith = scoped.pushWith.bind(scoped)
     scoped.pushWith = async (bundle, pack) => (order.push(bundle.nativeId), pushWith(bundle, pack))
-    const pushes = new RecordPushes(store, scoped, () => {})
-    pushes.scoped({ sessions: [{ harness: "synthetic", nativeId: "s4" }, { harness: "synthetic", nativeId: "s3" }], paused: true })
-    await pushes.settled()
+    const session = (nativeId, tier, busy = false) => ({ harness: "synthetic", nativeId, path: own(nativeId), thread: `t-${nativeId}`, busy, tier })
+    const inCloud = (uploads, ...names) => names.map((name) => uploads.inCloud("synthetic", name))
+    const uploads = new ScopedUploads(store, scoped, () => {})
+    uploads.scope({ sessions: [session("s4", "week"), session("s3", "month")], paused: true })
+    await uploads.settled()
     assert.deepEqual(order, [], "waiting: nothing caught up")
-    assert.deepEqual([pushes.status().behind, pushes.status().paused], [2, true])
+    assert.deepEqual([inCloud(uploads, "s3", "s4"), uploads.held("synthetic", "s3"), uploads.status().paused], [[false, false], true, true])
     await appendFile(own("s3"), line(3, 1))
     await store.capture({ harness: "synthetic", nativeId: "s3", home, records: recordsOf("s3") })
-    pushes.captured("synthetic", "s3")
-    await pushes.settled()
-    assert.deepEqual(order, ["s3"], "a session in scope being written goes up all the same")
-    pushes.scoped({ sessions: [{ harness: "synthetic", nativeId: "s4" }], paused: false })
-    await pushes.settled()
-    assert.deepEqual(order, ["s3", "s4"], "caught up once it may, on what's still in scope")
-    pushes.captured("synthetic", "s3")
-    await pushes.settled()
-    assert.deepEqual(order, ["s3", "s4"], "out of scope: not pushed")
-    assert.equal(pushes.status().behind, 0)
-    pushes.stop()
+    uploads.scope({ sessions: [session("s3", "now", true), session("s4", "week")], paused: true })
+    await uploads.settled()
+    assert.deepEqual(order, ["s3"], "a Session at work goes up all the same")
+    assert.deepEqual(inCloud(uploads, "s3", "s4"), [true, false])
+    uploads.scope({ sessions: [session("s3", "now", true), session("s4", "week")], paused: false })
+    await uploads.settled()
+    assert.deepEqual(order, ["s3", "s4"], "caught up once it may, the most wanted first")
+    assert.ok(uploads.status().lastSuccessAt > 0)
+    // A capture by another process: read from the store, so it goes up at the next look.
+    const other = new RecordStore(join(root, "scoped-store"), stores)
+    await appendFile(own("s4"), line(4, 1))
+    await other.capture({ harness: "synthetic", nativeId: "s4", home, records: recordsOf("s4") })
+    other.close()
+    await appendFile(own("s5"), line(5, 1))
+    await store.capture({ harness: "synthetic", nativeId: "s5", home, records: recordsOf("s5") })
+    uploads.look()
+    await uploads.settled()
+    assert.deepEqual(order, ["s3", "s4", "s4"], "another process's capture goes up; one out of scope never does")
+    uploads.stop()
+    // A restart: the store says what the account holds, so nothing is sent again.
+    const again = new ScopedUploads(store, scoped, () => {})
+    again.scope({ sessions: [session("s3", "day"), session("s4", "week")], paused: false })
+    await again.settled()
+    assert.deepEqual(order, ["s3", "s4", "s4"], "nothing pushed again after a restart")
+    assert.deepEqual(inCloud(again, "s3", "s4"), [true, true])
+    // Counted by tier and Thread from what each form says, in one place.
+    const scope = { sessions: [session("s3", "day"), { ...session("s4", "day"), thread: "t-s3" }, session("s5", "week")], paused: false }
+    const tiers = countTiers(scope, { readable: () => true, held: (each) => each.nativeId !== "s5", whole: (each) => again.inCloud(each.harness, each.nativeId) })
+    assert.deepEqual([tiers.day, tiers.week], [
+      { sessions: 2, threads: 1, readable: 2, held: 2, whole: 2, inCloud: 2, threadsInCloud: 1 },
+      { sessions: 1, threads: 1, readable: 1, held: 0, whole: 0, inCloud: 0, threadsInCloud: 0 },
+    ])
+    // A refusal is kept with the gateway's correlation ID, and the next capture tries again at once.
+    scoped.pushWith = async () => {
+      throw new GatewayHttpError(503, "The archive's storage couldn't be read; try again", { method: "POST", path: "/sessions/with-chunks", tries: 4, correlationId: "c-123" })
+    }
+    await appendFile(own("s3"), line(3, 1))
+    await store.capture({ harness: "synthetic", nativeId: "s3", home, records: recordsOf("s3") })
+    again.look()
+    await again.settled()
+    const [failure] = again.status().failures
+    assert.deepEqual([failure.nativeId, failure.correlationId, ...inCloud(again, "s3")], ["s3", "c-123", false])
+    assert.match(failure.message, /correlation c-123/)
+    scoped.pushWith = async (bundle, pack) => (order.push(bundle.nativeId), pushWith(bundle, pack))
+    await appendFile(own("s3"), line(3, 1))
+    await store.capture({ harness: "synthetic", nativeId: "s3", home, records: recordsOf("s3") })
+    again.look()
+    await again.settled()
+    assert.deepEqual([order.at(-1), again.status().failures.length, ...inCloud(again, "s3")], ["s3", 0, true], "pushed on its next capture; the failure is no longer said")
+    again.stop()
     store.close()
+  }
+
+  // Catching up is paced: each upload waits until the bytes before it would have gone at the rate.
+  {
+    const sent = []
+    const raw = { id: "paced", putChunks: async () => (sent.push(performance.now()), { taken: 1 }) }
+    const paced = pacedRemote(raw, 100_000)
+    const pack = [{ hash: "h", codec: 0, size: 10_000, body: new Uint8Array(10_000) }]
+    for (let index = 0; index < 3; index++) await paced.putChunks(pack)
+    const gaps = [sent[1] - sent[0], sent[2] - sent[1]]
+    assert.ok(gaps.every((gap) => gap >= 90), `uploads paced at 100 kB/s: ${gaps.map(Math.round)} ms apart`)
   }
 
   for (const store of [a, laptopStore]) store.close()

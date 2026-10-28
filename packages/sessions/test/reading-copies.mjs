@@ -110,8 +110,8 @@ test("reading copies go up as Mako draws each Session, the ones at work first an
     const open = () => new ReadingCopies(folder, views, () => {}, { now: () => now, remote: () => remote })
     const scope = (paused = false) => ({
       sessions: [
-        { harness: "claude", nativeId: "busy", path: "/rail/busy.jsonl", busy: true },
-        { harness: "claude", nativeId: "rest", path: "/rail/rest.jsonl", busy: false },
+        { harness: "claude", nativeId: "busy", path: "/rail/busy.jsonl", thread: "t-busy", busy: true, tier: "now" },
+        { harness: "claude", nativeId: "rest", path: "/rail/rest.jsonl", thread: "t-rest", busy: false, tier: "week" },
       ],
       paused,
     })
@@ -122,6 +122,7 @@ test("reading copies go up as Mako draws each Session, the ones at work first an
     copies.link(link)
     await copies.settled()
     assert.deepEqual(remote.pushed, ["busy", "rest"], "the one at work first")
+    assert.deepEqual(scope().sessions.map((session) => copies.readable(session)), [true, true], "both readable in the account")
     const lines = (await readFile(copyFile(folder, "claude", "busy"), "utf8")).trimEnd().split("\n")
     const header = CopyHeaderSchema.parse(JSON.parse(lines[0]))
     assert.deepEqual([header.nativeId, header.total, header.title, header.translator], ["busy", 40, "Session busy", "t-1"])
@@ -134,6 +135,7 @@ test("reading copies go up as Mako draws each Session, the ones at work first an
     copies.scope(scope())
     await copies.settled()
     assert.equal(remote.pushed.length, 2, "not within 10 s of the last")
+    assert.deepEqual([copies.readable(scope().sessions[0]), copies.current(scope().sessions[0])], [false, false], "changed since its copy: not readable as it is, until its turn")
     now += 10_000
     copies.scope(scope())
     await copies.settled()
@@ -179,7 +181,7 @@ test("another device reads a copy as it stands: the newest version, a page at a 
     let now = 2_000_000
     const remote = new MemoryRemote("gateway/d-studio")
     const owner = new ReadingCopies(join(folder, "studio"), views, () => {}, { now: () => ownerNow, remote: () => remote })
-    const scope = { sessions: [{ harness: "claude", nativeId: "s-1", path: "/rail/s-1.jsonl", busy: true }], paused: false }
+    const scope = { sessions: [{ harness: "claude", nativeId: "s-1", path: "/rail/s-1.jsonl", thread: "t-1", busy: true, tier: "now" }], paused: false }
     const link = { id: "https://cloud.test/v1/devices/studio/records", base: "https://cloud.test/v1/devices/studio/records", authorization: "Bearer b" }
     owner.scope(scope)
     owner.link(link)
