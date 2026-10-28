@@ -35,6 +35,7 @@
     "test:fixture-desk": "npm run build:electron && node scripts/test-fixture-desk.mjs && node scripts/test-remove-fixture-desk.mjs",
     "test:thread-lifecycle": "tsx scripts/test-thread-lifecycle.ts && tsx scripts/test-runtime-transport.ts && tsx scripts/test-runtime-recovery.ts",
     "test:workspace-ui": "node scripts/test-workspace-ui.mjs",
+    "test:opening-send-ui": "node scripts/test-opening-send-ui.mjs",
     "test:rail-ui": "node scripts/test-rail-ui.mjs && node scripts/test-kept-session-ui.mjs && node scripts/test-versions-ui.mjs && node scripts/test-store-formats-ui.mjs",
     "test:rail-list": "tsx scripts/test-rail-list.ts && tsx scripts/test-thread-archive-targets.ts",
     "desktop": "npm run build:electron && node electron/start.mjs",

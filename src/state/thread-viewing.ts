@@ -451,6 +451,54 @@ export async function recoverThreadReader(path: string): Promise<void> {
 }
 
 /**
+ * Why a send can't go to the conversation being opened yet, or null when it
+ * can. A transcript on screen, the last read of it or its record's tail, is
+ * the send's target while the fresh read lands underneath: the host routes
+ * a reply by path. Only the skeleton (nothing read yet) and the error the
+ * viewer shows in place of the transcript (`ThreadLoadingShell`) hold a send.
+ */
+export function openingHoldsSend(state: Pick<ThreadsState, "viewing" | "opening">): NonNullable<ThreadsState["opening"]> | null {
+  const { opening, viewing } = state
+  if (!opening) return null
+  if (opening.kind === "failed") return opening
+  return viewing?.ref.path === opening.ref.path ? null : opening
+}
+
+/**
+ * The viewed conversation's ref once its fresh read has landed, for a send
+ * whose route the ref on screen decides on the window's side. Null when the
+ * read failed, another conversation took the viewer, or `ms` passed first.
+ */
+export function freshViewedRef(path: string, ms: number): Promise<ThreadRef | null> {
+  return new Promise((resolve) => {
+    let stop = () => {}
+    const settle = (ref: ThreadRef | null) => {
+      stop()
+      clearTimeout(timer)
+      resolve(ref)
+    }
+    const check = () => {
+      const { viewing, opening } = threadsStore.get()
+      if (viewing?.ref.path !== path || opening?.kind === "failed") settle(null)
+      else if (!opening) settle(viewing.ref)
+    }
+    const timer = setTimeout(() => settle(null), ms)
+    stop = threadsStore.subscribe(check)
+    check()
+  })
+}
+
+/**
+ * Read the opened conversation again when its read failed, as Retry
+ * loading does: after the host comes back, a read the outage broke is
+ * retried instead of leaving its error on screen.
+ */
+export function rereadFailedOpening(): void {
+  const { opening } = threadsStore.get()
+  if (opening?.kind === "failed") void threadViewingActions.view(opening.ref)
+}
+
+/**
  * Keep showing a session whose record moved. What is on screen stays while
  * the record is read again where it now lives and followed from there.
  */
