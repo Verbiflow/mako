@@ -527,10 +527,11 @@ export class CloudAccounts {
   }
 
   /**
-   * A move's checkpoint, sent to the cloud Thread's records once: one the account already has is answered without
-   * sending its bytes. The cloud keeps it only if its bytes are the ones its hash names.
+   * A move's checkpoint (or its carry, a bundle kept the same way), sent to the cloud Thread's records once: one the
+   * account already has is answered without sending its bytes. The cloud keeps it only if its bytes are the ones its
+   * hash names.
    */
-  async sendCheckpoint(threadId: string, checkpoint: MoveCheckpoint, file: string): Promise<{ sent: boolean }> {
+  async sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string): Promise<{ sent: boolean }> {
     const path = `/v1/threads/${encodeURIComponent(threadId)}/records/checkpoints/${checkpoint.sha256}`
     if ((await this.#call("moves.checkpoint", "HEAD", path, undefined, false, [404])).status === 200) return { sent: false }
     await this.#call("moves.checkpoint", "PUT", path, new FileBody(file, checkpoint.bytes))

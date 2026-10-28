@@ -123,6 +123,11 @@ export interface ScriptedModelOptions {
   usage?: JsonObject
   /** A bearer token the provider no longer takes (a refresh retired it): its requests are answered 401. */
   refuses?: (bearer: string) => boolean
+  /**
+   * The address it listens on and names in its URL: this computer's loopback unless given. A harness on another machine
+   * (a local cloud machine in Docker) reaches it at an address this computer has on its network.
+   */
+  host?: string
 }
 
 /** A request a stand-in model received: a conversation's takes a step of the script, and is unscripted when none was left. */
@@ -217,11 +222,12 @@ export async function scriptedModel(options: ScriptedModelOptions) {
       for (const event of responsesStreamed(reply, id)) send(JSON.stringify(served(event, { model: body.model, usage: options.usage })))
     })
   })
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const host = options.host ?? "127.0.0.1"
+  await new Promise<void>((resolve) => server.listen(0, host, resolve))
   // SAFETY: a server listening on a TCP port reports its address as an AddressInfo.
   const { port } = server.address() as AddressInfo
   return {
-    url: `http://127.0.0.1:${port}`,
+    url: `http://${host}:${port}`,
     requests,
     bearers,
     close: () => new Promise<void>((resolve) => {

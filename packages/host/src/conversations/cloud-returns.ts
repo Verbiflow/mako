@@ -2,19 +2,20 @@ import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:f
 import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
-import { MoveCheckpointSchema, ReturnDepartureSchema, type ReturnState } from "@mako/protocol/moves"
+import { MoveCheckpointSchema, ReturnDepartureSchema, type MoveCheckpoint, type ReturnState } from "@mako/protocol/moves"
 import type { ArchivedThread } from "@mako/protocol/thread-listing"
 import { describeGatewayFailure } from "@mako/protocol/gateway-http"
 import { describeSync, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink, type StagedRecords } from "@mako/sessions/record-sync"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { ReturnProjectMissingSchema, type ReturnWaitsOn, type ThreadReturnOptions, type ThreadReturnOutcome, type ThreadReturnStep } from "../contracts/cloud-threads.js"
+import { ReturnProjectMissingSchema, type ReturnLanded, type ReturnWaitsOn, type ThreadReturnOptions, type ThreadReturnOutcome, type ThreadReturnStep } from "../contracts/cloud-threads.js"
 import { OutdatedRestoreSchema, type OutdatedRestore, type RuntimeUpdateOffer } from "../contracts/restore-plan.js"
 import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { HandoffSchema, MoveIdSchema, RuntimeIdSchema, type ClaimReceipt, type ExecutionOwner, type Handoff, type MoveId, type SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "../contracts/thread-identity.js"
 import type { CloudAccount } from "../usage/index.js"
-import { applyMoveCheckpoint, captureMoveCheckpoint, ProjectMissingError } from "../workspaces/index.js"
+import type { ThreadFileHistory } from "@mako/protocol"
+import { applyMoveCheckpoint, captureMoveCheckpoint, mergeReturned, openCarry, planOutsideReturn, ProjectMissingError, returnOutside, unchangedSince, type OpenedCarry } from "../workspaces/index.js"
 import { cloudRuntimeOf, MovePlanSchema, namedUuid } from "./cloud-moves.js"
 
 /**
@@ -80,8 +81,21 @@ const ReturnPlanSchema = z.object({
   /** Set before the machine is asked to pack: from then it may hold the Thread released, until told to stay. */
   departing: z.boolean().optional(),
   departure: ReturnDepartureSchema.optional(),
-  /** This Mac's worktree as it was before the return laid the machine's over it, kept until the return is done. */
-  kept: z.object({ checkpoint: MoveCheckpointSchema, file: z.string() }).optional(),
+  /**
+   * This Mac's worktree as it was before the return laid the machine's over it, kept until the return is done; `others`,
+   * each other repository's in a project of several.
+   */
+  kept: z.object({ checkpoint: MoveCheckpointSchema, file: z.string(), others: z.array(z.object({ path: z.string(), checkpoint: MoveCheckpointSchema, file: z.string() })).optional() }).optional(),
+  /** How the Thread's work landed where it wasn't simply laid down (`ReturnLanded`), once it was taken here. */
+  landed: z.object({
+    merged: z.array(z.string()),
+    conflicts: z.array(z.string()),
+    mine: z.string().optional(),
+    outside: z.object({ placed: z.array(z.string()), removed: z.array(z.string()), waiting: z.array(z.string()), kept: z.string().optional() }),
+  }).optional(),
+  /** What the agents hear on their next turn here about how its work landed (`notices`), and which have heard it. */
+  note: z.string().optional(),
+  told: z.array(z.string()).optional(),
   reason: z.string().optional(),
   /** Why it stayed, when a harness here was older than the one that wrote its sessions there: the update that lets it come. */
   outdated: OutdatedRestoreSchema.optional(),
@@ -138,6 +152,15 @@ export type CloudReturnsOptions = {
   /** A journal here for a conversation begun in the cloud, from its records written back at `path`. */
   capture(conversationId: string, path: string): Promise<void>
   step(conversationId: string, move: string, step: ThreadReturnStep): void
+  /** Where a Thread's files outside its worktree wait, when the person changed them here meanwhile: `<data root>/cloud/outside`. */
+  outside?: string
+  /**
+   * The worktree here following the Thread in the cloud (`CloudFollow`): the checkout last laid in each repository, which
+   * a way back merges the person's changes from in place of what the move sent; forgotten once the Thread is back.
+   */
+  followed?: { laid(cloudThread: string, path: string): Promise<MoveCheckpoint | undefined>; forget(cloudThread: string): Promise<void> }
+  /** This Mac's journal takes the Thread's file history from the cloud (`Attribution.carryThreadHistory`); false while it isn't open. */
+  carryHistory?(history: ThreadFileHistory): Promise<boolean>
 }
 
 export class CloudReturns {
@@ -148,6 +171,8 @@ export class CloudReturns {
    * conversation meanwhile, and a call for one of its conversations waits for it.
    */
   readonly #returning = new Map<string, Set<Promise<void>>>()
+  /** By conversation, what its agent hasn't heard yet of how a return landed (`notices`). */
+  readonly #untold = new Map<string, Array<{ move: MoveId; note: string }>>()
 
   constructor(options: CloudReturnsOptions) {
     this.#options = options
@@ -248,6 +273,7 @@ export class CloudReturns {
     for (const name of await readdir(this.#options.folder).catch(() => [])) {
       if (!name.endsWith(".json")) continue
       const plan = await this.#read(MoveIdSchema.parse(name.slice(0, -".json".length))).catch(() => undefined)
+      if (plan?.phase === "done") this.#tell(plan)
       if (!plan || plan.phase === "done" || plan.phase === "stayed" || this.#running.has(plan.move)) continue
       if (plan.phase === "staying") {
         await this.#tellStay(plan).catch((error: Error) => hostWarn("returns", "a machine still to be told its Thread stays couldn't be told yet", { move: plan.move, error: error.message }))
@@ -421,10 +447,12 @@ export class CloudReturns {
           await this.#options.capture(session.conversationId, session.path)
         }
         await heard(this.#account().finishReturn(plan.cloudThread, plan.move))
-        if (plan.kept) await rm(plan.kept.file, { force: true })
+        if (plan.kept) for (const file of [plan.kept.file, ...(plan.kept.others ?? []).map((other) => other.file)]) await rm(file, { force: true })
+        await this.#options.followed?.forget(plan.cloudThread)
         plan.phase = "done"
         plan.timings.done = Date.now() - plan.began
         await this.#write(plan)
+        this.#tell(plan)
         hostLog("returns", "a Thread came back from the cloud", { move: plan.move, cloudThread: plan.cloudThread, sessions: plan.sessions.length, ...plan.timings })
       }
     } catch (error) {
@@ -437,8 +465,8 @@ export class CloudReturns {
       step({ kind: "unsettled", reason, waitsOn })
       return { kind: "unsettled", reason, waitsOn }
     }
-    step({ kind: "back", conversations: plan.sessions.map((session) => session.conversationId) })
-    return { kind: "back" }
+    step({ kind: "back", conversations: plan.sessions.map((session) => session.conversationId), ...plan.landed && { landed: plan.landed } })
+    return { kind: "back", ...plan.landed && { landed: plan.landed } }
   }
 
   /**
@@ -448,6 +476,8 @@ export class CloudReturns {
    */
   async #release(plan: ReturnPlan): Promise<ThreadReturnOutcome | undefined> {
     const account = this.#account()
+    // A machine that took a carry gives one back; one from before carries is never asked for what it can't read.
+    const carry = (await this.#forward(plan.thread, cloudRuntimeOf(plan.cloudThread)).catch(() => undefined))?.takesCarry === true
     // Beside the cloud's steps, not after them: the copy is taken while the machine packs.
     const keeping = this.#keep(plan).then((kept) => {
       // Kept, it's the plan's: a return that stays removes it, one that comes puts it back on a failure.
@@ -467,7 +497,7 @@ export class CloudReturns {
       // Both settled before the cloud is told anything: a stay must never reach a machine still packing.
       const [kept, packed] = await Promise.all([
         keeping,
-        this.#options.cloud.callThread(plan.cloudThread, "mako:move-depart", [{ move: plan.move, folder: plan.folder, conversations: plan.sessions.map((session) => session.conversationId), device: plan.device }], plan.asked)
+        this.#options.cloud.callThread(plan.cloudThread, "mako:move-depart", [{ move: plan.move, folder: plan.folder, conversations: plan.sessions.map((session) => session.conversationId), device: plan.device, ...carry && { carry: true } }], plan.asked)
           .then((value) => ({ departure: ReturnDepartureSchema.parse(decodeRuntimeValue(value)) }), (error: Error) => ({ error })),
       ])
       if ("error" in packed) return this.#cancel(plan, errorMessage({ error: packed.error }))
@@ -497,7 +527,16 @@ export class CloudReturns {
       const captured = await captureMoveCheckpoint(this.#options.git, plan.folder, scratch)
       const file = join(this.#options.folder, `${plan.move}.kept.bundle`)
       await rename(captured.file, file)
-      return { kept: { checkpoint: captured.checkpoint, file } }
+      // A project of several repositories: each other one kept as well.
+      const forward = await this.#forward(plan.thread, cloudRuntimeOf(plan.cloudThread)).catch(() => undefined)
+      const others: NonNullable<Kept["others"]> = []
+      for (const [at, other] of (forward?.others ?? []).entries()) {
+        const taken = await captureMoveCheckpoint(this.#options.git, other.path, await mkdtemp(join(scratch, "other-")))
+        const kept = join(this.#options.folder, `${plan.move}.kept-${at + 1}.bundle`)
+        await rename(taken.file, kept)
+        others.push({ path: other.path, checkpoint: taken.checkpoint, file: kept })
+      }
+      return { kept: { checkpoint: captured.checkpoint, file, ...others.length && { others } } }
     } catch (error) {
       return { error }
     } finally {
@@ -550,6 +589,11 @@ export class CloudReturns {
       }
       const scratch = await mkdtemp(join(this.#options.folder, `${plan.move}-back-`))
       let ahead: StagedRecords[] = []
+      // How the work landed, repository by repository, and what came back from outside the worktree, read while the
+      // carry was open.
+      const landed: Array<Pick<ReturnLanded, "merged" | "conflicts" | "mine">> = []
+      let carried: OpenedCarry | undefined
+      let outside: { opened: OpenedCarry; plan: Awaited<ReturnType<typeof planOutsideReturn>>; bytes: Map<string, Buffer> } | undefined
       try {
         const file = join(scratch, "checkpoint.bundle")
         // The checkout and the records come down at once. The records go only into Mako's record store here, so the
@@ -561,6 +605,30 @@ export class CloudReturns {
             .then((staged) => { ahead = staged }, (error: Error) => hostWarn("returns", "a return's records couldn't come down ahead; the restore pulls them", { move: plan.move, error: describeGatewayFailure(error) })),
         ])
         await timed("checkpointApplied", () => applyMoveCheckpoint(this.#options.git, plan.folder, file, departure.checkpoint, { replace: true }))
+        // What the person changed in the worktree meanwhile is merged in, never written over; then the carry: the
+        // project's other repositories the same way, and what comes back from outside the worktree once all else has.
+        const forward = await this.#forward(plan.thread, cloudRuntimeOf(plan.cloudThread)).catch(() => undefined)
+        const kept = plan.kept
+        const sent = (await this.#options.followed?.laid(plan.cloudThread, plan.folder)) ?? forward?.checkpoint
+        if (sent && kept) landed.push(await timed("merged", () => this.#merge(plan, plan.folder, sent, kept, departure.checkpoint, scratch)))
+        if (departure.carry) {
+          const carryFile = join(scratch, "carry.bundle")
+          await timed("carryRead", () => account.readCheckpoint(plan.cloudThread, departure.carry?.sha256 ?? "", carryFile))
+          carried = await openCarry(this.#options.git, carryFile, departure.carry, scratch)
+          for (const repository of carried.carry.repositories.slice(1)) {
+            const bundle = join(scratch, `${repository.checkpoint.sha256}.bundle`)
+            await timed("othersRead", () => account.readCheckpoint(plan.cloudThread, repository.checkpoint.sha256, bundle))
+            await timed("othersApplied", () => applyMoveCheckpoint(this.#options.git, repository.path, bundle, repository.checkpoint, { replace: true }))
+            const base = (await this.#options.followed?.laid(plan.cloudThread, repository.path)) ?? forward?.others.find((other) => other.path === repository.path)?.checkpoint
+            const mine = kept?.others?.find((other) => other.path === repository.path)
+            if (base && mine) landed.push(await timed("merged", () => this.#merge(plan, repository.path, base, mine, repository.checkpoint, scratch)))
+          }
+          // What's outside the worktree waits for the records below, which can still refuse the return: its files are
+          // read now, while the carry is open, and placed once nothing else can fail.
+          const left = new Map((forward?.carry?.manifest.outside ?? []).map((entry) => [entry.path, entry.sha256]))
+          outside = { opened: carried, plan: await planOutsideReturn(carried.carry, left), bytes: new Map() }
+          for (const step of outside.plan) if (step.entry && step.action !== "same") outside.bytes.set(step.path, await carried.bytes(step.path))
+        }
       } finally {
         await rm(scratch, { recursive: true, force: true })
       }
@@ -582,6 +650,19 @@ export class CloudReturns {
         for (const session of plan.sessions) if (session.begun && session.harness === each.harness && session.nativeId === each.nativeId) session.path = restored.path
       }
       this.#everyConversationCarried(plan)
+      // Nothing can refuse the return from here: what came back from outside the worktree goes in place, and the
+      // Thread's file history is taken.
+      const waiting = join(this.#options.outside ?? join(this.#options.folder, "..", "outside"), plan.thread)
+      const read = outside
+      const done = read ? await timed("outside", () => returnOutside({ ...read.opened, bytes: async (path) => read.bytes.get(path) ?? read.opened.bytes(path) }, read.plan, waiting)) : { placed: [], removed: [], waiting: [] }
+      const history = carried?.history ? (await this.#options.carryHistory?.(carried.history)) ?? false : undefined
+      const mine = landed.find((each) => each.mine)?.mine
+      const result: ReturnLanded = { merged: landed.flatMap((each) => each.merged), conflicts: landed.flatMap((each) => each.conflicts), ...mine && { mine }, outside: { ...done, ...done.waiting.length && { kept: waiting } } }
+      // Said only when it wasn't simply laid down: the person's changes merged in, or anything from outside the worktree.
+      if (result.merged.length || result.mine || done.placed.length || done.removed.length || done.waiting.length) plan.landed = result
+      const note = landedNote(result, waiting)
+      if (note) plan.note = note
+      if (carried || plan.landed) hostLog("returns", "a return's carry was taken here", { move: plan.move, merged: result.merged.length, conflicts: result.conflicts.length, placed: done.placed.length, removed: done.removed.length, waiting: done.waiting.length, ...history !== undefined && { history } })
     } catch (error) {
       const reason = errorMessage({ error })
       // What the person reads is the reason; what lay beneath it (a store's own error, the versions and columns a
@@ -592,10 +673,13 @@ export class CloudReturns {
       if (plan.kept) {
         const kept = plan.kept
         // A worktree that can't be put back keeps its copy beside the plan, and the Thread still goes back to the cloud.
-        await applyMoveCheckpoint(this.#options.git, plan.folder, kept.file, kept.checkpoint, { replace: true }).catch((restore: Error) => {
-          hostWarn("returns", "this Mac's worktree couldn't be put back as it was; its copy stays", { move: plan.move, file: kept.file, error: errorMessage({ error: restore }) })
-          plan.kept = undefined
-        })
+        let whole = true
+        for (const each of [{ path: plan.folder, checkpoint: kept.checkpoint, file: kept.file }, ...kept.others ?? []])
+          await applyMoveCheckpoint(this.#options.git, each.path, each.file, each.checkpoint, { replace: true }).catch((restore: Error) => {
+            hostWarn("returns", "this Mac's worktree couldn't be put back as it was; its copy stays", { move: plan.move, folder: each.path, file: each.file, error: errorMessage({ error: restore }) })
+            whole = false
+          })
+        if (!whole) plan.kept = undefined
       }
       if (error instanceof OutdatedReturnError) plan.outdated = error.outdated
       if (error instanceof ProjectMissingError) plan.missing = error.missing
@@ -609,6 +693,44 @@ export class CloudReturns {
     plan.timings.applied = Date.now() - plan.began
     await this.#write(plan)
     return undefined
+  }
+
+  /**
+   * The person's changes to `folder` while the Thread was away, merged into the machine's checkout laid there
+   * (`mergeReturned`); nothing to merge when the worktree still read as what this Mac sent (`base`).
+   */
+  async #merge(plan: ReturnPlan, folder: string, base: MoveCheckpoint, kept: { checkpoint: MoveCheckpoint; file: string }, theirs: MoveCheckpoint, scratch: string): Promise<Pick<ReturnLanded, "merged" | "conflicts" | "mine">> {
+    if (unchangedSince(base, kept.checkpoint)) return { merged: [], conflicts: [] }
+    const file = join(scratch, `${base.sha256}.base.bundle`)
+    await this.#account().readCheckpoint(plan.cloudThread, base.sha256, file)
+    const merged = await mergeReturned(this.#options.git, folder, { base, mine: kept.checkpoint, theirs, bundles: { base: file, mine: kept.file } })
+    const prefix = folder === plan.folder ? "" : `${folder}: `
+    return { merged: merged.merged.map((path) => `${prefix}${path}`), conflicts: merged.conflicts.map((path) => `${prefix}${path}`), ...merged.mine && { mine: merged.mine } }
+  }
+
+  /**
+   * What the agents of a Thread that came back hear on their next turn about how its work landed, each once: the
+   * person's changes merged in, conflicts to resolve, files outside the worktree waiting (`landedNote`). Recorded as
+   * heard in the return's plan, so a restart doesn't say it again.
+   */
+  notices(conversationId: string): string[] {
+    const untold = this.#untold.get(conversationId)
+    if (!untold?.length) return []
+    this.#untold.delete(conversationId)
+    for (const { move } of untold)
+      void this.#read(move).then((plan) => this.#write({ ...plan, told: [...plan.told ?? [], conversationId] }))
+        .catch((error: Error) => hostWarn("returns", "couldn't record that an agent heard how its return landed", { move, conversation: conversationId, error: error.message }))
+    return untold.map(({ note }) => note)
+  }
+
+  /** A return's note, for each of its conversations that hasn't heard it. */
+  #tell(plan: ReturnPlan): void {
+    if (!plan.note || plan.phase !== "done") return
+    for (const { conversationId } of plan.sessions) {
+      if (plan.told?.includes(conversationId)) continue
+      const untold = (this.#untold.get(conversationId) ?? []).filter((each) => each.move !== plan.move)
+      this.#untold.set(conversationId, [...untold, { move: plan.move, note: plan.note }])
+    }
   }
 
   /**
@@ -695,6 +817,31 @@ export class CloudReturns {
     await writeFile(`${file}.tmp`, JSON.stringify(ReturnPlanSchema.parse(plan)))
     await rename(`${file}.tmp`, file)
   }
+}
+
+/** At most this many paths are named in a note; the rest are counted. */
+const NOTE_PATHS = 5
+
+/** Paths named in a sentence: the first few, then how many more. */
+function named(paths: readonly string[]): string {
+  const shown = paths.slice(0, NOTE_PATHS).join(", ")
+  return paths.length > NOTE_PATHS ? `${shown} and ${paths.length - NOTE_PATHS} more` : shown
+}
+
+/**
+ * What an agent back from the cloud hears about how its work landed, when it wasn't simply laid down: the person's
+ * changes merged in, the files that hold conflict markers, the branch their commits are on, and files outside the
+ * worktree the person had changed meanwhile, whose cloud copies wait. Undefined when there's nothing to say.
+ */
+export function landedNote(landed: ReturnLanded, waiting: string): string | undefined {
+  const lines: string[] = []
+  const conflicts = new Set(landed.conflicts)
+  const clean = landed.merged.filter((path) => !conflicts.has(path))
+  if (clean.length) lines.push(`While you worked in the cloud, the user changed ${clean.length === 1 ? "a file" : `${clean.length} files`} in this worktree on their Mac; Mako kept their changes beside yours: ${named(clean)}.`)
+  if (conflicts.size) lines.push(`You and the user both changed ${named([...conflicts])}: ${conflicts.size === 1 ? "it holds" : "they hold"} Git's conflict markers, theirs as \`mako/merge/this-mac\` and yours as \`mako/merge/cloud\`. Resolve them before building on ${conflicts.size === 1 ? "it" : "them"}.`)
+  if (landed.mine) lines.push(`The user's own commits on this branch meanwhile are on \`${landed.mine}\`.`)
+  if (landed.outside.waiting.length) lines.push(`Files outside the worktree that you changed in the cloud, and the user changed here meanwhile, kept the user's version; yours wait under ${waiting}: ${named(landed.outside.waiting)}.`)
+  return lines.length ? lines.join(" ") : undefined
 }
 
 /** How a return that stayed answers, from its plan: why, and what lets it come (an update, the project's folder). */

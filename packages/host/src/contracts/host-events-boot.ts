@@ -87,6 +87,11 @@ export type HostEventBody =
   | { type: "cloud-start-step"; conversationId: string; step: CloudStartStep; project: string }
   /** A Thread's move to the cloud (`mako:thread-move`), step by step, for the conversation it was asked from. */
   | { type: "thread-move-step"; conversationId: string; move: string; step: ThreadMoveStep }
+  /**
+   * A Thread running in the cloud whose worktree here stopped following it: the person changed it here (`folders`), so
+   * nothing more is laid over it, and the way back merges both. Said for each of its conversations here.
+   */
+  | { type: "thread-follow-stopped"; conversations: string[]; folders: string[]; at: number }
   | { type: "thread-return-step"; conversationId: string; move: string; step: ThreadReturnStep }
   /** An agent's tool changed this device's worktrees; windows read them again. */
   | { type: "worktrees-changed" }

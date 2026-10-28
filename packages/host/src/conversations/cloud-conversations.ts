@@ -219,6 +219,8 @@ export type CloudConversationsOptions = {
   carried?(folder: string, why: string): Promise<void>
   /** A conversation's folder on its machine may have changed: its agent worked. At most once a `CHANGED_MS`. */
   changed?(conversationId: string): void
+  /** A turn of a conversation on cloud Thread `threadId` ended there: what follows the Thread here reads it (`CloudFollow`). */
+  turnEnded?(conversationId: string, threadId: string): void
   /**
    * This Mac's Thread store, where a conversation begun in a Thread that moved to the cloud (a `+` tab, a fork) is
    * recorded: its Session runs where the Thread does, and the way back brings it here with the rest.
@@ -352,6 +354,13 @@ export class CloudConversations {
   readonly controlPreviews: CloudControlPreviews
   /** By conversation: a change to tell of, waiting out `CHANGED_MS` from the last told. */
   readonly #changes = new Map<string, NodeJS.Timeout>()
+  /**
+   * By conversation, the requests whose end was heard, the newest few: a request's later changes (what its turn
+   * changed, counted after it) restate its end, which says nothing new.
+   */
+  readonly #ended = new Map<string, Set<string>>()
+  /** Conversations whose turn end was heard from a request since their session last ran: its stopping says it again. */
+  readonly #endHeard = new Set<string>()
   /** Each cloud Thread's ports, served on this Mac. */
   readonly #previews: CloudPreviews
   /**
@@ -1143,6 +1152,8 @@ export class CloudConversations {
   /** No longer answered here, and its Thread no longer followed once none of its conversations is. */
   #forget(entry: Entry): void {
     this.#entries.delete(entry.conversationId)
+    this.#ended.delete(entry.conversationId)
+    this.#endHeard.delete(entry.conversationId)
     if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
   }
 
@@ -1481,14 +1492,45 @@ export class CloudConversations {
     // One subscription follows a Thread; a Thread moved from this Mac can carry several of its conversations.
     const target = head.data.type === "live-batch" && head.data.conversation ? this.#entries.get(head.data.conversation) : undefined
     if (!target || target.threadId !== entry.threadId) return
+    const { batch } = z.object({ batch: LiveBatchSchema }).parse(JSON.parse(parts.payload))
+    const before = target.summary?.session.status
     if (target.summary) {
-      const { batch } = z.object({ batch: LiveBatchSchema }).parse(JSON.parse(parts.payload))
       const summary: LiveSummary = { ...target.summary, session: sessionAfter(target.summary.session, batch), revision: batch.revision }
       if (batch.epoch) summary.epoch = batch.epoch
       target.summary = summaryOf(summary)
     }
+    // A turn ended there: a request of its reached its end in this batch, or the session stopped running with no
+    // request's end heard since it began (a turn the harness began itself). The first holds however the batches fell (a
+    // turn begun and ended in one, or a summary this Mac never had), and the stream replays from where this Mac left it,
+    // so a turn that ended while it slept or lost the link is heard as it catches up. Each end is said once.
+    const after = target.summary?.session.status
+    if (before !== "running" && after === "running") this.#endHeard.delete(target.conversationId)
+    if (this.#endsRequest(target.conversationId, batch)) {
+      this.#endHeard.add(target.conversationId)
+      this.#options.turnEnded?.(target.conversationId, entry.threadId)
+    } else if (before === "running" && after !== "running" && !this.#endHeard.delete(target.conversationId)) this.#options.turnEnded?.(target.conversationId, entry.threadId)
     this.#options.emit({ type: "live-batch", conversation: target.conversationId, payload: parts.payload })
     this.#noteChange(target.conversationId)
+  }
+
+  /**
+   * Whether a relayed batch carries a request of the conversation reaching its end for the first time: a turn ended. A
+   * whole list (one went away, or they reordered) restates requests that ended long ago, which are noted, never said.
+   */
+  #endsRequest(conversationId: string, batch: Pick<LiveBatch, "requests" | "requestChanges">): boolean {
+    const ended = this.#ended.get(conversationId) ?? new Set<string>()
+    this.#ended.set(conversationId, ended)
+    const note = (id: string) => {
+      ended.add(id)
+      for (const oldest of ended) {
+        if (ended.size <= ENDED_KEPT) break
+        ended.delete(oldest)
+      }
+    }
+    for (const request of batch.requests ?? []) if (ENDED_REQUEST.has(request.status)) note(request.id)
+    const fresh = (batch.requestChanges ?? []).filter((request) => ENDED_REQUEST.has(request.status) && !ended.has(request.id))
+    for (const request of fresh) note(request.id)
+    return fresh.length > 0
   }
 
   /** Its agent worked: a window on its folder reads it again, once a `CHANGED_MS` at most, after the last batch of a burst. */
@@ -1689,6 +1731,11 @@ export class CloudConversations {
     return write
   }
 }
+
+/** The ends a request reaches: its turn is over, whatever it did. */
+const ENDED_REQUEST = new Set<LiveRequest["status"]>(["completed", "failed", "interrupted", "canceled", "uncertain"])
+/** How many of a conversation's ended requests are remembered: far more than a batch restates. */
+const ENDED_KEPT = 64
 
 /** A snapshot's summary fields, which are all a window needs to list the conversation before it opens it. */
 function summaryOf(snapshot: LiveSummary): LiveSummary {

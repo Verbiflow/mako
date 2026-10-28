@@ -36,6 +36,8 @@ import { githubRepositoryUrl } from "@mako/host/contracts/cloud-threads"
 import { decodeRuntimeEvent, decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ThreadAppView } from "@mako/host/contracts/thread-app"
+import type { LiveBatch } from "@mako/host/contracts/live-conversations"
+import { TURN_CHANGES_VERSION } from "@mako/host/contracts/turn-changes"
 import { followHostLog } from "@mako/host/base/host-log"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
 import type { CloudAccount } from "@mako/host/usage/cloud-account-methods"
@@ -166,9 +168,9 @@ async function cloudMachine(reach: Reach = {}) {
     stop: () => {},
   }
   /** One of the machine host's live batches, on its Thread's stream as the machine sends it. */
-  const batch = (threadId: string, conversation: string, revision: number, status: string) => {
+  const batch = (threadId: string, conversation: string, revision: number, status: string, more: Pick<LiveBatch, "requests" | "requestChanges"> = {}) => {
     // SAFETY: a batch as the machine's live driver sends it, filled only as far as the router and summary read it.
-    const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
+    const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status }, ...more } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
   return { account, calls, created, asked, machineState, bases, batch, network, served, wake, app, forkSessions, filing, gateway }
@@ -266,13 +268,15 @@ function conversations(account: CloudAccount, file: string, copies?: CloudCopies
   const starts: RuntimeEvent[] = []
   /** Each conversation a window on its folder was told changed, in order. */
   const changed: string[] = []
-  const options: CloudConversationsOptions = { account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id) }
+  /** Each turn end heard, as `<conversation> <Thread>`. */
+  const ended: string[] = []
+  const options: CloudConversationsOptions = { account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id), turnEnded: (conversation, thread) => ended.push(`${conversation} ${thread}`) }
   if (copies) options.copies = copies
   if (asleepMs) options.asleepMs = asleepMs
   options.archivedChanged = (threads) => archived.push([...threads.keys()])
   const router = new CloudConversations(options)
   after(() => router.dispose())
-  return { router, events, starts, changed, archived }
+  return { router, events, starts, changed, archived, ended }
 }
 
 async function until(what: string, check: () => boolean, ms = 3_000) {
@@ -316,6 +320,37 @@ test("a cloud start makes the Thread once, starts on the machine in its clone, a
   assert.ok(machine.calls.some((call) => call.channel === "mako:live-prompt" && call.args[0] === conversationId))
   assert.equal((await router.route("mako:live-prompt", ["not-a-cloud-one", "r-3", "x", [], undefined])).handled, false)
   assert.equal((await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID() }])).handled, false, "a start without cloud is this Mac's")
+})
+
+test("a cloud turn's end is heard once however its batches fell: the session stopping, a request ending in a batch of its own, never a list restated", async () => {
+  const machine = await cloudMachine()
+  const { router, events, ended } = conversations(machine.account, join(scratch, "turn-ends", "conversations.json"))
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY }, initialRequest: { id: "r-1", text: "hi", attachments: [] } }])
+  const [threadId] = machine.created
+  const heard = `${conversationId} ${threadId}`
+  machine.batch(threadId!, conversationId, 2, "running")
+  machine.batch(threadId!, conversationId, 3, "ready")
+  await until("both batches relayed", () => events.length === 2)
+  assert.deepEqual(ended, [heard], "the session stopped running: its turn ended")
+  // A turn begun and ended between two batches this Mac heard: only its request says so.
+  machine.batch(threadId!, conversationId, 4, "ready", { requestChanges: [{ id: "r-2", text: "again", attachments: [], status: "completed" }] })
+  await until("the request's end relayed", () => events.length === 3)
+  assert.deepEqual(ended, [heard, heard], "a request that ended is a turn that ended")
+  machine.batch(threadId!, conversationId, 5, "ready", { requestChanges: [{ id: "r-3", text: "more", attachments: [], status: "dispatching" }] })
+  machine.batch(threadId!, conversationId, 6, "ready", { requests: [{ id: "r-2", text: "again", attachments: [], status: "completed" }] })
+  await until("both relayed", () => events.length === 5)
+  assert.deepEqual(ended, [heard, heard], "a request still at work, or a list restating one that ended long ago, ends nothing")
+  // A turn as most fall: running, its request ended, then the session stops: one end, not two.
+  machine.batch(threadId!, conversationId, 7, "running")
+  machine.batch(threadId!, conversationId, 8, "running", { requestChanges: [{ id: "r-3", text: "more", attachments: [], status: "completed" }] })
+  machine.batch(threadId!, conversationId, 9, "ready")
+  await until("the turn relayed", () => events.length === 8)
+  assert.deepEqual(ended, [heard, heard, heard], "the session stopping after its request's end says nothing more")
+  // Its request changed again after its end (what its turn changed, counted then): the same end, not another.
+  machine.batch(threadId!, conversationId, 10, "ready", { requestChanges: [{ id: "r-3", text: "more", attachments: [], status: "completed", changes: { version: TURN_CHANGES_VERSION, state: "pending" } }] })
+  await until("the change relayed", () => events.length === 9)
+  assert.deepEqual(ended, [heard, heard, heard], "a request already ended, changed again, ends nothing")
 })
 
 /** The steps a new cloud conversation's window was told, in order. */

@@ -833,6 +833,7 @@ const inputs = {
             open: z
               .object({
                 conversationId: z.string(),
+                cwd: z.string().optional(),
                 modeId: z.string().optional(),
                 tuning: z
                   .object({
@@ -889,6 +890,7 @@ const inputs = {
             ),
           })
           .optional(),
+        carry: z.object({ sha256: z.string(), bytes: z.number() }).optional(),
       }),
     ]),
   "mako:move-depart": () =>
@@ -898,12 +900,23 @@ const inputs = {
         folder: z.string(),
         conversations: z.array(z.string()),
         device: z.string(),
+        carry: z.literal(true).optional(),
       }),
     ]),
+  "mako:move-follow": () => z.tuple([z.object({ folder: z.string() })]),
   "mako:move-ready": () =>
     z.tuple([
       z.object({
         folder: z.string(),
+        repositories: z
+          .array(
+            z.object({
+              path: z.string(),
+              url: z.string(),
+              branch: z.string().optional(),
+            })
+          )
+          .optional(),
         harnesses: z.array(z.string()).optional(),
         launches: z
           .array(
@@ -1885,6 +1898,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:merge-pull", "git"],
   ["mako:move-arrive", "conversations"],
   ["mako:move-depart", "conversations"],
+  ["mako:move-follow", "conversations"],
   ["mako:move-ready", "conversations"],
   ["mako:move-stage", "conversations"],
   ["mako:move-stay", "conversations"],

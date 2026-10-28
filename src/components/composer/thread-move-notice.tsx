@@ -9,7 +9,7 @@ import { returnNotice } from "@/lib/restore-plan"
 import { MoveSteps as Steps } from "./move-steps"
 import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
-import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, type HarnessUpdating } from "@/state/cloud-moves"
+import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, dismissFollowStopped, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, updateThen, useCloudMoves, type HarnessUpdating } from "@/state/cloud-moves"
 
 /** A move's steps in the order they're taken, each in the words its step says. */
 const STEPS = [
@@ -17,6 +17,9 @@ const STEPS = [
   { kind: "handing-over", words: "Handing over" },
   { kind: "resuming", words: "Resuming in the cloud" },
 ] as const
+
+/** A Thread in the main checkout goes onto its own branch first, then the move's own steps. */
+const OWN_BRANCH_STEPS = [{ kind: "own-branch", words: "Onto its own branch" }, ...STEPS] as const
 
 /** A handoff's steps: its running turn is paused between sending ahead and the hand-over, and goes on in the cloud. */
 const HANDOFF_STEPS = [
@@ -29,6 +32,8 @@ const HANDOFF_STEPS = [
 /** What each step means for the person, under the title. */
 function detail(step: ThreadMoveStep, handOff: boolean): string {
   switch (step.kind) {
+    case "own-branch":
+      return "Only its own changes leave the project folder; yours and other threads' stay there. It moves to the cloud from its new worktree."
     case "packing":
       return handOff ? "Its worktree and sessions go ahead while its agent keeps working here." : "Its worktree and sessions go ahead while it still runs here."
     case "pausing":
@@ -74,6 +79,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   const returning = useCloudMoves((state) => (key ? state.returning[key] : undefined))
   const outdated = useCloudMoves((state) => (key ? state.outdated[key] : undefined))
   const missing = useCloudMoves((state) => (key ? state.missing[key] : undefined))
+  const stopped = useCloudMoves((state) => (key ? state.followStopped[key] : undefined))
   const updating = useCloudMoves((state) => (key ? state.updating[key] : undefined))
   const check = useCloudMoves((state) => (key ? state.harnesses[key] : undefined))
   // A harness the person updates outside Mako (another app's, a command) is weighed again as they come back to the window.
@@ -89,7 +95,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   if (moving) {
     const unsettled = moving.step.kind === "unsettled"
     const handOff = moving.handOff === true
-    const steps = handOff ? HANDOFF_STEPS : STEPS
+    const steps: ReadonlyArray<{ kind: string; words: string }> = handOff ? HANDOFF_STEPS : moving.ownBranch ? OWN_BRANCH_STEPS : STEPS
     const at = steps.findIndex((each) => each.kind === moving.step.kind)
     return {
       id: "thread-move",
@@ -107,6 +113,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   }
   if (!returning) {
     if (missing) return missingProject(key, missing)
+    if (stopped) return followStoppedNotice(key, stopped)
     return outdated ? outdatedReturn(key, outdated, check) : null
   }
   const step = returning.step
@@ -135,6 +142,26 @@ export function useThreadMoveNotice(): ComposerNotice | null {
       </>
     ),
     data: { "data-thread-return": step.kind },
+  }
+}
+
+/**
+ * A Thread in the cloud whose worktree here stopped following it, because the person changed it here: nothing more is
+ * laid over their changes, and bringing it back merges both. Put away, it stays in the cloud; its Cloud chip still
+ * brings it back.
+ */
+function followStoppedNotice(conversationId: string, stopped: { folders: string[] }): ComposerNotice {
+  const where = stopped.folders.length > 1 ? `${stopped.folders.length} of its repositories` : "its worktree"
+  return {
+    id: "thread-move",
+    tone: "caution",
+    title: "You changed its worktree here",
+    description: "Still in the cloud",
+    detail: <p>{`So your changes stay, ${where} here no longer follows the cloud. Bring it back to edit here: what it did in the cloud is merged with your changes, and any file you both changed is marked for you and the agent to resolve.`}</p>,
+    actions: [{ label: "Bring back to edit here", primary: true, onClick: () => void bringBack(conversationId) }],
+    onDismiss: () => dismissFollowStopped(conversationId),
+    dismissLabel: "Keep in the cloud",
+    data: { "data-thread-follow": "stopped" },
   }
 }
 

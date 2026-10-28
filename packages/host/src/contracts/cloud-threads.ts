@@ -1,3 +1,4 @@
+import type { MoveLeft } from "@mako/protocol/moves"
 import type { OutdatedRestore } from "./restore-plan.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { z } from "zod"
@@ -67,12 +68,18 @@ export function githubRepositoryUrl(remote: string): string | undefined {
  * again: the Thread runs nowhere until it is.
  */
 export type ThreadMoveStep =
+  /**
+   * A Thread in the main checkout moving onto its own branch first, taking only its own changes; `to`, once there, when
+   * the conversation that goes on is another (its harness couldn't resume in another folder, so it forked): the rest of
+   * the move's steps are that conversation's.
+   */
+  | { kind: "own-branch"; to?: string }
   | { kind: "packing" }
   | { kind: "pausing" }
   | { kind: "handing-over" }
   | { kind: "resuming" }
   /** Every conversation of the Thread that moved, each the cloud's now under its own id; `continued`: a turn the handoff paused goes on there. */
-  | { kind: "moved"; conversations: string[]; continued?: boolean }
+  | { kind: "moved"; conversations: string[]; continued?: boolean; carried?: MoveCarried }
   /** `continued`: a turn the handoff had paused goes on here. */
   | { kind: "kept-here"; reason: string; continued?: boolean }
   | { kind: "unsettled"; reason: string }
@@ -111,7 +118,11 @@ export type HandOffSettings = {
  * for a quit's handoff: this Mac let go of the Thread and its host carries the rest (the last changes sent, the claim,
  * the start), so the window can close; the move's steps say how it ends.
  */
-export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string } | { kind: "released"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
+/**
+ * What `mako:thread-move` came to. `conversation`: the conversation that went, when it isn't the one asked (a Thread in
+ * the main checkout whose harness forked onto its own branch).
+ */
+export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string; conversation?: string } | { kind: "released"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
 
 /**
  * A way back refused before the cloud let go, because the Thread's worktree here has no project to come back into:
@@ -137,7 +148,7 @@ export type ThreadReturnStep =
   /** The checkout and each Session's records are arriving here. */
   | { kind: "bringing" }
   /** Every conversation of the Thread runs here again, under its own id. */
-  | { kind: "back"; conversations: string[] }
+  | { kind: "back"; conversations: string[]; landed?: ReturnLanded }
   /**
    * `outdated`: a harness here is older than the one that wrote its sessions in the cloud; updating it lets it come.
    * `missing`: its project isn't on this Mac; choosing where it is now lets it come.
@@ -145,9 +156,29 @@ export type ThreadReturnStep =
   | { kind: "stayed"; reason: string; outdated?: OutdatedRestore; missing?: ReturnProjectMissing }
   | { kind: "unsettled"; reason: string; waitsOn: ReturnWaitsOn }
 
+/**
+ * What a move took besides its checkout, as the person reads it: how many repositories and outside files went, and
+ * what stayed and why (`MoveLeft`), from the move's carry.
+ */
+export type MoveCarried = { repositories: number; outside: number; left: MoveLeft[] }
+
+/**
+ * How a Thread's work landed here as it came back, where it wasn't simply laid down: `merged`, files the person had
+ * changed in its worktree meanwhile that kept both sides; `conflicts`, files both changed, left with Git's markers;
+ * `mine`, the branch the person's own commits there were kept on; `outside`, its files outside the worktree, put in
+ * place, removed, or `waiting`: the person changed them here since, so theirs stayed and the cloud's copies are kept apart.
+ */
+export type ReturnLanded = {
+  merged: string[]
+  conflicts: string[]
+  mine?: string
+  /** `kept`: the folder the cloud's copies of the `waiting` files are kept in, each at its own path beneath it. */
+  outside: { placed: string[]; removed: string[]; waiting: string[]; kept?: string }
+}
+
 /** What `mako:thread-return` came to: the Thread runs here again, or it stayed in the cloud, and why. */
 export type ThreadReturnOutcome =
-  | { kind: "back" }
+  | { kind: "back"; landed?: ReturnLanded }
   | { kind: "stayed"; reason: string; outdated?: OutdatedRestore; missing?: ReturnProjectMissing }
   | { kind: "unsettled"; reason: string; waitsOn: ReturnWaitsOn }
 

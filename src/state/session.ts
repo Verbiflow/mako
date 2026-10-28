@@ -86,7 +86,7 @@ import {
 } from "@/state/threads"
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
 import { cloudStepped, worktreeMade, worktreeStepped } from "@/state/acp-start"
-import { threadMoveStepped, threadReturnStepped } from "@/state/cloud-moves"
+import { followStopped, threadMoveStepped, threadReturnStepped } from "@/state/cloud-moves"
 import { cloudArchiveStepped } from "@/state/cloud-archive"
 import { noteOutcome, openSubjectId, retireSubject, subjectId } from "@/state/notifications"
 import { toast } from "sonner"
@@ -262,6 +262,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-move-step") {
     threadMoveStepped(event.conversationId, event.move, event.step)
+    return
+  }
+  if (event.type === "thread-follow-stopped") {
+    followStopped(event)
     return
   }
   if (event.type === "worktrees-changed") {

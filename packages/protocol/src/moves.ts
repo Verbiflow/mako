@@ -33,6 +33,71 @@ export const MoveCheckpointSchema = z.object({
 }).strict()
 export type MoveCheckpoint = z.infer<typeof MoveCheckpointSchema>
 
+/**
+ * A move's carry, named by its SHA-256 and kept beside the checkpoints: one Git bundle whose single commit
+ * (`refs/mako/carry`) holds the manifest (`carry.json`, `MoveCarrySchema`), the Thread's file history
+ * (`history.json`) and the bytes of each file outside its folder (`outside/<absolute path>`). Apart from the
+ * checkout's bundle, which is staged ahead and proven unchanged at the hand-over.
+ */
+export const MoveCarryRefSchema = z.object({
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  bytes: z.number().int().positive().max(MOVE_CHECKPOINT_MAX_BYTES),
+}).strict()
+export type MoveCarryRef = z.infer<typeof MoveCarryRefSchema>
+
+/** The most bytes a carry takes from outside the Thread's folder: one file, and every one. */
+export const MOVE_OUTSIDE_FILE_BYTES = 8 * 1024 * 1024
+export const MOVE_OUTSIDE_BYTES = 64 * 1024 * 1024
+
+const CarriedPathSchema = z.string().min(2).max(4_096).regex(/^\/(?!.*(^|\/)\.\.?(\/|$))[^\0]*[^/]$/, "an absolute path")
+
+/** A repository of the Thread's checkout: where it is, what its remote is, and its checkout as the move took it. */
+export const MoveCarryRepositorySchema = z.object({
+  path: CarriedPathSchema,
+  /** Its GitHub repository, which a machine clones it from: absent for the first, which the cloud Thread names. */
+  url: z.string().max(200).optional(),
+  branch: z.string().min(1).max(250).optional(),
+  checkpoint: MoveCheckpointSchema,
+}).strict()
+export type MoveCarryRepository = z.infer<typeof MoveCarryRepositorySchema>
+
+/** A file outside the Thread's folder, as the carry holds it: its bytes are `outside/<path>` in the carry's tree. */
+export const MoveOutsideFileSchema = z.object({
+  path: CarriedPathSchema,
+  kind: z.enum(["file", "executable", "symlink"]),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  bytes: z.number().int().nonnegative().max(MOVE_OUTSIDE_FILE_BYTES),
+  /** How the Thread used it: wrote it, or only read it. */
+  access: z.enum(["read", "write"]),
+}).strict()
+export type MoveOutsideFile = z.infer<typeof MoveOutsideFileSchema>
+
+/**
+ * Why a path the Thread used didn't come: a secret's; past the size a move carries; somewhere the other side can't hold
+ * it at the same path; unreadable; or the cloud's machines are older than carries.
+ */
+export const MoveLeftSchema = z.object({
+  path: CarriedPathSchema,
+  why: z.enum(["secret", "too-large", "elsewhere", "unreadable", "folder", "older-cloud"]),
+}).strict()
+export type MoveLeft = z.infer<typeof MoveLeftSchema>
+
+/**
+ * What a move carries, the one answer to it: the Thread's folder, every repository of its checkout (the first is the
+ * one the move's own checkpoint names), every file outside its folder, what was left and why, and whether its file
+ * history came. `gone`: files outside it the Thread had carried in and removed, which the way back removes too.
+ */
+export const MoveCarrySchema = z.object({
+  version: z.literal(1),
+  folder: CarriedPathSchema,
+  repositories: z.array(MoveCarryRepositorySchema).min(1).max(32),
+  outside: z.array(MoveOutsideFileSchema).max(10_000),
+  gone: z.array(CarriedPathSchema).max(10_000).default([]),
+  left: z.array(MoveLeftSchema).max(10_000).default([]),
+  history: z.boolean(),
+}).strict()
+export type MoveCarry = z.infer<typeof MoveCarrySchema>
+
 /** The most operations one hand-over carries: an arrival, and a start, a continued turn and a few waiting messages per Session. */
 export const MOVE_HANDOVER_OPERATIONS = 1_024
 
@@ -136,6 +201,8 @@ export const ReturnHoldingsSchema = z.record(z.string().min(1).max(4_096), z.num
 export const ReturnDepartureSchema = z.object({
   checkpoint: MoveCheckpointSchema,
   sessions: z.array(z.object({ harness: z.string().min(1).max(64), nativeId: z.string().min(1).max(256), holdings: ReturnHoldingsSchema }).strict()).min(1).max(256),
+  /** What else it packed (`MoveCarryRefSchema`): its other repositories, the files outside its folder, its file history. */
+  carry: MoveCarryRefSchema.optional(),
 }).strict()
 export type ReturnDeparture = z.infer<typeof ReturnDepartureSchema>
 

@@ -1,19 +1,21 @@
-import { createReadStream } from "node:fs"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { createReadStream, existsSync } from "node:fs"
+import { lstat, mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { fetch as fetchWith } from "undici"
 import { z } from "zod"
 import type { Git } from "@mako/git"
-import { ReturnDepartureSchema, type ReturnDeparture } from "@mako/protocol/moves"
+import type { ThreadFileHistory } from "@mako/protocol"
+import { MoveCarrySchema, ReturnDepartureSchema, type MoveCarryRef, type MoveCarryRepository, type ReturnDeparture } from "@mako/protocol/moves"
 import { withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { DeviceIdSchema, MoveIdSchema, type ExecutionOwner, type Handoff, type MoveId, type Refusal } from "../contracts/thread-execution.js"
 import type { Actor, ThreadId } from "../contracts/thread-identity.js"
 import type { MoveBegan } from "../threads/index.js"
-import { captureMoveCheckpoint } from "../workspaces/index.js"
+import { captureCarry, captureMoveCheckpoint, readOutside, type OutsideCandidate } from "../workspaces/index.js"
 import { namedUuid } from "./cloud-moves.js"
 import { MoveNotQuietError } from "./live-moves.js"
+import { ARRIVED_CARRY } from "./move-arrival.js"
 
 /**
  * A Thread leaving a cloud machine for the device it came from. Once none of its conversations works, the machine
@@ -35,6 +37,8 @@ export const MoveDepartureInputSchema = z.object({
   conversations: z.array(z.uuid()).min(1).max(256),
   /** The device the Thread goes back to: the owner its release here names. */
   device: z.uuid(),
+  /** The device takes a carry back (`MoveCarry`): its other repositories, its files outside its folder, its file history. */
+  carry: z.literal(true).optional(),
 }).strict()
 export type MoveDepartureInput = z.infer<typeof MoveDepartureInputSchema>
 
@@ -59,6 +63,10 @@ export type MoveDepartureDeps = {
   send(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   /** A folder of this host's own for the checkpoint while it's made. */
   scratch: string
+  /** The Thread's paths outside its folder that this machine's journal ties to it (`Attribution.changes`' footprint, with evidence). */
+  outside?(thread: ThreadId): OutsideCandidate[]
+  /** The Thread's file history on this machine (`Attribution.threadHistory`), carried back with it. */
+  history?(thread: ThreadId): ThreadFileHistory | undefined
 }
 
 /** What a departure reads of the machine's Thread store. */
@@ -106,6 +114,39 @@ async function releaseHere(deps: MoveDepartureDeps, input: MoveDepartureInput, t
   }
 }
 
+export const MoveFollowInputSchema = z.object({ folder: z.string().min(1) }).strict()
+export type MoveFollowInput = z.infer<typeof MoveFollowInputSchema>
+/** Each repository of the Thread's checkout on this machine as it stands, its checkpoint kept beside the Thread's records. */
+export type MoveFollow = { repositories: Array<{ path: string; checkpoint: ReturnDeparture["checkpoint"] }> }
+
+/**
+ * The Thread's checkout on this machine as it stands, for its device's worktree to follow while the Thread runs here:
+ * each repository's checkpoint (the first's, then any other the carry it arrived with names), sent up unless the cloud
+ * has it. Only reads: nothing of the Thread is released or changed, so it can be asked at any turn's end.
+ */
+export async function followMove(deps: Pick<MoveDepartureDeps, "git" | "records" | "workspace" | "workspaceProblem" | "scratch">, input: MoveFollowInput): Promise<MoveFollow> {
+  const link = deps.records()
+  if (!link) throw new Error("This host isn't a cloud machine's: no Thread's records are linked here.")
+  const workspace = deps.workspace()
+  if (workspace !== input.folder) throw new Error(`This machine's folder is ${workspace ?? `not made${deps.workspaceProblem() ? ` (${deps.workspaceProblem()})` : ""}`}, not ${input.folder}.`)
+  const gitDir = (await deps.git.output(input.folder, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim()
+  const marked = join(gitDir, ARRIVED_CARRY)
+  const arrived = existsSync(marked) ? MoveCarrySchema.safeParse(JSON.parse(await readFile(marked, "utf8"))).data : undefined
+  await mkdir(deps.scratch, { recursive: true })
+  const scratch = await mkdtemp(join(deps.scratch, "follow-"))
+  try {
+    const repositories: MoveFollow["repositories"] = []
+    for (const path of [input.folder, ...(arrived?.repositories.slice(1) ?? []).map((repository) => repository.path)]) {
+      const captured = await captureMoveCheckpoint(deps.git, path, await mkdtemp(join(scratch, "checkout-")))
+      await sendBundle(link, captured.checkpoint, captured.file, `The checkout of ${path}`)
+      repositories.push({ path, checkpoint: captured.checkpoint })
+    }
+    return { repositories }
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
+}
+
 export const MoveStayInputSchema = z.object({ move: z.uuid(), device: z.uuid(), reason: z.string().min(1).max(2_000) }).strict()
 export type MoveStayInput = z.infer<typeof MoveStayInputSchema>
 /** Whether the machine took the Thread back now: false when nothing of it was released here, or it was already back. */
@@ -146,7 +187,7 @@ export async function departMove(deps: MoveDepartureDeps, input: MoveDepartureIn
   })
   await releaseHere(deps, input, thread)
   try {
-    return await packUp(deps, input, link, natives, began)
+    return await packUp(deps, input, link, natives, began, thread)
   } catch (error) {
     // Nothing recorded it gone: it runs here again, and the device hears why.
     const reason = errorMessage({ error })
@@ -157,11 +198,11 @@ export async function departMove(deps: MoveDepartureDeps, input: MoveDepartureIn
 }
 
 /** The checkout and the records, sent up once the Thread is released here. */
-async function packUp(deps: MoveDepartureDeps, input: MoveDepartureInput, link: RecordsLink, natives: Array<{ harness: string; nativeId: string; path: string }>, began: number): Promise<ReturnDeparture> {
+async function packUp(deps: MoveDepartureDeps, input: MoveDepartureInput, link: RecordsLink, natives: Array<{ harness: string; nativeId: string; path: string }>, began: number, thread: ThreadId): Promise<ReturnDeparture> {
   // The checkout and the records go up at once: neither waits on the other, and the device takes both only once the
-  // cloud has the departure, which names both.
-  const [checkpoint, sent] = await Promise.all([
-    sendCheckout(deps, input, link),
+  // cloud has the departure, which names both. The carry names the checkout, so it follows it.
+  const [{ checkpoint, carry }, sent] = await Promise.all([
+    sendCheckout(deps, input, link).then(async (checkpoint) => ({ checkpoint, carry: input.carry ? await sendCarry(deps, input, link, thread, checkpoint) : undefined })),
     withFreshLink(() => deps.records() ?? link, (current) => deps.send(current, natives.map((native) => native.path))),
   ])
   const sessions = natives.map((native) => {
@@ -169,9 +210,63 @@ async function packUp(deps: MoveDepartureDeps, input: MoveDepartureInput, link: 
     if (!went) throw new Error(`${native.harness}'s session ${native.nativeId} wasn't sent.`)
     return { harness: native.harness, nativeId: native.nativeId, holdings: went.holdings }
   })
-  const departure = ReturnDepartureSchema.parse({ checkpoint, sessions })
+  const departure = ReturnDepartureSchema.parse({ checkpoint, sessions, ...carry && { carry } })
   hostLog("moves", "a Thread left for its device", { move: input.move, folder: input.folder, sessions: sessions.length, checkpointBytes: checkpoint.bytes, ms: Math.round(performance.now() - began) })
   return departure
+}
+
+/** A bundle sent up beside the Thread's records unless the cloud has it, by its hash. */
+async function sendBundle(link: RecordsLink, ref: MoveCarryRef, file: string, what: string): Promise<void> {
+  const url = `${link.base}/checkpoints/${ref.sha256}`
+  const kept = await fetchWith(url, { method: "HEAD", headers: { authorization: link.authorization }, signal: AbortSignal.timeout(30_000) })
+  if (kept.status === 404) {
+    const put = await fetchWith(url, {
+      method: "PUT",
+      headers: { authorization: link.authorization, "content-type": "application/octet-stream", "content-length": String(ref.bytes) },
+      body: createReadStream(file),
+      duplex: "half",
+      signal: AbortSignal.timeout(10 * 60_000),
+    })
+    if (!put.ok) throw new Error(`${what} couldn't be sent back: the cloud answered ${put.status}`)
+  } else if (!kept.ok) throw new Error(`The cloud couldn't say whether it has ${what.toLowerCase()}: it answered ${kept.status}`)
+}
+
+/**
+ * What the Thread carries back besides its checkout: its other repositories' checkouts, every file outside its folder
+ * that it changed here (what came with it and changed, and what it wrote here), the ones it removed, and its file
+ * history; the manifest it arrived with (`ARRIVED_CARRY`) says which came. A Thread that arrived without one carries
+ * what this machine's journal ties to it.
+ */
+async function sendCarry(deps: MoveDepartureDeps, input: MoveDepartureInput, link: RecordsLink, thread: ThreadId, checkpoint: ReturnDeparture["checkpoint"]): Promise<MoveCarryRef> {
+  const gitDir = (await deps.git.output(input.folder, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim()
+  const marked = join(gitDir, ARRIVED_CARRY)
+  const arrived = existsSync(marked) ? MoveCarrySchema.safeParse(JSON.parse(await readFile(marked, "utf8"))).data : undefined
+  const folder = arrived?.folder ?? input.folder
+  await mkdir(deps.scratch, { recursive: true })
+  const scratch = await mkdtemp(join(deps.scratch, "carry-"))
+  try {
+    const repositories: MoveCarryRepository[] = [{ path: input.folder, checkpoint }]
+    for (const other of arrived?.repositories.slice(1) ?? []) {
+      const captured = await captureMoveCheckpoint(deps.git, other.path, await mkdtemp(join(scratch, "checkout-")))
+      await sendBundle(link, captured.checkpoint, captured.file, `The checkout of ${other.path}`)
+      repositories.push({ ...other, checkpoint: captured.checkpoint })
+    }
+    const came = new Map((arrived?.outside ?? []).map((entry) => [entry.path, entry]))
+    const candidates: OutsideCandidate[] = [...came.values()].map(({ path, access }) => ({ path, access }))
+    for (const used of deps.outside?.(thread) ?? []) if (used.access === "write") candidates.push(used)
+    const { read, left } = await readOutside(candidates, folder)
+    // Only what changed here goes back: a file that came and wasn't touched is the device's already.
+    const changed = read.filter((each) => came.get(each.entry.path)?.sha256 !== each.entry.sha256)
+    const gone: string[] = []
+    for (const path of came.keys()) if (!(await lstat(path).catch(() => undefined))) gone.push(path)
+    const history = deps.history?.(thread)
+    const carry = await captureCarry(deps.git, { folder, repositories, outside: changed, left, gone, ...history && { history } }, scratch)
+    await sendBundle(link, carry.ref, carry.file, "What it carries")
+    hostLog("moves", "a Thread's carry was packed for its way back", { move: input.move, repositories: repositories.length, outside: changed.length, gone: gone.length, left: left.length, history: history !== undefined, bytes: carry.ref.bytes })
+    return carry.ref
+  } finally {
+    await rm(scratch, { recursive: true, force: true })
+  }
 }
 
 /** The machine's checkout, captured and sent up unless the cloud has it. */
@@ -182,18 +277,7 @@ async function sendCheckout(deps: MoveDepartureDeps, input: MoveDepartureInput, 
   try {
     const captured = await captureMoveCheckpoint(deps.git, input.folder, scratch)
     checkpoint = captured.checkpoint
-    const url = `${link.base}/checkpoints/${checkpoint.sha256}`
-    const kept = await fetchWith(url, { method: "HEAD", headers: { authorization: link.authorization }, signal: AbortSignal.timeout(30_000) })
-    if (kept.status === 404) {
-      const put = await fetchWith(url, {
-        method: "PUT",
-        headers: { authorization: link.authorization, "content-type": "application/octet-stream", "content-length": String(checkpoint.bytes) },
-        body: createReadStream(captured.file),
-        duplex: "half",
-        signal: AbortSignal.timeout(10 * 60_000),
-      })
-      if (!put.ok) throw new Error(`The checkout couldn't be sent back: the cloud answered ${put.status}`)
-    } else if (!kept.ok) throw new Error(`The cloud couldn't say whether it has the checkout: it answered ${kept.status}`)
+    await sendBundle(link, checkpoint, captured.file, "The checkout")
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
