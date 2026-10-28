@@ -1,7 +1,8 @@
 import { useEffect, type ReactNode } from "react"
 import { FaGithub } from "react-icons/fa"
 import { FcGoogle } from "react-icons/fc"
-import { ChevronRightIcon, CopyIcon, KeyRoundIcon, LoaderCircleIcon, SettingsIcon } from "lucide-react"
+import { ChevronRightIcon, CopyIcon, KeyRoundIcon, SettingsIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
 import { Action, ConnectionChip, Keys } from "@/components/ui/kit"
@@ -129,7 +130,7 @@ function MakoSignIn({ state }: { state: Exclude<CloudAccountState, { status: "si
       tone={failure || notice ? "negative" : undefined}
     >
       <Action size="xs" tone="outline" disabled={busy === "sign-in"} onClick={() => void cloudAccount.signIn()}>
-        {busy === "sign-in" ? <LoaderCircleIcon className="animate-spin" /> : null}
+        {busy === "sign-in" ? <Spinner /> : null}
         {notice ? "Sign in again" : "Sign in"}
       </Action>
     </Connection>

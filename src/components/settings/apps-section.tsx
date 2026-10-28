@@ -5,6 +5,7 @@ import type { ProjectAppSetup, RecipeProofSummary, RecipeVersionView, RecipeView
 import { environmentRepairPrompt } from "@mako/host/contracts/thread-environments"
 import { Action, Blank, Chip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
+import { Skeleton } from "@/components/ui/skeleton"
 import { recipeChangeContext } from "@/lib/app-setup-context"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { cn } from "@/lib/utils"
@@ -139,7 +140,7 @@ function ProjectRow({ root, setup, onOpen }: { root: string; setup: ProjectAppSe
 }
 
 function ProjectState({ setup }: { setup: ProjectAppSetup | null | undefined }) {
-  if (setup === undefined) return <span className="h-[18px] w-16 shrink-0 animate-pulse rounded bg-raised" />
+  if (setup === undefined) return <Skeleton className="h-[18px] w-16 shrink-0" />
   if (setup === null) return <span className="shrink-0 text-label text-faint">Couldn’t read</span>
   const { recipe } = setup
   if (recipe.kind === "none") return <Chip>Not set up</Chip>

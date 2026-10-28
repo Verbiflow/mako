@@ -3,6 +3,7 @@ import { toast } from "sonner"
 import { AtSignIcon, CopyIcon } from "lucide-react"
 import { IconAction, Segmented } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
+import { Shimmer } from "@/components/ui/shimmer"
 import { threadReferenceId, threadToken } from "@/lib/mentions"
 import { selectAcpPresence } from "@/state/acp-presence"
 import { useAcp } from "@/state/acp-state"
@@ -52,8 +53,8 @@ export function TranscriptControls({ document }: { document: ViewerDocument }) {
         <span className="truncate">{document.title}</span>
         {running ? (
           <span className="flex shrink-0 items-center gap-1 text-faint" title="Still running. This updates as it goes.">
-            <span className="size-1.5 animate-pulse rounded-full bg-added" aria-hidden />
-            Live
+            <span className="size-1.5 rounded-full bg-added" aria-hidden />
+            <Shimmer text="Live" />
           </span>
         ) : null}
       </span>

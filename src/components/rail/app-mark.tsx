@@ -1,5 +1,6 @@
 import { memo } from "react"
-import { HourglassIcon, LoaderCircleIcon, PlayIcon, TriangleAlertIcon } from "lucide-react"
+import { HourglassIcon, PlayIcon, TriangleAlertIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { appMarkOf, useThreadApp, type AppMark } from "@/state/thread-app"
 import { cn } from "@/lib/utils"
 
@@ -24,7 +25,7 @@ export const AppMarkIcon = memo(function AppMarkIcon({ checkout }: { checkout: s
   return (
     <span role="img" aria-label={text} data-tip={text} data-app-mark={state} className="flex shrink-0 items-center">
       {state === "running" ? <PlayIcon aria-hidden className={cn(icon, "fill-current text-positive")} strokeWidth={2.5} />
-        : state === "starting" ? <LoaderCircleIcon aria-hidden className={cn(icon, "animate-spin text-faint")} strokeWidth={2.5} />
+        : state === "starting" ? <Spinner aria-hidden className={cn(icon, "text-faint")} strokeWidth={2.5} />
         : state === "waiting" ? <HourglassIcon aria-hidden className={cn(icon, "text-muted-foreground")} strokeWidth={2.25} />
         : <TriangleAlertIcon aria-hidden className={cn(icon, "text-muted-foreground")} strokeWidth={2.25} />}
     </span>

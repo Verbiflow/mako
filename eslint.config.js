@@ -138,6 +138,11 @@ export default defineConfig([
           message:
             "Literal pixel type sizes are banned; use the scale (text-label, text-ui, text-title) or prose/code styles.",
         },
+        {
+          selector: "Literal[value=/(?:^|\\s)animate-(?:spin|pulse|ping|bounce)(?:\\s|$)/]",
+          message:
+            "Work in progress moves on one gate (`observeVisibleAnimation`): use <Spinner>, <Shimmer> or <Skeleton>, never Tailwind's endless animate-* loops.",
+        },
       ],
     },
   },

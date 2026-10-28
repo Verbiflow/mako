@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react"
 import type { CarriedFilesView } from "@mako/host/contracts/cloud-carried-files"
-import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon, LoaderCircleIcon } from "lucide-react"
+import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { backgroundWork } from "@mako/host/contracts/background-work"
 import { Action } from "@/components/ui/kit"
@@ -87,7 +88,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
       >
         <PopoverTrigger asChild>
           <button type="button" data-run-place="cloud" disabled={returning} aria-label={returning ? "Coming back to this Mac" : "Runs on a cloud machine. Bring it back to this Mac"} title={returning ? "Coming back to this Mac" : "Runs on a cloud machine, at the same folder"} className={cn(triggerClass, "text-foreground")}>
-            {returning ? <LoaderCircleIcon className="size-3 shrink-0 animate-spin" /> : <CloudIcon className="size-3 shrink-0" />}
+            {returning ? <Spinner className="size-3 shrink-0" /> : <CloudIcon className="size-3 shrink-0" />}
             <span data-collapse="1" className="truncate">
               {returning ? "Coming back…" : "Cloud"}
             </span>
@@ -149,7 +150,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
     >
       <PopoverTrigger asChild>
         <button type="button" data-run-place="local" disabled={moving} aria-label={moving ? "Moving to the cloud" : "Runs on this Mac. Move it to the cloud"} title={moving ? "Moving to the cloud" : "Runs on this Mac"} className={triggerClass}>
-          {moving ? <LoaderCircleIcon className="size-3 shrink-0 animate-spin" /> : <LaptopIcon className="size-3 shrink-0" />}
+          {moving ? <Spinner className="size-3 shrink-0" /> : <LaptopIcon className="size-3 shrink-0" />}
           <span data-collapse="1" className="truncate">
             {moving ? "Moving…" : "Local"}
           </span>

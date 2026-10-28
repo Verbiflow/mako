@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react"
-import { CheckIcon, HourglassIcon, LoaderCircleIcon, PlayIcon, SquareIcon, TriangleAlertIcon } from "lucide-react"
+import { CheckIcon, HourglassIcon, PlayIcon, SquareIcon, TriangleAlertIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { fitLine, memoryLine, othersAmong, roomDetail, roomMemory, roomTip, roomTitle } from "@/lib/room"
@@ -18,7 +19,7 @@ const PICKED_ACTIONS: CSSProperties & { "--row-over": string } = {
 function StateIcon({ state }: { state: RoomApp["state"] }) {
   const icon = "size-3 shrink-0"
   if (state === "running") return <PlayIcon aria-hidden className={cn(icon, "fill-current text-positive")} strokeWidth={2.5} />
-  if (state === "starting") return <LoaderCircleIcon aria-hidden className={cn(icon, "animate-spin text-faint")} strokeWidth={2.5} />
+  if (state === "starting") return <Spinner aria-hidden className={cn(icon, "text-faint")} strokeWidth={2.5} />
   if (state === "waiting") return <HourglassIcon aria-hidden className={cn(icon, "text-muted-foreground")} strokeWidth={2.25} />
   return <TriangleAlertIcon aria-hidden className={cn(icon, "text-muted-foreground")} strokeWidth={2.25} />
 }

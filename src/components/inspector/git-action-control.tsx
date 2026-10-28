@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react"
 import { ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronDownIcon, GitMergeIcon, GitPullRequestDraftIcon, GitPullRequestIcon, MessageSquareTextIcon, RefreshCwIcon, Trash2Icon, Undo2Icon, XIcon, type LucideIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
 import { Action, IconAction } from "@/components/ui/kit"
@@ -261,7 +262,7 @@ export function GitActionControl({ cwd, branch }: { cwd: string; branch: string 
     // The worktree merge check reads the main checkout too, which this worktree's watch doesn't hear: read it again as the pointer or focus arrives.
     <span data-push-control className="flex shrink-0 items-center gap-1" onPointerEnter={worktree ? reread : undefined} onFocus={worktree ? reread : undefined}>
       <IconAction size="xs" label="Fetch remote changes" disabled={pending} className="text-faint" onClick={() => void git.remote("fetch")}>
-        <RefreshCwIcon className={state.kind === "syncing" && state.action === "fetch" ? "animate-spin motion-reduce:animate-none" : ""} />
+        <Spinner icon={RefreshCwIcon} turning={state.kind === "syncing" && state.action === "fetch"} />
       </IconAction>
       {primary ? (
         <span data-git-next={primary.kind} className="inline-flex items-stretch rounded-md bg-foreground/[0.06]">

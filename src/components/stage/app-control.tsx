@@ -1,7 +1,8 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { Fragment, useEffect, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { CheckIcon, ChevronDownIcon, HourglassIcon, LoaderCircleIcon, MoonIcon, PauseIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, HourglassIcon, MoonIcon, PauseIcon, PlayIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import type { SetupStep } from "@mako/host/contracts/thread-app"
 import { environmentRepairPrompt } from "@mako/host/contracts/thread-environments"
 import {
@@ -84,7 +85,7 @@ function AppMark({ mark, className }: { mark: Mark; className?: string }) {
     return <CheckIcon key={mark} {...props} aria-label={mark === "live" ? "Running" : "Passed"} className={cn(props.className, "text-positive")} strokeWidth={2.5} />
   if (mark === "failed") return <XIcon key={mark} {...props} aria-label="Failed" className={cn(props.className, "text-negative")} strokeWidth={2.5} />
   if (mark === "running")
-    return <LoaderCircleIcon key={mark} {...props} aria-label="Working" className={cn(props.className, "animate-spin text-muted-foreground")} strokeWidth={2.25} />
+    return <Spinner key={mark} {...props} aria-label="Working" className={cn(props.className, "text-muted-foreground")} strokeWidth={2.25} />
   return (
     <span key={mark} {...props} aria-label="Not yet">
       <span className="size-2.5 rounded-full border-[1.5px] border-faint/55" />
@@ -247,7 +248,7 @@ function AsleepControl({ cwd, view }: { cwd: string; view: Asleep }) {
             {paused.map((process) => (
               <div key={process.name} data-app-row={process.name} className="flex min-h-8 items-center gap-2 px-2">
                 {view.waking ? (
-                  <LoaderCircleIcon aria-label="Waking" className="size-3.5 shrink-0 animate-spin text-muted-foreground" strokeWidth={2.25} />
+                  <Spinner aria-label="Waking" className="size-3.5 shrink-0 text-muted-foreground" strokeWidth={2.25} />
                 ) : (
                   <PauseIcon aria-label="Paused" className="size-3.5 shrink-0 fill-current text-faint" strokeWidth={2.25} />
                 )}
@@ -319,12 +320,12 @@ function TriggerLabel({ view, target }: { view: ThreadAppView; target?: string }
 function TriggerIcon({ view }: { view: ThreadAppView }) {
   const icon = "size-3 shrink-0"
   if (view.kind === "asleep")
-    return view.waking ? <LoaderCircleIcon aria-hidden className={cn(icon, "animate-spin")} strokeWidth={2.5} /> : <MoonIcon aria-hidden className={icon} strokeWidth={2.25} />
+    return view.waking ? <Spinner aria-hidden className={icon} strokeWidth={2.5} /> : <MoonIcon aria-hidden className={icon} strokeWidth={2.25} />
   switch (view.kind === "ready" ? view.phase : view.kind) {
     case "setting-up":
     case "preparing":
     case "starting":
-      return <LoaderCircleIcon aria-hidden className={cn(icon, "animate-spin")} strokeWidth={2.5} />
+      return <Spinner aria-hidden className={icon} strokeWidth={2.5} />
     case "running":
       return <PlayIcon aria-hidden className={cn(icon, "fill-current text-positive")} strokeWidth={2.5} />
     case "invalid":

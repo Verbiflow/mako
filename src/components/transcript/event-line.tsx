@@ -1,10 +1,10 @@
 import { useId, useState, type ComponentType, type ReactNode } from "react"
 import {
-  ActivityIcon,
   ArrowLeftRightIcon,
   ChevronRightIcon,
   CircleAlertIcon,
   CircleStopIcon,
+  EyeIcon,
   FoldVerticalIcon,
   GaugeIcon,
   HistoryIcon,
@@ -39,7 +39,7 @@ const TOOL_GLYPHS = {
 } as const satisfies Partial<Record<EventGlyph, ToolKind>>
 
 const ICONS = {
-  monitor: ActivityIcon,
+  monitor: EyeIcon,
   task: HourglassIcon,
   goal: TargetIcon,
   compaction: FoldVerticalIcon,

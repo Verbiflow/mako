@@ -1,10 +1,10 @@
 import { useState } from "react"
 import {
   CameraIcon,
-  LoaderCircleIcon,
   MonitorIcon,
   SearchIcon,
 } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
 import {
   Popover,
@@ -92,7 +92,7 @@ export function AppshotButton({
           disabled={disabled || capturing !== null}
         >
           {capturing ? (
-            <LoaderCircleIcon className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" />
+            <Spinner className="size-4 text-muted-foreground" />
           ) : (
             <CameraIcon className="size-4 text-muted-foreground" />
           )}
@@ -123,7 +123,7 @@ export function AppshotButton({
               role="status"
               className="flex h-36 items-center justify-center gap-2 text-ui text-muted-foreground"
             >
-              <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />
+              <Spinner className="size-4" />
               Finding windows…
             </p>
           )}

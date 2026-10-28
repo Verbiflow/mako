@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { ChevronDownIcon, RefreshCwIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { Action } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { providers, useProviders } from "@/state/providers"
@@ -60,11 +61,7 @@ export function ProviderTable({
           disabled={refreshing || busy}
           onClick={() => void refresh()}
         >
-          <RefreshCwIcon
-            className={cn(
-              (refreshing || busy) && "animate-spin motion-reduce:animate-none"
-            )}
-          />
+          <Spinner icon={RefreshCwIcon} turning={refreshing || busy} />
           {refreshing || busy ? "Checking…" : "Refresh"}
         </Action>
       </div>

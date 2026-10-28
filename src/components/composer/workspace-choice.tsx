@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react"
 import { RadioGroup } from "radix-ui"
-import { CheckIcon, ChevronRightIcon, FolderIcon, GitBranchIcon, GitPullRequestIcon, LoaderCircleIcon, XIcon } from "lucide-react"
+import { CheckIcon, ChevronRightIcon, FolderIcon, GitBranchIcon, GitPullRequestIcon, XIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { WORKTREE_BRANCH_PREFIX, worktreeSlug, type WorktreeStartPoint } from "@mako/host/contracts/thread-worktrees"
 import { Keys } from "@/components/ui/kit"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -304,7 +305,7 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
           title={branch ?? "Makes changes in the project folder"}
           className={triggerClass}
         >
-          {moving ? <LoaderCircleIcon className="size-3 shrink-0 animate-spin" /> : branch ? <GitBranchIcon className="size-3 shrink-0" /> : <FolderIcon className="size-3 shrink-0" />}
+          {moving ? <Spinner className="size-3 shrink-0" /> : branch ? <GitBranchIcon className="size-3 shrink-0" /> : <FolderIcon className="size-3 shrink-0" />}
           <span data-collapse="1" className="truncate">
             {label}
           </span>

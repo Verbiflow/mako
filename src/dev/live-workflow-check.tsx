@@ -15,6 +15,7 @@ import { HotIndicator } from "@/components/shell/hot-indicator"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { Exchange } from "@/components/transcript/exchange"
 import { ActivityMark } from "@/components/ui/activity-mark"
+import { Spinner } from "@/components/ui/spinner"
 import { MODE_DRAWS, resolvePreset } from "thinking-orbs"
 import { AgentsPanel } from "@/components/inspector/agents-panel"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
@@ -598,6 +599,10 @@ export function Fixture() {
                   <ThreadStatusMark status={status} />
                 </span>
               ))}
+            </span>
+            <span data-fixture="spinner" className="flex items-center gap-1 rounded-md bg-fill-hover px-2 py-0.5 text-ui text-foreground/85">
+              Starting
+              <Spinner className="size-3.5" />
             </span>
             <button
               className="pressable rounded border border-hairline px-2 py-1"

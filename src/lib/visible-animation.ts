@@ -1,16 +1,20 @@
 /**
- * Only what a person can see moves. A running turn's live row, a compaction
- * under way and every loading label sweep their words, in every pane that
- * shows them; scrolled out of view, in a hidden window or for a reader who
- * asked for reduced motion, they would still be repainting.
+ * Only what a person can see moves, and whatever they can see of work in
+ * progress moves for as long as the work runs. A running turn's live row, a
+ * compaction under way and every loading label sweep their words (`Shimmer`),
+ * and every spinner turns (`Spinner`), in every pane that shows them;
+ * scrolled out of view, in a hidden window or for a reader who asked for
+ * reduced motion, they would still be repainting.
  *
  * One `IntersectionObserver` serves every animated element. Each gets
  * `--visible-animation-state` (`running` or `paused`), which CSS animations
  * read as their `animation-play-state` and descendants inherit, and
  * `--visible-animation-will-change`, so a layer is promoted only while it
- * moves. An element starts paused until the observer has seen it. (The
- * orbs, painted on a canvas by their worker, pause the same way in
- * `orb-client.ts`.)
+ * moves. An element starts paused until the observer has seen it, and
+ * moves again as soon as it is back in view or its window is shown. A rule
+ * reads the gate with `running` as its fallback, so an element nobody
+ * observes keeps moving rather than standing still. (The orbs, painted on a
+ * canvas by their worker, pause the same way in `orb-client.ts`.)
  */
 
 type Animated = HTMLElement | SVGElement

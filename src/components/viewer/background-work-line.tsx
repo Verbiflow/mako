@@ -5,6 +5,7 @@ import { stage } from "@/state/stage"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
 import { Elapsed, WorkGlyph } from "@/components/inspector/agents-panel"
+import { Shimmer } from "@/components/ui/shimmer"
 import type { NativeAgent } from "@/lib/types"
 
 interface Waiting {
@@ -29,10 +30,11 @@ const SHOWN = 3
 /**
  * The end of the transcript while the turn has ended and the provider still
  * runs work it will wake on: what runs, for how long, and what it last did.
- * It is quiet on purpose, an hourglass and plain words in the faint ink of
- * the event lines it turns into: when a piece of work settles and the
- * provider wakes, the provider's turn draws its own event line and this
- * line loses that entry. Nothing here animates; only the elapsed times move.
+ * It is quiet on purpose, an hourglass and words in the faint ink of the
+ * event lines it turns into: when a piece of work settles and the provider
+ * wakes, the provider's turn draws its own event line and this line loses
+ * that entry. Its words sweep while the work runs, as every running step's
+ * do; the elapsed times count.
  */
 export function BackgroundWorkLine() {
   const scope = useConversationScope()
@@ -52,7 +54,7 @@ export function BackgroundWorkLine() {
         <span className="flex size-5 shrink-0 items-center justify-center">
           <HourglassIcon aria-hidden className="size-3.5" />
         </span>
-        <span className="min-w-0 truncate">Waiting on {work.text}</span>
+        <Shimmer text={`Waiting on ${work.text}`} className="min-w-0 truncate" />
         <span className="ml-auto flex shrink-0 items-center gap-0.5">
           <button
             type="button"
