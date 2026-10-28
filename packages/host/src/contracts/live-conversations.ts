@@ -354,6 +354,11 @@ export interface LiveSummary {
    */
   waitingOn?: string
   /**
+   * Listed from a device the account hasn't heard from since then (`QuietDevice`): nothing on it is shown at work or
+   * waiting, and a window says when it was last seen.
+   */
+  quietSince?: number
+  /**
    * Read from the account's copy, its device being off: when that device wrote it. Nothing in it runs or answers until
    * the device is back; a window says so and how old it is.
    */

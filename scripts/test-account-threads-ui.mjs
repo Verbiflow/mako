@@ -280,6 +280,44 @@ async function checkWindow() {
     await both("sidebar-threads", [".thread-jump-scope"])
     console.log("Account Threads UI: the sidebar lists Threads, one row each, this Mac's, another Mac's and a cloud machine's, saying where each runs")
   }
+
+  {
+    // The Studio went quiet three hours ago: its Thread's row stops saying anything runs or waits there, and says when
+    // the Studio was last seen instead, in the row and in its tip. Heard from again, the row is as it says.
+    await window.loadURL(`${base}?mock&cloud=signed-in&invited&events&app=rail`)
+    await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 300, theme: 'dark'}))`)
+    await until(`Boolean(document.querySelector('[data-thread-row]')) && Boolean(globalThis.makoMockHost)`, "the rail and the fixture's host")
+    await until(`(document.querySelectorAll('[data-sonner-toast] [data-close-button]').forEach(button => button.click()), !document.querySelector('[data-sonner-toast]'))`, "the fixture's toasts closed")
+    const now = Date.now()
+    const quietSince = now - 3 * 60 * 60_000 - 5 * 60_000
+    const studioThread = "6d4f9b21-8c3e-4a7f-8b2d-1e3f5a7b9c26"
+    const studio = (id, sessionId, harness, title, status, minutes, extra = {}) => ({
+      session: { id, harness, cwd: "/Users/you/api", title, status, connection: "hibernated", modes: [], currentMode: null, configOptions: [] },
+      revision: 0, createdAt: now - minutes * 60_000, elsewhere: "Studio", threadId: studioThread, sessionId, threadTitle: "Retry the webhooks", ...extra,
+    })
+    const quiet = [
+      studio("2b4d6f81-3a5c-4e7f-9a1b-3c5d7e9f1a21", "3c5e7a92-4b6d-4f8a-8b2c-4d6e8f0a2b31", "claude", "Retry the webhooks with backoff", "ready", 240, { quietSince }),
+      studio("2b4d6f81-3a5c-4e7f-9a1b-3c5d7e9f1a22", "3c5e7a92-4b6d-4f8a-8b2c-4d6e8f0a2b32", "codex", "Add the dead-letter queue", "ready", 200, { quietSince }),
+    ]
+    await hostEvent({ type: "live-listed", summaries: quiet })
+    const studioRow = `[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].find(row => row.innerText.includes("Retry the webhooks"))`
+    await until(`Boolean(${studioRow}?.querySelector('[data-last-seen]'))`, "the quiet Studio's row saying when it was last seen")
+    assert.equal(await evaluate(`${studioRow}.querySelector('[data-last-seen]').innerText`), "seen 3h", "in the row's time column, told apart from an idle row's time")
+    assert.match(await evaluate(`${studioRow}.getAttribute('aria-label')`), /on Studio, last seen 3 hours ago/)
+    assert.match(await evaluate(`${studioRow}.getAttribute('data-tip')`), /· on Studio, last seen 3 hours ago/)
+    assert.doesNotMatch(await evaluate(`${studioRow}.getAttribute('aria-label')`), /working|needs your approval/, "nothing there shown at work or asking")
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 40 })
+    await settle()
+    await both("quiet-device", [".thread-jump-scope"])
+
+    // Heard from again: the Studio says one Session is at work, and the row says so, with nothing about when it was seen.
+    await hostEvent({ type: "live-listed", summaries: [{ ...quiet[0], session: { ...quiet[0].session, status: "running" }, quietSince: undefined }, { ...quiet[1], quietSince: undefined }] })
+    await until(`!${studioRow}?.querySelector('[data-last-seen]')`, "the row without its last-seen time")
+    assert.doesNotMatch(await evaluate(`${studioRow}.getAttribute('aria-label')`), /last seen/)
+    await settle()
+    await both("quiet-device-back", [".thread-jump-scope"])
+    console.log("Account Threads UI: a quiet device's Thread says when it was last seen, and nothing there at work; back, it's as it says")
+  }
   clearTimeout(watchdog)
   app.exit(0)
 }
