@@ -360,6 +360,95 @@ async function sweepsAgain() {
   }
 }
 
+/**
+ * A session its harness deleted before the record store took it, which the
+ * catalog serves only as Mako's archive copy (`copyOnly`), keeps the journal's
+ * copy as all there is, and the sweep doesn't ask again until the journal or
+ * the session changes.
+ */
+async function remembersCopyOnly() {
+  const f = fixture()
+  f.native.hold = false
+  const id = randomUUID()
+  try {
+    const first = f.host()
+    await first.capture(id, f.path)
+    await waitFor(() => f.native.holds.length === 1, "asked")
+    await first.stop()
+    const page = f.native.page!
+    f.native.page = { ...page, ref: { ...page.ref, archived: true, copyOnly: true } }
+    const host = f.host()
+    const once = await host.settleHistoryCopies(0)
+    assert.equal(once.journals.find((entry) => entry.id === id)?.keptBecause,
+      "its session is gone from its harness, and Mako's records never held it: the copy is all there is", JSON.stringify(once))
+    const holds = f.native.holds.length
+    const reads = f.native.reads
+    const again = await host.settleHistoryCopies(0)
+    assert.equal(again.copies, 0, "an unchanged journal of an unchanged copy-only session isn't opened again")
+    assert.equal(f.native.holds.length, holds, "nor is its session held again")
+    assert.equal(f.native.reads, reads, "nor read again")
+    // Its harness has it again: the session's file changed, so the sweep asks, and the store takes it.
+    writeFileSync(f.path, "given back")
+    f.native.page = page
+    f.native.hold = true
+    const back = await host.settleHistoryCopies(0)
+    assert.equal(back.moved, 1, JSON.stringify(back))
+    assert.equal(copiedBaseBytes(f.journals, id), 0)
+    await host.stop()
+    console.log("PASS: a copy-only session keeps its copy, and the sweep asks again only once its session changes")
+  } finally {
+    f.cleanup()
+  }
+}
+
+/**
+ * A conversation that went on in two sessions moves onto its first though a
+ * newer decoder words an event of it otherwise (Codex's "Interrupted" lost its
+ * "interrupted" detail); one whose session holds other turns keeps its copy,
+ * and isn't read again while neither it nor its session changes.
+ */
+async function spansThroughRewording() {
+  const f = fixture()
+  const reworded = randomUUID()
+  const other = randomUUID()
+  try {
+    const stopped = (detail?: string) => ({ type: "event" as const, id: "#1:0", label: "Interrupted", ...detail && { detail } })
+    const page = f.native.page!
+    const kept = { ...page, entries: [...page.entries, stopped("interrupted")], total: page.entries.length + 1 }
+    f.native.page = { ...page, entries: [...page.entries, stopped()], total: page.entries.length + 1 }
+    for (const [id, base] of [[reworded, kept], [other, { ...kept, entries: kept.entries.map((entry, index) => index === 1 ? { ...entry, text: "another answer" } : entry) }]] as const) {
+      const second = randomUUID()
+      const journal = new LiveJournal(f.journals, id)
+      journal.commit({
+        session: { id, harness, nativeId: "native-2", cwd: "/tmp", status: "ready", connection: "disconnected", modes: [], currentMode: null, configOptions: [] },
+        revision: 1, createdAt: Date.now(), threadPath: f.path, base,
+        blocks: [{ type: "text", text: "an answer from the second session" }], permissions: [], requests: [],
+        control: { merges: [], activeBindingId: second, transfers: [], bindings: [
+          { id, provider: harness, nativeId: "native-1", path: f.path, coveredBlocks: 0, includesBase: true },
+          { id: second, provider: harness, nativeId: "native-2", path: `${f.path}.second`, coveredBlocks: 1, includesBase: false },
+        ] },
+      })
+      journal.close()
+    }
+    const host = f.host()
+    const once = await host.settleHistoryCopies(0)
+    assert.equal(once.journals.find((entry) => entry.id === reworded)?.keptBecause, undefined, JSON.stringify(once))
+    assert.equal(copiedBaseBytes(f.journals, reworded), 0, "an event worded otherwise is the same turn")
+    assert.equal(once.journals.find((entry) => entry.id === other)?.keptBecause, "its session, read again, holds other turns than the history it keeps")
+    const reads = f.native.reads
+    const again = await host.settleHistoryCopies(0)
+    assert.equal(again.copies, 0, "a copy kept for its session's turns isn't read again while neither changes")
+    assert.equal(f.native.reads, reads)
+    writeFileSync(f.path, "the harness went on")
+    const changed = await host.settleHistoryCopies(0)
+    assert.deepEqual(changed.journals.map((entry) => entry.id), [other], "its session changed: asked again")
+    await host.stop()
+    console.log("PASS: an event a newer decoder words otherwise doesn't keep a copy, and a copy kept for its session's turns is remembered until the session changes")
+  } finally {
+    f.cleanup()
+  }
+}
+
 /** A session nobody has any more is shown as unreadable, and messages still go. */
 async function unreadable() {
   const f = fixture()
@@ -474,6 +563,8 @@ await readsGrowth()
 await followsMovedSession()
 await settlesMovedCopy()
 await sweepsAgain()
+await remembersCopyOnly()
+await spansThroughRewording()
 await spansSessions()
 await unreadable()
 await keepsWithoutHold()

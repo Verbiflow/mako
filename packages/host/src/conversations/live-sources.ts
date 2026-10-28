@@ -59,10 +59,20 @@ export class LiveSources {
   private readonly baseHolds = new WeakMap<Resident, Promise<void>>()
   /** Why a history that went on in several sessions keeps its copy though its first session is held: its reading wasn't found exact. */
   private readonly unspanned = new WeakMap<Resident, string>()
-  /** Conversations whose session neither its harness nor the record store had when a refresh asked for it. */
+  /**
+   * Conversations whose session neither its harness nor the record store had
+   * when a refresh asked for it: gone, or served only as Mako's archive copy
+   * (`ThreadRef.copyOnly`).
+   */
   private readonly missing = new WeakSet<Resident>()
-  /** Each journal's stamp (`journalStamp`) when a sweep last found it without a copy or kept the copy it has. */
-  private readonly settledAt = new Map<string, string>()
+  /**
+   * What a sweep last found of each journal it may skip: the journal's stamp
+   * (`journalStamp`) when it found it without a copy or kept the copy it has,
+   * and, for a copy kept for its session's sake (gone from all but the
+   * journal, or read again with other turns), the session's stamp then
+   * (`sessionStamp`). A write to either asks again.
+   */
+  private readonly settledAt = new Map<string, { journal: string; session?: { source: BaseSource; stamp: string } }>()
   private settling: Promise<SettledBases> | undefined
 
   constructor(access: SourcesAccess) {
@@ -299,8 +309,10 @@ export class LiveSources {
       return false
     })
     if (!held) {
-      // A session its harness has deleted, which the store never took: the journal's copy is all that's left.
-      if (!(await this.access.dependencies.history(path).catch(() => null))) this.missing.add(resident)
+      // A session its harness has deleted, which the store never took: the journal's copy is all that's left. The
+      // catalog may still serve Mako's archive copy of it (`ThreadRef.copyOnly`), which no capture can take either.
+      const read = await this.access.dependencies.history(path).catch(() => null)
+      if (!read || read.ref.copyOnly) this.missing.add(resident)
       return
     }
     const heldAt = Date.now()
@@ -350,7 +362,8 @@ export class LiveSources {
    * nothing runs. One whose session is gone, or whose live blocks continue a
    * reading only it has, keeps its copy as the history it shows. A journal
    * unchanged since a sweep found it without a copy, or keeping its copy for
-   * a reason of its own, is skipped; one sweep runs at a time.
+   * a reason of its own, is skipped, as is one kept for its session's sake
+   * while that session is unchanged too; one sweep runs at a time.
    */
   settleBases(pauseMs = SETTLE_PAUSE_MS): Promise<SettledBases> {
     this.settling ??= this.settleNow(pauseMs).finally(() => { this.settling = undefined })
@@ -364,15 +377,31 @@ export class LiveSources {
     return `${at(join(root, `${id}.sqlite`))}:${at(join(root, `${id}.sqlite-wal`))}`
   }
 
+  /**
+   * The session's file where it is now (`located`), as it stands: its harness
+   * writing it, moving it or deleting it, or giving a deleted one back,
+   * changes it. A store of many sessions (`sessions.db#id`) stamps as gone.
+   */
+  private sessionStamp(source: BaseSource): string {
+    const path = this.located(source)
+    try {
+      const info = statSync(path)
+      return `${path}:${info.size}:${info.mtimeMs}`
+    } catch {
+      return `${path}:gone`
+    }
+  }
+
   private async settleNow(pauseMs: number): Promise<SettledBases> {
     const { root } = this.access.dependencies
     const started = performance.now()
     const copies = journalIds(root).flatMap((id) => {
       try {
         const stamp = this.journalStamp(id)
-        if (this.settledAt.get(id) === stamp) return []
+        const settled = this.settledAt.get(id)
+        if (settled?.journal === stamp && (!settled.session || this.sessionStamp(settled.session.source) === settled.session.stamp)) return []
         const bytes = copiedBaseBytes(root, id)
-        if (!bytes) this.settledAt.set(id, stamp)
+        if (!bytes) this.settledAt.set(id, { journal: stamp })
         return bytes ? [{ id, bytes, changed: statSync(join(root, `${id}.sqlite`)).mtimeMs }] : []
       } catch (error) {
         hostWarn("live", "a journal's copy of its history could not be measured", { conversation: id, error: errorMessage({ error }) })
@@ -380,7 +409,7 @@ export class LiveSources {
       }
     }).sort((a, b) => b.changed - a.changed)
     const journals: SettledBases["journals"] = []
-    for (const { id, bytes } of copies) {
+    for (const [index, { id, bytes }] of copies.entries()) {
       while (!this.access.admission.closed && this.access.hasActiveWork())
         await new Promise((resolve) => setTimeout(resolve, SETTLE_PAUSE_MS))
       if (this.access.admission.closed) break
@@ -389,22 +418,32 @@ export class LiveSources {
       const resident = this.access.load(id)
       if (!resident) {
         journals.push({ id, bytes, ms: Math.round(performance.now() - began), keptBecause: "Mako could not open its journal" })
-        this.settledAt.set(id, this.journalStamp(id))
+        this.settledAt.set(id, { journal: this.journalStamp(id) })
         continue
       }
+      // The session as it stands before it is read: one that changes while the sweep reads it is asked again.
+      const base = resident.snapshot.base
+      const source = base ? sourceOfPage(base) : undefined
+      const sessionBefore = source && { source, stamp: this.sessionStamp(source) }
       let keptBecause: string | null
-      // A reason of the journal's own holds until it changes; a hold the record store refused is asked again next time.
+      // A reason of the journal's own holds until it changes; one of its session's (gone from all but the journal, or
+      // read again with other turns) until either changes; a hold the record store refused is asked again next time.
       let ownReason = false
+      let sessionReason = false
       try {
         // A conversation whose last turn ended before this build took coverage then may not have taken it: it does now.
         await this.checkpointIdle(resident)
         await this.refreshedSnapshot(id)
         await this.holdBase(resident)
         const onceHeld = baseKeptOnceHeld(resident.snapshot)
-        keptBecause = baseKeptBecause(resident.snapshot) && (onceHeld ?? this.unspanned.get(resident) ?? baseKeptBecause(resident.snapshot))
+        const unspanned = this.unspanned.get(resident)
+        keptBecause = baseKeptBecause(resident.snapshot) && (onceHeld ?? unspanned ?? baseKeptBecause(resident.snapshot))
+        sessionReason = onceHeld === null && unspanned !== undefined
         // Gone from its harness, and never captured: the journal's copy is all that's left of it.
-        if (keptBecause && !resident.snapshot.baseSource && this.missing.has(resident))
+        if (keptBecause && !resident.snapshot.baseSource && this.missing.has(resident)) {
           keptBecause = "its session is gone from its harness, and Mako's records never held it: the copy is all there is"
+          sessionReason = true
+        }
         ownReason = onceHeld !== null
       } catch (error) {
         keptBecause = errorMessage({ error })
@@ -413,9 +452,10 @@ export class LiveSources {
       if (!loaded && !this.access.release(id)) hostLog("live", "a journal the sweep opened stays open; it compacts when it is let go", { conversation: id })
       const settled: SettledBases["journals"][number] = { id, bytes, ms: Math.round(performance.now() - began) }
       if (keptBecause) settled.keptBecause = keptBecause
-      if (keptBecause && ownReason) this.settledAt.set(id, this.journalStamp(id))
+      if (keptBecause && ownReason) this.settledAt.set(id, { journal: this.journalStamp(id) })
+      else if (keptBecause && sessionReason && sessionBefore) this.settledAt.set(id, { journal: this.journalStamp(id), session: sessionBefore })
       journals.push(settled)
-      if (pauseMs) await new Promise((resolve) => setTimeout(resolve, pauseMs))
+      if (pauseMs && index < copies.length - 1) await new Promise((resolve) => setTimeout(resolve, pauseMs))
     }
     const why = new Map<string, number>()
     let freed = 0
@@ -427,7 +467,8 @@ export class LiveSources {
     const ms = Math.round(performance.now() - started)
     if (copies.length)
       hostLog("live", "journals moved onto their sessions' records", {
-        copies: copies.length, moved, kept: journals.length - moved, freed, ms,
+        // `ms` counts the pauses between journals and the waits for work to end; `workMs` only the journals' own.
+        copies: copies.length, moved, kept: journals.length - moved, freed, ms, workMs: journals.reduce((sum, journal) => sum + journal.ms, 0),
         why: [...why].map(([reason, count]) => `${count}: ${reason}`).join("; ") || undefined,
       })
     return { copies: copies.length, moved, freed, ms, journals }
@@ -475,7 +516,7 @@ export class LiveSources {
     const work = (async (): Promise<LiveSnapshot> => {
       try {
         const latest = await dependencies.history(path)
-        if (!latest) this.missing.add(resident)
+        if (!latest || latest.ref.copyOnly) this.missing.add(resident)
         else this.missing.delete(resident)
         if (!latest || latest.ref.nativeId !== nativeId || latest.ref.harness !== provider)
           return this.access.stamp(resident.snapshot)
@@ -830,8 +871,9 @@ function turnItem(entry: Entry): string {
       return `${entry.type}\0${entry.text.replace(/\s+/g, "")}`
     case "tool":
       return `tool\0${entry.id}`
+    // An event's detail is its decoder's wording: Codex's "Interrupted" said "interrupted" again until dfbbc3e1.
     case "event":
-      return `event\0${entry.label}\0${entry.detail ?? ""}`
+      return `event\0${entry.label}`
     default:
       return entry.type
   }
