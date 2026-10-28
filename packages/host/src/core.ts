@@ -474,6 +474,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareSyncMethods(methods, uploads)
   late.cloud = declareCloudAccountMethods(methods, {
     sessions,
+    files: (request) => withHostClient("gateway:files", () => readFilePreview(request, withHost, renditions)),
     environment,
     secrets: fixtureDesk ? detachedSecrets() : secrets,
     machine,

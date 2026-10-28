@@ -129,6 +129,18 @@ export class AccountList {
     return undefined
   }
 
+  /**
+   * The list read again now, as a pull to refresh asks: the same read a follow starts with, kept if it's newer than
+   * what the stream brought, and the socket checked at once. The follow goes on as it was.
+   */
+  async refresh(): Promise<void> {
+    this.#gateway.wake()
+    const listings = SessionListingsSchema.parse(await this.#gateway.rest("GET", "/v1/sessions"))
+    if (this.#list.seq === undefined || listings.seq >= this.#list.seq) this.#list.listed(listings)
+    await this.refreshDevices().catch((error) => this.#failed({ error }))
+    this.#publish("live")
+  }
+
   /** The account's devices, read again: a device that joined is named once a row names it. */
   async refreshDevices(): Promise<void> {
     this.#devicesAsked = Date.now()

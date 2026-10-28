@@ -24,6 +24,8 @@ export type GatewayHostOptions = {
   media?: RuntimeOptions["media"]
   /** Whether another device watches one of its conversations (`RuntimeOptions.watch`). */
   watch?: RuntimeOptions["watch"]
+  /** Requests to its Threads' apps from the account's other devices (`RuntimeOptions.ports`); without it, each is refused. */
+  ports?: RuntimeOptions["ports"]
 }
 
 /**
@@ -78,5 +80,6 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
   if (options.onFrame) runtime.onFrame = options.onFrame
   if (options.media) runtime.media = options.media
   if (options.watch) runtime.watch = options.watch
+  if (options.ports) runtime.ports = options.ports
   return serveRuntime(link, runtime)
 }

@@ -28,7 +28,8 @@ import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-in
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type CarriedFile, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
 import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { runtimeEventRouting } from "../contracts/runtime.js"
-import { type HostInvoke, serveHostThroughGateway } from "../transport/index.js"
+import { type HostInvoke, PortRelay, serveHostThroughGateway } from "../transport/index.js"
+import { appPorts } from "./app-ports.js"
 import { CloudLink, type CloudLinkEnding, type CloudLinkState } from "./cloud-link.js"
 import { ACTIVITY_HEARTBEAT_MS } from "@mako/protocol"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
@@ -41,6 +42,8 @@ type SignIns = Extract<AgentMessage, { type: "sign-ins" }>
 export type MachineRuntimeOptions = {
   /** The agent's end: a socket carrying a JSON message per line each way. */
   agent: NodeJS.ReadWriteStream
+  /** The machine's signed files, as a window reads them: what a phone's transcript draws its media from (`PortRelay`). */
+  files?: (request: Request) => Promise<Response>
   invoke: HostInvoke
   version: string
   build: string
@@ -92,7 +95,7 @@ export type SessionPublishing = {
 }
 
 /** A stream's frames come as often as its acks; they change nothing the agent hears about. */
-const MEDIA_FRAMES: ReadonlySet<GatewayFrame["type"]> = new Set(["media-watch", "media-ack", "media-unwatch"])
+const MEDIA_FRAMES: ReadonlySet<GatewayFrame["type"]> = new Set(["media-watch", "media-ack", "media-unwatch", "port-open"])
 
 /**
  * Host-wide readings about this machine's own harnesses and accounts. No client of a cloud Thread reads them (the
@@ -545,7 +548,9 @@ export class MachineRuntime {
         queueMicrotask(() => this.#publish())
       } else if (frame.type !== "operation" && !MEDIA_FRAMES.has(frame.type)) this.#changed()
     }
-    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, onFrame, watch: (conversations) => this.#options.sessions?.watch(runtimeLink, conversations) }).then(
+    // A phone reaches this machine's Threads' apps and signed files through the same link, as it does a Mac's.
+    const ports = new PortRelay({ allowed: () => appPorts(this.#options.invoke), files: this.#options.files })
+    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, ports, onFrame, watch: (conversations) => this.#options.sessions?.watch(runtimeLink, conversations) }).then(
       (served) => {
         if (closed) return served.close()
         this.#served = served

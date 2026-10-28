@@ -14,6 +14,7 @@ import {
   ThreadIdSchema,
 } from "./ids.js"
 import { MediaStreamIdSchema } from "./media.js"
+import { PortRequestSchema } from "./ports.js"
 import { SessionsReportSchema } from "./thread-listing.js"
 import type { Payload } from "./payload.js"
 import { VersionRangeSchema } from "./version.js"
@@ -201,6 +202,11 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
     .strict(),
   /** The stream's viewer stopped watching or left: send nothing more on it. */
   z.object({ type: z.literal("media-unwatch"), stream: MediaStreamIdSchema }).strict(),
+  /**
+   * A request to an app this runtime serves on one of its ports (version 7 on, `ports.ts`), answered on `stream` as
+   * media: its head, then its body. `media-ack` and `media-unwatch` pace and stop it as they do a watch.
+   */
+  PortRequestSchema.extend({ type: z.literal("port-open"), stream: MediaStreamIdSchema }).strict(),
   /**
    * The conversations of this runtime someone watches now, the whole set, replacing the last (version 5 on): send their
    * live updates and no others'. A new link starts with none watched; this is said on enrolment when some are, and on

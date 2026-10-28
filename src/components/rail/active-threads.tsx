@@ -4,6 +4,7 @@ import { CloudIcon, LaptopIcon } from "lucide-react"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
+import { MarkStack } from "@/components/ui/mark-stack"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
@@ -143,7 +144,7 @@ export function LiveAgentRow({
         onClick={open}
         className={cn("pressable", ROW_SURFACE, indent ? "pl-2" : "pl-1.5")}
       >
-        <span className="flex shrink-0 items-center -space-x-1">
+        <MarkStack>
           {(folded?.members.slice(0, FOLD_GLYPHS) ?? [null]).map((member, index) => {
             const session = foldState?.sessions[index]
             return (
@@ -155,7 +156,7 @@ export function LiveAgentRow({
               />
             )
           })}
-        </span>
+        </MarkStack>
         <span className={cn("min-w-0 flex-[1_1_60%] truncate text-ui", lit ? "font-medium text-foreground" : "text-foreground/85")}>
           {title}
         </span>

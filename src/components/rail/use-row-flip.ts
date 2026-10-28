@@ -37,6 +37,14 @@ function easing(): string {
   return easeOut
 }
 
+/**
+ * When the frame is idle. WebKit has no `requestIdleCallback` (Safari, every iPhone browser): there it's the next task,
+ * which still lands after the commit's paint.
+ */
+const idleCallbacks = "requestIdleCallback" in globalThis
+const whenIdle = (callback: () => void): number => (idleCallbacks ? requestIdleCallback(callback) : window.setTimeout(callback, 1))
+const cancelIdle = (handle: number): void => (idleCallbacks ? cancelIdleCallback(handle) : window.clearTimeout(handle))
+
 function reducedMotion(): boolean {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches
 }
@@ -76,12 +84,12 @@ export function useRowFlip(
     const nodes = [...root.querySelectorAll<HTMLElement>("[data-flip-key]")]
     const order = nodes.map((node) => node.dataset["flipKey"] ?? "").join("\n")
     if (refresh.current !== null) {
-      cancelIdleCallback(refresh.current)
+      cancelIdle(refresh.current)
       refresh.current = null
     }
     const before = previous.current
     if (before && before.scene === scene && before.order === order) {
-      refresh.current = requestIdleCallback(() => {
+      refresh.current = whenIdle(() => {
         refresh.current = null
         if (previous.current !== before) return
         const gliding = nodes.some((node) =>
@@ -131,7 +139,7 @@ export function useRowFlip(
   })
   useLayoutEffect(
     () => () => {
-      if (refresh.current !== null) cancelIdleCallback(refresh.current)
+      if (refresh.current !== null) cancelIdle(refresh.current)
     },
     []
   )

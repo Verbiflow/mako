@@ -1208,10 +1208,33 @@ diffs-container {
 .thread-glyph[data-new] {
   animation: review-dot-arrive 220ms var(--ease-out) both;
 }
-/* The next mark sits 4px over this 12px one: centre 2px past the edge, 6px
-   radius, plus a 1.5px gap that shows whatever the row is painted with. */
-.thread-glyph:not(:last-child) {
-  mask-image: radial-gradient(circle at calc(100% + 2px) 50%, transparent 7.5px, #000 8px);
+/*
+ * A stack of harness marks (`MarkStack`), each `--mark` wide, the next a third
+ * over it. Each is cut where the next overlaps: the next mark's centre sits
+ * half a mark less the overlap past this one's edge (2px for the rail's 12px),
+ * its radius plus a 1.5px gap that shows whatever the row is painted with.
+ */
+.mark-stack {
+  --mark: 12px;
+  --mark-over: calc(var(--mark) / 3);
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+}
+.mark-stack > * + * {
+  margin-left: calc(-1 * var(--mark-over));
+}
+.mark-stack > .thread-glyph:not(:last-child) {
+  mask-image: radial-gradient(
+    circle at calc(100% + var(--mark) / 2 - var(--mark-over)) 50%,
+    transparent calc(var(--mark) / 2 + 1.5px),
+    #000 calc(var(--mark) / 2 + 2px)
+  );
+}
+.mark-stack > .thread-glyph > svg,
+.mark-stack > .thread-glyph > span {
+  width: var(--mark);
+  height: var(--mark);
 }
 
 /*
