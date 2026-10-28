@@ -248,18 +248,35 @@ threadViewingActions.closeViewer()
   pending.get(held.path)!.reject(new Error("The host stopped answering"))
   assert.equal(await failing, null, "a failed read gives a waiting send nothing to go by")
   await new Promise((resolve) => setTimeout(resolve, 0))
-  assert.deepEqual(openingHoldsSend(threadsStore.get()), { kind: "failed", ref: held, error: "The host stopped answering" }, "a failed read holds a send with its reason")
+  assert.equal(threadsStore.get().opening?.kind, "failed")
+  assert.equal(threadsStore.get().viewing?.ref.path, held.path, "the saved messages stay on screen")
+  assert.equal(openingHoldsSend(threadsStore.get()), null, "and a send still goes to them: the host routes it by path")
 
-  pending.delete(held.path)
-  rereadFailedOpening()
-  await waitFor(held.path)
-  pending.get(held.path)!.resolve({ ref: held, entries: [{ type: "user", id: "u", text: "hello" }], start: 0, total: 1, hasEarlier: false })
-  for (let i = 0; i < 30 && threadsStore.get().opening; i++) await new Promise((resolve) => setTimeout(resolve, 5))
-  assert.equal(threadsStore.get().opening, null, "after a reconnect the failed read is read again and the view settles")
+  // Read again after a reconnect, whether the saved messages or nothing was on screen.
+  const settles = async (ref: ThreadRef) => {
+    pending.delete(ref.path)
+    rereadFailedOpening()
+    await waitFor(ref.path)
+    pending.get(ref.path)!.resolve({ ref, entries: [{ type: "user", id: "u", text: "hello" }], start: 0, total: 1, hasEarlier: false })
+    for (let i = 0; i < 30 && threadsStore.get().opening; i++) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.equal(threadsStore.get().opening, null, "after a reconnect the failed read is read again and the view settles")
+    assert.equal(threadsStore.get().viewing?.ref.path, ref.path)
+  }
+  await settles(held)
   pending.delete(held.path)
   rereadFailedOpening()
   await new Promise((resolve) => setTimeout(resolve, 20))
   assert.equal(pending.has(held.path), false, "a settled view is not read again")
+
+  // Nothing read before: a failed read leaves nothing to send to, and holds a send with its reason.
+  const cold: ThreadRef = { harness: "claude", nativeId: "cold", path: "/cold" }
+  pending.delete(cold.path)
+  const coldOpen = threadViewingActions.view(cold)
+  await waitFor(cold.path)
+  pending.get(cold.path)!.reject(new Error("The host stopped answering"))
+  await coldOpen
+  assert.deepEqual(openingHoldsSend(threadsStore.get()), { kind: "failed", ref: cold, error: "The host stopped answering" }, "a failed read with nothing on screen holds a send with its reason")
+  await settles(cold)
   threadViewingActions.closeViewer()
 }
 console.log(

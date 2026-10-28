@@ -215,12 +215,13 @@ function sayOpeningHolds(held: NonNullable<ReturnType<typeof openingHoldsSend>>)
  * lands, the ref shown is the last read's or the record's tail's. The host
  * routes a reply by path, so most sends go at once; a session that only goes
  * on from its transcript (`copyOnly`, `resumeUnavailable`) is routed here, so
- * that send waits a moment for the read to say so still. False keeps the
- * draft: the read failed, or another conversation took the viewer.
+ * that send waits a moment for the read to say so still, and goes by the
+ * transcript shown when the read fails or is slow. False keeps the draft:
+ * another conversation took the viewer, or nothing of it is left on screen.
  */
 async function settleViewedRoute(waiting: (on: boolean) => void): Promise<boolean> {
   const { viewing, opening } = threadsStore.get()
-  if (!viewing || opening?.ref.path !== viewing.ref.path || !(viewing.ref.copyOnly || viewing.ref.resumeUnavailable)) return true
+  if (!viewing || opening?.kind !== "loading" || opening.ref.path !== viewing.ref.path || !(viewing.ref.copyOnly || viewing.ref.resumeUnavailable)) return true
   waiting(true)
   try {
     await freshViewedRef(viewing.ref.path, FRESH_ROUTE_PATIENCE_MS)

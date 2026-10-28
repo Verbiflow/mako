@@ -2399,9 +2399,12 @@ fresh read lands, and the composer sends to it at once (`openingHoldsSend`
 in `thread-viewing.ts`). Only a session the window itself routes from its
 ref (`copyOnly`, `resumeUnavailable`: straight to a move) waits for that
 read, at most four seconds, its send button turning meanwhile. With nothing
-on screen yet the button turns and Enter says nothing; a failed read says
-"Could not load this conversation" with its reason and Retry loading, one
-notice however often Enter is pressed, and a reconnect reads it again.
+on screen yet the button turns and Enter says nothing. A refresh that
+fails leaves the saved messages on screen under one quiet "Couldn't refresh
+· Retry" line, and they still take a send. An open that fails with nothing
+to show is said by the viewer alone; Enter there says "Could not load this
+conversation" with its reason and Retry loading, one notice however often
+it is pressed. A reconnect reads either again.
 Before this, every Enter on a cached conversation stacked "Wait for this
 conversation to load" while a slow host read it. `test-thread-opening.ts`
 and `test-opening-send-ui.mjs` cover it.

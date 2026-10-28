@@ -11,7 +11,9 @@ import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 // conversation painted from the last read takes Enter at once while its
 // fresh read is still under way; one with nothing on screen yet turns the
 // send button and Enter says nothing; a read that failed says so once, with
-// its reason and Retry, however often Enter is pressed; a session only Mako's
+// its reason and Retry, however often Enter is pressed, and nothing else
+// says it; a cached conversation whose refresh fails keeps its saved
+// messages, a quiet line and its send; a session only Mako's
 // copy keeps, routed by the window, sends once its fresh read lands, the
 // button turning meanwhile. Writes a screenshot of each.
 //
@@ -80,6 +82,7 @@ async function check() {
     await pause(60)
   }
   /** Notices that a send was held: "Wait for this conversation to load", or a failed read's. */
+  const said = (words) => evaluate(`[...document.querySelectorAll('[data-sonner-toast]')].filter((toast) => toast.textContent.includes(${JSON.stringify(words)})).length`)
   const held = () => evaluate(`[...document.querySelectorAll('[data-sonner-toast]')].filter((toast) => /conversation to load|Your draft is saved/.test(toast.textContent)).length`)
   const sendButton = () => evaluate("(() => { const button = document.querySelector('[data-composer] button.composer-send'); return button && { label: button.getAttribute('aria-label'), busy: button.getAttribute('aria-busy'), disabled: button.disabled } })()")
   const view = (path) => evaluate(`import('/src/state/threads.ts').then(({ threads, threadsStore }) => { void threads.view(threadsStore.get().threads.find((ref) => ref.path === ${JSON.stringify(path)})); return true })`)
@@ -142,13 +145,16 @@ async function check() {
     assert.equal(await evaluate(`window.sent.filter((send) => send.path === ${JSON.stringify(fresh)}).length`), 0, "and sends nothing anywhere")
     await capture("loading.png")
 
-    // Its read fails: Enter says so once, with the reason and Retry, however often it is pressed.
+    // Its read fails: the viewer says so, and nothing else does until Enter, which says so once, with the reason and Retry.
     await evaluate("window.waitingReads.splice(0).forEach((read) => read.fail()); true")
     await until("document.body.textContent.includes('Could not load this conversation')", "the viewer's error")
+    await pause(400)
+    assert.equal(await said("The host stopped answering"), 0, "the viewer's error is the one place a failed open is said")
     for (let press = 0; press < 3; press++) await enter()
     await until(`[...document.querySelectorAll('[data-sonner-toast]')].some((toast) => toast.textContent.includes("Your draft is saved"))`, "the notice")
     await pause(400)
     assert.equal(await held(), 1, "one notice, however often Enter is pressed")
+    assert.equal(await said("The host stopped answering"), 1, "and nothing stacked under it")
     const notice = await evaluate("[...document.querySelectorAll('[data-sonner-toast]')].find((toast) => toast.textContent.includes('Your draft is saved')).textContent")
     assert.match(notice, /^Could not load this conversation/, "in the viewer's words")
     assert.match(notice, /The host stopped answering\. Your draft is saved\./, "it says why, and that the draft is kept")
@@ -162,6 +168,30 @@ async function check() {
     await until(settled(fresh), "the retried read")
     await enter()
     await until(`window.sent.some((send) => send.path === ${JSON.stringify(fresh)} && send.text.includes("Look at the retry budget"))`, "the send after Retry")
+
+    // A cached conversation whose refresh fails keeps its saved messages on screen, says so in one quiet line, and takes a send.
+    await view(other)
+    await until(settled(other), "another conversation before the failed refresh")
+    await evaluate(`window.heldReads.add(${JSON.stringify(cached)}); true`)
+    await view(cached)
+    await until(`window.waitingReads.some((read) => read.path === ${JSON.stringify(cached)})`, "the cached conversation's refresh under way")
+    await evaluate("window.waitingReads.splice(0).forEach((read) => read.fail()); true")
+    await until("Boolean(document.querySelector('[data-refresh-failed]'))", "the refresh's quiet line")
+    assert.match(await evaluate("document.querySelector('[data-refresh-failed]').textContent"), /^Couldn't refresh·Retry$/)
+    assert.equal(await evaluate("document.body.textContent.includes('Could not load this conversation')"), false, "the saved messages are not swapped for the error")
+    assert.equal(await evaluate("document.body.textContent.includes('Ship it with the regression test')"), true, "they stay on screen")
+    await pause(400)
+    assert.equal(await said("The host stopped answering"), 0, "no notice says it")
+    assert.equal(await said("Could not refresh"), 0)
+    await type("Send it anyway")
+    assert.equal((await sendButton())?.label, "Send", "the send button offers to send")
+    await capture("refresh-failed.png")
+    await enter()
+    await until(`window.sent.some((send) => send.path === ${JSON.stringify(cached)} && send.text.includes("Send it anyway"))`, "the send to the saved messages")
+    assert.equal(await held(), 0, "with no notice")
+    await evaluate(`window.heldReads.delete(${JSON.stringify(cached)}); document.querySelector('[data-refresh-failed] button').click(); true`)
+    await until(settled(cached), "Retry on the quiet line")
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-refresh-failed]'))"), false, "and the line goes once it has refreshed")
 
     // Mako's copy goes on from its transcript, a route the window picks from the ref: the send waits for the fresh read, on the button.
     await view(copy)
@@ -181,7 +211,7 @@ async function check() {
     await evaluate(`window.heldReads.delete(${JSON.stringify(copy)}); window.waitingReads.splice(0).forEach((read) => read.release()); true`)
     await until(`window.captured.includes(${JSON.stringify(copy)})`, "the kept copy's send once its read landed")
 
-    console.log("✓ a conversation on screen takes a send while it refreshes; with nothing on screen the send button waits and Enter adds no notice; a failed read says why once, with Retry; a window-routed send waits for the fresh read on the button")
+    console.log("✓ a conversation on screen takes a send while it refreshes; with nothing on screen the send button waits and Enter adds no notice; a failed open says why once, with Retry; a failed refresh keeps the saved messages and their send; a window-routed send waits for the fresh read on the button")
     guard.done()
     app.exit(0)
   } catch (error) {
