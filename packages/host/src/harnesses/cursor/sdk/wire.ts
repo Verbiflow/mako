@@ -21,7 +21,7 @@ import {
  * delta union alone is fifty thousand lines — and a change in the SDK's shape
  * fails here, at the boundary, rather than somewhere in a transcript.
  */
-export const CURSOR_SDK_WIRE_VERSION = 5
+export const CURSOR_SDK_WIRE_VERSION = 6
 
 /** The largest line either side accepts: a tool result the SDK truncated is still under this. */
 export const CURSOR_SDK_MAX_LINE_BYTES = 16 * 1024 * 1024
@@ -114,8 +114,23 @@ export const SdkRunResultSchema = z.object({
   usage: CursorSdkTokenUsageSchema.optional(),
   /** What the run's last checkpoint kept for calls still open when it ended. */
   settled: SdkSettledCallsSchema.optional(),
+  /** The agent's turn had ended and no more work had begun when the run did (`turnEndedAfter`). */
+  turnEnded: z.literal(true).optional(),
 })
 export type SdkRunResult = z.infer<typeof SdkRunResultSchema>
+
+/** SDK updates that begin more work in a run: after one, a turn that had ended is going on again. */
+const TURN_WORK = new Set(["step-started", "user-message-appended", "text-delta", "thinking-delta", "partial-tool-call", "tool-call-started"])
+
+/**
+ * Whether the agent's turn has ended once the SDK's update `type` arrives,
+ * given whether it had before. A run can go on after `turn-ended` (a resume
+ * from an older checkpoint, a stop hook's follow-up), so only an end with no
+ * work begun after it counts.
+ */
+export function turnEndedAfter(ended: boolean, type: string): boolean {
+  return type === "turn-ended" || (ended && !TURN_WORK.has(type))
+}
 
 export const SdkAuthStatusSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("logged-out") }),
