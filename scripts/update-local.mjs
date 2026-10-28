@@ -81,6 +81,7 @@ async function install(options, dependencies) {
   const app = join(options.output, "mac-arm64/Mako.app")
   await dependencies.ensureSpace()
   if (!(await dependencies.source())) return
+  await dependencies.packages()
   dependencies.say("Building Mako. Running agents are not stopped.")
   await dependencies.run(
     "npm",
@@ -176,6 +177,30 @@ export async function prepareSource({ project, installed, say, ask }) {
     const moved = await bringForward(git, project, reading)
     if (moved) say(`Moved ${moved.branch} forward from ${shortRevision(moved.from)} to ${shortRevision(moved.to)}.`)
     return true
+  } finally {
+    git.close()
+  }
+}
+
+/**
+ * Install what the checkout's package-lock.json lists and its node_modules
+ * doesn't hold, as Settings › Updates does before it builds: the same check,
+ * the same npm install and the same words. A fast-forward that changed the
+ * lockfile otherwise left the build to fail on a missing package.
+ */
+export async function prepareDependencies({ project, say, run, signal }) {
+  const { uninstalledPackages, installDependencies, missingDependencies } = await import("@mako/host/application/local-update-dependencies")
+  const missing = await uninstalledPackages(project)
+  if (!missing.length) return
+  const { Git } = await import("@mako/git")
+  const { missingDependenciesText } = await import("@mako/host/contracts/update-source-text")
+  const git = new Git()
+  try {
+    await installDependencies(git, project, missing, {
+      run,
+      signal,
+      installing: () => say(`Installing dependencies… ${missingDependenciesText(missingDependencies(missing))}`),
+    })
   } finally {
     git.close()
   }
@@ -407,7 +432,7 @@ async function main() {
   )
   if (args.includes("--help")) {
     console.log(
-      "npm run update:local\n\nFetches origin and, when this checkout is on the branch that tracks it, behind it and without uncommitted changes, offers to fast-forward it first; otherwise builds it as it is and says why. Stops when the installed app already carries that revision. Builds a locally signed Mako, asks before installing, waits for Mako to close safely, installs, and reopens it. Never force-stops agents. Refuses to build when the disk is short of space, and removes the build output when it finishes.\n\n--check  Verify signer selection and report running processes without building or installing."
+      "npm run update:local\n\nFetches origin and, when this checkout is on the branch that tracks it, behind it and without uncommitted changes, offers to fast-forward it first; otherwise builds it as it is and says why. Stops when the installed app already carries that revision. Runs npm install first when node_modules doesn't hold what package-lock.json lists, unless package.json or package-lock.json has uncommitted changes. Builds a locally signed Mako, asks before installing, waits for Mako to close safely, installs, and reopens it. Never force-stops agents. Refuses to build when the disk is short of space, and removes the build output when it finishes.\n\n--check  Verify signer selection and report running processes without building or installing."
     )
     return
   }
@@ -467,6 +492,13 @@ async function main() {
             say: console.log,
             ask: async (prompt) => /^(?:y(?:es)?)?$/i.test(await question(prompt)),
           }),
+        packages: () =>
+          prepareDependencies({
+            project,
+            say: console.log,
+            signal: abort.signal,
+            run: (args, signal) => run("npm", args, {}, signal),
+          }),
         ensureSpace: async () => {
           // The build compiles in place and packages one app; it copies no checkout.
           const { ensureBuildSpace } =
@@ -505,10 +537,13 @@ if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  await main().catch((error) => {
+  await main().catch(async (error) => {
     console.error(
       error instanceof Error ? error.message : "Local update failed."
     )
+    // A command that fixes it, on a line of its own to copy.
+    const { DependencyInstallError } = await import("@mako/host/application/local-update-dependencies")
+    if (error instanceof DependencyInstallError) console.error(`\n  ${error.command}\n`)
     process.exitCode = 1
   })
 }

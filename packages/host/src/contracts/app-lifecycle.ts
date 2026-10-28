@@ -125,13 +125,22 @@ export type UpdateSource =
       readAt: string
     }
 
+/** Packages the source checkout's package-lock.json lists that its node_modules doesn't hold: how many, and the first few by name. */
+export interface MissingDependencies {
+  count: number
+  names: string[]
+}
+
 export type LocalBuildState =
   | { kind: "idle" }
   | {
       kind: "building"
-      phase: "copying" | "compiling" | "checking" | "packaging" | "verifying"
+      /** `installing` runs npm install in the source checkout first, only when its node_modules is behind its package-lock.json. */
+      phase: "installing" | "copying" | "compiling" | "checking" | "packaging" | "verifying"
       /** The commit being built, once the checkout has been read and brought forward. */
       revision?: string
+      /** What the install brings, while `phase` is `installing`. */
+      dependencies?: MissingDependencies
     }
   | {
       kind: "ready"
@@ -141,7 +150,12 @@ export type LocalBuildState =
       /** The branch fast-forwarded before building, and to which commit. */
       forwarded: { branch: string; from: string; to: string } | null
     }
-  | { kind: "error"; message: string }
+  | {
+      kind: "error"
+      message: string
+      /** A command that fixes it, run by hand in a terminal: `cd '<checkout>' && npm install`. */
+      command?: string
+    }
 export interface UpdateInstallation {
   distribution: "development" | "local" | "signed" | "unsigned"
   build: BuildIdentity | null

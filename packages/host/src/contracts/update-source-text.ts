@@ -1,4 +1,4 @@
-import type { UpdateSource } from "./app-lifecycle.js"
+import type { MissingDependencies, UpdateSource } from "./app-lifecycle.js"
 
 /**
  * How a source checkout's reading is said, in Settings › Updates and by
@@ -22,6 +22,17 @@ export interface UpdateSourceText {
 export const shortRevision = (revision: string) => revision.slice(0, 8)
 
 const count = (n: number, noun: string, plural = `${noun}s`) => `${n} ${n === 1 ? noun : plural}`
+
+/**
+ * `package-lock.json lists 3 packages the checkout hasn't installed:
+ * @mako/web-client, esbuild and 1 more.` Said while the build installs
+ * them, and when it can't.
+ */
+export function missingDependenciesText({ count: total, names }: MissingDependencies): string {
+  const more = total - names.length
+  const listed = more > 0 ? `${names.join(", ")} and ${more} more` : names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names.join("")
+  return `package-lock.json lists ${total === 1 ? "a package" : `${total} packages`} the checkout hasn't installed: ${listed}.`
+}
 
 /** `uncommitted changes in 2 files and 1 untracked file`, or null for a clean checkout. */
 function localWork(changed: number, untracked: number): string | null {

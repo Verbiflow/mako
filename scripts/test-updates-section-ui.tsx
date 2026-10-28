@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { BuildIdentity, RevisionChanges, UpdateInstallation, UpdateSource } from "../packages/host/src/contracts/app-lifecycle"
-import { updateSourceText } from "../packages/host/src/contracts/update-source-text"
+import { missingDependenciesText, updateSourceText } from "../packages/host/src/contracts/update-source-text"
 import { UpdatesSection } from "../src/components/settings/updates-section"
 import { applicationStore } from "../src/state/application"
 import { updatesStore } from "../src/state/updates"
@@ -138,6 +138,29 @@ const building = draw({ checkout: reading({ head: UPSTREAM, behind: 0, plan: { k
 assert.match(building, /Building 079f9b31/)
 assert.deepEqual(buttons(building), ["Change…", "Building…"])
 
+// The fast-forward changed package-lock.json: the build installs what it lists first, and says so, on the Prepare step.
+const installing = draw({
+  checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "as-is", why: "level", installed: false } }),
+  local: { kind: "building", phase: "installing", revision: UPSTREAM, dependencies: { count: 4, names: ["@mako/web-client", "esbuild", "vite"] } },
+})
+assert.match(installing, /data-testid="update-title"[^>]*>Installing dependencies…</)
+assert.match(installing, /package-lock\.json lists 4 packages the checkout hasn't installed: @mako\/web-client, esbuild, vite and 1 more\. Mako is running npm install in the checkout before it builds\. Your installed app and agents stay running\./)
+assert.match(installing, /<li aria-current="step"[^>]*><div[^>]*><\/div><span[^>]*>Prepare<\/span><\/li>/, "installing is part of Prepare")
+assert.deepEqual(buttons(installing), ["Change…", "Building…"])
+// Once it's installed, the build names its revision again.
+assert.match(draw({ local: { kind: "building", phase: "copying", revision: UPSTREAM } }), /Building 079f9b31/)
+// Refused: the checkout's own edits to package-lock.json, and what to run.
+const refusal = "The update couldn't install dependencies: package-lock.json lists a package the checkout hasn't installed: @mako/web-client. The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you. Commit or discard them, or run npm install yourself, then build again. Your installed app and agents were not changed."
+const command = "cd '/Users/developer/Projects/mako' && npm install"
+const refused = draw({ checkout: reading({ head: UPSTREAM, behind: 0, changed: 1, plan: { kind: "as-is", why: "level", installed: false } }), local: { kind: "error", message: refusal, command } })
+assert.ok(decode(refused).includes(`<p>${refusal}</p>`), "the refusal is said whole")
+assert.ok(decode(refused).includes(`data-testid="update-command">${command}</code>`), "and the command to run by hand stands apart, to copy whole")
+assert.doesNotMatch(draw({ local: { kind: "error", message: "The update failed during packaging: x" } }), /update-command/, "a failure with no command to run shows none")
+assert.deepEqual(buttons(refused), ["Change…", "Build 079f9b31 with local changes", "Check again"], "and Build is there to try again once it's resolved")
+assert.equal(missingDependenciesText({ count: 1, names: ["dep"] }), "package-lock.json lists a package the checkout hasn't installed: dep.")
+assert.equal(missingDependenciesText({ count: 2, names: ["a", "b"] }), "package-lock.json lists 2 packages the checkout hasn't installed: a and b.")
+assert.equal(missingDependenciesText({ count: 3, names: ["a", "b", "c"] }), "package-lock.json lists 3 packages the checkout hasn't installed: a, b and c.")
+
 // Ready: both revisions, the fast-forward, and what changed.
 const ready = draw({ local: { kind: "ready", build: { ...build, id: "c41e7d2f9a0b3e65", revision: UPSTREAM }, changes: CHANGES, forwarded: { branch: "main", from: INSTALLED, to: UPSTREAM } } })
 assert.match(ready, /data-testid="update-transition"[^>]*><span[^>]*>9a7a5c0c<\/span>.*079f9b31.*· 21 changes.*Signature verified/)
@@ -155,4 +178,4 @@ assert.equal(updateSourceText(reading({ behind: 1, changes: { from: INSTALLED, c
 assert.equal(updateSourceText(reading({ upstream: null, behind: 0, plan: { kind: "as-is", why: "no-upstream", installed: false }, target: INSTALLED })).action, "Build main 9a7a5c0c")
 assert.equal(updateSourceText(reading({ branch: null, plan: { kind: "as-is", why: "detached", installed: false }, target: INSTALLED })).title, "The checkout isn't on a branch")
 
-console.log("Updates section: says what Build will take before it runs (fast-forward, already installed, local changes, another branch, diverged, offline, unreadable), names the revision it builds, and shows both revisions and the changes once built and once installed")
+console.log("Updates section: says what Build will take before it runs (fast-forward, already installed, local changes, another branch, diverged, offline, unreadable), names the revision it builds, says when it installs dependencies first and why it won't, and shows both revisions and the changes once built and once installed")

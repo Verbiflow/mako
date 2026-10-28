@@ -26,6 +26,9 @@ function fixture(overrides = {}) {
     ensureSpace: async () => {
       calls.push({ command: "space" })
     },
+    packages: async () => {
+      calls.push({ command: "packages" })
+    },
     remove: async (path) => {
       calls.push({ command: "remove", path })
     },
@@ -64,17 +67,17 @@ const success = fixture()
 await updateLocal(options, success.dependencies)
 assert.deepEqual(
   success.calls.map((call) => call.command),
-  ["space", "source", "npm", "reserve", "prepare", "wait", "wait", process.execPath, "open", "verify-startup", "release", "remove"]
+  ["space", "source", "packages", "npm", "reserve", "prepare", "wait", "wait", process.execPath, "open", "verify-startup", "release", "remove"]
 )
 // Installing copied the app into /Applications; the output goes last.
 assert.equal(success.calls.at(-1).path, options.output)
-assert.deepEqual(success.calls[2].args, [
+assert.deepEqual(success.calls[3].args, [
   "run",
   "package:mac:local",
   "--",
   `--output=${options.output}`,
 ])
-assert.equal(success.calls[2].env.MAKO_LOCAL_SIGNING_IDENTITY, identity)
+assert.equal(success.calls[3].env.MAKO_LOCAL_SIGNING_IDENTITY, identity)
 assert.deepEqual(success.calls.find((call) => call.command === process.execPath).args, [
   join(options.project, "scripts/install-local-mac.mjs"),
   join(options.output, "mac-arm64/Mako.app"),
@@ -93,7 +96,7 @@ const declined = fixture({ confirm: async () => false })
 await updateLocal(options, declined.dependencies)
 assert.deepEqual(
   declined.calls.map((call) => call.command),
-  ["space", "source", "npm", "remove"]
+  ["space", "source", "packages", "npm", "remove"]
 )
 const badSigner = fixture({ verify: async () => "B".repeat(40) })
 await assert.rejects(
@@ -102,7 +105,7 @@ await assert.rejects(
 )
 assert.deepEqual(
   badSigner.calls.map((call) => call.command),
-  ["space", "source", "npm", "remove"]
+  ["space", "source", "packages", "npm", "remove"]
 )
 const interrupted = fixture({
   wait: async () => {
@@ -115,7 +118,7 @@ await assert.rejects(
 )
 assert.deepEqual(
   interrupted.calls.map((call) => call.command),
-  ["space", "source", "npm", "reserve", "prepare", "cancel", "release", "remove"]
+  ["space", "source", "packages", "npm", "reserve", "prepare", "cancel", "release", "remove"]
 )
 const masked = fixture({
   running: async () => [],
@@ -168,7 +171,16 @@ const failed = fixture({
   },
 })
 await assert.rejects(updateLocal(options, failed.dependencies), /Build failed/)
-assert.deepEqual(failed.calls.map((call) => call.command), ["space", "source", "remove"])
+assert.deepEqual(failed.calls.map((call) => call.command), ["space", "source", "packages", "remove"])
+// npm install refused or failed in the checkout: nothing is built, and the output still goes.
+const unpackaged = fixture({
+  packages: async () => {
+    unpackaged.calls.push({ command: "packages" })
+    throw new Error("The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you.")
+  },
+})
+await assert.rejects(updateLocal(options, unpackaged.dependencies), /won't run npm install there/)
+assert.deepEqual(unpackaged.calls.map((call) => call.command), ["space", "source", "packages", "remove"])
 const full = fixture({
   ensureSpace: async () => {
     throw new Error("Not enough free disk space to build Mako")
