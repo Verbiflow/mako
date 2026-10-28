@@ -27,7 +27,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { verifyFilePreview, fileIdentity, MediaRenditions, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, projectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { verifyFilePreview, cloneRepository, fileIdentity, MediaRenditions, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, projectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -46,7 +46,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -146,6 +146,8 @@ interface LateParts {
   cloud?: CloudAccount
   cloudConversations?: CloudConversations
   cloudReturns?: CloudReturns
+  /** The worktrees here of Threads that run in the cloud, following them at each turn's end. */
+  cloudFollow?: CloudFollow
   /** This host's Sessions on the account's list: told again when one is archived here. */
   sessions?: SessionPublisher
   /** The keys of the account's archived cloud Threads' Sessions, told to every window (`ThreadArchives.account`). */
@@ -512,6 +514,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         changed: (conversationId) => {
           for (const tab of workspaceClients.everyTab()) tab.elsewhereChanged(conversationId)
         },
+        turnEnded: (_conversationId, threadId) => late.cloudFollow?.turnEnded(threadId),
         threads: () => threads.store ?? undefined,
         returning: (cloudThread) => late.cloudReturns?.returning(cloudThread),
         keepsNative: (harness, nativeId, folder) => catalog.keepsNative(harness, nativeId, folder),
@@ -617,7 +620,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       // A harness without instructions of its own hears how media reaches the person here (`makoInstructions`).
       const harness = late.conversations?.live.session(conversationId)?.harness
       const media = harness && !harnesses.host.liveDrivers.get(harness)?.makoInstructions ? SHOW_MEDIA_LINE : undefined
-      return [session && controlLine(session), launched && threadEnvironmentInstructions(launched), media, ...(workspaces.worktrees?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
+      return [session && controlLine(session), launched && threadEnvironmentInstructions(launched), media, ...(workspaces.worktrees?.notices(conversationId) ?? []), ...(late.cloudReturns?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
     },
     revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),
@@ -679,6 +682,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     moves: live.moves,
     snapshot: (id) => live.snapshot(id),
     checkout: (id) => workspaces.worktrees?.threadCheckout(id),
+    // A Thread in the main checkout goes onto its own branch first, as the person's "Move to its own branch" does, its
+    // companions following; its agent isn't told, since nothing starts a turn on the way to the cloud.
+    ownBranch: async (id) => {
+      const movers = late.movers
+      const worktreeMoves = movers?.worktreeMoves
+      if (!movers || !worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
+      const { moved, following } = await movers.moves.moveNow(id, () => worktreeMoves.carry(id, { lead: true, tell: false }))
+      await following
+      return moved.session.id
+    },
+    // What it carries besides its checkout: the paths outside it the journal ties to it, and its file history.
+    outside: (thread) => late.attribution?.changes(thread).outside.filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? [],
+    history: (thread) => late.attribution?.threadHistory(thread),
+    archived: (conversationId) => late.archivedHere?.(conversationId) ?? false,
     repositoryOf: (cwd) => folderRepository(git, cwd),
     sendRecords: (link, paths) => catalog.sendRecords(link, paths),
     cloud: cloudConversations,
@@ -719,8 +736,33 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     cloud: cloudConversations,
     capture: async (conversationId, path) => void (await live.capture(conversationId, path)),
     step: (conversationId, move, step) => emit({ type: "thread-return-step", conversationId, move, step }),
+    outside: join(environment.dataRoot, "cloud", "outside"),
+    followed: {
+      laid: async (cloudThread, path) => late.cloudFollow?.laid(cloudThread, path),
+      forget: async (cloudThread) => late.cloudFollow?.forget(cloudThread),
+    },
+    carryHistory: async (history) => {
+      const attribution = late.attribution
+      if (!attribution) return false
+      await attribution.carryThreadHistory(history)
+      return true
+    },
   })
   late.cloudReturns = cloudReturns
+  // The worktree here of a Thread in the cloud follows it at each turn's end, until the person changes it here.
+  late.cloudFollow = cloudConversations && new CloudFollow({
+    folder: join(environment.dataRoot, "cloud", "follow"),
+    moves: join(environment.dataRoot, "cloud", "moves"),
+    git,
+    readCheckpoint: async (cloudThread, sha256, file) => {
+      const account = late.cloud
+      if (!account) throw new Error("This Mac signed out of Mako Cloud.")
+      await account.readCheckpoint(cloudThread, sha256, file)
+    },
+    callThread: (cloudThread, channel, args) => cloudConversations.callThread(cloudThread, channel, args),
+    returning: (cloudThread) => late.cloudReturns?.returning(cloudThread) !== undefined,
+    stopped: (cloudThread, state) => emit({ type: "thread-follow-stopped", conversations: cloudConversations.threadConversations(cloudThread).map((each) => each.conversationId), folders: state.edited?.folders ?? [], at: state.edited?.at ?? Date.now() }),
+  })
   // And archives them, from here, whichever device they came from: the cloud ends them and keeps what they ran.
   const cloudArchives = cloudConversations && new CloudArchives({
     folder: join(environment.dataRoot, "cloud", "archives"),
@@ -927,6 +969,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         label: (harness) => opened.harnessLabel(harness),
         scratch: join(environment.dataRoot, "moves"),
         ahead: new Map(),
+        carryHistory: async (history) => {
+          const attribution = late.attribution
+          if (!attribution) return false
+          await attribution.carryThreadHistory(history)
+          return true
+        },
+        clone: (repository) => cloneRepository(git, repository),
       },
       departure: {
         git,
@@ -942,6 +991,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         },
         send: (link, paths) => catalog.sendRecords(link, paths),
         scratch: join(environment.dataRoot, "moves"),
+        outside: (thread) => late.attribution?.changes(thread).outside.filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? [],
+        history: (thread) => late.attribution?.threadHistory(thread),
       },
     }),
   })

@@ -3,21 +3,21 @@ import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:f
 import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
-import { encodeOperation } from "@mako/protocol"
-import { MOVE_ANSWER_WAIT_MS, MoveCheckpointSchema, type MoveAnswer, type MoveCheckpoint } from "@mako/protocol/moves"
+import { encodeOperation, type ThreadFileHistory } from "@mako/protocol"
+import { MOVE_ANSWER_WAIT_MS, MoveCarryRefSchema, MoveCarrySchema, MoveCheckpointSchema, type MoveAnswer, type MoveCarryRepository, type MoveCheckpoint, type MoveLeft } from "@mako/protocol/moves"
 import { RecordHoldingsSchema, describeSync, withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { CloudRepositorySchema, type CloudRepository, type ThreadHandOff, type ThreadMoveOutcome, type ThreadMoveStep } from "../contracts/cloud-threads.js"
+import { CloudRepositorySchema, type CloudRepository, type MoveCarried, type ThreadHandOff, type ThreadMoveOutcome, type ThreadMoveStep } from "../contracts/cloud-threads.js"
 import { hostCallInput, toHostOperation } from "../contracts/host-operations.js"
-import type { EncodedValue } from "../contracts/runtime-value.js"
+import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
 import { executionRefusal, HandoffSchema, MoveIdSchema, RuntimeIdSchema, type ClaimReceipt, type ExecutionOwner, type Handoff, type MoveId, type Refusal, type RuntimeId, type SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "../contracts/thread-identity.js"
 import type { CloudAccount } from "../usage/index.js"
-import { captureMoveCheckpoint } from "../workspaces/index.js"
+import { captureCarry, captureMoveCheckpoint, readOutside, type OutsideCandidate } from "../workspaces/index.js"
 import type { ReadyPlan, TakenReady } from "./cloud-readiness.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 import type { CheckedSession } from "./harness-check.js"
@@ -56,6 +56,16 @@ export function namedUuid(name: string): string {
 export function cloudRuntimeOf(cloudThread: string): RuntimeId {
   return RuntimeIdSchema.parse(namedUuid(`mako cloud thread\0${cloudThread}`))
 }
+
+/** Runs one step of a move, its failure saying which step, which a bare one ("file closed") doesn't. */
+function named<Value>(what: string, work: Promise<Value>): Promise<Value> {
+  return work.catch((error: Error) => {
+    throw new Error(`${what}: ${errorMessage({ error })}`, { cause: error })
+  })
+}
+
+/** What a machine answers when it's ready for a move: `carry`, that it takes one (`MoveCarry`). */
+const ReadyAnswerSchema = z.object({ folder: z.string(), carry: z.boolean().optional() }).loose()
 
 /** What a sleeping Mac's handoff must leave for the release and the hand-over after the pause. */
 const RELEASE_TAKES_MS = 4_000
@@ -105,6 +115,8 @@ const PlanSessionSchema = z.object({
   nativeId: z.string(),
   /** Its native session's path here, which its records are read by. */
   path: z.string(),
+  /** The folder it works in, when it isn't the move's `folder`: a project of several repositories, or a folder inside one. */
+  cwd: z.string().optional(),
   modeId: z.string().optional(),
   tuning: SessionSettingsSchema.optional(),
   /** What the last send pushed of its records, each unit at its head: what the machine must hold before it writes them. */
@@ -125,9 +137,16 @@ export const MovePlanSchema = z.object({
   thread: ThreadIdSchema,
   /** The conversation the move was asked from, whose window hears its steps. */
   asked: z.string(),
+  /** The conversation the person asked from, when its harness forked onto its own branch and `asked` is the fork. */
+  from: z.string().optional(),
   cloudThread: z.string(),
+  /** The folder the cloud Thread is made at, which its machine clones `repository` into: the Thread's worktree, or the first repository's in a project of several. */
   folder: z.string(),
   repository: CloudRepositorySchema,
+  /** The Thread's own folder, when it isn't `folder`: a project of several repositories, one worktree each. */
+  project: z.string().optional(),
+  /** The Thread's other repositories: each cloned beside the first by the machine, and carried by its own checkpoint. */
+  others: z.array(z.object({ path: z.string(), url: z.string(), branch: z.string().optional(), checkpoint: MoveCheckpointSchema.optional() })).default([]),
   sessions: z.array(PlanSessionSchema).min(1),
   phase: PhaseSchema,
   checkpoint: MoveCheckpointSchema.optional(),
@@ -136,6 +155,10 @@ export const MovePlanSchema = z.object({
    * move sent. One the same isn't asked about again.
    */
   held: z.string().optional(),
+  /** What else the move carries (`MoveCarry`, without its bytes), as last sent: the way back reads from it what left here. */
+  carry: z.object({ ref: MoveCarryRefSchema, manifest: MoveCarrySchema }).optional(),
+  /** Whether the machine takes a carry, as its `mako:move-ready` answered: one before carries is sent the checkout alone. */
+  takesCarry: z.boolean().optional(),
   handoff: HandoffSchema.optional(),
   /** A move that pauses running turns to take them along (`ThreadHandOff`), and what it paused. */
   handingOff: z.object({
@@ -175,8 +198,22 @@ export type CloudMovesOptions = {
   }
   /** What a move reads of a conversation: its native session, where it works, and its mode. */
   snapshot(conversationId: string): { session: Pick<LiveSnapshot["session"], "harness" | "nativeId" | "nativePath" | "cwd" | "currentMode"> } | null
-  /** The Thread's own checkout here, its worktree; undefined for a Thread in the main checkout. */
-  checkout(conversationId: string): { path: string; worktrees: unknown[] } | undefined
+  /** The Thread's own checkout here, its worktree (a folder of them, one a repository, in a project of several); undefined for a Thread in the main checkout. */
+  checkout(conversationId: string): { path: string; worktrees: Array<{ path: string }> } | undefined
+  /**
+   * Moves the Thread of a conversation in the main checkout onto its own branch, as "Move to its own branch" does,
+   * taking only its own changes; answers the conversation that goes on there (itself, or its fork).
+   */
+  ownBranch?(conversationId: string): Promise<string>
+  /** The Thread's paths outside its folder that its journal ties to it (`Attribution.changes`' footprint, with evidence). */
+  outside?(thread: ThreadId): OutsideCandidate[]
+  /** The Thread's file history (`Attribution.threadHistory`), carried so the side it lands on resolves its files alike. */
+  history?(thread: ThreadId): ThreadFileHistory | undefined
+  /**
+   * Whether a conversation of the Thread is archived here: no tab shows it, so it starts nowhere and stays as it is, such
+   * as the one a fork onto the Thread's own branch left behind in the main checkout.
+   */
+  archived?(conversationId: string): boolean
   repositoryOf(folder: string): Promise<CloudRepository>
   /** Sends Sessions' records to the cloud Thread now (`SessionCatalog.sendRecords`). */
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
@@ -211,6 +248,19 @@ export type CloudMovesOptions = {
    * the move here, before anything is made, rather than as it arrives.
    */
   harnesses?: { check(sessions: readonly CheckedSession[]): Promise<ThreadHarnessCheck> }
+}
+
+/**
+ * What a move took besides its checkout, for the person: from its carry, or, to a machine that takes none, what stayed.
+ * Nothing when it was only its checkout.
+ */
+function carriedOf(plan: Plan): MoveCarried | undefined {
+  const manifest = plan.carry?.manifest
+  if (!manifest) return undefined
+  const carried = plan.takesCarry
+    ? { repositories: manifest.repositories.length, outside: manifest.outside.length, left: manifest.left }
+    : { repositories: 1, outside: 0, left: [...manifest.outside.map(({ path }): MoveLeft => ({ path, why: "older-cloud" })), ...manifest.left] }
+  return carried.repositories > 1 || carried.outside || carried.left.length ? carried : undefined
 }
 
 export class CloudMoves {
@@ -330,10 +380,24 @@ export class CloudMoves {
   async #move(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined): Promise<ThreadMoveOutcome> {
     const known = await this.#read(move).catch(() => undefined)
     if (known) this.#leaving.set(move, known.thread)
-    if (known) return known.phase === "started" ? { kind: "moved", cloudThread: known.cloudThread } : known.phase === "kept-here" ? { kind: "kept-here", reason: known.reason ?? "It stayed here." } : this.#resume(known)
+    if (known) return known.phase === "started" ? { kind: "moved", cloudThread: known.cloudThread, ...known.from && { conversation: known.asked } } : known.phase === "kept-here" ? { kind: "kept-here", reason: known.reason ?? "It stayed here." } : this.#resume(known)
     let plan: Plan
+    const from = conversationId
     try {
+      // A Thread in the main checkout goes onto its own branch first, taking only its own changes, once nothing else
+      // would keep it here: the rest of the move goes from there, and the main checkout is never the cloud's.
+      if (!handOff && this.#options.ownBranch && !this.#options.checkout(conversationId)) {
+        await this.#plan(conversationId, move, handOff, true, "later")
+        this.#options.step(conversationId, move, { kind: "own-branch" })
+        const going = await this.#options.ownBranch(conversationId)
+        if (going !== conversationId) this.#options.step(conversationId, move, { kind: "own-branch", to: going })
+        conversationId = going
+        // A fork has no session of its harness's until its first turn, so there's nothing of it to carry yet.
+        if (conversationId !== from && !this.#options.snapshot(conversationId)?.session.nativeId)
+          throw new Error("It's on its own branch now, as a conversation forked from this one, which starts with its next message. Send it one, then move it to the cloud.")
+      }
       plan = await this.#plan(conversationId, move, handOff)
+      if (conversationId !== from) plan.from = from
       this.#leaving.set(move, plan.thread)
       // Kept ready while it worked: its records and checkout are there already, and only the last seconds go.
       const ready = await this.#options.ready?.take(plan.thread, plan.folder, plan.repository).catch(() => undefined)
@@ -351,8 +415,14 @@ export class CloudMoves {
     return this.#resume(plan)
   }
 
-  /** What a move carries, read before anything changes: refused, with the reason, when the Thread can't move. */
-  async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses = true): Promise<Plan> {
+  /**
+   * What a move carries, read before anything changes: refused, with the reason, when the Thread can't move. `checkout:
+   * "later"`: weighed for a Thread in the main checkout before it goes onto its own branch: everything but its folder,
+   * and nothing is planned.
+   */
+  async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses?: boolean, checkout?: "now"): Promise<Plan>
+  async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses: boolean, checkout: "later"): Promise<undefined>
+  async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses = true, checkout: "now" | "later" = "now"): Promise<Plan | undefined> {
     const account = this.#options.account()
     if (!account || !(await account.id())) throw new Error("Moving to the cloud needs this Mac signed in to Mako Cloud.")
     const threads = this.#options.threads()
@@ -372,29 +442,48 @@ export class CloudMoves {
       const busy = await this.#options.moves.settledBlockers(placed.thread)
       if (busy.length) throw new Error(`Moves happen between turns: ${busy.join("; ")}.`)
     }
-    const checkout = this.#options.checkout(conversationId)
-    if (!checkout) throw new Error("A Thread moves to the cloud from its own worktree. Move it into one first; the main checkout stays here.")
-    if (checkout.worktrees.length !== 1) throw new Error("A Thread working in several repositories can't move to the cloud yet.")
-    const folder = checkout.path
-    const repository = await this.#options.repositoryOf(folder)
+    const own = this.#options.checkout(conversationId)
+    if (checkout === "now" && !own)
+      throw new Error(handOff && this.#options.ownBranch
+        ? "A Thread in the project folder goes onto its own branch before it moves, once its turn has ended. Move it then."
+        : "A Thread moves to the cloud from its own worktree. Move it into one first; the main checkout stays here.")
+    // A project of several repositories: the cloud Thread is made at the first's worktree, which its machine clones,
+    // and the machine clones the others beside it; each goes by its own checkpoint.
+    const worktrees = [...own?.worktrees ?? []].sort((left, right) => left.path.localeCompare(right.path))
+    const project = own && worktrees.length > 1 ? own.path : undefined
+    const folder = project ? worktrees[0]?.path ?? "" : own?.path ?? this.#options.snapshot(conversationId)?.session.cwd ?? ""
     const sessions: PlanSession[] = []
     for (const moving of threads.threadSessions(placed.thread)) {
       const conversation = moving.journals.includes(conversationId) ? conversationId : moving.journals.at(-1)
+      if (conversation !== conversationId && conversation && this.#options.archived?.(conversation)) continue
       const snapshot = conversation ? this.#options.snapshot(conversation) : null
       const { nativeId, nativePath, harness, cwd } = snapshot?.session ?? {}
       if (!conversation || !snapshot || !nativeId || !nativePath || !harness) throw new Error("Every tab in the Thread needs to have started before it moves: send a first message or close the empty tab.")
-      if (cwd !== folder && !cwd?.startsWith(`${folder}/`)) throw new Error(`A tab in this Thread works in ${cwd ?? "another folder"}, outside its worktree, so the Thread can't move.`)
+      const root = project ?? folder
+      if (own && cwd !== root && !cwd?.startsWith(`${root}/`)) throw new Error(`A tab in this Thread works in ${cwd ?? "another folder"}, outside its worktree, so the Thread can't move.`)
       const remembered = this.#options.remembered(harness, nativeId)
       const planned: PlanSession = { session: moving.session, conversationId: conversation, harness, nativeId, path: nativePath }
+      if (own && cwd && cwd !== folder) planned.cwd = cwd
       const modeId = remembered?.modeId ?? snapshot.session.currentMode ?? undefined
       if (modeId) planned.modeId = modeId
       if (remembered?.settings) planned.tuning = remembered.settings
       sessions.push(planned)
     }
     if (!sessions.length) throw new Error("This Thread has no sessions to move.")
+    // Weighed before a Thread in the main checkout goes onto its own branch too: its repository must be one the cloud
+    // clones. A project folder of several is weighed repository by repository once its worktree is made.
+    const inRepository = await this.#options.git.succeeds(folder, ["rev-parse", "--show-toplevel"])
+    const repository = own || inRepository ? await this.#options.repositoryOf(folder) : undefined
+    const others = []
+    for (const worktree of project ? worktrees.slice(1) : []) {
+      const other = await this.#options.repositoryOf(worktree.path)
+      others.push({ path: worktree.path, url: other.url, ...other.branch && { branch: other.branch } })
+    }
     const check = weighHarnesses ? await this.#options.harnesses?.check(sessions) : undefined
     if (check?.kind === "known" && check.refusal) throw new Error(check.refusal)
-    const plan: Plan = { move, thread: placed.thread, asked: conversationId, cloudThread: this.#options.newCloudThread(), folder, repository, sessions, phase: "preparing", began: Date.now(), timings: {} }
+    if (checkout === "later" || !repository) return undefined
+    const plan: Plan = { move, thread: placed.thread, asked: conversationId, cloudThread: this.#options.newCloudThread(), folder, repository, others, sessions, phase: "preparing", began: Date.now(), timings: {} }
+    if (project) plan.project = project
     if (handOff) plan.handingOff = { why: handOff.why, ...handOff.releaseBy !== undefined && { releaseBy: handOff.releaseBy }, paused: [] }
     return plan
   }
@@ -426,14 +515,18 @@ export class CloudMoves {
         if (!answer) {
           // What only this Mac has goes first, a few files and lines at most: nothing runs the Thread now, so the
           // machine arrives with that and never with what went before the release. Then the cloud carries the rest.
-          await Promise.all([this.#sendCheckpoint(plan), this.#sendRecords(plan)])
+          await Promise.all([
+            named("Its worktree couldn't be sent after the release", this.#sendCheckout(plan)),
+            named("Its sessions' records couldn't be sent after the release", this.#sendRecords(plan)),
+          ])
           plan.timings.sent = Date.now() - plan.began
-          await this.#handOver(plan)
+          await named("The cloud couldn't be handed the move", this.#handOver(plan))
           plan.phase = "handed"
           plan.timings.handed = Date.now() - plan.began
           await this.#write(plan)
         }
       } catch (error) {
+        hostWarn("moves", "a released move couldn't be handed to the cloud", { move: plan.move, error: errorMessage({ error }), ...error instanceof Error && error.cause instanceof Error && { stack: error.cause.stack?.split("\n").slice(0, 6).join(" | ") ?? "" } })
         answer = await this.#refuse(plan, errorMessage({ error }))
         if (!answer) {
           const reason = `This Mac couldn't hand the Thread to the cloud: ${errorMessage({ error })}. It asks again; the Thread runs nowhere until it hears.`
@@ -468,8 +561,9 @@ export class CloudMoves {
       await this.#write(plan)
       hostLog("moves", "a Thread moved to the cloud", { move: plan.move, cloudThread: plan.cloudThread, sessions: plan.sessions.length, ...plan.timings })
     }
-    step({ kind: "moved", conversations: plan.sessions.map((session) => session.conversationId), ...plan.handingOff?.paused.length && { continued: true } })
-    return { kind: "moved", cloudThread: plan.cloudThread }
+    const carried = carriedOf(plan)
+    step({ kind: "moved", conversations: plan.sessions.map((session) => session.conversationId), ...plan.handingOff?.paused.length && { continued: true }, ...carried && { carried } })
+    return { kind: "moved", cloudThread: plan.cloudThread, ...plan.from && { conversation: plan.asked } }
   }
 
   /**
@@ -484,15 +578,15 @@ export class CloudMoves {
     plan.timings.carried = Date.now() - plan.began
     await account.createThread(plan.cloudThread, plan.repository, { folder: plan.folder, harness: plan.sessions[0]?.harness ?? "" })
     plan.timings.made = Date.now() - plan.began
-    // Each failure says which step it stopped, which a bare one ("file closed") doesn't.
-    const step = <Value>(what: string, work: Promise<Value>) => work.catch((error: Error) => {
-      throw new Error(`${what}: ${errorMessage({ error })}`, { cause: error })
-    })
+    // A project of several repositories: the machine clones the others beside the first as it gets ready, so one it
+    // can't clone keeps the Thread here. A machine from before carries takes none of these, and says so by refusing.
+    const repositories = plan.others.map(({ path, url, branch }) => ({ path, url, ...branch && { branch } }))
     await Promise.all([
-      step("Its worktree couldn't be sent ahead", this.#sendCheckpoint(plan)),
-      step("Its sessions' records couldn't be sent ahead", this.#sendRecords(plan)),
+      named("Its worktree couldn't be sent ahead", this.#sendCheckout(plan)),
+      named("Its sessions' records couldn't be sent ahead", this.#sendRecords(plan)),
       // Never queued: a cloud that can't start the machine now says so now, and the Thread stays here.
-      step("Its cloud machine didn't get ready", this.#options.cloud.callThread(plan.cloudThread, "mako:move-ready", [{ folder: plan.folder, harnesses: [...new Set(plan.sessions.map((session) => session.harness))], launches: plan.sessions.map(({ harness, tuning }) => ({ harness, ...tuning && { tuning } })) }], undefined, { refuseUnstarted: true }).then(() => {
+      named("Its cloud machine didn't get ready", this.#options.cloud.callThread(plan.cloudThread, "mako:move-ready", [{ folder: plan.folder, harnesses: [...new Set(plan.sessions.map((session) => session.harness))], launches: plan.sessions.map(({ harness, tuning }) => ({ harness, ...tuning && { tuning } })), ...repositories.length && { repositories } }], undefined, { refuseUnstarted: true }).then((answer) => {
+        plan.takesCarry = ReadyAnswerSchema.safeParse(decodeRuntimeValue(answer)).data?.carry === true
         plan.timings.ready = Date.now() - plan.began
       })),
     ])
@@ -553,17 +647,19 @@ export class CloudMoves {
     const deviceId = await account.deviceId()
     if (!deviceId) throw new Error("This Mac isn't signed in to Mako.")
     const calls: Array<{ channel: string; args: unknown[]; key: string }> = []
-    const sessions = plan.sessions.map(({ harness, nativeId, holdings, conversationId, modeId, tuning }) => ({
+    const sessions = plan.sessions.map(({ harness, nativeId, holdings, conversationId, cwd, modeId, tuning }) => ({
       harness, nativeId, ...holdings && { holdings },
-      open: { conversationId, ...modeId !== undefined && { modeId }, ...tuning !== undefined && { tuning } },
+      open: { conversationId, ...cwd !== undefined && { cwd }, ...modeId !== undefined && { modeId }, ...tuning !== undefined && { tuning } },
     }))
-    // With the handoff: the machine's store files the Thread under the same IDs as this Mac's.
-    calls.push({ channel: "mako:move-arrive", args: [{ move: plan.move, folder: plan.folder, checkpoint, sessions, ...plan.handoff && { handoff: plan.handoff } }], key: "arrive" })
+    // With the handoff: the machine's store files the Thread under the same IDs as this Mac's. With the carry, to a
+    // machine that takes one: the Thread's other repositories, its files outside its folder and its file history.
+    const carry = plan.takesCarry ? plan.carry?.ref : undefined
+    calls.push({ channel: "mako:move-arrive", args: [{ move: plan.move, folder: plan.folder, checkpoint, sessions, ...plan.handoff && { handoff: plan.handoff }, ...carry && { carry } }], key: "arrive" })
     for (const session of plan.sessions) {
       const options: LiveStartOptions = { conversationId: session.conversationId, resume: session.nativeId }
       if (session.modeId) options.modeId = session.modeId
       if (session.tuning) options.tuning = session.tuning
-      calls.push({ channel: "mako:live-start", args: [session.harness, plan.folder, options], key: `start\0${session.conversationId}` })
+      calls.push({ channel: "mako:live-start", args: [session.harness, session.cwd ?? plan.folder, options], key: `start\0${session.conversationId}` })
     }
     for (const { conversationId, requestId, stopped } of plan.handingOff?.paused ?? [])
       calls.push({ channel: "mako:live-continue-turn", args: [conversationId, namedUuid(`mako move\0${plan.move}\0${requestId}\0continue`), { reason: "handed-off", continues: requestId, ...stopped.length && { stopped } }], key: `continue\0${requestId}` })
@@ -629,14 +725,35 @@ export class CloudMoves {
     await this.#write(plan)
   }
 
-  async #sendCheckpoint(plan: Plan): Promise<void> {
+  /**
+   * The Thread's checkout as it stands: each repository's checkpoint, sent unless the cloud has it, then the carry
+   * naming them all with the files outside its folder and its file history. Sent ahead and again after the release; a
+   * part that hasn't changed is the same bytes, which the cloud has already.
+   */
+  async #sendCheckout(plan: Plan): Promise<void> {
     await mkdir(this.#options.folder, { recursive: true })
     const scratch = await mkdtemp(join(this.#options.folder, `${plan.move}-`))
     try {
-      const { checkpoint, file } = await captureMoveCheckpoint(this.#options.git, plan.folder, scratch)
-      if (checkpoint.sha256 !== plan.held) await this.#account().sendCheckpoint(plan.cloudThread, checkpoint, file)
-      plan.held = checkpoint.sha256
-      plan.checkpoint = checkpoint
+      const account = this.#account()
+      const repositories: MoveCarryRepository[] = []
+      for (const [at, path] of [plan.folder, ...plan.others.map((other) => other.path)].entries()) {
+        const { checkpoint, file } = await captureMoveCheckpoint(this.#options.git, path, await mkdtemp(join(scratch, "checkout-")))
+        const other = at === 0 ? undefined : plan.others[at - 1]
+        if (other) {
+          if (checkpoint.sha256 !== other.checkpoint?.sha256) await account.sendCheckpoint(plan.cloudThread, checkpoint, file)
+          other.checkpoint = checkpoint
+        } else {
+          if (checkpoint.sha256 !== plan.held) await account.sendCheckpoint(plan.cloudThread, checkpoint, file)
+          plan.held = checkpoint.sha256
+          plan.checkpoint = checkpoint
+        }
+        repositories.push({ path, ...other && { url: other.url }, ...other?.branch && { branch: other.branch }, checkpoint })
+      }
+      const { read, left } = await readOutside(this.#options.outside?.(plan.thread) ?? [], plan.project ?? plan.folder)
+      const history = this.#options.history?.(plan.thread)
+      const carry = await captureCarry(this.#options.git, { folder: plan.project ?? plan.folder, repositories, outside: read, left, ...history && { history } }, scratch)
+      if (carry.ref.sha256 !== plan.carry?.ref.sha256) await account.sendCheckpoint(plan.cloudThread, carry.ref, carry.file)
+      plan.carry = { ref: carry.ref, manifest: carry.carry }
     } finally {
       await rm(scratch, { recursive: true, force: true })
     }

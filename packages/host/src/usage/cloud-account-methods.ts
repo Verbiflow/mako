@@ -60,8 +60,8 @@ export interface CloudAccount {
   checkPlan?(): Promise<CloudAccountView>
   /** Each agent's sign-in as it stands in the cloud (`mako:cloud-sign-ins`); undefined where this Mac shares none. */
   signIns?(): Promise<CloudSignInsState | undefined>
-  /** A move's checkpoint, sent to the cloud Thread once (`CloudAccounts.sendCheckpoint`). */
-  sendCheckpoint(threadId: string, checkpoint: MoveCheckpoint, file: string): Promise<{ sent: boolean }>
+  /** A move's checkpoint or carry, a bundle sent to the cloud Thread once by its hash (`CloudAccounts.sendCheckpoint`). */
+  sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string): Promise<{ sent: boolean }>
   /**
    * A move this Mac released, handed to the cloud to carry through once it sent what only it has: the cloud arrives
    * it, claims it (or refuses it), and starts it (`CloudAccounts.handOverMove`).

@@ -51,9 +51,9 @@ export function RunPlaceChoice() {
 }
 
 /**
- * Where an open Thread runs, and the way to move it: a Thread on this Mac in its own worktree moves to the cloud,
- * all of its sessions, between turns; one in the project folder, or mid-turn, is told what to do first. A Thread
- * in the cloud comes back the same way.
+ * Where an open Thread runs, and the way to move it: a Thread on this Mac moves to the cloud, all of its sessions,
+ * from its own worktree; one in the project folder goes onto its own branch first, in the same move, taking only its
+ * own changes, which waits for its turn to end. A Thread in the cloud comes back the same way.
  */
 function ThreadRunPlace({ thread }: { thread: string }) {
   const live = useAcp((state) => {
@@ -118,8 +118,8 @@ function ThreadRunPlace({ thread }: { thread: string }) {
   // The cloud can't resume a Session a newer harness here wrote: said here, before anything is made (`ThreadHarnessCheck`).
   const blocked = !live.started
     ? "Send a first message before it moves."
-    : !inWorktree
-      ? "It works in the project folder. Move it to its own branch first, from the menu beside this; the project folder stays on this Mac."
+    : !inWorktree && (live.running || live.background)
+      ? "It works in the project folder, so it goes onto its own branch first, once this turn ends. Move it then; the project folder stays on this Mac."
       : known?.refusal
   // This Mac's harnesses older than the cloud's: the way back will need them updated, said before it goes.
   const behind = blocked === undefined ? known?.behind ?? [] : []
@@ -145,7 +145,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
         setOpen(next)
         setAsking(false)
         if (next && inWorktree && worktree) void readCarriedFiles(worktree)
-        if (next && inWorktree && live.started) void checkHarnesses(live.key)
+        if (next && live.started) void checkHarnesses(live.key)
       }}
     >
       <PopoverTrigger asChild>
@@ -169,7 +169,9 @@ function ThreadRunPlace({ thread }: { thread: string }) {
           icon={<CloudUploadIcon className="mt-0.5 size-3 shrink-0" />}
           title={handOff ? "Hand off to the cloud" : "Move to the cloud"}
           detail={blocked ??
-            (live.running
+            (!inWorktree
+              ? "It goes onto its own branch first, taking only its own changes; the project folder keeps yours. Then its worktree and every session go to a cloud machine, at the same folder. Your Mac can close."
+              : live.running
               ? "Its turn pauses, and its worktree and every session go to a cloud machine at the same folder. The turn goes on there from where it paused. Your Mac can close."
               : handOff
               ? "What it left running in the background stops, and its worktree and every session go to a cloud machine at the same folder, where it's told what stopped. Your Mac can close."

@@ -290,6 +290,35 @@ try {
     assert.deepEqual(s.cloud.ahead, [["n-1"]], "its records came down beside the checkout, once")
   }
 
+  // The person changed the worktree here while the Thread was away: their changes are merged with the cloud's, never
+  // written over. The file both changed holds Git's markers; the window hears what merged and what conflicts, and the
+  // agent hears it once, on its next turn.
+  {
+    const s = setup("edited-here")
+    // What the forward move sent: the worktree as it left, which the cloud keeps by its hash.
+    const sent = await captureMoveCheckpoint(git, s.checkout, mkdtempSync(join(s.folder, "sent-")))
+    s.cloud.checkpoints.set(sent.checkpoint.sha256, sent.file)
+    const forwardFile = join(s.folder, "moves", readdirSync(join(s.folder, "moves")).find((name) => name.endsWith(".json")) ?? "")
+    writeFileSync(forwardFile, JSON.stringify({ ...JSON.parse(readFileSync(forwardFile, "utf8")), checkpoint: sent.checkpoint }))
+    writeFileSync(join(s.checkout, "a.txt"), "one, changed by the person here\n")
+    writeFileSync(join(s.checkout, "c.txt"), "the person's own\n")
+    const outcome = await s.returns.bringBack(s.conversation, move())
+    assert.deepEqual(outcome, { kind: "back", landed: { merged: ["a.txt", "c.txt"], conflicts: ["a.txt"], outside: { placed: [], removed: [], waiting: [] } } })
+    assert.deepEqual(s.steps.at(-1), { kind: "back", conversations: [s.conversation], landed: outcome.kind === "back" ? outcome.landed : undefined })
+    assert.equal(readFileSync(join(s.checkout, "c.txt"), "utf8"), "the person's own\n", "the person's new file stays")
+    assert.equal(readFileSync(join(s.checkout, "b.txt"), "utf8"), "left by the agent\n", "the cloud's file came")
+    assert.match(readFileSync(join(s.checkout, "a.txt"), "utf8"), /<<<<<<< mako\/merge\/this-mac\none, changed by the person here\n=======\none, changed in the cloud\n>>>>>>> mako\/merge\/cloud/)
+    const told = s.returns.notices(s.conversation)
+    assert.equal(told.length, 1)
+    assert.match(told[0] ?? "", /changed c\.txt|kept their changes beside yours: c\.txt/)
+    assert.match(told[0] ?? "", /both changed a\.txt: it holds Git's conflict markers/)
+    assert.deepEqual(s.returns.notices(s.conversation), [], "told once")
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const restarted = s.fresh()
+    await restarted.settle()
+    assert.deepEqual(restarted.notices(s.conversation), [], "and not again after a restart")
+  }
+
   // Records that can't come down ahead: the restore pulls them all, and the Thread comes back the same.
   {
     const s = setup("ahead-fails")

@@ -225,6 +225,8 @@ const replays = [
   "mako:move-arrive",
   /** A Thread's departure for its device: a repeat finds it released, sends the same checkpoint by its hash, and only what's new of the records. */
   "mako:move-depart",
+  /** Following a Thread's checkout on its machine only reads it, sending each checkpoint by its hash. */
+  "mako:move-follow",
   /** A Thread staying on its machine after a departure: a repeat finds it there and changes nothing. */
   "mako:move-stay",
   /** Cancelling a sign-in that has ended cancels nothing. */

@@ -40,7 +40,7 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
 import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, MoveStageInputSchema, readyForMove, stageMove, type MoveArrivalDeps, type MoveArrivalWire, type MoveReadyInput, type MoveStageInput } from "./move-arrival.js"
-import { departMove, MoveDepartureInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveStayInput } from "./move-departure.js"
+import { departMove, followMove, MoveDepartureInputSchema, MoveFollowInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveFollowInput, type MoveStayInput } from "./move-departure.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { FileReadPurpose } from "../contracts/git-workspace-search.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
@@ -58,6 +58,7 @@ export { SYNC_WINDOW_MS, syncTier, windowStart } from "./sync-window.js"
 export { CloudReadiness, READY_EVERY_MS } from "./cloud-readiness.js"
 export { SleepHandOff, sleepWatchHelper } from "./sleep-handoff.js"
 export { CloudReturns } from "./cloud-returns.js"
+export { CloudFollow } from "./cloud-follow.js"
 export { CloudArchives } from "./cloud-archives.js"
 export { HarnessCheck } from "./harness-check.js"
 export { installedReading } from "./kept-resume.js"
@@ -568,6 +569,12 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const departure = deps.departure
     if (!departure) throw new Error("Only a cloud machine's host sends a Thread back.")
     return departMove(departure, MoveDepartureInputSchema.parse(input))
+  })
+  /** A Thread's checkout on its cloud machine as it stands, for its device's worktree to follow: read, never released. */
+  methods.handle("mako:move-follow", (input: MoveFollowInput) => {
+    const departure = deps.departure
+    if (!departure) throw new Error("Only a cloud machine's host sends a Thread's checkout to follow.")
+    return followMove(departure, MoveFollowInputSchema.parse(input))
   })
   /** A Thread staying on its cloud machine after its departure: the device cancelled the return or gave it back. */
   methods.handle("mako:move-stay", (input: MoveStayInput) => {
