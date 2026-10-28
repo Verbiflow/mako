@@ -11,7 +11,7 @@ import { z } from "zod"
 import { invokeRuntime, runtimeInfo } from "@mako/host/transport/connection"
 import { hostCommand, runtimeLocation } from "@mako/host/transport/service"
 import { assertOwnHarnessStores, proofDataRoot } from "./lib/proof-host.ts"
-import { scratchHostHome } from "./scratch-harness-home.ts"
+import { hostSafeStorage, scratchHostHome } from "./scratch-harness-home.ts"
 import { holdHostLease } from "@mako/host/base/host-idle"
 
 /**
@@ -145,8 +145,10 @@ if (values["spawn-host"]) {
   // SAFETY: the electron package's main export is the path of its executable.
   const electron = createRequire(import.meta.url)("electron") as string
   // Kept with the data root: its sign-ins and keychain go as the run ends, its sessions stay for the Threads left in the cloud.
-  const { env } = scratchHostHome(dataRoot, { keep: true })
+  const { env, home } = scratchHostHome(dataRoot, { keep: true })
   const command = hostCommand({ executable: electron, args: [process.cwd()], env: { ...env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_CLOUD_URL: values.cloud, MAKO_SCREENLESS: "1" } })
+  // Its keychain's safe-storage item, made by its own binary: without it, it could keep no cloud sign-in.
+  hostSafeStorage(home, command.executable, process.cwd())
   const host = spawn(command.executable, command.args, { env: command.env, stdio: "ignore" })
   process.once("exit", () => host.kill("SIGTERM"))
   for (const deadline = Date.now() + 60_000; !(await runtimeInfo(socket).catch(() => null)); ) {

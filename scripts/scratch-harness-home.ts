@@ -357,6 +357,22 @@ export function scratchKeychain(home: string): void {
 }
 
 /**
+ * The safe-storage item a host from this checkout keeps its data key under (`<app> Safe Storage`), in the scratch
+ * home's keychain, made by the host's own binary as Electron's `safeStorage` makes it. A host in Node mode reads that
+ * item and never makes it, so in a fresh scratch keychain it could keep no secret, its cloud sign-in included. Made by
+ * the same binary that reads it, the host reads it back with no prompt: an item another program made (`security`)
+ * would ask the person. `executable` is the host's (`hostCommand`), run as Node in `cwd`, the checkout.
+ */
+export function hostSafeStorage(home: string, executable: string, cwd: string): void {
+  if (process.platform !== "darwin") return
+  // Named as the host names its app (`resolveHostEnvironment`): the checkout's top-level `productName`, or its `name`.
+  const manifest = z.object({ name: z.string(), productName: z.string().optional() }).loose().parse(JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")))
+  const appName = manifest.productName ?? manifest.name
+  const script = `const { Entry } = require("@napi-rs/keyring"); const entry = new Entry(${JSON.stringify(`${appName} Safe Storage`)}, ${JSON.stringify(`${appName} Key`)}); if (entry.getPassword() == null) entry.setPassword(require("node:crypto").randomBytes(16).toString("base64"))`
+  execFileSync(executable, ["-e", script], { cwd, env: { ...process.env, HOME: home, ELECTRON_RUN_AS_NODE: "1" }, stdio: "ignore", timeout: 30_000 })
+}
+
+/**
  * A scratch home for a Mako host or packaged app run by a proof: its catalog
  * reads, and its harnesses write, only the scratch home's stores, and it
  * keeps its secrets in the home's own keychain. `root/home`; with `keep`, its
