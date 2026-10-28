@@ -115,6 +115,11 @@ export type MachineRuntimeState = {
   carried?: { files: CarriedFile[]; at: string; problem?: string }
   /** The workspace the agent last gave, once the host has opened it or failed to. */
   workspace?: { path: string; status: "opened" | "failed"; at: string; reason?: string }
+  /**
+   * A machine that replaced a lost one restores its Thread's save before its runtime connects: where that stands, and
+   * why its last try failed while it tries again.
+   */
+  restore?: { state: "restoring" | "restored" | "none"; at: string; attempts: number; from?: number; ms?: number; failed?: string }
 }
 
 /** What the host tells the agent. */

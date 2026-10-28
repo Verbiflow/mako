@@ -12,6 +12,7 @@
     "./records": "./dist/records.js",
     "./records-http": "./dist/records-http.js",
     "./moves": "./dist/moves.js",
+    "./saves": "./dist/saves.js",
     "./account-events": "./dist/account-events.js",
     "./thread-listing": "./dist/thread-listing.js",
     "./account-sessions": "./dist/account-sessions.js",

@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
+import { MACHINE_NOTICE_PREFIX, ThreadMachineNoticeSchema } from "@mako/protocol/saves"
 import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import type { ArchivedThread, ListedSession } from "@mako/protocol/thread-listing"
@@ -1474,6 +1475,9 @@ export class CloudConversations {
   }
 
   #relay(entry: Entry, line: string): void {
+    // The Thread's object's own word on its machine, written into the stream as JSON: every conversation of the Thread
+    // here shows it. Read only when the line says so, so a runtime's batches are never parsed for it.
+    if (line.startsWith(MACHINE_NOTICE_PREFIX)) return this.#machineNotice(entry, line)
     const parts = splitRuntimeEventLine(line)
     if (!parts) return
     const head = LiveBatchHeadSchema.safeParse(JSON.parse(parts.head))
@@ -1531,6 +1535,21 @@ export class CloudConversations {
     const fresh = (batch.requestChanges ?? []).filter((request) => ENDED_REQUEST.has(request.status) && !ended.has(request.id))
     for (const request of fresh) note(request.id)
     return fresh.length > 0
+  }
+
+  #machineNotice(entry: Entry, line: string): void {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      return
+    }
+    const notice = ThreadMachineNoticeSchema.safeParse(parsed)
+    if (!notice.success) return
+    const conversationIds = [...this.#entries.values()].filter((each) => each.threadId === entry.threadId).map((each) => each.conversationId)
+    if (!conversationIds.length) return
+    hostLog("cloud-conversations", "the cloud's word on a cloud Thread's work", { threadId: entry.threadId, state: notice.data.state, savedAt: notice.data.savedAt ?? -1, reason: notice.data.reason ?? "none" })
+    this.#options.emit(encodeRuntimeEvent({ type: "cloud-machine-notice", conversationIds, notice: notice.data }))
   }
 
   /** Its agent worked: a window on its folder reads it again, once a `CHANGED_MS` at most, after the last batch of a burst. */

@@ -20,6 +20,7 @@ import {
   type ServedRuntime,
 } from "@mako/protocol"
 import { z } from "zod"
+import { errorMessage } from "../base/error-message.js"
 import { followHostLog, hostLog, hostWarn, type HostLogLine } from "../base/host-log.js"
 import { cpuBetween, describeCpu, describeThreads, sampleCpu, type CpuSample } from "./process-cpu.js"
 import { HostProfiler } from "./host-profile.js"
@@ -70,6 +71,13 @@ export type MachineRuntimeOptions = {
   media(): MediaHandler | undefined
   /** The gateway the machine works through, as its agent linked it: what keeps its records and recipes in step. Null once silenced. */
   linked?(link: MachineGatewayLink | null): Promise<void>
+  /**
+   * Restores the Thread's save of an earlier generation (`restoreSave`), before this generation's runtime connects;
+   * answers what it restored, or undefined when there was nothing to.
+   */
+  restore?(link: MachineGatewayLink, generation: number): Promise<{ from: number; ms: number } | undefined>
+  /** The machine tracker (`MachineSaves`): told whether anything works, and asked for a save a turn's end waits for. */
+  saves?: { working(busy: boolean): void; settle(why: string): Promise<void> }
   /** Every process's CPU time so far (`/proc`); undefined off Linux. Tests give their own. */
   sampleCpu?: () => Promise<CpuSample | undefined>
   /** Whether to profile the host's own JavaScript while a launch runs (`MAKO_LAUNCH_PROFILE=1`); off unless asked. */
@@ -97,6 +105,8 @@ const MACHINE_ONLY_EVENTS: ReadonlySet<string> = new Set(["account-usage", "harn
 const CARRIED_REFRESH_MS = 20_000
 /** A clock that moved this much more than the timer that read it was asleep: the machine was paused, or copied. */
 const RESUMED_GAP_MS = 3_000
+/** Between tries of a restore that failed: the Thread's object replaces a machine that stays silent much longer. */
+const RESTORE_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
 const TICK_MS = 1_000
 const REPORT_MS = 200
 /** The longest a link waits on the workspace opening: past it, the machine answers from its home instead of not at all. */
@@ -157,6 +167,11 @@ export class MachineRuntime {
   #heldLink: Link | undefined
   /** What this machine last told its Thread of its work, on which link and for which Threads, and when. */
   #activity: { served: ServedRuntime; claims: string; busy: boolean; at: number } | undefined
+  /** The save a turn's end waits for before idle is said, and whether it has landed since the work last ran. */
+  #idleSaving: Promise<void> | undefined
+  #idleSaved = false
+  /** The runtime restoring its Thread's save, which connects once that's done. */
+  #restoring: string | undefined
   /** The link the served runtime runs on: what's watched belongs to it. */
   #servedLink: RuntimeLink | undefined
   /** A watch that comes before the core has loaded ends; its viewer asks again when the agent next acts. */
@@ -407,6 +422,13 @@ export class MachineRuntime {
 
   #linkTo(link: Link): void {
     const current = this.#link
+    // Restoring as this runtime: a renewed credential is kept for the link it connects with once it's done.
+    if (current && sameRuntime(current, link) && this.#restoring === link.runtimeId) {
+      if (current.credential === link.credential) return
+      this.#link = link
+      void this.#options.linked?.({ gatewayUrl: link.gatewayUrl, machine: link.machine, credential: link.credential }).catch((error: Error) => hostWarn("machine", "the gateway's link wasn't taken", { error: error.message }))
+      return
+    }
     if (current && sameRuntime(current, link) && this.#cloud) {
       if (current.credential === link.credential) return this.#cloud.wake()
       // The agent renewed the machine's credential: the connection goes on, and its next one, the records and the
@@ -428,11 +450,66 @@ export class MachineRuntime {
       delete this.#state.lastEnrolledAt
       delete this.#state.lastEnding
     }
+    const fresh = current?.runtimeId !== link.runtimeId
     this.#link = link
     delete this.#state.unlinked
     this.#state.runtimeId = link.runtimeId
     this.#state.machine = link.machine
     this.#state.generation = link.generation
+    if (fresh && this.#options.restore && link.generation > 1) {
+      // A new generation restores its Thread's save before it speaks: its records' link first, which the restore reads.
+      // A Thread's first machine (generation 1) has nothing before it to restore, so it asks nothing.
+      this.#setLink("connecting")
+      void this.#restoreThenConnect(link)
+      return
+    }
+    this.#connect(link)
+  }
+
+  /**
+   * The Thread's save of an earlier generation restored, then the link: tried again until it's done, never skipped,
+   * since a machine that spoke for the Thread without it would work on a checkout that isn't the Thread's. The
+   * Thread's object replaces a machine that never connects.
+   */
+  async #restoreThenConnect(link: Link): Promise<void> {
+    const gateway = { gatewayUrl: link.gatewayUrl, machine: link.machine, credential: link.credential }
+    const restore = this.#options.restore
+    if (!restore) return this.#connect(link)
+    this.#restoring = link.runtimeId
+    try {
+      await this.#restoreWith(restore, link, gateway)
+    } finally {
+      if (this.#restoring === link.runtimeId) this.#restoring = undefined
+    }
+    const current = this.#link
+    if (this.#stopped || !current || !sameRuntime(current, link)) return
+    this.#connect(current, true)
+  }
+
+  async #restoreWith(restore: NonNullable<MachineRuntimeOptions["restore"]>, link: Link, gateway: MachineGatewayLink): Promise<void> {
+    await this.#options.linked?.(gateway).catch((error: Error) => hostWarn("machine", "the gateway's link wasn't taken", { error: error.message }))
+    for (let attempt = 1; ; attempt++) {
+      const current = this.#link
+      if (this.#stopped || !current || !sameRuntime(current, link)) return
+      const failed = this.#state.restore?.failed
+      this.#state.restore = { state: "restoring", at: this.#iso(), attempts: attempt }
+      if (failed) this.#state.restore.failed = failed
+      this.#publish()
+      try {
+        const restored = await restore({ ...gateway, credential: current.credential }, link.generation)
+        this.#state.restore = restored ? { state: "restored", at: this.#iso(), attempts: attempt, from: restored.from, ms: restored.ms } : { state: "none", at: this.#iso(), attempts: attempt }
+        break
+      } catch (error) {
+        const failed = errorMessage({ error }).slice(0, 500)
+        this.#state.restore = { state: "restoring", at: this.#iso(), attempts: attempt, failed }
+        hostWarn("machine", "the Thread's save wasn't restored; trying again before this machine speaks", { runtimeId: link.runtimeId, attempt, error: failed })
+        await new Promise((resolve) => setTimeout(resolve, RESTORE_BACKOFF_MS[Math.min(attempt - 1, RESTORE_BACKOFF_MS.length - 1)]).unref())
+      }
+    }
+  }
+
+  /** Connects as `link`'s runtime. `told`: the records' link was given already, by a restore. */
+  #connect(link: Link, told = false): void {
     hostLog("machine", "linking", { runtimeId: link.runtimeId, gateway: new URL(link.gatewayUrl).host })
     const url = new URL(`/v1/runtimes/${encodeURIComponent(link.runtimeId)}/connect`, link.gatewayUrl)
     const threads = this.#threads!
@@ -455,7 +532,7 @@ export class MachineRuntime {
     this.#setLink("connecting")
     cloud.start()
     // Its records and its project's recipe are kept where its Thread's are, under the same credential.
-    void this.#options.linked?.({ gatewayUrl: link.gatewayUrl, machine: link.machine, credential: link.credential }).catch((error: Error) => hostWarn("machine", "the gateway's link wasn't taken", { error: error.message }))
+    if (!told) void this.#options.linked?.({ gatewayUrl: link.gatewayUrl, machine: link.machine, credential: link.credential }).catch((error: Error) => hostWarn("machine", "the gateway's link wasn't taken", { error: error.message }))
   }
 
   #attach(link: Link, threads: RuntimeThreads, socket: WebSocket, end: (ending: CloudLinkEnding) => void) {
@@ -524,7 +601,19 @@ export class MachineRuntime {
     if (!claims) return
     const working = this.#options.work().filter((item) => item.status !== "waiting")
     const busy = working.length > 0
+    const saves = this.#options.saves
+    saves?.working(busy)
     const last = this.#activity
+    if (busy) this.#idleSaved = false
+    else if (last?.busy && saves && !this.#idleSaved) {
+      // Idle is said once the turn's save has landed: a Thread whose machine says it's idle has a save as new as its
+      // last change, which a planned move to another machine counts on.
+      if (!this.#idleSaving) this.#idleSaving = saves.settle("a turn ended").catch(() => undefined).finally(() => {
+        this.#idleSaving = undefined
+        this.#idleSaved = true
+      })
+      return
+    }
     const due = !last || last.served !== served || last.claims !== claims || last.busy !== busy || (busy && now - last.at >= ACTIVITY_HEARTBEAT_MS)
     if (!due) return
     const work = working.map((item) => `${item.provider || "Mako"} ${item.status}: ${item.title}`)

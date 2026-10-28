@@ -107,6 +107,13 @@ export const INTERRUPTION_REASONS = [
    * the person sets it again with more.
    */
   "goal-budget",
+  /**
+   * The cloud machine running the conversation was lost mid-turn (gone, crashed
+   * or stuck), and Mako carried its Thread to a new machine from its last save.
+   * The turn so far stands in the provider's session; what ran after the save
+   * didn't finish. The new machine continues the turn once, on its own.
+   */
+  "machine-lost",
 ] as const
 export type InterruptionReason = (typeof INTERRUPTION_REASONS)[number]
 
@@ -124,9 +131,10 @@ export type SavedReason = (typeof SAVED_REASONS)[number]
  * `reason` and the exact one as `exactReason`, which older builds pass over
  * and newer ones read; a reason added later must say its older reading here.
  * `not-saved` and `goal-budget` read as the person's Stop, which is how every
- * build before them recorded these stops.
+ * build before them recorded these stops; `machine-lost` reads as a handoff,
+ * the nearest a build before it knows: Mako carried the turn to another machine.
  */
-export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
+export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
 
 function isSavedReason(reason: InterruptionReason): reason is SavedReason {
   return SAVED_REASONS.some((saved) => saved === reason)

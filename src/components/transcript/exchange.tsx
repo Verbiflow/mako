@@ -322,6 +322,8 @@ function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): 
       return sender === "mako" ? "Mako continued the turn it stopped when it couldn't save" : sender === "person" ? "You continued the turn Mako stopped when it couldn't save" : "The turn Mako stopped when it couldn't save continued"
     case "goal-budget":
       return sender === "mako" ? "Mako continued the turn it stopped at the goal's token budget" : sender === "person" ? "You continued the turn Mako stopped at the goal's token budget" : "The turn Mako stopped at the goal's token budget continued"
+    case "machine-lost":
+      return sender === "person" ? "You picked the interrupted step up again" : `The last step was interrupted; ${provider} picked it up again`
   }
 }
 
@@ -340,7 +342,7 @@ function Continued({ continued, provider, said, timestamp, origin }: { continued
   return (
     <EventLine
       align="end"
-      icon={continued.reason === "provider-exited" ? RefreshCwIcon : continued.reason === "handed-off" ? CloudIcon : PlayIcon}
+      icon={continued.reason === "provider-exited" ? RefreshCwIcon : continued.reason === "handed-off" ? CloudIcon : continued.reason === "machine-lost" ? RefreshCwIcon : PlayIcon}
       time={timestamp}
       data-turn-continued={continued.reason}
       data-continued-by={continued.sender ?? "unknown"}

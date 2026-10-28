@@ -48,7 +48,7 @@ export { ArtifactPreviews, type ProviderArtifactPreview } from "./artifact-previ
 export { Automations } from "./automations.js"
 export { checkoutConversations } from "./checkout-conversations.js"
 export { WorkspaceClients } from "./clients.js"
-export { applyMoveCheckpoint, captureMoveCheckpoint, verifyMoveCheckpoint } from "./move-checkpoint.js"
+export { applyMoveCheckpoint, captureMoveCheckpoint, MoveCheckpointError, verifyMoveCheckpoint } from "./move-checkpoint.js"
 export { captureCarry, cloneRepository, openCarry, placeOutside, planOutsideReturn, readOutside, returnOutside, type OpenedCarry, type OutsideCandidate } from "./move-carry.js"
 export { mergeReturned, unchangedSince } from "./move-merge.js"
 export { ProjectMissingError } from "./worktree-reattach.js"

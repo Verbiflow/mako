@@ -159,6 +159,7 @@ const TURN_STOP_LABELS = {
   "handed-off": () => "Paused to move to the cloud",
   "not-saved": () => "Stopped when Mako couldn't save",
   "goal-budget": () => "Stopped at the goal's token budget",
+  "machine-lost": () => "Interrupted",
 } satisfies Record<InterruptionReason, (provider: string) => string>
 
 /**

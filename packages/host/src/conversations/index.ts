@@ -62,6 +62,8 @@ export { CloudFollow } from "./cloud-follow.js"
 export { CloudArchives } from "./cloud-archives.js"
 export { HarnessCheck } from "./harness-check.js"
 export { installedReading } from "./kept-resume.js"
+export { openMachineTracker, type MachineTracker } from "./machine-tracker.js"
+export type { MoveArrivalDeps } from "./move-arrival.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 

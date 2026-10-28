@@ -201,3 +201,6 @@ export function clipReason(reason: string): string {
   const said = reason.trim() || "No reason was given."
   return said.length <= MOVE_REASON_MAX ? said : `${said.slice(0, MOVE_REASON_MAX - 1)}…`
 }
+
+/** The cloud's word to a cloud Thread's person when their own work is affected (`cloud-machine-notice`). */
+export type { ThreadMachineNotice } from "@mako/protocol/saves"
