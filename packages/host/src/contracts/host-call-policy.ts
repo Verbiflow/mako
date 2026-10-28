@@ -123,6 +123,10 @@ const reads = [
   "mako:cloud-account",
   /** How this device's Sessions stand in the account, as last read. */
   "mako:sync-status",
+  /** Turning the cloud on, read from what owns each step; keeps only when each was first seen done. */
+  "mako:cloud-turn-on",
+  /** Asks the cloud again what the account has: a repeat asks the same. */
+  "mako:cloud-turn-on-check",
   /** May refresh the connection token, which another caller would have refreshed the same way. */
   "mako:cloud-devices",
   "mako:cloud-browser-sessions",
@@ -207,6 +211,8 @@ const replays = [
   "mako:cloud-prepare",
   /** Offered once per account on this Mac: a repeat finds it offered. */
   "mako:cloud-offer-projects",
+  /** Asking again for the bases that failed: a base asked for twice is one base. */
+  "mako:cloud-turn-on-retry-bases",
   /** A move is settled by its id: a repeat joins the move running, or answers how it went. */
   "mako:thread-move",
   /** A return is settled by its id: a repeat joins the return running, or answers how it went. */

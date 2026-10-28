@@ -69,7 +69,16 @@ const READY_ASK_MS = 2_000
 const READY_ASK_FOR_MS = 90_000
 /** Onboarding offers this many of the Mac's most recent projects for project bases. */
 const PROJECTS_OFFERED = 5
-const OfferedSchema = z.object({ accounts: z.array(z.string()) })
+/**
+ * The accounts this Mac offered its recent projects to, and, from builds that keep it, which projects (a folder and its
+ * repository, the newest first), which turning the cloud on follows the bases of. An older build rewrites the file only
+ * on offering another account, and keeps `accounts`.
+ */
+const OfferedSchema = z.object({
+  accounts: z.array(z.string()),
+  projects: z.record(z.string(), z.array(z.object({ folder: z.string(), repository: CloudRepositorySchema }))).optional(),
+})
+type Offered = z.infer<typeof OfferedSchema>
 
 const SummaryIdentitySchema = z.object({ session: z.object({ id: z.string(), status: z.string() }).loose(), revision: z.number(), createdAt: z.number() }).loose()
 /** A cloud host's own `LiveSummary`, checked for the identity and revision this router reads. */
@@ -978,17 +987,67 @@ export class CloudConversations {
     const account = this.#options.account()
     const accountId = await account?.id()
     if (!account || !accountId) return "none"
-    const file = join(dirname(this.#options.file), "projects-offered.json")
-    const offered = OfferedSchema.safeParse(JSON.parse(await readFile(file, "utf8").catch(() => "{}"))).data?.accounts ?? []
-    if (offered.includes(accountId)) return "already"
-    const found = await Promise.all(folders.slice(0, PROJECTS_OFFERED).map((folder) => this.#options.repositoryOf(folder).catch(() => undefined)))
-    const repositories = [...new Map(found.filter((repository) => repository !== undefined).map((repository) => [repositoryKey(repository), repository])).values()]
-    if (repositories.length) await account.askBases(repositories)
+    const offered = await this.#readOffered()
+    const before = offered.accounts.includes(accountId)
+    // Offered by a build that didn't keep which projects: they're noted now, for turning the cloud on, not asked again.
+    if (before && offered.projects?.[accountId]) return "already"
+    const found = await Promise.all(folders.slice(0, PROJECTS_OFFERED).map(async (folder) => {
+      const repository = await this.#options.repositoryOf(folder).catch(() => undefined)
+      return repository && { folder, repository }
+    }))
+    // Each repository once, as its newest folder.
+    const byRepository = new Map<string, { folder: string; repository: CloudRepository }>()
+    for (const project of found) if (project && !byRepository.has(repositoryKey(project.repository))) byRepository.set(repositoryKey(project.repository), project)
+    const projects = [...byRepository.values()]
+    if (projects.length && !before) await account.askBases(projects.map((project) => project.repository))
+    const file = this.#offeredFile()
     await mkdir(dirname(file), { recursive: true })
-    await writeFile(file, `${JSON.stringify({ accounts: [...offered, accountId] })}\n`)
-    hostLog("cloud-conversations", "offered this Mac's recent projects for project bases", { repositories: repositories.length })
-    return repositories.length ? "asked" : "none"
+    const accounts = before ? offered.accounts : [...offered.accounts, accountId]
+    await writeFile(file, `${JSON.stringify({ accounts, projects: { ...offered.projects, [accountId]: projects } } satisfies Offered)}\n`)
+    if (before) return "already"
+    hostLog("cloud-conversations", "offered this Mac's recent projects for project bases", { repositories: projects.length })
+    return projects.length ? "asked" : "none"
   }
+
+  #offeredFile(): string {
+    return join(dirname(this.#options.file), "projects-offered.json")
+  }
+
+  async #readOffered(): Promise<Offered> {
+    const text = await readFile(this.#offeredFile(), "utf8").catch(() => "{}")
+    return OfferedSchema.safeParse(JSON.parse(text)).data ?? { accounts: [] }
+  }
+
+  /**
+   * The recent projects offered to this account for bases, the newest first, for turning the cloud on to follow:
+   * undefined until known, empty when none was on GitHub.
+   */
+  async offeredProjects(accountId: string): Promise<Array<{ folder: string; repository: CloudRepository }> | undefined> {
+    const offered = await this.#readOffered()
+    // Offered by an older build, which didn't keep which: unknown until this window offers again, never "none".
+    return offered.accounts.includes(accountId) ? offered.projects?.[accountId] : undefined
+  }
+
+  /** Asks the cloud again for these repositories' bases: a person's "Try again" after one failed. */
+  async askBasesAgain(repositories: CloudRepository[]): Promise<void> {
+    const account = this.#options.account()
+    if (account && repositories.length) await account.askBases(repositories)
+  }
+
+  /** The first cloud Thread this Mac knows of, started here or listed by the account: when it was made. */
+  firstCloudThread(): number | undefined {
+    let first: number | undefined
+    for (const entry of this.#entries.values()) if (entry.repository && entry.created && (first === undefined || entry.createdAt < first)) first = entry.createdAt
+    return first
+  }
+
+  /** A cloud Thread made ahead for this repository, its machine still coming up or ready for a first message. */
+  preparedMachine(repository: CloudRepository): "warming" | "ready" | undefined {
+    const prepared = this.#prepared.get(repositoryKey(repository))
+    if (!prepared || Date.now() - prepared.askedAt >= PREPARED_KEPT_MS) return undefined
+    return prepared.ready ? "ready" : "warming"
+  }
+
 
   /** The Thread made ahead for a repository, unless this Mac last asked for it too long ago: that one went unused. */
   #fresh(key: string): Prepared | undefined {

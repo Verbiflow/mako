@@ -1,5 +1,6 @@
 import { AgentThreads } from "@/components/rail/agent-threads"
 import { StoreFormatLine } from "@/components/shell/store-format-line"
+import { TurnOnRailLine } from "@/components/settings/cloud-turn-on"
 import { Slot } from "@/extend/slot"
 import { useStoreFormats } from "@/state/store-formats"
 
@@ -15,6 +16,7 @@ export function SessionRail() {
     <aside className="flex h-full min-h-0 flex-col">
       <AgentThreads />
       <ThreadStoreLine />
+      <TurnOnRailLine />
       <Slot name="rail.footer" />
     </aside>
   )

@@ -1,4 +1,5 @@
 import type { SyncStatus, SyncTier } from "@mako/host/contracts/sync-status"
+import { mockCloudTurnOn } from "./mock-cloud-turn-on"
 import type { CloudAccount, CloudBrowserSession, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow, CloudSignInsState, HostEvent } from "@/lib/types"
 
 type CloudSignInHarness = CloudSignInRow["harness"]
@@ -128,7 +129,16 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
     setTimeout(() => emit({ type: "cloud-account-event", seq: 1, at: new Date().toISOString(), mine: false, event: { type: "device-joined", device: { id: "d4f5a6b7-1c2d-4e3f-8a9b-0c1d2e3f4a5b", kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: "Hesse", country: "DE" } } } }), 1_500)
 
   const sync = mockSyncStatus(params.get("sync"))
+  const turnOn = mockCloudTurnOn(
+    emit,
+    () => account.state.status === "signed-in" && person.entitlements.includes("cloud"),
+    () => {
+      person.entitlements = ["cloud"]
+      if (account.state.status === "signed-in") set({ ...account.state, account: { ...person } })
+    }
+  )
   return {
+    ...turnOn,
     cloudAccount: async () => account,
     syncStatus: async () => (account.state.status === "signed-in" ? (person.entitlements.includes("cloud") ? sync() : { state: "off", reason: "no-cloud" }) : { state: "off", reason: "signed-out" }) satisfies SyncStatus,
     cloudSignIns: async () => signIns,

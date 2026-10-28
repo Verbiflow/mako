@@ -12,6 +12,8 @@ import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudCarriedFile } from "../contracts/cloud-carried-files.js"
+import type { CloudAccount as CloudAccountView } from "../contracts/cloud-account.js"
+import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import type { HostEnvironment } from "../base/host-environment.js"
@@ -49,6 +51,14 @@ export interface CloudAccount {
   createThread(threadId: string, repository: CloudRepository, options?: CloudThreadMaking): Promise<{ ready: boolean; ended?: true }>
   /** Project bases for these repositories, made in the background ahead of their first cloud Thread. */
   askBases(repositories: CloudRepository[]): Promise<void>
+  /** How the cloud stands these repositories' bases, without asking for them again; null from a cloud that doesn't say. */
+  baseStandings?(repositories: CloudRepository[]): Promise<Array<{ repository: CloudRepository; standing: BaseStanding }> | null>
+  /** This Mac's account as it stands: who, and whether it has the cloud. */
+  account?(): Promise<CloudAccountView>
+  /** Asks the cloud again what the account has, now: an invite (later a payment) lands at once. */
+  checkPlan?(): Promise<CloudAccountView>
+  /** Each agent's sign-in as it stands in the cloud (`mako:cloud-sign-ins`); undefined where this Mac shares none. */
+  signIns?(): Promise<CloudSignInsState | undefined>
   /** A move's checkpoint, sent to the cloud Thread once (`CloudAccounts.sendCheckpoint`). */
   sendCheckpoint(threadId: string, checkpoint: MoveCheckpoint, file: string): Promise<{ sent: boolean }>
   /**
@@ -274,6 +284,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     cloudBlocked: () => cloud.signInsBlocked(),
     createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),
     askBases: (repositories) => cloud.askBases(repositories),
+    baseStandings: (repositories) => cloud.baseStandings(repositories),
+    account: () => cloud.ready(),
+    checkPlan: () => cloud.checkPlan(),
+    signIns: async () => sync?.state(),
     sendCheckpoint: (threadId, checkpoint, file) => cloud.sendCheckpoint(threadId, checkpoint, file),
     handOverMove: (threadId, move, request) => cloud.handOverMove(threadId, move, request),
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),

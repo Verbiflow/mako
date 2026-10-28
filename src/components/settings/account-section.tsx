@@ -22,6 +22,7 @@ import { setPref, usePrefs } from "@/state/prefs"
 import { useThreads } from "@/state/thread-store"
 import { useDeskIdentity } from "@/components/identity/desk-identity"
 import { SyncSection } from "@/components/settings/sync-section"
+import { TurnOnCard } from "@/components/settings/cloud-turn-on"
 import { formatDay, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { CloudAccountState, CloudBrowserSession, CloudDevice, CloudKeptSignIn, CloudPerson, CloudSignInRow } from "@/lib/types"
@@ -210,21 +211,7 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
       ) : null}
       {failure?.action === "sign-out" ? <Note tone="negative">{failure.message}</Note> : null}
 
-      <div className="flex flex-col gap-2">
-        <Eyebrow>Cloud</Eyebrow>
-        <ListCard>
-          <ListCardRow className="flex items-center justify-between gap-6">
-            <p className="text-ui leading-relaxed text-muted-foreground">
-              {invited
-                ? "Your account can run Threads in Mako's cloud."
-                : "Mako's cloud is invite-only for now. Once you're invited, this Mac picks it up within a few minutes."}
-            </p>
-            <Chip tone={invited ? "positive" : "neutral"} className="shrink-0 whitespace-nowrap">
-              {invited ? "Invited" : "Not invited yet"}
-            </Chip>
-          </ListCardRow>
-        </ListCard>
-      </div>
+      <TurnOnCard />
 
       {invited ? <SyncSection /> : null}
       {invited ? <CloudSignIns /> : null}
