@@ -57,6 +57,7 @@ import {
   type SdkHeadlessSpec,
   JsonValueSchema,
   SdkRequestSchema,
+  turnEndedAfter,
   type JsonValue,
   type SdkChildLine,
   type SdkImportSource,
@@ -169,14 +170,18 @@ const SpawnFailureSchema = z.object({ syscall: z.string().startsWith("spawn") })
  * (`AbortError code 20` right after Stop) and its shell tool rejects a
  * second promise when a command cannot start (`ENOENT` from a deleted
  * folder); in both the owning run or tool call settles on its own. Ending
- * the process for either ended the turn with it. A streaming tool's failure
+ * the process for either ended the turn with it. In 1.0.35 and 1.0.40, a local
+ * exec that fails writes its failure to the exec's stream from a promise
+ * nothing awaits; when that stream has already closed, the write rejects
+ * with `WriteIterableClosedError` (a name, since the class is minified),
+ * after the exec's own cleanup has run. A streaming tool's failure
  * reaches its readers inside the SDK (since 1.0.40; Mako patched it into
  * 1.0.31), held so by `scripts/test-cursor-tool-stream.mjs`, rather than
  * exempted here by an RPC name or error code.
  */
 function containedRejection(cause: unknown): boolean {
   if (!(cause instanceof Error)) return false
-  return cause.name === "AbortError" || SpawnFailureSchema.safeParse(cause).success
+  return cause.name === "AbortError" || cause.name === "WriteIterableClosedError" || SpawnFailureSchema.safeParse(cause).success
 }
 
 function fatal(kind: string, cause: unknown): void {
@@ -583,7 +588,7 @@ const ResultStatusSchema = z.object({ status: z.string().optional().catch(undefi
 /** How often a run looks for the result of a call it moved past, until the call settles or the stream ends. */
 const SETTLE_POLL_MS = 250
 
-async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
+async function pump(open: OpenAgent, turn: string, run: Run, turnEnded: () => boolean): Promise<void> {
   const unended = new Set<string>()
   // Calls whose result only the checkpoint keeps: open calls the model went
   // on past, which the stream may never end, and calls it ended as an error
@@ -653,6 +658,7 @@ async function pump(open: OpenAgent, turn: string, run: Run): Promise<void> {
       durationMs: result.durationMs,
       usage: result.usage,
       settled: settledCalls(checkpoints.results(new Set([...unended, ...passed]))),
+      turnEnded: turnEnded() || undefined,
     },
   })
 }
@@ -765,7 +771,9 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
   if (closing) throw new ConfigurationError("This session is closing")
   if (params.model) open.model = params.model
   const message = { text: params.text, images: params.images }
+  let turnEnded = false
   const onDelta = ({ update }: { update: { type: string; text?: string; event?: unknown } }) => {
+    turnEnded = turnEndedAfter(turnEnded, update.type)
     switch (update.type) {
       case "text-delta":
       case "thinking-delta":
@@ -817,7 +825,7 @@ async function send(params: SendParams): Promise<SdkResult<"send">> {
     let finish = () => {}
     const finished = new Promise<void>(resolve => { finish = resolve })
     active = { turn: params.turn, run, finished, replay: [], replayCharacters: 0, replayTruncated: false, messages: 0 }
-    void pump(open, params.turn, run).then(finish, cause => {
+    void pump(open, params.turn, run, () => turnEnded).then(finish, cause => {
       log("warn", `run projection ended early: ${cursorSdkWireError(cause).message}`)
       finish()
     })

@@ -10,6 +10,7 @@ import {
   CURSOR_SDK_WIRE_VERSION,
   SdkChildLineSchema,
   SdkRequestSchema,
+  turnEndedAfter,
   type JsonValue,
   type SdkEvent,
   type SdkMethod,
@@ -633,6 +634,20 @@ console.log("cursor sdk projection, modes and wire ok")
 }
 console.log("cursor sdk: steer and send outlive the request deadline, cancel does not")
 
+// Whether the agent's turn has ended, read in the order the SDK's updates
+// arrive: `turn-ended`, then anything that begins more work undoes it.
+{
+  const ended = (types: string[]) => types.reduce((was, type) => turnEndedAfter(was, type), false)
+  assert.equal(ended(["text-delta", "turn-ended"]), true)
+  assert.equal(ended(["text-delta", "turn-ended", "text-delta", "turn-ended"]), true,
+    "a resume that re-streamed the closing and ended again leaves the turn ended")
+  assert.equal(ended(["turn-ended", "token-delta", "step-completed", "thinking-completed"]), true, "bookkeeping after the end begins nothing")
+  for (const work of ["step-started", "user-message-appended", "text-delta", "thinking-delta", "partial-tool-call", "tool-call-started"])
+    assert.equal(ended(["turn-ended", work]), false, `${work} after the end is a continuation that has not ended`)
+  assert.equal(ended([]), false)
+  console.log("cursor sdk: a turn counts as ended until more work begins")
+}
+
 // The driver marks each compaction once, with its summary, whichever of the
 // summary message and `summary-completed` arrives first; SDK 1.0.31 sends
 // the message alone. A failed turn leaves its reason in the transcript,
@@ -740,9 +755,14 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
     assert.deepEqual(await turn([], { status: "error", error: { message: gaveUp } }), [`Turn failed | ${gaveUp} | error`],
       "the SDK giving up its own no-progress resumes is a failed turn, never one Mako continues by itself")
     assert.equal(lastStop, RETRIES_EXHAUSTED_STOP, "so the host offers Send again instead of continuing it")
+    assert.deepEqual(await turn([], { status: "error", error: { message: gaveUp }, turnEnded: true }), [],
+      "the same give-up after the agent's turn had ended is a finished turn: its resumes only re-streamed the delivered answer's closing")
+    assert.equal(lastStop, "end_turn")
     assert.deepEqual(await turn([], { status: "error", error: { message: "Connection failed repeatedly" } }), ["Turn failed | Connection failed repeatedly | error"],
       "the SDK giving up its transport retries is failed too, though its words read as a network drop")
     assert.equal(lastStop, RETRIES_EXHAUSTED_STOP)
+    assert.deepEqual(await turn([], { status: "error", error: { message: "Connection failed repeatedly" }, turnEnded: true }), ["Turn failed | Connection failed repeatedly | error"],
+      "a transport give-up stays failed after the turn ended: those retries resend the action and re-run its tools")
   } finally {
     await driver.close(id)
     rmSync(root, { recursive: true, force: true })

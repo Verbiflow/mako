@@ -2032,8 +2032,10 @@ Inside the Cursor SDK child, a shell whose remembered folder was deleted
 ENOENT` rejection that ended the turn with exit code 70. Even with that
 rejection tolerated, every later shell call failed. `shell-folder.ts` turns such a call
 into a refusal naming both folders and moves the shell to the workspace. The
-child logs spawn-failure and abort rejections instead of exiting; any other
-rejection is still fatal.
+child logs spawn-failure and abort rejections instead of exiting, and the
+`WriteIterableClosedError` a failed exec's unawaited write to its closed
+stream rejects with (in SDK 1.0.35 and 1.0.40); any other rejection is still
+fatal.
 `test-provider-startup.ts`, `test-provider-process.ts`,
 `test-cursor-shell-folder.ts`, `test-host-log.ts`, `test-provider-children.ts`
 and `test-composer-settings.ts` cover these.
@@ -2895,6 +2897,20 @@ turn's final text any more: the hooks that lifted Cursor's error prose out
 of the transcript and re-asked `cursor-agent` for the option set its failed
 backend fetch had left empty went with the transport, and an ACP turn's
 verdict is its stop reason or its prompt error (`acp-turn-verdict.ts`).
+
+The SDK's own retry loop gives up in words, with no code: `Connection failed
+repeatedly` after its transport retries, each of which resent the action and
+re-ran its tools, and `Agent turn stopped after repeated resume attempts made
+no progress`. Both settle `failed` with `RETRIES_EXHAUSTED_STOP`, which the
+host never continues, except when the agent's turn had already ended. A
+stream error after `turn-ended` makes the SDK resume inside the same run from
+an older checkpoint; each resume re-streams the closing and ends the turn
+again, and two that save nothing end the run with the no-progress error. The
+child reports `turnEnded` on the result when `turn-ended` came with no work
+begun after it (`turnEndedAfter`), and the driver finishes that turn
+(`resumesFailedAfterAnswer`). On 2026-10-02 (SDK 1.0.31) this showed as an
+answer, the same closing twice more, then "Turn failed"; T3 Code saw it with
+1.0.35 (pingdotgg/t3code#24226), and 1.0.40's retry loop is unchanged.
 
 A dropped turn is continued by the host itself, once. The turn's work is on
 the provider's side, so when the settled request is the newest one and

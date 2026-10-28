@@ -140,12 +140,13 @@ const CONNECTION_MESSAGE =
   /RetriableError|http\/2|HTTP\/2|RST_STREAM|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|stream closed|network error|fetch failed/i
 
 /**
- * SDK 1.0.31's words when its own retry loop gives up; neither carries a
- * code. Each attempt it made already re-ran the turn (without a checkpoint,
- * the whole message), so continuing it repeats that work once more and, in
- * practice, ends on the same error.
+ * The SDK's words when its own retry loop gives up (1.0.31 through 1.0.40);
+ * neither carries a code. Each attempt it made already re-ran the turn
+ * (without a checkpoint, the whole message), so continuing it repeats that
+ * work once more and, in practice, ends on the same error.
  */
-const RETRIES_EXHAUSTED_MESSAGE = /^Connection failed repeatedly$|resume attempts made no progress/i
+const TRANSPORT_RETRIES_EXHAUSTED_MESSAGE = /^Connection failed repeatedly$/i
+const RESUMES_MADE_NO_PROGRESS_MESSAGE = /resume attempts made no progress/i
 
 /** The SDK's `unauthenticated` code, or its wording, on a run's error. */
 export function authenticationFailure(error: { message: string; code?: string } | undefined): boolean {
@@ -164,7 +165,21 @@ export function connectionLost(result: SdkRunResult): boolean {
 
 /** A run the SDK's retry loop gave up on after re-running it. */
 export function retriesExhausted(result: SdkRunResult): boolean {
-  return result.status === "error" && !!result.error && RETRIES_EXHAUSTED_MESSAGE.test(result.error.message)
+  return result.status === "error" && !!result.error &&
+    (TRANSPORT_RETRIES_EXHAUSTED_MESSAGE.test(result.error.message) || RESUMES_MADE_NO_PROGRESS_MESSAGE.test(result.error.message))
+}
+
+/**
+ * A run that gave up resuming after the agent's turn had ended, with the
+ * answer delivered. A stream error after `turn-ended` makes the SDK resume
+ * from an older checkpoint inside the same run; each resume re-streams the
+ * closing and ends the turn again, and two that save nothing end the run with
+ * the no-progress error. The turn finished, and its last ending is the answer
+ * on screen. A transport give-up stays a failure, because those retries
+ * resend the action and re-run its tools.
+ */
+export function resumesFailedAfterAnswer(result: SdkRunResult): boolean {
+  return result.status === "error" && result.turnEnded === true && RESUMES_MADE_NO_PROGRESS_MESSAGE.test(result.error?.message ?? "")
 }
 
 type Engine = LiveEngineApi<Live>
@@ -260,7 +275,10 @@ function claimTurn(engine: Engine, live: Live, turn: string): boolean {
   return true
 }
 
-function finishTurn(engine: Engine, live: Live, result: SdkRunResult): void {
+function finishTurn(engine: Engine, live: Live, reported: SdkRunResult): void {
+  const answered = resumesFailedAfterAnswer(reported)
+  if (answered) hostWarn("cursor-sdk", "the SDK's resumes after the turn ended made no progress; the turn finished", { conversation: live.state.id, error: reported.error?.message ?? "" })
+  const result: SdkRunResult = answered ? { ...reported, status: "finished", error: undefined } : reported
   settleTurn(engine, live, result.status, result.error?.message, result.settled)
   const plan = live.state.settings?.options?.plan
   const settings = result.model ? cursorSdkReportedSettings(result.model, live.models, plan) : live.state.settings
