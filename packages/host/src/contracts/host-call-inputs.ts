@@ -1471,6 +1471,7 @@ const inputs = {
           }),
         ]),
         archived: z.boolean(),
+        anyway: z.literal(true).optional(),
       }),
     ]),
   "mako:thread-archives": () => z.tuple([]),

@@ -1,6 +1,6 @@
 import type { AccountDeviceEvent } from "@mako/protocol/account-events"
 import type { LifecycleState, LifecycleAction, UpdateInstallation } from "./app-lifecycle.js"
-import type { ThreadArchiveSnapshot } from "./thread-lifecycle.js"
+import type { CloudArchiveStep, ThreadArchiveSnapshot } from "./thread-lifecycle.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { MoveOutcome, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuilds } from "./plan-builds.js"
@@ -74,6 +74,7 @@ export type HostEventBody =
   | { type: "host-disconnected"; message: string }
   | { type: "host-reconnected" }
   | { type: "thread-archives"; snapshot: ThreadArchiveSnapshot }
+  | { type: "cloud-archive-step"; step: CloudArchiveStep }
   /** A followed checkout's HEAD moved, by folder; window-wide. */
   | { type: "checkout-heads"; heads: CheckoutHeads }
   /** A new Thread's worktree is checked out; its provider starts next. */

@@ -169,6 +169,7 @@ function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMov
     cancelReturn: () => Promise.reject(new Error("no return in this test")),
     giveBackReturn: () => Promise.reject(new Error("no return in this test")),
     finishReturn: () => Promise.reject(new Error("no return in this test")),
+    archiveReturn: () => Promise.reject(new Error("no archive in this test")),
     returnState: () => Promise.reject(new Error("no return in this test")),
     wake: () => undefined,
     stop: () => undefined,

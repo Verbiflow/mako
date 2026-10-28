@@ -6,9 +6,33 @@ export const ThreadTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("native"), provider: z.string().min(1), nativeId: z.string().min(1) }),
 ])
 export type ThreadTarget = z.infer<typeof ThreadTargetSchema>
-export const ArchiveCommandSchema = z.object({ id: z.string().uuid(), target: ThreadTargetSchema, archived: z.boolean() })
+/**
+ * `anyway`: archive a cloud Thread whose machine can't start all the same. Its records are kept; its checkout's changes
+ * since it last moved can't be, and it can't be restored.
+ */
+export const ArchiveCommandSchema = z.object({ id: z.string().uuid(), target: ThreadTargetSchema, archived: z.boolean(), anyway: z.literal(true).optional() })
 export type ArchiveCommand = z.infer<typeof ArchiveCommandSchema>
+/**
+ * The keys of the Sessions archived, as this device shows them: those it archived of its own, and those of the cloud
+ * Threads its account archived, which it reads from the account and never keeps.
+ */
 export interface ThreadArchiveSnapshot { revision: number; keys: string[] }
+
+/**
+ * How archiving or restoring a cloud Thread went, by the cloud Thread. `refused`: nothing changed, and `reason` says
+ * why in the person's words; `anyway`, when its machine couldn't start, offers to archive it all the same.
+ */
+export type CloudArchiveOutcome =
+  | { kind: "archived"; thread: string }
+  | { kind: "restored"; thread: string }
+  | { kind: "refused"; thread: string; reason: string; anyway?: true }
+/** What an archive command answers: the archive keys as they stand, and how a cloud Thread's archive went, if it was one. */
+export type ArchiveAnswer = ThreadArchiveSnapshot & { cloud?: CloudArchiveOutcome }
+/**
+ * A cloud Thread's archive or restore going on, step by step, for the window that asked: its machine packing, its
+ * machine ending, or its checkout and records arriving here.
+ */
+export type CloudArchiveStep = { thread: string; kind: "packing" | "ending" | "bringing" }
 export const StopTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("live"), id: z.string().uuid(), requestId: z.string().uuid() }),
   z.object({ kind: z.literal("native"), path: z.string(), token: z.string().uuid() }),

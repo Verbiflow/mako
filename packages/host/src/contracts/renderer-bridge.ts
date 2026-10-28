@@ -5,6 +5,7 @@ import type {
   ThreadTarget,
   ThreadControls,
   ThreadArchiveSnapshot,
+  ArchiveAnswer,
   ArchiveCommand,
   StopTarget,
 } from "./thread-lifecycle.js"
@@ -209,7 +210,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadControls: (target: ThreadTarget) =>
       invokeTrustedHost<ThreadControls>("mako:thread-controls", target),
     archiveThread: (command: ArchiveCommand) =>
-      invokeTrustedHost<ThreadArchiveSnapshot>("mako:thread-archive", command),
+      invokeTrustedHost<ArchiveAnswer>("mako:thread-archive", command),
     stopThread: (target: StopTarget) =>
       invokeTrustedHost<boolean>("mako:thread-stop", target),
 

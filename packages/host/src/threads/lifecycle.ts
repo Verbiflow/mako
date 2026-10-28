@@ -6,6 +6,9 @@ import type { QueuedPromptEdit } from "../contracts/live-queue.js"
 import type { ThreadRef } from "../contracts/conversation-session.js"
 import { archivedByKeys, staleShownMarkers, threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget, type ThreadArchiveSnapshot } from "../contracts/thread-lifecycle.js"
 
+/** The conversation and the Session a lifecycle target names, as far as this host knows them. */
+export type TargetIdentity = { conversationId?: string; sessionId?: string }
+
 /** What archiving and stopping a Thread read and ask of the conversations live on this host. */
 export interface LiveThreads {
   summaries(): LiveSummary[]
@@ -62,6 +65,22 @@ export class ThreadLifecycle {
       }
     }
     return [...new Set(keys)]
+  }
+
+  /** The conversation and the Session a target names, as far as this host knows them: what finds its cloud Thread. */
+  identity(target: ThreadTarget): TargetIdentity {
+    const owner = this.owner(target)
+    const identity: TargetIdentity = {}
+    const sessionId = this.ref(target)?.sessionId ?? owner?.sessionId
+    const conversationId = target.kind === "live" ? target.id : owner?.session.id
+    if (sessionId) identity.sessionId = sessionId
+    if (conversationId) identity.conversationId = conversationId
+    return identity
+  }
+
+  /** Whether the target sits with the archived ones, by every key it's known by. */
+  archived(target: ThreadTarget): boolean {
+    return archivedByKeys(this.keys(target), new Set(this.dependencies.archives.snapshot().keys), this.ref(target))
   }
 
   controls(target: ThreadTarget): ThreadControls {

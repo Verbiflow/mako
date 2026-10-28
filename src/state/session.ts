@@ -86,6 +86,7 @@ import {
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
 import { cloudStepped, worktreeMade, worktreeStepped } from "@/state/acp-start"
 import { threadMoveStepped, threadReturnStepped } from "@/state/cloud-moves"
+import { cloudArchiveStepped } from "@/state/cloud-archive"
 import { noteOutcome, openSubjectId, retireSubject, subjectId } from "@/state/notifications"
 import { toast } from "sonner"
 import { recoverThreadReader } from "@/state/thread-viewing"
@@ -232,6 +233,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-archives") {
     applyThreadArchives(event.snapshot)
+    return
+  }
+  if (event.type === "cloud-archive-step") {
+    cloudArchiveStepped(event.step)
     return
   }
   if (event.type === "checkout-heads") {

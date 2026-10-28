@@ -118,6 +118,7 @@
     "test:moves-ui": "node scripts/test-thread-move-ui.mjs",
     "test:carried-files-ui": "node scripts/test-carried-files-ui.mjs",
     "test:account-threads-ui": "node scripts/test-account-threads-ui.mjs",
+    "test:cloud-archive-ui": "node scripts/test-cloud-archive-ui.mjs",
     "test:telemetry": "tsx scripts/test-telemetry.ts",
     "test:host": "tsx scripts/test-host.ts && tsx scripts/test-repeated-calls.ts",
     "test:host-linux": "npm run build:control-runtime && node scripts/test-host-linux.mjs",

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path"
 import { sessionStream, threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
 import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
-import type { ListedSession, ListedState } from "@mako/protocol/thread-listing"
+import type { ArchivedThread, ListedSession, ListedState } from "@mako/protocol/thread-listing"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
@@ -276,6 +276,11 @@ export type CloudConversationsOptions = {
    * as its own, under Sessions of its own; listed here too, each would show twice.
    */
   keepsNative?(harness: string, nativeId: string, folder: string | undefined): boolean
+  /**
+   * The account's archived cloud Threads changed (`ArchivedThread`), as its list and stream say them: what each device
+   * shows as archived, from the account's word alone.
+   */
+  archivedChanged?(archived: ReadonlyMap<string, ArchivedThread>): void
 }
 
 /** Copies another device keeps of its Sessions in the account (`ReadingCopies`), by that device, read here (`HostCatalog.copyPage`). */
@@ -327,6 +332,9 @@ function bootFolder(boot: EncodedValue): string {
   if (!cwd) throw new Error("The cloud machine has no folder to work in")
   return cwd
 }
+
+/** What archiving a cloud Thread asks its machine to pack: its conversations that started there, at its folder. */
+export type ArchiveInputs = { conversations: string[]; folder: string | undefined }
 
 /** A harness with its settings, as two starts that would begin the same compare. */
 function launchKey(harness: string, modeId: string | undefined, tuning: LiveStartOptions["tuning"]): string {
@@ -402,6 +410,8 @@ export class CloudConversations {
   readonly #askedNames = new Set<string>()
   #unlisten: (() => void) | undefined
   #listing: Promise<void> | undefined
+  /** The archived cloud Threads last told of (`archivedChanged`), by their IDs. */
+  #archivedKey: string | undefined
   /**
    * Threads followed from the stream's head rather than from an event relayed: a listed conversation a window opened,
    * whose history its snapshot reads on the machine. Replaying the Thread from its first event would carry all of it.
@@ -1138,6 +1148,63 @@ export class CloudConversations {
     return released
   }
 
+  /**
+   * The cloud Thread a conversation or a Session runs in, or ran in before it was archived: by this Mac's own cloud
+   * conversations, the account's list, and its archived Threads. Undefined for one another device or this Mac runs.
+   */
+  async cloudThreadOf(where: { conversationId?: string; sessionId?: string }): Promise<string | undefined> {
+    // What's known now: this Mac's own, and the list as last read. Never waits on the cloud, so a local archive doesn't.
+    await this.start()
+    const { conversationId, sessionId } = where
+    const entry = conversationId ? this.#entries.get(conversationId) : undefined
+    if (entry) return entry.runtime ? undefined : entry.threadId
+    const named = (row: ListedSession) => (conversationId !== undefined && row.conversation === conversationId) || (sessionId !== undefined && row.session === sessionId)
+    for (const row of this.#list.sessions().values()) if (named(row)) return row.runsOn.kind === "cloud" ? row.runsOn.threadId : undefined
+    for (const archived of this.#list.archived().values()) if (archived.sessions.some(named)) return archived.thread
+    if (sessionId) for (const each of this.#entries.values()) if (!each.runtime && each.summary?.sessionId === sessionId) return each.threadId
+    return undefined
+  }
+
+  /**
+   * Archives a conversation another device runs, by asking that device: its archive is its owner's word, and every
+   * device's list drops it once its owner does. False for one no other device runs; throws, saying so, while it's off.
+   */
+  async archiveOnOwner(conversationId: string, command: { id: string; archived: boolean }): Promise<boolean> {
+    await this.start()
+    const entry = this.#entries.get(conversationId)
+    if (!entry?.runtime) return false
+    await this.#call(entry, "mako:thread-archive", [{ id: command.id, target: { kind: "live", id: conversationId }, archived: command.archived }])
+    return true
+  }
+
+  /** The cloud Thread's archive, as the account says it; undefined while it isn't archived. */
+  archiveOf(threadId: string): ArchivedThread | undefined {
+    return this.#list.archived().get(threadId)
+  }
+
+  /**
+   * What archiving a cloud Thread asks its machine to pack: each of its conversations whose harness started there (one
+   * that never started has nothing to keep), by the account's list and this Mac's own, and the folder they work in there.
+   */
+  archiveInputs(threadId: string): ArchiveInputs {
+    const conversations = new Set<string>()
+    let folder: string | undefined
+    for (const row of this.#list.sessions().values()) {
+      if (row.runsOn.kind !== "cloud" || row.runsOn.threadId !== threadId) continue
+      folder ??= row.folder
+      // A session its harness keeps that Mako there never opened (`capture`) is no conversation of the machine's.
+      if (row.nativeId && !row.capture) conversations.add(row.conversation)
+    }
+    // This Mac's own, moved or started there: each runs on the machine from its start, though what the machine said of
+    // it may not have reached here yet (an archive asked as its move lands).
+    for (const entry of this.#entries.values()) {
+      if (entry.runtime || entry.listed || entry.threadId !== threadId) continue
+      folder ??= entry.summary?.session.cwd || undefined
+      conversations.add(entry.conversationId)
+    }
+    return { conversations: [...conversations], folder }
+  }
+
   /** The cloud conversations of a cloud Thread: their harness and native session, as their machine last said. */
   threadConversations(threadId: string): Array<{ conversationId: string; harness: string; nativeId: string | undefined }> {
     return [...this.#entries.values()].filter((entry) => entry.threadId === threadId)
@@ -1360,7 +1427,8 @@ export class CloudConversations {
       let wait = RETRY_MS
       let failing = false
       let wakes = this.#wakes
-      while (!this.#closed && this.#entries.get(entry.conversationId) === entry) {
+      // An archived Thread takes nothing and says nothing: it isn't followed.
+      while (!this.#closed && this.#entries.get(entry.conversationId) === entry && !this.#list.archived().has(entry.threadId)) {
         try {
           const { session } = await this.#connected()
           const fromHead = this.#fromHead.has(entry.threadId)
@@ -1502,7 +1570,12 @@ export class CloudConversations {
    * nothing wakes a machine or reaches a Mac until one opens.
    */
   #reconcile(): void {
+    this.#archivedNow()
     const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string; quiet: boolean }>()
+    // An archived cloud Thread's Sessions, as they were listed when it was archived: every device shows them with the
+    // archived ones (`archivedChanged`), at rest, and nothing runs them.
+    for (const archived of this.#list.archived().values())
+      for (const row of archived.sessions) wanted.set(row.conversation, { row: { ...row, state: "idle" }, threadId: archived.thread, where: CLOUD_FOLDER_WHERE, quiet: false })
     for (const row of this.#list.sessions().values()) {
       if (!this.#listable(row)) continue
       if (row.runsOn.kind === "device") {
@@ -1573,6 +1646,16 @@ export class CloudConversations {
       for (const known of unheard) this.#deviceNames.set(known.id, known.name)
       if (unheard.length && !this.#closed) this.#reconcile()
     }, () => {})
+  }
+
+  /** Tells the host of the archived cloud Threads when they changed, and stops following each: it says nothing now. */
+  #archivedNow(): void {
+    const archived = this.#list.archived()
+    const key = [...archived.keys()].sort().join(",")
+    if (key === this.#archivedKey) return
+    this.#archivedKey = key
+    for (const thread of archived.keys()) this.#following.get(thread)?.close()
+    this.#options.archivedChanged?.(archived)
   }
 
   /**

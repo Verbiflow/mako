@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
 import { MoveCheckpointSchema, ReturnDepartureSchema, type ReturnState } from "@mako/protocol/moves"
+import type { ArchivedThread } from "@mako/protocol/thread-listing"
 import { describeGatewayFailure } from "@mako/protocol/gateway-http"
 import { describeSync, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink, type StagedRecords } from "@mako/sessions/record-sync"
 import { errorMessage } from "../base/error-message.js"
@@ -88,6 +89,11 @@ const ReturnPlanSchema = z.object({
   missing: ReturnProjectMissingSchema.optional(),
   began: z.number(),
   timings: z.record(z.string(), z.number()).default({}),
+  /**
+   * Taken back from the archive, under the archive's ID: its machine is gone, so it starts released, from what the
+   * archive kept, and one that can't be taken here stays archived rather than going back to a machine.
+   */
+  from: z.literal("archive").optional(),
 })
 type ReturnPlan = z.infer<typeof ReturnPlanSchema>
 type Kept = NonNullable<ReturnPlan["kept"]>
@@ -191,6 +197,52 @@ export class CloudReturns {
     return [...new Set([...forward.sessions.map((session) => session.harness), ...begunThere.map((begun) => begun.harness)])]
   }
 
+  /**
+   * Brings an archived cloud Thread back to this Mac, the one it came from, from what its archive kept: its last
+   * checkout and its records, as the second half of a return. Refused, saying why, for one this Mac's store doesn't
+   * hold (it came from another Mac, or began in the cloud) or whose archive kept nothing.
+   */
+  restore(archived: ArchivedThread): Promise<ThreadReturnOutcome> {
+    const running = this.#running.get(archived.move)
+    if (running) return running
+    const work = this.#restore(archived).finally(() => this.#running.delete(archived.move))
+    this.#running.set(archived.move, work)
+    return work
+  }
+
+  async #restore(archived: ArchivedThread): Promise<ThreadReturnOutcome> {
+    const move = MoveIdSchema.parse(archived.move)
+    const known = await this.#read(move).catch(() => undefined)
+    if (known?.phase === "done") return { kind: "back" }
+    if (known && OPEN_PHASES.includes(known.phase)) return this.#resume(known)
+    const threads = this.#options.threads()
+    const asked = archived.sessions.find((row) => threads?.journalPlacement(row.conversation))?.conversation
+    const refused = (reason: string): ThreadReturnOutcome => {
+      hostLog("returns", "an archived Thread wasn't restored here", { move, cloudThread: archived.thread, reason })
+      return { kind: "stayed", reason }
+    }
+    if (!asked) return refused("This Thread came to the cloud from another Mac, or began there: restore it on the Mac it came from.")
+    const record = await heard(this.#account().returnState(archived.thread, move)).catch((error: Error) => error)
+    if (record instanceof Error) return { kind: "unsettled", reason: `Mako couldn't hear the cloud: ${record.message}. It stays archived; restore it again.`, waitsOn: "cloud" }
+    if (record?.phase === "returned") return { kind: "back" }
+    if (record?.phase !== "archived") return refused("The cloud doesn't read this Thread as archived.")
+    if (!record.departure) return refused("Its machine kept nothing to bring back when it was archived: it ran nothing, or couldn't start.")
+    let plan: ReturnPlan
+    try {
+      plan = await this.#plan(asked, move, {}, archived)
+    } catch (error) {
+      const reason = errorMessage({ error })
+      const missing = error instanceof ProjectMissingError ? error.missing : undefined
+      hostLog("returns", "an archived Thread wasn't restored here", { move, reason })
+      return { kind: "stayed", reason, ...missing && { missing } }
+    }
+    plan.from = "archive"
+    plan.departure = record.departure
+    plan.phase = "released"
+    await this.#write(plan)
+    return this.#resume(plan)
+  }
+
   /** Settles every return a stopped host left unsettled, as its plan stands. */
   async settle(): Promise<void> {
     for (const name of await readdir(this.#options.folder).catch(() => [])) {
@@ -255,7 +307,7 @@ export class CloudReturns {
   }
 
   /** What the return carries, read before anything changes: refused, with the reason, when the Thread can't come back. */
-  async #plan(conversationId: string, move: MoveId, options: ThreadReturnOptions): Promise<ReturnPlan> {
+  async #plan(conversationId: string, move: MoveId, options: ThreadReturnOptions, archived?: ArchivedThread): Promise<ReturnPlan> {
     const account = this.#options.account()
     if (!account || !(await account.id())) throw new Error("Bringing a Thread back needs this Mac signed in to Mako Cloud.")
     const threads = this.#options.threads()
@@ -288,7 +340,8 @@ export class CloudReturns {
       for (const begun of begunThere.filter((each) => journals.includes(each.conversationId))) {
         // What this Mac heard can trail the machine (a fork names its native session only once its first turn runs
         // there): the machine, which runs it, says.
-        const nativeId = begun.nativeId ?? (await this.#nativeThere(forward.cloudThread, begun.conversationId))
+        // An archived Thread's machine is gone: the archive says what each ran.
+        const nativeId = begun.nativeId ?? (archived ? archived.sessions.find((row) => row.conversation === begun.conversationId)?.nativeId : await this.#nativeThere(forward.cloudThread, begun.conversationId))
         if (nativeId) sessions.push({ session, conversationId: begun.conversationId, harness: begun.harness, nativeId, generation, begun: true })
         else left.push(begun.conversationId)
       }
@@ -546,6 +599,8 @@ export class CloudReturns {
       }
       if (error instanceof OutdatedReturnError) plan.outdated = error.outdated
       if (error instanceof ProjectMissingError) plan.missing = error.missing
+      // From the archive there's no machine to give it back to: it stays archived, as it was.
+      if (plan.from === "archive") return this.#stayArchived(plan, reason)
       const given = await heard(account.giveBackReturn(plan.cloudThread, plan.move, reason))
       if (given.phase === "given-back") return this.#stay(plan, given.reason)
       throw new Error(`the cloud reads the return as ${given.phase} after this Mac gave it back`, { cause: error })
@@ -600,6 +655,18 @@ export class CloudReturns {
     // Its machine runs it again once told; until then it's still the cloud's, and a later start tells it.
     await this.#tellStay(plan).catch((error: Error) => hostWarn("returns", "a machine still to be told its Thread stays couldn't be told yet", { move: plan.move, error: error.message }))
     hostLog("returns", "a Thread stayed in the cloud", { move: plan.move, reason })
+    const outcome = stayedOutcome(plan)
+    this.#options.step(plan.asked, plan.move, outcome)
+    return outcome
+  }
+
+  /** A restore that couldn't be taken here: its worktree was put back, and the Thread stays archived in the cloud. */
+  async #stayArchived(plan: ReturnPlan, reason: string): Promise<ThreadReturnOutcome> {
+    plan.phase = "stayed"
+    plan.reason = `${reason.replace(/[.\s]*$/, "")}. It stays archived.`
+    await this.#write(plan)
+    if (plan.kept) await rm(plan.kept.file, { force: true })
+    hostLog("returns", "an archived Thread couldn't be restored here; it stays archived", { move: plan.move, reason })
     const outcome = stayedOutcome(plan)
     this.#options.step(plan.asked, plan.move, outcome)
     return outcome

@@ -3,8 +3,15 @@ import { createHash } from "node:crypto"
 import { z } from "zod"
 import { shownKeyOf, threadShownKey, type ArchiveCommand, type NativeArchive, type ThreadArchiveSnapshot } from "../contracts/thread-lifecycle.js"
 
+/**
+ * What this device archived of its own, kept here; and, beside it, the keys of the cloud Threads its account archived,
+ * which the account's word sets (`account`) and nothing here writes: a cloud Thread's archive is its own object's, so a
+ * device never keeps a second word on it. A snapshot is both, under one revision.
+ */
 export class ThreadArchives {
   private readonly db: DatabaseSync
+  /** The keys of the account's archived cloud Threads' Sessions, as its list says them now. */
+  private accountKeys: ReadonlySet<string> = new Set()
   constructor(path: string) {
     this.db = new DatabaseSync(path)
     this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS archives (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, digest TEXT NOT NULL); CREATE TABLE IF NOT EXISTS revision (id INTEGER PRIMARY KEY CHECK (id=1), value INTEGER NOT NULL); INSERT OR IGNORE INTO revision VALUES (1,0)")
@@ -12,7 +19,19 @@ export class ThreadArchives {
   snapshot(): ThreadArchiveSnapshot {
     const revision = z.object({ value: z.number() }).parse(this.db.prepare("SELECT value FROM revision WHERE id=1").get()).value
     const keys = this.db.prepare("SELECT key FROM archives ORDER BY key").all().map((row) => z.object({ key: z.string() }).parse(row).key)
-    return { revision, keys }
+    if (this.accountKeys.size === 0) return { revision, keys }
+    return { revision, keys: [...new Set([...keys, ...this.accountKeys])].sort() }
+  }
+  /**
+   * The account's archived cloud Threads, as the keys of their Sessions: held in memory, never written. The snapshot
+   * after it, under a new revision, when they changed; null when they didn't.
+   */
+  account(keys: Iterable<string>): ThreadArchiveSnapshot | null {
+    const next = new Set(keys)
+    if (next.size === this.accountKeys.size && [...next].every((key) => this.accountKeys.has(key))) return null
+    this.accountKeys = next
+    this.db.prepare("UPDATE revision SET value=value+1 WHERE id=1").run()
+    return this.snapshot()
   }
   /**
    * Restore markers by the archive key each is for. A marker says a Session
