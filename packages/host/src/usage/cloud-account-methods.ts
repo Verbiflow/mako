@@ -3,8 +3,9 @@ import { hostname } from "node:os"
 import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
+import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking } from "./cloud-account.js"
-import type { AccountEvent } from "@mako/protocol/account-events"
+import { isAccountListEvent, type AccountListHeard } from "@mako/protocol/account-sessions"
 import type { SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingInput, WaitingMessage } from "@mako/protocol/waiting"
 import type { SessionPublishing } from "./machine-runtime.js"
@@ -116,18 +117,12 @@ export interface CloudAccount {
    * Hears each change to the account's list of Sessions, in the stream's order, as it comes, and `account-changed` when
    * this Mac signs in, out or to another account, after which the list is another's; returns how to stop.
    */
-  onThreadListings?(listener: (heard: ThreadListHeard | "account-changed") => void): () => void
+  onThreadListings?(listener: (heard: AccountListHeard | "account-changed") => void): () => void
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   stop(): void
 }
 
-/** A change to the account's list of Sessions, as its stream said it. */
-export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: ThreadListEvent }> }
-/** The account's events about its Threads, as against its devices: what the list of them follows. */
-export type ThreadListEvent = "sessions-listed" | "sessions-unlisted" | "messages-waiting" | "device-quiet" | "thread-archived" | "thread-unarchived"
-const THREAD_LIST_EVENTS: ReadonlySet<string> = new Set<ThreadListEvent>(["sessions-listed", "sessions-unlisted", "messages-waiting", "device-quiet", "thread-archived", "thread-unarchived"])
-const isThreadListEvent = (event: AccountEvent): event is Extract<AccountEvent, { type: ThreadListEvent }> => THREAD_LIST_EVENTS.has(event.type)
 
 /** The account's store of shared sign-ins in Mako Cloud, through this Mac's device sign-in. */
 export interface HarnessSignInStore {
@@ -201,7 +196,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
-  const threadListeners = new Set<(heard: ThreadListHeard | "account-changed") => void>()
+  const threadListeners = new Set<(heard: AccountListHeard | "account-changed") => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -232,7 +227,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     // to the account's Threads goes to what lists them, which tells windows of the conversations it changes.
     onAccountEvent: (heard) => {
       const { event } = heard
-      if (isThreadListEvent(event)) {
+      if (isAccountListEvent(event)) {
         for (const listener of threadListeners) listener({ seq: heard.seq, event })
         return
       }
@@ -257,6 +252,12 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       },
     },
   })
+
+  // While its person is at this Mac, the account holds their notices: the Mac's own banner is the one they see.
+  const attention = attendable(machine, onMac())
+    ? new CloudAttention({ idle: macIdleSeconds, say: (attending) => cloud.attend(attending), signedIn: () => status === "signed-in", log: (message, fields) => hostLog("cloud", message, fields) })
+    : undefined
+  attention?.start()
 
   methods.handle("mako:cloud-account", () => cloud.ready())
   methods.handle("mako:cloud-sign-in", () => cloud.signIn())
@@ -323,8 +324,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     wake: () => {
       cloud.wake()
       sync?.wake()
+      void attention?.look()
     },
     stop: () => {
+      attention?.stop()
       sync?.stop()
       cloud.close()
     },

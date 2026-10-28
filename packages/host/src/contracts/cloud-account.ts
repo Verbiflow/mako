@@ -5,7 +5,7 @@ import { z } from "zod"
  * the cloud. The host answers with public account facts and never the device
  * credential or a connection token.
  */
-export const CloudDeviceKindSchema = z.enum(["desktop", "runtime", "cli"])
+export const CloudDeviceKindSchema = z.enum(["desktop", "runtime", "cli", "browser"])
 
 export const CloudDeviceSchema = z.object({
   id: z.string(),

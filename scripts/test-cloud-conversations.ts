@@ -38,7 +38,8 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ThreadAppView } from "@mako/host/contracts/thread-app"
 import { followHostLog } from "@mako/host/base/host-log"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
-import type { CloudAccount, ThreadListHeard } from "@mako/host/usage/cloud-account-methods"
+import type { CloudAccount } from "@mako/host/usage/cloud-account-methods"
+import type { AccountListHeard } from "@mako/protocol/account-sessions"
 import type { ListedSession, ListedState, SessionListings } from "@mako/protocol/thread-listing"
 import { z } from "zod"
 
@@ -954,7 +955,7 @@ test("every Session the account lists is listed here, unopened and waking nothin
   const inCloud = (state: ListedState, extra: Partial<ListedSession> = {}) => row(cloudConversation, { kind: "cloud", threadId: theirs }, state, extra)
   const onStudio = (state: ListedState, extra: Partial<ListedSession> = {}) => row(studioConversation, { kind: "device", deviceId: studio }, state, extra)
   const mine = row(randomUUID(), { kind: "device", deviceId: myDevice! }, "working")
-  const listeners = new Set<(heard: ThreadListHeard | "account-changed") => void>()
+  const listeners = new Set<(heard: AccountListHeard | "account-changed") => void>()
   let answer: SessionListings = { sessions: [inCloud("working"), onStudio("waiting", { waitingOn: "Approve: npm test" }), mine], seq: 5 }
   let reads = 0
   machine.account.sessionListings = async () => (reads++, answer)
@@ -963,7 +964,7 @@ test("every Session the account lists is listed here, unopened and waking nothin
     listeners.add(listener)
     return () => listeners.delete(listener)
   }
-  const say = (heard: ThreadListHeard | "account-changed") => {
+  const say = (heard: AccountListHeard | "account-changed") => {
     for (const listener of listeners) listener(heard)
   }
   const file = join(scratch, "listed", "conversations.json")
@@ -1125,12 +1126,12 @@ test("a quiet device's rows are listed as it left them, but none at work or wait
   const since = "2026-10-27T08:00:00.000Z"
   machine.account.sessionListings = async () => ({ sessions: [working, waiting, failed, inCloud], seq: 3, quiet: [{ deviceId: studio, since }] })
   machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
-  const listeners = new Set<(heard: ThreadListHeard | "account-changed") => void>()
+  const listeners = new Set<(heard: AccountListHeard | "account-changed") => void>()
   machine.account.onThreadListings = (listener) => {
     listeners.add(listener)
     return () => listeners.delete(listener)
   }
-  const say = (heard: ThreadListHeard) => {
+  const say = (heard: AccountListHeard) => {
     for (const listener of listeners) listener(heard)
   }
   const router = new CloudConversations({ account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-quiet-")), "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY })
@@ -1160,7 +1161,7 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
   }
   machine.account.sessionListings = async () => ({ sessions: [listed], seq: 1 })
   machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
-  let tell: ((heard: ThreadListHeard | "account-changed") => void) | undefined
+  let tell: ((heard: AccountListHeard | "account-changed") => void) | undefined
   machine.account.onThreadListings = (listener) => ((tell = listener), () => {})
   // The Studio's copy: 250 entries, written at 21:10.
   const at = Date.parse("2026-10-24T21:10:00.000Z")
@@ -1278,7 +1279,7 @@ async function movingThread(name: string, threadIds: string[]) {
   for (const threadId of threadIds) await machine.account.createThread(threadId, REPOSITORY)
 
   const myDevice = await machine.account.deviceId()
-  let tell: ((heard: ThreadListHeard | "account-changed") => void) | undefined
+  let tell: ((heard: AccountListHeard | "account-changed") => void) | undefined
   let seq = 1
   machine.account.sessionListings = async () => ({ sessions: [], seq })
   machine.account.devices = async () => ({ devices: [], current: myDevice! })
@@ -1432,7 +1433,7 @@ test("a message that waited in the account for this Mac's own Session is taken h
   const message = (session: string, conversation: string, text: string): WaitingMessage => ({ id: randomUUID(), session, conversation, text, from: "3d0f6c2a-8b1e-4f7a-9c5d-2e1b0a9f8d7c", at: "2026-10-25T09:00:00.000Z" })
   const first = message(mine, "c-mine", "Merge it once CI is green")
   const elsewhere = message(moved, "c-moved", "Tag the release")
-  let tell: ((heard: ThreadListHeard | "account-changed") => void) | undefined
+  let tell: ((heard: AccountListHeard | "account-changed") => void) | undefined
   machine.account.sessionListings = async () => ({ sessions: [row(mine, "c-mine"), row(moved, "c-moved")], seq: 1, waiting: [first, elsewhere] })
   machine.account.devices = async () => ({ devices: [], current: myDevice! })
   machine.account.onThreadListings = (listener) => ((tell = listener), () => {})

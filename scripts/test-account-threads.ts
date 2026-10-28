@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { Payload } from "@mako/protocol"
 import { rowsForLink, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
-import { AccountSessions } from "@mako/host/conversations/account-threads"
+import { AccountSessions } from "@mako/protocol/account-sessions"
 import { nativeConversation, ownedSessions, SessionPublisher, SessionReporter, type NativeRow, type ReportSources } from "@mako/host/conversations/session-report"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import { SessionUploads, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
@@ -238,6 +238,13 @@ test("a publisher reports when something changed, sweeps every half minute regar
   publisher.watch(next.link, ["c-1"])
   publisher.event("event", batch("c-1"))
   assert.deepEqual(live, ["c-1 true", "c-1 true"])
+  // The host's own batches, as its conversations emit them: relayed only while watched, as their encoded line.
+  // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
+  const own = (conversation: string) => ({ type: "live-batch", batch: { id: conversation, revision: 3, updates: [] } }) as never
+  publisher.own(own("c-2"))
+  assert.deepEqual(live, ["c-1 true", "c-1 true"], "its own batch nobody watches goes nowhere")
+  publisher.own(own("c-1"))
+  assert.deepEqual(live, ["c-1 true", "c-1 true", "c-1 true"], "its own batch a device watches goes to it")
   // A gateway older than the frame hears nothing.
   const older = new SessionPublisher({ rows: () => rows, now: () => now })
   const before = sent.length

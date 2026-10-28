@@ -91,6 +91,7 @@ export function RewindButton({
     <>
       <button
         type="button"
+        data-transcript-action="rewind"
         disabled={!boundary}
         aria-disabled={boundary?.kind !== "ready"}
         title={

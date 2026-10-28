@@ -10,7 +10,7 @@ import { CORRELATION_HEADER } from "@mako/protocol/gateway-http"
 import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thread-listing"
 import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
 import type { SessionPublishing } from "./machine-runtime.js"
-import { MOVE_ANSWER_WAIT_MS, MOVE_REASON_MAX, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
+import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
@@ -56,7 +56,7 @@ import {
   type CloudSignInHarness,
   type CloudSignInListing,
 } from "../contracts/cloud-sign-ins.js"
-import { CloudRepositorySchema, type CloudRepository } from "../contracts/cloud-threads.js"
+import { clipReason, CloudRepositorySchema, type CloudRepository } from "../contracts/cloud-threads.js"
 import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
@@ -651,6 +651,14 @@ export class CloudAccounts {
    */
   async askBases(repositories: CloudRepository[]): Promise<void> {
     await this.#call("bases.ask", "POST", "/v1/bases", { repositories })
+  }
+
+  /**
+   * Says whether the person is at this Mac (`cloud-attention.ts`): a notice for them waits in the account while they
+   * are. A gateway from before notices doesn't know the route, and is left alone.
+   */
+  async attend(attending: boolean): Promise<void> {
+    await this.#call("attention.put", "PUT", "/v1/attention", { attending }, false, [404])
   }
 
   /**
@@ -1276,10 +1284,4 @@ function messageOf(error: Error | undefined, fallback: string): string {
 
 function sameJson(a: CloudPerson | CloudDevice, b: CloudPerson | CloudDevice): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
-}
-
-/** A reason the cloud keeps beside a move: within `MOVE_REASON_MAX`, cut with an ellipsis rather than refused. */
-export function clipReason(reason: string): string {
-  const said = reason.trim() || "No reason was given."
-  return said.length <= MOVE_REASON_MAX ? said : `${said.slice(0, MOVE_REASON_MAX - 1)}…`
 }

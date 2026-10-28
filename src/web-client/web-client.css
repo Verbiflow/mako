@@ -1,0 +1,205 @@
+/*
+ * The web app's own pieces, on the desk's tokens: bars, rows, fields and the composer at a phone's size. Everything
+ * else (the transcript, approvals, questions, the queue) is the desk's own CSS. Touch targets are 44px; every bar keeps
+ * clear of the notch and the home indicator (`env(safe-area-inset-*)`).
+ */
+@layer components {
+  .web-icon-button:active:not(:disabled),
+  .web-button:active:not(:disabled),
+  .web-send:active:not(:disabled) {
+    transform: scale(0.95);
+  }
+
+  .web-app {
+    -webkit-tap-highlight-color: transparent;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  /*
+   * The desk's three sizes, each a step larger under a finger: a phone is read at arm's length, and iOS zooms into a
+   * field under 16px. Still three sizes, and the desk's own scale everywhere a pointer is.
+   */
+  @media (pointer: coarse) {
+    .web-app {
+      --text-label: 13px;
+      --text-label--line-height: 18px;
+      --text-ui: 16px;
+      --text-ui--line-height: 22px;
+      --text-title: 17px;
+      --text-title--line-height: 22px;
+    }
+  }
+
+  .web-bar {
+    min-height: calc(52px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .web-scroll {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .web-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .web-icon-button {
+    @apply flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground;
+    transition: background-color 120ms ease, color 120ms ease, transform var(--duration-press) var(--ease-out);
+  }
+  .web-icon-button:hover:not(:disabled) {
+    @apply bg-fill-hover text-foreground;
+  }
+  .web-icon-button:disabled {
+    @apply opacity-40;
+  }
+
+  .web-row {
+    transition: background-color 120ms ease;
+  }
+  /* Rows part with a hairline under their words, not under their mark, as a phone's lists do. */
+  li + li > .web-row::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 74px;
+    border-top: 1px solid var(--hairline);
+  }
+  /* What needs the person sits on a card of its own, at the head of the list. */
+  .web-needs {
+    @apply bg-raised/70 ring-1 ring-hairline;
+  }
+  .web-needs .web-row {
+    @apply pl-3.5;
+  }
+  .web-needs li + li > .web-row::before {
+    left: 64px;
+  }
+  .web-needs .web-row > span:first-child {
+    @apply bg-surface;
+  }
+  /* A Thread's harnesses overlap, each ringed in its avatar's own colour. */
+  .web-mark {
+    background: inherit;
+  }
+  .web-badge {
+    box-shadow: 0 0 0 2.5px var(--surface);
+  }
+  .web-needs .web-badge {
+    box-shadow: 0 0 0 2.5px color-mix(in oklab, var(--raised) 70%, var(--surface));
+  }
+  .web-row:active {
+    @apply bg-fill-selected;
+  }
+  @media (hover: hover) {
+    .web-row:hover {
+      @apply bg-fill-hover;
+    }
+  }
+
+  .web-button {
+    @apply inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-ui font-medium text-primary-foreground;
+    transition: opacity 120ms ease, transform var(--duration-press) var(--ease-out);
+  }
+  .web-button:disabled {
+    @apply opacity-40;
+  }
+
+  .web-field {
+    @apply w-full rounded-xl bg-raised px-3.5 text-ui text-foreground ring-1 ring-hairline outline-none placeholder:text-faint;
+    min-height: 44px;
+    /* 16px or more, or iOS zooms the page into a field it focuses. */
+    font-size: max(16px, var(--text-ui));
+  }
+  .web-field:focus {
+    @apply ring-ring;
+  }
+
+  .web-live {
+    /* The renderer's conversation reads its column; on a phone it is the screen's width less a margin. */
+    --container-content: 760px;
+  }
+  .web-dock {
+    @apply bg-surface;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .web-composer {
+    @apply mx-auto flex w-full max-w-content items-end gap-2 px-3 pt-2 pb-2.5;
+  }
+  .web-composer-input {
+    @apply min-h-11 flex-1 resize-none rounded-[22px] bg-raised px-4 py-[11px] text-foreground ring-1 ring-hairline outline-none placeholder:text-faint;
+    font-size: max(16px, var(--text-ui));
+    line-height: 22px;
+    max-height: 180px;
+  }
+  .web-composer-input:focus {
+    @apply ring-ring;
+  }
+
+  .web-send {
+    @apply flex size-11 shrink-0 items-center justify-center rounded-full bg-foreground text-surface;
+    transition: opacity 120ms ease, transform var(--duration-press) var(--ease-out);
+  }
+  .web-send:disabled {
+    @apply bg-fill-selected text-faint;
+  }
+  .web-stop {
+    @apply bg-raised text-foreground ring-1 ring-border;
+  }
+
+  .web-switch {
+    @apply relative h-[30px] w-[50px] shrink-0 rounded-full bg-fill-selected ring-1 ring-hairline;
+    transition: background-color 160ms var(--ease-out);
+  }
+  .web-switch > span {
+    @apply absolute top-[3px] left-[3px] size-6 rounded-full bg-foreground/80 shadow-sm;
+    transition: transform 200ms var(--ease-out), background-color 160ms ease;
+  }
+  .web-switch-on {
+    @apply bg-positive;
+  }
+  .web-switch-on > span {
+    @apply bg-white;
+    transform: translateX(20px);
+  }
+  .web-switch:disabled {
+    @apply opacity-40;
+  }
+}
+
+/*
+ * The desk's own pieces, adjusted for a phone. Outside the layer, so they win over the desk's utilities on the same
+ * elements.
+ *
+ * Reuse, edit, rewind and fork are the desk's: they need its composer and its checkout, so the phone shows a message's
+ * time and its copy, and nothing it can't do.
+ */
+.web-live [data-transcript-action] {
+  display: none;
+}
+/* An approval is the one thing a phone is opened for: a card above the composer, its answers a thumb's size. */
+.web-live [data-permission] {
+  margin: 0 12px 8px;
+  border: 0;
+  border-radius: 18px;
+  background: var(--raised);
+  padding: 14px 14px 12px;
+  box-shadow:
+    0 0 0 1px var(--hairline),
+    0 10px 30px -14px rgb(0 0 0 / 0.45);
+}
+.web-live [data-permission] > div:last-child {
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 4px;
+}
+.web-live [data-permission-option] {
+  min-height: 44px;
+  width: 100%;
+  justify-content: center;
+  border-radius: 12px;
+  font-size: var(--text-ui);
+}

@@ -489,7 +489,7 @@ function Devices({ current, connection }: { current: CloudDevice; connection: Si
   )
 }
 
-const DEVICE_ICONS = { desktop: LaptopIcon, cli: TerminalIcon, runtime: ServerIcon } as const
+const DEVICE_ICONS = { desktop: LaptopIcon, cli: TerminalIcon, runtime: ServerIcon, browser: GlobeIcon } as const
 
 /**
  * How a device came to be signed in as you, in one line: when, from where (as the cloud read its address, never the

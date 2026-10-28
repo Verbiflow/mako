@@ -1,0 +1,21 @@
+{
+  "name": "@mako/web-client",
+  "version": "0.1.0",
+  "license": "Elastic-2.0",
+  "description": "Mako in a browser: an account's Threads on every device, each read live, answered and steered through a Mako gateway, drawn by the desktop's own renderer. Built from the renderer's source; it brings its own React.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./style.css": "./dist/index.css"
+  },
+  "files": [
+    "dist",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}

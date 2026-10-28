@@ -42,8 +42,10 @@ for (const entry of await readdir("packages", { withFileTypes: true }))
   if (entry.isDirectory()) folders.set(JSON.parse(await readFile(join("packages", entry.name, "package.json"), "utf8")).name, join("packages", entry.name))
 const packed = JSON.parse((await run("npm", ["pack", "--dry-run", "--json", "--workspaces", "--ignore-scripts"], { maxBuffer: 64 * 1024 * 1024 })).stdout)
 assert.deepEqual(packed.map(({ name }) => name).sort(), [...folders.keys()].sort(), "every workspace is packed")
+/** Workspaces the host never runs: the web client is a browser's, carried as its package files alone so the workspace resolves. */
+const browserOnly = new Set(["@mako/web-client"])
 for (const { name, files: published } of packed) {
-  assert.ok(published.some((file) => file.path.startsWith("dist/")), `${name} isn't built: run npm run build:control-runtime first`)
+  if (!browserOnly.has(name)) assert.ok(published.some((file) => file.path.startsWith("dist/")), `${name} isn't built: run npm run build:control-runtime first`)
   for (const file of published) await copy(join(folders.get(name), file.path), join("app", folders.get(name), file.path))
 }
 for (const file of ["host-process.mjs", "install-harnesses.mjs", "prove.mjs"]) await copy(join("scripts/linux-host", file), join("proof", file))

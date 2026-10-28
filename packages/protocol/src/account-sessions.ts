@@ -1,10 +1,19 @@
-import type { ArchivedThread, ListedSession, SessionListings } from "@mako/protocol/thread-listing"
-import type { WaitingMessage } from "@mako/protocol/waiting"
-import type { ThreadListHeard } from "../usage/index.js"
+import type { AccountEvent } from "./account-events.js"
+import type { ArchivedThread, ListedSession, SessionListings } from "./thread-listing.js"
+import type { WaitingMessage } from "./waiting.js"
+
+/** The account's events about its Threads, as against its devices: what the list of them follows. */
+export type AccountListEvent = "sessions-listed" | "sessions-unlisted" | "messages-waiting" | "device-quiet" | "thread-archived" | "thread-unarchived"
+/** A change to the account's list of Sessions, as its stream said it, with its number there. */
+export type AccountListHeard = { seq: number; event: Extract<AccountEvent, { type: AccountListEvent }> }
+const ACCOUNT_LIST_EVENTS: ReadonlySet<string> = new Set<AccountListEvent>(["sessions-listed", "sessions-unlisted", "messages-waiting", "device-quiet", "thread-archived", "thread-unarchived"])
+/** Whether an account's event is about its list of Sessions, which `AccountSessions` follows, rather than its devices. */
+export const isAccountListEvent = (event: AccountEvent): event is Extract<AccountEvent, { type: AccountListEvent }> => ACCOUNT_LIST_EVENTS.has(event.type)
 
 /**
- * The account's Sessions as every device lists them, held in step with the account's stream: the list
- * `GET /v1/sessions` answered, then each change the stream says after it, in order, by its number. A change heard
+ * The account's Sessions as every device lists them, held in step with the account's stream, by a Mac's host and a
+ * browser alike: the list `GET /v1/sessions` answered, then each change the stream says after it, in order, by its
+ * number. A change heard
  * before the list answered waits for it and applies only if it's newer; one heard twice, or older than the list,
  * changes nothing. So the list read and the stream can't disagree, whichever comes first. The cloud already held each
  * row to the one-owner rule; this keeps whatever it said last. Which devices are quiet is kept beside the rows, once
@@ -16,15 +25,20 @@ export class AccountSessions {
   readonly #waiting = new Map<string, WaitingMessage[]>()
   /** Each quiet device, by ID: when the cloud last heard from it (`QuietDevice`). */
   readonly #quiet = new Map<string, string>()
-  /** The account's archived cloud Threads, by cloud Thread: its own objects' word, never this Mac's. */
+  /** The account's archived cloud Threads, by cloud Thread: its own objects' word, never a device's. */
   readonly #archived = new Map<string, ArchivedThread>()
   /** The stream's number the list stands at; undefined until it's been read. */
   #seq: number | undefined
-  readonly #early: ThreadListHeard[] = []
+  readonly #early: AccountListHeard[] = []
 
   /** Whether the list has been read: until then a change heard only waits. */
   get known(): boolean {
     return this.#seq !== undefined
+  }
+
+  /** The stream's number the list stands at; undefined until it's been read. */
+  get seq(): number | undefined {
+    return this.#seq
   }
 
   /** Every listed Session, as the list now stands. */
@@ -70,7 +84,7 @@ export class AccountSessions {
   }
 
   /** One change the stream said: whether it changed the list. */
-  heard(heard: ThreadListHeard): boolean {
+  heard(heard: AccountListHeard): boolean {
     if (this.#seq === undefined) {
       this.#early.push(heard)
       return false
@@ -88,7 +102,7 @@ export class AccountSessions {
     this.#early.length = 0
   }
 
-  #apply({ seq, event }: ThreadListHeard): boolean {
+  #apply({ seq, event }: AccountListHeard): boolean {
     if (this.#seq === undefined || seq <= this.#seq) return false
     this.#seq = seq
     if (event.type === "sessions-listed") {

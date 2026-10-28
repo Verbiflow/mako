@@ -29,7 +29,7 @@ import { toast } from "sonner"
 import type { LivePermissionRequest, LiveRequest } from "@/lib/types"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { identifyTool } from "@mako/sessions/tool-identity"
+import { bareCommand, identifyTool } from "@mako/sessions/tool-identity"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import {
   CheckCheckIcon,
@@ -505,7 +505,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
-    <div className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
+    <div data-permission={permission.id} className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         {permission.kind ? (
           <ToolGlyph
@@ -515,7 +515,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
         ) : (
           <ShieldQuestionIcon className="size-3.5 shrink-0 text-caution/90" />
         )}
-        <span className={cn("min-w-0 truncate", !makoTool && !permission.detail && "font-mono")}>{makoTool ?? permission.title}</span>
+        <span className={cn("min-w-0 truncate", !makoTool && !permission.detail && "font-mono")}>{makoTool ?? bareCommand(permission.title)}</span>
       </p>
       {permission.detail ? (
         <p data-request-detail className="max-w-prose pt-0.5 pb-2 text-label text-muted-foreground">{permission.detail}</p>
@@ -532,6 +532,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
             <button
               key={option.optionId}
               type="button"
+              data-permission-option={option.kind ?? "other"}
               onClick={() => acp.answerPermission(option.optionId)}
               className={cn(
                 "pressable flex items-center gap-1.5 rounded-md border px-2 py-1 text-label transition-colors",

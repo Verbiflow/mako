@@ -1,15 +1,17 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { sessionStream, threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
+import { threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
 import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
-import type { ArchivedThread, ListedSession, ListedState } from "@mako/protocol/thread-listing"
+import type { ArchivedThread, ListedSession } from "@mako/protocol/thread-listing"
+import { CLOUD_FOLDER_WHERE, listedOwner, listedSummary } from "../contracts/listed-conversations.js"
+import { listedArchiveInputs, type ArchiveInputs } from "../contracts/cloud-archive.js"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
-import { deferredWhenAsleep, hostCallReplay } from "../contracts/host-call-policy.js"
-import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, OwnerUnavailableError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
+import { bootFolder, CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
+import { deferredWhenAsleep } from "../contracts/host-call-policy.js"
+import { OwnerUnavailableError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { ForkInputSchema } from "../contracts/conversation-control.js"
 import { sessionAfter, type LiveBatch, type LiveRequest, type LiveSnapshot, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
@@ -20,12 +22,14 @@ import type { SessionExecution } from "../contracts/thread-execution.js"
 import type { CloudMachineState, ThreadAppView } from "../contracts/thread-app.js"
 import { SessionIdSchema, type Actor as StoreActor, type SessionId, type ThreadPlacement } from "../contracts/thread-identity.js"
 import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/index.js"
+import { sendWithRepeats, type GatewayCallLog } from "../contracts/gateway-host-calls.js"
 import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
 import { CloudControlPreviews } from "./cloud-control-previews.js"
 import { cloudRuntimeOf, namedUuid } from "./cloud-moves.js"
-import { AccountSessions } from "./account-threads.js"
+import { AccountSessions } from "@mako/protocol/account-sessions"
 import { CloudPreviews } from "./cloud-previews.js"
-import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
+import { conversationCallId } from "../contracts/conversation-calls.js"
+import type { ConversationRoutingResult } from "./shared-conversations.js"
 import { LiveHistoryReader } from "./live-history-reader.js"
 import type { LiveHistoryRead } from "../contracts/live-history.js"
 import type { ThreadPage } from "@mako/sessions"
@@ -48,9 +52,8 @@ const RETRY_MAX_MS = 30_000
 const WOKEN_MS = 15_000
 const WOKEN_RETRY_MS = 250
 const SAVE_MS = 1_000
-/** How long a call that didn't reach its Thread is repeated before the window hears of it: a wake takes seconds. */
-const CLOUD_REPEAT_MS = 60_000
-const CLOUD_REPEAT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000, 10_000] as const
+/** Where a routed call's repeats are said: this module's lines in the host's log. */
+const CALL_LOG: GatewayCallLog = { warn: (message, fields) => hostWarn("cloud-conversations", message, fields), info: (message, fields) => hostLog("cloud-conversations", message, fields) }
 /** A Thread made ahead is taken up only this soon after this Mac last asked: the cloud ends one unused 30 minutes on. */
 const PREPARED_KEPT_MS = 25 * 60_000
 /**
@@ -167,45 +170,6 @@ function keptApp({ kind, project, phase, processes, startedAt, address }: Looked
   return ready.success ? { project, ready: ready.data } : { project }
 }
 
-/** How a list shows a Session's state, as a session's status: `waiting` is a turn at work, with what it waits on said beside. */
-const LISTED_STATUS = { working: "running", waiting: "running", idle: "ready", failed: "failed", moving: "starting" } as const satisfies Record<ListedState, LiveSummary["session"]["status"]>
-/**
- * The same, for a row of a quiet device (`QuietDevice`): nothing there runs or answers for anyone else, so nothing is
- * shown at work or waiting on the person; a message to it waits in the account until the device is back.
- */
-const QUIET_STATUS = { ...LISTED_STATUS, working: "ready", waiting: "ready" } as const satisfies Record<ListedState, LiveSummary["session"]["status"]>
-
-/**
- * What a window lists of a Session it knows only from the account's list: the row, where it runs in words, and nothing
- * that takes its owner. Opening it reads the rest there, as it would any cloud conversation's. A row of a quiet device
- * is listed as that device left it, but not at work.
- */
-function listedSummary(row: ListedSession, where: string, quietSince: string | undefined): LiveSummary {
-  const quiet = quietSince !== undefined
-  const summary: LiveSummary = {
-    session: {
-      id: row.conversation,
-      harness: row.harness,
-      cwd: row.folder ?? "",
-      status: (quiet ? QUIET_STATUS : LISTED_STATUS)[row.state],
-      connection: "hibernated",
-      modes: [],
-      currentMode: null,
-      configOptions: [],
-    },
-    revision: 0,
-    createdAt: Date.parse(row.createdAt),
-    elsewhere: where,
-    threadId: row.thread,
-    sessionId: row.session,
-  }
-  if (row.title) summary.session.title = row.title
-  if (row.threadTitle) summary.threadTitle = row.threadTitle
-  if (row.waitingOn && !quiet) summary.waitingOn = row.waitingOn
-  if (quiet) summary.quietSince = Date.parse(quietSince)
-  return summary
-}
-
 /**
  * A cloud Thread made ahead of a new conversation's first message, while the person writes it with Cloud chosen.
  * Only in memory: one this Mac forgets is the cloud's to end.
@@ -235,11 +199,6 @@ type StartedAhead = { conversationId: string; key: string; cwd: string | undefin
 
 const StoredSchema = z.object({ conversations: z.array(EntrySchema) })
 
-/** What a start reads of the cloud host's boot: the folder of its tab in front, which is the clone. */
-const BootTabsSchema = z.object({
-  activeTabId: z.string(),
-  tabs: z.array(z.object({ id: z.string(), session: z.object({ meta: z.object({ cwd: z.string() }).loose() }).loose() }).loose()),
-}).loose()
 
 const LiveBatchHeadSchema = z.object({ channel: z.string(), type: z.string().optional(), conversation: z.string().optional() })
 const ControlActivityEventSchema = z.object({ type: z.literal("control-activity"), activity: ControlActivitySchema })
@@ -325,8 +284,6 @@ export type ElsewhereFolderRoute = {
 /** An app's view with an address, as `mako:thread-app` answers for a running one. */
 const ReadyAddressSchema = z.object({ kind: z.literal("ready"), address: z.object({ host: z.string(), port: z.number().int() }) }).loose()
 
-/** Where a cloud conversation's folder is, in words. */
-export const CLOUD_FOLDER_WHERE = "a cloud machine"
 /** The host log's line as a cloud Thread's machine changes, as this Mac knows it. */
 const MACHINE_WORDS = {
   asleep: "a cloud Thread's machine is asleep",
@@ -337,15 +294,6 @@ const MACHINE_WORDS = {
 const CHANGED_MS = 1_000
 
 /** The folder the machine's host works in: its tab in front, which is the clone. */
-function bootFolder(boot: EncodedValue): string {
-  const tabs = BootTabsSchema.parse(decodeRuntimeValue(boot))
-  const cwd = tabs.tabs.find((tab) => tab.id === tabs.activeTabId)?.session.meta.cwd
-  if (!cwd) throw new Error("The cloud machine has no folder to work in")
-  return cwd
-}
-
-/** What archiving a cloud Thread asks its machine to pack: its conversations that started there, at its folder. */
-export type ArchiveInputs = { conversations: string[]; folder: string | undefined }
 
 /** A harness with its settings, as two starts that would begin the same compare. */
 function launchKey(harness: string, modeId: string | undefined, tuning: LiveStartOptions["tuning"]): string {
@@ -1248,14 +1196,9 @@ export class CloudConversations {
    * that never started has nothing to keep), by the account's list and this Mac's own, and the folder they work in there.
    */
   archiveInputs(threadId: string): ArchiveInputs {
-    const conversations = new Set<string>()
-    let folder: string | undefined
-    for (const row of this.#list.sessions().values()) {
-      if (row.runsOn.kind !== "cloud" || row.runsOn.threadId !== threadId) continue
-      folder ??= row.folder
-      // A session its harness keeps that Mako there never opened (`capture`) is no conversation of the machine's.
-      if (row.nativeId && !row.capture) conversations.add(row.conversation)
-    }
+    const listed = listedArchiveInputs(this.#list.sessions().values(), threadId)
+    const conversations = new Set(listed.conversations)
+    let folder = listed.folder
     // This Mac's own, moved or started there: each runs on the machine from its start, though what the machine said of
     // it may not have reached here yet (an archive asked as its move lands).
     for (const entry of this.#entries.values()) {
@@ -1404,11 +1347,9 @@ export class CloudConversations {
   }
 
   /**
-   * One call to the Thread's machine. A call the gateway lost on the way (its machine's link changed under it) or
-   * still holds while the machine wakes is repeated here, under its one id, for as long as `CLOUD_REPEAT_MS`, when a
-   * repeat can't do it twice (a read, or a call the host settles by its id): the gateway answers a repeat with the
-   * first answer. So a send after the machine slept arrives, without the window hearing of the wake. Past that, or
-   * for a call only the person may repeat, the window hears it as a reconnect, in a cloud Thread's words.
+   * One call to the Thread's machine, repeated by `sendWithRepeats` while the gateway lost it or holds it as the
+   * machine wakes: so a send after the machine slept arrives, without the window hearing of the wake. Past that, or for
+   * a call only the person may repeat, the window hears it as a reconnect, in a cloud Thread's words.
    */
   #call(entry: Entry, channel: string, args: readonly unknown[]): Promise<EncodedValue> {
     return this.#callThread(entry.threadId, channel, args, { conversationId: entry.conversationId, runtime: entry.runtime })
@@ -1424,13 +1365,11 @@ export class CloudConversations {
     if (how.passive) calls.passive = true
     if (how.refuseUnstarted) calls.refuseUnstarted = true
     const send = gatewayHostCalls(session, calls).call(channel, args)
-    // A passive look is answered at once, asleep or not; it's never waited out, and never wakes the machine.
-    const repeatable = !how.passive && hostCallReplay(channel) !== "never"
     // A call kept for the machine's next wake (a close) neither wakes it nor, answered by the cloud, says it's awake.
     const wakes = !deferredWhenAsleep.has(channel)
     const ended = wakes && !how.passive ? this.#calling(threadId) : undefined
     try {
-      const value = await this.#sendThread(threadId, channel, send, repeatable, how)
+      const value = await sendWithRepeats(channel, send, { ...how, threadId, log: CALL_LOG })
       if (wakes) this.#heardAwake(threadId)
       return value
     } finally {
@@ -1438,28 +1377,7 @@ export class CloudConversations {
     }
   }
 
-  /** `#callThread`'s tries of one call, repeated while the gateway lost it or holds it as the machine wakes. */
-  async #sendThread(threadId: string, channel: string, send: (attempt: number) => Promise<EncodedValue>, repeatable: boolean, how: { conversationId?: string; runtime?: string | undefined }): Promise<EncodedValue> {
-    const began = performance.now()
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await send(attempt)
-      } catch (error) {
-        if (!(error instanceof RuntimeDisconnectedError)) throw error
-        // Another device's runtime that isn't connected, said before the call was applied: it's off, and a call doesn't
-        // wake a Mac as it does a cloud Thread's machine. Said at once, as itself, for its copy to answer a read.
-        if (how.runtime && error instanceof OwnerUnavailableError && !error.unconfirmed) throw error
-        const waitMs = CLOUD_REPEAT_BACKOFF_MS[Math.min(attempt - 1, CLOUD_REPEAT_BACKOFF_MS.length - 1)]!
-        if (repeatable && attempt < 8 && performance.now() - began + waitMs < CLOUD_REPEAT_MS) {
-          hostLog("cloud-conversations", "a call didn't reach the Thread yet; repeating it", { threadId, channel, attempt, inMs: waitMs })
-          await new Promise((resolve) => setTimeout(resolve, waitMs))
-          continue
-        }
-        // As a call to another host's conversation: the window settles a lost one by its own ids, never this router.
-        throw new RuntimeDisconnectedError(error.unconfirmed, how.conversationId, error.unconfirmed && !repeatable ? CLOUD_CALL_UNCONFIRMED_MESSAGE : CLOUD_RECONNECTING_MESSAGE)
-      }
-    }
-  }
+
 
 
   #account(): CloudAccount {
@@ -1641,10 +1559,11 @@ export class CloudConversations {
       if (!this.#listable(row)) continue
       if (row.runsOn.kind === "device") {
         if (row.runsOn.deviceId === this.#device || this.#keptHere(row)) continue
-        const runtime = `d-${row.runsOn.deviceId}`
-        const name = this.#deviceNames.get(row.runsOn.deviceId)
-        if (name === undefined) this.#nameDevice(row.runsOn.deviceId)
-        wanted.set(row.conversation, { row, threadId: sessionStream(runtime, row.conversation), runtime, where: name ?? "another computer", quietSince: this.#list.quietSince(row.runsOn.deviceId) })
+        const owner = listedOwner(row)
+        if (owner.kind !== "device") continue
+        const name = this.#deviceNames.get(owner.deviceId)
+        if (name === undefined) this.#nameDevice(owner.deviceId)
+        wanted.set(row.conversation, { row, threadId: owner.stream, runtime: owner.runtimeId, where: name ?? "another computer", quietSince: this.#list.quietSince(owner.deviceId) })
       } else if (!this.#options.returning?.(row.runsOn.threadId)) wanted.set(row.conversation, { row, threadId: row.runsOn.threadId, where: CLOUD_FOLDER_WHERE, quietSince: undefined })
     }
     const unlisted: string[] = []
