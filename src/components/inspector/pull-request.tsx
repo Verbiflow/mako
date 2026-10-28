@@ -23,6 +23,7 @@ import {
   RefreshCwIcon,
   XIcon,
 } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 
@@ -387,7 +388,7 @@ function PullSummary({ pull, loading, root }: { pull: Pull; loading: boolean; ro
           onClick={() => void github.refresh(root, pull.head)}
           data-on={loading || undefined}
         >
-          <RefreshCwIcon className={loading ? "animate-spin" : undefined} />
+          <Spinner icon={RefreshCwIcon} turning={loading} />
         </IconAction>
         <IconAction label="Add to your message" size="xs" onClick={() => attachPull()}>
           <MessageSquarePlusIcon />

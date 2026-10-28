@@ -3,9 +3,9 @@ import {
   AppWindowIcon,
   ArrowUpRightIcon,
   GlobeIcon,
-  LoaderCircleIcon,
   SearchIcon,
 } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 import { desktop } from "@/state/desktop"
 import {
@@ -62,7 +62,7 @@ export function ElementPickChooser({ cwd, onChosen }: { cwd?: string; onChosen?:
       <div className="max-h-96 overflow-y-auto overscroll-contain p-1.5" data-element-pick-tabs>
         {targets.kind === "loading" || targets.kind === "idle" ? (
           <p role="status" className="flex h-28 items-center justify-center gap-2 text-ui text-muted-foreground">
-            <LoaderCircleIcon className="size-4 animate-spin motion-reduce:animate-none" />
+            <Spinner className="size-4" />
             Finding tabs…
           </p>
         ) : null}

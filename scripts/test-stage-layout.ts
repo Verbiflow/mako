@@ -139,8 +139,9 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   ["[data-commit-box][data-busy]:not([data-drafting]) .commit-editor::after", { animation: "git-progress", reduced: /\[data-commit-box\]\[data-busy\] \.commit-editor::after[^{]*\{\s*animation:\s*none;/ }],
   ['[data-push-state="pushing"] > svg', { animation: "git-upload", reduced: /\[data-push-state="pushing"\] > svg[^{]*\{\s*animation:\s*none;/ }],
   [".skeleton::after", { animation: "mako-skeleton-glint", reduced: "global" }],
-  // A loading label sweeps only while it is on screen (`observeVisibleAnimation`) and motion is allowed.
+  // A loading label sweeps, and a spinner turns, only while it is on screen (`observeVisibleAnimation`) and motion is allowed.
   [".shimmer-text", { animation: "shimmer-sweep", reduced: "global" }],
+  [".spinner", { animation: "spinner-turn", reduced: "global" }],
   [".control-preview-rim > span", { animation: "control-preview-sweep", reduced: /\.control-preview-rim\s*\{\s*display:\s*none;/ }],
   ['.cloud-wire[data-state="waiting"]::before', { animation: "cloud-wire-flow", reduced: /\.cloud-wire::before\s*\{\s*animation:\s*none\s*!important;/ }],
   // A connection's bead turns while it connects and breathes while it's offline; its chip's tone and words say which.

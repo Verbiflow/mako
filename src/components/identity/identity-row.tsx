@@ -7,7 +7,8 @@ import { confirmStore } from "@/state/confirm"
 import { github } from "@/state/github"
 import { accounts } from "@/state/accounts"
 import { cloudAccount, useCloudAccount } from "@/state/cloud-account"
-import { LoaderCircleIcon, UserIcon } from "lucide-react"
+import { UserIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 
 /**
  * The desk's identity, in the rail's footer and nowhere else. Superset keeps
@@ -51,7 +52,7 @@ export function IdentityRow() {
             ) : (
               <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-raised">
                 {signingIn ? (
-                  <LoaderCircleIcon className="size-3 animate-spin text-faint" />
+                  <Spinner className="size-3 text-faint" />
                 ) : (
                   <UserIcon className="size-3 text-faint" />
                 )}

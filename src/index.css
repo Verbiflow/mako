@@ -1243,10 +1243,6 @@ diffs-container {
   @starting-style { opacity: 0; }
 }
 
-.animate-spin {
-  animation: none;
-}
-
 /*
  * Overlays scale out of their trigger rather than their own center — Radix
  * publishes the trigger-relative origin, and honouring it is what makes a
@@ -1349,11 +1345,27 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
     -webkit-background-clip: text;
     background-clip: text;
     animation: shimmer-sweep 2.2s steps(30) infinite;
-    animation-play-state: var(--visible-animation-state, paused);
+    animation-play-state: var(--visible-animation-state, running);
     will-change: var(--visible-animation-will-change, auto);
   }
   .shimmer-text * {
     color: transparent;
+  }
+}
+
+/*
+ * A spinner (`Spinner`): a glyph turning once a second, on the same gate as
+ * the sweep. Transform only, so the compositor turns it while the page is
+ * busy. Reduced motion stands it still (the global one-iteration rule).
+ */
+.spinner {
+  animation: spinner-turn 1s linear infinite;
+  animation-play-state: var(--visible-animation-state, running);
+}
+
+@keyframes spinner-turn {
+  to {
+    transform: rotate(1turn);
   }
 }
 
@@ -2193,13 +2205,13 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   to { opacity: 1; transform: none; }
 }
 /* A mark that changes (working, then passed) arrives rather than swapping in place. */
-.app-mark[data-changed]:not(.animate-spin) { animation: app-mark-arrive 220ms var(--ease-out) both; }
+.app-mark[data-changed]:not(.spinner) { animation: app-mark-arrive 220ms var(--ease-out) both; }
 @keyframes app-mark-arrive {
   from { opacity: 0; transform: scale(0.55); }
   to { opacity: 1; transform: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .changing-label, .companion-panel, .terminal-panel, .dock-alert, .app-mark[data-changed]:not(.animate-spin) { animation: none; }
+  .changing-label, .companion-panel, .terminal-panel, .dock-alert, .app-mark[data-changed]:not(.spinner) { animation: none; }
   [data-sonner-toaster] [data-sonner-toast] { transition: none; }
 }
 

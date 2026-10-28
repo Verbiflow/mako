@@ -12,10 +12,10 @@ import { SearchSelect } from "@/components/ui/search-select"
 import { formatContextWindow } from "@/lib/format"
 import {
   KeyRoundIcon,
-  LoaderCircleIcon,
   RefreshCwIcon,
   XIcon,
 } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 
 const inputClass =
   "h-9 w-full rounded-md bg-raised px-2.5 text-ui text-foreground ring-1 ring-hairline placeholder:text-faint focus:outline-none focus-visible:ring-border"
@@ -373,7 +373,7 @@ export function ConnectModel({
                 disabled={busy || !model.trim() || (custom && !baseUrl.trim())}
               >
                 {busy ? (
-                  <LoaderCircleIcon className="animate-spin motion-reduce:animate-none" />
+                  <Spinner />
                 ) : null}
                 {busy
                   ? "Testing connection..."

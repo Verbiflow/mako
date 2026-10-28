@@ -1,4 +1,5 @@
-import { LoaderCircleIcon, SquareDashedMousePointerIcon } from "lucide-react"
+import { SquareDashedMousePointerIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import type { ComposerControlSlotProps } from "@/extend/slots"
 import { elementPicks, useElementPicks } from "@/state/element-picks"
@@ -25,7 +26,7 @@ export function ElementPickButton({ disabled, dismiss }: ComposerControlSlotProp
       }}
     >
       {active ? (
-        <LoaderCircleIcon className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" />
+        <Spinner className="size-4 text-muted-foreground" />
       ) : (
         <SquareDashedMousePointerIcon className="size-4 text-muted-foreground" />
       )}

@@ -8,6 +8,7 @@ import {
 } from "@/lib/control-preview-painter"
 import { MonitorIcon, GlobeIcon, Maximize2Icon, SquareDashedMousePointerIcon } from "lucide-react"
 import { Blank } from "@/components/ui/kit"
+import { Shimmer } from "@/components/ui/shimmer"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { elementPicks, useElementPicks } from "@/state/element-picks"
@@ -88,14 +89,14 @@ export function ControlPreviewPanel() {
               className={cn(
                 "size-1.5 rounded-full",
                 activity.status === "running"
-                  ? "animate-pulse bg-positive"
+                  ? "bg-positive"
                   : activity.status === "error"
                     ? "bg-negative"
                     : "bg-faint"
               )}
             />
             {activity.status === "running"
-              ? "Working"
+              ? <Shimmer text="Working" />
               : activity.status === "error"
                 ? "Action failed"
                 : "Last observed"}

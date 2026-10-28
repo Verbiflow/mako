@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react"
 import { createPortal } from "react-dom"
-import { LoaderCircleIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { bindAppshotShortcut, endFlight, useAppshotShortcut, type Flight } from "@/state/appshot-shortcut"
 
 /**
@@ -29,7 +29,7 @@ function CapturingPill({ flight }: { flight: Extract<Flight, { phase: "capturing
       role="status"
       className="overlay-panel pointer-events-none fixed top-12 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-2 rounded-full px-3 py-1.5 text-ui text-foreground duration-200 ease-(--ease-out) motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-top-1"
     >
-      <LoaderCircleIcon className="size-3.5 animate-spin text-muted-foreground motion-reduce:animate-none" />
+      <Spinner className="size-3.5 text-muted-foreground" />
       Taking an Appshot of {flight.app}…
     </div>
   )

@@ -27,11 +27,14 @@ export class PackagedApp {
    * as `executable`, the checkout in `args` and `MAKO_PROD` in `env`. A key
    * set to undefined in `env` is left out of the desktop's, and so its host's.
    * A `HOME` in `env` is a private home the caller prepared, taken instead of
-   * `root/home`; the person's own is refused.
-   * @param {{ executable: string, root: string, workspace: string, args?: string[], env?: Record<string, string | undefined>, onStdoutLine?: (line: string) => void }} options
+   * `root/home`; the person's own is refused. `paintCovered: false` lets a
+   * covered window stop painting, as the installed app's does, for a check of
+   * what a window does when it is covered and uncovered.
+   * @param {{ executable: string, root: string, workspace: string, args?: string[], env?: Record<string, string | undefined>, paintCovered?: boolean, onStdoutLine?: (line: string) => void }} options
    */
-  constructor({ executable, root, workspace, args = [], env = {}, onStdoutLine }) {
+  constructor({ executable, root, workspace, args = [], env = {}, paintCovered = true, onStdoutLine }) {
     this.executable = executable
+    this.paintCovered = paintCovered
     this.args = args
     this.extraEnv = env
     this.root = root
@@ -150,7 +153,7 @@ export class PackagedApp {
         // The desktop hands its host the data key; a mock keychain keeps the person's items out of reach.
         "--use-mock-keychain",
         // The person's own windows may cover this one, and a covered window draws no frames for a screenshot to wait on.
-        "--disable-backgrounding-occluded-windows",
+        ...this.paintCovered ? ["--disable-backgrounding-occluded-windows"] : [],
         `--remote-debugging-port=${debugPort}`,
         "--remote-debugging-address=127.0.0.1",
       ],

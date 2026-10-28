@@ -1,26 +1,26 @@
-import { useState, type ReactNode } from "react"
+import { useState, type ComponentType, type ReactNode } from "react"
 import {
   ChevronRightIcon,
   CircleCheckIcon,
   InfoIcon,
-  Loader2Icon,
   OctagonXIcon,
   TriangleAlertIcon,
   XIcon,
-  type LucideIcon,
+  type LucideProps,
 } from "lucide-react"
 import { Collapse } from "@/components/ui/collapse"
+import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
 
 export type NoticeTone = "progress" | "info" | "success" | "caution" | "danger"
 
 const GLYPHS = {
-  progress: { icon: Loader2Icon, className: "animate-spin text-muted-foreground" },
+  progress: { icon: Spinner, className: "text-muted-foreground" },
   info: { icon: InfoIcon, className: "text-muted-foreground" },
   success: { icon: CircleCheckIcon, className: "text-positive" },
   caution: { icon: TriangleAlertIcon, className: "text-caution" },
   danger: { icon: OctagonXIcon, className: "text-destructive" },
-} satisfies Record<NoticeTone, { icon: LucideIcon; className: string }>
+} satisfies Record<NoticeTone, { icon: ComponentType<LucideProps>; className: string }>
 
 interface NoticeProps {
   tone?: NoticeTone

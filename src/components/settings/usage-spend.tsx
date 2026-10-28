@@ -1,4 +1,5 @@
 import { RefreshCwIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { useEffect, useState, type ReactNode } from "react"
 import { usageWindow, type UsageAmount, type UsageSummary, type UsageTotals, type UsageWindow, type UsageWindowId } from "@mako/host/contracts/automations-usage-updates"
 import { PRICE_TABLES } from "@mako/host/contracts/usage-ledger"
@@ -75,7 +76,7 @@ export function SpendOverview() {
             setRead((previous) => ({ summary: previous.summary, reading: true }))
             setGeneration((value) => value + 1)
           }}>
-          <RefreshCwIcon className={cn("size-3.5", read.reading && read.summary && "animate-spin")} />
+          <Spinner icon={RefreshCwIcon} turning={read.reading && Boolean(read.summary)} className="size-3.5" />
         </IconAction>
       </div>
       {read.error && !read.summary ? (

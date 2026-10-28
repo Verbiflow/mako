@@ -7,6 +7,8 @@ export interface PackagedAppOptions {
   workspace: string
   args?: string[]
   env?: Record<string, string | undefined>
+  /** Whether a covered window keeps painting (the default, for screenshots under other windows); false behaves as the installed app. */
+  paintCovered?: boolean
   onStdoutLine?: (line: string) => void
 }
 

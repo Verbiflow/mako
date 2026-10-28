@@ -5,12 +5,12 @@ import {
   CheckIcon,
   GlobeIcon,
   LaptopIcon,
-  LoaderCircleIcon,
   LockIcon,
   ServerIcon,
   TerminalIcon,
   XIcon,
 } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
 import { Action, Chip, ConnectionChip, Eyebrow, ListCard, ListCardRow, Segmented, Toggle } from "@/components/ui/kit"
@@ -103,7 +103,7 @@ function SignedOutView({ state, cloud }: { state: Exclude<CloudAccountState, Sig
           disabled={busy === "sign-in"}
           onClick={() => void cloudAccount.signIn()}
         >
-          {busy === "sign-in" ? <LoaderCircleIcon className="animate-spin" /> : null}
+          {busy === "sign-in" ? <Spinner /> : null}
           {notice ? "Sign in again" : "Sign in with browser"}
         </Action>
       ) : null}
@@ -187,7 +187,7 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
             <p className="mt-1 truncate text-ui text-muted-foreground">{account.email}</p>
           </div>
           <Action tone="outline" disabled={busy === "sign-out"} onClick={() => void cloudAccount.signOut()}>
-            {busy === "sign-out" ? <LoaderCircleIcon className="animate-spin" /> : null}
+            {busy === "sign-out" ? <Spinner /> : null}
             Sign out
           </Action>
         </div>
@@ -271,7 +271,7 @@ function CloudSignIns() {
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            {busy ? <LoaderCircleIcon className="size-3.5 animate-spin text-faint" /> : null}
+            {busy ? <Spinner className="size-3.5 text-faint" /> : null}
             <Toggle
               label="Use this Mac's sign-ins in the cloud"
               on={sharing}
@@ -573,7 +573,7 @@ function DeviceRow({
             disabled={removing}
             onClick={() => void cloudAccount.removeDevice(device.id).then((ok) => ok && onConfirm(false))}
           >
-            {removing ? <LoaderCircleIcon className="animate-spin" /> : null}
+            {removing ? <Spinner /> : null}
             Remove
           </Action>
         </div>
@@ -627,7 +627,7 @@ function Browsers({ connection }: { connection: SignedIn["connection"] }) {
                 Cancel
               </Action>
               <Action size="xs" tone="danger" disabled={endingAll} onClick={() => void cloudAccount.endBrowsers().then((ok) => ok && setConfirming(undefined))}>
-                {endingAll ? <LoaderCircleIcon className="animate-spin" /> : null}
+                {endingAll ? <Spinner /> : null}
                 Sign out {browsers.length} browsers
               </Action>
             </div>
@@ -695,7 +695,7 @@ function BrowserRow({ session, confirming, onConfirm }: { session: CloudBrowserS
             Cancel
           </Action>
           <Action size="xs" tone="danger" disabled={ending} onClick={() => void cloudAccount.endBrowser(session.id).then((ok) => ok && onConfirm(false))}>
-            {ending ? <LoaderCircleIcon className="animate-spin" /> : null}
+            {ending ? <Spinner /> : null}
             Sign out
           </Action>
         </div>

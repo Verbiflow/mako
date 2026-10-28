@@ -81,6 +81,7 @@ export function Orb({ state, size, paused = false, className, style, ...data }: 
     <span
       ref={host}
       aria-hidden
+      data-paused={paused || undefined}
       {...data}
       className={cn("activity-orb inline-block shrink-0", className)}
       style={{ width: size, height: size, ...style }}

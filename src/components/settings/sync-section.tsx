@@ -1,5 +1,6 @@
 import { useEffect } from "react"
-import { CheckIcon, CopyIcon, LoaderCircleIcon } from "lucide-react"
+import { CheckIcon, CopyIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import type { SyncStatus, SyncTier, SyncTierName } from "@mako/host/contracts/sync-status"
 import { Action, Chip, Eyebrow, ListCard, ListCardRow, Meter } from "@/components/ui/kit"
 import { syncStatus, useSyncStatus } from "@/state/sync-status"
@@ -64,7 +65,7 @@ export function SyncSection() {
         ) : (
           <ListCardRow>
             <p className="flex items-center gap-1.5 text-label text-faint">
-              <LoaderCircleIcon className="size-3 animate-spin" />
+              <Spinner className="size-3" />
               {status?.state === "starting" ? `Reading ${count(status.sessions, "Session")} on this Mac…` : "Reading what's on this Mac…"}
             </p>
           </ListCardRow>
@@ -97,7 +98,7 @@ function TierRow({ tier, sending }: { tier: SyncTier; sending: boolean }) {
           </p>
         </div>
         <div className={cn("flex shrink-0 items-center gap-1.5 text-label tabular-nums", done ? "text-positive" : "text-muted-foreground")}>
-          {done ? <CheckIcon className="size-3.5" /> : sending ? <LoaderCircleIcon className="size-3 animate-spin text-faint" /> : null}
+          {done ? <CheckIcon className="size-3.5" /> : sending ? <Spinner className="size-3 text-faint" /> : null}
           {done ? `All ${count(tier.threads, "Thread")}` : `${tier.threadsInCloud} of ${count(tier.threads, "Thread")}`}
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { memo, useMemo, useState } from "react"
-import { ActivityIcon, ChevronDownIcon, GitBranchIcon, HourglassIcon, SquareIcon, WorkflowIcon } from "lucide-react"
+import { ChevronDownIcon, EyeIcon, GitBranchIcon, HourglassIcon, SquareIcon, WorkflowIcon } from "lucide-react"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { stage } from "@/state/stage"
 import { shallowEqual } from "@/state/store"
@@ -19,6 +19,7 @@ import { formatTokens } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { Blank } from "@/components/ui/kit"
+import { Shimmer } from "@/components/ui/shimmer"
 import type { NativeAgent, NativeAgentRoster } from "@/lib/types"
 
 const labels = {
@@ -65,7 +66,7 @@ export function WorkGlyph({ work, provider, className }: { work: NativeWork | un
     case "command":
       return <ToolGlyph kind="shell" className={className} />
     case "monitor":
-      return <ActivityIcon className={className} />
+      return <EyeIcon className={className} />
     case "workflow":
       return <WorkflowIcon className={className} />
     case "task":
@@ -243,7 +244,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation }: { agent:
               {agent.title || agent.detail || kinds[work]}
             </span>
             <span className={cn("flex shrink-0 items-center gap-1.5 text-label", agent.state.kind === "failed" ? "text-negative" : "text-faint")}>
-              {labels[agent.state.kind]}
+              {active ? <Shimmer text={labels[agent.state.kind]} /> : labels[agent.state.kind]}
               <Elapsed agent={agent} />
             </span>
             {more ? (

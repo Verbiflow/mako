@@ -1,5 +1,6 @@
 import { useState } from "react"
-import { CopyIcon, ExternalLinkIcon, LoaderCircleIcon, PlusIcon, TriangleAlertIcon } from "lucide-react"
+import { CopyIcon, ExternalLinkIcon, PlusIcon, TriangleAlertIcon } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import {
   accounts as accountActions,
   accountGroups,
@@ -204,10 +205,7 @@ export function SignInCard({ signIn, label, who }: { signIn: AccountSignIn; labe
     : `Sign in with the ${label} account you want to add. It shows up here when you're done, and your current login stays as it is.`
   return (
     <div role="status" aria-live="polite" className={cn(CARD, "flex items-start gap-3")}>
-      <LoaderCircleIcon
-        className="mt-0.5 size-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none"
-        aria-hidden
-      />
+      <Spinner className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="text-ui font-medium text-foreground">{title}</p>
         <p className="mt-0.5 text-label leading-relaxed text-muted-foreground">{body}</p>

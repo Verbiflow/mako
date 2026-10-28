@@ -220,6 +220,8 @@
     "test:appshot-live": "node --import tsx scripts/test-appshot-live.mjs",
     "test:background-work": "tsx scripts/test-background-work.ts",
     "test:background-work-ui": "node scripts/test-background-work-ui.mjs",
+    "test:animations-ui": "node scripts/test-animations-ui.mjs",
+    "test:packaged-animations": "node scripts/test-packaged-animations.mjs",
     "test:native-agents": "tsx scripts/test-native-agents.ts && tsx scripts/test-background-work.ts && tsx scripts/test-codex-agent-status.ts && tsx scripts/test-grok-agents.ts && tsx scripts/test-devin-agents.ts && tsx scripts/test-child-residency.ts && npm run test:opencode-agents",
     "test:opencode-agents": "tsgo -p tsconfig.electron.json && tsx scripts/test-opencode-agents.ts",
     "test:opencode-api": "tsx scripts/test-opencode-native-api.ts",

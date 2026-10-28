@@ -1,25 +1,25 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from "react"
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type ReactNode, type RefObject } from "react"
 import {
   CircleCheckIcon,
   InfoIcon,
-  Loader2Icon,
   OctagonXIcon,
   TriangleAlertIcon,
   XIcon,
-  type LucideIcon,
+  type LucideProps,
 } from "lucide-react"
+import { Spinner } from "@/components/ui/spinner"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useRegistry } from "@/extend/registry"
 import { noticeProducers, orderNotices, type ComposerNotice, type ComposerNoticeProps, type ComposerNoticeTone, type NoticeProducer, type NoticeRegistration } from "@/extend/notices"
 import { cn } from "@/lib/utils"
 
 const GLYPHS = {
-  progress: { icon: Loader2Icon, className: "animate-spin text-muted-foreground motion-reduce:animate-none" },
+  progress: { icon: Spinner, className: "text-muted-foreground" },
   info: { icon: InfoIcon, className: "text-muted-foreground" },
   success: { icon: CircleCheckIcon, className: "text-positive" },
   caution: { icon: TriangleAlertIcon, className: "text-caution" },
   danger: { icon: OctagonXIcon, className: "text-negative" },
-} satisfies Record<ComposerNoticeTone, { icon: LucideIcon; className: string }>
+} satisfies Record<ComposerNoticeTone, { icon: ComponentType<LucideProps>; className: string }>
 
 /** The lip of the notice behind the front one, in that notice's tone. */
 const LIPS = {
