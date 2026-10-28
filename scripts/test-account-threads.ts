@@ -334,3 +334,18 @@ test("a device's list holds each Session's waiting messages as the list read and
   assert.equal(list.heard({ seq: 12, event: { type: "messages-waiting", session: uuid(1), messages: [] } }), true)
   assert.deepEqual([list.waiting(uuid(1)), list.allWaiting().size], [[], 0], "none once each was taken")
 })
+
+test("a device's list holds which devices are quiet, once each, as the list read and the stream said it, in order", () => {
+  const list = new AccountSessions()
+  const since = new Date(NOW - 3 * 60 * 60_000).toISOString()
+  assert.equal(list.heard({ seq: 11, event: { type: "device-quiet", deviceId: uuid(900), since: null } }), false, "before the read: waits")
+  assert.equal(list.listed({ sessions: [listed(1, "working")], seq: 10, quiet: [{ deviceId: uuid(900), since }] }), true)
+  assert.equal(list.quietSince(uuid(900)), undefined, "back, said after the read")
+  assert.equal(list.heard({ seq: 12, event: { type: "device-quiet", deviceId: uuid(900), since } }), true)
+  assert.equal(list.quietSince(uuid(900)), since)
+  assert.equal(list.sessions().get(uuid(1))?.state, "working", "its rows stand as it left them")
+  assert.equal(list.heard({ seq: 13, event: { type: "device-quiet", deviceId: uuid(901), since: null } }), false, "one that wasn't quiet, back: nothing changed")
+  assert.equal(list.listed({ sessions: [listed(1, "working")], seq: 13, quiet: [{ deviceId: uuid(900), since }] }), false, "read again, the same")
+  assert.equal(list.listed({ sessions: [listed(1, "working")], seq: 14 }), true, "read again from a list that says none")
+  assert.equal(list.quietSince(uuid(900)), undefined)
+})

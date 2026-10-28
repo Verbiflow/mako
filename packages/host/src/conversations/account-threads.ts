@@ -7,12 +7,15 @@ import type { ThreadListHeard } from "../usage/index.js"
  * `GET /v1/sessions` answered, then each change the stream says after it, in order, by its number. A change heard
  * before the list answered waits for it and applies only if it's newer; one heard twice, or older than the list,
  * changes nothing. So the list read and the stream can't disagree, whichever comes first. The cloud already held each
- * row to the one-owner rule; this keeps whatever it said last.
+ * row to the one-owner rule; this keeps whatever it said last. Which devices are quiet is kept beside the rows, once
+ * per device, as the cloud says it.
  */
 export class AccountSessions {
   readonly #sessions = new Map<string, ListedSession>()
   /** Each Session's messages waiting for its owner, as the list and the stream said them last. */
   readonly #waiting = new Map<string, WaitingMessage[]>()
+  /** Each quiet device, by ID: when the cloud last heard from it (`QuietDevice`). */
+  readonly #quiet = new Map<string, string>()
   /** The stream's number the list stands at; undefined until it's been read. */
   #seq: number | undefined
   readonly #early: ThreadListHeard[] = []
@@ -32,6 +35,11 @@ export class AccountSessions {
     return this.#waiting.get(session) ?? []
   }
 
+  /** When the cloud last heard from a quiet device; undefined for one it hears. */
+  quietSince(deviceId: string): string | undefined {
+    return this.#quiet.get(deviceId)
+  }
+
   /** Every Session with messages waiting, and them. */
   allWaiting(): ReadonlyMap<string, readonly WaitingMessage[]> {
     return this.#waiting
@@ -44,6 +52,8 @@ export class AccountSessions {
     for (const session of listings.sessions) this.#sessions.set(session.session, session)
     this.#waiting.clear()
     for (const message of listings.waiting ?? []) this.#waiting.set(message.session, [...(this.#waiting.get(message.session) ?? []), message])
+    this.#quiet.clear()
+    for (const { deviceId, since } of listings.quiet ?? []) this.#quiet.set(deviceId, since)
     this.#seq = listings.seq
     const early = this.#early.splice(0).sort((left, right) => left.seq - right.seq)
     for (const heard of early) this.#apply(heard)
@@ -63,6 +73,7 @@ export class AccountSessions {
   clear(): void {
     this.#sessions.clear()
     this.#waiting.clear()
+    this.#quiet.clear()
     this.#seq = undefined
     this.#early.length = 0
   }
@@ -79,6 +90,12 @@ export class AccountSessions {
       else this.#waiting.delete(event.session)
       return true
     }
+    if (event.type === "device-quiet") {
+      if (event.since === null) return this.#quiet.delete(event.deviceId)
+      const changed = this.#quiet.get(event.deviceId) !== event.since
+      this.#quiet.set(event.deviceId, event.since)
+      return changed
+    }
     let changed = false
     for (const session of event.sessions) changed = this.#sessions.delete(session) || changed
     return changed
@@ -86,6 +103,7 @@ export class AccountSessions {
 
   #snapshot(): string {
     const waiting = [...this.#waiting].sort(([left], [right]) => (left < right ? -1 : 1))
-    return JSON.stringify([[...this.#sessions.values()].sort((left, right) => (left.session < right.session ? -1 : 1)), waiting])
+    const quiet = [...this.#quiet].sort(([left], [right]) => (left < right ? -1 : 1))
+    return JSON.stringify([[...this.#sessions.values()].sort((left, right) => (left.session < right.session ? -1 : 1)), waiting, quiet])
   }
 }

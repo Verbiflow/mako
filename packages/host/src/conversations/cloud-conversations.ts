@@ -160,18 +160,24 @@ function keptApp({ kind, project, phase, processes, startedAt, address }: Looked
 
 /** How a list shows a Session's state, as a session's status: `waiting` is a turn at work, with what it waits on said beside. */
 const LISTED_STATUS = { working: "running", waiting: "running", idle: "ready", failed: "failed", moving: "starting" } as const satisfies Record<ListedState, LiveSummary["session"]["status"]>
+/**
+ * The same, for a row of a quiet device (`QuietDevice`): nothing there runs or answers for anyone else, so nothing is
+ * shown at work or waiting on the person; a message to it waits in the account until the device is back.
+ */
+const QUIET_STATUS = { ...LISTED_STATUS, working: "ready", waiting: "ready" } as const satisfies Record<ListedState, LiveSummary["session"]["status"]>
 
 /**
  * What a window lists of a Session it knows only from the account's list: the row, where it runs in words, and nothing
- * that takes its owner. Opening it reads the rest there, as it would any cloud conversation's.
+ * that takes its owner. Opening it reads the rest there, as it would any cloud conversation's. A row of a quiet device
+ * is listed as that device left it, but not at work.
  */
-function listedSummary(row: ListedSession, where: string): LiveSummary {
+function listedSummary(row: ListedSession, where: string, quiet: boolean): LiveSummary {
   const summary: LiveSummary = {
     session: {
       id: row.conversation,
       harness: row.harness,
       cwd: row.folder ?? "",
-      status: LISTED_STATUS[row.state],
+      status: (quiet ? QUIET_STATUS : LISTED_STATUS)[row.state],
       connection: "hibernated",
       modes: [],
       currentMode: null,
@@ -185,7 +191,7 @@ function listedSummary(row: ListedSession, where: string): LiveSummary {
   }
   if (row.title) summary.session.title = row.title
   if (row.threadTitle) summary.threadTitle = row.threadTitle
-  if (row.waitingOn) summary.waitingOn = row.waitingOn
+  if (row.waitingOn && !quiet) summary.waitingOn = row.waitingOn
   return summary
 }
 
@@ -1496,7 +1502,7 @@ export class CloudConversations {
    * nothing wakes a machine or reaches a Mac until one opens.
    */
   #reconcile(): void {
-    const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string }>()
+    const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string; quiet: boolean }>()
     for (const row of this.#list.sessions().values()) {
       if (!this.#listable(row)) continue
       if (row.runsOn.kind === "device") {
@@ -1504,8 +1510,9 @@ export class CloudConversations {
         const runtime = `d-${row.runsOn.deviceId}`
         const name = this.#deviceNames.get(row.runsOn.deviceId)
         if (name === undefined) this.#nameDevice(row.runsOn.deviceId)
-        wanted.set(row.conversation, { row, threadId: sessionStream(runtime, row.conversation), runtime, where: name ?? "another computer" })
-      } else if (!this.#options.returning?.(row.runsOn.threadId)) wanted.set(row.conversation, { row, threadId: row.runsOn.threadId, where: CLOUD_FOLDER_WHERE })
+        const quiet = this.#list.quietSince(row.runsOn.deviceId) !== undefined
+        wanted.set(row.conversation, { row, threadId: sessionStream(runtime, row.conversation), runtime, where: name ?? "another computer", quiet })
+      } else if (!this.#options.returning?.(row.runsOn.threadId)) wanted.set(row.conversation, { row, threadId: row.runsOn.threadId, where: CLOUD_FOLDER_WHERE, quiet: false })
     }
     const unlisted: string[] = []
     // Deleting from a Map as it's walked is safe: the walk goes on past what went.
@@ -1518,10 +1525,10 @@ export class CloudConversations {
       if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
     }
     const listed: LiveSummary[] = []
-    for (const [id, { row, threadId, runtime, where }] of wanted) {
+    for (const [id, { row, threadId, runtime, where, quiet }] of wanted) {
       const known = this.#entries.get(id)
       if (known && (!known.listed || this.#following.has(known.threadId))) continue
-      const summary = listedSummary(row, where)
+      const summary = listedSummary(row, where, quiet)
       if (known?.summary && JSON.stringify(known.summary) === JSON.stringify(summary)) continue
       const entry: Entry = known ?? { conversationId: id, threadId, harness: row.harness, createdAt: summary.createdAt, created: true, seq: 0, listed: true }
       if (runtime) entry.runtime = runtime

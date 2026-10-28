@@ -1076,6 +1076,43 @@ test("a second Mako on this Mac, which lists this Mac's own sessions as its own,
   assert.equal(shown(terminal.conversation), undefined)
 })
 
+test("a quiet device's rows are listed as it left them, but none at work or waiting on the person; heard from again, each says its state again", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const studio = "8e4b1f20-6a7c-4d9e-b0f1-2c3d4e5f6a7b"
+  const row = (state: ListedState, extra: Partial<ListedSession> = {}): ListedSession => ({
+    session: randomUUID(), thread: randomUUID(), conversation: randomUUID(), harness: "claude", title: "Retry the webhooks", state, folder: "/Users/ana/api",
+    createdAt: "2026-10-27T07:20:00.000Z", activityAt: "2026-10-27T07:20:00.000Z", generation: 1, runsOn: { kind: "device", deviceId: studio }, listedAt: "2026-10-27T07:20:01.000Z", ...extra,
+  })
+  const working = row("working")
+  const waiting = row("waiting", { waitingOn: "Approve: npm test" })
+  const failed = row("failed")
+  const inCloud = row("working", { runsOn: { kind: "cloud", threadId: "t-00000000000000ac" } })
+  const since = "2026-10-27T08:00:00.000Z"
+  machine.account.sessionListings = async () => ({ sessions: [working, waiting, failed, inCloud], seq: 3, quiet: [{ deviceId: studio, since }] })
+  machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
+  const listeners = new Set<(heard: ThreadListHeard | "account-changed") => void>()
+  machine.account.onThreadListings = (listener) => {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  }
+  const say = (heard: ThreadListHeard) => {
+    for (const listener of listeners) listener(heard)
+  }
+  const router = new CloudConversations({ account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-quiet-")), "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY })
+  after(() => router.dispose())
+  await router.start()
+  const shown = (each: ListedSession) => router.summaries().find((summary) => summary.session.id === each.conversation)
+  const states = () => [working, waiting, failed, inCloud].map((each) => [shown(each)?.session.status, shown(each)?.waitingOn])
+  await until("the list read and listed here", () => shown(working)?.elsewhere === "Studio")
+  assert.deepEqual(states(), [["ready", undefined], ["ready", undefined], ["failed", undefined], ["running", undefined]], "nothing on the quiet Studio shown at work or asking; the cloud machine's is")
+
+  say({ seq: 4, event: { type: "device-quiet", deviceId: studio, since: null } })
+  assert.deepEqual(states(), [["running", undefined], ["running", "Approve: npm test"], ["failed", undefined], ["running", undefined]], "back: each as it last said")
+  say({ seq: 5, event: { type: "device-quiet", deviceId: studio, since } })
+  assert.deepEqual(states().slice(0, 2), [["ready", undefined], ["ready", undefined]], "and quiet again")
+})
+
 test("another Mac's conversation while that Mac is off reads from the copy it keeps in the account, saying so, a page at a time; anything else is refused, saying why", async () => {
   const machine = await cloudMachine()
   const myDevice = await machine.account.deviceId()

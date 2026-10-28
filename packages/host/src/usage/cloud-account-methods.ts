@@ -109,7 +109,7 @@ export interface CloudAccount {
 }
 
 /** A change to the account's list of Sessions, as its stream said it. */
-export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: "sessions-listed" | "sessions-unlisted" | "messages-waiting" }> }
+export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: "sessions-listed" | "sessions-unlisted" | "messages-waiting" | "device-quiet" }> }
 
 /** The account's store of shared sign-ins in Mako Cloud, through this Mac's device sign-in. */
 export interface HarnessSignInStore {
@@ -214,7 +214,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     // to the account's Threads goes to what lists them, which tells windows of the conversations it changes.
     onAccountEvent: (heard) => {
       const { event } = heard
-      if (event.type === "sessions-listed" || event.type === "sessions-unlisted" || event.type === "messages-waiting") {
+      if (event.type === "sessions-listed" || event.type === "sessions-unlisted" || event.type === "messages-waiting" || event.type === "device-quiet") {
         for (const listener of threadListeners) listener({ seq: heard.seq, event })
         return
       }

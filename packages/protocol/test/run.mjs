@@ -1557,4 +1557,14 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.deepEqual(AccountEventSchema.parse({ type: "sessions-unlisted", sessions: [session.session] }), { type: "sessions-unlisted", sessions: [session.session] })
     assert.equal(AccountEventSchema.safeParse({ type: "sessions-unlisted", sessions: [] }).success, false, "an event says something")
   })
+
+  test("a quiet device is said once, not on each of its rows: on the list read, then each change on the stream", () => {
+    const quiet = { deviceId: mac.deviceId, since: "2026-10-27T08:00:00.000Z" }
+    assert.deepEqual(SessionListingsSchema.parse({ sessions: [listed], seq: 4, quiet: [quiet] }).quiet, [quiet])
+    assert.equal(SessionListingsSchema.parse({ sessions: [], seq: 4 }).quiet, undefined, "a gateway that says none")
+    assert.deepEqual(AccountEventSchema.parse({ type: "device-quiet", ...quiet }), { type: "device-quiet", ...quiet })
+    assert.deepEqual(AccountEventSchema.parse({ type: "device-quiet", deviceId: mac.deviceId, since: null }).since, null, "heard from again")
+    assert.equal(AccountEventSchema.safeParse({ type: "device-quiet", deviceId: mac.deviceId }).success, false, "quiet since when, or back, always said")
+    assert.equal(AccountEventSchema.safeParse({ type: "device-quiet", deviceId: "laptop", since: null }).success, false)
+  })
 })
