@@ -54,6 +54,8 @@ const SITUATIONS = {
     "Continue where you left off. Mako stopped your previous turn because it couldn't save this conversation; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
   "goal-budget":
     "Continue where you left off. Mako stopped your previous turn when the goal reached its token budget; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it.",
+  "machine-lost":
+    "Continue where you left off. Your previous turn was interrupted before it finished, and Mako brought this conversation and its files back as they were after your last finished step: a command or edit that was still running didn't finish, and anything you left running in the background stopped. Check the state of what you were in the middle of before repeating it.",
 } as const satisfies Record<InterruptionReason, string>
 
 /**

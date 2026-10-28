@@ -7,6 +7,7 @@ import { useRestoreVersionNotice } from "@/components/composer/restore-version-n
 import { useLedgerNotice } from "@/components/composer/ledger-notice"
 import { useCopyNotice } from "@/components/composer/copy-notice"
 import { useThreadMoveNotice } from "@/components/composer/thread-move-notice"
+import { useMachineNotice } from "@/components/composer/machine-notice"
 import { useSignInRecoveryNotice } from "@/components/composer/sign-in-recovery"
 import { useMovedReviewNotice } from "@/components/composer/moved-review-notice"
 import { useWorkspaceMoveNotice } from "@/components/composer/workspace-move-card"
@@ -42,6 +43,7 @@ export function installComposerNotices(): Array<() => void> {
     registerNotice("approval-status", useApprovalStatusNotice),
     registerNotice("workspace-move", useWorkspaceMoveNotice),
     registerNotice("thread-move", useThreadMoveNotice),
+    registerNotice("cloud-machine", useMachineNotice),
     registerNotice("moved-review", useMovedReviewNotice),
   ]
 }

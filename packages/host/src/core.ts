@@ -16,7 +16,7 @@ import { heavy } from "./base/heavy-packages.js"
 import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
 import { readPower } from "./base/power.js"
-import { SessionIdSchema } from "./contracts/thread-identity.js"
+import { SessionIdSchema, type ThreadId } from "./contracts/thread-identity.js"
 import { threadArchiveKey, type ArchiveAnswer, type ArchiveCommand, type CloudArchiveOutcome } from "./contracts/thread-lifecycle.js"
 import type { ArchivedThread } from "@mako/protocol/thread-listing"
 import type { Domain } from "./base/host-domains.js"
@@ -46,7 +46,8 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { workspaceWrites } from "./base/workspace-writes.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -110,6 +111,13 @@ export interface Core {
    * Thread's there (`ThreadCatalog.syncRecords`), and its project's recipe with the account's (`RecipeAccounts`).
    */
   machineLinked(link: MachineGatewayLink | null): Promise<void>
+  /**
+   * On a cloud machine made to replace a lost one: its Thread's save of an earlier generation restored, before its
+   * runtime connects (`restoreSave`); undefined when there was nothing to restore.
+   */
+  restoreMachineSave(link: MachineGatewayLink, generation: number): Promise<{ from: number; ms: number } | undefined>
+  /** On a cloud machine: its tracker's saves, told whether anything works and asked for the save a turn's end waits for. */
+  machineSaves: { working(busy: boolean): void; settle(why: string): Promise<void> } | undefined
   /** On a project base's builder: what a start in `path` does first, done before its snapshot. */
   prepareFolder(path: string): Promise<void>
   /** On a cloud machine as it boots: what `harness`'s start runs first, run ahead (`startPrefetch`). */
@@ -157,6 +165,8 @@ interface LateParts {
   automations?: Automations
   updates?: Updates
   attribution?: Attribution
+  /** On a cloud machine: its tracker (`openMachineTracker`), made once the conversations are. */
+  machineTracker?: MachineTracker
 }
 
 export async function openCore(shell: CoreShell): Promise<Core> {
@@ -231,7 +241,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // Selecting a child repository is not a commit in the parent workspace.
     if (event.type === "git" && !event.git.repositories?.length) late.automations?.noticeHead(event.git.head)
     // Turns, tool calls and background work starting and ending: who was running when a file changed.
-    if (event.type === "live-batch") late.attribution?.live(event.batch)
+    if (event.type === "live-batch") {
+      late.attribution?.live(event.batch)
+      // On a cloud machine, the same reading says when to save the Thread.
+      late.machineTracker?.observe(event.batch)
+    }
     // A conversation another device watches goes to it as it changes (`SessionPublisher`), and its row may change.
     late.sessions?.own(event)
     // A Session archived here leaves the account's list on every device: its owner's word is the one that counts.
@@ -922,6 +936,75 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     worker: new URL("./usage-worker.js", import.meta.url),
     strictStores: fixtureDesk,
   })
+  /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`), and a lost machine's restore. */
+  const arrival: MoveArrivalDeps | undefined = config.machineAgentFd === undefined ? undefined : {
+    git,
+    records: () => machineRecords(machineLink),
+    workspace: () => workspaceClients.homePath(),
+    workspaceProblem: () => machineWorkspace.problem,
+    workspaceSettled: () => machineWorkspace.settled(),
+    receive: (link, sessions, installed) => catalog.receiveRecords(link, sessions, installed),
+    stage: (link, sessions) => catalog.stageRecords(link, sessions),
+    installed: (harness) => installedReading(harnesses.updates.restoreRuntime(harness)),
+    open: async (session) => {
+      // Settled as every start's are: the harness's catalog fills what the device's settings leave out.
+      const tuning = await harnesses.profiles.resolveLaunch(session.harness, session.folder, session.tuning)
+      await live.start(session.harness, session.folder, {
+        conversationId: session.conversationId, resume: session.nativeId, threadPath: session.path,
+        ...session.modeId !== undefined && { modeId: session.modeId },
+        ...tuning !== undefined && { tuning },
+      })
+      await live.opened(session.conversationId)
+    },
+    take: (handoff) => {
+      const store = threads.store
+      if (!store) throw new Error("This machine's Thread store isn't open.")
+      store.takeArrival({ operationId: namedUuid(`mako move\0${handoff.move}\0arrive`), handoff, actor: store.person() })
+    },
+    // The launch settings a session's start resolves (a harness's model catalog, which OpenCode reads by starting a
+    // whole server): read now, in the folder, with the session's own settings, so the hand-over's start finds them.
+    warm: async (harness, folder, tuning) => {
+      await harnesses.profiles.resolveLaunch(harness, folder, tuning)
+    },
+    signedIn: (harness) => machineSignIns?.some((install) => install.harness === harness && install.status === "installed"),
+    refreshCarried: async () => shell.refreshMachineCarried?.(),
+    label: (harness) => opened.harnessLabel(harness),
+    scratch: join(environment.dataRoot, "moves"),
+    ahead: new Map(),
+    carryHistory: async (history) => {
+      const attribution = late.attribution
+      if (!attribution) return false
+      await attribution.carryThreadHistory(history)
+      return true
+    },
+    clone: (repository) => cloneRepository(git, repository),
+  }
+  /** The Thread's files outside its folder that this machine's journal ties to it, with strong evidence: what a carry takes. */
+  const threadOutside = (thread: ThreadId) => late.attribution?.changes(thread).outside.filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? []
+  const threadHistory = (thread: ThreadId) => late.attribution?.threadHistory(thread)
+  /** On a cloud machine: its tracker, which saves the Thread as it changes and restores a lost machine's save. */
+  const machineTracker = arrival && openMachineTracker({
+    git,
+    dataRoot: environment.dataRoot,
+    gateway: () => machineLink ?? undefined,
+    records: (gateway) => machineRecords(gateway)!,
+    workspace: () => workspaceClients.homePath(),
+    live: {
+      summaries: () => live.summaries(),
+      activeRequest: (id) => live.activeRequest(id),
+      continueTurn: (conversationId, input) => void live.continueTurn(conversationId, input),
+    },
+    remembered: (harness, nativeId) => threads.memory?.recall(harness, nativeId),
+    store: () => threads.store ?? undefined,
+    sendRecords: (link, paths) => catalog.sendRecords(link, paths),
+    arrival,
+    carry: { git, scratch: join(environment.dataRoot, "moves"), outside: threadOutside, history: threadHistory },
+  })
+  // Mako's own writes to the checkout (a person's edit through Files, a Git action): saved as a tool call's are.
+  late.machineTracker = machineTracker
+  const unwatchSaves = machineTracker && workspaceWrites.subscribe((write) => {
+    if (write.paths.length) machineTracker?.saves.changed("Mako wrote files")
+  })
   declareConversationMethods(methods, {
     conversations: opened,
     profiles: harnesses.profiles,
@@ -934,49 +1017,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     workspace,
     emit,
-    ...(config.machineAgentFd !== undefined && {
-      arrival: {
-        git,
-        records: () => machineRecords(machineLink),
-        workspace: () => workspaceClients.homePath(),
-        workspaceProblem: () => machineWorkspace.problem,
-        workspaceSettled: () => machineWorkspace.settled(),
-        receive: (link, sessions, installed) => catalog.receiveRecords(link, sessions, installed),
-        stage: (link, sessions) => catalog.stageRecords(link, sessions),
-        installed: (harness) => installedReading(harnesses.updates.restoreRuntime(harness)),
-        open: async (session) => {
-          // Settled as every start's are: the harness's catalog fills what the device's settings leave out.
-          const tuning = await harnesses.profiles.resolveLaunch(session.harness, session.folder, session.tuning)
-          await live.start(session.harness, session.folder, {
-            conversationId: session.conversationId, resume: session.nativeId, threadPath: session.path,
-            ...session.modeId !== undefined && { modeId: session.modeId },
-            ...tuning !== undefined && { tuning },
-          })
-          await live.opened(session.conversationId)
-        },
-        take: (handoff) => {
-          const store = threads.store
-          if (!store) throw new Error("This machine's Thread store isn't open.")
-          store.takeArrival({ operationId: namedUuid(`mako move\0${handoff.move}\0arrive`), handoff, actor: store.person() })
-        },
-        // The launch settings a session's start resolves (a harness's model catalog, which OpenCode reads by starting a
-        // whole server): read now, in the folder, with the session's own settings, so the hand-over's start finds them.
-        warm: async (harness, folder, tuning) => {
-          await harnesses.profiles.resolveLaunch(harness, folder, tuning)
-        },
-        signedIn: (harness) => machineSignIns?.some((install) => install.harness === harness && install.status === "installed"),
-        refreshCarried: async () => shell.refreshMachineCarried?.(),
-        label: (harness) => opened.harnessLabel(harness),
-        scratch: join(environment.dataRoot, "moves"),
-        ahead: new Map(),
-        carryHistory: async (history) => {
-          const attribution = late.attribution
-          if (!attribution) return false
-          await attribution.carryThreadHistory(history)
-          return true
-        },
-        clone: (repository) => cloneRepository(git, repository),
-      },
+    ...(arrival && {
+      arrival,
       departure: {
         git,
         records: () => machineRecords(machineLink),
@@ -991,8 +1033,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         },
         send: (link, paths) => catalog.sendRecords(link, paths),
         scratch: join(environment.dataRoot, "moves"),
-        outside: (thread) => late.attribution?.changes(thread).outside.filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? [],
-        history: (thread) => late.attribution?.threadHistory(thread),
+        outside: threadOutside,
+        history: threadHistory,
       },
     }),
   })
@@ -1145,6 +1187,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       machineLink = link
       await catalog.syncRecords(machineRecords(link) ?? null)
     },
+    restoreMachineSave: async (link, generation) => machineTracker?.restore(link, generation),
+    machineSaves: machineTracker && {
+      working: (busy) => machineTracker?.saves.working(busy),
+      settle: (why) => machineTracker?.saves.settle(why) ?? Promise.resolve(),
+    },
     machineWorkspaceFailed: (problem) => machineWorkspace.failed(problem),
     machineCarriedFiles: (files) => {
       machineCarried = files
@@ -1161,6 +1208,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {
       jobs.stop()
+      machineTracker?.saves.stop()
+      unwatchSaves?.()
       unfollowEffects?.()
       unfollowBounds?.()
       await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))

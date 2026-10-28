@@ -217,6 +217,12 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         },
         media: () => core.current()?.media,
         linked: async (link) => (await core.load("the machine's link")).machineLinked(link),
+        restore: async (link, generation) => (await core.load("restore the Thread's save")).restoreMachineSave(link, generation),
+        // Once the core has loaded; before then nothing works, so there's nothing to save.
+        saves: {
+          working: (busy) => core.current()?.machineSaves?.working(busy),
+          settle: async (why) => core.current()?.machineSaves?.settle(why),
+        },
       })
     }
     web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {

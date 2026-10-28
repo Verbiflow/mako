@@ -93,6 +93,12 @@ export type HostEventBody =
    */
   | { type: "thread-follow-stopped"; conversations: string[]; folders: string[]; at: number }
   | { type: "thread-return-step"; conversationId: string; move: string; step: ThreadReturnStep }
+  /**
+   * The cloud's word on a cloud Thread's work, as its object says it in the Thread's stream, only when the person's own
+   * work is affected: changes its machine couldn't keep, or a Thread that can't carry on without them. For each of the
+   * Thread's conversations this host shows; the newest stands.
+   */
+  | { type: "cloud-machine-notice"; conversationIds: string[]; notice: import("@mako/protocol/saves").ThreadMachineNotice }
   /** An agent's tool changed this device's worktrees; windows read them again. */
   | { type: "worktrees-changed" }
   /** An agent's tool pushed, opened or merged a pull request; windows read GitHub and the worktrees' summaries again. */

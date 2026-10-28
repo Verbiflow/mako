@@ -298,8 +298,6 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
   if (!link) throw new Error("This host isn't a cloud machine's: no Thread's records are linked here.")
   const workspace = deps.workspace()
   if (workspace !== input.folder) throw new Error(`This machine's folder is ${workspace ?? `not made${deps.workspaceProblem() ? ` (${deps.workspaceProblem()})` : ""}`}, not the move's ${input.folder}.`)
-  const gitDir = (await deps.git.output(input.folder, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim()
-  const mark = join(gitDir, `mako-move-${input.move}.json`)
   // Each part timed, so a slow hand-over says where it waited.
   const parts: Record<string, number> = {}
   const timed = async <Value>(part: string, work: () => Promise<Value>): Promise<Value> => {
@@ -310,32 +308,29 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
       parts[part] = Math.round(performance.now() - at)
     }
   }
-  let checkout: MoveArrival["checkout"] = "arrived"
-  let carried: MoveArrival["carried"]
-  if (!existsSync(mark)) {
-    const stagedMark = join(gitDir, `mako-stage-${input.move}.json`)
-    const staged = existsSync(stagedMark) ? StagedMarkSchema.safeParse(JSON.parse(await readFile(stagedMark, "utf8"))).data : undefined
-    // Staged ahead and unchanged since: the clone already reads as the checkout, which is proven, not assumed. Else
-    // the newest is laid over what was staged (nothing has run here, so nothing of the machine's own is lost).
-    const unchanged = staged?.sha256 === input.checkpoint.sha256 && await timed("checkpointVerified", () => verifyMoveCheckpoint(deps.git, input.folder, input.checkpoint).then(() => true, () => false))
-    if (!unchanged) {
-      await mkdir(deps.scratch, { recursive: true })
-      const scratch = await mkdtemp(join(deps.scratch, "move-"))
-      try {
-        const file = join(scratch, "checkpoint.bundle")
-        await timed("checkpointRead", () => readCheckpoint(link, input.checkpoint.sha256, file))
-        await timed("checkpointApplied", () => applyMoveCheckpoint(deps.git, input.folder, file, input.checkpoint, { replace: staged !== undefined }))
-      } finally {
-        await rm(scratch, { recursive: true, force: true })
-      }
-    }
-    // The carry before the mark: a repeat that finds the mark has had all of it, and never lays it over the agent's work.
-    const carry = input.carry
-    if (carry) carried = await timed("carry", () => part("What it carries couldn't be placed here", () => arriveCarry(deps, link, input, carry, gitDir)))
-    await writeFile(mark, JSON.stringify(ArrivedMarkSchema.parse({ move: input.move, sha256: input.checkpoint.sha256, at: Date.now() })))
-    await rm(stagedMark, { force: true })
-    checkout = unchanged ? "staged" : "applied"
-  }
+  const { checkout, carried } = await applyArrivalCheckout(deps, input, link, timed)
+  const { sessions, received } = await openArrivedSessions(deps, input, link, timed)
+  const ms = Math.round(performance.now() - began)
+  hostLog("moves", "a Thread arrived from a device", {
+    move: input.move, folder: input.folder, checkout, sessions: sessions.length, ms, ...parts,
+    ...carried && { repositories: carried.repositories, outside: carried.outside, outsideFailed: carried.failed.length, history: carried.history },
+    openMs: sessions.map((session) => session.opened?.ms ?? "none").join(","),
+    received: received.map((each) => `${each.harness}: pulled ${describeSync(each.pulled)}; ${each.restored.kind}${"ms" in each.restored ? ` in ${each.restored.ms} ms` : ""}`).join("; "),
+  })
+  return { checkout, sessions, ms, parts, ...carried && { carried } }
+}
+
+/**
+ * What an arrival does once the checkout reads as it should: the carried files placed again, each session's records
+ * written into its harness's store, the Thread taken into this machine's store under its IDs, and each session opened
+ * as the same native session, one at a time. A machine restoring a lost one's save (`machine-restore.ts`) does the same.
+ */
+export async function openArrivedSessions(
+  deps: MoveArrivalDeps,
+  input: Pick<MoveArrivalInput, "folder" | "sessions" | "handoff">,
+  link: RecordsLink,
+  timed: <Value>(part: string, work: () => Promise<Value>) => Promise<Value> = (_part, work) => work()
+): Promise<{ sessions: MoveArrival["sessions"]; received: ReceivedRecords[] }> {
   // The carried files placed once the checkout reads as the device's (its apply cleans what Git doesn't track), beside
   // the records, and before any session opens.
   const carrying = timed("carried", async () => deps.refreshCarried?.().catch((error: Error) => hostWarn("moves", "the carried files weren't placed again as a move arrived", { error: error.message })))
@@ -372,25 +367,66 @@ export async function arriveMove(deps: MoveArrivalDeps, input: MoveArrivalInput)
     }
     at.opened = { ms: Math.round(performance.now() - opening) }
   }
-  const ms = Math.round(performance.now() - began)
-  hostLog("moves", "a Thread arrived from a device", {
-    move: input.move, folder: input.folder, checkout, sessions: sessions.length, ms, ...parts,
-    ...carried && { repositories: carried.repositories, outside: carried.outside, outsideFailed: carried.failed.length, history: carried.history },
-    openMs: sessions.map((session) => session.opened?.ms ?? "none").join(","),
-    received: received.map((each) => `${each.harness}: pulled ${describeSync(each.pulled)}; ${each.restored.kind}${"ms" in each.restored ? ` in ${each.restored.ms} ms` : ""}`).join("; "),
-  })
-  return { checkout, sessions, ms, parts, ...carried && { carried } }
+  return { sessions, received }
+}
+
+/** What an arrival's checkout takes of its deps: Git, its scratch, and for a carry, the journal and cloning. */
+export type ArrivalCheckoutDeps = Pick<MoveArrivalDeps, "git" | "scratch" | "carryHistory" | "clone">
+
+/**
+ * An arrival's checkout: the checkpoint laid over the machine's clone once, then proven, unless it was staged ahead
+ * unchanged; then its carry, if it has one (`arriveCarry`). A mark in the clone's Git folder says the move arrived, so
+ * a repeat never writes over work done since. A machine restoring a lost one's save does the same, under the restore's
+ * own move.
+ */
+export async function applyArrivalCheckout(
+  deps: ArrivalCheckoutDeps,
+  input: Pick<MoveArrivalInput, "move" | "folder" | "checkpoint" | "carry"> & { restoring?: true },
+  link: RecordsLink,
+  timed: <Value>(part: string, work: () => Promise<Value>) => Promise<Value> = (_part, work) => work()
+): Promise<{ checkout: MoveArrival["checkout"]; carried?: MoveArrival["carried"] }> {
+  const gitDir = (await deps.git.output(input.folder, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim()
+  const mark = join(gitDir, `mako-move-${input.move}.json`)
+  let checkout: MoveArrival["checkout"] = "arrived"
+  let carried: MoveArrival["carried"]
+  if (!existsSync(mark)) {
+    const stagedMark = join(gitDir, `mako-stage-${input.move}.json`)
+    const staged = existsSync(stagedMark) ? StagedMarkSchema.safeParse(JSON.parse(await readFile(stagedMark, "utf8"))).data : undefined
+    // Staged ahead and unchanged since: the clone already reads as the checkout, which is proven, not assumed. Else
+    // the newest is laid over what was staged (nothing has run here, so nothing of the machine's own is lost).
+    const unchanged = staged?.sha256 === input.checkpoint.sha256 && await timed("checkpointVerified", () => verifyMoveCheckpoint(deps.git, input.folder, input.checkpoint).then(() => true, () => false))
+    if (!unchanged) {
+      await mkdir(deps.scratch, { recursive: true })
+      const scratch = await mkdtemp(join(deps.scratch, "move-"))
+      try {
+        const file = join(scratch, "checkpoint.bundle")
+        await timed("checkpointRead", () => readCheckpoint(link, input.checkpoint.sha256, file))
+        await timed("checkpointApplied", () => applyMoveCheckpoint(deps.git, input.folder, file, input.checkpoint, { replace: staged !== undefined }))
+      } finally {
+        await rm(scratch, { recursive: true, force: true })
+      }
+    }
+    // The carry before the mark: a repeat that finds the mark has had all of it, and never lays it over the agent's work.
+    const carry = input.carry
+    if (carry) carried = await timed("carry", () => part("What it carries couldn't be placed here", () => arriveCarry(deps, link, input, carry, gitDir)))
+    await writeFile(mark, JSON.stringify(ArrivedMarkSchema.parse({ move: input.move, sha256: input.checkpoint.sha256, at: Date.now() })))
+    await rm(stagedMark, { force: true })
+    checkout = unchanged ? "staged" : "applied"
+  }
+  return { checkout, ...carried && { carried } }
 }
 
 /** Where a machine keeps the carry that arrived, in the first repository's Git folder: what its departure weighs against. */
 export const ARRIVED_CARRY = "mako-carry.json"
 
 /**
- * A move's carry where it lands: its other repositories' checkouts applied to the clones made beside the first as the
- * machine got ready, its outside files placed at their paths, and its file history taken; then its manifest kept
- * (`ARRIVED_CARRY`) for the departure. An outside file this machine can't place is said, never failing the move.
+ * A move's carry where it lands: its other repositories' checkouts applied to their clones, its outside files placed
+ * at their paths, and its file history taken; then its manifest kept (`ARRIVED_CARRY`) for the departure and for this
+ * machine's saves. A move clones the other repositories as the machine gets ready; a machine restoring a lost one's
+ * save, which nothing got ready, clones one it lacks here first. An outside file this machine can't place is said,
+ * never failing the move.
  */
-async function arriveCarry(deps: MoveArrivalDeps, link: RecordsLink, input: MoveArrivalInput, ref: MoveCarryRef, gitDir: string): Promise<NonNullable<MoveArrival["carried"]>> {
+async function arriveCarry(deps: ArrivalCheckoutDeps, link: RecordsLink, input: Pick<MoveArrivalInput, "move" | "checkpoint"> & { restoring?: true }, ref: MoveCarryRef, gitDir: string): Promise<NonNullable<MoveArrival["carried"]>> {
   await mkdir(deps.scratch, { recursive: true })
   const scratch = await mkdtemp(join(deps.scratch, "carry-"))
   try {
@@ -399,8 +435,13 @@ async function arriveCarry(deps: MoveArrivalDeps, link: RecordsLink, input: Move
     const opened = await openCarry(deps.git, file, ref, scratch)
     const carry: MoveCarry = opened.carry
     const first = carry.repositories[0]
-    if (first?.checkpoint.sha256 !== input.checkpoint.sha256) throw new Error("The carry names another checkout than the move's.")
+    // A move's carry names its checkout; a save's may be a turn older than its checkpoint, which governs the first.
+    if (!input.restoring && first?.checkpoint.sha256 !== input.checkpoint.sha256) throw new Error("The carry names another checkout than the move's.")
     for (const repository of carry.repositories.slice(1)) {
+      if (!existsSync(repository.path)) {
+        if (!repository.url || !deps.clone) throw new Error(`${repository.path} isn't on this machine, and it can't be cloned here.`)
+        await deps.clone({ path: repository.path, url: repository.url, ...repository.branch && { branch: repository.branch } })
+      }
       const bundle = join(scratch, `${repository.checkpoint.sha256}.bundle`)
       await readCheckpoint(link, repository.checkpoint.sha256, bundle)
       await applyMoveCheckpoint(deps.git, repository.path, bundle, repository.checkpoint, { replace: true })

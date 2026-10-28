@@ -202,7 +202,7 @@ async function packUp(deps: MoveDepartureDeps, input: MoveDepartureInput, link: 
   // The checkout and the records go up at once: neither waits on the other, and the device takes both only once the
   // cloud has the departure, which names both. The carry names the checkout, so it follows it.
   const [{ checkpoint, carry }, sent] = await Promise.all([
-    sendCheckout(deps, input, link).then(async (checkpoint) => ({ checkpoint, carry: input.carry ? await sendCarry(deps, input, link, thread, checkpoint) : undefined })),
+    sendCheckout(deps, input, link).then(async (checkpoint) => ({ checkpoint, carry: input.carry ? await sendThreadCarry(deps, { folder: input.folder, thread, checkpoint }, link, `move ${input.move}`) : undefined })),
     withFreshLink(() => deps.records() ?? link, (current) => deps.send(current, natives.map((native) => native.path))),
   ])
   const sessions = natives.map((native) => {
@@ -237,15 +237,25 @@ async function sendBundle(link: RecordsLink, ref: MoveCarryRef, file: string, wh
  * history; the manifest it arrived with (`ARRIVED_CARRY`) says which came. A Thread that arrived without one carries
  * what this machine's journal ties to it.
  */
-async function sendCarry(deps: MoveDepartureDeps, input: MoveDepartureInput, link: RecordsLink, thread: ThreadId, checkpoint: ReturnDeparture["checkpoint"]): Promise<MoveCarryRef> {
-  const gitDir = (await deps.git.output(input.folder, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim()
+/** What a carry of the Thread on this machine reads: Git, a scratch folder, and the journal's outside files and file history. */
+export type ThreadCarryDeps = Pick<MoveDepartureDeps, "git" | "scratch" | "outside" | "history">
+
+/**
+ * The Thread's carry as it stands on this machine, sent up beside its records unless the cloud has it: each other
+ * repository the carry it arrived with names (the first's checkpoint is `at.checkpoint`), its files outside its folder
+ * that changed here, those gone, and its file history. What its departure packs for the way back, and what a save takes
+ * so a machine restoring it (`machine-restore.ts`) lays all of it down. `why` names the caller in the log.
+ */
+export async function sendThreadCarry(deps: ThreadCarryDeps, at: { folder: string; thread: ThreadId; checkpoint: ReturnDeparture["checkpoint"] }, link: RecordsLink, why: string): Promise<MoveCarryRef> {
+  const { thread, checkpoint } = at
+  const gitDir = (await deps.git.output(at.folder, ["rev-parse", "--path-format=absolute", "--git-dir"])).trim()
   const marked = join(gitDir, ARRIVED_CARRY)
   const arrived = existsSync(marked) ? MoveCarrySchema.safeParse(JSON.parse(await readFile(marked, "utf8"))).data : undefined
-  const folder = arrived?.folder ?? input.folder
+  const folder = arrived?.folder ?? at.folder
   await mkdir(deps.scratch, { recursive: true })
   const scratch = await mkdtemp(join(deps.scratch, "carry-"))
   try {
-    const repositories: MoveCarryRepository[] = [{ path: input.folder, checkpoint }]
+    const repositories: MoveCarryRepository[] = [{ path: at.folder, checkpoint }]
     for (const other of arrived?.repositories.slice(1) ?? []) {
       const captured = await captureMoveCheckpoint(deps.git, other.path, await mkdtemp(join(scratch, "checkout-")))
       await sendBundle(link, captured.checkpoint, captured.file, `The checkout of ${other.path}`)
@@ -262,7 +272,7 @@ async function sendCarry(deps: MoveDepartureDeps, input: MoveDepartureInput, lin
     const history = deps.history?.(thread)
     const carry = await captureCarry(deps.git, { folder, repositories, outside: changed, left, gone, ...history && { history } }, scratch)
     await sendBundle(link, carry.ref, carry.file, "What it carries")
-    hostLog("moves", "a Thread's carry was packed for its way back", { move: input.move, repositories: repositories.length, outside: changed.length, gone: gone.length, left: left.length, history: history !== undefined, bytes: carry.ref.bytes })
+    hostLog("moves", "a Thread's carry was packed", { for: why, repositories: repositories.length, outside: changed.length, gone: gone.length, left: left.length, history: history !== undefined, bytes: carry.ref.bytes })
     return carry.ref
   } finally {
     await rm(scratch, { recursive: true, force: true })
