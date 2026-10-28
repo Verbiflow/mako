@@ -1,7 +1,7 @@
 import { createContext, useContext } from "react"
 import { z } from "zod"
 import { AccountList } from "./account-list"
-import { reportAttention } from "./account"
+import { reportAttention } from "./attention"
 import type { WebConversations } from "./conversations"
 import { ARCHIVE_PLANS, Gateway, type WebAccount, type WebConnection } from "./gateway"
 import { WebPush } from "./push"
@@ -20,6 +20,11 @@ export interface WebClientOptions {
   signInUrl(next: string): string
   /** The build serving the page, for Diagnostics. */
   build?: string
+  /**
+   * Called once, after the app's first screen has painted with the account's Threads and the screens it reads next (a
+   * Thread, New) have arrived: the moment for the page's own work that can wait, such as installing its service worker.
+   */
+  painted?(): void
 }
 
 /** One signed-in browser: its gateway, the account's list it follows, its conversations and its notifications. */

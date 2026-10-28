@@ -33,6 +33,11 @@ export interface WebClientOptions {
   signInUrl(next: string): string
   /** The build serving the page, for Diagnostics. */
   build?: string
+  /**
+   * Called once, after the app's first screen has painted with the account's Threads and the screens it reads next (a
+   * Thread, New) have arrived: the moment for the page's own work that can wait, such as installing its service worker.
+   */
+  painted?(): void
 }
 
 /** The browser's sign-in ended: signed out here or on another device, or it ran out. */

@@ -15,7 +15,8 @@ import { acpStore } from "@/state/acp-state"
 import { threadsStore } from "@/state/thread-store"
 import { CONSOLE_LOG, type Gateway } from "./gateway"
 import type { WebSession } from "./threads"
-import { webHarnessDescriptors } from "./labels"
+import { harnessDescriptors } from "@/dev/harness-descriptors"
+import type { HarnessDescriptor } from "@/lib/types"
 
 const RESUBSCRIBE_MS = [250, 1_000, 2_000, 5_000, 10_000] as const
 /** What `mako:resolve-file-references` names first: the conversation whose transcript's words are being resolved. */
@@ -256,4 +257,12 @@ export class WebConversations {
   wake(): void {
     this.#gateway.wake()
   }
+}
+
+/**
+ * Every harness as the host describes it on any Mac, each runnable: what the renderer reads for a harness's name, mark
+ * and what it can do (steering, modes). Generated from the harness definitions (`npm run harness:descriptors`).
+ */
+function webHarnessDescriptors(): HarnessDescriptor[] {
+  return harnessDescriptors.map((descriptor) => ({ ...descriptor, live: true }))
 }

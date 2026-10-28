@@ -107,7 +107,7 @@
     position: absolute;
     top: 0;
     right: 0;
-    left: 68px;
+    left: 72px;
     border-top: 1px solid var(--hairline);
   }
   /* What needs the person sits on a card of its own, at the head of the list. */
@@ -118,7 +118,7 @@
     @apply pl-3.5;
   }
   .web-needs li + li > .web-row::before {
-    left: 62px;
+    left: 66px;
   }
 
   .web-button {

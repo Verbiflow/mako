@@ -55,6 +55,48 @@ test("one row per Thread, folded by its ID, the ones that need the person first"
   assert.equal(threads[0]?.sessions[0]?.owner.kind, "device")
 })
 
+test("the phone folds the account's Sessions into Threads as a Mac's rail does: one rule, the same rows, the same Threads", async () => {
+  // Another Mac's Thread of three Sessions (its second a fork, its third another harness), listed out of order; a cloud
+  // Thread of two; two Threads of one Session each that share a title, as two Threads made with one prompt do.
+  const rows = [
+    row(13, { thread: uuid(500), harness: "cursor", runsOn: { kind: "device", deviceId: STUDIO }, threadTitle: "Find the flaky payments test" }),
+    row(11, { thread: uuid(500), harness: "codex", runsOn: { kind: "device", deviceId: STUDIO }, threadTitle: "Find the flaky payments test" }),
+    row(12, { thread: uuid(500), harness: "codex", runsOn: { kind: "device", deviceId: STUDIO }, threadTitle: "Find the flaky payments test", title: "Fork of the flaky test" }),
+    row(14, { thread: uuid(600), harness: "claude" }),
+    row(15, { thread: uuid(600), harness: "opencode", state: "working" }),
+    row(16, { thread: uuid(700), runsOn: { kind: "device", deviceId: STUDIO }, threadTitle: "Run the payments suite" }),
+    row(17, { thread: uuid(800), runsOn: { kind: "device", deviceId: STUDIO }, threadTitle: "Run the payments suite" }),
+  ]
+  const { threads } = foldThreads({ rows, devices, quiet: new Map(), waiting: new Map(), archived: [] })
+  // The rail reads its modules' stores at import, which keep drafts in the browser's storage.
+  const kept = new Map<string, string>()
+  Object.assign(globalThis, { localStorage: { getItem: (key: string) => kept.get(key) ?? null, setItem: (key: string, value: string) => kept.set(key, value), removeItem: (key: string) => kept.delete(key) } })
+  const { foldThreads: foldRail } = await import("../src/lib/thread-fold")
+  // What a Mac's window holds for each row the account lists (`selectAcpPresence` of the host's `listedSummary`): no
+  // Thread of this Mac's store, so its Thread is the one the row names.
+  const sessions = threads.flatMap((thread) => thread.sessions)
+  const rail = foldRail(
+    sessions.map(({ summary }) => ({
+      kind: "live" as const,
+      key: summary.session.id,
+      presence: { key: summary.session.id, harness: summary.session.harness, cwd: summary.session.cwd, createdAt: summary.createdAt, status: "ready" as const, threadId: summary.threadId, sessionId: summary.sessionId, elsewhere: summary.elsewhere },
+    })),
+    {},
+    {}
+  )
+  const railThreads = sessions
+    .map((session) => session.row.conversation)
+    .filter((conversation) => !rail.hidden.has(conversation))
+    .map((lead) => rail.byLead.get(lead)?.members.map((member) => member.key) ?? [lead])
+  assert.deepEqual(
+    threads.map((thread) => thread.sessions.map((session) => session.row.conversation)).sort(),
+    railThreads.sort(),
+    "the same Sessions make each Thread, in the same order, on the phone and on a Mac"
+  )
+  assert.equal(threads.length, 4, "a fork is a Session of its Thread; two Threads with one title stay two")
+  assert.deepEqual(threads.find((thread) => thread.id === uuid(500))?.sessions.map((session) => session.row.conversation), ["c11", "c12", "c13"])
+})
+
 test("a quiet device's rows stand as it left them, none at work, and its Thread says when it was seen", () => {
   const rows = [row(5, { thread: uuid(400), state: "waiting", waitingOn: "Approve: rm", runsOn: { kind: "device", deviceId: STUDIO } })]
   const { threads } = foldThreads({ rows, devices, quiet: new Map([[STUDIO, at(-180)]]), waiting: new Map(), archived: [] })

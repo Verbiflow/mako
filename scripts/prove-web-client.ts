@@ -20,7 +20,8 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * this host's runtime link, answers its approvals, sends to it and stops it.
  *
  * Lines on stdin drive it; each answers with one line on stdout:
- * - `start`: a Codex Thread in `api` at "Ask first", whose first turn asks to run the payments tests. `STARTED <conversation>`
+ * - `start`: a Codex Session in `api` at "Ask first", whose first turn asks to run the payments tests: the first makes its
+ *   Thread, each after is a Session added to it. `STARTED <conversation>`
  * - `quit` (or stdin's end): signs the host out, so its device leaves the account, stops it, and removes the root unless `--keep`.
  *
  * No harness runs on anything of the person's: the home is the scratch one, Codex's sign-in an API key the stand-in takes.
@@ -235,10 +236,20 @@ const stop = async () => {
   if (!values.keep) await rm(root, { recursive: true, force: true })
   process.exit(0)
 }
+/** What `mako:live-start` and `mako:thread-create-session` answer that a start reads: the Thread, and the new Session. */
+const StartedSchema = z.object({ threadId: z.string() }).loose()
+const PlacedSchema = z.object({ session: z.string() }).loose()
+// `start`: a live Session asking for approval. The first makes its Thread; each after is a Session added to that Thread,
+// as Add a Session does, so however many a proof asks for, every list shows one Thread.
+let flaky: string | undefined
 for await (const line of createInterface({ input: process.stdin })) {
   if (line.trim() === "start") {
     const conversationId = randomUUID()
-    await call("mako:live-start", ["codex", api, { conversationId, modeId: "access:ask", title: "Find the flaky payments test", initialRequest: { id: randomUUID(), text: "Run the payments tests and find out which one is flaky on CI.", attachments: [] } }])
+    const options = { conversationId, modeId: "access:ask", title: "Find the flaky payments test", initialRequest: { id: randomUUID(), text: "Run the payments tests and find out which one is flaky on CI.", attachments: [] } }
+    if (flaky) {
+      const placed = PlacedSchema.parse(await call("mako:thread-create-session", [randomUUID(), flaky]))
+      await call("mako:live-start", ["codex", api, { ...options, session: placed.session }])
+    } else flaky = StartedSchema.parse(await call("mako:live-start", ["codex", api, options])).threadId
     console.log(`STARTED ${conversationId}`)
   } else if (line.trim() === "quit") break
 }
