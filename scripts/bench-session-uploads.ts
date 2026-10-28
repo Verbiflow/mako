@@ -120,7 +120,7 @@ const listed = ownedSessions({
   now: Date.now,
 })
 const pathOf = (harness: string, nativeId: string) => native.find((ref) => ref.harness === harness && ref.nativeId === nativeId)?.path
-const scope = uploadScope(listed, { onBattery: false, percent: undefined, lowPower: false }, pathOf)
+const scope = uploadScope(listed, { onBattery: false, percent: undefined, lowPower: false }, pathOf, Date.now())
 
 const scratch = join(process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp"), `bench-session-uploads-${Date.now()}`)
 mkdirSync(scratch, { recursive: true })

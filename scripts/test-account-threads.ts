@@ -3,12 +3,13 @@ import { test } from "node:test"
 import type { Payload } from "@mako/protocol"
 import { rowsForLink, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import { AccountSessions } from "@mako/host/conversations/account-threads"
-import { LISTED_FOR_MS, nativeConversation, ownedSessions, SessionPublisher, SessionReporter, type NativeRow, type ReportSources } from "@mako/host/conversations/session-report"
+import { nativeConversation, ownedSessions, SessionPublisher, SessionReporter, type NativeRow, type ReportSources } from "@mako/host/conversations/session-report"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
-import { SessionUploads, uploadScope, UPLOAD_BATTERY_FLOOR } from "@mako/host/conversations/session-uploads"
+import { SessionUploads, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
+import { SYNC_WINDOW_MS } from "@mako/host/conversations/sync-window"
 import { parsePower, type PowerReading } from "@mako/host/base/power"
 import type { RecordsLink } from "@mako/sessions/record-sync"
-import type { CopyScope } from "@mako/sessions/reading-copies"
+import type { CatalogSyncStatus, SyncFailure, SyncScope } from "@mako/sessions/scoped-uploads"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { DeviceIdSchema, MoveIdSchema, RuntimeIdSchema, type SessionExecution } from "@mako/host/contracts/thread-execution"
@@ -31,7 +32,7 @@ const summary = (id: string, createdAt: number, session: Partial<LiveSummary["se
 const work = (id: string, status: LifecycleWork["status"]): LifecycleWork => ({ id, token: id, title: "", provider: "codex", cwd: "", status, stoppable: true })
 
 /** A host with conversations c-1.. filed under Sessions uuid(1).. of Thread uuid(100), each owned here unless `executions` says. */
-function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; executions?: Record<string, SessionExecution>; waiting?: Record<string, string>; moved?: Record<string, number>; title?: string; native?: NativeRow[]; activity?: Record<string, ExternalThreadActivity>; archived?: string[] } = {}): ReportSources {
+function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; executions?: Record<string, SessionExecution>; waiting?: Record<string, string>; moved?: Record<string, number>; title?: string; native?: NativeRow[]; activity?: Record<string, ExternalThreadActivity>; archived?: string[]; threads?: Record<string, number> } = {}): ReportSources {
   const index = (id: string) => Number(id.slice(2))
   return {
     summaries: () => summaries,
@@ -42,14 +43,14 @@ function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; execu
     archived: (id) => options.archived?.includes(id) ?? false,
     lastMoved: (id) => options.moved?.[id],
     // SAFETY: test IDs in the Thread store's shapes, which brand plain UUIDs.
-    placement: (id) => ({ thread: uuid(100), session: uuid(index(id)) }) as never,
+    placement: (id) => ({ thread: uuid(options.threads?.[id] ?? 100), session: uuid(index(id)) }) as never,
     execution: (session) => options.executions?.[session],
     thread: () => (options.title ? { title: options.title, titleSource: "user" } : { title: "made by an old build", titleSource: "auto" }),
     now: () => NOW,
   }
 }
 
-test("a host lists the Sessions it owns, newest first, each as the lifecycle sees it, at the generation its store holds", () => {
+test("a host lists the Sessions it owns, at work first, then newest first, each as the lifecycle sees it, at the generation its store holds", () => {
   const here = (generation: number): SessionExecution => ({ state: "here", owner: { kind: "device", device: DeviceIdSchema.parse(uuid(900)) }, generation })
   const rows = ownedSessions(host(
     [
@@ -75,20 +76,22 @@ test("a host lists the Sessions it owns, newest first, each as the lifecycle see
   assert.deepEqual(rows.map((row) => [row.conversation, row.state, row.generation]), [
     ["c-2", "waiting", 1],
     ["c-7", "moving", 4],
-    ["c-4", "idle", 3],
     ["c-3", "working", 1],
+    ["c-5", "idle", 1],
+    ["c-4", "idle", 3],
     ["c-1", "failed", 1],
-  ], "closed and elsewhere aren't listed; a Session in transit is, as moving, at its generation")
+  ], "the ones at work first, then the newest; a closed conversation is listed (another device's message reopens it), one elsewhere isn't; a Session in transit is, as moving, at its generation")
   assert.equal(rows[0]?.waitingOn, "Approve: npm test")
   assert.equal(rows[0]?.threadTitle, "Webhooks")
   assert.equal(rows.find((row) => row.conversation === "c-1")?.title, "Fix the flaky test")
   assert.equal(ownedSessions(host([summary("c-1", NOW)]))[0]?.threadTitle, undefined, "an older build's automatic title isn't shown anywhere")
 })
 
-test("a Session moved more than 30 days ago isn't listed unless it works or waits; when it moved is its journal's last write", () => {
-  const old = NOW - LISTED_FOR_MS - 1
-  const rows = ownedSessions(host([summary("c-1", old), summary("c-2", old), summary("c-3", old)], { work: [work("c-2", "running")], moved: { "c-3": NOW - 60_000 } }))
-  assert.deepEqual(rows.map((row) => row.conversation).sort(), ["c-2", "c-3"])
+test("a Thread worked in within 30 days is listed whole, its older Sessions too; an older one only while a Session of it works or waits; when it moved is its journal's last write", () => {
+  const old = NOW - SYNC_WINDOW_MS - 1
+  const threads = { "c-1": 101, "c-2": 102, "c-3": 103, "c-4": 103 }
+  const rows = ownedSessions(host([summary("c-1", old), summary("c-2", old), summary("c-3", old), summary("c-4", old)], { work: [work("c-2", "running")], moved: { "c-3": NOW - 60_000 }, threads }))
+  assert.deepEqual(rows.map((row) => row.conversation), ["c-2", "c-3", "c-4"], "at work first; then Thread 103 whole, its Session of 31 days ago with it")
   assert.equal(rows.find((row) => row.conversation === "c-3")?.activityAt, new Date(NOW - 60_000).toISOString())
 })
 
@@ -128,7 +131,7 @@ test("the sessions a terminal or another app runs are listed beside Mako's own, 
       nativeRow(24, NOW - 4_000, { sessionId: uuid(23), threadId: uuid(223) }),
       // At rest, within 30 days; and older than the list keeps.
       nativeRow(25, NOW - 6_000),
-      nativeRow(26, NOW - LISTED_FOR_MS - 1),
+      nativeRow(26, NOW - SYNC_WINDOW_MS - 1),
       // Deleted or archived by its harness; moved to the cloud; never placed in a Thread.
       nativeRow(27, NOW - 1_000, { archived: true }),
       nativeRow(28, NOW - 1_000, { nativeArchived: true }),
@@ -249,61 +252,95 @@ test("macOS's power reads as pmset says it: the source, the battery, and Low Pow
   assert.deepEqual(parsePower("", ""), { onBattery: false, percent: undefined, lowPower: false }, "nothing said reads as plugged in")
 })
 
-test("a device's history goes up at work first, then newest first; catching up waits on a low battery; the scope always goes before the link", async () => {
+test("a device's Sessions go up at work first, then each Thread whole, the most recently worked in first, by tier; catching up waits on a low battery; the scope always goes before the links", async () => {
   const plugged: PowerReading = { onBattery: false, percent: 100, lowPower: false }
+  const hoursAgo = (hours: number) => new Date(NOW - hours * 3_600_000).toISOString()
+  const at = (base: ReportedSession, activityAt: string, thread: number): ReportedSession => ({ ...base, activityAt, thread: uuid(thread) })
   const rows: ReportedSession[] = [
-    { ...row(1), nativeId: "n-1" },
-    { ...row(2, "working"), nativeId: "n-2" },
-    { ...row(3), nativeId: "n-3" },
-    { ...row(4, "waiting"), nativeId: "n-4" },
-    row(5),
+    // Thread 101: worked in an hour ago, with a Session of 20 days ago that goes with it.
+    { ...at(row(1), hoursAgo(1), 101), nativeId: "n-1" },
+    { ...at(row(6), hoursAgo(24 * 20), 101), nativeId: "n-6" },
+    { ...at(row(2, "working"), hoursAgo(30), 102), nativeId: "n-2" },
+    { ...at(row(3), hoursAgo(2), 103), nativeId: "n-3" },
+    { ...at(row(4, "waiting"), hoursAgo(24 * 40), 104), nativeId: "n-4" },
+    // Thread 105: three days ago; Thread 106: twelve days ago.
+    { ...at(row(7), hoursAgo(72), 105), nativeId: "n-7" },
+    { ...at(row(8), hoursAgo(24 * 12), 106), nativeId: "n-8" },
+    at(row(5), hoursAgo(1), 107),
   ]
   const pathOf = (_harness: string, nativeId: string) => (nativeId === "n-3" ? undefined : `/rail/${nativeId}.jsonl`)
-  assert.deepEqual(uploadScope(rows, plugged, pathOf).sessions.map((each) => [each.nativeId, each.path, each.busy]), [["n-2", "/rail/n-2.jsonl", true], ["n-4", "/rail/n-4.jsonl", true], ["n-1", "/rail/n-1.jsonl", false]], "at work first, each as listed, where the rail reads it; one with no native session yet, or the rail doesn't list, waits")
-  assert.equal(uploadScope(rows, { onBattery: true, percent: UPLOAD_BATTERY_FLOOR - 1, lowPower: false }, pathOf).paused, true)
-  assert.equal(uploadScope(rows, { onBattery: true, percent: UPLOAD_BATTERY_FLOOR, lowPower: false }, pathOf).paused, false)
-  assert.equal(uploadScope(rows, { ...plugged, lowPower: true }, pathOf).paused, true)
+  assert.deepEqual(uploadScope(rows, plugged, pathOf, NOW).sessions.map((each) => [each.nativeId, each.tier, each.busy]), [
+    ["n-2", "now", true],
+    ["n-4", "now", true],
+    ["n-1", "day", false],
+    ["n-6", "day", false],
+    ["n-7", "week", false],
+    ["n-8", "month", false],
+  ], "at work first, then each Thread whole by its last activity, each in its Thread's tier; one with no native session yet, or the catalog doesn't list, waits")
+  assert.equal(uploadScope(rows, { onBattery: true, percent: UPLOAD_BATTERY_FLOOR - 1, lowPower: false }, pathOf, NOW).paused, true)
+  assert.equal(uploadScope(rows, { onBattery: true, percent: UPLOAD_BATTERY_FLOOR, lowPower: false }, pathOf, NOW).paused, false)
+  assert.equal(uploadScope(rows, { ...plugged, lowPower: true }, pathOf, NOW).paused, true)
 
   const said: string[] = []
-  let link: RecordsLink | undefined
+  let links: UploadLinks = { state: "off", reason: "no-cloud" }
   let listedRows: ReportedSession[] | undefined
   let power = plugged
   let powerReads = 0
-  let now = 0
+  let now = NOW
+  const tiers = { now: tierCount(2), day: tierCount(2), week: tierCount(1), month: tierCount(1) }
+  const failure = { at: NOW, harness: "codex", nativeId: "n-8", message: "The gateway answered 500 (PUT /chunks answered 500, correlation c-9)", correlationId: "c-9" }
+  let catalog: CatalogSyncStatus | null = null
   const uploads = new SessionUploads({
     rows: () => listedRows,
     path: pathOf,
-    link: async () => link,
+    links: async () => links,
     power: async () => (powerReads++, power),
-    scope: async (scope: CopyScope) => void said.push(`scope ${scope.sessions.map((each) => each.nativeId).join(",")}${scope.paused ? " waiting" : ""}`),
-    sync: async (given) => void said.push(given ? `link ${given.authorization}` : "stop"),
+    scope: async (scope: SyncScope) => void said.push(`scope ${scope.sessions.map((each) => each.nativeId).join(",")}${scope.paused ? " waiting" : ""}`),
+    copies: async (given) => void said.push(given ? `copies ${given.authorization}` : "stop copies"),
+    originals: async (given) => void said.push(given ? `originals ${given.authorization}` : "stop originals"),
+    status: async () => catalog,
+    backfill: async () => undefined,
     now: () => now,
   })
   await uploads.tick()
-  assert.deepEqual(said, [], "signed out, or no cloud: nothing leaves the Mac")
-  link = { id: "d-1", base: "https://cloud.test/v1/devices/d-1/records", authorization: "Bearer a" }
+  assert.deepEqual([said, uploads.status()], [[], { state: "off", reason: "no-cloud" }], "no cloud: nothing leaves the Mac, and the status says why")
+  const link = (index: string, authorization: string): RecordsLink => ({ id: `d-1/${index}`, base: `https://cloud.test/v1/devices/d-1/${index}`, authorization })
+  links = { state: "on", copies: link("records", "Bearer a"), originals: link("originals", "Bearer a") }
   await uploads.tick()
-  assert.deepEqual(said, [], "no link before the Sessions are known: it would catch up on the whole store")
+  assert.deepEqual(said, [], "no links before the Sessions are known: they would catch up on the whole store")
   listedRows = rows
   await uploads.tick()
-  assert.deepEqual(said, ["scope n-2,n-4,n-1", "link Bearer a"])
+  assert.deepEqual(said, ["scope n-2,n-4,n-1,n-6,n-7,n-8", "copies Bearer a", "originals Bearer a"])
+  assert.deepEqual(uploads.status(), { state: "starting", sessions: 6 })
   await uploads.tick()
-  assert.equal(said.length, 2, "nothing changed: nothing said")
-  link = { ...link, authorization: "Bearer b" }
+  assert.equal(said.length, 3, "nothing changed: nothing said")
+  links = { state: "on", copies: link("records", "Bearer b"), originals: link("originals", "Bearer b") }
+  catalog = { paused: false, tiers, stale: 0, copies: activity(), originals: activity([failure]) }
   await uploads.tick()
-  assert.deepEqual(said.slice(2), ["link Bearer b"], "a renewed token, the link again")
+  assert.deepEqual(said.slice(3), ["copies Bearer b", "originals Bearer b"], "a renewed token, the links again")
+  const status = uploads.status()
+  assert.equal(status.state, "failing")
+  assert.deepEqual("failures" in status ? status.failures : [], [failure], "a failure is said with the gateway's correlation ID")
+  catalog = { ...catalog, originals: activity() }
+  await uploads.tick()
+  assert.equal(uploads.status().state, "synced", "every Session readable and whole in the account")
   power = { onBattery: true, percent: 12, lowPower: false }
   now += 30_000
   await uploads.tick()
-  assert.equal(said.length, 3, "the power read at most once a minute")
+  assert.equal(said.length, 5, "the power read at most once a minute")
   now += 30_000
   await uploads.tick()
-  assert.deepEqual(said.slice(3), ["scope n-2,n-4,n-1 waiting"])
+  assert.deepEqual(said.slice(5), ["scope n-2,n-4,n-1,n-6,n-7,n-8 waiting"])
   assert.equal(powerReads, 2)
-  link = undefined
+  links = { state: "off", reason: "signed-out" }
   await uploads.tick()
-  assert.deepEqual(said.slice(4), ["stop"], "signed out: it stops")
+  assert.deepEqual(said.slice(6), ["stop copies", "stop originals"], "signed out: it stops")
+  assert.deepEqual(uploads.status(), { state: "off", reason: "signed-out" })
 })
+
+/** A tier whose `sessions` are all in the account, as one Thread. */
+const tierCount = (sessions: number) => ({ sessions, threads: 1, readable: sessions, held: sessions, whole: sessions, inCloud: sessions, threadsInCloud: 1 })
+const activity = (failures: SyncFailure[] = []) => ({ sending: [], paused: false, pushes: 1, bytes: 10, failed: failures.length, lastSuccessAt: NOW, failures })
 
 const listed = (n: number, state: ListedSession["state"] = "idle"): ListedSession => ({ ...row(n, state), runsOn: { kind: "device", deviceId: uuid(900) }, listedAt: new Date(NOW).toISOString() })
 

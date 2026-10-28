@@ -16,6 +16,8 @@ const fixtureReads = [
   /** Builds the workspace shell, which has no provider behind it. */
   "mako:boot",
   "mako:capabilities",
+  /** Answers from memory: a fixture desk uploads nothing, so it's always off. */
+  "mako:sync-status",
   "mako:lifecycle-state",
   "mako:installation-state",
   "mako:update-state",

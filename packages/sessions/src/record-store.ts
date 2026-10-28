@@ -77,9 +77,11 @@ const READS_VERSION = 2
 /** The first format Mako released: a store from before it is moved aside. */
 const RELEASED_SCHEMA = 2
 /** Every table of the store, each guarded against an older build's writes once the format is raised (`guardStoreWrites`). */
-const RECORD_TABLES = ["chunks", "units", "versions", "sessions", "session_units", "session_paths", "child_paths", "marks", "captures", "orphans", "intents", "intent_claims", "unnamed", "remote_units", "remote_sessions", "remote_session_units", "meta"] as const
+const RECORD_TABLES = ["chunks", "units", "versions", "sessions", "session_units", "session_paths", "child_paths", "marks", "captures", "orphans", "intents", "intent_claims", "unnamed", "remote_units", "remote_sessions", "remote_session_units", "remote_pushed", "meta"] as const
 /** Additive changes this build made to the format, each a name in `meta.additions`; a build that doesn't know one ignores what it added. */
-const ADDITIONS = ["writers", "children", "intents", "remotes", "remote-sessions"]
+const ADDITIONS = ["writers", "children", "intents", "remotes", "remote-sessions", "remote-pushed"]
+/** Each session's newest capture by `<harness>\n<native id>` (`RecordStore.captureHeads`), and the newest capture of all. */
+export type CaptureHeads = { heads: Map<string, number>; through: number }
 /** One batch of `RecordStore.exportFor`: at most `limit` versions, from the unit after `cursor`. */
 export type ExportPage = { limit?: number; cursor?: number }
 /** A unit as an export reads it, with what a remote is known to hold of it. */
@@ -1185,7 +1187,7 @@ export class RecordStore {
         }
         const versions = Number(this.prepared(`DELETE FROM versions WHERE unit IN (${own})`).run(session).changes)
         const units = Number(this.prepared(`DELETE FROM units WHERE id IN (${own})`).run(session).changes)
-        for (const table of ["session_units", "session_paths", "child_paths", "marks", "captures"]) this.prepared(`DELETE FROM ${table} WHERE session = ?`).run(session)
+        for (const table of ["session_units", "session_paths", "child_paths", "marks", "captures", "remote_pushed"]) this.prepared(`DELETE FROM ${table} WHERE session = ?`).run(session)
         this.prepared("DELETE FROM sessions WHERE id = ?").run(session)
         // A capture that found one of these chunks held before they became candidates, and hasn't named it yet, starts over.
         this.prepared(`INSERT INTO meta (key, value) VALUES (?, '1') ON CONFLICT (key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)`).run(DROPPED)
@@ -1498,6 +1500,11 @@ export class RecordStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS remote_session_units (remote TEXT NOT NULL, session INTEGER NOT NULL, unit INTEGER NOT NULL, head INTEGER NOT NULL, PRIMARY KEY (remote, session, unit)) WITHOUT ROWID;
     `)
+    // Addition: how far each remote holds a session, by the last capture a push of it took whole (`notePushed`): what a
+    // device's uploads read to know which Sessions are in the account, without reading their units.
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS remote_pushed (remote TEXT NOT NULL, session INTEGER NOT NULL, capture INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (remote, session)) WITHOUT ROWID;
+    `)
     if (!z.object({ name: z.string() }).array().parse(this.db.prepare("PRAGMA table_info(chunks)").all()).some((column) => column.name === "intent"))
       this.db.exec("ALTER TABLE chunks ADD COLUMN intent INTEGER")
     const additions = new Set((meta("additions") ?? "").split(" ").filter(Boolean))
@@ -1749,6 +1756,39 @@ export class RecordStore {
         if (this.db.isTransaction) this.db.exec("ROLLBACK")
         throw error
       }
+    })
+  }
+
+  /**
+   * Each session's newest capture that took something, by `<harness>\n<native id>`, past capture `after` only: a
+   * session the store holds with no such capture (pulled, not captured) reads 0 when `after` is 0. With the newest
+   * capture's number, which the next call passes as `after` to read only what landed since, from any process.
+   */
+  captureHeads(after = 0): CaptureHeads {
+    const heads = new Map<string, number>()
+    const rows = z.object({ harness: z.string(), nativeId: z.string(), capture: z.number() }).array()
+    const found = after > 0
+      ? this.prepared("SELECT s.harness, s.native_id AS nativeId, max(c.id) AS capture FROM captures c JOIN sessions s ON s.id = c.session WHERE c.id > ? GROUP BY c.session").all(after)
+      : this.prepared("SELECT s.harness, s.native_id AS nativeId, coalesce(max(c.id), 0) AS capture FROM sessions s LEFT JOIN captures c ON c.session = s.id WHERE s.layout IS NOT NULL GROUP BY s.id").all()
+    for (const row of rows.parse(found)) heads.set(`${row.harness}\n${row.nativeId}`, row.capture)
+    const through = z.object({ id: z.number().nullable() }).parse(this.prepared("SELECT max(id) AS id FROM captures").get()).id ?? 0
+    return { heads, through }
+  }
+
+  /** What `remote` holds whole of each session, by the capture its last whole push took (`notePushed`), and when. */
+  pushed(remote: string): Map<string, { capture: number; at: number }> {
+    const rows = z.object({ harness: z.string(), nativeId: z.string(), capture: z.number(), at: z.number() }).array()
+      .parse(this.prepared("SELECT s.harness, s.native_id AS nativeId, p.capture, p.at FROM remote_pushed p JOIN sessions s ON s.id = p.session WHERE p.remote = ?").all(remote))
+    return new Map(rows.map((row) => [`${row.harness}\n${row.nativeId}`, { capture: row.capture, at: row.at }]))
+  }
+
+  /** `remote` took every version of the session there was as of capture `capture` (`captureHeads`): a push of it ended with nothing left. */
+  notePushed(remote: string, harness: string, nativeId: string, capture: number, at: number): Promise<void> {
+    this.writable()
+    return this.serially(async () => {
+      const session = this.sessionId(harness, nativeId, false)
+      if (session === null) return
+      this.prepared("INSERT INTO remote_pushed (remote, session, capture, at) VALUES (?, ?, ?, ?) ON CONFLICT (remote, session) DO UPDATE SET capture = max(capture, excluded.capture), at = excluded.at").run(remote, session, capture, at)
     })
   }
 

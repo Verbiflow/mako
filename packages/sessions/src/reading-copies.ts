@@ -8,7 +8,8 @@ import { recordsOverHttp } from "@mako/protocol/records-http"
 import type { ThreadRef } from "./format.js"
 import { NativeStores } from "./read-only-sqlite.js"
 import { RecordStore } from "./record-store.js"
-import { RecordPushes, RecordSync, type PushStatus, type RecordRemote, type RecordsLink } from "./record-sync.js"
+import { RecordSync, type RecordRemote, type RecordsLink } from "./record-sync.js"
+import { ScopedUploads, type SyncScope, type UploadsStatus } from "./scoped-uploads.js"
 import { EntrySchema, type Entry } from "./entries.js"
 import type { SessionView } from "./view-cache.js"
 
@@ -16,23 +17,15 @@ import type { SessionView } from "./view-cache.js"
  * A device's reading copies: each Session its account lists, as Mako draws it (its view's entries, one JSON line
  * each), kept in the account's records for that device, so another device reads one while this one is off. Not the
  * Session's records: a Cursor chat's records hold its store's every checkpoint, and an editor chat's the editor's whole
- * database; a copy holds only what Mako shows, and reads on a device without the harness. Moving a Session still
- * sends its records, from its owner, awake.
+ * database; a copy holds only what Mako shows, and reads on a device without the harness. The records go up beside
+ * it, to the device's originals (`SessionCatalog.syncOriginals`), for continuing the Session anywhere.
  *
- * A copy is written where its Session changed and its turn came: one at work every 10 s (a large one less often, its
- * size permitting), one at rest a minute after it last went, in the scope's order, the ones at work first. Each is
- * captured into a record store of its own, so content-defined chunks carry only what changed, and pushed to the
- * account by the pushes a device runs (`RecordPushes`).
+ * A copy is written where its Session changed and its turn came: one at work or worked in today every 10 s (a large
+ * one less often, its size permitting), an older one a minute after it last went, in the scope's order (`SyncScope`), the ones at work
+ * first. Each is captured into a record store of its own, so content-defined chunks carry only what changed, and
+ * pushed to the account in the same order (`ScopedUploads`), which keeps in that store what the account holds.
  */
 export const COPY_FORMAT = 1
-
-/** Which Sessions a device keeps copies of, most wanted first, by their native session and where the catalog reads it. */
-export const CopyScopeSchema = z.object({
-  sessions: z.array(z.object({ harness: z.string().min(1), nativeId: z.string().min(1), path: z.string().min(1), busy: z.boolean() })).max(10_000),
-  /** Catching up waits (on a low battery): only Sessions at work are copied meanwhile. */
-  paused: z.boolean(),
-})
-export type CopyScope = z.infer<typeof CopyScopeSchema>
 
 /** A copy's first line: what it's a copy of, drawn by which decoder build, from which state of its records, and when. */
 export const CopyHeaderSchema = z.object({
@@ -60,10 +53,12 @@ export type CopyViews = {
 /** How often a Session at work is copied, at the least: a large one waits longer, by its size. */
 const BUSY_EVERY_MS = 10_000
 const BUSY_MS_PER_MIB = 2_000
-/** And one at rest, after it last went. */
+/** And one at rest since before today, after it last went. */
 const REST_EVERY_MS = 60_000
 /** How often copies are looked at; a look that finds nothing changed reads a stamp a Session. */
 const LOOK_EVERY_MS = 5_000
+/** Catching up on copies goes at no more than this, so a first upload of a month never fills the connection. */
+const COPIES_BYTES_PER_SECOND = 1024 * 1024
 
 /**
  * Where a Session's copy is written, under the copies' folder. Not `.jsonl`: the record store takes a `.jsonl` file
@@ -105,16 +100,15 @@ export class ReadingCopies {
   readonly #now: () => number
   readonly #remote: (link: { current: RecordsLink }) => RecordRemote
   #store: RecordStore | null = null
-  #pushes: RecordPushes | null = null
+  #uploads: ScopedUploads | null = null
   #link: { current: RecordsLink } | null = null
-  #scope: CopyScope | null = null
+  #scope: SyncScope | null = null
   /** What each Session's copy was last written from, by `<harness>\n<native id>`; read from the files after a restart. */
   readonly #copied = new Map<string, Copied>()
   #looking: Promise<void> | undefined
   #again = false
   #timer: ReturnType<typeof setInterval> | undefined
   #stopped = false
-  #written = 0
 
   constructor(
     folder: string,
@@ -130,44 +124,59 @@ export class ReadingCopies {
   }
 
   /** The Sessions to keep copies of, most wanted first; said again as the list changes. */
-  scope(scope: CopyScope): void {
+  scope(scope: SyncScope): void {
     this.#scope = scope
-    this.#pushes?.scoped({ sessions: scope.sessions.map(({ harness, nativeId }) => ({ harness, nativeId })), paused: scope.paused })
+    this.#uploads?.scope(scope)
     this.#look()
   }
 
   /** Where copies go (this device's records in the account); null stops. A renewed credential goes on where it was. */
   link(link: RecordsLink | null): void {
     const held = this.#link
-    if (link && held && this.#pushes && held.current.id === link.id && held.current.base === link.base) {
+    if (link && held && this.#uploads && held.current.id === link.id && held.current.base === link.base) {
       held.current = link
       return
     }
-    this.#pushes?.stop()
-    this.#pushes = null
+    this.#uploads?.stop()
+    this.#uploads = null
     this.#link = null
     if (this.#timer) clearInterval(this.#timer)
     this.#timer = undefined
     if (!link || this.#stopped) return
     const store = this.#open()
     const remote = { current: link }
-    this.#pushes = new RecordPushes(store, this.#remote(remote), this.#log)
+    this.#uploads = new ScopedUploads(store, this.#remote(remote), this.#log, { bytesPerSecond: COPIES_BYTES_PER_SECOND })
     this.#link = remote
-    if (this.#scope) this.#pushes.scoped({ sessions: this.#scope.sessions.map(({ harness, nativeId }) => ({ harness, nativeId })), paused: this.#scope.paused })
+    if (this.#scope) this.#uploads.scope(this.#scope)
     this.#timer = setInterval(() => this.#look(), LOOK_EVERY_MS)
     this.#timer.unref?.()
     this.#look()
   }
 
-  status(): (PushStatus & { copies: number; written: number }) | null {
-    const pushes = this.#pushes?.status()
-    return pushes ? { ...pushes, copies: this.#copied.size, written: this.#written } : null
+  /** How the copies' uploads go; null without a link. */
+  status(): UploadsStatus | null {
+    return this.#uploads?.status() ?? null
+  }
+
+  /**
+   * Whether another device can read the Session as it is now: its copy in the account, and drawn from the Session's
+   * records as they are (a newer copy waits for its turn otherwise: `current`).
+   */
+  readable(session: SyncScope["sessions"][number]): boolean {
+    return (this.#uploads?.inCloud(session.harness, session.nativeId) ?? false) && this.current(session)
+  }
+
+  /** Whether the Session's copy was written from its records as they are now; true when its records can't be read. */
+  current(session: SyncScope["sessions"][number]): boolean {
+    const records = this.#views.stamp(session.path)
+    const copied = this.#copied.get(`${session.harness}\n${session.nativeId}`)
+    return !records || !copied || copied.stamp === `${records}\n${this.#views.translator()}`
   }
 
   /** Once the look under way and the pushes it started have settled. */
   async settled(): Promise<void> {
     while (this.#looking) await this.#looking
-    await this.#pushes?.settled()
+    await this.#uploads?.settled()
   }
 
   stop(): void {
@@ -184,7 +193,7 @@ export class ReadingCopies {
 
   /** Looks at every Session in scope, now or once the look under way ends. */
   #look(): void {
-    if (this.#stopped || !this.#pushes || !this.#scope) return
+    if (this.#stopped || !this.#uploads || !this.#scope) return
     if (this.#looking) {
       this.#again = true
       return
@@ -205,7 +214,7 @@ export class ReadingCopies {
     if (!scope) return
     const translator = this.#views.translator()
     for (const session of scope.sessions) {
-      if (this.#stopped || !this.#pushes || this.#scope !== scope) return
+      if (this.#stopped || !this.#uploads || this.#scope !== scope) return
       if (scope.paused && !session.busy) continue
       const records = this.#views.stamp(session.path)
       if (!records) continue
@@ -215,7 +224,9 @@ export class ReadingCopies {
       const copied = this.#copied.get(key) ?? (await this.#fromFile(key, file))
       if (copied?.stamp === stamp) continue
       const now = this.#now()
-      const every = session.busy ? Math.max(BUSY_EVERY_MS, ((copied?.bytes ?? 0) / (1024 * 1024)) * BUSY_MS_PER_MIB) : REST_EVERY_MS
+      // One at work, or worked in today, goes again within seconds of a change (a large one as its size allows): a turn
+      // that just ended is the one another device opens next. Older ones changing again wait a minute.
+      const every = session.busy || session.tier === "day" ? Math.max(BUSY_EVERY_MS, ((copied?.bytes ?? 0) / (1024 * 1024)) * BUSY_MS_PER_MIB) : REST_EVERY_MS
       if (copied && now - copied.at < every) continue
       await this.#copy(session, key, file, stamp)
       // Yield to the person between Sessions: a large copy is written in one go.
@@ -232,7 +243,7 @@ export class ReadingCopies {
     return copied
   }
 
-  async #copy(session: CopyScope["sessions"][number], key: string, file: string, stamp: string): Promise<void> {
+  async #copy(session: SyncScope["sessions"][number], key: string, file: string, stamp: string): Promise<void> {
     await mkdir(dirname(file), { recursive: true })
     const served = await this.#views.view(session.path)
     if (!served || this.#stopped) return
@@ -268,8 +279,7 @@ export class ReadingCopies {
     const root = join(this.#folder, "files")
     await this.#open().capture({ harness: session.harness, nativeId: session.nativeId, home: root, records: { roots: [{ name: "copy", path: root }], files: [file], databases: [] } })
     this.#copied.set(key, { stamp, at: header.at, bytes })
-    this.#written += 1
-    this.#pushes?.captured(session.harness, session.nativeId)
+    this.#uploads?.look()
   }
 }
 

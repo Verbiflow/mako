@@ -162,6 +162,7 @@ function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMov
     },
     threadRecords: async (threadId) => ({ id: threadId, base: `https://gateway.test/v1/threads/${threadId}/records`, authorization: "Bearer token" }),
     deviceRecords: async (deviceId) => ({ id: deviceId, base: `https://gateway.test/v1/devices/${deviceId}/records`, authorization: "Bearer token" }),
+    deviceOriginals: async (deviceId) => ({ id: deviceId, base: `https://gateway.test/v1/devices/${deviceId}/originals`, authorization: "Bearer token" }),
     // The way back's, which this test never takes (`test-cloud-returns.ts` does).
     readCheckpoint: () => Promise.reject(new Error("no return in this test")),
     beginReturn: () => Promise.reject(new Error("no return in this test")),

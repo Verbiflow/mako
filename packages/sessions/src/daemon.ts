@@ -26,7 +26,8 @@
  */
 
 import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "./record-sync.js"
-import type { CopyPage, CopyScope } from "./reading-copies.js"
+import type { CopyPage } from "./reading-copies.js"
+import type { CatalogSyncStatus, SyncScope } from "./scoped-uploads.js"
 import type { InstalledReading } from "./record-writers.js"
 import {
   createConnection,
@@ -424,9 +425,16 @@ function catalogService(
             catalog.syncCopies(frame.link)
             reply({ id: frame.id, ok: true, result: null })
             return
-          case "copy-scope":
-            catalog.scopeCopies(frame.scope)
+          case "originals":
+            catalog.syncOriginals(frame.link)
             reply({ id: frame.id, ok: true, result: null })
+            return
+          case "sync-scope":
+            catalog.scopeSync(frame.scope)
+            reply({ id: frame.id, ok: true, result: null })
+            return
+          case "sync-status":
+            reply({ id: frame.id, ok: true, result: await catalog.syncStatus() })
             return
           case "send-records":
             reply({ id: frame.id, ok: true, result: await catalog.sendRecords(frame.link, frame.paths) })
@@ -614,8 +622,12 @@ export interface DaemonClient {
   syncRecords(link: RecordsLink | null): Promise<void>
   /** Where this device's reading copies go (`SessionCatalog.syncCopies`); null stops them. */
   syncCopies(link: RecordsLink | null): Promise<void>
-  /** Which Sessions it keeps copies of, most wanted first (`SessionCatalog.scopeCopies`). */
-  scopeCopies(scope: CopyScope): Promise<void>
+  /** Where this device's originals go (`SessionCatalog.syncOriginals`); null stops them. */
+  syncOriginals(link: RecordsLink | null): Promise<void>
+  /** Which Sessions it keeps in the account, most wanted first (`SessionCatalog.scopeSync`). */
+  scopeSync(scope: SyncScope): Promise<void>
+  /** How its sync stands (`SessionCatalog.syncStatus`). */
+  syncStatus(): Promise<CatalogSyncStatus>
   /** Sends sessions' records to a remote store now (`SessionCatalog.sendRecords`). */
   sendRecords(link: RecordsLink, paths: string[]): Promise<SentRecords[]>
   /** Takes sessions' records from a remote store into their harnesses' stores here (`SessionCatalog.receiveRecords`). */
@@ -746,6 +758,9 @@ async function connectDaemonLink(
           response.pending.resolve(response.result)
           break
         case "copy-page":
+          response.pending.resolve(response.result)
+          break
+        case "sync-status":
           response.pending.resolve(response.result)
           break
         case "ack":
@@ -928,6 +943,14 @@ async function connectDaemonLink(
       send(before === undefined ? { id, op: "copy-page", link, harness, nativeId, limit } : { id, op: "copy-page", link, harness, nativeId, before, limit })
     })
 
+  const requestSyncStatus = (): Promise<CatalogSyncStatus> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, timeoutMs)
+      pending.set(id, { kind: "sync-status", resolve, reject, timer })
+      send({ id, op: "sync-status" })
+    })
+
   const requestCopyEntry = (link: RecordsLink, harness: string, nativeId: string, entry: string): Promise<Entry | null> =>
     new Promise((resolve, reject) => {
       const id = nextId++
@@ -965,7 +988,9 @@ async function connectDaemonLink(
       retire: () => requestAck((id) => ({ id, op: "retire" })),
       syncRecords: (link) => requestAck((id) => ({ id, op: "records", link })),
       syncCopies: (link) => requestAck((id) => ({ id, op: "copies", link })),
-      scopeCopies: (scope) => requestAck((id) => ({ id, op: "copy-scope", scope })),
+      syncOriginals: (link) => requestAck((id) => ({ id, op: "originals", link })),
+      scopeSync: (scope) => requestAck((id) => ({ id, op: "sync-scope", scope })),
+      syncStatus: requestSyncStatus,
       sendRecords: requestSendRecords,
       receiveRecords: requestReceiveRecords,
       stageRecords: requestStageRecords,

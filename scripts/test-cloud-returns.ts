@@ -167,6 +167,7 @@ function setup(name: string, options: { worktree?: boolean } = {}) {
     createThread: unused, askBases: unused, sendCheckpoint: unused, handOverMove: unused, refuseMove: unused, moveAnswer: unused,
     threadRecords: async (threadId) => ({ id: threadId, base: `https://gateway.test/v1/threads/${threadId}/records`, authorization: "Bearer token" }),
     deviceRecords: async (deviceId) => ({ id: deviceId, base: `https://gateway.test/v1/devices/${deviceId}/records`, authorization: "Bearer token" }),
+    deviceOriginals: async (deviceId) => ({ id: deviceId, base: `https://gateway.test/v1/devices/${deviceId}/originals`, authorization: "Bearer token" }),
     readCheckpoint: async (_threadId, sha256, file) => copyFileSync(cloud.checkpoints.get(sha256) ?? "/missing", file),
     beginReturn: async (_threadId, move, to) => {
       const refused = cloud.refuseBegin

@@ -619,6 +619,15 @@ export class CloudAccounts {
     return { id: base, base, authorization: `Bearer ${await this.#connectionToken()}` }
   }
 
+  /**
+   * Where a device's originals are kept in the account: the records of its Sessions in the sync window, as their
+   * harnesses wrote them, beside its copies but apart from them, so reading a copy never pulls records.
+   */
+  async deviceOriginals(deviceId: string): Promise<RecordsLink> {
+    const base = new URL(`/v1/devices/${encodeURIComponent(deviceId)}/originals`, this.#require()).toString()
+    return { id: base, base, authorization: `Bearer ${await this.#connectionToken()}` }
+  }
+
   /** Where a cloud Thread's session records are kept, as this Mac's device reaches them, for sending a move's. */
   async threadRecords(threadId: string): Promise<RecordsLink> {
     const base = new URL(`/v1/threads/${encodeURIComponent(threadId)}/records`, this.#require()).toString()
