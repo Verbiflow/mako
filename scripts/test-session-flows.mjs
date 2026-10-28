@@ -15,9 +15,12 @@ import "./lib/scratch-git.mjs"
 //                                                    processes the activity probe can't inventory, so a resume is refused
 //
 // `--record` before a change and `--continue` after it is the "install the
-// new build, then follow up in an old conversation" case. Uses normal
-// selected-account routing and each harness's work default; spends a few
-// short turns per harness. Never copies credentials or resends an uncertain prompt.
+// new build, then follow up in an old conversation" case. Runs as a person of
+// its own, in the run's scratch home (`scratchHostHome`, `<run>/home`), where
+// every harness is signed in with access alone and keeps the sessions it
+// starts: none reaches the person's own stores, which their Mako lists. Each
+// harness's work default; spends a few short turns per harness. Never resends
+// an uncertain prompt.
 //
 // Every session gets the `mako` MCP server with `thread_history`, as the app
 // gives it. The continuation flows (`switch` to `history-tool`) carry a
@@ -25,9 +28,9 @@ import "./lib/scratch-git.mjs"
 // selected one, so with all six each is a source once and a destination once.
 //
 // Once the stream check has read them, the sessions a run made are removed
-// from their harnesses' stores through the catalog, children included;
-// `--keep` keeps them (and `--record` always does, for `--continue`), and
-// `npm run clean:fixture-sessions -- --root <run> --delete` removes them later.
+// from the scratch home's harness stores through the catalog, children
+// included; `--keep` keeps them (and `--record` always does, for
+// `--continue`).
 import { execFileSync, spawn } from "node:child_process"
 import { once } from "node:events"
 import { randomUUID } from "node:crypto"
@@ -57,7 +60,11 @@ if (!process.versions.electron) {
   await mkdir(root, { recursive: true })
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-session-flows", main: fileURLToPath(import.meta.url) }))
   console.log(`Session flows: ${root}`)
-  const env = { ...process.env, MAKO_FLOWS_ROOT: root, MAKO_FLOWS_REPO: resolve("."), MAKO_FLOWS_ARGS: JSON.stringify(args) }
+  // The host, the stream check and the clean-up all run as the scratch home, so each reads the stores the run wrote.
+  const { scratchHostHome } = await import("./scratch-harness-home.ts")
+  // Its sign-ins go as the run ends; a recorded or kept run keeps its sessions there for `--continue`.
+  const { env: scratch } = scratchHostHome(root, { keep: args.includes("--keep") || Boolean(kept) })
+  const env = { ...scratch, MAKO_FLOWS_ROOT: root, MAKO_FLOWS_REPO: resolve("."), MAKO_FLOWS_ARGS: JSON.stringify(args) }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(resolve("node_modules/.bin/electron"), [root], { env, stdio: "inherit" })
   const [exited, signal] = await once(child, "exit")
@@ -66,14 +73,14 @@ if (!process.versions.electron) {
   const code = exited ?? 1
   // Every session the run made: its stream bound to the session's id, held whole by the record store, drawing what its store draws.
   const streams = existsSync(join(root, "report.json")) && JSON.parse(await readFile(join(root, "report.json"), "utf8")).sessions?.length
-    ? spawn(resolve("node_modules/.bin/tsx"), ["--tsconfig", "tsconfig.app.json", "scripts/check-streams.ts", root], { stdio: "inherit" })
+    ? spawn(resolve("node_modules/.bin/tsx"), ["--tsconfig", "tsconfig.app.json", "scripts/check-streams.ts", root], { env: scratch, stdio: "inherit" })
     : null
   const [checked] = streams ? await once(streams, "exit") : [0]
   // Then the run's sessions leave their harnesses, as a person's delete takes them, unless they are kept on purpose: `--keep`, or `--record`, whose sessions `--continue` follows up.
   const keep = args.includes("--keep") || args.includes("--record")
   const cleaned = keep
-    ? (console.log(`Kept the run's sessions; remove them with npm run clean:fixture-sessions -- --root ${root} --delete`), [0])
-    : await once(spawn(resolve("node_modules/.bin/tsx"), ["scripts/clean-fixture-sessions.ts", "--root", root, "--delete"], { stdio: "inherit" }), "exit")
+    ? (console.log(`Kept the run's sessions, in its scratch home ${join(root, "home")}`), [0])
+    : await once(spawn(resolve("node_modules/.bin/tsx"), ["scripts/clean-fixture-sessions.ts", "--root", root, "--data-root", root, "--delete"], { env: scratch, stdio: "inherit" }), "exit")
   process.exitCode = code || checked || cleaned[0] || 0
 } else {
   const { app } = await import("electron")

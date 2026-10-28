@@ -10,13 +10,12 @@
  *                                                       # an isolated host's: its own Cursor agents and records
  *
  * A fixture session is one whose working directory is a disposable directory
- * that a Mako test or probe creates under the OS temporary directory: one
- * named `mako-…` (every test's `mkdtemp` prefix starts so) or one of the
- * older prefixes below, or a run of the cloud moves proof under
- * `~/.mako/moves-e2e/run-…`, which a cloud machine needs under the person's
- * home rather than the temporary directory. Nothing else qualifies. macOS keeps those
- * directories around, so their presence says nothing; a fixture updated in
- * the last thirty minutes is treated as a run in progress and left alone.
+ * that a Mako test or probe creates under the OS temporary directory, or a run
+ * of the cloud moves proof (`fixture` and `moves-e2e` in `lib/proof-folders.ts`).
+ * Nothing else qualifies: a Thread's data folder may hold an agent's own work, so
+ * its sessions are only ever archived (`archive-proof-sessions.ts`). A fixture
+ * updated in the last thirty minutes is treated as a run in progress and left
+ * alone.
  *
  * The harnesses' own stores (`~/.claude`, `~/.codex`, `~/.cursor`, …) are
  * shared by every host. What Mako keeps per user is a host's user root: the
@@ -26,33 +25,17 @@
  * file level, so it writes nothing anywhere, not even SQLite's `-shm`.
  */
 import { mkdtemp, realpath, rm } from "node:fs/promises"
-import { homedir, tmpdir } from "node:os"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { defaultCatalog } from "@mako/sessions"
 import type { ThreadRef } from "@mako/sessions"
 import { makoUserRoot } from "@mako/sessions/mako-root"
 import { makoRecords } from "@mako/sessions/record-streams"
-
-const FIXTURE_DIRECTORY =
-  /\/(?:mako|acp-perm|acp-steer|acp-steer-tools|acp-probe|codex-home|codex-steer)-[^/]+(?:\/|$)/
-
-/** The cloud moves proof's runs (`machines -- moves-e2e`): under the home, where a cloud machine can make the same folder. */
-const MOVES_RUNS = join(homedir(), ".mako", "moves-e2e")
+import { proofFolder } from "./lib/proof-folders.ts"
 
 function fixtureRoot(ref: ThreadRef): boolean {
-  const cwd = ref.cwd ?? ""
-  if (cwd.startsWith(`${MOVES_RUNS}/run-`)) return true
-  const temporary = [
-    tmpdir(),
-    "/tmp",
-    "/private/tmp",
-    "/var/folders",
-    "/private/var/folders",
-  ]
-  return (
-    temporary.some((root) => cwd.startsWith(root)) &&
-    FIXTURE_DIRECTORY.test(cwd)
-  )
+  const folder = proofFolder(ref.cwd)
+  return folder === "fixture" || folder === "moves-e2e"
 }
 
 const IN_PROGRESS_MS = 30 * 60_000

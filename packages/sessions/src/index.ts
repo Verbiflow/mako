@@ -163,8 +163,15 @@ export async function defaultCatalogIdentity(
 ): Promise<string> {
   const code = await loadedCode
   if (!code) throw new Error("Cannot establish catalog reader compatibility")
-  const providers = named(readers).map(provider => ({ harness: provider.harness, roots: provider.roots() }))
-  return catalogSharingIdentity({ code, archivePath, providers })
+  return catalogSharingIdentity({ code, archivePath, providers: harnessStoreRoots(readers) })
+}
+
+/**
+ * The folders each harness keeps its sessions in, as these readers find them for this process's home: what a host
+ * running as this home lists, and what its harnesses write. Opens nothing.
+ */
+export function harnessStoreRoots(readers: readonly SavedHistoryReader[] = SAVED_HISTORY_READERS): { harness: string; roots: string[] }[] {
+  return named(readers).map(provider => ({ harness: provider.harness, roots: provider.roots() }))
 }
 
 /** The harnesses whose saved conversations these readers read. */

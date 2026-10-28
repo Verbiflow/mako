@@ -8,17 +8,21 @@ import { parseArgs } from "node:util"
 import { z } from "zod"
 import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import { invokeRuntime } from "@mako/host/transport/connection"
-import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { runtimeLocation } from "@mako/host/transport/service"
+import { assertOwnHarnessStores, proofDataRoot } from "./lib/proof-host.ts"
 
 /**
- * How a cloud Thread feels, timed from this Mac's own host through the calls the composer makes, on each harness,
+ * How a cloud Thread feels, timed from a host of this Mac's through the calls the composer makes, on each harness,
  * beside the same steps run locally. For each: the start until the first output and the reply; a message while it's
  * awake; a message after it has slept (its machine pauses two minutes after its work ends), with the composer's
  * warm-up as the person starts typing and without; and the close. With `--ahead-ms`, a second start whose Thread the
  * composer made ahead while the person wrote for that long (`mako:cloud-prepare`, asked every 30 s). Prints a table
  * and writes a JSON report; prints no secret.
  *
- *   npx tsx scripts/bench-cloud-threads.ts [--harness claude …] [--repository <url>] [--local] [--no-warm] [--ahead-ms 20000] [--report <file>]
+ *   npx tsx scripts/bench-cloud-threads.ts --data-root <dir> [--harness claude …] [--repository <url>] [--local] [--no-warm] [--ahead-ms 20000] [--report <file>]
+ *
+ * Only on a host of its own (`--data-root`: a packaged app's scratch profile, `PackagedApp`), never this Mac's own Mako,
+ * whose sidebar its Threads would join; the run checks the host's harnesses run in a home of their own.
  */
 const { values } = parseArgs({
   options: {
@@ -31,15 +35,18 @@ const { values } = parseArgs({
     /** How long the person writes a new cloud Thread's first message while its Thread is made ahead; none, no such start. */
     "ahead-ms": { type: "string" },
     report: { type: "string" },
+    "data-root": { type: "string" },
   },
 })
 const HARNESSES = values.harness?.length ? values.harness : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
 const TYPING_MS = Number(values["typing-ms"])
 /** Its machine pauses two minutes after its work ends; this waits that out with room to spare. */
 const SLEEP_MS = 150_000
-const { socket } = runtimeLocation(runtimeDataRoot(appDataFolder(), {}))
+const dataRoot = proofDataRoot(values["data-root"], "the cloud Threads bench")
+const { socket } = runtimeLocation(dataRoot)
 const client = randomUUID()
 const call = (channel: string, args: unknown[]) => invokeRuntime(socket, client, channel, args)
+await assertOwnHarnessStores(call, dataRoot)
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const DescriptorSchema = z.array(z.object({ provider: z.string(), modes: z.array(z.object({ id: z.string(), access: z.string().optional() }).loose()).default([]) }).loose())

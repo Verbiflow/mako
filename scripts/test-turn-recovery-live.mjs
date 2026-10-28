@@ -20,8 +20,10 @@ if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-turn-recovery-live-"))
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-turn-recovery-live", main: fileURLToPath(import.meta.url) }))
   const providers = process.argv.slice(2).filter((argument) => !argument.startsWith("-"))
+  // A person of its own (`scratchHostHome`): the harnesses keep their sessions in `<root>/home`, never in the person's stores.
+  const { env: scratch } = (await import("./scratch-harness-home.ts")).scratchHostHome(root)
   const env = {
-    ...process.env,
+    ...scratch,
     MAKO_RECOVERY_ROOT: root,
     MAKO_REPO: resolve("."),
     MAKO_RECOVERY_PROVIDERS: (providers.length ? providers : ["codex", "claude", "cursor", "grok", "devin"]).join(","),

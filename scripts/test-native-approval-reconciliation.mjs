@@ -19,7 +19,9 @@ if (!process.versions.electron) {
     await symlink(resolve(name), join(root, name), "dir")
   const ui = process.argv.includes("--ui") ? await import("vite").then(({ createServer }) => createServer({ cacheDir: join(root, "cache"), server: { host: "127.0.0.1", port: 0, hmr: false, watch: { ignored: ["**"] } } })) : null
   await ui?.listen()
-  const env = { ...process.env, MAKO_NATIVE_APPROVAL_ROOT: root, MAKO_NATIVE_APPROVAL_URL: ui?.resolvedUrls.local[0] }
+  // A person of its own (`scratchHostHome`): the harnesses keep their sessions in `<root>/home`, never in the person's stores.
+  const { env: scratch } = (await import("./scratch-harness-home.ts")).scratchHostHome(root)
+  const env = { ...scratch, MAKO_NATIVE_APPROVAL_ROOT: root, MAKO_NATIVE_APPROVAL_URL: ui?.resolvedUrls.local[0] }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(
     resolve("node_modules/.bin/electron"),

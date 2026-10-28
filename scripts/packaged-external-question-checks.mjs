@@ -28,7 +28,9 @@ export async function checkPackagedExternalQuestion({app,bridge,command,evaluate
   await mkdir(launcher)
   await writeFile(join(launcher,'package.json'),JSON.stringify({main:resolve('scripts/external-native-question-answer.mjs')}))
   await writeFile(input,JSON.stringify({app,root,cwd:asked.session.cwd,question:group.native,answers:{[group.native.questions[0].id]:[phrase]}}))
-  const env={...process.env,MAKO_EXTERNAL_QUESTION_INPUT:input};delete env.ELECTRON_RUN_AS_NODE
+  // As the packaged app's own person (`PackagedApp` runs it in `root/home`), so it resumes the session where the app's Codex keeps it.
+  const {env:scratch}=(await import('./scratch-harness-home.ts')).scratchHostHome(root,{keep:true})
+  const env={...scratch,MAKO_EXTERNAL_QUESTION_INPUT:input};delete env.ELECTRON_RUN_AS_NODE
   const child=spawn(resolve('node_modules/.bin/electron'),[launcher],{env,stdio:['ignore','pipe','pipe']})
   let output='';for(const stream of [child.stdout,child.stderr])stream.on('data',data=>{output+=data})
   const timer=setTimeout(()=>child.kill('SIGTERM'),150000)

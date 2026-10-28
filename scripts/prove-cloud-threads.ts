@@ -5,27 +5,34 @@ import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { z } from "zod"
 import { invokeRuntime } from "@mako/host/transport/connection"
-import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { runtimeLocation } from "@mako/host/transport/service"
+import { assertOwnHarnessStores, proofDataRoot } from "./lib/proof-host.ts"
 
 /**
- * 1.8's live proof: a cloud Thread from this Mac's own host, through the calls the composer and the transcript make,
+ * 1.8's live proof: a cloud Thread from a host of this Mac's, through the calls the composer and the transcript make,
  * on each harness. It starts the Thread on a public GitHub repository, watches it, answers its permission request,
  * steers it while it runs, stops a turn, and reads a turn back that finished while nothing here watched. Every step
  * is timed; each conversation is closed at the end. Prints no secret; writes a JSON report.
  *
- *   npx tsx scripts/prove-cloud-threads.ts [--harness claude --harness codex …] [--report <file>]
+ *   npx tsx scripts/prove-cloud-threads.ts --data-root <dir> [--harness claude --harness codex …] [--report <file>]
+ *
+ * Only on a host of its own (`--data-root`: a packaged app's scratch profile, `PackagedApp`), never this Mac's own Mako,
+ * whose sidebar its Threads would join; the run checks the host's harnesses run in a home of their own.
  */
 const { values } = parseArgs({
   options: {
     harness: { type: "string", multiple: true },
     repository: { type: "string", default: "https://github.com/octocat/Hello-World" },
     report: { type: "string" },
+    "data-root": { type: "string" },
   },
 })
 const HARNESSES = values.harness?.length ? values.harness : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
-const { socket } = runtimeLocation(runtimeDataRoot(appDataFolder(), {}))
+const dataRoot = proofDataRoot(values["data-root"], "the cloud Threads proof")
+const { socket } = runtimeLocation(dataRoot)
 const client = randomUUID()
 const call = (channel: string, args: unknown[]) => invokeRuntime(socket, client, channel, args)
+await assertOwnHarnessStores(call, dataRoot)
 
 /** Each harness's own modes, as the composer reads them: the start asks first where the harness has a mode that asks. */
 const DescriptorSchema = z.array(z.object({ provider: z.string(), modes: z.array(z.object({ id: z.string(), access: z.string().optional() }).loose()).default([]) }).loose())

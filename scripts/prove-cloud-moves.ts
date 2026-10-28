@@ -9,7 +9,9 @@ import { parseArgs } from "node:util"
 import WebSocket from "ws"
 import { z } from "zod"
 import { invokeRuntime, runtimeInfo } from "@mako/host/transport/connection"
-import { appDataFolder, hostCommand, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { hostCommand, runtimeLocation } from "@mako/host/transport/service"
+import { assertOwnHarnessStores, proofDataRoot } from "./lib/proof-host.ts"
+import { scratchHostHome } from "./scratch-harness-home.ts"
 import { holdHostLease } from "@mako/host/base/host-idle"
 
 /**
@@ -30,11 +32,15 @@ import { holdHostLease } from "@mako/host/base/host-idle"
  * Prints no secret; writes a JSON report. The Threads stay, on their cloud machines, to be looked at, and so does the
  * project their worktrees were made from, so any of them can come back: in the data root on a host of its own.
  *
- *   npx tsx scripts/prove-cloud-moves.ts [--harness claude --harness codex …] [--report <file>]
+ *   npx tsx scripts/prove-cloud-moves.ts --data-root <dir> (--spawn-host --cloud <url> | --scratch-host) [--harness claude …] [--report <file>]
  *
- * Against this Mac's own host by default. `--data-root <dir>` drives the host of that data root instead, and with
- * `--spawn-host` starts it there from this checkout's build, screenless, its cloud `--cloud <url>`: a host of its own
- * for an end-to-end run beside a local cloud. A host that isn't signed in is asked to sign in, and the page it waits on
+ * Only ever on a host of its own, never this Mac's own Mako: a proof's Threads, sessions and worktrees would be the
+ * person's. `--data-root <dir>` names that host's data root; with `--spawn-host` the run starts it there from this
+ * checkout's build, screenless, its cloud `--cloud <url>`, for an end-to-end run beside a local cloud; with
+ * `--scratch-host` it's one already running (a packaged app's, started by `PackagedApp`). Either way its harnesses run in
+ * a home of its own (`scratchHostHome`): their sessions land there, never in the person's `~/.claude` and the like,
+ * which the person's Mako lists. The run checks it before anything else: the host's catalog may list nothing from the
+ * person's harness stores. A host that isn't signed in is asked to sign in, and the page it waits on
  * is printed on a line of its own (`SIGN IN <url>`) for whoever plays the person; the run goes on once the account is
  * signed in with the cloud.
  *
@@ -121,24 +127,26 @@ const { values } = parseArgs({
 })
 // With `--handoff` or `--fork-burst` alone, only that runs.
 const HARNESSES = values.harness?.length ? values.harness : values.handoff || values["fork-burst"] || values.entropy || values.carried || values["project-gone"] || values.archive ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
-const dataRoot = values["data-root"] ?? runtimeDataRoot(appDataFolder(), {})
+const dataRoot = proofDataRoot(values["data-root"], "the moves proof")
+if (!values["spawn-host"] && !values["scratch-host"]) throw new Error("the moves proof needs --spawn-host or --scratch-host: a host of its own")
 const { socket } = runtimeLocation(dataRoot)
 const client = randomUUID()
 const call = (channel: string, args: unknown[]) => invokeRuntime(socket, client, channel, args)
 const run = promisify(execFile)
 
 // A host of its own, when asked: screenless, so its sign-in opens nothing on this Mac, sharing sign-ins as access alone,
-// held up by this run's lease (a profile host stops once nothing holds it) and stopped when the run ends.
-const ownHost = values["spawn-host"] || values["scratch-host"]
-if (ownHost && !values["data-root"]) throw new Error("a host of its own needs --data-root")
+// held up by this run's lease (a profile host stops once nothing holds it) and stopped when the run ends. It runs in a
+// scratch home in its data root, kept with it, so a Thread left in the cloud comes back into the same harness stores.
 if (values["spawn-host"]) {
-  if (!values["data-root"] || !values.cloud) throw new Error("--spawn-host needs --data-root and --cloud")
+  if (!values.cloud) throw new Error("--spawn-host needs --cloud")
   await mkdir(join(dataRoot, "cloud"), { recursive: true, mode: 0o700 })
   await writeFile(join(dataRoot, "cloud", "sign-ins.json"), JSON.stringify({ version: 2, sharing: true, accessOnly: true, inStep: {} }), { mode: 0o600 })
   // As `ensureRuntime` starts one: this checkout's build, under Electron's Helper in Node mode.
   // SAFETY: the electron package's main export is the path of its executable.
   const electron = createRequire(import.meta.url)("electron") as string
-  const command = hostCommand({ executable: electron, args: [process.cwd()], env: { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_CLOUD_URL: values.cloud, MAKO_SCREENLESS: "1" } })
+  // Kept with the data root: its sign-ins and keychain go as the run ends, its sessions stay for the Threads left in the cloud.
+  const { env } = scratchHostHome(dataRoot, { keep: true })
+  const command = hostCommand({ executable: electron, args: [process.cwd()], env: { ...env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_CLOUD_URL: values.cloud, MAKO_SCREENLESS: "1" } })
   const host = spawn(command.executable, command.args, { env: command.env, stdio: "ignore" })
   process.once("exit", () => host.kill("SIGTERM"))
   for (const deadline = Date.now() + 60_000; !(await runtimeInfo(socket).catch(() => null)); ) {
@@ -148,6 +156,8 @@ if (values["spawn-host"]) {
   const release = await holdHostLease(runtimeLocation(dataRoot).directory)
   process.once("beforeExit", () => void release())
 }
+
+await assertOwnHarnessStores(call, dataRoot)
 
 // Signed in, with the cloud: asked for once if not, the page printed for whoever plays the person.
 const AccountSchema = z.object({ state: z.object({ status: z.string(), url: z.string().optional(), account: z.object({ entitlements: z.array(z.string()) }).loose().optional() }).loose() }).loose()
@@ -381,7 +391,7 @@ async function prove(harness: string, project: string): Promise<Proved> {
   if (!(await timed("move to the cloud", async () => {
     const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, move]))
     // A host of its own shares no sign-ins: a harness that can't start without one is refused before the claim.
-    if (ownHost && outcome.kind === "kept-here" && /couldn't start in the cloud: .* Mako Cloud has no sign-in for /.test(outcome.reason)) {
+    if (outcome.kind === "kept-here" && /couldn't start in the cloud: .* Mako Cloud has no sign-in for /.test(outcome.reason)) {
       refused = outcome.reason
       return `refused before the claim: ${outcome.reason.slice(0, 160)}`
     }
@@ -413,119 +423,95 @@ async function prove(harness: string, project: string): Promise<Proved> {
     return undefined
   })
 
-  // 5, on a host of its own: the machine's side read from the conversation's history as the machine serves it.
-  if (ownHost) {
-    await timed("its history in the cloud", async () => {
-      const seen = await history(id)
-      const read = JSON.stringify(seen)
-      // What the machine showed, so a failure says where it stopped: its base unread, empty, or read without the turn.
-      const showed = `base ${seen.base === null ? "unread" : `${seen.base.entries?.length ?? 0} entries`}, ${seen.blocks.length} live blocks, session ${seen.session.status} at ${seen.session.nativePath ?? "no path"}${seen.session.lastError ? `, last error: ${seen.session.lastError.slice(0, 200)}` : ""}`
-      if (!read.includes(token)) throw new Error(`the machine's history of the conversation doesn't hold its first turn (${showed})`)
-      if (!read.includes("BUSY-DONE")) throw new Error(`the machine's history doesn't hold the turn that finished here before the move (${showed})`)
-      return "both turns from before the move, read on the machine"
-    })
-    // 6. Conversations begun in the cloud: a new tab of the Thread's and a fork of it, each a turn on the machine.
-    const tabHarness = values["tab-harness"] ?? harness
-    const tab = randomUUID()
-    const fork = randomUUID()
-    const tabToken = `tab-proof-${randomUUID().slice(0, 8)}`
-    const tabTurn = randomUUID()
-    let tabSession = ""
-    const recall = `Without running anything, reply with one line starting with MEMORY: followed by the exact line you replied with first in this conversation.`
-    const tabbed = await timed("a new tab in the cloud", async () => {
-      const threadId = (await snapshot(id)).threadId
-      if (!threadId) throw new Error("the moved conversation names no Thread")
-      tabSession = PlacementSchema.parse(await call("mako:thread-create-session", [randomUUID(), threadId])).session
-      const mode = widestMode(tabHarness)
-      const options: TabOptions = { conversationId: tab, session: tabSession, initialRequest: { id: tabTurn, text: `Without running anything, reply with exactly this line and nothing else: ${tabToken}`, attachments: [] }, ...mode && { modeId: mode } }
-      const started = SnapshotSchema.parse(await call("mako:live-start", [tabHarness, folder, options]))
-      if (!started.elsewhere) throw new Error("the new tab started on this Mac, not in the cloud with its Thread")
-      const shot = await until(tab, (current) => settled(current, tabTurn), 300_000, answered)
-      if (shot.requests.find((request) => request.id === tabTurn)?.status !== "completed") throw new Error(`its turn ended ${ended(shot, tabTurn)}`)
-      if (!proseText(shot, 0).includes(tabToken)) throw new Error(`it didn't say the line: ${proseText(shot, 0).slice(0, 200)}`)
-      if (shot.sessionId !== tabSession) throw new Error(`the machine put it in Session ${shot.sessionId ?? "none"}, not the tab's ${tabSession}`)
-      return `${tabHarness}, in the tab's Session on the machine`
-    })
-    const forked = tabbed && (await timed("a fork of it in the cloud", async () => {
-      const made = SnapshotSchema.parse(await call("mako:live-fork", [tab, { id: fork, provider: tabHarness, point: { kind: "run", requestId: tabTurn } }]))
-      if (!made.elsewhere) throw new Error("the fork was made on this Mac, not in the cloud")
-      const turn = randomUUID()
-      await call("mako:live-prompt", [fork, turn, recall, []])
-      const shot = await until(fork, (current) => settled(current, turn), 300_000, answered)
-      if (shot.requests.find((request) => request.id === turn)?.status !== "completed") throw new Error(`its turn ended ${ended(shot, turn)}`)
-      if (!proseText(shot, 0).includes(tabToken)) throw new Error(`it didn't remember the line: ${proseText(shot, 0).slice(0, 200)}`)
-      if (!shot.sessionId || shot.sessionId === tabSession) throw new Error(`it isn't in a Session of its own: ${shot.sessionId ?? "none"}`)
-      return "remembered the tab's line, in a Session of its own"
-    }))
-
-    // 7. The way back: the machine's checkout and every session come back here, and a turn here remembers the first.
-    const back = randomUUID()
-    if (!(await timed("back to this Mac", async () => {
-      const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, back]))
-      if (outcome.kind !== "back") throw new Error(`${outcome.kind}: ${outcome.reason}`)
-      const plan = ReturnTimingsSchema.parse(JSON.parse(await readFile(join(dataRoot, "cloud", "returns", `${back}.json`), "utf8")))
-      if (plan.phase !== "done") throw new Error(`the return's plan reads ${plan.phase}`)
-      const carried = plan.sessions.filter((session) => session.begun).map((session) => session.conversationId)
-      const expected = [...tabbed ? [tab] : [], ...forked ? [fork] : []]
-      if (expected.some((each) => !carried.includes(each))) throw new Error(`the return carried ${carried.length} begun in the cloud, not the tab and fork`)
-      const files = [(await readFile(join(folder, "move-proof.txt"), "utf8")).trim(), (await readFile(join(folder, "staged.txt"), "utf8")).trim(), await git(folder, "log", "-1", "--format=%s")]
-      if (files[0] !== token || files[1] !== staged || files[2] !== `move proof ${committed}`) throw new Error(`the worktree came back as ${JSON.stringify(files)}`)
-      const order = ["packed", "released", "applied", "claimed", "done"]
-      return order.filter((name) => name in plan.timings).map((name) => `${name} ${(plan.timings[name]! / 1000).toFixed(1)} s`).join(", ")
-    }))) return proved()
-    await timed("the same return again", async () => {
-      const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, back]))
-      if (outcome.kind !== "back") throw new Error(`answered ${JSON.stringify(outcome)}`)
-      return undefined
-    })
-    await timed("a turn here after", async () => {
-      const here = randomUUID()
-      const before = (await snapshot(id)).blocks.length
-      await call("mako:live-prompt", [id, here, "Without running anything, write one line starting with MEMORY: followed by the exact line you wrote into move-proof.txt earlier in this conversation, from memory.", []])
-      const shot = await until(id, (current) => settled(current, here), 300_000, answered)
-      const status = shot.requests.find((request) => request.id === here)?.status
-      if (status !== "completed") throw new Error(`the turn ended ${ended(shot, here)}; said: ${proseText(shot, before).slice(0, 200)}`)
-      if (!proseText(shot, before).includes(token)) throw new Error(`it didn't remember the token: ${proseText(shot, before).slice(0, 300)}`)
-      return "the same session: remembered the token"
-    })
-    // Each begun in the cloud goes on here, in its own native session: it remembers what it said there.
-    for (const [step, conversation] of [["the new tab here", tabbed && tab], ["the fork here", forked && fork]] as const) {
-      if (!conversation) continue
-      await timed(step, async () => {
-        const turn = randomUUID()
-        const shot0 = await snapshot(conversation)
-        if (shot0.elsewhere) throw new Error("this Mac still reads it as the cloud's")
-        const before = shot0.blocks.length
-        await call("mako:live-prompt", [conversation, turn, recall, []])
-        const shot = await until(conversation, (current) => settled(current, turn), 300_000, answered)
-        if (shot.requests.find((request) => request.id === turn)?.status !== "completed") throw new Error(`the turn ended ${ended(shot, turn)}; said: ${proseText(shot, before).slice(0, 200)}`)
-        if (!proseText(shot, before).includes(tabToken)) throw new Error(`it didn't remember the line: ${proseText(shot, before).slice(0, 300)}`)
-        return "the same session: remembered its line from the cloud"
-      })
-    }
-    return proved()
-  }
-
-  // 5. A turn on the machine: the same native session (memory) at the same path, with every kind of change there.
-  const there = randomUUID()
-  await timed("a turn in the cloud", async () => {
-    const before = (await snapshot(id)).blocks.length
-    await call("mako:live-prompt", [id, there, "Before running anything, write one line starting with MEMORY: followed by the exact line you wrote into move-proof.txt earlier in this conversation, from memory. Then run this shell command and show its output: `pwd; cat move-proof.txt committed.txt staged.txt; git log -1 --format=%s; git status --short`", []])
-    const shot = await until(id, (current) => settled(current, there), 420_000, answered)
-    const status = shot.requests.find((request) => request.id === there)?.status
-    if (status !== "completed") throw new Error(`the turn ended ${ended(shot, there)}; said: ${proseText(shot, before).slice(0, 200)}`)
-    const prose = proseText(shot, before)
-    const everything = blockText(shot, before)
-    const missing = [
-      [`MEMORY: ${token}`, prose.includes(token) ? "" : "the token from memory"],
-      ["the Mac's path", everything.includes(folder) ? "" : `pwd ${folder}`],
-      ["the agent's file", everything.includes(token) ? "" : "move-proof.txt"],
-      ["the commit", everything.includes(`move proof ${committed}`) && everything.includes(committed) ? "" : "the commit"],
-      ["the staged file", everything.includes(staged) ? "" : "staged.txt"],
-    ].filter(([, gap]) => gap).map(([, gap]) => gap)
-    if (missing.length) throw new Error(`missing ${missing.join(", ")}; said: ${prose.slice(0, 300)}`)
-    return "remembered the token; path, file, commit and staged file all there"
+  // 5: the machine's side read from the conversation's history as the machine serves it.
+  await timed("its history in the cloud", async () => {
+    const seen = await history(id)
+    const read = JSON.stringify(seen)
+    // What the machine showed, so a failure says where it stopped: its base unread, empty, or read without the turn.
+    const showed = `base ${seen.base === null ? "unread" : `${seen.base.entries?.length ?? 0} entries`}, ${seen.blocks.length} live blocks, session ${seen.session.status} at ${seen.session.nativePath ?? "no path"}${seen.session.lastError ? `, last error: ${seen.session.lastError.slice(0, 200)}` : ""}`
+    if (!read.includes(token)) throw new Error(`the machine's history of the conversation doesn't hold its first turn (${showed})`)
+    if (!read.includes("BUSY-DONE")) throw new Error(`the machine's history doesn't hold the turn that finished here before the move (${showed})`)
+    return "both turns from before the move, read on the machine"
   })
+  // 6. Conversations begun in the cloud: a new tab of the Thread's and a fork of it, each a turn on the machine.
+  const tabHarness = values["tab-harness"] ?? harness
+  const tab = randomUUID()
+  const fork = randomUUID()
+  const tabToken = `tab-proof-${randomUUID().slice(0, 8)}`
+  const tabTurn = randomUUID()
+  let tabSession = ""
+  const recall = `Without running anything, reply with one line starting with MEMORY: followed by the exact line you replied with first in this conversation.`
+  const tabbed = await timed("a new tab in the cloud", async () => {
+    const threadId = (await snapshot(id)).threadId
+    if (!threadId) throw new Error("the moved conversation names no Thread")
+    tabSession = PlacementSchema.parse(await call("mako:thread-create-session", [randomUUID(), threadId])).session
+    const mode = widestMode(tabHarness)
+    const options: TabOptions = { conversationId: tab, session: tabSession, initialRequest: { id: tabTurn, text: `Without running anything, reply with exactly this line and nothing else: ${tabToken}`, attachments: [] }, ...mode && { modeId: mode } }
+    const started = SnapshotSchema.parse(await call("mako:live-start", [tabHarness, folder, options]))
+    if (!started.elsewhere) throw new Error("the new tab started on this Mac, not in the cloud with its Thread")
+    const shot = await until(tab, (current) => settled(current, tabTurn), 300_000, answered)
+    if (shot.requests.find((request) => request.id === tabTurn)?.status !== "completed") throw new Error(`its turn ended ${ended(shot, tabTurn)}`)
+    if (!proseText(shot, 0).includes(tabToken)) throw new Error(`it didn't say the line: ${proseText(shot, 0).slice(0, 200)}`)
+    if (shot.sessionId !== tabSession) throw new Error(`the machine put it in Session ${shot.sessionId ?? "none"}, not the tab's ${tabSession}`)
+    return `${tabHarness}, in the tab's Session on the machine`
+  })
+  const forked = tabbed && (await timed("a fork of it in the cloud", async () => {
+    const made = SnapshotSchema.parse(await call("mako:live-fork", [tab, { id: fork, provider: tabHarness, point: { kind: "run", requestId: tabTurn } }]))
+    if (!made.elsewhere) throw new Error("the fork was made on this Mac, not in the cloud")
+    const turn = randomUUID()
+    await call("mako:live-prompt", [fork, turn, recall, []])
+    const shot = await until(fork, (current) => settled(current, turn), 300_000, answered)
+    if (shot.requests.find((request) => request.id === turn)?.status !== "completed") throw new Error(`its turn ended ${ended(shot, turn)}`)
+    if (!proseText(shot, 0).includes(tabToken)) throw new Error(`it didn't remember the line: ${proseText(shot, 0).slice(0, 200)}`)
+    if (!shot.sessionId || shot.sessionId === tabSession) throw new Error(`it isn't in a Session of its own: ${shot.sessionId ?? "none"}`)
+    return "remembered the tab's line, in a Session of its own"
+  }))
+
+  // 7. The way back: the machine's checkout and every session come back here, and a turn here remembers the first.
+  const back = randomUUID()
+  if (!(await timed("back to this Mac", async () => {
+    const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, back]))
+    if (outcome.kind !== "back") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    const plan = ReturnTimingsSchema.parse(JSON.parse(await readFile(join(dataRoot, "cloud", "returns", `${back}.json`), "utf8")))
+    if (plan.phase !== "done") throw new Error(`the return's plan reads ${plan.phase}`)
+    const carried = plan.sessions.filter((session) => session.begun).map((session) => session.conversationId)
+    const expected = [...tabbed ? [tab] : [], ...forked ? [fork] : []]
+    if (expected.some((each) => !carried.includes(each))) throw new Error(`the return carried ${carried.length} begun in the cloud, not the tab and fork`)
+    const files = [(await readFile(join(folder, "move-proof.txt"), "utf8")).trim(), (await readFile(join(folder, "staged.txt"), "utf8")).trim(), await git(folder, "log", "-1", "--format=%s")]
+    if (files[0] !== token || files[1] !== staged || files[2] !== `move proof ${committed}`) throw new Error(`the worktree came back as ${JSON.stringify(files)}`)
+    const order = ["packed", "released", "applied", "claimed", "done"]
+    return order.filter((name) => name in plan.timings).map((name) => `${name} ${(plan.timings[name]! / 1000).toFixed(1)} s`).join(", ")
+  }))) return proved()
+  await timed("the same return again", async () => {
+    const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, back]))
+    if (outcome.kind !== "back") throw new Error(`answered ${JSON.stringify(outcome)}`)
+    return undefined
+  })
+  await timed("a turn here after", async () => {
+    const here = randomUUID()
+    const before = (await snapshot(id)).blocks.length
+    await call("mako:live-prompt", [id, here, "Without running anything, write one line starting with MEMORY: followed by the exact line you wrote into move-proof.txt earlier in this conversation, from memory.", []])
+    const shot = await until(id, (current) => settled(current, here), 300_000, answered)
+    const status = shot.requests.find((request) => request.id === here)?.status
+    if (status !== "completed") throw new Error(`the turn ended ${ended(shot, here)}; said: ${proseText(shot, before).slice(0, 200)}`)
+    if (!proseText(shot, before).includes(token)) throw new Error(`it didn't remember the token: ${proseText(shot, before).slice(0, 300)}`)
+    return "the same session: remembered the token"
+  })
+  // Each begun in the cloud goes on here, in its own native session: it remembers what it said there.
+  for (const [step, conversation] of [["the new tab here", tabbed && tab], ["the fork here", forked && fork]] as const) {
+    if (!conversation) continue
+    await timed(step, async () => {
+      const turn = randomUUID()
+      const shot0 = await snapshot(conversation)
+      if (shot0.elsewhere) throw new Error("this Mac still reads it as the cloud's")
+      const before = shot0.blocks.length
+      await call("mako:live-prompt", [conversation, turn, recall, []])
+      const shot = await until(conversation, (current) => settled(current, turn), 300_000, answered)
+      if (shot.requests.find((request) => request.id === turn)?.status !== "completed") throw new Error(`the turn ended ${ended(shot, turn)}; said: ${proseText(shot, before).slice(0, 200)}`)
+      if (!proseText(shot, before).includes(tabToken)) throw new Error(`it didn't remember the line: ${proseText(shot, before).slice(0, 300)}`)
+      return "the same session: remembered its line from the cloud"
+    })
+  }
   return proved()
 }
 
@@ -1167,7 +1153,7 @@ async function freeModel(harness: string, cwd: string): Promise<string | undefin
 // A clone of the repository as a person's project: the Threads take worktrees of it. A host of its own keeps it in its
 // data root, for as long as the worktrees made of it: a Thread the run leaves in the cloud comes back into its worktree
 // later, which needs its project, and the data root goes whole when it's cleaned up.
-const projects = ownHost ? join(dataRoot, "proof-projects") : tmpdir()
+const projects = join(dataRoot, "proof-projects")
 await mkdir(projects, { recursive: true, mode: 0o700 })
 const scratch = await mkdtemp(join(projects, "mako-move-proof-"))
 const project = join(scratch, "project")
@@ -1177,7 +1163,7 @@ for (const harness of HARNESSES) report[harness] = await prove(harness, project)
 const places = values["full-cloud"] === undefined ? 0 : Number(values["full-cloud"])
 // Any Thread that's here again (back from the cloud, or kept here) moves no differently.
 const here = Object.values(report).find(({ steps }) => steps.some((step) => (step.step === "back to this Mac" || step.step === "runs here after the refusal") && step.ok))?.conversation
-if (ownHost && places > 0 && here) report["full cloud"] = await fullCloud(places, here)
+if (places > 0 && here) report["full cloud"] = await fullCloud(places, here)
 if (values.handoff) report["handoff"] = await handOffProof(values.handoff, project)
 if (values["fork-burst"]) report["fork burst"] = await forkBurst(values["tab-harness"] ?? "claude", project, Number(values["fork-burst"]))
 if (values.entropy) report["entropy"] = await entropy(values["tab-harness"] ?? "claude", project, Number(values.entropy))

@@ -1,10 +1,22 @@
 // Live probe: does Codex native compaction retain the thread's history?
 // Spawns the real `codex app-server`, runs one turn, compacts, resumes, and
-// compares the turns the store still carries.
+// compares the turns the store still carries. In a scratch home signed in with
+// access alone (`scratchHarnessHome`), removed as the probe exits: its thread
+// never reaches the person's `~/.codex`.
 import { spawn } from "node:child_process"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { scratchHarnessHome } from "./scratch-harness-home.ts"
 
+const root = mkdtempSync(join(tmpdir(), "mako-codex-compact-"))
+const { env, dispose } = await scratchHarnessHome(root, [])
+process.once("exit", () => {
+  dispose()
+  rmSync(root, { recursive: true, force: true })
+})
 const child = spawn("codex", ["app-server"], {
+  env,
   stdio: ["pipe", "pipe", "pipe"],
 })
 child.stderr.resume()

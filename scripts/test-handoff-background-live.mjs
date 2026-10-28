@@ -20,16 +20,16 @@ if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-handoff-background-live-"))
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-handoff-background-live", main: fileURLToPath(import.meta.url) }))
   const providers = process.argv.slice(2).filter((argument) => !argument.startsWith("-"))
-  const env = { ...process.env, MAKO_HANDOFF_ROOT: root, MAKO_REPO: resolve("."), MAKO_HANDOFF_PROVIDERS: (providers.length ? providers : ["claude"]).join(",") }
+  // A person of its own (`scratchHostHome`): the harnesses keep their sessions in `<root>/home`, never in the person's stores.
+  const { env: scratch, dispose } = (await import("./scratch-harness-home.ts")).scratchHostHome(root)
+  const env = { ...scratch, MAKO_HANDOFF_ROOT: root, MAKO_REPO: resolve("."), MAKO_HANDOFF_PROVIDERS: (providers.length ? providers : ["claude"]).join(",") }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })
   const deadline = setTimeout(() => child.kill("SIGTERM"), 15 * 60_000)
   const [code] = await once(child, "exit")
   clearTimeout(deadline)
-  // The sessions it made in the harnesses' own stores go with it, whether it passed or not.
-  const cleaned = spawn("npx", ["tsx", "--tsconfig", "tsconfig.scripts.json", "scripts/clean-fixture-sessions.ts", "--root", root, "--delete"], { stdio: "inherit" })
-  const [cleanedCode] = await once(cleaned, "exit")
-  if (cleanedCode !== 0) console.error(`the run's sessions weren't all removed: npx tsx scripts/clean-fixture-sessions.ts --root ${root} --delete`)
+  // The sessions it made are in its scratch home, which goes with it, whether it passed or not.
+  dispose()
   await rm(root, { recursive: true, force: true })
   process.exitCode = code ?? 1
 } else {

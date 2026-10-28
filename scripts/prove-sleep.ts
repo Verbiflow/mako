@@ -5,7 +5,8 @@ import { join } from "node:path"
 import { parseArgs } from "node:util"
 import { z } from "zod"
 import { invokeRuntime } from "@mako/host/transport/connection"
-import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
+import { runtimeLocation } from "@mako/host/transport/service"
+import { assertOwnHarnessStores, proofDataRoot } from "./lib/proof-host.ts"
 
 /**
  * The laptop closed and opened, live: cloud Threads on each harness work for some minutes, the person closes the lid
@@ -14,7 +15,10 @@ import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/tran
  * where the machine's does. For the sign-ins: what the wake did (the refresh locks it held, the pairs it took, how
  * long until it was in step) from the host's log, and that every sign-in is in step after. Prints no secret.
  *
- *   npx tsx scripts/prove-sleep.ts [--harness claude …] [--minutes 10] [--report <file>]
+ *   npx tsx scripts/prove-sleep.ts --data-root <dir> [--harness claude …] [--minutes 10] [--report <file>]
+ *
+ * Only on a host of its own (`--data-root`: a packaged app's scratch profile, `PackagedApp`), never this Mac's own Mako,
+ * whose sidebar its Threads would join; the run checks the host's harnesses run in a home of their own.
  */
 const { values } = parseArgs({
   options: {
@@ -22,14 +26,16 @@ const { values } = parseArgs({
     minutes: { type: "string", default: "10" },
     repository: { type: "string", default: "https://github.com/octocat/Hello-World" },
     report: { type: "string" },
+    "data-root": { type: "string" },
   },
 })
 const HARNESSES = values.harness?.length ? values.harness : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
 const STEPS = Math.max(2, Math.round((Number(values.minutes) * 60) / 50))
-const dataRoot = runtimeDataRoot(appDataFolder(), {})
+const dataRoot = proofDataRoot(values["data-root"], "the sleep proof")
 const { socket } = runtimeLocation(dataRoot)
 const client = randomUUID()
 const call = (channel: string, args: unknown[]) => invokeRuntime(socket, client, channel, args)
+await assertOwnHarnessStores(call, dataRoot)
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const clock = () => new Date().toISOString().slice(11, 19)
 

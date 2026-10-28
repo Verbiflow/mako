@@ -1,14 +1,18 @@
+import { mkdtempSync } from "node:fs"
 import { mkdir, rm } from "node:fs/promises"
-import { homedir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { defaultCatalog } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { RecordStore } from "../packages/sessions/src/record-store.ts"
 import { HARNESSES, harnessNamed, nativePath, removeSession, type Harness } from "./native-harnesses.ts"
+import { enterScratchHome } from "./scratch-harness-home.ts"
 
 /**
- * Capture as Mako runs it: the catalog every host and daemon builds, over
- * this machine's home, keeping its record store in a scratch folder. Each
+ * Capture as Mako runs it: the catalog every host and daemon builds, over a
+ * scratch home signed in as this machine's person (`enterScratchHome`), so the
+ * sessions it makes never reach their own stores, keeping its record store in
+ * a scratch folder. Each
  * harness's CLI starts a session and continues it, and after each turn the
  * store must hold the session as the harness left it: a dry-run restore into
  * the same home finds every unit already there. Prints how long after each
@@ -17,8 +21,8 @@ import { HARNESSES, harnessNamed, nativePath, removeSession, type Harness } from
  *
  *   tsx --tsconfig tsconfig.app.json scripts/prove-record-capture.ts [--store <dir>] [harness…]
  *
- * It runs model turns on each harness's own account and deletes its test
- * sessions afterwards.
+ * It runs model turns on each harness's own account, and deletes its test
+ * sessions and the scratch home afterwards.
  */
 
 const CAUGHT_UP_MS = 60_000
@@ -26,6 +30,8 @@ const CAUGHT_UP_MS = 60_000
 const args = process.argv.slice(2)
 const storeAt = args.indexOf("--store")
 const folder = storeAt >= 0 ? args.splice(storeAt, 2)[1]! : join(process.env["MAKO_THREAD_DATA_DIR"] ?? "/tmp", "record-capture-proof")
+const scratchRoot = mkdtempSync(join(tmpdir(), "mako-record-capture-"))
+const { env, dispose } = enterScratchHome(scratchRoot)
 const home = homedir()
 await rm(folder, { recursive: true, force: true })
 
@@ -66,8 +72,8 @@ async function prove(harness: string, spec: Harness): Promise<string[]> {
       "Also remember BRAVO-CAPTURE. Reply with just OK. Don't run any tools.",
     ]
     for (const [index, prompt] of turns.entries()) {
-      if (index === 0) ({ id } = await spec.start(cwd, prompt))
-      else await spec.resume(cwd, id, prompt)
+      if (index === 0) ({ id } = await spec.start(cwd, prompt, env))
+      else await spec.resume(cwd, id, prompt, env)
       const exited = Date.now()
       if (index === 0) await nativePath(harness, id, home)
       const result = await caughtUp(harness, id, exited)
@@ -99,4 +105,6 @@ try {
   await catalog.stop()
   console.log(`catalog stopped in ${Math.round(performance.now() - stopping)} ms, its last captures flushed`)
   await look.close()
+  dispose()
+  await rm(scratchRoot, { recursive: true, force: true })
 }

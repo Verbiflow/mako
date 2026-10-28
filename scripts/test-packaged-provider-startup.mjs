@@ -26,7 +26,9 @@ const traceWatchClose = process.argv.includes("--trace-watch-close")
 const requested = process.argv.slice(3).filter(arg => !arg.startsWith("--"))
 const report = { app, build: metadata.makoBuild, root, results: [], status: "running" }
 const call = (channel, ...args) => invokeRuntime(socket, client, channel, args)
-const env = { ...process.env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket }
+// A person of its own (`scratchHostHome`): the harnesses keep their sessions in `<root>/home`, never in the person's stores.
+const { env: scratch } = (await import("./scratch-harness-home.ts")).scratchHostHome(root)
+const env = { ...scratch, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket }
 for (const key of ["VITE_DEV_SERVER_URL", "MAKO_PROFILE", "MAKO_PROD"])
   delete env[key]
 await mkdir(directory, { recursive: true })

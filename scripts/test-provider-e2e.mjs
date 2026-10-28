@@ -42,12 +42,14 @@ if (!process.versions.electron) {
   )
   for (const name of ["node_modules", "dist-electron", "scripts"])
     await symlink(join(repo, name), join(root, name), "dir")
+  // A person of its own (`scratchHostHome`): the harnesses keep their sessions in `<root>/home`, never in the person's stores.
+  const { env: scratch } = (await import("./scratch-harness-home.ts")).scratchHostHome(root)
   const child = spawn(
     join(repo, "node_modules/.bin/electron"),
     [root, ...process.argv.slice(2)],
     {
       stdio: "inherit",
-      env: { ...process.env, MAKO_E2E_ROOT: root },
+      env: { ...scratch, MAKO_E2E_ROOT: root },
     }
   )
   child.on("exit", (code) => {
