@@ -230,6 +230,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (event.type === "git" && !event.git.repositories?.length) late.automations?.noticeHead(event.git.head)
     // Turns, tool calls and background work starting and ending: who was running when a file changed.
     if (event.type === "live-batch") late.attribution?.live(event.batch)
+    // A conversation another device watches goes to it as it changes (`SessionPublisher`), and its row may change.
+    late.sessions?.own(event)
     // A Session archived here leaves the account's list on every device: its owner's word is the one that counts.
     if (event.type === "thread-archives") late.sessions?.changed()
     web()?.event(event, client)

@@ -1,6 +1,8 @@
 import type { OutdatedRestore } from "./restore-plan.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { z } from "zod"
+import { MOVE_REASON_MAX } from "@mako/protocol/moves"
+import { decodeRuntimeValue, type EncodedValue } from "./runtime-value.js"
 
 /** A public GitHub repository a cloud Thread's machine clones and works in, as the cloud takes it. */
 export const CloudRepositorySchema = z
@@ -148,3 +150,23 @@ export type ThreadReturnOutcome =
   | { kind: "back" }
   | { kind: "stayed"; reason: string; outdated?: OutdatedRestore; missing?: ReturnProjectMissing }
   | { kind: "unsettled"; reason: string; waitsOn: ReturnWaitsOn }
+
+/** What a start reads of the cloud host's boot: the folder of its tab in front, which is the clone. */
+const BootTabsSchema = z.object({
+  activeTabId: z.string(),
+  tabs: z.array(z.object({ id: z.string(), session: z.object({ meta: z.object({ cwd: z.string() }).loose() }).loose() }).loose()),
+}).loose()
+
+/** The folder a cloud host works in, read from its boot: its tab in front, which is the clone. */
+export function bootFolder(boot: EncodedValue): string {
+  const tabs = BootTabsSchema.parse(decodeRuntimeValue(boot))
+  const cwd = tabs.tabs.find((tab) => tab.id === tabs.activeTabId)?.session.meta.cwd
+  if (!cwd) throw new Error("The cloud machine has no folder to work in")
+  return cwd
+}
+
+/** A reason the cloud keeps beside a move or a return: within `MOVE_REASON_MAX`, cut with an ellipsis rather than refused. */
+export function clipReason(reason: string): string {
+  const said = reason.trim() || "No reason was given."
+  return said.length <= MOVE_REASON_MAX ? said : `${said.slice(0, MOVE_REASON_MAX - 1)}…`
+}

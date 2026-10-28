@@ -14,6 +14,7 @@
     "./moves": "./dist/moves.js",
     "./account-events": "./dist/account-events.js",
     "./thread-listing": "./dist/thread-listing.js",
+    "./account-sessions": "./dist/account-sessions.js",
     "./waiting": "./dist/waiting.js",
     "./recipes": "./dist/recipes.js",
     "./recipes-http": "./dist/recipes-http.js",

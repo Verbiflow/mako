@@ -6,7 +6,8 @@ import type { LiveSummary } from "../contracts/live-conversations.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId, type ThreadPlacement } from "../contracts/thread-identity.js"
 import { Payload, SESSIONS_VERSION, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
-import { runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
+import type { HostEvent } from "../contracts/host-events-boot.js"
+import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { namedUuid } from "./cloud-moves.js"
 import { syncTier } from "./sync-window.js"
 
@@ -287,13 +288,30 @@ export class SessionPublisher {
     this.#watching = { link, conversations: new Set(conversations) }
   }
 
-  /** One of the host's outgoing events: a watched conversation's batch goes to its watchers, and every batch may change a row. */
+  /** One of the host's outgoing events, encoded: a watched conversation's batch goes to its watchers, and every batch may change a row. */
   event(channel: RuntimeEventChannel, event: RuntimeEvent): void {
     if (channel !== "event") return
     if (event.type === "live-batch") this.#dirty = true
     const conversation = event.conversation
-    const current = this.#current
-    if (!conversation || !current || this.#watching?.link !== current.link || !this.#watching.conversations.has(conversation)) return
+    const current = this.#watched(conversation)
+    if (!conversation || !current) return
     current.served.live(conversation, Payload.encoded(runtimeEventLine(channel, event).slice(0, -1)))
+  }
+
+  /**
+   * One of this host's own events, as its conversations emit it: a batch may change a row, and a watched conversation's
+   * goes to its watchers, encoded only then, so an event nobody elsewhere watches costs nothing.
+   */
+  own(event: HostEvent): void {
+    if (event.type !== "live-batch") return
+    this.#dirty = true
+    if (this.#watched(event.batch.id)) this.event("event", encodeRuntimeEvent(event))
+  }
+
+  /** The current link, when another device watches `conversation` on it. */
+  #watched(conversation: string | undefined): SessionLink | undefined {
+    const current = this.#current
+    if (!conversation || !current || this.#watching?.link !== current.link || !this.#watching.conversations.has(conversation)) return undefined
+    return current
   }
 }

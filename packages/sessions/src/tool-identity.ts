@@ -297,14 +297,16 @@ function firstLine(text: string | undefined): string | undefined {
   return text?.split("\n").map((line) => line.trim()).find(Boolean)
 }
 
-const SHELL_WRAPPER = /^(?:\/usr\/bin\/env\s+)?(?:\/(?:usr\/)?(?:local\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+([\s\S]+)$/
+// The command starts at its first non-space, so the spaces before it are read one way only: a long run of them can't
+// make the match try every split (polynomial backtracking on a command the harness sent).
+const SHELL_WRAPPER = /^(?:\/usr\/bin\/env\s+)?(?:\/(?:usr\/)?(?:local\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(\S[\s\S]*)$/
 
 /**
  * The command inside `/bin/zsh -lc '…'`, which is how Codex records every
  * command it runs. Only a wrapper whose quoting closes exactly at the end is
  * opened; anything else is shown as recorded.
  */
-function bareCommand(command: string): string {
+export function bareCommand(command: string): string {
   const rest = SHELL_WRAPPER.exec(command.trim())?.[1]
   if (!rest) return command
   const quote = rest[0]

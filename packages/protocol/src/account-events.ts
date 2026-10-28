@@ -21,7 +21,7 @@ export const AccountEventSchema = z.discriminatedUnion("type", [
     type: z.literal("device-joined"),
     device: z.object({
       id: z.uuid(),
-      kind: z.enum(["desktop", "runtime", "cli"]),
+      kind: z.enum(["desktop", "runtime", "cli", "browser"]),
       name: z.string().max(80),
       platform: z.string().max(40),
       enrolledBy: z.enum(["browser", "device-code"]),

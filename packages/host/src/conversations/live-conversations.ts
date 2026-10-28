@@ -38,6 +38,7 @@ import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
 import { changedEntryStart, deliverLiveUpdates } from "@mako/sessions/live-content"
+import { bareCommand } from "@mako/sessions/tool-identity"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { LiveAccounts } from "./live-accounts.js"
 import { LiveActions } from "./live-actions.js"
@@ -373,7 +374,8 @@ export class LiveConversations {
     const resident = this.records.has(id) ? this.records.load(id) : undefined
     if (!resident) return undefined
     const permission = resident.snapshot.permissions[0]
-    if (permission) return `Approve: ${permission.title}`
+    // A command as its person would type it: Codex asks about `/bin/zsh -lc '…'`, which says nothing more.
+    if (permission) return `Approve: ${bareCommand(permission.title)}`
     const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
     const asked = question?.native.questions.find((item) => !question.answered?.includes(item.id))
     return asked ? `A question: ${asked.question}` : undefined

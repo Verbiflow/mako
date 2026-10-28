@@ -214,6 +214,22 @@ idempotency, a new channel is an adapter plus a preference row. The desk and
 the phone never both ring: the plan picks one recipient, and a receipt from
 either cancels the rest.
 
+**Built 2026-10-28: Web Push to the web app, decided by the account.** The
+first push channel didn't wait for the host's ledger. The account already
+holds one row per Session, written only by its owner (a Mac, or a cloud
+Thread's machine), so the cloud decides from those rows: a Session turning
+`waiting` (an approval or a question), `failed`, or finishing a turn is one
+fact, keyed by its Session, generation, state and time, sent once. A device
+says while its person is at it (`PUT /v1/attention`): a Mac while its
+keyboard or pointer moved in the last two minutes (`CloudAttention`, never a
+host with no screen), the web app while its page is in front. While any is,
+the notice waits, and it goes once they leave if its fact is still true. So
+the Mac's own banner is the one a person at the Mac sees, and the phone is
+told two minutes after they walk away. The web app's service worker shows
+every notice it's sent (a browser takes a push that shows nothing as abuse);
+a tap opens the Thread. The web client is `@mako/web-client`
+(`packages/web-client`, its code in `src/web-client`).
+
 ### What stays out
 
 - No notification history surface beyond the titlebar list. The ledger

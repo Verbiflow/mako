@@ -538,6 +538,7 @@ function Prompt({ message }: { message: ChatMessage }) {
         ) : null}
         <button
           type="button"
+          data-transcript-action="reuse"
           title="Put this prompt back in the composer"
           onClick={compose}
           className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
@@ -550,6 +551,7 @@ function Prompt({ message }: { message: ChatMessage }) {
           <>
             <button
               type="button"
+              data-transcript-action="edit"
               title="Rewind to here and re-ask — later turns stay on their own branch"
               onClick={() => void editHere()}
               className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
@@ -559,6 +561,7 @@ function Prompt({ message }: { message: ChatMessage }) {
             </button>
             <button
               type="button"
+              data-transcript-action="fork"
               title="Branch from this point into a new tab — both lines stay open"
               onClick={() => void actions.fork(message.id)}
               className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
@@ -1218,6 +1221,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
       <>
         <button
           type="button"
+          data-transcript-action="fork"
           title="Fork after this answer into a new tab in this Thread. Option-click forks into a new Thread."
           onClick={(event) => void acp.fork(liveAnswer, event.altKey ? "new" : "parent", scopedLiveAcp(acpStore.get(), scope))}
           className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
@@ -1231,6 +1235,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
     return (
       <button
         type="button"
+        data-transcript-action="fork"
         title="Fork from this completed answer into a new tab"
         onClick={() => void actions.fork(nativeEntry, "at")}
         className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
