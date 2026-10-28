@@ -27,6 +27,7 @@ import {
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { unregisterBundle } from "./local-update-installer.js"
 import { bringForward, changesSince, readUpdateSource } from "./local-update-source.js"
+import { DependencyInstallError, installDependencies, missingDependencies, uninstalledPackages } from "./local-update-dependencies.js"
 import type { Git } from "@mako/git"
 
 const execute = promisify(execFile)
@@ -162,6 +163,8 @@ export interface LocalUpdateOptions {
    */
   buildSource?: boolean
   statfs?: DiskReader
+  /** How long npm install in the checkout may run; `DEPENDENCY_INSTALL_TIMEOUT_MS` unless a test shortens it. */
+  installTimeoutMs?: number
 }
 
 export class LocalUpdates {
@@ -344,9 +347,11 @@ export class LocalUpdates {
         const phase =
           this.state.kind === "building" ? this.state.phase : "verification"
         const reason = error instanceof Error ? error.message.slice(0, 1500) : "Unexpected build failure"
+        const what = phase === "installing" ? "couldn't install dependencies" : `failed during ${phase}`
         this.state = {
           kind: "error",
-          message: `The update failed during ${phase}: ${reason} Your installed app and agents were not changed.`,
+          message: `The update ${what}: ${reason} Your installed app and agents were not changed.`,
+          ...error instanceof DependencyInstallError && { command: error.command },
         }
       })
       .finally(() => {
@@ -392,8 +397,36 @@ export class LocalUpdates {
     await ensureBuildSpace(this.root, await buildCopyBytes(source), this.options.statfs)
     const forwarded = reading ? await bringForward(this.git, source, reading) : null
     const built = forwarded ? await this.check({ fetch: false, force: true }) : reading
-    if (built?.kind === "checkout") this.state = { kind: "building", phase: "copying", revision: built.head }
+    const revision = built?.kind === "checkout" ? { revision: built.head } : {}
+    this.state = { kind: "building", phase: "copying", ...revision }
     this.changed()
+    const inherited = Object.fromEntries(
+      [
+        "HOME",
+        "PATH",
+        "TMPDIR",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+      ].flatMap((key) =>
+        process.env[key] === undefined ? [] : [[key, process.env[key]]]
+      )
+    )
+    // A lockfile the fast-forward (or a pull) changed: install what it
+    // lists into the checkout first, with the npm and Node the build uses.
+    const missing = await uninstalledPackages(source)
+    if (missing.length) {
+      this.state = { kind: "building", phase: "installing", ...revision, dependencies: missingDependencies(missing) }
+      this.changed()
+      const env = environmentForExecutable(node, inherited)
+      await installDependencies(this.git, source, missing, {
+        run: (args, signal) => runBuild(npm, args, source, env, signal),
+        timeoutMs: this.options.installTimeoutMs,
+      })
+      this.phase("copying")
+    }
     const checkout = join(this.root, "checkout")
     const job = await mkdtemp(join(this.root, "build-"))
     const output = join(job, "output")
@@ -417,20 +450,6 @@ export class LocalUpdates {
         this.changed()
         return
       }
-      const inherited = Object.fromEntries(
-        [
-          "HOME",
-          "PATH",
-          "TMPDIR",
-          "USER",
-          "LOGNAME",
-          "SHELL",
-          "LANG",
-          "LC_ALL",
-        ].flatMap((key) =>
-          process.env[key] === undefined ? [] : [[key, process.env[key]]]
-        )
-      )
       const variables: NodeJS.ProcessEnv = {
         ...inherited,
         MAKO_LOCAL_SIGNING_IDENTITY: this.identity,
@@ -507,32 +526,6 @@ const syncManifestSchema = z.object({
   deps: z.string().nullable(),
   entries: z.record(z.string(), z.string()),
 })
-
-const lockPackagesSchema = z.object({
-  packages: z.record(z.string(), z.object({
-    optional: z.boolean().optional(),
-    devOptional: z.boolean().optional(),
-    peer: z.boolean().optional(),
-  })).optional(),
-})
-
-/**
- * Packages the source's lockfile requires that its last npm install never
- * put in node_modules: a pull or merge changed package-lock.json without an
- * install after it. Optional and peer entries are left out, since npm skips
- * the ones for other platforms.
- */
-async function uninstalledPackages(source: string): Promise<string[]> {
-  const read = (path: string) => readFile(join(source, path), "utf8")
-    .then((text) => lockPackagesSchema.parse(JSON.parse(text)).packages ?? {})
-    .catch(() => null)
-  const [wanted, installed] = await Promise.all([read("package-lock.json"), read(DEPENDENCIES_SENTINEL)])
-  if (!wanted || !installed) return []
-  return Object.entries(wanted).flatMap(([path, entry]) =>
-    path.startsWith("node_modules/") && !entry.optional && !entry.devOptional && !entry.peer && !(path in installed)
-      ? [path.slice("node_modules/".length)]
-      : [])
-}
 
 const buildSourceFilter = (path: string) => {
   const name = basename(path)
@@ -777,8 +770,10 @@ async function runBuild(
   command: string,
   args: string[],
   cwd: string,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal
 ): Promise<void> {
+  signal?.throwIfAborted()
   await new Promise<void>((resolve, reject) => {
     const child = spawn(command, args, {
       cwd,
@@ -793,6 +788,7 @@ async function runBuild(
     child.stdout.setEncoding("utf8").on("data", (text: string) => { stdout = (stdout + text).slice(-8192) })
     child.stderr.setEncoding("utf8").on("data", (text: string) => { stderr = (stderr + text).slice(-8192) })
     let timedOut = false
+    let stopping = false
     let force: ReturnType<typeof setTimeout> | undefined
     const kill = (signal: NodeJS.Signals) => {
       if (!child.pid) return
@@ -807,24 +803,35 @@ async function runBuild(
           reject(error)
       }
     }
-    const timer = setTimeout(() => {
-      timedOut = true
+    // The whole group goes: npm's own children (install scripts) with it.
+    const stop = () => {
+      if (stopping) return
+      stopping = true
       kill("SIGTERM")
       force = setTimeout(() => kill("SIGKILL"), 5000)
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      stop()
     }, 20 * 60_000)
-    child.once("error", (error) => {
+    signal?.addEventListener("abort", stop, { once: true })
+    const settle = () => {
       clearTimeout(timer)
       clearTimeout(force)
+      signal?.removeEventListener("abort", stop)
+    }
+    child.once("error", (error) => {
+      settle()
       reject(error)
     })
     child.once("close", (code) => {
-      clearTimeout(timer)
-      clearTimeout(force)
+      settle()
       // The pipes can drain out of order: a stdout burst must not erase the
       // final stderr failure, even if the child wrote stderr last.
       const diagnostic = [stdout.slice(stderr ? -600 : -1200), stderr.slice(stdout ? -600 : -1200)]
         .map(text => stripVTControlCharacters(text).trim()).filter(Boolean).join("\n")
-      if (code === 0 && !timedOut) resolve()
+      if (signal?.aborted) reject(signal.reason)
+      else if (code === 0 && !timedOut) resolve()
       else
         reject(
           new Error(

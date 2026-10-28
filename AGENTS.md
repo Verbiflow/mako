@@ -3494,6 +3494,22 @@ the revision already running, and the update read as done. `npm run
 test:update-source` covers it against scratch repositories and a local bare
 remote, and draws every state.
 
+Then the checkout's node_modules must hold what its package-lock.json lists
+(`local-update-dependencies.ts`: each lockfile entry against npm's
+`node_modules/.package-lock.json`, by version; optional and peer entries
+aside). When it doesn't, as after a fast-forward or a pull that changed the
+lockfile, Settings (phase `installing`, "Installing dependencies…") and
+`update:local` run `npm install --no-audit --no-fund --no-save` in the
+checkout with the npm and Node the build uses, before anything is copied:
+never `npm ci` (it deletes node_modules under whatever else reads it), and
+`--no-save` so package.json and package-lock.json stay as Git has them. It's
+refused while any package.json or package-lock.json has uncommitted
+changes, stopped with its process group after 10 minutes, and every failure
+ends with the command to run by hand. No dependency install script is
+approved: the build needs none of the ones npm's `allowScripts` would hold
+back, and `test-local-update-dependencies.mjs` (in `test:update-source`)
+names each and fails when one arrives or leaves.
+
 `npm run test:application` covers the lifecycle state machine, draft-close
 acknowledgements, source-copy isolation, replacement rollback, real Electron
 private-socket clients, and the production Settings/dialog/palette components.

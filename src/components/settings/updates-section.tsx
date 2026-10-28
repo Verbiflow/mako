@@ -8,7 +8,7 @@ import {
   ShieldCheckIcon,
 } from "lucide-react"
 import type { RevisionChanges, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
-import { shortRevision, updateSourceText, type UpdateSourceText } from "@mako/host/contracts/update-source-text"
+import { missingDependenciesText, shortRevision, updateSourceText, type UpdateSourceText } from "@mako/host/contracts/update-source-text"
 import { Action, Chip } from "@/components/ui/kit"
 import { IfCanChooseFolder } from "@/components/ui/machine-gate"
 import { MakoTile } from "@/components/ui/mako-mark"
@@ -18,13 +18,16 @@ import { application, useApplication } from "@/state/application"
 import { runCommand } from "@/extend/commands"
 import { cn } from "@/lib/utils"
 
-const phases = [
-  "copying",
-  "compiling",
-  "checking",
-  "packaging",
-  "verifying",
-] as const
+type BuildPhase = Extract<UpdateInstallation["local"], { kind: "building" }>["phase"]
+/** Each phase's step in the progress row; installing dependencies is part of preparing. */
+const phaseSteps = {
+  installing: 0,
+  copying: 0,
+  compiling: 1,
+  checking: 2,
+  packaging: 3,
+  verifying: 4,
+} satisfies Record<BuildPhase, number>
 const phaseLabels = ["Prepare", "Build", "Check", "Package", "Verify"]
 
 /** The commit subjects a change count stands for, newest first, and how many more there are. */
@@ -56,6 +59,11 @@ interface CardCopy {
 function localCopy(installation: UpdateInstallation, text: UpdateSourceText | null): CardCopy {
   const { local, checkout } = installation
   if (local.kind === "ready") return { title: "Your update is ready", detail: "Verified and ready. Install after agents finish, or choose when to stop them." }
+  if (local.kind === "building" && local.phase === "installing")
+    return {
+      title: "Installing dependencies…",
+      detail: `${local.dependencies ? `${missingDependenciesText(local.dependencies)} ` : ""}Mako is running npm install in the checkout before it builds. Your installed app and agents stay running.`,
+    }
   if (local.kind === "building") {
     const forward = checkout?.kind === "checkout" && checkout.plan.kind === "fast-forward" && checkout.branch
     return {
@@ -95,7 +103,7 @@ export function UpdatesSection() {
     lifecycle?.operation.kind === "stopping"
   const phase =
     installation?.local.kind === "building"
-      ? phases.indexOf(installation.local.phase)
+      ? phaseSteps[installation.local.phase]
       : -1
   const build = installation?.build
   const nextBuild =
@@ -104,6 +112,8 @@ export function UpdatesSection() {
     installation?.local.kind === "error"
       ? installation.local.message
       : error || release.error
+  // What to run by hand when Mako won't or couldn't, apart from the words so it copies whole.
+  const fix = installation?.local.kind === "error" ? installation.local.command : undefined
   const copy = local && installation ? localCopy(installation, text) : null
   const prepared = installation?.local.kind === "ready" ? installation.local : null
   // What Build would bring, listed before it runs; nothing while it builds or once it's ready.
@@ -308,12 +318,20 @@ export function UpdatesSection() {
           </div>
         )}
         {failed && (
-          <p
+          <div
             role="alert"
-            className="mx-4 mb-4 rounded-lg bg-negative/10 p-3 text-ui leading-relaxed text-negative"
+            className="mx-4 mb-4 flex flex-col gap-2 rounded-lg bg-negative/10 p-3 text-ui leading-relaxed text-negative"
           >
-            {failed}
-          </p>
+            <p>{failed}</p>
+            {fix && (
+              <code
+                className="block rounded-md bg-background/60 px-2.5 py-1.5 font-mono text-label break-all text-foreground select-all"
+                data-testid="update-command"
+              >
+                {fix}
+              </code>
+            )}
+          </div>
         )}
         <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-4 py-3">
           {ready && (
