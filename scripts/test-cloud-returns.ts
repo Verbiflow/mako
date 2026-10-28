@@ -9,6 +9,9 @@ import { Git } from "@mako/git"
 import type { ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { ReceivedRecords } from "@mako/sessions/record-sync"
 import { CloudReturns, type CloudReturnsOptions } from "@mako/host/conversations/cloud-returns"
+import { CloudArchives } from "@mako/host/conversations/cloud-archives"
+import type { CloudArchiveStep } from "@mako/host/contracts/thread-lifecycle"
+import type { ArchivedThread } from "@mako/protocol/thread-listing"
 import { cloudRuntimeOf, type MovePlanSchema } from "@mako/host/conversations/cloud-moves"
 import type { ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import { encodeRuntimeValue, type EncodedValue } from "@mako/host/contracts/runtime-value"
@@ -47,6 +50,8 @@ class Cloud {
   aheadFails = false
   /** The machine's departure: what it packs, or why it can't. */
   depart: () => Promise<ReturnDeparture> = async () => { throw new Error("no departure set") }
+  /** Set to refuse the next archive's beginning, as the gateway does a Thread at work: nothing is begun. */
+  refuseBegin: string | undefined
   unreachable = 0
   step(move: string, next: (record: ReturnState | undefined) => ReturnState | "past"): ReturnState {
     if (this.unreachable > 0) {
@@ -62,6 +67,14 @@ class Cloud {
     this.records.set(move, after)
     return after
   }
+}
+
+/** A return's mark of the archive, carried along as the gateway does (`returns.ts`). */
+const mark = (record: ReturnState): Pick<ReturnState, "to" | "by"> => {
+  const marked: Pick<ReturnState, "to" | "by"> = {}
+  if (record.to === "archive") marked.to = "archive"
+  if (record.to === "archive" && record.by) marked.by = record.by
+  return marked
 }
 
 /** The repository a Thread's move recorded, as GitHub names it. */
@@ -138,6 +151,15 @@ function setup(name: string, options: { worktree?: boolean } = {}) {
     return { checkpoint, sessions: asked.map((id) => ({ harness: there.find((each) => each.conversationId === id)?.harness ?? "", nativeId: nativeThere.get(id) ?? "" })).map((each) => ({ ...each, holdings: { [`${each.harness}:${each.nativeId}.jsonl`]: 5 } })) }
   }
   const unused = () => Promise.reject(new Error("not in this test"))
+  /** The machine, through its Thread: it packs, takes the Thread back, and says what it runs. */
+  const callThread = async (_threadId: string, channel: string, args: readonly unknown[]): Promise<EncodedValue> => {
+    cloud.calls.push({ channel, args })
+    if (channel === "mako:move-depart") return encodeRuntimeValue(await cloud.depart())
+    if (channel === "mako:move-stay") return encodeRuntimeValue({ stayed: true })
+    // The machine's own word on a conversation it runs: the native session it started, or none.
+    if (channel === "mako:live-snapshot") return encodeRuntimeValue({ session: { nativeId: nativeThere.get(String(args[0])) ?? null } })
+    throw new Error(`no ${channel} in this test`)
+  }
   const account: ReturnType<CloudReturnsOptions["account"]> = {
     token: async () => "token", gateway: () => new URL("https://gateway.test"), id: async () => "acct",
     session: () => { throw new Error("no session in this test") },
@@ -146,11 +168,17 @@ function setup(name: string, options: { worktree?: boolean } = {}) {
     threadRecords: async (threadId) => ({ id: threadId, base: `https://gateway.test/v1/threads/${threadId}/records`, authorization: "Bearer token" }),
     deviceRecords: async (deviceId) => ({ id: deviceId, base: `https://gateway.test/v1/devices/${deviceId}/records`, authorization: "Bearer token" }),
     readCheckpoint: async (_threadId, sha256, file) => copyFileSync(cloud.checkpoints.get(sha256) ?? "/missing", file),
-    beginReturn: async (_threadId, move) => cloud.step(move, (record) => record ?? { phase: "returning", move, at: clock++ }),
-    releaseReturn: async (_threadId, move, departure) => cloud.step(move, (record) => record?.phase === "returning" ? { phase: "released", move, at: clock++, departure } : "past"),
-    cancelReturn: async (_threadId, move, reason) => cloud.step(move, (record) => record?.phase === "returning" ? { phase: "cancelled", move, at: clock++, reason } : "past"),
-    giveBackReturn: async (_threadId, move, reason) => cloud.step(move, (record) => record?.phase === "released" ? { phase: "given-back", move, at: clock++, reason, departure: record.departure } : "past"),
-    finishReturn: async (_threadId, move) => cloud.step(move, (record) => record?.phase === "released" ? { phase: "returned", move, at: clock++, departure: record.departure } : "past"),
+    beginReturn: async (_threadId, move, to) => {
+      const refused = cloud.refuseBegin
+      cloud.refuseBegin = undefined
+      if (refused) throw new Error(refused)
+      return cloud.step(move, (record) => record ?? { phase: "returning", move, at: clock++, ...to && { to, by: device } })
+    },
+    releaseReturn: async (_threadId, move, departure) => cloud.step(move, (record) => record?.phase === "returning" ? { phase: "released", move, at: clock++, departure, ...mark(record) } : "past"),
+    cancelReturn: async (_threadId, move, reason) => cloud.step(move, (record) => record?.phase === "returning" ? { phase: "cancelled", move, at: clock++, reason, ...mark(record) } : "past"),
+    giveBackReturn: async (_threadId, move, reason) => cloud.step(move, (record) => record?.phase === "released" ? { phase: "given-back", move, at: clock++, reason, departure: record.departure, ...mark(record) } : "past"),
+    finishReturn: async (_threadId, move) => cloud.step(move, (record) => (record?.phase === "released" && record.to !== "archive") || (record?.phase === "archived" && record.departure) ? { phase: "returned", move, at: clock++, departure: record.departure!, ...mark(record) } : "past"),
+    archiveReturn: async (_threadId, move) => cloud.step(move, (record) => (record?.phase === "released" || record?.phase === "returning") && record.to === "archive" ? { phase: "archived", move, at: clock++, to: "archive", ...record.phase === "released" && { departure: record.departure }, ...record.by && { by: record.by } } : "past"),
     returnState: async (_threadId, move) => cloud.records.get(move),
     wake: () => undefined, stop: () => undefined,
   }
@@ -176,14 +204,7 @@ function setup(name: string, options: { worktree?: boolean } = {}) {
     },
     receiveRecords: async (_link, sessions) => receiveFails ? Promise.reject(receiveFails) : sessions.map((session) => ({ harness: session.harness, nativeId: session.nativeId, pulled: { versions: 1, held: 0, chunks: 1, bytes: 1, requests: 1, ms: 1 }, restored: restored ?? { kind: "restored", path: `/${session.harness}/${session.nativeId}.jsonl`, files: 1, rows: 0, ms: 1 } })),
     cloud: {
-      callThread: async (_threadId, channel, args): Promise<EncodedValue> => {
-        cloud.calls.push({ channel, args })
-        if (channel === "mako:move-depart") return encodeRuntimeValue(await cloud.depart())
-        if (channel === "mako:move-stay") return encodeRuntimeValue({ stayed: true })
-        // The machine's own word on a conversation it runs: the native session it started, or none.
-        if (channel === "mako:live-snapshot") return encodeRuntimeValue({ session: { nativeId: nativeThere.get(String(args[0])) ?? null } })
-        throw new Error(`no ${channel} in this test`)
-      },
+      callThread,
       releaseThread: async (threadId) => {
         const ids = there.map((each) => each.conversationId)
         released.push(threadId)
@@ -217,8 +238,19 @@ function setup(name: string, options: { worktree?: boolean } = {}) {
     nativeThere.set(conversationId, nativeId)
     return { session: placedFork.session, conversationId }
   }
+  /** Archives the cloud Thread from this Mac, as the router lists it: its conversations that started there, at its folder. */
+  const archiveSteps: CloudArchiveStep[] = []
+  const archives = () => new CloudArchives({
+    folder: join(folder, "archives"),
+    account: () => account,
+    cloud: {
+      callThread,
+      archiveInputs: () => ({ conversations: there.filter((each) => each.nativeId).map((each) => each.conversationId), folder: checkout }),
+    },
+    step: (step) => archiveSteps.push(step),
+  })
   return {
-    returns: make(), fresh: make, cloud, conversation, checkout, project, remote, folder, steps, released, captured, state, files, device, cloudThread, threads, thread: placed.thread, session: placed.session, tab, fork, handoff,
+    returns: make(), fresh: make, archives, archiveSteps, account, there, cloud, conversation, checkout, project, remote, folder, steps, released, captured, state, files, device, cloudThread, threads, thread: placed.thread, session: placed.session, tab, fork, handoff,
     setRestored: (next: ReceivedRecords["restored"]) => (restored = next),
     failReceive: (error: Error) => (receiveFails = error),
     failClaim: (times: number) => (claimFails = times),
@@ -515,7 +547,110 @@ try {
     assert.deepEqual(await s.returns.bringBack(s.conversation, id), { kind: "stayed", reason: `Its project, ${s.project}, isn't on this Mac anymore: it was moved or deleted. It goes on in the cloud.`, missing: { folder: s.checkout, project: s.project } }, "asked again, it says why, with the project for the window")
     assert.deepEqual(readdirSync(join(s.folder, "returns")).filter((name) => !name.endsWith(".json")), [], "no copies left beside the plan")
   }
-  console.log("PASS: a Thread comes back from the cloud with one owner throughout: packed, released, laid over this Mac's worktree and claimed here; a machine that can't pack cancels it and keeps the Thread; records that can't be taken put the worktree back and give it back; an unheard release is settled by the next host; conversations begun in the cloud come back with it, and one begun as it set off gives it back rather than be left behind; asked again under a new id, an open return goes on; this Mac's own failure after the release waits on this Mac, and says so; a worktree that can't be kept cancels before the release; a project gone is refused with nothing asked of the cloud, a moved one is chosen and the worktree joins it, a deleted worktree is made again; and a return left released and unkept is given back by the next host")
+  // Archived from this Mac: begun to the archive, packed by its machine toward this Mac, released, then archived; its
+  // Thread stays elsewhere here, and nothing of this Mac's changed. Asked again, the same, with nothing asked twice.
+  const archivedOf = (s: ReturnType<typeof setup>, op: string): ArchivedThread => {
+    const record = s.cloud.records.get(op)
+    assert.equal(record?.phase, "archived")
+    return { thread: s.cloudThread, move: op, archivedAt: new Date().toISOString(), sessions: [{ session: s.session, thread: s.thread, conversation: s.conversation, harness: "codex", state: "idle", createdAt: new Date().toISOString(), activityAt: new Date().toISOString(), generation: 3, nativeId: "n-1", runsOn: { kind: "cloud", threadId: s.cloudThread }, listedAt: new Date().toISOString() }] }
+  }
+  {
+    const s = setup("archive", { worktree: true })
+    const before = s.files()
+    const op = move()
+    assert.deepEqual(await s.archives().archive(s.cloudThread, op), { kind: "archived", thread: s.cloudThread })
+    assert.deepEqual(s.archiveSteps.map((step) => step.kind), ["packing", "ending"])
+    const record = s.cloud.records.get(op)
+    assert.deepEqual([record?.phase, record?.to, record?.by], ["archived", "archive", s.device], "archived, by this Mac's word")
+    assert.equal(record?.phase === "archived" && record.departure?.sessions[0]?.nativeId, "n-1", "what its machine packed is kept with it")
+    const depart = s.cloud.calls.find((call) => call.channel === "mako:move-depart")
+    assert.deepEqual(depart?.args, [{ move: op, folder: s.checkout, conversations: [s.conversation], device: s.device }])
+    assert.deepEqual([s.state()?.state, s.files()], ["elsewhere", before], "this Mac's store and worktree are as they were")
+    const calls = s.cloud.calls.length
+    assert.deepEqual(await s.archives().archive(s.cloudThread, op), { kind: "archived", thread: s.cloudThread }, "asked again, the same")
+    assert.equal(s.cloud.calls.length, calls, "and nothing asked twice")
+
+    // Restored here, the Mac it came from: the second half of a return, from what the archive kept.
+    s.steps.length = 0
+    const archived = archivedOf(s, op)
+    assert.deepEqual(await s.returns.restore(archived), { kind: "back" })
+    assert.deepEqual(s.steps.map((step) => step.kind), ["bringing", "back"], "nothing packed again: its machine is gone")
+    assert.equal(s.cloud.records.get(op)?.phase, "returned", "the archive is over")
+    assert.deepEqual([s.state()?.state, s.state()?.generation], ["here", 5], "it runs here, one generation on")
+    assert.equal(s.files()[0], "one, changed in the cloud\n", "the checkout the archive kept, over this Mac's")
+    assert.ok(!s.cloud.calls.some((call) => call.channel === "mako:move-stay"), "no machine to tell")
+    assert.deepEqual(await s.returns.restore(archived), { kind: "back" }, "asked again, the same")
+  }
+
+  // A Mac that can't take it back: its worktree is put back exactly, and the Thread stays archived, with no machine to
+  // give it to. A Mac that doesn't hold it is told where to restore it, and asks nothing of the cloud.
+  {
+    const s = setup("archive-kept", { worktree: true })
+    const op = move()
+    assert.equal((await s.archives().archive(s.cloudThread, op)).kind, "archived")
+    const before = s.files()
+    s.failReceive(new Error("the records didn't come down"))
+    const stayed = await s.returns.restore(archivedOf(s, op))
+    assert.deepEqual(stayed, { kind: "stayed", reason: "the records didn't come down. It stays archived." })
+    assert.deepEqual([s.files(), s.state()?.state], [before, "elsewhere"], "put back as it was, still the cloud's here")
+    assert.equal(s.cloud.records.get(op)?.phase, "archived", "never given back to a machine that's gone")
+    assert.ok(!s.cloud.calls.some((call) => call.channel === "mako:move-stay"))
+    const elsewhere = setup("archive-elsewhere", { worktree: true })
+    const theirs = { ...archivedOf(s, op), sessions: archivedOf(s, op).sessions.map((row) => ({ ...row, conversation: randomUUID() })) }
+    const calls = elsewhere.cloud.calls.length
+    assert.deepEqual(await elsewhere.returns.restore(theirs), { kind: "stayed", reason: "This Thread came to the cloud from another Mac, or began there: restore it on the Mac it came from." })
+    assert.equal(elsewhere.cloud.calls.length, calls)
+  }
+
+  // Refused while it works: the gateway's words, nothing begun. A machine that won't pack (a turn just began) cancels it,
+  // saying why. One that can't start offers to archive it anyway, which keeps only its records and can't be restored.
+  {
+    const s = setup("archive-refused", { worktree: true })
+    s.cloud.refuseBegin = "This Thread is working. Archive it once its turn ends."
+    const working = move()
+    assert.deepEqual(await s.archives().archive(s.cloudThread, working), { kind: "refused", thread: s.cloudThread, reason: "This Thread is working. Archive it once its turn ends." })
+    assert.equal(s.cloud.records.has(working), false, "nothing begun")
+    s.cloud.depart = async () => { throw new Error("A Thread goes back between turns: codex is answering.") }
+    const busy = move()
+    assert.deepEqual(await s.archives().archive(s.cloudThread, busy), { kind: "refused", thread: s.cloudThread, reason: "This Thread is working (codex is answering). Archive it once its turn ends." }, "in the person's words")
+    assert.equal(s.cloud.records.get(busy)?.phase, "cancelled", "cancelled: it goes on as it was")
+    s.cloud.depart = async () => { throw new Error("This Thread couldn't start in the cloud. Try again in a moment.") }
+    const unstarted = move()
+    assert.deepEqual(await s.archives().archive(s.cloudThread, unstarted), { kind: "refused", thread: s.cloudThread, reason: "This Thread couldn't start in the cloud. Try again in a moment.", anyway: true })
+    const departs = s.cloud.calls.filter((call) => call.channel === "mako:move-depart").length
+    // What this Mac doesn't know the machine runs it can't ask it to pack: never archived without its checkout unasked.
+    const unknown = s.there.splice(0)
+    const nothing = move()
+    assert.deepEqual(await s.archives().archive(s.cloudThread, nothing), { kind: "refused", thread: s.cloudThread, reason: "Mako can't tell yet what this Thread runs in the cloud, so its checkout can't be saved. Try again in a moment.", anyway: true })
+    assert.equal(s.cloud.records.get(nothing)?.phase, "cancelled")
+    s.there.push(...unknown)
+    const anyway = move()
+    assert.deepEqual(await s.archives().archive(s.cloudThread, anyway, true), { kind: "archived", thread: s.cloudThread })
+    assert.equal(s.cloud.calls.filter((call) => call.channel === "mako:move-depart").length, departs, "archived anyway, its machine isn't asked again")
+    const kept = s.cloud.records.get(anyway)
+    assert.deepEqual([kept?.phase, kept?.phase === "archived" && kept.departure], ["archived", undefined], "with nothing packed")
+  }
+
+  // An archive whose last step wasn't heard stays as its plan says, and the next host finishes it: never left fenced.
+  {
+    const s = setup("archive-unheard", { worktree: true })
+    const op = move()
+    const releasing = s.account.releaseReturn
+    s.account.releaseReturn = async (...args) => {
+      const answered = await releasing(...args)
+      s.cloud.unreachable = 1
+      return answered
+    }
+    const first = await s.archives().archive(s.cloudThread, op)
+    assert.equal(first.kind, "refused")
+    assert.match(first.kind === "refused" ? first.reason : "", /couldn't hear the cloud/)
+    assert.equal(s.cloud.records.get(op)?.phase, "released", "released, and not yet archived")
+    s.account.releaseReturn = releasing
+    await s.archives().settle()
+    assert.equal(s.cloud.records.get(op)?.phase, "archived", "the next host archived it")
+  }
+
+  console.log("PASS: a Thread comes back from the cloud with one owner throughout: packed, released, laid over this Mac's worktree and claimed here; a machine that can't pack cancels it and keeps the Thread; records that can't be taken put the worktree back and give it back; an unheard release is settled by the next host; conversations begun in the cloud come back with it, and one begun as it set off gives it back rather than be left behind; asked again under a new id, an open return goes on; this Mac's own failure after the release waits on this Mac, and says so; a worktree that can't be kept cancels before the release; a project gone is refused with nothing asked of the cloud, a moved one is chosen and the worktree joins it, a deleted worktree is made again; a return left released and unkept is given back by the next host; and a Thread archived from here packs and ends in the cloud, is refused while it works, is archived anyway only when asked, is finished by the next host when unheard, and comes back from its archive to the Mac it came from, or stays archived")
 } finally {
   git.close()
   rmSync(root, { recursive: true, force: true })

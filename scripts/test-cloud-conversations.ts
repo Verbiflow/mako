@@ -44,7 +44,7 @@ import { z } from "zod"
 
 /** A move's calls and its way back's, which these conversations never make (`test-cloud-moves.ts` covers them). */
 const unused = () => Promise.reject(new Error("no move in this test"))
-const movesUnused: Pick<CloudAccount, "sendCheckpoint" | "handOverMove" | "refuseMove" | "moveAnswer" | "threadRecords" | "deviceRecords" | "readCheckpoint" | "beginReturn" | "releaseReturn" | "cancelReturn" | "giveBackReturn" | "finishReturn" | "returnState"> = {
+const movesUnused: Pick<CloudAccount, "sendCheckpoint" | "handOverMove" | "refuseMove" | "moveAnswer" | "threadRecords" | "deviceRecords" | "readCheckpoint" | "beginReturn" | "releaseReturn" | "cancelReturn" | "giveBackReturn" | "finishReturn" | "archiveReturn" | "returnState"> = {
   sendCheckpoint: unused,
   handOverMove: unused,
   refuseMove: unused,
@@ -57,6 +57,7 @@ const movesUnused: Pick<CloudAccount, "sendCheckpoint" | "handOverMove" | "refus
   cancelReturn: unused,
   giveBackReturn: unused,
   finishReturn: unused,
+  archiveReturn: unused,
   returnState: unused,
 }
 
@@ -258,15 +259,18 @@ function sessionOf(client: ClientSession): ClientSessionOverSockets {
 /** The router, the conversations' events it relays, and apart from them, what it tells windows of each start. */
 function conversations(account: CloudAccount, file: string, copies?: CloudCopies, asleepMs?: number) {
   const events: RuntimeEvent[] = []
+  /** The archived cloud Threads each time the host was told of them, by their IDs. */
+  const archived: string[][] = []
   const starts: RuntimeEvent[] = []
   /** Each conversation a window on its folder was told changed, in order. */
   const changed: string[] = []
   const options: CloudConversationsOptions = { account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id) }
   if (copies) options.copies = copies
   if (asleepMs) options.asleepMs = asleepMs
+  options.archivedChanged = (threads) => archived.push([...threads.keys()])
   const router = new CloudConversations(options)
   after(() => router.dispose())
-  return { router, events, starts, changed }
+  return { router, events, starts, changed, archived }
 }
 
 async function until(what: string, check: () => boolean, ms = 3_000) {
@@ -950,10 +954,18 @@ test("every Session the account lists is listed here, unopened and waking nothin
     for (const listener of listeners) listener(heard)
   }
   const file = join(scratch, "listed", "conversations.json")
-  const { router, events } = conversations(machine.account, file)
+  const { router, events, archived } = conversations(machine.account, file)
   await router.start()
   const shown = (id: string) => router.summaries().find((summary) => summary.session.id === id)
   await until("the list read and listed here", () => shown(cloudConversation) !== undefined && shown(studioConversation) !== undefined)
+  // Which cloud Thread a row's archive is the cloud's to keep, and which the Studio's: never this Mac's.
+  assert.equal(await router.cloudThreadOf({ conversationId: cloudConversation }), theirs)
+  assert.equal(await router.cloudThreadOf({ sessionId: inCloud("idle").session }), theirs, "by its Session too")
+  assert.equal(await router.cloudThreadOf({ conversationId: studioConversation }), undefined)
+  assert.equal(await router.archiveOnOwner(cloudConversation, { id: randomUUID(), archived: true }), false, "a cloud Thread's archive isn't a device's")
+  assert.equal(await router.archiveOnOwner(studioConversation, { id: randomUUID(), archived: true }), true)
+  assert.deepEqual(studioCalls, ["mako:thread-archive"], "the Studio's Session is archived by the Studio, its owner")
+  studioCalls.length = 0
   assert.equal(shown(mine.conversation), undefined, "this Mac's own Sessions are its own")
   assert.deepEqual([shown(cloudConversation)?.session.status, shown(cloudConversation)?.elsewhere], ["running", "a cloud machine"])
   assert.deepEqual([shown(studioConversation)?.elsewhere, shown(studioConversation)?.waitingOn], ["Studio", "Approve: npm test"], "where it runs, by name, and what it waits on")
@@ -1014,8 +1026,17 @@ test("every Session the account lists is listed here, unopened and waking nothin
   await until("the Studio no longer watched for it", () => watched.at(-1)?.includes(studioConversation) === false)
   assert.deepEqual(watched.at(-1), [terminalConversation], "the terminal's, opened, still is")
 
+  // Archived by its person on another device: its Sessions leave the list, and it's kept with the archived ones, at rest,
+  // still named by its cloud Thread, and the host is told so (what every window shows as archived).
   say({ seq: 10, event: { type: "sessions-unlisted", sessions: [inCloud("idle").session] } })
-  assert.equal(shown(cloudConversation), undefined)
+  say({ seq: 11, event: { type: "thread-archived", thread: { thread: theirs, move: randomUUID(), archivedAt: "2026-10-27T10:00:00.000Z", sessions: [inCloud("working")] } } })
+  await until("the host told it's archived", () => archived.at(-1)?.includes(theirs) === true)
+  assert.deepEqual([shown(cloudConversation)?.session.status, shown(cloudConversation)?.elsewhere], ["ready", "a cloud machine"], "with the archived ones, at rest")
+  assert.equal(await router.cloudThreadOf({ conversationId: cloudConversation }), theirs, "restoring it finds its cloud Thread")
+  assert.equal(router.archiveOf(theirs)?.thread, theirs)
+  say({ seq: 12, event: { type: "thread-unarchived", thread: theirs } })
+  await until("the host told it's back", () => archived.at(-1)?.includes(theirs) === false)
+  assert.equal(shown(cloudConversation), undefined, "taken back by its Mac, which lists it as its own")
   assert.equal((await router.route("mako:live-snapshot", [cloudConversation])).handled, false, "no longer answered here")
 
   // Another account: whatever the last one listed is gone, and the new account's list is read.

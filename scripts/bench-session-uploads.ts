@@ -112,6 +112,7 @@ const listed = ownedSessions({
   activity: (path) => activity[path],
   work: () => [],
   waitingOn: () => undefined,
+  archived: () => false,
   lastMoved: () => undefined,
   placement: () => undefined,
   execution: () => undefined,

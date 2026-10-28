@@ -30,6 +30,8 @@ export type ReportSources = {
   work(): readonly LifecycleWork[]
   /** What a conversation waits on, in a line, while it waits. */
   waitingOn(conversationId: string): string | undefined
+  /** Whether a conversation is archived here: its owner's word, so every other device's list drops it too. */
+  archived(conversationId: string): boolean
   /** When a conversation last moved (its journal's last write), if known; read again only once its revision moved. */
   lastMoved(conversationId: string, revision: number): number | undefined
   placement(conversationId: string): ThreadPlacement | undefined
@@ -58,7 +60,7 @@ function preferred(left: ReportedSession, right: ReportedSession): ReportedSessi
  * harnesses keep that Mako hasn't opened (a terminal's Claude Code, Cursor's editor, Codex's CLI), each filed under a
  * Session whose owner is here (or which is leaving here, or released and not yet claimed: `moving`), at the generation
  * the store holds, moved within 30 days or at work now, newest first. A Session that runs elsewhere is the other
- * owner's to say; a closed conversation isn't listed, nor is a session its harness deleted or archived.
+ * owner's to say; a closed or archived conversation isn't listed, nor is a session its harness deleted or archived.
  */
 export function ownedSessions(sources: ReportSources): ReportedSession[] {
   const work = new Map(sources.work().map((item) => [item.id, item.status]))
@@ -77,7 +79,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
   }
   for (const summary of summaries) {
     const { session } = summary
-    if (session.status === "closed") continue
+    if (session.status === "closed" || sources.archived(session.id)) continue
     const placed = sources.placement(session.id)
     if (!placed) continue
     const execution = sources.execution(placed.session)

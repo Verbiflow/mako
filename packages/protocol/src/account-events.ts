@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { StreamId } from "./events.js"
-import { LISTED_PER_FRAME, ListedSessionSchema } from "./thread-listing.js"
+import { ThreadIdSchema } from "./ids.js"
+import { ArchivedThreadSchema, LISTED_PER_FRAME, ListedSessionSchema } from "./thread-listing.js"
 import { WAITING_PER_SESSION, WaitingMessageSchema } from "./waiting.js"
 
 /**
@@ -45,6 +46,13 @@ export const AccountEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("device-quiet"), deviceId: z.uuid(), since: z.iso.datetime().nullable() }),
   /** A Session's messages waiting for its owner (`waiting.ts`), all of them as they stand now; none once each was taken or taken back. */
   z.object({ type: z.literal("messages-waiting"), session: z.uuid(), messages: z.array(WaitingMessageSchema).max(WAITING_PER_SESSION) }),
+  /**
+   * A cloud Thread archived: ended in the cloud and kept with the archived ones (`ArchivedThreadSchema`). Its Sessions
+   * left the list, said first by `sessions-unlisted`, so a device that doesn't know this event drops them all the same.
+   */
+  z.object({ type: z.literal("thread-archived"), thread: ArchivedThreadSchema }),
+  /** An archived cloud Thread a Mac took back: it leaves the archived ones, and its Mac lists its Sessions as its own. */
+  z.object({ type: z.literal("thread-unarchived"), thread: ThreadIdSchema }),
 ])
 export type AccountEvent = z.infer<typeof AccountEventSchema>
 /** An event about the account's devices, as against its Threads. */

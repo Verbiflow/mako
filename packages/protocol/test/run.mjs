@@ -3,14 +3,14 @@ import { describe, test } from "node:test"
 import { runGatewayConformance, runMediaConformance } from "../dist/conformance.js"
 import { CORRELATION_HEADER, GatewayHttpError, gatewayCalls } from "../dist/gateway-http.js"
 import { recordsOverHttp } from "../dist/records-http.js"
-import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, MoveClaimRequestSchema } from "../dist/moves.js"
+import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, MoveClaimRequestSchema, ReturnStateSchema, ReturnBeginRequestSchema } from "../dist/moves.js"
 import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
 import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 import { sessionStream, streamConversation } from "../dist/socket.js"
 import { AccountEventSchema } from "../dist/account-events.js"
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
-import { ListedSessionSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
+import { ArchivedThreadSchema, ListedSessionSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
   CLOSE_CODES,
@@ -1500,6 +1500,21 @@ describe("a Thread moving between a device and the cloud", () => {
     assert.equal(MoveAnswerSchema.parse({ kind: "claimed", move, at: 1, sessions: [{ ...session, generation: 4 }] }).kind, "claimed")
     assert.equal(MoveAnswerSchema.parse({ kind: "refused", move, at: 1, reason: "the checkout didn't arrive" }).kind, "refused")
   })
+
+  test("a return to the archive says so and who asked, and only an archive is archived", () => {
+    const move = crypto.randomUUID()
+    const by = crypto.randomUUID()
+    const departure = { checkpoint, sessions: [{ harness: "claude", nativeId: "n-1", holdings: { "a.jsonl": 3 } }] }
+    assert.deepEqual(ReturnBeginRequestSchema.parse({}), {}, "to its device, as before")
+    assert.deepEqual(ReturnBeginRequestSchema.parse({ to: "archive" }), { to: "archive" })
+    assert.ok(!ReturnBeginRequestSchema.safeParse({ to: "elsewhere" }).success)
+    assert.equal(ReturnStateSchema.parse({ phase: "returning", move, at: 1, to: "archive", by }).to, "archive")
+    assert.equal(ReturnStateSchema.parse({ phase: "returning", move, at: 1 }).to, undefined, "a record from before archiving reads as it was")
+    assert.equal(ReturnStateSchema.parse({ phase: "archived", move, at: 2, departure, to: "archive", by }).phase, "archived")
+    assert.ok(!ReturnStateSchema.safeParse({ phase: "archived", move, at: 2, departure }).success, "an archived record is an archive's")
+    assert.ok(ReturnStateSchema.safeParse({ phase: "archived", move, at: 2, to: "archive" }).success, "archived with nothing packed: its machine ran nothing, or couldn't start")
+    assert.equal(ReturnStateSchema.parse({ phase: "returned", move, at: 3, departure, to: "archive", by }).phase, "returned", "taken back from the archive, it ends as any return does")
+  })
 })
 
 describe("an account's list of Threads, one row per Session", () => {
@@ -1566,5 +1581,15 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.deepEqual(AccountEventSchema.parse({ type: "device-quiet", deviceId: mac.deviceId, since: null }).since, null, "heard from again")
     assert.equal(AccountEventSchema.safeParse({ type: "device-quiet", deviceId: mac.deviceId }).success, false, "quiet since when, or back, always said")
     assert.equal(AccountEventSchema.safeParse({ type: "device-quiet", deviceId: "laptop", since: null }).success, false)
+  })
+
+  test("an archived cloud Thread keeps its Sessions as they were listed; the list and the stream say it, and its taking back", () => {
+    const archived = { thread: cloud.threadId, move: "5b1e7c3a-9d2f-4a6b-8c1d-2e3f4a5b6c7d", archivedAt: "2026-10-27T10:00:00.000Z", by: mac.deviceId, sessions: [{ ...listed, runsOn: cloud }] }
+    assert.deepEqual(ArchivedThreadSchema.parse({ ...archived, later: true }), archived, "read leniently")
+    assert.ok(!ArchivedThreadSchema.safeParse({ ...archived, thread: "not a thread id!" }).success)
+    assert.deepEqual(SessionListingsSchema.parse({ sessions: [], seq: 4, archived: [archived] }).archived, [archived])
+    assert.equal(SessionListingsSchema.parse({ sessions: [], seq: 4 }).archived, undefined, "a gateway from before archiving says none")
+    assert.deepEqual(AccountEventSchema.parse({ type: "thread-archived", thread: archived }), { type: "thread-archived", thread: archived })
+    assert.deepEqual(AccountEventSchema.parse({ type: "thread-unarchived", thread: cloud.threadId }), { type: "thread-unarchived", thread: cloud.threadId })
   })
 })

@@ -17,6 +17,8 @@ import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
 import { readPower } from "./base/power.js"
 import { SessionIdSchema } from "./contracts/thread-identity.js"
+import { threadArchiveKey, type ArchiveAnswer, type ArchiveCommand, type CloudArchiveOutcome } from "./contracts/thread-lifecycle.js"
+import type { ArchivedThread } from "@mako/protocol/thread-listing"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
 import { cloudUrl } from "./base/build-identity.js"
@@ -44,7 +46,7 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -144,6 +146,12 @@ interface LateParts {
   cloud?: CloudAccount
   cloudConversations?: CloudConversations
   cloudReturns?: CloudReturns
+  /** This host's Sessions on the account's list: told again when one is archived here. */
+  sessions?: SessionPublisher
+  /** The keys of the account's archived cloud Threads' Sessions, told to every window (`ThreadArchives.account`). */
+  archivedKeys?: () => void
+  /** Whether a conversation of this host's is archived here, by its owner's own word. */
+  archivedHere?: (conversationId: string) => boolean
   automations?: Automations
   updates?: Updates
   attribution?: Attribution
@@ -222,6 +230,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (event.type === "git" && !event.git.repositories?.length) late.automations?.noticeHead(event.git.head)
     // Turns, tool calls and background work starting and ending: who was running when a file changed.
     if (event.type === "live-batch") late.attribution?.live(event.batch)
+    // A Session archived here leaves the account's list on every device: its owner's word is the one that counts.
+    if (event.type === "thread-archives") late.sessions?.changed()
     web()?.event(event, client)
   }
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
@@ -385,6 +395,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         activity: (path) => activity[path],
         work: () => application.lifecycle.snapshot().work,
         waitingOn: (id) => live.waitingOn(id),
+        archived: (id) => late.archivedHere?.(id) ?? false,
         lastMoved: (id, revision) => live.lastMoved(id, revision),
         placement: (id) => store.journalPlacement(id),
         execution: (session) => store.execution(session),
@@ -406,10 +417,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       railRows = undefined
       railPaths = undefined
       late.cloudConversations?.nativeChanged()
+      // A catalog row of an archived cloud Thread's Session (one this Mac had before it moved) shows archived too.
+      late.archivedKeys?.()
     }
     else if (event.type !== "thread-activity") return
     sessions.changed()
   })
+  late.sessions = sessions
   shell.jobs.every("tell the account this host's Sessions", 1_000, () => late.cloud?.reportSessions?.())
   // This Mac's listed Sessions' history, kept in step in the account's copy, the ones at work first, so another device
   // reads one with this Mac off. A cloud machine keeps its Thread's records instead; a fixture desk sends nothing.
@@ -469,6 +483,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         recipe: (checkout) => projectRecipe(git, checkout, workspaces.recipes),
       })
   declareCarriedFilesMethods(methods, carriedFiles)
+  /** The account's archived cloud Threads, as its list said them last: what every window shows as archived of them. */
+  let accountArchived: ReadonlyMap<string, ArchivedThread> = new Map()
   // A cloud machine runs its conversations itself; only a person's own Mac starts them on one.
   const cloudConversations = fixtureDesk || config.machineAgentFd !== undefined
     ? undefined
@@ -517,7 +533,24 @@ export async function openCore(shell: CoreShell): Promise<Core> {
             return cloud ? catalog.copyEntry(await cloud.deviceRecords(device), harness, nativeId, id) : null
           },
         },
+        archivedChanged: (archived) => {
+          accountArchived = archived
+          late.archivedKeys?.()
+        },
       })
+  late.archivedKeys = () => {
+    const keys = new Set<string>()
+    const sessionIds = new Set<string>()
+    for (const archived of accountArchived.values())
+      for (const row of archived.sessions) {
+        keys.add(threadArchiveKey({ kind: "live", id: row.conversation }))
+        if (row.nativeId) keys.add(threadArchiveKey({ kind: "native", provider: row.harness, nativeId: row.nativeId }))
+        sessionIds.add(row.session)
+      }
+    if (sessionIds.size) for (const ref of catalog.list()) if (ref.sessionId && sessionIds.has(ref.sessionId)) keys.add(threadArchiveKey({ kind: "file", path: ref.path }))
+    const snapshot = threads.archives.account(keys)
+    if (snapshot) emit({ type: "thread-archives", snapshot })
+  }
   late.cloudConversations = cloudConversations
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
   const residency = new ControlResidency({
@@ -652,6 +685,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     step: (conversationId, move, step) => emit({ type: "thread-return-step", conversationId, move, step }),
   })
   late.cloudReturns = cloudReturns
+  // And archives them, from here, whichever device they came from: the cloud ends them and keeps what they ran.
+  const cloudArchives = cloudConversations && new CloudArchives({
+    folder: join(environment.dataRoot, "cloud", "archives"),
+    account: () => late.cloud,
+    cloud: cloudConversations,
+    step: (step) => emit({ type: "cloud-archive-step", step }),
+  })
+  void cloudArchives?.settle().catch((error: Error) => hostWarn("archives", "archives a stopped host left couldn't be settled", { error: error.message }))
   void cloudReturns?.settle().catch((error: Error) => hostWarn("returns", "returns a stopped host left couldn't be settled", { error: error.message }))
   // Agents at work go to the cloud when the person quits and asks, and as this Mac sleeps when they let it.
   const handOffUnavailable = async (): Promise<string | undefined> => {
@@ -724,6 +765,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     homes: workspaces.environments,
     emit,
   })
+  late.archivedHere = (conversationId) => lifecycle.archived({ kind: "live", id: conversationId })
+  /** Archives a cloud Thread, or brings an archived one back here, as its window asked. */
+  const archiveInCloud = async (cloudThread: string, command: ArchiveCommand): Promise<CloudArchiveOutcome> => {
+    if (!cloudArchives || !cloudReturns || !cloudConversations) throw new Error("This host doesn't archive cloud Threads")
+    const archived = cloudConversations.archiveOf(cloudThread)
+    if (command.archived) return archived ? { kind: "archived", thread: cloudThread } : cloudArchives.archive(cloudThread, command.id, command.anyway === true)
+    if (!archived) return { kind: "restored", thread: cloudThread }
+    emit({ type: "cloud-archive-step", step: { thread: cloudThread, kind: "bringing" } })
+    const back = await cloudReturns.restore(archived)
+    return back.kind === "back" ? { kind: "restored", thread: cloudThread } : { kind: "refused", thread: cloudThread, reason: back.reason }
+  }
   const workspaceMovers = openWorkspaceMovers({
     git,
     dataRoot: environment.dataRoot,
@@ -909,6 +961,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           // Its Thread came back: the folder is this Mac's again, and this host answers it.
           if (answered !== "here") return { handled: true, value: answered.value }
         }
+      }
+      if (channel === "mako:thread-archive" && cloudArchives && cloudConversations && cloudReturns) {
+        // A cloud Thread's archive is its own object's, never a key here: archived or restored there, for every device.
+        // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-archive`'s schema before routing it.
+        const [command] = args as [ArchiveCommand]
+        const identity = lifecycle.identity(command.target)
+        const cloudThread = await cloudConversations.cloudThreadOf(identity)
+        if (cloudThread) {
+          const cloud = await archiveInCloud(cloudThread, command)
+          return { handled: true, value: encodeRuntimeValue({ ...threads.archives.snapshot(), cloud } satisfies ArchiveAnswer) }
+        }
+        // Another device's Session is archived by that device: its list drops it everywhere, and nothing here keeps it.
+        if (identity.conversationId && (await cloudConversations.archiveOnOwner(identity.conversationId, command)))
+          return { handled: true, value: encodeRuntimeValue(threads.archives.snapshot() satisfies ArchiveAnswer) }
       }
       if (channel === "mako:thread-return" && cloudReturns) {
         // SAFETY: the dispatcher parsed this call's arguments with `mako:thread-return`'s schema before routing it.

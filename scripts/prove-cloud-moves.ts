@@ -110,10 +110,17 @@ const { values } = parseArgs({
      * worktree at the same folder, with what it wrote.
      */
     "project-gone": { type: "string" },
+    /**
+     * A Thread of this harness moved to the cloud, a turn run there, then archived from this Mac as the sidebar does:
+     * the cloud ends it (its machine packs and goes), a call to it is refused, asked again nothing is done twice, and
+     * restored it comes back here with what it wrote in the cloud. Prints `ARCHIVED <cloud Thread>` and `RESTORED
+     * <cloud Thread>` as each lands, for a second device to watch the account's list say so.
+     */
+    archive: { type: "string" },
   },
 })
 // With `--handoff` or `--fork-burst` alone, only that runs.
-const HARNESSES = values.harness?.length ? values.harness : values.handoff || values["fork-burst"] || values.entropy || values.carried || values["project-gone"] ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
+const HARNESSES = values.harness?.length ? values.harness : values.handoff || values["fork-burst"] || values.entropy || values.carried || values["project-gone"] || values.archive ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
 const dataRoot = values["data-root"] ?? runtimeDataRoot(appDataFolder(), {})
 const { socket } = runtimeLocation(dataRoot)
 const client = randomUUID()
@@ -812,6 +819,92 @@ async function projectGoneProof(harness: string): Promise<Proved> {
   return { steps, conversation: id }
 }
 
+/** What archiving answers (`ArchiveAnswer`): the keys as they stand, and how the cloud Thread's archive went. */
+const ArchiveAnswerSchema = z.object({ keys: z.array(z.string()), cloud: z.object({ kind: z.string(), thread: z.string(), reason: z.string().optional() }).optional() }).loose()
+
+/** Whether the host shows the conversation archived (`want`) within 15 s, as every window's snapshot says. */
+async function shownArchived(conversation: string, want: boolean): Promise<boolean> {
+  for (const deadline = Date.now() + 15_000; Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 100)))
+    if (ArchiveAnswerSchema.parse(await call("mako:thread-archives", [])).keys.includes(`live:${conversation}`) === want) return true
+  return false
+}
+
+async function archiveProof(harness: string): Promise<Proved> {
+  const steps: Step[] = []
+  const id = randomUUID()
+  const answered: string[] = []
+  const timed = async (step: string, work: () => Promise<string>) => {
+    const started = performance.now()
+    const done: Step = await work().then(
+      (detail) => ({ step, ms: Math.round(performance.now() - started), ok: true, detail }),
+      (error: Error) => ({ step, ms: Math.round(performance.now() - started), ok: false, detail: error.message }),
+    )
+    steps.push(done)
+    console.log(`${"archive".padEnd(9)} ${step.padEnd(30)} ${done.ok ? "ok  " : "FAIL"} ${String(done.ms).padStart(7)} ms  ${done.detail ?? ""}`)
+    return done.ok
+  }
+  const own = join(scratch, "archive-project")
+  await run("git", ["clone", "-q", values.repository, own])
+  const token = `archive-proof-${randomUUID().slice(0, 8)}`
+  const cloudToken = `archived-cloud-${randomUUID().slice(0, 8)}`
+  const mode = widestMode(harness)
+  let folder = ""
+  let cloudThread = ""
+  if (!(await timed("a Thread, moved", async () => {
+    const model = await freeModel(harness, own)
+    const first = randomUUID()
+    await call("mako:live-start", [harness, own, { conversationId: id, worktree: true, ...mode && { modeId: mode }, ...model && { tuning: { model } }, initialRequest: { id: first, text: `Create a file named archive-proof.txt in the current folder containing exactly one line: ${token}\nDo not commit it. Then reply with one short sentence that includes the word WRITTEN.`, attachments: [] } }])
+    const shot = await until(id, (current) => settled(current, first), 300_000, answered)
+    folder = shot.session.cwd ?? ""
+    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, randomUUID()]))
+    if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    cloudThread = outcome.cloudThread
+    return cloudThread
+  }))) return { steps, conversation: id }
+  // What its machine's checkout holds only in the cloud: archiving keeps it, and restoring brings it here. Only where a
+  // turn runs on a machine with no sign-ins (OpenCode's free models): another harness's would wait there for one.
+  const wroteThere = (await freeModel(harness, own)) !== undefined && await timed("a turn in the cloud", async () => {
+    const turn = randomUUID()
+    await call("mako:live-prompt", [id, turn, `Create a file named archive-cloud.txt in the current folder containing exactly one line: ${cloudToken}\nDo not commit it. Then reply with the word DONE.`, []])
+    const shot = await until(id, (current) => settled(current, turn), 300_000, answered)
+    const status = shot.requests.find((request) => request.id === turn)?.status
+    if (status !== "completed") throw new Error(`the turn ended ${ended(shot, turn)}`)
+    return "archive-cloud.txt written on its machine"
+  })
+  const archive = { id: randomUUID(), target: { kind: "live", id }, archived: true }
+  if (!(await timed("archived from this Mac", async () => {
+    const answer = ArchiveAnswerSchema.parse(await call("mako:thread-archive", [archive]))
+    if (answer.cloud?.kind !== "archived") throw new Error(`${answer.cloud?.kind ?? "archived here only"}: ${answer.cloud?.reason ?? ""}`)
+    // Shown archived by the account's word, as its stream says it a moment later: never a key of this Mac's own.
+    if (!(await shownArchived(id, true))) throw new Error("this Mac doesn't show it archived")
+    const plan = z.object({ phase: z.string() }).loose().parse(JSON.parse(await readFile(join(dataRoot, "cloud", "archives", `${archive.id}.json`), "utf8")))
+    if (plan.phase !== "archived") throw new Error(`its plan reads ${plan.phase}`)
+    console.log(`ARCHIVED ${cloudThread}`)
+    return `its machine packed and ended; archived by the account's word`
+  }))) return { steps, conversation: id }
+  await timed("asked again: the same", async () => {
+    const answer = ArchiveAnswerSchema.parse(await call("mako:thread-archive", [archive]))
+    if (answer.cloud?.kind !== "archived") throw new Error(JSON.stringify(answer.cloud))
+    return "archived, nothing asked twice"
+  })
+  await timed("a call refused", async () => {
+    const refused = await call("mako:live-prompt", [id, randomUUID(), "Reply with the word NO.", []]).then(() => undefined, (error: Error) => error.message)
+    if (!refused) throw new Error("a message to an archived Thread was taken")
+    if (!/archived/i.test(refused)) throw new Error(refused)
+    return refused
+  })
+  await timed("restored here", async () => {
+    const answer = ArchiveAnswerSchema.parse(await call("mako:thread-archive", [{ id: randomUUID(), target: { kind: "live", id }, archived: false }]))
+    if (answer.cloud?.kind !== "restored") throw new Error(`${answer.cloud?.kind}: ${answer.cloud?.reason ?? ""}`)
+    if (!(await shownArchived(id, false))) throw new Error("still shown archived")
+    if ((await readFile(join(folder, "archive-proof.txt"), "utf8")).trim() !== token) throw new Error("archive-proof.txt didn't come back")
+    if (wroteThere && (await readFile(join(folder, "archive-cloud.txt"), "utf8").catch(() => "")).trim() !== cloudToken) throw new Error("what it wrote in the cloud didn't come back")
+    console.log(`RESTORED ${cloudThread}`)
+    return wroteThere ? "back here with what it wrote here and in the cloud" : "back here with what it wrote here"
+  })
+  return { steps, conversation: id }
+}
+
 /**
  * Machines cloned from one image, each asked for fresh randomness: a new process's random UUID, the kernel's boot id
  * and whether the kernel has a VM generation counter (which reseeds it as a snapshot is restored). Two machines that
@@ -1090,6 +1183,7 @@ if (values["fork-burst"]) report["fork burst"] = await forkBurst(values["tab-har
 if (values.entropy) report["entropy"] = await entropy(values["tab-harness"] ?? "claude", project, Number(values.entropy))
 if (values.carried) report["carried"] = await carriedProof(values.carried, project)
 if (values["project-gone"]) report["project gone"] = await projectGoneProof(values["project-gone"])
+if (values.archive) report["archive"] = await archiveProof(values.archive)
 // A host this run started signs out as it ends: its device leaves the account, and its credential leaves the keychain.
 if (values["spawn-host"]) await call("mako:cloud-sign-out", [])
 if (values.report) await writeFile(values.report, `${JSON.stringify(report, null, 2)}\n`)

@@ -540,9 +540,17 @@ export class CloudAccounts {
     await pipeline(Readable.fromWeb(response.body), createWriteStream(file))
   }
 
-  /** A cloud Thread's return to this Mac begun: from now it takes no work but its machine's departure. */
-  async beginReturn(threadId: string, move: string): Promise<ReturnState> {
-    return this.#returnStep("returns.begin", threadId, move, "", {})
+  /**
+   * A cloud Thread's return to this Mac begun: from now it takes no work but its machine's departure. `to: "archive"`:
+   * its person archives it, from this Mac, whichever device it came from; refused, saying why, while it works or moves.
+   */
+  async beginReturn(threadId: string, move: string, to?: "archive"): Promise<ReturnState> {
+    return this.#returnStep("returns.begin", threadId, move, "", to ? { to } : {})
+  }
+
+  /** A return to the archive, released or with nothing to pack, archived: the cloud ends its machine and keeps its records. */
+  async archiveReturn(threadId: string, move: string): Promise<ReturnState> {
+    return this.#returnStep("returns.archive", threadId, move, "/archive", {})
   }
 
   /** The cloud Thread recorded released, with what its machine packed: nothing runs it in the cloud from now. */

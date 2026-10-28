@@ -1,4 +1,4 @@
-import type { ListedSession, SessionListings } from "@mako/protocol/thread-listing"
+import type { ArchivedThread, ListedSession, SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import type { ThreadListHeard } from "../usage/index.js"
 
@@ -16,6 +16,8 @@ export class AccountSessions {
   readonly #waiting = new Map<string, WaitingMessage[]>()
   /** Each quiet device, by ID: when the cloud last heard from it (`QuietDevice`). */
   readonly #quiet = new Map<string, string>()
+  /** The account's archived cloud Threads, by cloud Thread: its own objects' word, never this Mac's. */
+  readonly #archived = new Map<string, ArchivedThread>()
   /** The stream's number the list stands at; undefined until it's been read. */
   #seq: number | undefined
   readonly #early: ThreadListHeard[] = []
@@ -45,6 +47,11 @@ export class AccountSessions {
     return this.#waiting
   }
 
+  /** The account's archived cloud Threads, by cloud Thread, as the list and the stream said them last. */
+  archived(): ReadonlyMap<string, ArchivedThread> {
+    return this.#archived
+  }
+
   /** The whole list, as read: replaces what was held, then applies what the stream said after it. Whether anything changed. */
   listed(listings: SessionListings): boolean {
     const before = this.#snapshot()
@@ -54,6 +61,8 @@ export class AccountSessions {
     for (const message of listings.waiting ?? []) this.#waiting.set(message.session, [...(this.#waiting.get(message.session) ?? []), message])
     this.#quiet.clear()
     for (const { deviceId, since } of listings.quiet ?? []) this.#quiet.set(deviceId, since)
+    this.#archived.clear()
+    for (const archived of listings.archived ?? []) this.#archived.set(archived.thread, archived)
     this.#seq = listings.seq
     const early = this.#early.splice(0).sort((left, right) => left.seq - right.seq)
     for (const heard of early) this.#apply(heard)
@@ -74,6 +83,7 @@ export class AccountSessions {
     this.#sessions.clear()
     this.#waiting.clear()
     this.#quiet.clear()
+    this.#archived.clear()
     this.#seq = undefined
     this.#early.length = 0
   }
@@ -96,6 +106,11 @@ export class AccountSessions {
       this.#quiet.set(event.deviceId, event.since)
       return changed
     }
+    if (event.type === "thread-archived") {
+      this.#archived.set(event.thread.thread, event.thread)
+      return true
+    }
+    if (event.type === "thread-unarchived") return this.#archived.delete(event.thread)
     let changed = false
     for (const session of event.sessions) changed = this.#sessions.delete(session) || changed
     return changed
@@ -104,6 +119,7 @@ export class AccountSessions {
   #snapshot(): string {
     const waiting = [...this.#waiting].sort(([left], [right]) => (left < right ? -1 : 1))
     const quiet = [...this.#quiet].sort(([left], [right]) => (left < right ? -1 : 1))
-    return JSON.stringify([[...this.#sessions.values()].sort((left, right) => (left.session < right.session ? -1 : 1)), waiting, quiet])
+    const archived = [...this.#archived.keys()].sort()
+    return JSON.stringify([[...this.#sessions.values()].sort((left, right) => (left.session < right.session ? -1 : 1)), waiting, quiet, archived])
   }
 }

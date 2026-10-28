@@ -112,6 +112,27 @@ export const SessionsReportSchema = z
 export type SessionsReport = z.infer<typeof SessionsReportSchema>
 
 /**
+ * A cloud Thread its person archived (a return to the archive, `moves.ts`): ended in the cloud, its machine deleted, its
+ * Sessions off the list, and kept, so every device shows it with the archived ones and a Mac can take it back. Written
+ * by the Thread's own object, the one authority on whether it's archived; no device keeps an archive state of its own
+ * for it.
+ */
+export const ArchivedThreadSchema = z
+  .object({
+    /** The cloud Thread, as `runsOn` names it. */
+    thread: ThreadIdSchema,
+    /** The archive's ID, the return to the archive that ended it (`moves.ts`): a Mac takes it back under the same. */
+    move: z.uuid(),
+    archivedAt: z.iso.datetime(),
+    /** The device whose person archived it. */
+    by: z.uuid().optional(),
+    /** Its Sessions as the list showed them when it was archived. */
+    sessions: z.array(ListedSessionSchema).max(LISTED_PER_FRAME),
+  })
+  .strip()
+export type ArchivedThread = z.infer<typeof ArchivedThreadSchema>
+
+/**
  * `GET /v1/sessions`: every listed Session of the account, and the account stream's number as they were read. A client
  * lists, then follows the stream after `seq`, and misses nothing between.
  */
@@ -122,6 +143,8 @@ export const SessionListingsSchema = z.object({
   waiting: z.array(WaitingMessageSchema).optional(),
   /** The account's devices that were quiet at `seq` (`QuietDeviceSchema`); the stream says each change after it (`device-quiet`). */
   quiet: z.array(QuietDeviceSchema).optional(),
+  /** The account's archived cloud Threads, newest first, as they stood at `seq`. Absent from a gateway before archiving. */
+  archived: z.array(ArchivedThreadSchema).optional(),
 })
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 

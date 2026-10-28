@@ -6,7 +6,8 @@ import { markSeen, subjectId } from "@/state/notifications"
 import { markThreadReviewed } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
 import type { TranscriptDepth } from "@mako/host/contracts/transcript-document"
-import { archivedByKeys, threadArchiveKey, type ThreadTarget, type ThreadArchiveSnapshot, type StopTarget } from "@mako/host/contracts/thread-lifecycle"
+import { archivedByKeys, threadArchiveKey, type ArchiveCommand, type CloudArchiveOutcome, type ThreadTarget, type ThreadArchiveSnapshot, type StopTarget } from "@mako/host/contracts/thread-lifecycle"
+import { cloudArchiveSettled } from "@/state/cloud-archive"
 import { type ThreadRef } from "@mako/host/contracts/conversation-session"
 import { toast } from "sonner"
 
@@ -33,6 +34,14 @@ export function archivedThread(ref: ThreadRef, keys: ReadonlySet<string>): boole
 
 export function archivedLive(presence: AcpPresence, keys: ReadonlySet<string>): boolean {
   return keys.has(threadArchiveKey({ kind: "live", id: presence.key })) || (presence.nativeId ? keys.has(threadArchiveKey({ kind: "native", provider: presence.harness, nativeId: presence.nativeId })) : false) || (presence.threadPath ? keys.has(threadArchiveKey({ kind: "file", path: presence.threadPath })) : false)
+}
+
+/** Where a cloud Thread's conversation runs, as its row says it (`CLOUD_FOLDER_WHERE`). */
+const CLOUD_WHERE = "a cloud machine"
+
+/** Whether a target is a conversation that runs, or ran, in the cloud: its archive is the cloud's, not this Mac's. */
+export function inCloud(target: ThreadTarget): boolean {
+  return target.kind === "live" && acpStore.get().conversations[target.id]?.elsewhere === CLOUD_WHERE
 }
 
 /** The thread paths and live key a lifecycle target is known by in the renderer. */
@@ -88,17 +97,30 @@ export const threadLifecycle = {
    * target per Session. A caller that says what happened itself passes
    * `announce: false`; failures are always reported.
    */
-  async archive(targets: readonly ThreadTarget[], archived: boolean, announce = true): Promise<boolean> {
+  async archive(targets: readonly ThreadTarget[], archived: boolean, announce = true, anyway = false): Promise<boolean> {
     let changed = 0
+    // A cloud Thread is archived, or restored, in the cloud, once for all its Sessions: its toast says how it went.
+    let cloud: CloudArchiveOutcome | undefined
     try {
       for (const one of targets) {
-        applyThreadArchives(await getMako().archiveThread({ id: crypto.randomUUID(), target: one, archived }))
+        const command: ArchiveCommand = { id: crypto.randomUUID(), target: one, archived }
+        if (anyway) command.anyway = true
+        const answer = await getMako().archiveThread(command)
+        applyThreadArchives(answer)
+        if (answer.cloud) {
+          cloud = answer.cloud
+          if (cloud.kind === "refused") break
+        }
         changed += 1
         // Putting a thread away is at least as much an acknowledgement as
         // opening it: its unread answer or failure stops counting in the
         // app icon's badge, and the row's mark stands down so a
         // restore does not bring back news you have already dismissed.
         if (archived) acknowledgeThread(one)
+      }
+      if (cloud) {
+        cloudArchiveSettled(cloud, archived, () => void threadLifecycle.archive(targets, archived, announce, true))
+        return cloud.kind !== "refused"
       }
       if (announce) toast(archived ? "Thread archived. Running work is not stopped." : "Thread restored")
       return true

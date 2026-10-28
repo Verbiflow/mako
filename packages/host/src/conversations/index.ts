@@ -56,6 +56,7 @@ export { SessionUploads, uploadScope, type UploadSources } from "./session-uploa
 export { CloudReadiness, READY_EVERY_MS } from "./cloud-readiness.js"
 export { SleepHandOff, sleepWatchHelper } from "./sleep-handoff.js"
 export { CloudReturns } from "./cloud-returns.js"
+export { CloudArchives } from "./cloud-archives.js"
 export { HarnessCheck } from "./harness-check.js"
 export { installedReading } from "./kept-resume.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"

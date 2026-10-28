@@ -67,11 +67,13 @@ export interface CloudAccount {
   /** A checkpoint kept beside a cloud Thread's records, read whole into `file`. */
   readCheckpoint(threadId: string, sha256: string, file: string): Promise<void>
   /** A cloud Thread's return to this Mac, step by step (`CloudAccounts.beginReturn` and the rest). */
-  beginReturn(threadId: string, move: string): Promise<ReturnState>
+  beginReturn(threadId: string, move: string, to?: "archive"): Promise<ReturnState>
   releaseReturn(threadId: string, move: string, departure: ReturnDeparture): Promise<ReturnState>
   cancelReturn(threadId: string, move: string, reason: string): Promise<ReturnState>
   giveBackReturn(threadId: string, move: string, reason: string): Promise<ReturnState>
   finishReturn(threadId: string, move: string): Promise<ReturnState>
+  /** A return to the archive, archived: the cloud ends the Thread's machine and keeps its records. */
+  archiveReturn(threadId: string, move: string): Promise<ReturnState>
   returnState(threadId: string, move: string): Promise<ReturnState | undefined>
   /** The account's Sessions as every device lists them (`GET /v1/sessions`), and the account stream's number then. */
   sessionListings?(): Promise<SessionListings>
@@ -109,7 +111,11 @@ export interface CloudAccount {
 }
 
 /** A change to the account's list of Sessions, as its stream said it. */
-export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: "sessions-listed" | "sessions-unlisted" | "messages-waiting" | "device-quiet" }> }
+export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: ThreadListEvent }> }
+/** The account's events about its Threads, as against its devices: what the list of them follows. */
+export type ThreadListEvent = "sessions-listed" | "sessions-unlisted" | "messages-waiting" | "device-quiet" | "thread-archived" | "thread-unarchived"
+const THREAD_LIST_EVENTS: ReadonlySet<string> = new Set<ThreadListEvent>(["sessions-listed", "sessions-unlisted", "messages-waiting", "device-quiet", "thread-archived", "thread-unarchived"])
+const isThreadListEvent = (event: AccountEvent): event is Extract<AccountEvent, { type: ThreadListEvent }> => THREAD_LIST_EVENTS.has(event.type)
 
 /** The account's store of shared sign-ins in Mako Cloud, through this Mac's device sign-in. */
 export interface HarnessSignInStore {
@@ -214,7 +220,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     // to the account's Threads goes to what lists them, which tells windows of the conversations it changes.
     onAccountEvent: (heard) => {
       const { event } = heard
-      if (event.type === "sessions-listed" || event.type === "sessions-unlisted" || event.type === "messages-waiting" || event.type === "device-quiet") {
+      if (isThreadListEvent(event)) {
         for (const listener of threadListeners) listener({ seq: heard.seq, event })
         return
       }
@@ -273,11 +279,12 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     threadRecords: (threadId) => cloud.threadRecords(threadId),
     deviceRecords: (deviceId) => cloud.deviceRecords(deviceId),
     readCheckpoint: (threadId, sha256, file) => cloud.readCheckpoint(threadId, sha256, file),
-    beginReturn: (threadId, move) => cloud.beginReturn(threadId, move),
+    beginReturn: (threadId, move, to) => cloud.beginReturn(threadId, move, to),
     releaseReturn: (threadId, move, departure) => cloud.releaseReturn(threadId, move, departure),
     cancelReturn: (threadId, move, reason) => cloud.cancelReturn(threadId, move, reason),
     giveBackReturn: (threadId, move, reason) => cloud.giveBackReturn(threadId, move, reason),
     finishReturn: (threadId, move) => cloud.finishReturn(threadId, move),
+    archiveReturn: (threadId, move) => cloud.archiveReturn(threadId, move),
     returnState: (threadId, move) => cloud.returnState(threadId, move),
     sessionListings: () => cloud.sessionListings(),
     waitMessage: (session, id, input) => cloud.waitMessage(session, id, input),

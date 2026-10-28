@@ -117,6 +117,13 @@ export type MoveAnswer = z.infer<typeof MoveAnswerSchema>
  * The gateway keeps one record per return, which only goes forward: `returning`, then `cancelled` or `released`, then
  * `given-back` or `returned`. A step asked again is answered with the record as it stands; a step the record has gone
  * past is refused with it. One return runs at a time per Thread.
+ *
+ * Archiving a cloud Thread is a return whose destination is the archive (`to: "archive"`), by the person's word from any
+ * of the account's devices: begun only while nothing in it works and nothing moves it, packed the same way, released,
+ * then `archived`: its machine is deleted, its Sessions leave the account's list, and what the machine packed is kept
+ * with its records, so a Mac can take it back later (`done`, as any return ends: `returned`). One whose machine has
+ * nothing to pack, or can't start, is archived from `returning`, keeping only its records. An archived Thread takes no
+ * work. Any Thread of the cloud's may be archived; only one that came from a device, packed, goes back to one.
  */
 
 /** The operation a Thread takes while it's returning: its machine's departure, and nothing else. */
@@ -132,14 +139,29 @@ export const ReturnDepartureSchema = z.object({
 }).strict()
 export type ReturnDeparture = z.infer<typeof ReturnDepartureSchema>
 
+/**
+ * A return to the archive, and who asked: the device whose person archived the Thread. Absent from a return to the
+ * device, whose record never had it.
+ */
+const ArchiveMarkSchema = { to: z.literal("archive").optional(), by: z.uuid().optional() }
+
 export const ReturnStateSchema = z.discriminatedUnion("phase", [
-  z.object({ phase: z.literal("returning"), move: z.uuid(), at: z.number() }).strict(),
-  z.object({ phase: z.literal("cancelled"), move: z.uuid(), at: z.number(), reason: z.string() }).strict(),
-  z.object({ phase: z.literal("released"), move: z.uuid(), at: z.number(), departure: ReturnDepartureSchema }).strict(),
-  z.object({ phase: z.literal("given-back"), move: z.uuid(), at: z.number(), reason: z.string(), departure: ReturnDepartureSchema }).strict(),
-  z.object({ phase: z.literal("returned"), move: z.uuid(), at: z.number(), departure: ReturnDepartureSchema }).strict(),
+  z.object({ phase: z.literal("returning"), move: z.uuid(), at: z.number(), ...ArchiveMarkSchema }).strict(),
+  z.object({ phase: z.literal("cancelled"), move: z.uuid(), at: z.number(), reason: z.string(), ...ArchiveMarkSchema }).strict(),
+  z.object({ phase: z.literal("released"), move: z.uuid(), at: z.number(), departure: ReturnDepartureSchema, ...ArchiveMarkSchema }).strict(),
+  z.object({ phase: z.literal("given-back"), move: z.uuid(), at: z.number(), reason: z.string(), departure: ReturnDepartureSchema, ...ArchiveMarkSchema }).strict(),
+  /**
+   * Archived: its machine deleted, its Sessions off the account's list, what the machine packed kept for a Mac to take.
+   * Without a departure when its machine had nothing to pack, or couldn't start and the person archived it anyway.
+   */
+  z.object({ phase: z.literal("archived"), move: z.uuid(), at: z.number(), departure: ReturnDepartureSchema.optional(), to: z.literal("archive"), by: z.uuid().optional() }).strict(),
+  z.object({ phase: z.literal("returned"), move: z.uuid(), at: z.number(), departure: ReturnDepartureSchema, ...ArchiveMarkSchema }).strict(),
 ])
 export type ReturnState = z.infer<typeof ReturnStateSchema>
+
+/** A return's beginning: to its device (the default), or to the archive. */
+export const ReturnBeginRequestSchema = z.object({ to: z.literal("archive").optional() }).strict()
+export type ReturnBeginRequest = z.infer<typeof ReturnBeginRequestSchema>
 
 export const ReturnReleaseRequestSchema = z.object({ departure: ReturnDepartureSchema }).strict()
 export const ReturnReasonRequestSchema = z.object({ reason: z.string().min(1).max(MOVE_REASON_MAX) }).strict()

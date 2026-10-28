@@ -3,7 +3,7 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { selectAcpPresence } from "@/state/acp-presence"
 import { acpStore } from "@/state/acp-state"
 import { threadGroupsStore } from "@/state/thread-groups"
-import { nativeThreadTarget, threadLifecycle, type ThreadTarget } from "@/state/thread-lifecycle"
+import { inCloud, nativeThreadTarget, threadLifecycle, type ThreadTarget } from "@/state/thread-lifecycle"
 import { currentOnScreen, currentThreadTabs, openSessionTab, type SessionTab } from "@/state/thread-sessions"
 import { threadsStore } from "@/state/threads"
 
@@ -77,6 +77,11 @@ function tabTarget(tab: Extract<SessionTab, { kind: "session" }>): ThreadTarget 
 export async function archiveSessionTab(tab: Extract<SessionTab, { kind: "session" }>, thread: string): Promise<boolean> {
   const target = tabTarget(tab)
   if (!target) return false
+  // One machine runs every Session of a cloud Thread, so the Thread is archived whole, from its row.
+  if (inCloud(target)) {
+    toast("A thread in the cloud is archived whole", { description: "Archive it from its row in the sidebar: its cloud machine ends, and its history is kept." })
+    return false
+  }
   const here = currentOnScreen()
   if (here.session === tab.id) {
     const sessions = currentThreadTabs(thread).filter((candidate) => candidate.kind === "session")

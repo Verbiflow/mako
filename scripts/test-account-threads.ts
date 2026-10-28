@@ -31,7 +31,7 @@ const summary = (id: string, createdAt: number, session: Partial<LiveSummary["se
 const work = (id: string, status: LifecycleWork["status"]): LifecycleWork => ({ id, token: id, title: "", provider: "codex", cwd: "", status, stoppable: true })
 
 /** A host with conversations c-1.. filed under Sessions uuid(1).. of Thread uuid(100), each owned here unless `executions` says. */
-function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; executions?: Record<string, SessionExecution>; waiting?: Record<string, string>; moved?: Record<string, number>; title?: string; native?: NativeRow[]; activity?: Record<string, ExternalThreadActivity> } = {}): ReportSources {
+function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; executions?: Record<string, SessionExecution>; waiting?: Record<string, string>; moved?: Record<string, number>; title?: string; native?: NativeRow[]; activity?: Record<string, ExternalThreadActivity>; archived?: string[] } = {}): ReportSources {
   const index = (id: string) => Number(id.slice(2))
   return {
     summaries: () => summaries,
@@ -39,6 +39,7 @@ function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; execu
     activity: (path) => options.activity?.[path],
     work: () => options.work ?? [],
     waitingOn: (id) => options.waiting?.[id],
+    archived: (id) => options.archived?.includes(id) ?? false,
     lastMoved: (id) => options.moved?.[id],
     // SAFETY: test IDs in the Thread store's shapes, which brand plain UUIDs.
     placement: (id) => ({ thread: uuid(100), session: uuid(index(id)) }) as never,
@@ -348,4 +349,29 @@ test("a device's list holds which devices are quiet, once each, as the list read
   assert.equal(list.listed({ sessions: [listed(1, "working")], seq: 13, quiet: [{ deviceId: uuid(900), since }] }), false, "read again, the same")
   assert.equal(list.listed({ sessions: [listed(1, "working")], seq: 14 }), true, "read again from a list that says none")
   assert.equal(list.quietSince(uuid(900)), undefined)
+})
+
+test("a device's list holds the account's archived cloud Threads as the list read and the stream said them; it keeps none of its own", () => {
+  const list = new AccountSessions()
+  const cloudRow = (n: number): ListedSession => ({ ...listed(n), runsOn: { kind: "cloud", threadId: "t-0123456789abcdef" } })
+  const archived = { thread: "t-0123456789abcdef", move: uuid(700), archivedAt: new Date(NOW).toISOString(), by: uuid(900), sessions: [cloudRow(1)] }
+  assert.equal(list.listed({ sessions: [cloudRow(1), listed(2)], seq: 10 }), true)
+  assert.equal(list.archived().size, 0)
+  // Archived from another device: its Sessions leave the list first (as an older Mac reads it), then it's kept archived.
+  assert.equal(list.heard({ seq: 11, event: { type: "sessions-unlisted", sessions: [uuid(1)] } }), true)
+  assert.equal(list.heard({ seq: 12, event: { type: "thread-archived", thread: archived } }), true)
+  assert.deepEqual([[...list.sessions().keys()], [...list.archived().keys()]], [[uuid(2)], ["t-0123456789abcdef"]])
+  assert.equal(list.heard({ seq: 12, event: { type: "thread-archived", thread: archived } }), false, "heard twice")
+  assert.equal(list.listed({ sessions: [listed(2)], seq: 12, archived: [archived] }), false, "read again, the same")
+  // Taken back by its Mac: it leaves the archived ones, and that Mac lists its Sessions as its own.
+  assert.equal(list.heard({ seq: 13, event: { type: "thread-unarchived", thread: "t-0123456789abcdef" } }), true)
+  assert.equal(list.archived().size, 0)
+  assert.equal(list.heard({ seq: 14, event: { type: "thread-unarchived", thread: "t-0123456789abcdef" } }), false, "already back")
+  assert.equal(list.listed({ sessions: [], seq: 20 }), true)
+  assert.equal(list.archived().size, 0, "a gateway that says none archived: none")
+})
+
+test("a conversation its owner archived isn't listed: every other device drops it, as it would a closed one", () => {
+  const rows = ownedSessions(host([summary("c-1", NOW - 1_000), summary("c-2", NOW - 2_000)], { archived: ["c-1"] }))
+  assert.deepEqual(rows.map((row) => row.conversation), ["c-2"])
 })
