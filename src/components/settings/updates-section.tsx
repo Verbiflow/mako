@@ -4,7 +4,6 @@ import {
   ChevronRightIcon,
   DownloadIcon,
   FolderIcon,
-  LoaderCircleIcon,
   RefreshCwIcon,
   ShieldCheckIcon,
 } from "lucide-react"
@@ -13,6 +12,7 @@ import { shortRevision, updateSourceText, type UpdateSourceText } from "@mako/ho
 import { Action, Chip } from "@/components/ui/kit"
 import { IfCanChooseFolder } from "@/components/ui/machine-gate"
 import { MakoTile } from "@/components/ui/mako-mark"
+import { Spinner } from "@/components/ui/spinner"
 import { updates, useUpdates } from "@/state/updates"
 import { application, useApplication } from "@/state/application"
 import { runCommand } from "@/extend/commands"
@@ -209,7 +209,7 @@ export function UpdatesSection() {
                 </p>
                 {installation.source && (text || reading) && (
                   <p className="mt-0.5 flex items-center gap-1.5 truncate font-mono text-label text-faint" data-testid="update-standing">
-                    {reading && <LoaderCircleIcon aria-label="Checking" className="size-3 shrink-0 animate-spin" />}
+                    {reading && <Spinner aria-label="Checking" className="size-3 shrink-0" />}
                     {text?.standing ?? "Checking…"}
                   </p>
                 )}
