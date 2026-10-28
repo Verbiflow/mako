@@ -54,8 +54,9 @@ export function processKeychain(keyring: () => Promise<typeof Keyring>): Keychai
           const [first] = await findCredentialsAsync(item.service)
           return first ? { kind: "found", value: first.password } : { kind: "missing" }
         }
-        const value = await new AsyncEntry(item.service, item.account).getPassword()
-        return value === undefined ? { kind: "missing" } : { kind: "found", value }
+        // Missing reads as `null` from the native module, whatever its types say (`undefined`): both mean none.
+        const value: string | null | undefined = await new AsyncEntry(item.service, item.account).getPassword()
+        return value === undefined || value === null ? { kind: "missing" } : { kind: "found", value }
       } catch (error) {
         return { kind: "failed", reason: error instanceof Error ? error.message : String(error) }
       }

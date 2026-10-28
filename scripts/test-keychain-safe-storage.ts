@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { openHostSecrets } from "@mako/host/base/host-secrets"
 import type { Keychain, KeychainItem, KeychainRead } from "@mako/host/base/keychain"
-import { securityValue } from "@mako/host/base/keychain"
+import { processKeychain, securityValue } from "@mako/host/base/keychain"
 import { chromiumSafeStorage, KeychainUnavailable, safeStorageItem } from "@mako/host/base/secure-storage"
 
 /**
@@ -136,7 +136,17 @@ try {
   assert.equal(securityValue(`password: 0x${Buffer.from("a\nb").toString("hex").toUpperCase()}  "a\\012b"\n`), "a\nb")
   assert.equal(securityValue("keychain: \"/Users/x/login.keychain-db\"\n"), null)
 
-  console.log("Keychain safe storage: seals and opens exactly as safeStorage does on macOS; one keychain read per process; never makes the password; a refusal asks once; a Node-mode host takes the desktop's handover first, reads the keychain without one, and takes over older files")
+  // The native module answers a missing item with `null`, not the `undefined` its types say: either is missing, never
+  // a password of null (a scratch home's empty keychain once failed every proof host's sign-in on it).
+  {
+    const answers: Array<string | null | undefined> = [null, undefined, "kept"]
+    const fake = { AsyncEntry: class { async getPassword() { return answers.shift() } } } as unknown as typeof import("@napi-rs/keyring")
+    const native = processKeychain(async () => fake)
+    assert.deepEqual(await native.read({ service: "Mako Safe Storage", account: "Mako" }), { kind: "missing" })
+    assert.deepEqual(await native.read({ service: "Mako Safe Storage", account: "Mako" }), { kind: "missing" })
+    assert.deepEqual(await native.read({ service: "Mako Safe Storage", account: "Mako" }), { kind: "found", value: "kept" })
+  }
+  console.log("Keychain safe storage: a missing item reads as missing whether the native module says null or undefined; seals and opens exactly as safeStorage does on macOS; one keychain read per process; never makes the password; a refusal asks once; a Node-mode host takes the desktop's handover first, reads the keychain without one, and takes over older files")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

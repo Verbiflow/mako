@@ -360,6 +360,8 @@ export class CloudAccounts {
           return true
         },
         (error) => {
+          // What the person reads is a sentence; what went wrong underneath goes to the log, never the code or a token.
+          this.#options.log?.("cloud sign-in didn't finish", { error: errorMessage({ error }), ...error instanceof Error && error.cause !== undefined && { cause: errorMessage({ error: error.cause }) } })
           this.#endSignIn({ kind: "failed", message: messageOf(error, "Signing in didn't finish. Try again.") }, { graceful: true })
           finish()
           return false
