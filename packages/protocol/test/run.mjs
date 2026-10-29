@@ -28,6 +28,7 @@ import {
   MEDIA_MESSAGE_LIMIT,
   PORT_BODY_LIMIT,
   PORTS_VERSION,
+  QUIET_VERSION,
   decodePortHead,
   encodePortHead,
   MediaTooLargeError,
@@ -85,7 +86,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 7)
+    assert.equal(SUPPORTED_VERSIONS.max, 8)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -501,6 +502,24 @@ describe("a runtime served through serveRuntime", () => {
     await new Promise((resolve) => setImmediate(resolve))
     assert.deepEqual(watching.at(-1), [], "and the last watcher leaving")
     runtime.close()
+    await gateway.close()
+  })
+
+  test("a runtime going quiet on purpose says so on a link that knows the frame, and its link is let go at once; an older link never hears it", async () => {
+    const lines = []
+    const gateway = createFakeGateway({ log: (line) => lines.push(line) })
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", handle: async (operation) => answer(operation, null) })
+    assert.equal(runtime.version, QUIET_VERSION)
+    assert.equal(runtime.goingQuiet("sleep"), true)
+    await runtime.done
+    assert.deepEqual(lines.filter((line) => line.event === "going-quiet" || line.event === "disconnected").map((line) => line.event), ["going-quiet", "disconnected"])
+    assert.equal(runtime.goingQuiet("quit"), false, "a closed link says nothing")
+    const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-old", build: "test", versions: { min: 1, max: QUIET_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
+    assert.equal(older.goingQuiet("sleep"), false, "a gateway on version 7 never sees the frame; it finds out from the heartbeats")
+    assert.equal(lines.filter((line) => line.event === "going-quiet").length, 1)
+    assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "going-quiet", reason: "sign-out" })), { type: "going-quiet", reason: "sign-out" })
+    assert.throws(() => decodeRuntimeFrame(JSON.stringify({ type: "going-quiet", reason: "bored" })), WireError)
+    older.close()
     await gateway.close()
   })
 

@@ -786,6 +786,8 @@ const inputs = {
         z.object({ path: z.string() }),
       ]),
     ]),
+  "mako:machine-leaving": () =>
+    z.tuple([z.union([z.literal("suspend"), z.literal("shutdown")])]),
   "mako:machine-woke": () =>
     z.tuple([z.union([z.literal("resume"), z.literal("unlock-screen")])]),
   "mako:mcp-discover": () => z.tuple([]),
@@ -1892,6 +1894,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-turn-undo-preview", "conversations"],
   ["mako:live-turn-writers", "conversations"],
   ["mako:lost-versions", "attribution"],
+  ["mako:machine-leaving", "application"],
   ["mako:machine-woke", "application"],
   ["mako:mcp-discover", "tools"],
   ["mako:mcp-sync-apply", "tools"],

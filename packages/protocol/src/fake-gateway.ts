@@ -52,7 +52,7 @@ const NIL_ID = "00000000-0000-0000-0000-000000000000"
 
 /** One line per thing the gateway did, for tests and for reading a request's path by its correlation ID. */
 export type GatewayLogLine = {
-  event: "operation" | "enrolled" | "refused" | "disconnected"
+  event: "operation" | "enrolled" | "refused" | "disconnected" | "going-quiet"
   correlationId?: string
   operationId?: string
   op?: string
@@ -460,6 +460,11 @@ export function createFakeGateway(
       waiting.settle(frame.reply, true)
     }
     if (frame.type === "media-end" && watches.get(frame.stream)?.runtime === connection) endWatch(frame.stream, frame.problem)
+    // Going away on purpose: its link is let go now, as the gateway does, not when its heartbeats stop.
+    if (frame.type === "going-quiet") {
+      log({ event: "going-quiet", runtimeId: connection.runtimeId, correlationId: connection.correlationId })
+      connection.close()
+    }
   }
 
   const forward = (

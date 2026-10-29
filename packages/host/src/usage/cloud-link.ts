@@ -10,6 +10,7 @@ import { CLOSE_CODES, PING, subprotocols } from "@mako/protocol"
  *   connection that stayed up a while starts the backoff over.
  * - An expired token is fetched fresh and the link reconnects at once; a removed device stops it.
  * - A connection that goes quiet for a minute, as after a laptop sleeps, is taken as gone; `wake` reconnects now.
+ * - Going away on purpose (`quiet`, as the Mac goes to sleep or shuts down), it closes at once and waits for `wake`.
  * - It reports "offline" only once it has been down for `offlineAfterMs`. A reconnect that's over in seconds, after
  *   a deploy or a network change, is never shown.
  */
@@ -56,6 +57,8 @@ const RESUME_PROBE_MS = 1_500
 /** Up this long, a connection counts as healthy: the next drop starts the backoff over. */
 const STABLE_MS = 30_000
 const BACKOFF_MS = [500, 1_000, 2_000, 5_000, 10_000, 30_000] as const
+/** A link closed for a sleep (`quiet`) opens again after this should the Mac not go after all; a wake opens it at once. */
+const QUIET_HOLD_MS = 30_000
 const OFFLINE_AFTER_MS = 15_000
 
 type Open = { socket: WebSocket; token: string; opened: boolean; openedAt: number; lastHeard: number; detach: CloudLinkAttachment | undefined }
@@ -129,6 +132,21 @@ export class CloudLink {
       this.#attempt = 0
       this.#reconnect(0)
     })
+  }
+
+  /**
+   * This Mac is going away on purpose, to sleep or shutting down: the connection closes now, cleanly, so the cloud
+   * takes it as gone at once rather than after missed heartbeats, and it isn't opened again until `wake`. The Mac's
+   * timers stop while it sleeps, so the hold's own timer only opens it again for a sleep that never came. Nothing is
+   * shown: the person isn't looking, and a wake reconnects before anything would be.
+   */
+  quiet(): void {
+    if (!this.#running || !this.#open) return
+    this.#options.log?.(`cloud ${this.#options.name}: closed while this Mac goes away`)
+    this.#drop(1000)
+    this.#attempt = 0
+    clearTimeout(this.#reconnectTimer)
+    this.#reconnectTimer = this.#after(QUIET_HOLD_MS, () => this.#connect())
   }
 
   #connect(): void {

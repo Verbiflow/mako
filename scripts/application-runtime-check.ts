@@ -126,6 +126,7 @@ async function checkRuntime() {
     native,
     nativeRuns: { lifecycleWork: () => [], abort: () => {} },
     wake: { notify: () => {}, stop: () => {} },
+    leaving: () => {},
     jobs,
     subscribed,
     admission,

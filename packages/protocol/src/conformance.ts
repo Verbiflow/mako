@@ -103,6 +103,21 @@ export function runGatewayConformance(
     }
   )
 
+  scenario(
+    "a runtime that says it's going quiet is let go at once: its link closes, and it enrolls again when it's back",
+    async (gateway) => {
+      const link = await gateway.connectRuntime()
+      link.send({ type: "enroll", runtimeId: "rt-a", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+      expect(await link.next(), "enrolled")
+      link.send({ type: "going-quiet", reason: "sleep" })
+      await assert.rejects(link.next(), LinkClosedError, "closed without waiting for missed heartbeats")
+      const back = await gateway.connectRuntime()
+      back.send({ type: "enroll", runtimeId: "rt-a", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+      expect(await back.next(), "enrolled")
+      back.close()
+    }
+  )
+
   scenario("anything before enrolling is refused", async (gateway) => {
     const link = await gateway.connectRuntime()
     link.send({
