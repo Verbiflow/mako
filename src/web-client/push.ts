@@ -1,5 +1,6 @@
 import { z } from "zod"
 import type { Gateway } from "./gateway"
+import { installed, onIos } from "./install"
 
 /** Hours a browser's notices wait for, in its own time zone: `22:00` to `07:00`. */
 export interface QuietHours {
@@ -26,16 +27,6 @@ const PushKeptSchema = z.object({ subscription: PushSubscriptionViewSchema.nulla
 /** `GET /v1/push`, as read for the key a browser subscribes with: none from a gateway that sends no notices. */
 const PushKeySchema = z.object({ key: z.string().nullable() })
 
-/** True on an iPhone or iPad, whose Safari gives Web Push only to an app on the Home Screen. */
-function onIos(): boolean {
-  return /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.userAgent.includes("Mac") && navigator.maxTouchPoints > 1)
-}
-
-function standalone(): boolean {
-  // Safari's own flag for a page opened from the Home Screen, which no other browser has.
-  return matchMedia("(display-mode: standalone)").matches || ("standalone" in navigator && navigator.standalone === true)
-}
-
 function base64UrlBytes(text: string): Uint8Array<ArrayBuffer> {
   const padded = text.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(text.length / 4) * 4, "=")
   const binary = atob(padded)
@@ -57,7 +48,7 @@ export class WebPush {
 
   async standing(): Promise<{ standing: PushStanding; quietHours: QuietHours | null }> {
     if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window))
-      return { standing: onIos() && !standalone() ? "install" : "unsupported", quietHours: null }
+      return { standing: onIos() && !installed() ? "install" : "unsupported", quietHours: null }
     if (Notification.permission === "denied") return { standing: "denied", quietHours: null }
     const registration = await navigator.serviceWorker.getRegistration()
     const subscription = await registration?.pushManager.getSubscription()

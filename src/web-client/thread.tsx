@@ -251,14 +251,14 @@ function QuietSession({ session }: { session: WebSession }) {
   const client = useWebClient()
   const send = async (text: string): Promise<boolean> => {
     try {
-      await client.gateway.rest("PUT", `/v1/sessions/${session.row.session}/waiting/${crypto.randomUUID()}`, { conversation: session.row.conversation, text })
+      await client.gateway.rest("PUT", `/v1/sessions/${encodeURIComponent(session.row.session)}/waiting/${crypto.randomUUID()}`, { conversation: session.row.conversation, text })
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
       return false
     }
   }
-  const remove = (id: string) => void client.gateway.rest("DELETE", `/v1/sessions/${session.row.session}/waiting/${id}`).catch((error) => toast.error(error instanceof Error ? error.message : String(error)))
+  const remove = (id: string) => void client.gateway.rest("DELETE", `/v1/sessions/${encodeURIComponent(session.row.session)}/waiting/${encodeURIComponent(id)}`).catch((error) => toast.error(error instanceof Error ? error.message : String(error)))
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="web-scroll min-h-0 flex-1 overflow-y-auto px-5 pt-10">
