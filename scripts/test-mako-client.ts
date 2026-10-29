@@ -18,6 +18,7 @@ import { probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { GROK_VERSIONS } from "@mako/host/harnesses/grok/versions"
 import { z } from "zod"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 const repo = resolve(import.meta.dirname, "..")
 const cli = join(repo, "packages/client/dist/cli.js")
@@ -104,6 +105,7 @@ exit 2
     await Promise.race([exited, new Promise((settle) => setTimeout(settle, 20_000))])
     if (host.exitCode === null) host.kill("SIGKILL")
   }
-  await rm(scratch, { recursive: true, force: true })
+  // The host stopped through its own quit, so nothing it started (the Grok stand-in included) runs in its home any more.
+  await removeScratch(scratch)
   await rm(location.directory, { recursive: true, force: true })
 }

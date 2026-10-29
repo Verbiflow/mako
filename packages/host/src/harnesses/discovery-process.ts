@@ -39,6 +39,10 @@ export class DiscoveryProcesses {
   private readonly pending = { launch: new Array<() => void>(), background: new Array<() => void>() }
   private active = 0
   private background = 0
+  /** Aborted as the host stops: every query ends, and none starts after. */
+  private readonly stopping = new AbortController()
+  /** Each query until its process has exited. */
+  private readonly running = new Set<Promise<void>>()
 
   private available(priority: Priority): boolean {
     return this.active < 4 && (priority === "launch" || this.background < 3)
@@ -62,7 +66,30 @@ export class DiscoveryProcesses {
     }
   }
 
-  async run<T>(
+  run<T>(
+    options: DiscoveryOptions,
+    run: (process: DiscoveryProcess) => Promise<T>
+  ): Promise<T> {
+    if (this.stopping.signal.aborted) return Promise.reject(this.stopping.signal.reason)
+    const signal = options.signal ? AbortSignal.any([options.signal, this.stopping.signal]) : this.stopping.signal
+    const query = this.query({ ...options, signal }, run)
+    const settled = query.then(() => {}, () => {})
+    this.running.add(settled)
+    void settled.then(() => this.running.delete(settled))
+    return query
+  }
+
+  /**
+   * Ends every query as the host stops, and refuses any asked after: a sign-in check a request started as the host
+   * began stopping once spawned Grok after it, and Grok outlived the host writing into its home. Resolves once each
+   * query's process has exited.
+   */
+  async stop(): Promise<void> {
+    this.stopping.abort(new Error("Mako is stopping, so it ended provider discovery."))
+    await Promise.all(this.running)
+  }
+
+  private async query<T>(
     options: DiscoveryOptions,
     run: (process: DiscoveryProcess) => Promise<T>
   ): Promise<T> {

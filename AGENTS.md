@@ -2031,6 +2031,14 @@ next host reaps what an earlier host left, but only a pid that still runs the
 recorded executable and started when the record says (`provider-children.ts`),
 because a killed or replaced host never reaches `stopAcp()` and four idle
 cursor-agent processes from three earlier hosts were once found a day later.
+A host that stops leaves none running: discovery ends its queries and refuses
+any asked after (`DiscoveryProcesses.stop`), and once every owner has stopped
+its own, whatever is still recorded gets SIGTERM, then SIGKILL, with its process
+group (`ProviderChildren.end`). A Grok sign-in check asked as a host began
+stopping once spawned after it and went on writing into a test's scratch home
+while the test removed it. A test removes a scratch folder with `removeScratch`
+(`scripts/lib/scratch-processes.mjs`), which waits for whatever still runs there
+and names it instead of flaking; `test-isolated-host.mjs` asserts none is left.
 Mako-owned Node children use `headlessNodeExecutable` (`headless-node.ts`):
 on macOS it selects Electron's bundled Helper, whose `LSUIElement` policy
 keeps each Cursor SDK process, managed MCP server, browser native host and
