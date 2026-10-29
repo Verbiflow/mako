@@ -1,8 +1,9 @@
+import { randomBytes } from "node:crypto"
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
-import { MoveCheckpointSchema, ReturnDepartureSchema, type MoveCheckpoint, type ReturnState } from "@mako/protocol/moves"
+import { MoveCheckpointSchema, ReturnDepartureSchema, type MoveCheckpoint, type MoveCarryRepository, type ReturnState } from "@mako/protocol/moves"
 import type { ArchivedThread } from "@mako/protocol/thread-listing"
 import { describeGatewayFailure } from "@mako/protocol/gateway-http"
 import { describeSync, withFreshLink, type ReceivedRecords, type ReceivingSession, type RecordsLink, type StagedRecords } from "@mako/sessions/record-sync"
@@ -15,8 +16,9 @@ import { HandoffSchema, MoveIdSchema, RuntimeIdSchema, type ClaimReceipt, type E
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId, type ThreadId } from "../contracts/thread-identity.js"
 import type { CloudAccount } from "../usage/index.js"
 import type { ThreadFileHistory } from "@mako/protocol"
-import { applyMoveCheckpoint, captureMoveCheckpoint, mergeReturned, openCarry, planOutsideReturn, ProjectMissingError, returnOutside, unchangedSince, type OpenedCarry } from "../workspaces/index.js"
+import { applyMoveCheckpoint, captureMoveCheckpoint, mergeReturned, openCarry, planOutsideReturn, ProjectMissingError, returnOutside, unchangedSince, type OpenedCarry, type OutsideReturned } from "../workspaces/index.js"
 import { cloudRuntimeOf, MovePlanSchema, namedUuid } from "./cloud-moves.js"
+import type { CloudWorktrees } from "./cloud-worktrees.js"
 
 /**
  * A Thread of this Mac's that moved to the cloud, coming back: a move the other way, by the same rules. One owner
@@ -29,8 +31,9 @@ import { cloudRuntimeOf, MovePlanSchema, namedUuid } from "./cloud-moves.js"
  *    store toward this Mac, so nothing there runs it from then, and sends the checkout as a checkpoint and each
  *    Session's records with what went of them.
  * 3. The cloud records the Thread released, with what the machine packed: nothing runs it in the cloud from now.
- * 4. This Mac keeps its worktree as it is (a checkpoint of its own, in the return's folder), then lays the machine's
- *    checkout over it and writes each Session's records into its harness's store, holding at least what went.
+ * 4. This Mac keeps its worktree again as it is right then (a checkpoint of its own, in the return's folder), lays the
+ *    machine's checkout over it, merges in what the person changed meanwhile, and writes each Session's records into
+ *    its harness's store, holding at least what went. Only what this Mac sent forward comes back to its place.
  * 5. This Mac claims the Thread in its own store, each Session one generation on, and its conversations stop being
  *    the cloud's. The cloud is told the return is done, and ends the machine.
  *
@@ -46,7 +49,8 @@ import { cloudRuntimeOf, MovePlanSchema, namedUuid } from "./cloud-moves.js"
  * on the cloud). So is work of this Mac's after the cloud let go that isn't a refusal (recording the claim), waiting on
  * this Mac. One Thread has one return open at a time: asked back again under another id, the open one goes on. Each
  * step's plan is written first (`<data root>/cloud/returns/<move>.json`), so a host that stops mid-way settles the
- * return at its next start, and the person's "Ask again" settles it now.
+ * return at its next start, and the person's "Ask again" settles it now. Every write of the worktree (making it ready,
+ * keeping it, laying and merging, putting it back) is one of `CloudWorktrees`', so none overlaps the follow's.
  */
 
 const ReturnSessionSchema = z.object({
@@ -86,12 +90,24 @@ const ReturnPlanSchema = z.object({
    * each other repository's in a project of several.
    */
   kept: z.object({ checkpoint: MoveCheckpointSchema, file: z.string(), others: z.array(z.object({ path: z.string(), checkpoint: MoveCheckpointSchema, file: z.string() })).optional() }).optional(),
+  /**
+   * The repositories the machine's checkout was laid in, each written down before it was: a host that stops after takes
+   * the worktree up again from `kept` as it was then, never keeping again what's partly the cloud's as the person's.
+   */
+  laying: z.array(z.string()).optional(),
   /** How the Thread's work landed where it wasn't simply laid down (`ReturnLanded`), once it was taken here. */
   landed: z.object({
     merged: z.array(z.string()),
     conflicts: z.array(z.string()),
     mine: z.string().optional(),
-    outside: z.object({ placed: z.array(z.string()), removed: z.array(z.string()), waiting: z.array(z.string()), kept: z.string().optional() }),
+    outside: z.object({
+      placed: z.array(z.string()),
+      removed: z.array(z.string()),
+      waiting: z.array(z.string()),
+      unsent: z.array(z.string()).optional(),
+      failed: z.array(z.object({ path: z.string(), why: z.string() })).optional(),
+      kept: z.string().optional(),
+    }),
   }).optional(),
   /** What the agents hear on their next turn here about how its work landed (`notices`), and which have heard it. */
   note: z.string().optional(),
@@ -161,6 +177,8 @@ export type CloudReturnsOptions = {
   followed?: { laid(cloudThread: string, path: string): Promise<MoveCheckpoint | undefined>; forget(cloudThread: string): Promise<void> }
   /** This Mac's journal takes the Thread's file history from the cloud (`Attribution.carryThreadHistory`); false while it isn't open. */
   carryHistory?(history: ThreadFileHistory): Promise<boolean>
+  /** The owner of the Thread's worktree writes, which the follow writes through too: every write here is one of its. */
+  worktrees: CloudWorktrees
 }
 
 export class CloudReturns {
@@ -173,6 +191,8 @@ export class CloudReturns {
   readonly #returning = new Map<string, Set<Promise<void>>>()
   /** By conversation, what its agent hasn't heard yet of how a return landed (`notices`). */
   readonly #untold = new Map<string, Array<{ move: MoveId; note: string }>>()
+  /** Each record that an agent heard, written one after another: each reads the plan as the last one left it. */
+  #noting: Promise<void> = Promise.resolve()
 
   constructor(options: CloudReturnsOptions) {
     this.#options = options
@@ -375,8 +395,9 @@ export class CloudReturns {
     if (left.length) hostLog("returns", "conversations begun in the cloud whose harness never started there bring nothing back", { move, conversations: left.join(", ") })
     const device = await account.deviceId()
     if (!device) throw new Error("This Mac isn't one of the account's devices, so nothing can be sent back to it.")
-    // Last, as it may change this Mac: its worktree made a checkout Git reads, of a project that's here.
-    await this.#ready(placed.thread, forward, options.project)
+    // Last, as it may change this Mac: its worktree made a checkout Git reads, of a project that's here. A write of the
+    // worktree's, so a follow under way finishes first and none lays anything after.
+    await this.#options.worktrees.returnWrite(forward.cloudThread, () => this.#ready(placed.thread, forward, options.project))
     return { move, thread: placed.thread, asked: conversationId, cloudThread: forward.cloudThread, folder: forward.folder, forward: forward.handoff, sessions, left, phase: "preparing", device, began: Date.now(), timings: {} }
   }
 
@@ -447,7 +468,7 @@ export class CloudReturns {
           await this.#options.capture(session.conversationId, session.path)
         }
         await heard(this.#account().finishReturn(plan.cloudThread, plan.move))
-        if (plan.kept) for (const file of [plan.kept.file, ...(plan.kept.others ?? []).map((other) => other.file)]) await rm(file, { force: true })
+        await dropKept(plan.kept)
         await this.#options.followed?.forget(plan.cloudThread)
         plan.phase = "done"
         plan.timings.done = Date.now() - plan.began
@@ -479,7 +500,7 @@ export class CloudReturns {
     // A machine that took a carry gives one back; one from before carries is never asked for what it can't read.
     const carry = (await this.#forward(plan.thread, cloudRuntimeOf(plan.cloudThread)).catch(() => undefined))?.takesCarry === true
     // Beside the cloud's steps, not after them: the copy is taken while the machine packs.
-    const keeping = this.#keep(plan).then((kept) => {
+    const keeping = this.#options.worktrees.returnWrite(plan.cloudThread, () => this.#keep(plan)).then((kept) => {
       // Kept, it's the plan's: a return that stays removes it, one that comes puts it back on a failure.
       if ("kept" in kept) plan.kept = kept.kept
       return kept
@@ -520,28 +541,56 @@ export class CloudReturns {
   /** This Mac's worktree as it is, kept beside the return's plan until the return is over; or why it couldn't be. */
   async #keep(plan: ReturnPlan): Promise<{ kept: Kept } | { error: unknown }> {
     if (plan.kept) return { kept: plan.kept }
+    return this.#capture(plan)
+  }
+
+  /**
+   * This Mac's worktree as it is now, each repository of it (the project's others too), copied beside the return's
+   * plan; or why it couldn't be. Each copy is named by its hash, so one taken again never writes over a copy an earlier
+   * plan names with other bytes, and nothing of a copy that couldn't be taken whole is left.
+   */
+  async #capture(plan: ReturnPlan): Promise<{ kept: Kept } | { error: unknown }> {
+    const made: string[] = []
     let scratch: string | undefined
     try {
       await mkdir(this.#options.folder, { recursive: true })
-      scratch = await mkdtemp(join(this.#options.folder, `${plan.move}-kept-`))
-      const captured = await captureMoveCheckpoint(this.#options.git, plan.folder, scratch)
-      const file = join(this.#options.folder, `${plan.move}.kept.bundle`)
-      await rename(captured.file, file)
-      // A project of several repositories: each other one kept as well.
+      const into = await mkdtemp(join(this.#options.folder, `${plan.move}-kept-`))
+      scratch = into
+      const copy = async (path: string, at: number): Promise<{ checkpoint: MoveCheckpoint; file: string }> => {
+        const taken = await captureMoveCheckpoint(this.#options.git, path, await mkdtemp(join(into, "repository-")))
+        const file = join(this.#options.folder, `${plan.move}.kept-${at}-${taken.checkpoint.sha256.slice(0, 16)}.bundle`)
+        await rename(taken.file, file)
+        made.push(file)
+        return { checkpoint: taken.checkpoint, file }
+      }
+      const first = await copy(plan.folder, 0)
       const forward = await this.#forward(plan.thread, cloudRuntimeOf(plan.cloudThread)).catch(() => undefined)
       const others: NonNullable<Kept["others"]> = []
-      for (const [at, other] of (forward?.others ?? []).entries()) {
-        const taken = await captureMoveCheckpoint(this.#options.git, other.path, await mkdtemp(join(scratch, "other-")))
-        const kept = join(this.#options.folder, `${plan.move}.kept-${at + 1}.bundle`)
-        await rename(taken.file, kept)
-        others.push({ path: other.path, checkpoint: taken.checkpoint, file: kept })
-      }
-      return { kept: { checkpoint: captured.checkpoint, file, ...others.length && { others } } }
+      for (const [at, other] of (forward?.others ?? []).entries()) others.push({ path: other.path, ...(await copy(other.path, at + 1)) })
+      return { kept: { ...first, ...others.length && { others } } }
     } catch (error) {
+      const named = keptFiles(plan.kept)
+      for (const file of made) if (!named.includes(file)) await rm(file, { force: true })
       return { error }
     } finally {
       if (scratch) await rm(scratch, { recursive: true, force: true })
     }
+  }
+
+  /**
+   * The worktree kept again, as it is right before the machine's is laid over it: what the person changed while the
+   * machine packed and its checkout came down (or while a host stopped mid-way) is what's merged in and what a failure
+   * puts back. The plan names the new copy before the old one goes.
+   */
+  async #keepAgain(plan: ReturnPlan): Promise<Kept> {
+    const fresh = await this.#capture(plan)
+    if ("error" in fresh) throw fresh.error
+    const before = keptFiles(plan.kept)
+    plan.kept = fresh.kept
+    await this.#write(plan)
+    const now = keptFiles(plan.kept)
+    for (const file of before) if (!now.includes(file)) await rm(file, { force: true })
+    return fresh.kept
   }
 
   /**
@@ -561,21 +610,26 @@ export class CloudReturns {
 
   /**
    * Step 4: this Mac's worktree kept, the machine's checkout laid over it, each Session's records taken into its
-   * harness's store. A failure puts the worktree back and gives the Thread back to the cloud.
+   * harness's store. A failure puts back what it laid and gives the Thread back to the cloud.
+   *
+   * Everything comes down first; then the worktree is kept again and the machine's laid and merged over it as one write
+   * of the worktree's (`CloudWorktrees`). The carry is taken only as far as this Mac sent it forward, by this Mac's own
+   * record of that move, never by what the machine says: a repository it didn't send isn't written, and a file outside
+   * the worktree that never left here is kept apart, never put in place.
    */
   async #take(plan: ReturnPlan): Promise<ThreadReturnOutcome | undefined> {
     const departure = plan.departure
     if (!departure) throw new Error("the return was released with nothing packed")
     const account = this.#account()
+    const worktrees = this.#options.worktrees
+    /** The repositories this return laid anything in, an earlier try's too: what a failure puts back from the copies kept. */
+    const laid = new Set<string>(plan.laying)
     try {
+      // Released before this Mac kept its worktree (an earlier version kept it only as it took it): made ready now, and
+      // kept below, or the Thread is given back, as any failure to take it here is.
       if (!plan.kept) {
-        // Released before this Mac kept its worktree (an earlier version kept it only now): made ready and kept now,
-        // or the Thread is given back, as any failure to take it here is.
-        await this.#ready(plan.thread, await this.#forward(plan.thread, cloudRuntimeOf(plan.cloudThread)))
-        const kept = await this.#keep(plan)
-        if ("error" in kept) throw kept.error
-        plan.kept = kept.kept
-        await this.#write(plan)
+        const forward = await this.#forward(plan.thread, cloudRuntimeOf(plan.cloudThread))
+        await worktrees.returnWrite(plan.cloudThread, () => this.#ready(plan.thread, forward))
       }
       // Each part timed, so a slow way back says where it waited.
       const parts: Record<string, number> = {}
@@ -587,13 +641,14 @@ export class CloudReturns {
           parts[part] = Math.round(performance.now() - began)
         }
       }
+      const forward = await this.#forward(plan.thread, cloudRuntimeOf(plan.cloudThread)).catch(() => undefined)
       const scratch = await mkdtemp(join(this.#options.folder, `${plan.move}-back-`))
       let ahead: StagedRecords[] = []
       // How the work landed, repository by repository, and what came back from outside the worktree, read while the
       // carry was open.
       const landed: Array<Pick<ReturnLanded, "merged" | "conflicts" | "mine">> = []
       let carried: OpenedCarry | undefined
-      let outside: { opened: OpenedCarry; plan: Awaited<ReturnType<typeof planOutsideReturn>>; bytes: Map<string, Buffer> } | undefined
+      const outsideBytes = new Map<string, Buffer>()
       try {
         const file = join(scratch, "checkpoint.bundle")
         // The checkout and the records come down at once. The records go only into Mako's record store here, so the
@@ -604,31 +659,49 @@ export class CloudReturns {
           timed("recordsAhead", () => withFreshLink(() => account.threadRecords(plan.cloudThread), (link) => this.#options.stageRecords(link, departure.sessions)))
             .then((staged) => { ahead = staged }, (error: Error) => hostWarn("returns", "a return's records couldn't come down ahead; the restore pulls them", { move: plan.move, error: describeGatewayFailure(error) })),
         ])
-        await timed("checkpointApplied", () => applyMoveCheckpoint(this.#options.git, plan.folder, file, departure.checkpoint, { replace: true }))
-        // What the person changed in the worktree meanwhile is merged in, never written over; then the carry: the
-        // project's other repositories the same way, and what comes back from outside the worktree once all else has.
-        const forward = await this.#forward(plan.thread, cloudRuntimeOf(plan.cloudThread)).catch(() => undefined)
-        const kept = plan.kept
-        const sent = (await this.#options.followed?.laid(plan.cloudThread, plan.folder)) ?? forward?.checkpoint
-        if (sent && kept) landed.push(await timed("merged", () => this.#merge(plan, plan.folder, sent, kept, departure.checkpoint, scratch)))
+        // The project's other repositories, each by its own checkpoint: only those this Mac sent forward.
+        const others: Array<{ repository: MoveCarryRepository; file: string }> = []
         if (departure.carry) {
           const carryFile = join(scratch, "carry.bundle")
           await timed("carryRead", () => account.readCheckpoint(plan.cloudThread, departure.carry?.sha256 ?? "", carryFile))
           carried = await openCarry(this.#options.git, carryFile, departure.carry, scratch)
+          const sent = new Set((forward?.others ?? []).map((other) => other.path))
           for (const repository of carried.carry.repositories.slice(1)) {
+            if (!sent.has(repository.path)) {
+              hostWarn("returns", "the cloud's carry named a repository this Mac never sent; it isn't written", { move: plan.move, path: repository.path })
+              continue
+            }
             const bundle = join(scratch, `${repository.checkpoint.sha256}.bundle`)
             await timed("othersRead", () => account.readCheckpoint(plan.cloudThread, repository.checkpoint.sha256, bundle))
+            others.push({ repository, file: bundle })
+          }
+          // What's outside the worktree is placed once nothing else can fail, as the files here are then: its bytes are
+          // read now, while the carry is open.
+          for (const entry of carried.carry.outside) outsideBytes.set(entry.path, await carried.bytes(entry.path))
+        }
+        await worktrees.returnWrite(plan.cloudThread, async () => {
+          // Kept again unless an earlier try (a host that stopped) began laying: then the copy it took stands.
+          const kept = plan.laying?.length && plan.kept ? plan.kept : await timed("kept", () => this.#keepAgain(plan))
+          const lay = async (path: string) => {
+            laid.add(path)
+            if (plan.laying?.includes(path)) return
+            plan.laying = [...plan.laying ?? [], path]
+            await this.#write(plan)
+          }
+          await lay(plan.folder)
+          await timed("checkpointApplied", () => applyMoveCheckpoint(this.#options.git, plan.folder, file, departure.checkpoint, { replace: true }))
+          // What the person changed in the worktree meanwhile is merged in, never written over; then the project's other
+          // repositories the same way.
+          const sent = (await this.#options.followed?.laid(plan.cloudThread, plan.folder)) ?? forward?.checkpoint
+          if (sent) landed.push(await timed("merged", () => this.#merge(plan, plan.folder, sent, kept, departure.checkpoint, scratch)))
+          for (const { repository, file: bundle } of others) {
+            await lay(repository.path)
             await timed("othersApplied", () => applyMoveCheckpoint(this.#options.git, repository.path, bundle, repository.checkpoint, { replace: true }))
             const base = (await this.#options.followed?.laid(plan.cloudThread, repository.path)) ?? forward?.others.find((other) => other.path === repository.path)?.checkpoint
-            const mine = kept?.others?.find((other) => other.path === repository.path)
+            const mine = kept.others?.find((other) => other.path === repository.path)
             if (base && mine) landed.push(await timed("merged", () => this.#merge(plan, repository.path, base, mine, repository.checkpoint, scratch)))
           }
-          // What's outside the worktree waits for the records below, which can still refuse the return: its files are
-          // read now, while the carry is open, and placed once nothing else can fail.
-          const left = new Map((forward?.carry?.manifest.outside ?? []).map((entry) => [entry.path, entry.sha256]))
-          outside = { opened: carried, plan: await planOutsideReturn(carried.carry, left), bytes: new Map() }
-          for (const step of outside.plan) if (step.entry && step.action !== "same") outside.bytes.set(step.path, await carried.bytes(step.path))
-        }
+        })
       } finally {
         await rm(scratch, { recursive: true, force: true })
       }
@@ -650,19 +723,39 @@ export class CloudReturns {
         for (const session of plan.sessions) if (session.begun && session.harness === each.harness && session.nativeId === each.nativeId) session.path = restored.path
       }
       this.#everyConversationCarried(plan)
-      // Nothing can refuse the return from here: what came back from outside the worktree goes in place, and the
-      // Thread's file history is taken.
+      // Nothing can refuse the return from here: what came back from outside the worktree goes in place, weighed against
+      // the files as they are now, each file on its own; and the Thread's file history is taken.
       const waiting = join(this.#options.outside ?? join(this.#options.folder, "..", "outside"), plan.thread)
-      const read = outside
-      const done = read ? await timed("outside", () => returnOutside({ ...read.opened, bytes: async (path) => read.bytes.get(path) ?? read.opened.bytes(path) }, read.plan, waiting)) : { placed: [], removed: [], waiting: [] }
+      const opened = carried
+      const done: OutsideReturned = opened
+        ? await timed("outside", async () => {
+          // What left this Mac, by path and hash: the only files the way back may put in place or remove.
+          const left = new Map((forward?.carry?.manifest.outside ?? []).map((entry) => [entry.path, entry.sha256]))
+          const steps = await planOutsideReturn(opened.carry, left)
+          return returnOutside({
+            ...opened,
+            bytes: async (path) => {
+              const bytes = outsideBytes.get(path)
+              if (!bytes) throw new Error("its bytes didn't come with the carry")
+              return bytes
+            },
+          }, steps, waiting)
+        })
+        : { placed: [], removed: [], waiting: [], unsent: [], failed: [] }
+      if (done.failed.length) hostWarn("returns", "files outside the worktree didn't come back to their places", { move: plan.move, failed: done.failed.map((each) => `${each.path}: ${each.why}`).join("; ").slice(0, 2_000) })
       const history = carried?.history ? (await this.#options.carryHistory?.(carried.history)) ?? false : undefined
       const mine = landed.find((each) => each.mine)?.mine
-      const result: ReturnLanded = { merged: landed.flatMap((each) => each.merged), conflicts: landed.flatMap((each) => each.conflicts), ...mine && { mine }, outside: { ...done, ...done.waiting.length && { kept: waiting } } }
+      const apart = done.waiting.length + done.unsent.length > 0
+      const outside: ReturnLanded["outside"] = {
+        placed: done.placed, removed: done.removed, waiting: done.waiting,
+        ...done.unsent.length && { unsent: done.unsent }, ...done.failed.length && { failed: done.failed }, ...apart && { kept: waiting },
+      }
+      const result: ReturnLanded = { merged: landed.flatMap((each) => each.merged), conflicts: landed.flatMap((each) => each.conflicts), ...mine && { mine }, outside }
       // Said only when it wasn't simply laid down: the person's changes merged in, or anything from outside the worktree.
-      if (result.merged.length || result.mine || done.placed.length || done.removed.length || done.waiting.length) plan.landed = result
+      if (result.merged.length || result.mine || done.placed.length || done.removed.length || done.waiting.length || done.unsent.length || done.failed.length) plan.landed = result
       const note = landedNote(result, waiting)
       if (note) plan.note = note
-      if (carried || plan.landed) hostLog("returns", "a return's carry was taken here", { move: plan.move, merged: result.merged.length, conflicts: result.conflicts.length, placed: done.placed.length, removed: done.removed.length, waiting: done.waiting.length, ...history !== undefined && { history } })
+      if (carried || plan.landed) hostLog("returns", "a return's carry was taken here", { move: plan.move, merged: result.merged.length, conflicts: result.conflicts.length, placed: done.placed.length, removed: done.removed.length, waiting: done.waiting.length, unsent: done.unsent.length, failed: done.failed.length, ...history !== undefined && { history } })
     } catch (error) {
       const reason = errorMessage({ error })
       // What the person reads is the reason; what lay beneath it (a store's own error, the versions and columns a
@@ -670,16 +763,24 @@ export class CloudReturns {
       const cause = error instanceof Error && error.cause !== undefined ? errorMessage({ error: error.cause }) : undefined
       const outdated = error instanceof OutdatedReturnError ? JSON.stringify(error.outdated) : undefined
       hostWarn("returns", "a return couldn't be taken here; the worktree is put back and the Thread given back", { move: plan.move, reason, ...cause !== undefined && { cause }, ...outdated !== undefined && { outdated } })
-      if (plan.kept) {
-        const kept = plan.kept
+      const kept = plan.kept
+      // Only what this return laid is put back: a worktree it never wrote holds the person's latest, not the copy.
+      if (kept && laid.size) {
         // A worktree that can't be put back keeps its copy beside the plan, and the Thread still goes back to the cloud.
         let whole = true
-        for (const each of [{ path: plan.folder, checkpoint: kept.checkpoint, file: kept.file }, ...kept.others ?? []])
-          await applyMoveCheckpoint(this.#options.git, each.path, each.file, each.checkpoint, { replace: true }).catch((restore: Error) => {
-            hostWarn("returns", "this Mac's worktree couldn't be put back as it was; its copy stays", { move: plan.move, folder: each.path, file: each.file, error: errorMessage({ error: restore }) })
-            whole = false
-          })
+        await worktrees.returnWrite(plan.cloudThread, async () => {
+          for (const each of [{ path: plan.folder, checkpoint: kept.checkpoint, file: kept.file }, ...kept.others ?? []]) {
+            if (!laid.has(each.path)) continue
+            await applyMoveCheckpoint(this.#options.git, each.path, each.file, each.checkpoint, { replace: true }).catch((restore: Error) => {
+              hostWarn("returns", "this Mac's worktree couldn't be put back as it was; its copy stays", { move: plan.move, folder: each.path, file: each.file, error: errorMessage({ error: restore }) })
+              whole = false
+            })
+          }
+        })
         if (!whole) plan.kept = undefined
+        // Put back whole, the worktree is the person's again: a later try keeps it afresh.
+        else plan.laying = undefined
+        await this.#write(plan)
       }
       if (error instanceof OutdatedReturnError) plan.outdated = error.outdated
       if (error instanceof ProjectMissingError) plan.missing = error.missing
@@ -717,9 +818,12 @@ export class CloudReturns {
     const untold = this.#untold.get(conversationId)
     if (!untold?.length) return []
     this.#untold.delete(conversationId)
+    // One after another: two agents hearing the same return at once each read the plan the other wrote.
     for (const { move } of untold)
-      void this.#read(move).then((plan) => this.#write({ ...plan, told: [...plan.told ?? [], conversationId] }))
-        .catch((error: Error) => hostWarn("returns", "couldn't record that an agent heard how its return landed", { move, conversation: conversationId, error: error.message }))
+      this.#noting = this.#noting.then(async () => {
+        const plan = await this.#read(move)
+        await this.#write({ ...plan, told: [...new Set([...plan.told ?? [], conversationId])] })
+      }).catch((error: Error) => hostWarn("returns", "couldn't record that an agent heard how its return landed", { move, conversation: conversationId, error: error.message }))
     return untold.map(({ note }) => note)
   }
 
@@ -773,7 +877,7 @@ export class CloudReturns {
     plan.phase = "staying"
     plan.reason = reason
     await this.#write(plan)
-    if (plan.kept) await rm(plan.kept.file, { force: true })
+    await dropKept(plan.kept)
     // Its machine runs it again once told; until then it's still the cloud's, and a later start tells it.
     await this.#tellStay(plan).catch((error: Error) => hostWarn("returns", "a machine still to be told its Thread stays couldn't be told yet", { move: plan.move, error: error.message }))
     hostLog("returns", "a Thread stayed in the cloud", { move: plan.move, reason })
@@ -787,7 +891,7 @@ export class CloudReturns {
     plan.phase = "stayed"
     plan.reason = `${reason.replace(/[.\s]*$/, "")}. It stays archived.`
     await this.#write(plan)
-    if (plan.kept) await rm(plan.kept.file, { force: true })
+    await dropKept(plan.kept)
     hostLog("returns", "an archived Thread couldn't be restored here; it stays archived", { move: plan.move, reason })
     const outcome = stayedOutcome(plan)
     this.#options.step(plan.asked, plan.move, outcome)
@@ -814,9 +918,21 @@ export class CloudReturns {
   async #write(plan: ReturnPlan): Promise<void> {
     await mkdir(this.#options.folder, { recursive: true })
     const file = join(this.#options.folder, `${plan.move}.json`)
-    await writeFile(`${file}.tmp`, JSON.stringify(ReturnPlanSchema.parse(plan)))
-    await rename(`${file}.tmp`, file)
+    // Beside it under a name of its own, so two writers never rename one half-written file.
+    const beside = `${file}.${randomBytes(4).toString("hex")}.tmp`
+    await writeFile(beside, JSON.stringify(ReturnPlanSchema.parse(plan)))
+    await rename(beside, file)
   }
+}
+
+/** Every copy of the worktree a plan keeps: its first repository's and each other's. */
+function keptFiles(kept: Kept | undefined): string[] {
+  return kept ? [kept.file, ...(kept.others ?? []).map((other) => other.file)] : []
+}
+
+/** A return over, or given up: every copy of the worktree it kept goes, each repository's. */
+async function dropKept(kept: Kept | undefined): Promise<void> {
+  for (const file of keptFiles(kept)) await rm(file, { force: true })
 }
 
 /** At most this many paths are named in a note; the rest are counted. */
@@ -841,6 +957,8 @@ export function landedNote(landed: ReturnLanded, waiting: string): string | unde
   if (conflicts.size) lines.push(`You and the user both changed ${named([...conflicts])}: ${conflicts.size === 1 ? "it holds" : "they hold"} Git's conflict markers, theirs as \`mako/merge/this-mac\` and yours as \`mako/merge/cloud\`. Resolve them before building on ${conflicts.size === 1 ? "it" : "them"}.`)
   if (landed.mine) lines.push(`The user's own commits on this branch meanwhile are on \`${landed.mine}\`.`)
   if (landed.outside.waiting.length) lines.push(`Files outside the worktree that you changed in the cloud, and the user changed here meanwhile, kept the user's version; yours wait under ${waiting}: ${named(landed.outside.waiting)}.`)
+  if (landed.outside.unsent?.length) lines.push(`Files you wrote outside the worktree in the cloud that never came from this Mac weren't put in place; they wait under ${waiting}: ${named(landed.outside.unsent)}.`)
+  if (landed.outside.failed?.length) lines.push(`Files outside the worktree that couldn't be written back on the user's Mac: ${named(landed.outside.failed.map((each) => `${each.path} (${each.why})`))}.`)
   return lines.length ? lines.join(" ") : undefined
 }
 

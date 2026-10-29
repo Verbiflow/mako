@@ -27,7 +27,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { verifyFilePreview, cloneRepository, fileIdentity, MediaRenditions, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, projectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { verifyFilePreview, cloneRepository, fileIdentity, MediaRenditions, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -47,7 +47,7 @@ import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from ".
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
-import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -509,7 +509,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           return { id, store: cloud.carriedFiles }
         },
         repositoryOf: async (folder) => (await folderRepository(git, folder)).url,
-        recipe: (checkout) => projectRecipe(git, checkout, workspaces.recipes),
+        recipe: (checkout) => readProjectRecipe(git, checkout, workspaces.recipes),
       })
   declareCarriedFilesMethods(methods, carriedFiles)
   /** The account's archived cloud Threads, as its list said them last: what every window shows as archived of them. */
@@ -728,6 +728,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     harnesses: harnessCheck,
   })
   void cloudMoves?.settle().catch((error: Error) => hostWarn("moves", "moves a stopped host left couldn't be settled", { error: error.message }))
+  // The one owner of each cloud Thread's worktree here: the way back and the follow both write it through this.
+  const cloudWorktrees = new CloudWorktrees()
   // And brings them back (`mako:thread-return`): a machine sends them (`mako:move-depart`).
   const cloudReturns = cloudConversations && new CloudReturns({
     folder: join(environment.dataRoot, "cloud", "returns"),
@@ -762,6 +764,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       await attribution.carryThreadHistory(history)
       return true
     },
+    worktrees: cloudWorktrees,
   })
   late.cloudReturns = cloudReturns
   // The worktree here of a Thread in the cloud follows it at each turn's end, until the person changes it here.
@@ -776,6 +779,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     callThread: (cloudThread, channel, args) => cloudConversations.callThread(cloudThread, channel, args),
     returning: (cloudThread) => late.cloudReturns?.returning(cloudThread) !== undefined,
+    worktrees: cloudWorktrees,
     stopped: (cloudThread, state) => emit({ type: "thread-follow-stopped", conversations: cloudConversations.threadConversations(cloudThread).map((each) => each.conversationId), folders: state.edited?.folders ?? [], at: state.edited?.at ?? Date.now() }),
   })
   // And archives them, from here, whichever device they came from: the cloud ends them and keeps what they ran.
@@ -987,6 +991,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const machineTracker = arrival && openMachineTracker({
     git,
     dataRoot: environment.dataRoot,
+    jobs: shell.jobs,
     gateway: () => machineLink ?? undefined,
     records: (gateway) => machineRecords(gateway)!,
     workspace: () => workspaceClients.homePath(),

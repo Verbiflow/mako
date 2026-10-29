@@ -9,7 +9,7 @@ import type { LiveBatch, LiveSummary } from "../contracts/live-conversations.js"
 import { HandoffSchema, RuntimeIdSchema, type Handoff } from "../contracts/thread-execution.js"
 import type { ThreadId } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
-import { MachineSaves, type MachineSaveLink } from "./machine-saves.js"
+import { MachineSaves, type MachineSaveLink, type MachineSavesDeps } from "./machine-saves.js"
 import { restoreSave, type MachineRestoreDeps } from "./machine-restore.js"
 import type { MoveArrivalDeps } from "./move-arrival.js"
 import { sendThreadCarry, type ThreadCarryDeps } from "./move-departure.js"
@@ -25,6 +25,8 @@ export type MachineGateway = { gatewayUrl: string; machine: string; credential: 
 export type MachineTrackerDeps = {
   git: Git
   dataRoot: string
+  /** The host's recurring work, which the saves' every-so-often save while work goes on is one of. */
+  jobs: MachineSavesDeps["jobs"]
   /** The gateway the machine is linked through now. */
   gateway(): MachineGateway | undefined
   records(gateway: MachineGateway): RecordsLink
@@ -69,6 +71,7 @@ export function openMachineTracker(deps: MachineTrackerDeps): MachineTracker {
   const started = () => deps.live.summaries().filter((summary) => summary.session.nativeId)
   const saves = new MachineSaves({
     git: deps.git,
+    jobs: deps.jobs,
     scratch: join(deps.dataRoot, "saves"),
     link: () => {
       const gateway = deps.gateway()

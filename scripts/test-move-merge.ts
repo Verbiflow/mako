@@ -95,7 +95,38 @@ try {
   assert.equal(sh(mac, "rev-parse", "mako/thread-mac"), personHead, "the person's commit is kept")
   assert.equal(await read(join(mac, "later.txt")), "later in the cloud\n")
   assert.equal(await read(join(mac, "mine.txt")), "committed by the person\n", "and its change is in the files")
-  console.log("move merge: the person's edits meanwhile kept, the cloud's laid over, a shared file's conflict marked, their commits kept: ok")
+
+  // A later way back, the person having committed again on another line: the branch an earlier way back kept is never
+  // moved off its commits; theirs go on a branch beside it, which the result names. One that only moves forward reuses it.
+  const third = await captureMoveCheckpoint(git, mac, await mkdtemp(join(root, "sent-")))
+  await applyMoveCheckpoint(git, machine, third.file, third.checkpoint, { replace: true })
+  await writeFile(join(machine, "latest.txt"), "latest in the cloud\n")
+  const departedThird = await captureMoveCheckpoint(git, machine, await mkdtemp(join(root, "departed-")))
+  sh(mac, "reset", "--quiet", "--hard")
+  await writeFile(join(mac, "mine.txt"), "committed by the person, another way\n")
+  sh(mac, "commit", "--quiet", "-am", "the person's other commit")
+  const otherHead = sh(mac, "rev-parse", "HEAD")
+  const keptThird = await captureMoveCheckpoint(git, mac, await mkdtemp(join(root, "kept-")))
+  await applyMoveCheckpoint(git, mac, departedThird.file, departedThird.checkpoint, { replace: true })
+  const thirdMerge = await mergeReturned(git, mac, { base: third.checkpoint, mine: keptThird.checkpoint, theirs: departedThird.checkpoint, bundles: { base: third.file, mine: keptThird.file } })
+  assert.equal(thirdMerge.mine, "mako/thread-mac-2", "a branch of its own, named")
+  assert.equal(sh(mac, "rev-parse", "mako/thread-mac"), personHead, "the earlier way back's commit is still kept")
+  assert.equal(sh(mac, "rev-parse", "mako/thread-mac-2"), otherHead)
+
+  // Again, the person going on from that commit: the branch that holds it moves forward to theirs.
+  const fourth = await captureMoveCheckpoint(git, mac, await mkdtemp(join(root, "sent-")))
+  await applyMoveCheckpoint(git, machine, fourth.file, fourth.checkpoint, { replace: true })
+  const departedFourth = await captureMoveCheckpoint(git, machine, await mkdtemp(join(root, "departed-")))
+  sh(mac, "reset", "--quiet", "--hard", otherHead)
+  await writeFile(join(mac, "mine.txt"), "committed by the person, on from there\n")
+  sh(mac, "commit", "--quiet", "-am", "the person's next commit")
+  const nextHead = sh(mac, "rev-parse", "HEAD")
+  const keptFourth = await captureMoveCheckpoint(git, mac, await mkdtemp(join(root, "kept-")))
+  await applyMoveCheckpoint(git, mac, departedFourth.file, departedFourth.checkpoint, { replace: true })
+  const fourthMerge = await mergeReturned(git, mac, { base: fourth.checkpoint, mine: keptFourth.checkpoint, theirs: departedFourth.checkpoint, bundles: { base: fourth.file, mine: keptFourth.file } })
+  assert.equal(fourthMerge.mine, "mako/thread-mac-2")
+  assert.deepEqual([sh(mac, "rev-parse", "mako/thread-mac"), sh(mac, "rev-parse", "mako/thread-mac-2")], [personHead, nextHead])
+  console.log("move merge: the person's edits meanwhile kept, the cloud's laid over, a shared file's conflict marked, their commits kept, never over an earlier way back's: ok")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

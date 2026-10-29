@@ -8,6 +8,7 @@ import type { MoveCarryRef, MoveCheckpoint } from "@mako/protocol/moves"
 import type { Git } from "@mako/git"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { errorMessage } from "../base/error-message.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import type { Handoff } from "../contracts/thread-execution.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { captureMoveCheckpoint, MoveCheckpointError } from "../workspaces/index.js"
@@ -26,6 +27,8 @@ import { captureMoveCheckpoint, MoveCheckpointError } from "../workspaces/index.
  * A save refused as fenced means this machine's generation moved on: it stops saving for good.
  */
 
+/** The host job that saves while anything works, by its name in the host's jobs. */
+export const SAVE_JOB = "save the machine's Thread while it works"
 /** A change is saved this long after it, so a burst of calls is one save. */
 const SETTLE_MS = 1_000
 /** In-memory scratch, where the machine has it: a disk that's full can still save. */
@@ -56,6 +59,8 @@ export type MachineSavesDeps = {
    * beside its records; its first repository's checkpoint is `checkpoint`. Absent where there's no carry to take.
    */
   carry?(folder: string, records: RecordsLink, checkpoint: MoveCheckpoint): Promise<MoveCarryRef | undefined>
+  /** The host's recurring work: while anything works, a save every `MACHINE_SAVE_EVERY_MS` is one of its jobs. */
+  jobs: Pick<HostJobs, "every" | "demand">
   /** A folder of the host's own, for capture's scratch when there's no memory to work in. */
   scratch: string
   /** Where memory scratch is; tests point it elsewhere. */
@@ -80,8 +85,11 @@ export class MachineSaves {
    * its turn's end: a save then named an ended turn, and the next machine continued it again.
    */
   readonly #turns = new Map<string, string | undefined>()
+  /** The settling time's one-shot timer: a burst of calls is one save. */
   #timer: NodeJS.Timeout | undefined
-  #every: NodeJS.Timeout | undefined
+  /** On while anything works: the job that saves every `MACHINE_SAVE_EVERY_MS` runs only then. */
+  readonly #working: JobDemand
+  readonly #unschedule: () => void
   #saving: Promise<void> | undefined
   #again: string | undefined
   #checkpoint: MoveCheckpoint | undefined
@@ -100,6 +108,8 @@ export class MachineSaves {
   constructor(deps: MachineSavesDeps) {
     this.#deps = deps
     this.#now = deps.now ?? Date.now
+    this.#working = deps.jobs.demand("the machine's Thread works")
+    this.#unschedule = deps.jobs.every(SAVE_JOB, MACHINE_SAVE_EVERY_MS, () => this.changed("work goes on"), { needs: [this.#working] })
   }
 
   state(): MachineSavesState {
@@ -130,13 +140,7 @@ export class MachineSaves {
   /** While anything works, a save at least every `MACHINE_SAVE_EVERY_MS`, so a long command's writes are kept too. */
   working(busy: boolean): void {
     if (this.#stopped) return
-    if (busy && !this.#every) {
-      this.#every = setInterval(() => this.changed("work goes on"), MACHINE_SAVE_EVERY_MS)
-      this.#every.unref()
-    } else if (!busy && this.#every) {
-      clearInterval(this.#every)
-      this.#every = undefined
-    }
+    this.#working.set(busy)
   }
 
   /**
@@ -193,9 +197,9 @@ export class MachineSaves {
   stop(): void {
     this.#stopped = true
     clearTimeout(this.#timer)
-    clearInterval(this.#every)
     this.#timer = undefined
-    this.#every = undefined
+    this.#working.set(false)
+    this.#unschedule()
   }
 
   async #run(flush = false): Promise<void> {

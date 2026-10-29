@@ -8,7 +8,8 @@ import type { MoveCheckpoint } from "@mako/protocol/moves"
  * index are the machine's). The files become a three-way merge of the three: what only one side changed keeps that
  * side, what both changed alike stays, and a file both changed differently holds Git's conflict markers, `this Mac`
  * against `the cloud`, for whoever resolves it. The index stays the machine's, so its staged work is still staged.
- * Commits the person made here on the Thread's branch meanwhile are kept on `<branch>-mac`, never lost.
+ * Commits the person made here on the Thread's branch meanwhile are kept on `<branch>-mac`, never lost: when that branch
+ * holds an earlier way back's commits, on `<branch>-mac-2` and on, whichever the result names.
  *
  * Writes into the repository only the refs it reads by (`refs/mako/merge/*`, removed after) and that branch; nothing
  * else of the person's.
@@ -37,6 +38,27 @@ export function unchangedSince(base: MoveCheckpoint, mine: MoveCheckpoint): bool
 }
 
 /**
+ * The branch the person's commits at `head` are kept on: `name`, unless it holds commits `head` doesn't (an earlier way
+ * back's), then `name-2`, `name-3`… the first that's free or that `head` only moves forward. A branch is never moved
+ * off a commit it had.
+ */
+async function keptBranch(git: Git, checkout: string, name: string, head: string): Promise<string> {
+  for (let n = 1; n <= 100; n += 1) {
+    const branch = n === 1 ? name : `${name}-${n}`
+    const ref = `refs/heads/${branch}`
+    const at = (await run(git, { cwd: checkout, args: ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], codes: [0, 1] })).trim()
+    if (at && at !== head) {
+      const ancestor = await git.run({ cwd: checkout, args: ["merge-base", "--is-ancestor", at, head], codes: [0, 1], timeoutMs: TIMEOUT_MS })
+      if (ancestor.code !== 0) continue
+    }
+    // Moved only from what was just read, so a branch made meanwhile is never written over.
+    const moved = await git.run({ cwd: checkout, args: ["update-ref", ref, head, at], codes: [0, 128], timeoutMs: TIMEOUT_MS })
+    if (moved.code === 0) return branch
+  }
+  throw new Error(`No branch beside ${name} was free to keep this Mac's commits on.`)
+}
+
+/**
  * Merges `mine` into the worktree at `checkout`, which holds `theirs` now. `bundles` are the files of `base` and `mine`
  * (their objects are fetched from them); `theirs`' are the repository's already.
  */
@@ -51,8 +73,7 @@ export async function mergeReturned(git: Git, checkout: string, input: { base: M
     let kept: string | undefined
     if (mine.head !== base.head) {
       // The person committed (or checked out) here meanwhile: those commits stay theirs, on a branch of their own.
-      kept = `${theirs.branch ?? base.branch ?? "mako"}-mac`
-      await run(git, { cwd: checkout, args: ["update-ref", `refs/heads/${kept}`, mine.head] })
+      kept = await keptBranch(git, checkout, `${theirs.branch ?? base.branch ?? "mako"}-mac`, mine.head)
     }
     const merged = await git.run({
       cwd: checkout,

@@ -11,7 +11,8 @@ import { join } from "node:path"
 import { Git } from "@mako/git"
 import { MachineSaveSchema, type MachineSave, type SavedConversation } from "@mako/protocol/saves"
 import type { ReceivedRecords } from "@mako/sessions/record-sync"
-import { MachineSaves, type MachineSaveLink } from "@mako/host/conversations/machine-saves"
+import { MachineSaves, SAVE_JOB, type MachineSaveLink } from "@mako/host/conversations/machine-saves"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { restoreSave } from "@mako/host/conversations/machine-restore"
 import type { ArrivingSession, MoveArrivalDeps } from "@mako/host/conversations/move-arrival"
 import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
@@ -98,8 +99,10 @@ try {
   const conversation = randomUUID()
   // The machine store's Thread, as a release names it.
   const handoff = HandoffSchema.parse({ move: randomUUID(), source: { kind: "cloud", runtime: randomUUID() }, target: { kind: "cloud", runtime: randomUUID() }, releasedAt: 1, thread: { id: randomUUID(), owner: randomUUID() }, sessions: [{ id: randomUUID(), origin: "started", position: 0, generation: 2, journals: [conversation] }] })
+  const jobs = new HostJobs()
   const saves = new MachineSaves({
     git,
+    jobs,
     scratch: join(root, "scratch"),
     memoryScratch: join(root, "memory"),
     link: () => link,
@@ -234,6 +237,15 @@ try {
   assert.equal(saves.state().fenced, undefined, "not restored yet isn't fenced")
   fake.state.restoreFirst = false
 
+  // While anything works, a save every so often is one of the host's jobs, named and paused while nothing works; never
+  // a timer of its own.
+  const job = () => jobs.list().find((each) => each.name === SAVE_JOB)
+  assert.equal(job()?.paused, true, "scheduled, paused while nothing works")
+  saves.working(true)
+  assert.equal(job()?.paused, false, "running while work goes on")
+  saves.working(false)
+  assert.equal(job()?.paused, true)
+
   // A newer generation took the Thread: this machine's save is refused, and it saves no more.
   fake.state.fence = true
   await writeFile(join(machine, "notes.txt"), "after the fence\n")
@@ -245,6 +257,7 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 1_200))
   assert.equal(fake.puts.length, puts, "a fenced machine never saves again")
   saves.stop()
+  assert.equal(job(), undefined, "stopped, its job is gone")
 
   // A Thread that came with a move's carry: a second repository beside the first, and a file outside its folder.
   const secondRemote = join(root, "second.git")
@@ -267,6 +280,7 @@ try {
   const thread = ThreadIdSchema.parse(randomUUID())
   const carrying = new MachineSaves({
     git,
+    jobs: new HostJobs(),
     scratch: join(root, "scratch-carry"),
     memoryScratch: join(root, "memory-carry"),
     link: () => link,
@@ -308,7 +322,7 @@ try {
   assert.equal(existsSync(join(first_, ".git", ARRIVED_CARRY)), true, "the carry kept for the next save and the way back")
 
   fake.server.close()
-  console.log("machine saves: saved after calls and turns, sent once, fenced for good; restored once, its turn continued; a carried Thread's other repository and outside file saved and laid down again")
+  console.log("machine saves: saved after calls and turns, sent once, the save while work goes on a host job, fenced for good; restored once, its turn continued; a carried Thread's other repository and outside file saved and laid down again")
 } finally {
   await rm(root, { recursive: true, force: true })
   rmSync(outsideRoot, { recursive: true, force: true })

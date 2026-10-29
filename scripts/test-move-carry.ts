@@ -1,6 +1,6 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
-import { lstat, mkdtemp, readFile, readlink, rm, stat, symlink, writeFile } from "node:fs/promises"
+import { lstat, mkdir, mkdtemp, readFile, readlink, rm, stat, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Git } from "@mako/git"
@@ -112,21 +112,76 @@ try {
     assert.deepEqual(Object.fromEntries(plan.map((step) => [step.path.replace(tmp, ""), step.action])), {
       "/state.json": "place",
       "/spec.md": "wait",
-      "/notes.txt": "place",
+      // Never sent from here: the cloud has no word over that path, whatever it says.
+      "/notes.txt": "unsent",
       "/run.sh": "remove",
     })
     const waiting = join(root, "waiting")
     const done = await returnOutside(home2, plan, waiting)
     assert.equal(await readFile(t("state.json"), "utf8"), '{"n":2}\n')
-    assert.equal(await readFile(t("notes.txt"), "utf8"), "made in the cloud\n")
+    assert.equal(await currentSha256(t("notes.txt")), undefined, "a file this side never sent isn't put in place")
+    assert.equal(await readFile(join(waiting, t("notes.txt")), "utf8"), "made in the cloud\n", "it waits beside")
     assert.equal(await currentSha256(t("run.sh")), undefined)
     assert.equal(await readFile(t("spec.md"), "utf8"), "# Spec, the person's\n", "the person's newer file is never written over")
     assert.equal(await readFile(join(waiting, t("spec.md")), "utf8"), "# Spec, from the cloud\n", "the cloud's waits beside")
-    assert.deepEqual(done.waiting.map((path) => path.replace(tmp, "")), ["/spec.md"])
+    assert.deepEqual([done.waiting, done.unsent].map((paths) => paths.map((path) => path.replace(tmp, ""))), [["/spec.md"], ["/notes.txt"]])
+    assert.deepEqual(done.failed, [])
+
+    // A forged carry: a launch agent and a removal at paths this side never sent, beside one it did. Nothing it never
+    // sent is written in place or removed.
+    const agents = t("Library/LaunchAgents")
+    await mkdir(agents, { recursive: true })
+    await writeFile(t("keep.txt"), "the person's\n")
+    const forged = await captureCarry(git, {
+      folder: thread, repositories,
+      outside: [{ entry: { path: join(agents, "x.plist"), kind: "file", sha256: "0".repeat(64), bytes: 4, access: "write" }, bytes: Buffer.from("evil") }],
+      left: [], gone: [t("keep.txt")],
+    }, await mkdtemp(join(root, "scratch-")))
+    const forgedOpened = await openCarry(git, forged.file, forged.ref, await mkdtemp(join(root, "open-")))
+    const forgedPlan = await planOutsideReturn(forgedOpened.carry, leftHere)
+    assert.deepEqual(forgedPlan.map((step) => [step.path.replace(tmp, ""), step.action]), [["/Library/LaunchAgents/x.plist", "unsent"]])
+    const forgedDone = await returnOutside(forgedOpened, forgedPlan, waiting)
+    assert.equal(await currentSha256(join(agents, "x.plist")), undefined, "never written where the cloud named it")
+    assert.equal(await readFile(t("keep.txt"), "utf8"), "the person's\n", "never removed")
+    assert.deepEqual(forgedDone.unsent.map((path) => path.replace(tmp, "")), ["/Library/LaunchAgents/x.plist"])
+
+    // Kept apart stays apart: a link one way back left beneath the waiting folder can't lead a later one's file out of it.
+    const carried = async (outside: Parameters<typeof captureCarry>[1]["outside"]) => {
+      const captured = await captureCarry(git, { folder: thread, repositories, outside, left: [] }, await mkdtemp(join(root, "scratch-")))
+      return openCarry(git, captured.file, captured.ref, await mkdtemp(join(root, "open-")))
+    }
+    const door = await carried([{ entry: { path: t("door"), kind: "symlink", sha256: "1".repeat(64), bytes: agents.length, access: "write" }, bytes: Buffer.from(agents) }])
+    assert.deepEqual((await returnOutside(door, await planOutsideReturn(door.carry, leftHere), waiting)).unsent, [t("door")])
+    const through = await carried([{ entry: { path: t("door/y.plist"), kind: "file", sha256: "2".repeat(64), bytes: 4, access: "write" }, bytes: Buffer.from("evil") }])
+    const escapeDone = await returnOutside(through, await planOutsideReturn(through.carry, leftHere), waiting)
+    assert.equal(await currentSha256(join(agents, "y.plist")), undefined, "nothing written through the link")
+    assert.deepEqual(escapeDone.failed.map((each) => [each.path.replace(tmp, ""), each.why]), [["/door/y.plist", "a link in its path leads outside the folder it's kept in"]])
+
+    // One file that can't be written doesn't stop the rest, and says why: each file on its own.
+    await writeFile(t("state.json"), '{"n":1}\n')
+    await writeFile(t("blocked"), "a file where a folder would be\n")
+    const blocked = new Map([...leftHere, [t("blocked/inner.txt"), "3".repeat(64)]])
+    const partial = await captureCarry(git, {
+      folder: thread, repositories,
+      outside: [
+        { entry: { path: t("blocked/inner.txt"), kind: "file", sha256: "4".repeat(64), bytes: 5, access: "write" }, bytes: Buffer.from("inner") },
+        ...cloudSide.read.filter((each) => each.entry.path.endsWith("state.json")),
+      ],
+      left: [],
+    }, await mkdtemp(join(root, "scratch-")))
+    const partialOpened = await openCarry(git, partial.file, partial.ref, await mkdtemp(join(root, "open-")))
+    // `blocked/inner.txt` reads as not-a-file-here (its folder is a file), which isn't what left: it waits, and its
+    // folder in the waiting place is made; force a place by saying nothing was there when it left.
+    const partialPlan = (await planOutsideReturn(partialOpened.carry, blocked)).map((step) => (step.path.endsWith("inner.txt") ? { ...step, action: "place" as const } : step))
+    const partialDone = await returnOutside(partialOpened, partialPlan, waiting)
+    assert.deepEqual(partialDone.failed.map((each) => each.path.replace(tmp, "")), ["/blocked/inner.txt"])
+    assert.equal(partialDone.failed[0]?.why, "a file is where its folder would be", "said in words, not a code")
+    assert.equal(await readFile(t("state.json"), "utf8"), '{"n":2}\n', "the rest still came")
+    assert.deepEqual(partialDone.placed.map((path) => path.replace(tmp, "")), ["/state.json"])
   } finally {
     await rm(tmp, { recursive: true, force: true })
   }
-  console.log("move carry: what may go, captured the same twice, opened and placed, and the way back keeps the person's newer files: ok")
+  console.log("move carry: what may go, captured the same twice, opened and placed, and the way back keeps the person's newer files, writes only what this side sent, keeps the rest apart through no link, and writes each file on its own: ok")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

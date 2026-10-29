@@ -1137,9 +1137,23 @@ export async function inputsDigest(git: Git, checkout: string, inputs: string[])
  * needs no ports. Undefined when there is none, or it doesn't parse.
  */
 export async function projectRecipe(git: Git, checkout: string, recipesRoot: string | undefined): Promise<Recipe | undefined> {
-  const saved = recipesRoot ? await readJson(await recipePath(git, recipesRoot, checkout)).catch((): JsonRead => ({ kind: "absent" })) : { kind: "absent" as const }
-  const read = saved.kind === "absent" ? await readJson(join(checkout, RECIPE_PATH)).catch((): JsonRead => ({ kind: "absent" })) : saved
-  if (read.kind !== "json") return undefined
+  const read = await readProjectRecipe(git, checkout, recipesRoot)
+  return read.kind === "recipe" ? read.recipe : undefined
+}
+
+/**
+ * `projectRecipe`, saying which of three it found: no recipe at all, one, or
+ * one it couldn't read (not JSON, not a recipe, or a file it couldn't open),
+ * for a caller that must never take "unreadable" for "says nothing".
+ */
+export type ProjectRecipeRead = { kind: "absent" } | { kind: "recipe"; recipe: Recipe } | { kind: "unreadable"; why: string }
+
+export async function readProjectRecipe(git: Git, checkout: string, recipesRoot: string | undefined): Promise<ProjectRecipeRead> {
+  const unreadable = (error: Error): JsonRead => ({ kind: "invalid", message: error.message })
+  const saved = recipesRoot ? await recipePath(git, recipesRoot, checkout).then(readJson).catch(unreadable) : { kind: "absent" as const }
+  const read = saved.kind === "absent" ? await readJson(join(checkout, RECIPE_PATH)).catch(unreadable) : saved
+  if (read.kind === "absent") return read
+  if (read.kind === "invalid") return { kind: "unreadable", why: read.message }
   const parsed = RecipeSchema.safeParse(read.value)
-  return parsed.success ? parsed.data : undefined
+  return parsed.success ? { kind: "recipe", recipe: parsed.data } : { kind: "unreadable", why: recipeIssues(parsed.error) }
 }

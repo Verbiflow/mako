@@ -1,9 +1,11 @@
 import { createHash, randomBytes } from "node:crypto"
 import { createReadStream } from "node:fs"
 import { existsSync } from "node:fs"
-import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises"
+import { chmod, lstat, mkdir, mkdtemp, readFile, readlink, realpath, rename, rm, stat, symlink, unlink, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
+import { z } from "zod"
 import type { Git, RunOptions } from "@mako/git"
+import { errorMessage } from "../base/error-message.js"
 import { ThreadFileHistorySchema, type ThreadFileHistory } from "@mako/protocol"
 import {
   MOVE_CHECKPOINT_MAX_BYTES, MOVE_OUTSIDE_BYTES, MOVE_OUTSIDE_FILE_BYTES, MoveCarrySchema,
@@ -248,21 +250,28 @@ export async function placeOutside(opened: OpenedCarry): Promise<{ placed: strin
 }
 
 /**
- * What the way back does with each outside file the cloud sent: `place` when this side's copy is the one that left
- * (`left`: its SHA-256 then, or undefined when there was none), `remove` when the cloud removed one this side still
- * has unchanged, `same` when this side already has the cloud's, `wait` when this side changed it since (the person's
- * newer file is never written over: the cloud's waits beside, to be put in place).
+ * What the way back does with each outside file the cloud sent, by `left`: this side's own record of what it sent
+ * forward (each path's SHA-256 as it left), never the other side's word. `place` when this side's copy is still the one
+ * that left; `remove` when the cloud removed one this side still has as it left; `same` when this side already has the
+ * cloud's; `wait` when this side changed it since (the person's newer file is never written over: the cloud's waits
+ * beside, to be put in place); `unsent` when this side never sent that path, so the cloud has no word over it: its copy
+ * waits beside, never put in place. A removal of a path this side never sent is no step at all.
  */
-export type OutsideReturn = { path: string; action: "place" | "remove" | "same" | "wait"; entry?: MoveOutsideFile }
+export type OutsideReturn = { path: string; action: "place" | "remove" | "same" | "wait" | "unsent"; entry?: MoveOutsideFile }
 
 export async function planOutsideReturn(carry: MoveCarry, left: ReadonlyMap<string, string>): Promise<OutsideReturn[]> {
   const plan: OutsideReturn[] = []
   for (const entry of carry.outside) {
+    if (!left.has(entry.path)) {
+      plan.push({ path: entry.path, action: "unsent", entry })
+      continue
+    }
     const here = await currentSha256(entry.path)
     if (here === entry.sha256) plan.push({ path: entry.path, action: "same", entry })
     else plan.push({ path: entry.path, action: here === left.get(entry.path) ? "place" : "wait", entry })
   }
   for (const path of carry.gone) {
+    if (!left.has(path)) continue
     const here = await currentSha256(path)
     if (here === undefined) continue
     plan.push({ path, action: here === left.get(path) ? "remove" : "wait" })
@@ -270,35 +279,81 @@ export async function planOutsideReturn(carry: MoveCarry, left: ReadonlyMap<stri
   return plan
 }
 
-/** What the way back did with the outside files: put in place, removed, or kept apart because the person changed them. */
-export type OutsideReturned = { placed: string[]; removed: string[]; waiting: string[] }
+/**
+ * What the way back did with the outside files: put in place, removed, kept apart because the person changed them
+ * (`waiting`) or because this side never sent them (`unsent`), and each it couldn't write, with why.
+ */
+export type OutsideReturned = { placed: string[]; removed: string[]; waiting: string[]; unsent: string[]; failed: Array<{ path: string; why: string }> }
+
+/**
+ * Writes a carried file at `path` beneath `root`, refusing one a link inside `root` would lead out of it: what's kept
+ * apart stays apart, whatever the files before it made there.
+ */
+async function writeBeneath(root: string, path: string, kind: MoveOutsideFile["kind"], bytes: Buffer): Promise<void> {
+  const target = join(root, path)
+  await mkdir(dirname(target), { recursive: true })
+  const [inside, folder] = await Promise.all([realpath(root), realpath(dirname(target))])
+  if (folder !== inside && !folder.startsWith(`${inside}/`)) throw new Error("a link in its path leads outside the folder it's kept in")
+  await writeCarried(target, kind, bytes)
+}
+
+/** Why a file couldn't be written, in the person's words, for the system's codes that have them. */
+function notWritten(code: string): string | undefined {
+  switch (code) {
+    case "EACCES":
+    case "EPERM":
+      return "permission denied"
+    case "EROFS":
+      return "its disk is read-only"
+    case "ENOSPC":
+      return "the disk is full"
+    // Making its folder where a file is: `mkdir` says EEXIST, opening beneath it ENOTDIR.
+    case "EEXIST":
+    case "ENOTDIR":
+      return "a file is where its folder would be"
+    case "EISDIR":
+      return "a folder is where it would be"
+    default:
+      return undefined
+  }
+}
+
+const SystemErrorSchema = z.object({ code: z.string(), message: z.string() })
 
 /**
  * Carries out the way back's plan for outside files: placed or removed where this side's copy is the one that left,
- * and kept under `waiting` (at `<waiting>/<absolute path>`) where the person changed it since.
+ * and kept under `waiting` (at `<waiting>/<absolute path>`) where the person changed it since or this side never sent
+ * it. Each file on its own, as the machine places them (`placeOutside`): one that can't be written is named with why,
+ * and the rest still go.
  */
 export async function returnOutside(opened: OpenedCarry, plan: readonly OutsideReturn[], waiting: string): Promise<OutsideReturned> {
-  const done: OutsideReturned = { placed: [], removed: [], waiting: [] }
+  const done: OutsideReturned = { placed: [], removed: [], waiting: [], unsent: [], failed: [] }
   for (const step of plan) {
     if (step.action === "same") continue
-    if (step.action === "remove") {
-      await rm(step.path, { force: true })
-      done.removed.push(step.path)
-      continue
-    }
-    const entry = step.entry
-    if (!entry) {
-      // Removed in the cloud, changed here: what's here stays, and nothing waits.
-      done.waiting.push(step.path)
-      continue
-    }
-    const bytes = await opened.bytes(entry.path)
-    if (step.action === "place") {
-      await writeCarried(entry.path, entry.kind, bytes)
-      done.placed.push(entry.path)
-    } else {
-      await writeCarried(join(waiting, entry.path), entry.kind, bytes)
-      done.waiting.push(entry.path)
+    try {
+      if (step.action === "remove") {
+        await rm(step.path, { force: true })
+        done.removed.push(step.path)
+        continue
+      }
+      const entry = step.entry
+      if (!entry) {
+        // Removed in the cloud, changed here: what's here stays, and nothing waits.
+        done.waiting.push(step.path)
+        continue
+      }
+      const bytes = await opened.bytes(entry.path)
+      if (step.action === "place") {
+        await writeCarried(entry.path, entry.kind, bytes)
+        done.placed.push(entry.path)
+      } else {
+        await mkdir(waiting, { recursive: true })
+        await writeBeneath(waiting, entry.path, entry.kind, bytes)
+        done[step.action === "unsent" ? "unsent" : "waiting"].push(entry.path)
+      }
+    } catch (error) {
+      const failure = SystemErrorSchema.safeParse(error).data
+      done.failed.push({ path: step.path, why: (failure && (notWritten(failure.code) ?? failure.message)) ?? errorMessage({ error }) })
     }
   }
   return done

@@ -14,7 +14,7 @@ import { promisify } from "node:util"
 import { Git } from "@mako/git"
 import { CloudCarriedFiles, variableNames, type CarriedFilesStore } from "@mako/host/workspaces/cloud-carried-files"
 import type { z } from "zod"
-import { RecipeSchema } from "@mako/host/workspaces/thread-recipe"
+import { RecipeSchema, readProjectRecipe, type ProjectRecipeRead } from "@mako/host/workspaces/thread-recipe"
 
 /** A recipe's `carry` as an agent writes it: a path alone is copied. */
 type Carry = z.input<typeof RecipeSchema>["carry"]
@@ -62,7 +62,7 @@ async function project(carry: Carry) {
   await mkdir(join(root, "models"))
   await writeFile(join(root, "models", "weights.bin"), "w")
   await writeFile(join(root, "big.bin"), Buffer.alloc(256 * 1024 + 1))
-  let recipe = RecipeSchema.parse({ carry })
+  let recipe: ProjectRecipeRead = { kind: "recipe", recipe: RecipeSchema.parse({ carry }) }
   const { store, files, puts } = memoryStore()
   const carried = new CloudCarriedFiles({
     file: join(root, "..", `${crypto.randomUUID()}.json`),
@@ -71,7 +71,12 @@ async function project(carry: Carry) {
     repositoryOf: async () => REPOSITORY,
     recipe: async () => recipe,
   })
-  return { root, carried, files, puts, setRecipe: (next: Carry) => void (recipe = RecipeSchema.parse({ carry: next })) }
+  return {
+    root, carried, files, puts,
+    setRecipe: (next: Carry) => void (recipe = { kind: "recipe", recipe: RecipeSchema.parse({ carry: next }) }),
+    /** The recipe as the main checkout has it now: none at all, or one Mako can't read. */
+    setRead: (next: ProjectRecipeRead) => void (recipe = next),
+  }
 }
 
 test("nothing leaves this Mac until the person says so for the project; then every file the recipe copies goes, once", async () => {
@@ -119,6 +124,31 @@ test("a file the person removes stays on this Mac until they copy it again; one 
   setRecipe([".env"])
   assert.deepEqual(await carried.sync(root, "a move"), { sent: [], removed: ["config/local.json"], unchanged: 1 })
   assert.deepEqual([...files.keys()], [".env"])
+})
+
+test("a recipe that can't be read removes nothing from the cloud and sends nothing; one that's gone carries nothing", async () => {
+  const { root, carried, files, setRead } = await project([".env", "config/local.json"])
+  await carried.decide(root, "allowed")
+  setRead({ kind: "unreadable", why: "not JSON (Unexpected token)" })
+  assert.deepEqual(await carried.sync(root, "a move"), { sent: [], removed: [], unchanged: 0 })
+  assert.deepEqual([...files.keys()].sort(), [".env", "config/local.json"], "every file the cloud keeps stays")
+  assert.match((await carried.view(root)).problem ?? "", /recipe can't be read \(not JSON/)
+  setRead({ kind: "absent" })
+  assert.deepEqual((await carried.sync(root, "a move")).removed, [".env", "config/local.json"])
+})
+
+test("the recipe as written reads as none, one, or one that can't be read: never an unreadable one as none", async () => {
+  const root = await mkdtemp(join(scratch, "recipe-"))
+  await run("git", ["-C", root, "init", "-q"])
+  assert.deepEqual(await readProjectRecipe(git, root, undefined), { kind: "absent" })
+  await mkdir(join(root, ".mako"), { recursive: true })
+  await writeFile(join(root, ".mako", "recipe.json"), "{ \"carry\": [\".env\"], ")
+  assert.equal((await readProjectRecipe(git, root, undefined)).kind, "unreadable", "not JSON")
+  await writeFile(join(root, ".mako", "recipe.json"), JSON.stringify({ carry: "everything" }))
+  assert.equal((await readProjectRecipe(git, root, undefined)).kind, "unreadable", "not a recipe")
+  await writeFile(join(root, ".mako", "recipe.json"), JSON.stringify({ carry: [".env"] }))
+  const read = await readProjectRecipe(git, root, undefined)
+  assert.deepEqual(read.kind === "recipe" && read.recipe.carry, [{ path: ".env", link: false }])
 })
 
 test("the person's no removes everything of the project from the cloud, and sends nothing after", async () => {

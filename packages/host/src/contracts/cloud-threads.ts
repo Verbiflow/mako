@@ -167,13 +167,15 @@ export type MoveCarried = { repositories: number; outside: number; left: MoveLef
  * changed in its worktree meanwhile that kept both sides; `conflicts`, files both changed, left with Git's markers;
  * `mine`, the branch the person's own commits there were kept on; `outside`, its files outside the worktree, put in
  * place, removed, or `waiting`: the person changed them here since, so theirs stayed and the cloud's copies are kept apart.
+ * `unsent`: files the cloud wrote outside the worktree that never left this Mac, kept apart and never put in place, since
+ * only what this Mac sent forward comes back to its place. `failed`: each one that couldn't be written here, and why.
  */
 export type ReturnLanded = {
   merged: string[]
   conflicts: string[]
   mine?: string
-  /** `kept`: the folder the cloud's copies of the `waiting` files are kept in, each at its own path beneath it. */
-  outside: { placed: string[]; removed: string[]; waiting: string[]; kept?: string }
+  /** `kept`: the folder the cloud's copies of the `waiting` and `unsent` files are kept in, each at its own path beneath it. */
+  outside: { placed: string[]; removed: string[]; waiting: string[]; unsent?: string[]; failed?: Array<{ path: string; why: string }>; kept?: string }
 }
 
 /** What `mako:thread-return` came to: the Thread runs here again, or it stayed in the cloud, and why. */
