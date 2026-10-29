@@ -1,0 +1,22 @@
+name: The recording media's sources
+description: >-
+  FFmpeg's and x264's source archives in vendor/control-media/downloads, each checked by the sha256
+  vendor/control-media/sources.json pins: from the cache when it holds them, else from the URLs the manifest lists,
+  mirrors first. The Linux host image builds its media from them with no network, so one host being down (FFmpeg's
+  own timed out this job's image build again and again) doesn't fail CI. A cached archive is checked like a downloaded
+  one before it is used.
+runs:
+  using: composite
+  steps:
+    - id: restore
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: vendor/control-media/downloads
+        key: control-media-sources-${{ hashFiles('vendor/control-media/sources.json') }}
+    - shell: bash
+      run: node scripts/fetch-control-media-sources.mjs
+    - if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: vendor/control-media/downloads
+        key: ${{ steps.restore.outputs.cache-primary-key }}
