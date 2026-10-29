@@ -3096,7 +3096,7 @@ export function installMockBridge() {
       disconnected: 0,
       warmLimit: 2,
       idleMs: 10 * 60_000,
-      memory: { loaded: 0, unloaded: 0, bytes: 0, pinnedBytes: 0, budget: 128 * 1024 * 1024 },
+      memory: { loaded: 0, unloaded: 0, bytes: 0, pinnedBytes: 0, budget: 128 * 1024 * 1024, loads: [], held: [] },
     }),
     clearCrashes: async () => {},
     reportCrash: async () => {},

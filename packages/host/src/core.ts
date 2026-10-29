@@ -4,6 +4,7 @@ import type { RecordsLink } from "@mako/sessions/record-sync"
 import { encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
+import { writeFile } from "node:fs/promises"
 import { mediaExecutable } from "@mako/control-runtime/media"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -20,6 +21,7 @@ import { threadArchiveKey, type ArchiveAnswer, type ArchiveCommand, type CloudAr
 import type { ArchivedThread } from "@mako/protocol/thread-listing"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
+import { HeapWatch, readHeap } from "./base/heap-watch.js"
 import { cloudUrl } from "./base/build-identity.js"
 import { NativeUnknown } from "./base/native-unknown.js"
 import { StreamMismatches } from "./base/stream-mismatches.js"
@@ -416,7 +418,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         activity: (path) => activity[path],
         work: () => application.lifecycle.snapshot().work,
         waitingOn: (id) => live.waitingOn(id),
-        archived: (id) => late.archivedHere?.(id) ?? false,
+        hidden: () => new Set(threads.archives.snapshot().keys),
         lastMoved: (id, revision) => live.lastMoved(id, revision),
         placement: (id) => store.journalPlacement(id),
         execution: (session) => store.execution(session),
@@ -446,6 +448,24 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   late.sessions = sessions
   shell.jobs.every("tell the account this host's Sessions", 1_000, () => late.cloud?.reportSessions?.())
+  // The heap, watched so a host filling up says who with while it still can: an out-of-memory report has no
+  // JavaScript stack. The line names what memory holds and who read it in; the whole readout goes beside the log.
+  const heap = new HeapWatch(readHeap, (change, level, reading) => {
+    const memory = late.conversations?.live.residency().memory
+    const mb = (bytes: number | undefined) => Math.round((bytes ?? 0) / 1_048_576)
+    const fields = {
+      level, usedMB: mb(reading.used), limitMB: mb(reading.limit), rssMB: mb(reading.rss),
+      conversations: memory?.loaded ?? 0, conversationMB: mb(memory?.bytes), pinnedMB: mb(memory?.pinnedBytes),
+      loads: (memory?.loads ?? []).slice(0, 5).map((load) => `${load.by}=${load.count}`).join(", "),
+      held: (memory?.held ?? []).slice(0, 5).map((held) => `${held.conversation.slice(0, 8)}:${mb(held.bytes)}MB${held.by ? ` by ${held.by}` : ""}`).join(", "),
+    }
+    if (change === "easing") return hostLog("memory", "the heap eased", fields)
+    hostWarn("memory", "the heap is under pressure", fields)
+    const readout = { at: new Date().toISOString(), change, level, heap: reading, memory, jobs: shell.jobs.list() }
+    void writeFile(join(logsRoot(environment.dataRoot), "memory-pressure.json"), JSON.stringify(readout, null, 2)).catch((error: Error) =>
+      hostWarn("memory", "the memory readout couldn't be written", { error: error.message }))
+  })
+  shell.jobs.every("watch the heap", 10_000, () => void heap.tick(), { runsWhileHeld: true })
   // This Mac's Sessions in the sync window, kept in step in the account, the ones at work first: as Mako draws each, so
   // another device reads one with this Mac off, and as its harness wrote it, so it continues anywhere. A cloud machine
   // keeps its Thread's records instead; a fixture desk sends nothing.
@@ -629,6 +649,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     telemetry,
     emit,
     foreground: shell.foreground,
+    work: shell.work,
     mcpSnapshot: (cwd) => tools.mcp.discover(cwd),
     tools: (bindingId, conversationId) => residency.tools(bindingId, conversationId),
     controlInstructions: (bindingId, conversationId) => {

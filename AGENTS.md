@@ -2516,6 +2516,31 @@ device at generation 1. `test-thread-execution.ts` and
 `test-thread-execution-host.ts` (six harnesses, round trip, cancel, restart,
 two hosts) run under `test:thread-store`.
 
+What the host holds of its conversations is `LiveRecords`
+(`packages/host/src/conversations/live-records.ts`): a journal is read in
+when something needs it and let go once the memory budget has no room for it
+and nothing is using it. Everything that lists conversations, every second or
+on every event, reads the listing (`LiveSummary`: the session, its paths and
+native ids, its revision), never a journal: the Sessions report
+(`ownedSessions`), the account's rows, the Thread lifecycle's archive keys
+(`liveArchiveKeys` in `contracts/thread-lifecycle.ts`, the one rule the
+lifecycle and the report share). On 2026-10-28 the report asked the lifecycle
+whether each conversation was archived, the lifecycle read each one's
+snapshot to answer, and the host loaded all 157 journals (1.3 GB) every
+second, swept them, loaded them again, and ran out of heap 90 seconds after
+each start, eight times. So every load from disk is counted to the work
+running (`HostWork.current`, set by `run` for every call, job and domain
+load, and only while it runs: a timer or a process the work set up that fires
+after it ended names the run around it, or none, never work long done), the
+residency lines name it (`by`, `loads`), Settings › Diagnostics
+lists who read what in, and one reader loading `BULK_LOADS` conversations
+between two sweeps is named in the log as a bug. A host whose heap crosses
+`HEAP_PRESSURE` says so once with that readout and writes it whole to
+`logs/memory-pressure.json` (`base/heap-watch.ts`), because an out-of-memory
+report has no JavaScript stack. `scripts/test-live-conversations.ts`
+(`bulkLoadsAreNamed`) holds the report and the lifecycle to loading nothing;
+`scripts/test-event-loop.ts` holds a run's name to the run.
+
 A ready provider process is a warm cache, not active work. `LiveConversations`
 keeps at most two warm bindings per host and hibernates either the oldest excess
 or any one idle for ten minutes. Hibernation closes the provider and its MCP

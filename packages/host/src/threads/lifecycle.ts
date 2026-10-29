@@ -1,18 +1,18 @@
 import type { ThreadArchives } from "./archives.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
-import type { LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
+import type { LiveSummary } from "../contracts/live-conversations.js"
 import type { NativeRequest } from "../contracts/native-requests.js"
 import type { QueuedPromptEdit } from "../contracts/live-queue.js"
 import type { ThreadRef } from "../contracts/conversation-session.js"
-import { archivedByKeys, staleShownMarkers, threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget, type ThreadArchiveSnapshot } from "../contracts/thread-lifecycle.js"
+import { archivedByKeys, liveArchiveKeys, staleShownMarkers, threadArchiveKey, type ThreadTarget, type ThreadControls, type ArchiveCommand, type StopTarget, type ThreadArchiveSnapshot } from "../contracts/thread-lifecycle.js"
 
 /** The conversation and the Session a lifecycle target names, as far as this host knows them. */
 export type TargetIdentity = { conversationId?: string; sessionId?: string }
 
 /** What archiving and stopping a Thread read and ask of the conversations live on this host. */
 export interface LiveThreads {
+  /** Every conversation, loaded or not: all a lifecycle reads of one, so archiving never reads a journal in. */
   summaries(): LiveSummary[]
-  snapshot(id: string): Pick<LiveSnapshot, "control"> | null
   activeRequest(id: string): string | null
   setArchived(id: string, archived: boolean): void
   stopRequest(id: string, requestId: string): Promise<boolean>
@@ -55,15 +55,10 @@ export class ThreadLifecycle {
       keys.push(threadArchiveKey({ kind: "file", path: ref.path }))
       if (ref.nativeId) keys.push(threadArchiveKey({ kind: "native", provider: ref.harness, nativeId: ref.nativeId }))
     }
+    // The conversation's own keys come from its listing (`liveArchiveKeys`), the same rule the Sessions report reads,
+    // so neither reads the journal in: the report once loaded every conversation this host had, every second.
     const owner = this.owner(target)
-    if (owner) {
-      keys.push(threadArchiveKey({ kind: "live", id: owner.session.id }))
-      const snapshot = this.dependencies.live.snapshot(owner.session.id)
-      for (const binding of snapshot?.control?.bindings ?? []) {
-        if (binding.nativeId) keys.push(threadArchiveKey({ kind: "native", provider: binding.provider, nativeId: binding.nativeId }))
-        if (binding.path) keys.push(threadArchiveKey({ kind: "file", path: binding.path }))
-      }
-    }
+    if (owner) keys.push(...liveArchiveKeys(owner))
     return [...new Set(keys)]
   }
 
