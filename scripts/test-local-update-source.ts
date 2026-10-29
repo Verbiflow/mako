@@ -1,13 +1,13 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Git } from "@mako/git"
-import { bringForward, readUpdateSource } from "@mako/host/application/local-update-source"
+import { bringForward, buildUncommitted, readUncommitted, readUpdateSource } from "@mako/host/application/local-update-source"
 import { LocalUpdates } from "@mako/host/application/local-updates"
-import type { UpdateSource } from "@mako/host/contracts/app-lifecycle"
+import { UNCOMMITTED_LISTED, type UpdateSource } from "@mako/host/contracts/app-lifecycle"
 
 /**
  * What a Settings build takes from its source checkout, against real
@@ -163,6 +163,52 @@ try {
   const only = await commit(alone, "a.txt", "a\n", "Only")
   assert.deepEqual(checkout(await readUpdateSource(git, alone, { fetch: true, installed: null })).plan, { kind: "as-is", why: "no-upstream", installed: false })
   assert.deepEqual(checkout(await readUpdateSource(git, alone, { fetch: false, installed: { revision: only, dirty: false } })).plan, { kind: "current" })
+
+  // Every uncommitted file a build of the checkout as it is takes, by name: edits, a staged new file, a deletion, a
+  // staged rename (one file, with where it came from), untracked files in new folders each named, and a path with
+  // spaces and quotes, never quoted by Git. Ignored files aren't the checkout's work and aren't listed.
+  for (const file of ["b.txt", "c.txt", "it's a file.txt", ".gitignore"]) await writeFile(join(alone, file), file === ".gitignore" ? "*.log\n" : `${file}\n`)
+  run(alone, "add", ".")
+  run(alone, "commit", "-qm", "More")
+  await writeFile(join(alone, "a.txt"), "edited\n")
+  await writeFile(join(alone, "it's a file.txt"), "edited\n")
+  run(alone, "mv", "b.txt", "moved.txt")
+  await rm(join(alone, "c.txt"))
+  await writeFile(join(alone, "staged.txt"), "new\n")
+  run(alone, "add", "staged.txt")
+  await mkdir(join(alone, "notes/deep"), { recursive: true })
+  await writeFile(join(alone, "notes/deep/one.md"), "1\n")
+  await writeFile(join(alone, "notes/two.md"), "2\n")
+  await writeFile(join(alone, "build.log"), "ignored\n")
+  const dirty = checkout(await readUpdateSource(git, alone, { fetch: false, installed: null }))
+  const expected = [
+    { path: "a.txt", change: "edited" },
+    { path: "c.txt", change: "deleted" },
+    { path: "it's a file.txt", change: "edited" },
+    { path: "moved.txt", change: "renamed", from: "b.txt" },
+    { path: "staged.txt", change: "added" },
+    { path: "notes/deep/one.md", change: "untracked" },
+    { path: "notes/two.md", change: "untracked" },
+  ]
+  assert.deepEqual(dirty.uncommitted, { count: 7, files: expected })
+  assert.equal(dirty.changed, 5, "a staged rename is one changed file")
+  assert.equal(dirty.untracked, 2)
+  assert.deepEqual(await readUncommitted(git, alone), dirty.uncommitted, "the build reads them the same way")
+  // Past the list's length the rest are counted.
+  for (let index = 0; index < UNCOMMITTED_LISTED; index++) await writeFile(join(alone, "notes", `many-${String(index).padStart(3, "0")}.md`), "x\n")
+  const many = await readUncommitted(git, alone)
+  assert.equal(many.count, 7 + UNCOMMITTED_LISTED)
+  assert.equal(many.files.length, UNCOMMITTED_LISTED)
+  assert.deepEqual(many.files.slice(0, 5), expected.slice(0, 5), "tracked changes come first")
+  // What package-mac.mjs stamps: the updater's list as it passed it; dirty alone from an updater that passes only
+  // that (one released before the list, or a copy with no history); else the checkout's own, read then.
+  const unread = async () => assert.fail("an updater's list is never read again")
+  assert.deepEqual(await buildUncommitted({ MAKO_BUILD_UNCOMMITTED: JSON.stringify(dirty.uncommitted), MAKO_BUILD_DIRTY: "1" }, unread), { dirty: true, uncommitted: dirty.uncommitted })
+  assert.deepEqual(await buildUncommitted({ MAKO_BUILD_UNCOMMITTED: JSON.stringify({ count: 0, files: [] }), MAKO_BUILD_DIRTY: "0" }, unread), { dirty: false })
+  assert.deepEqual(await buildUncommitted({ MAKO_BUILD_DIRTY: "1" }, unread), { dirty: true })
+  assert.deepEqual(await buildUncommitted({}, () => readUncommitted(git, alone)), { dirty: true, uncommitted: many })
+  await assert.rejects(buildUncommitted({ MAKO_BUILD_UNCOMMITTED: JSON.stringify({ count: "many" }) }, unread))
+
   const plain = await mkdtemp(join(tmpdir(), "mako-update-plain-"))
   try {
     const unreadable = await readUpdateSource(git, plain, { fetch: true, installed: null })
@@ -176,7 +222,13 @@ try {
     name: "mako",
     scripts: { build: "node -e 0", lint: "node -e 0", "package:mac:local": "node -e 0", "test:performance": "node -e 0", "test:application": "node -e 0", "test:renderer-assets": "node -e 0" },
   }))
-  run(writer, "add", "package.json")
+  // Packaging records the uncommitted files Settings passed it, beside the private copy, then stops the build.
+  await mkdir(join(writer, "scripts"), { recursive: true })
+  await writeFile(join(writer, "scripts/package-mac.mjs"), `import { writeFileSync } from "node:fs"
+writeFileSync("../packaged-with.json", JSON.stringify({ uncommitted: process.env.MAKO_BUILD_UNCOMMITTED ?? null, dirty: process.env.MAKO_BUILD_DIRTY ?? null }))
+process.exit(1)
+`)
+  run(writer, "add", "package.json", "scripts/package-mac.mjs")
   run(writer, "commit", "-qm", "Package (#7)")
   run(writer, "push", "-q", "origin", "main")
   run(source, "pull", "-q", "--ff-only")
@@ -216,9 +268,26 @@ try {
   assert.equal(run(source, "rev-parse", "HEAD"), target, "the source was fast-forwarded")
   assert.ok(phases.includes(`compiling:${target.slice(0, 8)}`), `the build names the revision it builds: ${phases.join(", ")}`)
   const failed = builder.snapshot().local
-  // The fixture has no packaging script, so packaging is where it stops.
+  // The fixture's packaging script fails, so packaging is where it stops.
   assert.equal(failed.kind, "error")
   if (failed.kind === "error") assert.match(failed.message, /failed during packaging/)
+
+  assert.deepEqual(JSON.parse(await readFile(join(buildRoot, "packaged-with.json"), "utf8")), { uncommitted: JSON.stringify({ count: 0, files: [] }), dirty: "0" }, "a clean build passes an empty list")
+
+  // A checkout with uncommitted work is built as it is, and packaging is handed every file by name, as read when the
+  // copy was taken.
+  await writeFile(join(source, "app.txt"), "someone else's edit\n")
+  await writeFile(join(source, "draft.md"), "not added yet\n")
+  const asIs = new LocalUpdates(git, buildRoot, "A".repeat(40), () => {}, identity(head), roomy)
+  await asIs.load()
+  await asIs.select(source)
+  asIs.start()
+  await finished(asIs)
+  const passed = JSON.parse(await readFile(join(buildRoot, "packaged-with.json"), "utf8"))
+  assert.deepEqual(JSON.parse(passed.uncommitted), { count: 2, files: [{ path: "app.txt", change: "edited" }, { path: "draft.md", change: "untracked" }] })
+  assert.equal(passed.dirty, "1")
+  run(source, "checkout", "--", "app.txt")
+  await rm(join(source, "draft.md"))
 
   // What a build brought is shown once that build runs.
   await writeFile(join(buildRoot, "build-changes.json"), JSON.stringify({ build: "d".repeat(16), changes: { from: head, count: 1, titles: ["Eighth (#8)"] } }))
@@ -229,7 +298,7 @@ try {
   await stranger.load()
   assert.equal(stranger.snapshot().installed, null, "another build's changes aren't claimed")
 
-  console.log("Update source: fetches the upstream, fast-forwards a clean checkout on its tracking branch (files and index, never untracked work), builds anything else as it is with the reason, refuses stale readings, and never rebuilds the installed revision")
+  console.log("Update source: fetches the upstream, fast-forwards a clean checkout on its tracking branch (files and index, never untracked work), builds anything else as it is with the reason, refuses stale readings, never rebuilds the installed revision, and names every uncommitted file a build takes (edits, renames, deletions, untracked files), handing packaging the list it read")
 } finally {
   git.close()
   await rm(root, { recursive: true, force: true })

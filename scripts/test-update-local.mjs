@@ -6,7 +6,10 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createPackage, extractFile } from "@electron/asar"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
-import { prepareSource, selectLocalSigner, sweepLocalUpdates, updateLocal } from "./update-local.mjs"
+import { buildOf, prepareSource, readCheckoutUncommitted, selectLocalSigner, sweepLocalUpdates, updateLocal, useCheckoutSource } from "./update-local.mjs"
+
+// As the CLI does: the checkout's packages from their source.
+useCheckoutSource()
 
 const identity = "A".repeat(40)
 const options = {
@@ -29,6 +32,11 @@ function fixture(overrides = {}) {
     packages: async () => {
       calls.push({ command: "packages" })
     },
+    uncommitted: async () => {
+      calls.push({ command: "uncommitted" })
+      return { count: 0, files: [] }
+    },
+    built: async () => ({ revision: "a".repeat(40), dirty: false }),
     remove: async (path) => {
       calls.push({ command: "remove", path })
     },
@@ -67,17 +75,38 @@ const success = fixture()
 await updateLocal(options, success.dependencies)
 assert.deepEqual(
   success.calls.map((call) => call.command),
-  ["space", "source", "packages", "npm", "reserve", "prepare", "wait", "wait", process.execPath, "open", "verify-startup", "release", "remove"]
+  ["space", "source", "packages", "uncommitted", "npm", "reserve", "prepare", "wait", "wait", process.execPath, "open", "verify-startup", "release", "remove"]
 )
 // Installing copied the app into /Applications; the output goes last.
 assert.equal(success.calls.at(-1).path, options.output)
-assert.deepEqual(success.calls[3].args, [
+assert.deepEqual(success.calls[4].args, [
   "run",
   "package:mac:local",
   "--",
   `--output=${options.output}`,
 ])
-assert.equal(success.calls[3].env.MAKO_LOCAL_SIGNING_IDENTITY, identity)
+assert.equal(success.calls[4].env.MAKO_LOCAL_SIGNING_IDENTITY, identity)
+assert.equal(success.calls[4].env.MAKO_BUILD_UNCOMMITTED, JSON.stringify({ count: 0, files: [] }), "a clean checkout passes an empty list")
+// A checkout with uncommitted work: every file is named before the build starts, the same list goes to packaging,
+// and the build's own metadata says what it took before the install question.
+const said = []
+const shared = { count: 3, files: [{ path: "packages/host/src/live.ts", change: "edited" }, { path: "src/new name.tsx", change: "renamed", from: "src/old name.tsx" }] }
+const dirtyRun = fixture({
+  say: (text) => said.push(text),
+  uncommitted: async () => shared,
+  built: async () => ({ revision: "4be1d02a7e93c5f18a0d6b2c97e4f3a1d8c0b5e6", dirty: true, uncommitted: shared }),
+  confirm: async () => {
+    said.push("[confirm]")
+    return false
+  },
+})
+await updateLocal(options, dirtyRun.dependencies)
+assert.deepEqual(said.slice(0, 2), [
+  "The build takes the checkout as it is, with 3 uncommitted changes:\n  packages/host/src/live.ts  Edited\n  src/new name.tsx           Renamed from src/old name.tsx\n  and 1 more",
+  "Building Mako. Running agents are not stopped.",
+])
+assert.equal(dirtyRun.calls.find((call) => call.command === "npm").env.MAKO_BUILD_UNCOMMITTED, JSON.stringify(shared))
+assert.deepEqual(said.slice(-3, -1), ["Built: 4be1d02a with 3 uncommitted changes.", "[confirm]"])
 assert.deepEqual(success.calls.find((call) => call.command === process.execPath).args, [
   join(options.project, "scripts/install-local-mac.mjs"),
   join(options.output, "mac-arm64/Mako.app"),
@@ -96,7 +125,7 @@ const declined = fixture({ confirm: async () => false })
 await updateLocal(options, declined.dependencies)
 assert.deepEqual(
   declined.calls.map((call) => call.command),
-  ["space", "source", "packages", "npm", "remove"]
+  ["space", "source", "packages", "uncommitted", "npm", "remove"]
 )
 const badSigner = fixture({ verify: async () => "B".repeat(40) })
 await assert.rejects(
@@ -105,7 +134,7 @@ await assert.rejects(
 )
 assert.deepEqual(
   badSigner.calls.map((call) => call.command),
-  ["space", "source", "packages", "npm", "remove"]
+  ["space", "source", "packages", "uncommitted", "npm", "remove"]
 )
 const interrupted = fixture({
   wait: async () => {
@@ -118,7 +147,7 @@ await assert.rejects(
 )
 assert.deepEqual(
   interrupted.calls.map((call) => call.command),
-  ["space", "source", "packages", "npm", "reserve", "prepare", "cancel", "release", "remove"]
+  ["space", "source", "packages", "uncommitted", "npm", "reserve", "prepare", "cancel", "release", "remove"]
 )
 const masked = fixture({
   running: async () => [],
@@ -171,7 +200,7 @@ const failed = fixture({
   },
 })
 await assert.rejects(updateLocal(options, failed.dependencies), /Build failed/)
-assert.deepEqual(failed.calls.map((call) => call.command), ["space", "source", "packages", "remove"])
+assert.deepEqual(failed.calls.map((call) => call.command), ["space", "source", "packages", "uncommitted", "remove"])
 // npm install refused or failed in the checkout: nothing is built, and the output still goes.
 const unpackaged = fixture({
   packages: async () => {
@@ -189,15 +218,15 @@ const full = fixture({
 await assert.rejects(updateLocal(options, full.dependencies), /Not enough free disk space/)
 assert.deepEqual(full.calls.map((call) => call.command), ["remove"])
 // A removal that fails is reported, and never hides the update's own outcome.
-const said = []
+const removal = []
 const stuck = fixture({
-  say: (text) => said.push(text),
+  say: (text) => removal.push(text),
   remove: async () => {
     throw new Error("busy")
   },
 })
 await updateLocal(options, stuck.dependencies)
-assert.match(said.at(-1), /Could not remove the build output .*busy/)
+assert.match(removal.at(-1), /Could not remove the build output .*busy/)
 const stuckFailure = fixture({
   run: async () => {
     throw new Error("Build failed")
@@ -209,11 +238,11 @@ const stuckFailure = fixture({
 await assert.rejects(updateLocal(options, stuckFailure.dependencies), /Build failed/)
 
 const root = await mkdtemp(join(tmpdir(), "mako-update-command-"))
-async function app(path, distribution) {
+async function app(path, distribution, makoBuild) {
   const input = await mkdtemp(join(root, "payload-"))
   await writeFile(
     join(input, "package.json"),
-    JSON.stringify({ makoDistribution: distribution })
+    JSON.stringify({ makoDistribution: distribution, ...(makoBuild && { makoBuild }) })
   )
   await mkdir(join(path, "Contents/Resources"), { recursive: true })
   await createPackage(input, join(path, "Contents/Resources/app.asar"))
@@ -302,6 +331,14 @@ try {
     (await readdir(release)).sort(),
     [".local-update-fresh", ".local-update-link", ".local-update-live", "another", "known", "unfinished"]
   )
+  // The CLI reads what an app says about its build from the app itself, as Settings does: the uncommitted files too.
+  const stamped = { id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: "4be1d02a7e93c5f18a0d6b2c97e4f3a1d8c0b5e6", dirty: true, uncommitted: { count: 1, files: [{ path: "draft.md", change: "untracked" }] } }
+  const dirtyApp = join(root, "dirty.app")
+  await app(dirtyApp, "local", stamped)
+  assert.deepEqual(await buildOf(dirtyApp), stamped)
+  assert.equal(await buildOf(signedInstalled), null, "an app with no build stamp has none")
+  assert.equal(await buildOf(join(root, "missing.app")), null)
+
   // The signer lookup still reads the builds the sweep leaves.
   assert.equal(
     await selectLocalSigner({ project: root, installed }, async () => identity),
@@ -346,8 +383,12 @@ try {
   assert.equal(await readSource({ revision: secondRevision, dirty: false }, true), false, "the installed revision isn't rebuilt")
   assert.match(sourceLines.at(-1), new RegExp(`^You're already on ${secondRevision.slice(0, 8)} \\(main at ${secondRevision.slice(0, 8)} · origin/main at ${secondRevision.slice(0, 8)}\\)\\.`))
   assert.equal(sourcePrompts.length, promptsBefore, "nothing to ask")
+  // The uncommitted files a build takes, read from the checkout as Settings reads them.
+  await writeFile(join(sourceCheckout, "app.txt"), "edited\n")
+  await writeFile(join(sourceCheckout, "draft.md"), "draft\n")
+  assert.deepEqual(await readCheckoutUncommitted(sourceCheckout), { count: 2, files: [{ path: "app.txt", change: "edited" }, { path: "draft.md", change: "untracked" }] })
   console.log(
-    "One-command update: reads the checkout against origin and fast-forwards it on yes, removed build output on install, decline and failure, disk refusal before building, stale output sweep, fresh metadata after archive replacement, verified signer reuse, no fallback from a bad installed signature, ambiguity refusal, ordered build/install, confirmation, wait cancellation, failures, and literal paths passed"
+    "One-command update: names every uncommitted file before building and passes the same list to packaging, reads each build's own record of them, reads the checkout against origin and fast-forwards it on yes, removed build output on install, decline and failure, disk refusal before building, stale output sweep, fresh metadata after archive replacement, verified signer reuse, no fallback from a bad installed signature, ambiguity refusal, ordered build/install, confirmation, wait cancellation, failures, and literal paths passed"
   )
 } finally {
   await rm(root, { recursive: true, force: true })

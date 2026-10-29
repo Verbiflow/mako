@@ -1,5 +1,4 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { lstat, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -10,6 +9,7 @@ import { readLocalAppMetadata } from "./local-app-metadata.mjs"
 import { z } from "zod"
 import { resolveLocalIdentity } from "./mac-local-signing.mjs"
 import { localRuntime, runningProcesses } from "./install-local-mac.mjs"
+import { useWorkspaceSource } from "./lib/workspace-source.mjs"
 
 const project = dirname(dirname(fileURLToPath(import.meta.url)))
 const distribution = z.object({ makoDistribution: z.string().optional() })
@@ -82,11 +82,18 @@ async function install(options, dependencies) {
   await dependencies.ensureSpace()
   if (!(await dependencies.source())) return
   await dependencies.packages()
+  // The checkout is built as it is: every uncommitted file in it, named
+  // before the build starts, and stamped into the build under the same names.
+  const uncommitted = await dependencies.uncommitted()
+  if (uncommitted?.count) dependencies.say(await uncommittedText(uncommitted))
   dependencies.say("Building Mako. Running agents are not stopped.")
   await dependencies.run(
     "npm",
     ["run", "package:mac:local", "--", `--output=${options.output}`],
-    { MAKO_LOCAL_SIGNING_IDENTITY: options.identity }
+    {
+      MAKO_LOCAL_SIGNING_IDENTITY: options.identity,
+      ...(uncommitted && { MAKO_BUILD_UNCOMMITTED: JSON.stringify(uncommitted) }),
+    }
   )
   assert.equal(
     await dependencies.verify(undefined, app),
@@ -94,6 +101,7 @@ async function install(options, dependencies) {
     "The prepared app has a different signer. Nothing was installed."
   )
   dependencies.say(`Build verified: ${app}`)
+  dependencies.say(await buildLine("Built", await dependencies.built(app)))
   if (!(await dependencies.confirm())) {
     dependencies.say(
       "Installation cancelled. Your running app was not changed, and the build is removed."
@@ -146,6 +154,38 @@ async function install(options, dependencies) {
   } finally {
     await release()
   }
+}
+
+/**
+ * The uncommitted files a build takes, said before it starts: how many, then
+ * each with what happened to it, in columns.
+ */
+export async function uncommittedText({ count, files }) {
+  const { uncommittedChangeText, uncommittedCount } = await import("@mako/host/contracts/update-source-text")
+  const width = Math.min(72, Math.max(...files.map((file) => file.path.length)))
+  return [
+    `The build takes the checkout as it is, with ${uncommittedCount(count)}:`,
+    ...files.map((file) => `  ${file.path.padEnd(width)}  ${uncommittedChangeText(file)}`),
+    ...(count > files.length ? [`  and ${count - files.length} more`] : []),
+  ].join("\n")
+}
+
+/** The checkout's uncommitted files, named, read the way Settings › Updates reads them. */
+export async function readCheckoutUncommitted(project) {
+  const { Git } = await import("@mako/git")
+  const { readUncommitted } = await import("@mako/host/application/local-update-source")
+  const git = new Git()
+  try {
+    return await readUncommitted(git, project)
+  } finally {
+    git.close()
+  }
+}
+
+/** A build's revision and what it took beyond it, from its own metadata: `Installed: 9a7a5c0c with 41 uncommitted changes.` */
+export async function buildLine(label, build) {
+  const { buildRevisionText } = await import("@mako/host/contracts/update-source-text")
+  return `${label}: ${build ? buildRevisionText(build) : "no build recorded"}.`
 }
 
 /**
@@ -206,11 +246,15 @@ export async function prepareDependencies({ project, say, run, signal }) {
   }
 }
 
-/** The installed app's revision, when it is a local build that recorded one. */
-function installedRevision(app) {
+/**
+ * What an app says about its own build (`makoBuild`, stamped by
+ * package-mac.mjs): its revision and the uncommitted files it took. Settings
+ * reads the same stamp. Null when the app has none or can't be read.
+ */
+export async function buildOf(app) {
+  const { BuildIdentitySchema } = await import("@mako/host/contracts/app-lifecycle")
   try {
-    const build = z.object({ makoBuild: z.object({ revision: z.string().nullable(), dirty: z.boolean() }) }).parse(readLocalAppMetadata(app)).makoBuild
-    return { revision: build.revision, dirty: build.dirty }
+    return z.object({ makoBuild: BuildIdentitySchema }).parse(readLocalAppMetadata(app)).makoBuild
   } catch {
     return null
   }
@@ -265,7 +309,14 @@ async function removeOutput(output) {
   await rm(output, { recursive: true, force: true })
 }
 
-async function run(command, args, env, signal) {
+/**
+ * Run one step in the checkout, shown in the terminal. npm steps stop with
+ * `signal` (Ctrl+C, or the install's time limit) as Settings' do: the whole
+ * process group, npm's install scripts and compile with it, and this
+ * settles only once they're gone, so a rerun never installs over them.
+ * Installing and reopening run to the end.
+ */
+export async function runStep(command, args, env, signal) {
   if (command !== "open") signal.throwIfAborted()
   const inherited = { ...process.env, ...env }
   delete inherited.ELECTRON_RUN_AS_NODE
@@ -275,25 +326,18 @@ async function run(command, args, env, signal) {
           await import("@mako/host/application/local-update-installer")
         ).desktopLaunchEnvironment(inherited)
       : inherited
-  await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: project,
-      detached: true,
-      stdio: "inherit",
-      signal: command === "npm" ? signal : undefined,
-      env: launchEnv,
-    })
-    child.once("error", reject)
-    child.once("exit", (code) =>
-      code === 0
-        ? resolve()
-        : reject(
-            new Error(
-              `${command} did not finish successfully. No later update steps were run.`
-            )
-          )
-    )
+  const { runProcessGroup } = await import("@mako/host/application/process-group")
+  const { code, stopped } = await runProcessGroup(command, args, {
+    cwd: project,
+    env: launchEnv,
+    stdio: "inherit",
+    signal: command === "npm" ? signal : undefined,
   })
+  if (stopped) throw signal.reason
+  if (code !== 0)
+    throw new Error(
+      `${command} did not finish successfully. No later update steps were run.`
+    )
 }
 
 export async function prepareToClose() {
@@ -424,7 +468,15 @@ export async function verifyStarted(candidate) {
   )
 }
 
+/**
+ * From here on, this checkout's own packages load from their source as it is
+ * now, never from what packages/<name>/dist held when it was last compiled
+ * (workspace-source.mjs). The CLI's first step, before it imports any.
+ */
+export const useCheckoutSource = () => useWorkspaceSource(project)
+
 async function main() {
+  useCheckoutSource()
   const args = process.argv.slice(2)
   assert.ok(
     args.every((arg) => arg === "--check" || arg === "--help"),
@@ -432,7 +484,7 @@ async function main() {
   )
   if (args.includes("--help")) {
     console.log(
-      "npm run update:local\n\nFetches origin and, when this checkout is on the branch that tracks it, behind it and without uncommitted changes, offers to fast-forward it first; otherwise builds it as it is and says why. Stops when the installed app already carries that revision. Runs npm install first when node_modules doesn't hold what package-lock.json lists, unless package.json or package-lock.json has uncommitted changes. Builds a locally signed Mako, asks before installing, waits for Mako to close safely, installs, and reopens it. Never force-stops agents. Refuses to build when the disk is short of space, and removes the build output when it finishes.\n\n--check  Verify signer selection and report running processes without building or installing."
+      "npm run update:local\n\nFetches origin and, when this checkout is on the branch that tracks it, behind it and without uncommitted changes, offers to fast-forward it first; otherwise builds it as it is and says why, naming every uncommitted file the build takes (tracked changes and untracked files alike); the installed app records them, and Settings › Updates lists them. Stops when the installed app already carries that revision. Runs npm install first when node_modules doesn't hold what package-lock.json lists, unless package.json or package-lock.json has uncommitted changes. Builds a locally signed Mako, asks before installing, waits for Mako to close safely, installs, and reopens it. Never force-stops agents. Refuses to build when the disk is short of space, and removes the build output when it finishes.\n\n--check  Verify signer selection and report the installed build and running processes without building or installing."
     )
     return
   }
@@ -442,10 +494,11 @@ async function main() {
     installed: "/Applications/Mako.app",
     requested: process.env.MAKO_LOCAL_SIGNING_IDENTITY,
   })
+  const installed = await buildOf("/Applications/Mako.app")
   if (args.includes("--check")) {
     console.log(
       JSON.stringify(
-        { identity, runningPids: await runningProcesses(), changed: false },
+        { identity, installed, runningPids: await runningProcesses(), changed: false },
         null,
         2
       )
@@ -485,20 +538,24 @@ async function main() {
       { project, output, identity },
       {
         say: console.log,
-        source: () =>
-          prepareSource({
+        source: async () => {
+          if (installed) console.log(await buildLine("Installed", installed))
+          return prepareSource({
             project,
-            installed: installedRevision("/Applications/Mako.app"),
+            installed: installed && { revision: installed.revision, dirty: installed.dirty },
             say: console.log,
             ask: async (prompt) => /^(?:y(?:es)?)?$/i.test(await question(prompt)),
-          }),
+          })
+        },
         packages: () =>
           prepareDependencies({
             project,
             say: console.log,
             signal: abort.signal,
-            run: (args, signal) => run("npm", args, {}, signal),
+            run: (args, signal) => runStep("npm", args, {}, signal),
           }),
+        uncommitted: () => readCheckoutUncommitted(project),
+        built: buildOf,
         ensureSpace: async () => {
           // The build compiles in place and packages one app; it copies no checkout.
           const { ensureBuildSpace } =
@@ -506,7 +563,7 @@ async function main() {
           await ensureBuildSpace(release, 0)
         },
         remove: removeOutput,
-        run: (command, args, env) => run(command, args, env, abort.signal),
+        run: (command, args, env) => runStep(command, args, env, abort.signal),
         verify: resolveLocalIdentity,
         verifyStarted,
         confirm: async () =>
@@ -533,17 +590,25 @@ async function main() {
   }
 }
 
+/**
+ * Say why the update stopped, and the command that fixes it on a line of its
+ * own to copy when there is one. Imports nothing: a failure to load a module
+ * must not fail again here.
+ */
+export function reportFailure(error, print = console.error) {
+  print(error instanceof Error ? error.message : "Local update failed.")
+  const fix = dependencyFix.safeParse(error)
+  if (fix.success) print(`\n  ${fix.data.command}\n`)
+}
+/** A DependencyInstallError, known by its name and command rather than its class, which would need its module. */
+const dependencyFix = z.object({ name: z.literal("DependencyInstallError"), command: z.string() })
+
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(process.argv[1]).href
 ) {
-  await main().catch(async (error) => {
-    console.error(
-      error instanceof Error ? error.message : "Local update failed."
-    )
-    // A command that fixes it, on a line of its own to copy.
-    const { DependencyInstallError } = await import("@mako/host/application/local-update-dependencies")
-    if (error instanceof DependencyInstallError) console.error(`\n  ${error.command}\n`)
+  await main().catch((error) => {
+    reportFailure(error)
     process.exitCode = 1
   })
 }

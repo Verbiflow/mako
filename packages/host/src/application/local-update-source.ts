@@ -1,7 +1,11 @@
 import { fastForward, GitError, type Git } from "@mako/git"
 import {
   CHANGE_TITLES,
+  UNCOMMITTED_LISTED,
+  UncommittedChangesSchema,
   type RevisionChanges,
+  type UncommittedChanges,
+  type UncommittedFile,
   type UpdateSource,
   type UpdateSourcePlan,
 } from "../contracts/app-lifecycle.js"
@@ -52,18 +56,76 @@ export async function readUpdateSource(git: Git, root: string, options: ReadSour
   const upstreamCommit = name ? await run(["rev-parse", "--verify", "-q", `refs/remotes/${name}^{commit}`], [1]) : null
   const tracking = upstreamCommit && name ? await trackingBranch(run, name) : null
   const upstream = upstreamCommit && name ? { name, commit: upstreamCommit, branch: tracking } : null
-  const [counts, status] = await Promise.all([
+  const [counts, files] = await Promise.all([
     upstream ? run(["rev-list", "--left-right", "--count", `HEAD...${upstream.commit}`]) : Promise.resolve("0 0"),
-    run(["status", "--porcelain=v1", "--untracked-files=all", "--no-renames"]),
+    uncommittedFiles(git, root, options.signal),
   ])
   const [ahead = 0, behind = 0] = (counts ?? "0 0").split(/\s+/).map(Number)
-  const entries = lines(status ?? "")
-  const untracked = entries.filter((line) => line.startsWith("??")).length
-  const changed = entries.length - untracked
+  const untracked = files.filter((file) => file.change === "untracked").length
+  const changed = files.length - untracked
   const plan = planFor({ head, branch, upstream, ahead, behind, changed, untracked }, options.installed)
   const target = plan.kind === "fast-forward" && upstream ? upstream.commit : head
   const changes = options.installed?.revision ? await changesSince(git, root, options.installed.revision, target, options.signal) : null
-  return { kind: "checkout", head, branch, upstream, ahead, behind, changed, untracked, fetch, plan, target, changes, readAt: new Date().toISOString() }
+  return { kind: "checkout", head, branch, upstream, ahead, behind, changed, untracked, uncommitted: listed(files), fetch, plan, target, changes, readAt: new Date().toISOString() }
+}
+
+/**
+ * Every file in the checkout at `root` with changes Git hasn't committed,
+ * untracked files Git doesn't ignore included, in `git status` order: tracked
+ * changes, then untracked files. A staged rename is one file, named with
+ * where it came from.
+ */
+async function uncommittedFiles(git: Git, root: string, signal?: AbortSignal): Promise<UncommittedFile[]> {
+  // NUL-separated, so a path is never quoted; a rename is `XY to\0from\0`.
+  const { stdout } = await git.run({ cwd: root, args: ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--renames"], read: true, timeoutMs: 30_000, signal })
+  const fields = stdout.toString("utf8").split("\0")
+  const files: UncommittedFile[] = []
+  for (let at = 0; at < fields.length; at++) {
+    const entry = fields[at]!
+    if (entry.length < 4) continue
+    const [x, y, path] = [entry[0]!, entry[1]!, entry.slice(3)]
+    if (x === "R" || y === "R" || x === "C" || y === "C") {
+      const from = fields[++at] ?? ""
+      files.push(x === "R" || y === "R" ? { path, change: "renamed", from } : { path, change: "added" })
+      continue
+    }
+    const change: UncommittedFile["change"] = x === "?" ? "untracked"
+      : x === "U" || y === "U" || (x === y && (x === "A" || x === "D")) ? "conflicted"
+      : x === "D" || y === "D" ? "deleted"
+      : x === "A" ? "added"
+      : "edited"
+    files.push({ path, change })
+  }
+  return files
+}
+
+const listed = (files: UncommittedFile[]): UncommittedChanges => ({ count: files.length, files: files.slice(0, UNCOMMITTED_LISTED) })
+
+/** The checkout's uncommitted files, named: what a build of it as it is takes beyond its revision. */
+export async function readUncommitted(git: Git, root: string, signal?: AbortSignal): Promise<UncommittedChanges> {
+  return listed(await uncommittedFiles(git, root, signal))
+}
+
+/**
+ * How an updater hands a build what it read with `readUncommitted`:
+ * `package-mac.mjs` stamps it into the bundle's `makoBuild`, so the
+ * installed app names the same files the updater named before building.
+ */
+export const BUILD_UNCOMMITTED_VARIABLE = "MAKO_BUILD_UNCOMMITTED"
+
+/**
+ * What `package-mac.mjs` stamps beside the revision: the updater's own
+ * reading when it passed one; only `dirty` from an updater that passes
+ * `MAKO_BUILD_DIRTY` alone (one released before the list, or a private copy
+ * with no history to read); otherwise the checkout at `root`, read now.
+ */
+export async function buildUncommitted(env: NodeJS.ProcessEnv, read: () => Promise<UncommittedChanges>): Promise<{ dirty: boolean; uncommitted?: UncommittedChanges }> {
+  const passed = env[BUILD_UNCOMMITTED_VARIABLE]
+  const uncommitted = passed !== undefined ? UncommittedChangesSchema.parse(JSON.parse(passed))
+    : env.MAKO_BUILD_DIRTY !== undefined ? null
+    : await read()
+  if (!uncommitted) return { dirty: env.MAKO_BUILD_DIRTY === "1" }
+  return uncommitted.count ? { dirty: true, uncommitted } : { dirty: false }
 }
 
 /**
