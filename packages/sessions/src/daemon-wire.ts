@@ -1,6 +1,6 @@
 import { ReceivedRecordsSchema, ReceivingSessionSchema, RecordsLinkSchema, SentRecordsSchema, StagedRecordsSchema, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords } from "./record-sync.js"
 import { CopyPageSchema, type CopyPage } from "./reading-copies.js"
-import { CatalogSyncStatusSchema, SyncScopeSchema, type CatalogSyncStatus, type SyncScope } from "./scoped-uploads.js"
+import { CatalogSyncStatusSchema, SYNC_SCOPE_MOST, SyncScopeSchema, SyncScopeSessionSchema, SyncTierSchema, emptyTier, type CatalogSyncStatus, type SyncScope, type SyncTier, type TierCount } from "./scoped-uploads.js"
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
 import {
@@ -305,6 +305,37 @@ export function serializeDaemonFrame(
   return `${JSON.stringify(frame)}\n`
 }
 
+/**
+ * The sync tiers of an earlier build, whose window was 30 days: its `month` reads as this build's `week`, the oldest
+ * tier it orders and counts. One daemon serves whichever build's host is let in (`daemonIsForeign` keeps other builds
+ * apart; this is for the moment they meet anyway), so a scope it sent still goes up, in its order.
+ */
+const EARLIER_TIERS = { month: "week" } as const satisfies Record<string, SyncTier>
+const SyncTierWireSchema = z.union([SyncTierSchema, z.enum(["month"]).transform((tier): SyncTier => EARLIER_TIERS[tier])])
+const SyncScopeWireSchema = SyncScopeSchema.extend({
+  sessions: z.array(SyncScopeSessionSchema.extend({ tier: SyncTierWireSchema })).max(SYNC_SCOPE_MOST),
+})
+
+/**
+ * A sync status as the wire carries it: with an empty `month` beside this build's tiers, which an earlier build's host
+ * requires to read the status at all. This build's reader drops it (`CatalogSyncStatusSchema` keeps only its tiers).
+ */
+export function syncStatusOnWire(status: CatalogSyncStatus): CatalogSyncStatus & { tiers: { month: TierCount } } {
+  return { ...status, tiers: { ...status.tiers, month: emptyTier() } }
+}
+
+/** What can be read of a request `parseDaemonRequest` refused: its id, to answer, and its op, to say which. */
+export interface RefusedRequest {
+  id: number | undefined
+  op: string | undefined
+}
+
+export function refusedRequest(raw: string): RefusedRequest {
+  const record = parseJsonRecord(raw)
+  const id = record ? readNumber(record, "id") : undefined
+  return { id: id !== undefined && Number.isInteger(id) && id >= 0 ? id : undefined, op: record ? readString(record, "op") : undefined }
+}
+
 export function parseJsonRecord(raw: string): JsonRecord | null {
   try {
     const value: JsonValue = JSON.parse(raw)
@@ -392,7 +423,7 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
       return link.success ? { id, op, link: link.data } : null
     }
     case "sync-scope": {
-      const scope = SyncScopeSchema.safeParse(record.scope)
+      const scope = SyncScopeWireSchema.safeParse(record.scope)
       return scope.success ? { id, op, scope: scope.data } : null
     }
     case "sync-status":

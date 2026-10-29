@@ -1,5 +1,6 @@
 import { ArrowUpIcon, CornerDownLeftIcon, PlayIcon, SquareIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Spinner } from "@/components/ui/spinner"
 import type { ComposerActionKind } from "@/lib/composer-action"
 
 interface ComposerActionButtonProps {
@@ -10,6 +11,8 @@ interface ComposerActionButtonProps {
   steerTitle?: string
   /** What the play button says it does: "Continue turn", "Send again". */
   resumeLabel?: string
+  /** What a send is waiting on ("Loading this conversation…"): the button turns and can't be pressed. */
+  waiting?: string
   onSend: () => void
   onStop: () => void
   onResume?: () => void
@@ -24,7 +27,9 @@ interface ComposerActionButtonProps {
  * the stop action; typing turns that same primary position into queue. An
  * empty idle composer whose newest turn was cut short or failed in a way a
  * repeat can fix offers to pick it up, with a play glyph and its name beside
- * it; typing anything makes it Send again.
+ * it; typing anything makes it Send again. A send that is waiting on
+ * something (the conversation it goes to still loading) turns in its place
+ * and says what it waits on, so Enter needs no notice of its own.
  */
 export function ComposerActionButton({
   action,
@@ -32,6 +37,7 @@ export function ComposerActionButton({
   stopping,
   steerTitle,
   resumeLabel,
+  waiting,
   onSend,
   onStop,
   onResume,
@@ -57,22 +63,24 @@ export function ComposerActionButton({
         {resumeLabel}
       </button>
     )
-  const enabled = stop || ready
+  const held = stop ? undefined : waiting
+  const enabled = stop || (ready && held === undefined)
   const label = stop
     ? stopping
       ? "Stopping…"
       : "Stop"
-    : queue
+    : held ?? (queue
       ? "Queue message"
       : steer
         ? "Steer the running turn"
-        : "Send"
-  const title = steer && steerTitle ? steerTitle : label
+        : "Send")
+  const title = steer && steerTitle && held === undefined ? steerTitle : label
   return (
     <button
       type="button"
       onClick={stop ? onStop : onSend}
       disabled={!enabled || (stop && stopping)}
+      aria-busy={held !== undefined || undefined}
       aria-label={label}
       title={title}
       className={cn(
@@ -85,6 +93,8 @@ export function ComposerActionButton({
     >
       {stop ? (
         <SquareIcon className="size-3 fill-current" strokeWidth={0} />
+      ) : held !== undefined ? (
+        <Spinner className="size-4" />
       ) : queue ? (
         <CornerDownLeftIcon className="size-4" />
       ) : (

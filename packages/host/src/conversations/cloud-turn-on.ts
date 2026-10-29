@@ -13,7 +13,7 @@ import type { SyncStatus } from "../contracts/sync-status.js"
  * Turning Mako Cloud on, read whole from what owns each step (`contracts/cloud-turn-on.ts`). Everything the steps wait
  * on starts by itself the moment this Mac hears the account has the cloud, at once and side by side: the agents'
  * sign-ins go up (`CloudSignInSync`), the recent projects' bases are asked for (`CloudConversations.offerProjects`),
- * and the last 30 days start syncing (`SessionUploads`). This only follows them, and keeps when each was first seen
+ * and the last 7 days start syncing (`SessionUploads`). This only follows them, and keeps when each was first seen
  * done, per account, in `turn-on.json` beside the cloud conversations.
  *
  * It follows by what its owners say, never by asking them on a timer: each owner's change (the account, the sign-ins,

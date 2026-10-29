@@ -4,7 +4,7 @@ import type { RecordsLink } from "@mako/sessions/record-sync"
 import { encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
-import { stat, writeFile } from "node:fs/promises"
+import { writeFile } from "node:fs/promises"
 import { mediaExecutable } from "@mako/control-runtime/media"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -28,7 +28,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { verifyFilePreview, cloneRepository, fileIdentity, MediaRenditions, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { cloneRepository, MediaRenditions, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -48,7 +48,7 @@ import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from ".
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
-import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, REPORT_WORK, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -92,7 +92,10 @@ export interface CoreShell {
 export interface Core {
   route(channel: HostChannel, args: unknown[]): Promise<RoutedCall>
   presentHistory<Result>(value: Result): Result
+  /** What a window on this Mac reads: a signed file, or a path in its open workspace (`readWindowFile`). */
   file(request: Request, client?: string): Promise<Response>
+  /** What the gateway's link reads: only a file whose signed URL this host issued (`readSignedFile`). */
+  signedFile(request: Request): Promise<Response>
   disconnected(client: string): void
   desktop: NonNullable<Parameters<typeof startWebHost>[7]>
   /** On a cloud machine: the sign-ins its agent was given, written where each harness reads them. */
@@ -427,6 +430,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         now: Date.now,
       })
     },
+    // A change goes to the account within a fraction of a second, on the link this Mac serves then, named as the tick's
+    // job is. A cloud machine's link is its machine runtime's, reported on its own tick.
+    ...config.machineAgentFd === undefined && { reportNow: () => late.cloud?.reportSessions?.(), work: shell.work },
   })
   catalog.subscribe((event) => {
     if (event.type === "thread-ref") {
@@ -448,7 +454,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     sessions.changed()
   })
   late.sessions = sessions
-  shell.jobs.every("tell the account this host's Sessions", 1_000, () => late.cloud?.reportSessions?.())
+  shell.jobs.every(REPORT_WORK, 1_000, () => late.cloud?.reportSessions?.())
   // The heap, watched so a host filling up says who with while it still can: an out-of-memory report has no
   // JavaScript stack. The line names what memory holds and who read it in; the whole readout goes beside the log.
   const heap = new HeapWatch(readHeap, (change, level, reading) => {
@@ -498,7 +504,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareSyncMethods(methods, uploads)
   late.cloud = declareCloudAccountMethods(methods, {
     sessions,
-    files: (request) => withHostClient("gateway:files", () => readFilePreview(request, withHost, renditions)),
+    signedFiles: (request) => withHostClient("gateway:files", () => readSignedFile(request, renditions)),
+    jobs: shell.jobs,
     environment,
     secrets: fixtureDesk ? detachedSecrets() : secrets,
     machine,
@@ -1178,7 +1185,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return cloud?.handled ? cloud : opened.route(channel, args)
     },
     presentHistory: (value) => opened.history.present(value),
-    file: (request, client = "web") => withHostClient(client, () => readFilePreview(request, withHost, renditions)),
+    file: (request, client = "web") => withHostClient(client, () => readWindowFile(request, withHost, renditions)),
+    signedFile: (request) => withHostClient("gateway:files", () => readSignedFile(request, renditions)),
     disconnected: (client) => {
       shell.terminals.current()?.release(client)
       void workspaceClients.release(client)
@@ -1291,33 +1299,6 @@ function machineRecords(link: MachineGatewayLink | null): RecordsLink | undefine
   if (!link) return undefined
   const records = new URL(`/v1/machines/${encodeURIComponent(link.machine)}/records`, link.gatewayUrl).toString()
   return { id: records, base: records, authorization: `Bearer ${link.credential}` }
-}
-
-async function readFilePreview(request: Request, withHost: <T>(run: (host: AgentHost) => T | Promise<T>) => Promise<T>, renditions: MediaRenditions): Promise<Response> {
-  if (request.method !== "GET") return new Response("Method not allowed", { status: 405 })
-  const grant = await verifyFilePreview(request.url)
-  if (grant.kind === "refused") return new Response(`Refused: ${grant.reason}`, { status: 403 })
-  if (grant.kind === "file") {
-    // `?rendition=poster|thumbnail` asks for a smaller picture of the signed file; a thumbnail that can't be made is the file itself.
-    const kind = new URL(request.url).searchParams.get("rendition")
-    if (grant.entry && (kind === "poster" || kind === "thumbnail")) {
-      const info = await stat(grant.path)
-      const made = await renditions.rendition(grant.path, fileIdentity(info), kind)
-      if (made) return fileResponse(await localFile(made, request.signal), made, request, { cacheable: true })
-      if (kind === "poster") return new Response("No poster", { status: 404 })
-    }
-    return fileResponse(await localFile(grant.path, request.signal), grant.path, request, { cacheable: true, crossOrigin: !grant.entry })
-  }
-  const path = workspacePreviewPath(request.url)
-  if (!path) return new Response("Not found", { status: 404 })
-  try {
-    return await withHost(async (host) => {
-      const absolute = await host.resolvePath(path)
-      return fileResponse(await localFile(absolute, request.signal), absolute, request)
-    })
-  } catch {
-    return new Response("Not found", { status: 404 })
-  }
 }
 
 /**

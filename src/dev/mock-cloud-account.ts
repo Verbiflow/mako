@@ -191,15 +191,15 @@ function mockSyncStatus(state: string | null): () => SyncStatus {
     const inCloud = Math.min(readable, whole)
     return { tier: name, threads, sessions, readable, held, whole, inCloud, threadsInCloud: inCloud === sessions ? threads : Math.floor((threads * inCloud) / sessions) }
   }
-  const whole = [tier("now", 2, 3, 3, 3), tier("day", 9, 14, 14, 14), tier("week", 31, 58, 58, 58), tier("month", 74, 129, 129, 129)]
-  if (state === "starting") return () => ({ state: "starting", sessions: 204 })
+  const whole = [tier("now", 2, 3, 3, 3), tier("day", 9, 14, 14, 14), tier("week", 31, 58, 58, 58)]
+  if (state === "starting") return () => ({ state: "starting", sessions: 75 })
   if (state === "synced")
-    return () => ({ state: "synced", sessions: 204, tiers: whole, sending: 0, stale: 0, lastSuccessAt: minutesAgo(0.2), failures: [], backfill: { sessions: 5_012, done: 5_012, startedAt: minutesAgo(40), endedAt: minutesAgo(12) } })
+    return () => ({ state: "synced", sessions: 75, tiers: whole, sending: 0, stale: 0, lastSuccessAt: minutesAgo(0.2), failures: [], backfill: { sessions: 5_012, done: 5_012, startedAt: minutesAgo(40), endedAt: minutesAgo(12) } })
   if (state === "paused")
-    return () => ({ state: "paused", sessions: 204, tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 58, 41), tier("month", 74, 129, 96, 12, 88)], sending: 0, stale: 2, lastSuccessAt: minutesAgo(3), failures: [] })
+    return () => ({ state: "paused", sessions: 75, tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 41, 12, 50)], sending: 0, stale: 2, lastSuccessAt: minutesAgo(3), failures: [] })
   if (state === "failing")
     return () => ({
-      state: "failing", sessions: 204, tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 57, 50), tier("month", 74, 129, 129, 101)], sending: 1, stale: 0, lastSuccessAt: minutesAgo(6),
+      state: "failing", sessions: 75, tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 57, 50)], sending: 1, stale: 0, lastSuccessAt: minutesAgo(6),
       failures: [
         { at: minutesAgo(2), harness: "codex", nativeId: "019a2b7c-5d1e-7f20-9a3b-4c5d6e7f8091", message: "The archive's storage couldn't be read; try again (POST /sessions/with-chunks answered 503, 4 tries, correlation 6f1c2d3e-8b9a-4c7d-a1e2-f3b4c5d6e7f8)", correlationId: "6f1c2d3e-8b9a-4c7d-a1e2-f3b4c5d6e7f8" },
         { at: minutesAgo(5), harness: "claude", nativeId: "8d0c3a1e-2f4b-4c6d-9e8f-7a6b5c4d3e2f", message: "The gateway answered 500 (PUT /chunks answered 500, correlation 0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d)", correlationId: "0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d" },
@@ -211,8 +211,8 @@ function mockSyncStatus(state: string | null): () => SyncStatus {
     const step = Math.min(reads, 20)
     return {
       state: "syncing",
-      sessions: 204,
-      tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 58, Math.min(58, 39 + step)), tier("month", 74, 129, Math.min(129, 92 + step * 2), Math.min(129, 8 + step), Math.min(129, 102 + step))],
+      sessions: 75,
+      tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, Math.min(58, 39 + step), Math.min(58, 8 + step), Math.min(58, 44 + step))],
       sending: 2,
       stale: 1,
       lastSuccessAt: minutesAgo(0.1),

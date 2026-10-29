@@ -8,8 +8,8 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
 
 /**
  * Settings › Account's Sync against the production components and the mock
- * bridge: what of the last 30 days is in the cloud, by tier (working now,
- * today, this week, earlier this month), as it catches up, once it's all
+ * bridge: what of the last 7 days is in the cloud, by tier (working now,
+ * today, this week), as it catches up, once it's all
  * there, while it waits for power, and when a push failed, in the cloud's
  * words with a copy of the correlation IDs. A Mac without the cloud shows no
  * Sync. Screenshots of each, dark and light, stay in the printed directory.
@@ -121,10 +121,10 @@ async function checkWindow() {
 
   // 1. Catching up: the Thread at work and today's are in; this week's and the rest go, the older sessions read first.
   await openAccount("&cloud=signed-in&invited")
-  await until(`Boolean(document.querySelector('${section} [data-sync-tier="month"]'))`, "the tiers")
+  await until(`Boolean(document.querySelector('${section} [data-sync-tier="week"]'))`, "the tiers")
   await show()
   let said = await text()
-  assert.match(said, /Your last 30 days, in the cloud/)
+  assert.match(said, /Your last 7 days, in the cloud/)
   assert.match(said, /Catching up/)
   assert.match(said, /Working now\n2 Threads · 3 Sessions\n\s*All 2 Threads/)
   assert.match(said, /Today\n9 Threads · 14 Sessions\n\s*All 9 Threads/)
@@ -140,7 +140,7 @@ async function checkWindow() {
   await show()
   said = await text()
   assert.match(said, /In sync/)
-  assert.match(said, /Earlier this month\n74 Threads · 129 Sessions\n\s*All 74 Threads/)
+  assert.match(said, /This week\n31 Threads · 58 Sessions\n\s*All 31 Threads/)
   assert.match(said, /Last sent just now\./)
   assert.doesNotMatch(said, /Reading this Mac's older sessions/, "a finished backfill isn't said")
   await both("sync-in-sync", [section])

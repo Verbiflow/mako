@@ -50,3 +50,25 @@ test("only a Mac with a screen says its person is at it: a screenless host's ban
   assert.equal(attendable({ kind: "absent" }, true), false, "a proof's host on the person's own Mac never holds their notices")
   assert.equal(attendable({ kind: "present" }, false), false, "a Linux desktop says nothing yet")
 })
+
+test("the minute is a host job: looked at once at the start, then on the job's schedule, and cancelled at a stop", async () => {
+  const scheduled: Array<{ name: string; everyMs: number; firstAfterMs: number | undefined; run: () => void | Promise<void> }> = []
+  let cancelled = 0
+  const jobs = {
+    every: (name: string, everyMs: number, run: () => void | Promise<void>, options: { firstAfterMs?: number } = {}) => {
+      scheduled.push({ name, everyMs, firstAfterMs: options.firstAfterMs, run })
+      return () => void cancelled++
+    },
+  }
+  const said: boolean[] = []
+  const attention = new CloudAttention({ idle: async () => 1, say: async (attending) => void said.push(attending), signedIn: () => true, log: () => undefined })
+  attention.start(jobs)
+  attention.start(jobs)
+  assert.equal(scheduled.length, 1, "started twice, scheduled once")
+  assert.equal(scheduled[0]?.everyMs, 60_000)
+  assert.equal(scheduled[0]?.firstAfterMs, 0, "the first look is at the start")
+  await scheduled[0]?.run()
+  assert.deepEqual(said, [true])
+  attention.stop()
+  assert.equal(cancelled, 1)
+})

@@ -129,6 +129,13 @@ conversations?.live`) rather than a domain importing another's files.
   says nothing as it changes gets a slow job that `needs` a demand on only
   while it's under way, and looks only while a window watches
   (`CloudTurnOnFollower`).
+- **Two file readers** (`workspaces/file-readers.ts`). `readSignedFile` serves
+  only a `mako-file://asset/…` URL this host signed; it is the one thing the
+  gateway's link (`PortRelay`: phones, other devices, cloud machines) reads
+  files through, and the relay itself passes on nothing but `/file/asset/…`.
+  `readWindowFile` also opens any path in a workspace, absolute ones included,
+  so it is for a window on this Mac alone; handing it to the link lets anyone
+  on the account read the Mac's files.
 - **No module-level state.** What the host holds lives in what `createHost`
   builds, so a test makes the one domain it needs. `check-host-module-state.mjs`
   (in `npm run lint`) fails on any module-level `let` and any empty
@@ -2400,6 +2407,22 @@ reopens a stopped session through `session/load` in place. Cursor reopens
 through the SDK's own resume (below); `test-cursor-resume.ts` covers its
 verdicts.
 
+So a send needs a target, not a fresh read. A conversation opened from the
+window's cache (or painted from its record's tail) is on screen while its
+fresh read lands, and the composer sends to it at once (`openingHoldsSend`
+in `thread-viewing.ts`). Only a session the window itself routes from its
+ref (`copyOnly`, `resumeUnavailable`: straight to a move) waits for that
+read, at most four seconds, its send button turning meanwhile. With nothing
+on screen yet the button turns and Enter says nothing. A refresh that
+fails leaves the saved messages on screen under one quiet "Couldn't refresh
+· Retry" line, and they still take a send. An open that fails with nothing
+to show is said by the viewer alone; Enter there says "Could not load this
+conversation" with its reason and Retry loading, one notice however often
+it is pressed. A reconnect reads either again.
+Before this, every Enter on a cached conversation stacked "Wait for this
+conversation to load" while a slow host read it. `test-thread-opening.ts`
+and `test-opening-send-ui.mjs` cover it.
+
 What a session ran under is remembered per user, not per host.
 `packages/host/src/threads/session-memory.ts` keeps `~/.mako/session-memory.sqlite`, keyed by
 provider plus native session id, with the settings and access mode the live
@@ -3330,9 +3353,19 @@ verified installed signer, or an unambiguous signer from existing local release
 artifacts during the first transition; builds to a unique output; asks before
 installation; waits for safe shutdown; installs and reopens Mako; and removes
 the output whether it installed, was declined or failed. It never
-force-stops agents. `npm run update:local -- --check` is read-only, and
-`npm run test:update-local` exercises orchestration and signer selection without
-building or replacing the user's app.
+force-stops agents. It runs under plain node but loads every `@mako/*`
+package from the checkout's source (`scripts/lib/workspace-source.mjs`: tsx
+plus a resolve hook mapping each export's `dist/x.js` to `src/x.ts`), never
+from `packages/*/dist`: that was whatever was last compiled, so the fetch,
+fast-forward and dependency code that ran was stale, and a checkout compiled
+before a module existed failed to import it. Keep its workspace imports
+dynamic and after `useCheckoutSource()`, and its failure handler free of
+imports. Its npm steps stop with their whole process group on Ctrl+C or the
+install's time limit, as Settings' do. `npm run update:local -- --check` is
+read-only, and `npm run test:update-local` exercises orchestration and signer
+selection without building or replacing the user's app;
+`test-update-local-cli.mjs` (in `test:update-source`) covers the source
+loading against a stale and an incomplete dist, and the group stop.
 
 Local installed builds use `npm run package:mac:local`, with
 `MAKO_LOCAL_SIGNING_IDENTITY=<certificate SHA-1>` for the first build. Later
@@ -3490,7 +3523,8 @@ the complete Settings build service against a private profile without installing
 They preserve npm security configuration, run build,
 lint and regression checks, and verify the existing signing identity. Public
 release updates remain separate from local builds. `package-mac.mjs` stamps the
-actual packaged inputs with a build ID, timestamp and source revision.
+actual packaged inputs with a build ID, timestamp and source revision, and
+the uncommitted files the build took (`makoBuild.uncommitted`, below).
 The local installer prepares outside the running bundle, waits for its processes
 to exit, retains the previous app, and rolls back failed replacement verification.
 Never install over a running app or turn Stop into an automatic prompt replay.
@@ -3526,6 +3560,24 @@ the revision already running, and the update read as done. `npm run
 test:update-source` covers it against scratch repositories and a local bare
 remote, and draws every state.
 
+Built as it is, the checkout goes in with every uncommitted file in it, other
+agents' work in progress included, and nobody should be surprised by that.
+`readUncommitted` (`local-update-source.ts`, `git status -z` with renames)
+names each tracked change and untracked, non-ignored file (edited, added,
+deleted, renamed from, untracked, conflicted; the first 200 by name, the rest
+counted), and the reading carries it: Settings › Updates says "Includes 41
+uncommitted changes" on the offer with the files behind a disclosure, and
+`update:local` lists them before it builds. Each updater reads them again as
+the build takes its source and hands that list to packaging
+(`MAKO_BUILD_UNCOMMITTED`); `package-mac.mjs` stamps it into the bundle as
+`makoBuild.uncommitted` beside `dirty` (`buildUncommitted`; packaged by hand
+it reads the checkout itself). That stamp is the one record of what an app
+took: Settings shows it on the ready build and under the installed revision
+("Revision 9a7a5c0c with 41 uncommitted changes"), and the CLI prints it for
+the build it made and the app installed. A build from an older updater has
+`dirty` only and says just "with uncommitted changes". Nothing answers the
+install question for the person: `update:local` takes no `--yes`.
+
 Then the checkout's node_modules must hold what its package-lock.json lists
 (`local-update-dependencies.ts`: each lockfile entry against npm's
 `node_modules/.package-lock.json`, by version; optional and peer entries
@@ -3537,7 +3589,11 @@ never `npm ci` (it deletes node_modules under whatever else reads it), and
 `--no-save` so package.json and package-lock.json stay as Git has them. It's
 refused while any package.json or package-lock.json has uncommitted
 changes, stopped with its process group after 10 minutes, and every failure
-ends with the command to run by hand. No dependency install script is
+ends with the command to run by hand. Every build step, in Settings and the
+CLI, runs through `runProcessGroup` (`application/process-group.ts`): its
+own process group, SIGTERM to the group then SIGKILL after 5 s, and a
+stopped step settles only once its group is empty, so a rerun never installs
+over an install still running. No dependency install script is
 approved: the build needs none of the ones npm's `allowScripts` would hold
 back, and `test-local-update-dependencies.mjs` (in `test:update-source`)
 names each and fails when one arrives or leaves.
@@ -3566,6 +3622,20 @@ same version. A host from another build retires the daemon on first contact
 and respawns it from its own executable, so an update never keeps serving from
 the bundle it replaced. Terminal scrollback is persisted first; live shells
 are reported interrupted.
+
+A request the sync daemon can't read is never dropped: it's logged
+(`mako-syncd: refused a request it couldn't read`) and answered with an error
+its sender shows at once, not at its 3 s timeout. `daemonIsForeign` keeps
+builds apart, but the wire still reads an earlier build's sync words: the
+sync window was 30 days before it was 7 (`SYNC_WINDOW_MS`), so a scope naming
+a `month` tier reads as `week`, and the status carries an empty `month` for a
+host that requires one (`syncStatusOnWire`). The daemon answers requests on
+the thread that writes reading copies, so a copy waits for its turn by its size
+whatever its tier (2 s a MiB, `MS_PER_MIB` in `reading-copies.ts`): a 100 MB
+copy, drawn and written in one go, holds its thread 5 to 7 s. Captures of
+Sessions outside the scope (the backfill's) look at nothing, and captures
+during a look are looked at together after it, one look at a time.
+`test/daemon.mjs` and `test/reading-copies.mjs` cover both.
 
 When the sync daemon is not enabled, the host still never reads a store on
 its main thread: `packages/host/src/threads/catalog-worker.ts` runs the catalog on a

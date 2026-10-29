@@ -229,7 +229,10 @@ assert.match(
 )
 assert.match(threadViewerSource, /Loading the conversation…/)
 assert.doesNotMatch(threadViewerSource, /Opening \{opening/)
-assert.match(threadViewingSource, /Showing saved messages/)
+// A refresh that fails keeps the saved messages on screen under one quiet
+// line with Retry; no toast says it (the UI check drives both).
+assert.match(threadViewerSource, /data-refresh-failed[^]*Couldn't refresh[^]*Retry/)
+assert.doesNotMatch(threadViewingSource, /Could not refresh this conversation|Showing saved messages/)
 assert.equal(composerActionKind({ running: false, hasContent: false }), "send")
 assert.equal(composerActionKind({ running: false, hasContent: true }), "send")
 assert.equal(composerActionKind({ running: true, hasContent: false }), "stop")

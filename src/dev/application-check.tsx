@@ -6,7 +6,7 @@ import { bindTheme, prefsStore } from "@/state/prefs"
 import { getMako } from "@/lib/bridge"
 import { installMockBridge } from "./mock-bridge"
 import { threadMoveStepped } from "@/state/cloud-moves"
-import type { LifecycleState, LifecycleWork, LocalBuildState, RevisionChanges, UpdateInstallation, UpdateSource } from "@mako/host/contracts/app-lifecycle"
+import type { LifecycleState, LifecycleWork, LocalBuildState, RevisionChanges, UncommittedChanges, UpdateInstallation, UpdateSource } from "@mako/host/contracts/app-lifecycle"
 import type { HandOffCandidate, HandOffResult, ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 import "../index.css"
 
@@ -47,6 +47,19 @@ const CHANGES: RevisionChanges = {
   ],
 }
 const installedBuild = { id: "b9c5c96a71e04f0d", builtAt: "2026-10-28T08:22:00.000Z", revision: INSTALLED, dirty: false }
+const CLEAN: UncommittedChanges = { count: 0, files: [] }
+/** A shared checkout mid-afternoon: other agents' edits, a rename, a new file not added yet. */
+const UNCOMMITTED: UncommittedChanges = {
+  count: 41,
+  files: [
+    { path: "packages/host/src/conversations/live-runtime.ts", change: "edited" },
+    { path: "packages/host/src/base/heap-watch.ts", change: "untracked" },
+    { path: "packages/sessions/src/reading-copies.ts", change: "edited" },
+    { path: "scripts/test-heap-watch.ts", change: "untracked" },
+    { path: "src/components/settings/sync-status.tsx", change: "renamed", from: "src/components/settings/sync-section.tsx" },
+    { path: "scripts/bench-session-uploads.ts", change: "deleted" },
+  ],
+}
 const reading = (overrides: Partial<Extract<UpdateSource, { kind: "checkout" }>>): UpdateSource => ({
   kind: "checkout",
   head: INSTALLED,
@@ -56,6 +69,7 @@ const reading = (overrides: Partial<Extract<UpdateSource, { kind: "checkout" }>>
   behind: 21,
   changed: 0,
   untracked: 0,
+  uncommitted: CLEAN,
   fetch: { kind: "fetched" },
   plan: { kind: "fast-forward" },
   target: UPSTREAM,
@@ -73,12 +87,13 @@ const BY_HAND = "cd '/Users/developer/Projects/mako' && npm install"
 export const SOURCE_SCENES = {
   behind: { checkout: reading({}) },
   current: { checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "current" }, changes: { from: UPSTREAM, count: 0, titles: [] } }), build: { ...installedBuild, id: "c41e7d2f9a0b3e65", revision: UPSTREAM } },
-  changes: { checkout: reading({ changed: 3, untracked: 1, plan: { kind: "as-is", why: "changes", installed: false }, target: INSTALLED, changes: { from: INSTALLED, count: 0, titles: [] } }) },
+  changes: { checkout: reading({ changed: 3, untracked: 1, uncommitted: { count: 4, files: UNCOMMITTED.files.slice(0, 4) }, plan: { kind: "as-is", why: "changes", installed: false }, target: INSTALLED, changes: { from: INSTALLED, count: 0, titles: [] } }) },
+  uncommitted: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 39, untracked: 2, uncommitted: UNCOMMITTED, plan: { kind: "as-is", why: "level", installed: false } }), build: { ...installedBuild, revision: INSTALLED, dirty: true, uncommitted: { count: 12, files: UNCOMMITTED.files.slice(0, 3) } } },
   branch: { checkout: reading({ head: LOCAL, branch: "approval-bar", ahead: 2, plan: { kind: "as-is", why: "branch", installed: false }, target: LOCAL, changes: { from: INSTALLED, count: 2, titles: ["Approve in place (#190)", "Name the waiting tool"] } }) },
   diverged: { checkout: reading({ head: LOCAL, ahead: 2, plan: { kind: "as-is", why: "diverged", installed: false }, target: LOCAL, changes: { from: INSTALLED, count: 2, titles: ["Local experiment", "Local fix"] } }) },
   offline: { checkout: reading({ fetch: { kind: "failed", reason: "origin didn't answer in 15 seconds" }, behind: 4, upstream: { name: "origin/main", commit: "d9da1b16a8e2f3c4b5a6978877665544332211ff", branch: "main" }, target: "d9da1b16a8e2f3c4b5a6978877665544332211ff", changes: { ...CHANGES, count: 4, titles: CHANGES.titles.slice(4) } }) },
   installing: { checkout: LEVEL, local: { kind: "building", phase: "installing", revision: UPSTREAM, dependencies: { count: 1, names: ["@mako/web-client"] } } },
-  installRefused: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 1, plan: { kind: "as-is", why: "level", installed: false } }), local: { kind: "error", message: `The update couldn't install dependencies: package-lock.json lists a package the checkout hasn't installed: @mako/web-client. The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you. Commit or discard them, or run npm install yourself, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
+  installRefused: { checkout: reading({ head: UPSTREAM, behind: 0, changed: 1, uncommitted: { count: 1, files: [{ path: "package-lock.json", change: "edited" }] }, plan: { kind: "as-is", why: "level", installed: false } }), local: { kind: "error", message: `The update couldn't install dependencies: package-lock.json lists a package the checkout hasn't installed: @mako/web-client. The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you. Commit or discard them, or run npm install yourself, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
   installFailed: { checkout: LEVEL, local: { kind: "error", message: `The update couldn't install dependencies: npm install didn't finish within 10 minutes, so Mako stopped it. Run npm install yourself to see the whole error, then build again. Your installed app and agents were not changed.`, command: BY_HAND } },
   building: { checkout: LEVEL, local: { kind: "building", phase: "checking", revision: UPSTREAM } },
   ready: { checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "as-is", why: "level", installed: false } }), local: { kind: "ready", build: { ...installedBuild, id: "c41e7d2f9a0b3e65", builtAt: "2026-10-28T09:05:00.000Z", revision: UPSTREAM }, changes: CHANGES, forwarded: { branch: "main", from: INSTALLED, to: UPSTREAM } } },

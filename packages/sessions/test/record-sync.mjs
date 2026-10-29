@@ -269,7 +269,7 @@ try {
     const session = (nativeId, tier, busy = false) => ({ harness: "synthetic", nativeId, path: own(nativeId), thread: `t-${nativeId}`, busy, tier })
     const inCloud = (uploads, ...names) => names.map((name) => uploads.inCloud("synthetic", name))
     const uploads = new ScopedUploads(store, scoped, () => {})
-    uploads.scope({ sessions: [session("s4", "week"), session("s3", "month")], paused: true })
+    uploads.scope({ sessions: [session("s4", "week"), session("s3", "week")], paused: true })
     await uploads.settled()
     assert.deepEqual(order, [], "waiting: nothing caught up")
     assert.deepEqual([inCloud(uploads, "s3", "s4"), uploads.held("synthetic", "s3"), uploads.status().paused], [[false, false], true, true])

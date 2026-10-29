@@ -168,7 +168,7 @@ async function checkWindow() {
 
   await open("&invited&turnon=ready")
   said = await text()
-  assert.match(said, /^Mako Cloud is ready\nSetting up your projects and syncing your last 30 days\. Today's are already in\.\nStart a cloud Thread\nDetails$/)
+  assert.match(said, /^Mako Cloud is ready\nSetting up your projects and syncing your last 7 days\. Today's are already in\.\nStart a cloud Thread\nDetails$/)
   await noJargon()
   await both("turn-on-03-ready", [card])
 
@@ -196,13 +196,13 @@ async function checkWindow() {
 
   await open("&invited&turnon=on")
   said = await text()
-  assert.match(said, /^Mako Cloud is on\nYour agents, projects and last 30 days are in the cloud\.\nDetails$/)
+  assert.match(said, /^Mako Cloud is on\nYour agents, projects and last 7 days are in the cloud\.\nDetails$/)
   assert.equal(await evaluate(`document.querySelector('[data-turn-on-mark]').dataset.turnOnMark`), "on")
   await both("turn-on-07-on", [card])
   await details()
   said = await text('[data-turn-on-details]')
   assert.match(said, /Agents\nClaude Code, Codex and Grok, from this Mac\n2s/)
-  assert.match(said, /Last 30 days\n117 of 117 Threads\n41s/)
+  assert.match(said, /Last 7 days\n117 of 117 Threads\n41s/)
   assert.match(said, /First cloud Thread\nRunning\n1m 23s/)
   await both("turn-on-08-on-how-it-went", [card])
 

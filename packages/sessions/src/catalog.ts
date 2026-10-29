@@ -77,7 +77,7 @@ import { FolderWatches, type RootWatch } from "./root-watch.js"
 
 /** How often the originals look for what was captured since, in any process: a Session at work goes this soon after. */
 const ORIGINALS_LOOK_MS = 5_000
-/** Catching up on originals goes at no more than this, beside the copies' own: a month of records never fills the connection. */
+/** Catching up on originals goes at no more than this, beside the copies' own: a week of records never fills the connection. */
 const ORIGINALS_BYTES_PER_SECOND = 1024 * 1024
 
 export type CatalogEvent =
@@ -410,6 +410,8 @@ export class SessionCatalog {
   private originals: { uploads: ScopedUploads; link: { current: RecordsLink }; timer: ReturnType<typeof setInterval> } | null = null
   /** The device's sync scope, most wanted first: what both its copies and its originals go up in (`scopeSync`). */
   private syncScope: SyncScope | null = null
+  /** The scope's Sessions by `<harness>\n<native id>`, which a capture names. */
+  private syncKeys: ReadonlySet<string> = new Set()
   /** Where the record store is kept, which the reading copies keep theirs beside; null for a catalog that writes nothing. */
   private readonly recordsFolder: string | null
   /** Where each session last read back from the record store was restored, which its entries' records name. */
@@ -536,7 +538,14 @@ export class SessionCatalog {
         rowBytesOf: async (ref) => (await this.ownerOf(ref.path)?.recordBytes?.(ref.path)) ?? null,
         observedInstall: (harness) => (this.runtimeReadings ? observedInstall(this.runtimeReadings, harness) : null),
         onError: (ref, message) => console.error("Session record capture failed", ref.path, message),
-        onCaptured: (ref) => this.recordPushes?.captured(ref.harness, ref.nativeId),
+        // A capture goes up as it lands: the machine's pushes, and of a Session this device keeps in the account, its
+        // originals and its copy. The backfill's captures of older Sessions, thousands of them, look at nothing.
+        onCaptured: (ref) => {
+          this.recordPushes?.captured(ref.harness, ref.nativeId)
+          if (!this.syncKeys.has(`${ref.harness}\n${ref.nativeId}`)) return
+          this.originals?.uploads.look()
+          this.readingCopies?.changed(ref.harness, ref.nativeId)
+        },
       })
       this.streams = streams
       if (backfill !== undefined)
@@ -1709,6 +1718,7 @@ export class SessionCatalog {
   /** Which Sessions this device keeps in the account, the most wanted first: its copies and its originals alike. */
   scopeSync(scope: SyncScope): void {
     this.syncScope = scope
+    this.syncKeys = new Set(scope.sessions.map((session) => `${session.harness}\n${session.nativeId}`))
     this.copies()?.scope(scope)
     this.originals?.uploads.scope(scope)
   }

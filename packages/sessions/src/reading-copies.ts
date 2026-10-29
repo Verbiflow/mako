@@ -20,10 +20,11 @@ import type { SessionView } from "./view-cache.js"
  * database; a copy holds only what Mako shows, and reads on a device without the harness. The records go up beside
  * it, to the device's originals (`SessionCatalog.syncOriginals`), for continuing the Session anywhere.
  *
- * A copy is written where its Session changed and its turn came: one at work or worked in today every 10 s (a large
- * one less often, its size permitting), an older one a minute after it last went, in the scope's order (`SyncScope`), the ones at work
- * first. Each is captured into a record store of its own, so content-defined chunks carry only what changed, and
- * pushed to the account in the same order (`ScopedUploads`), which keeps in that store what the account holds.
+ * A copy is written where its Session changed and its turn came: one at work or worked in today within seconds of
+ * its capture (`changed`; at most every 3 s, a large one less often, its size permitting), an older one a minute
+ * after it last went, in the scope's order (`SyncScope`), the ones at work first. Each is captured into a record
+ * store of its own, so content-defined chunks carry only what changed, and pushed to the account in the same order
+ * (`ScopedUploads`), which keeps in that store what the account holds.
  */
 export const COPY_FORMAT = 1
 
@@ -50,14 +51,19 @@ export type CopyViews = {
   translator(): string
 }
 
-/** How often a Session at work is copied, at the least: a large one waits longer, by its size. */
-const BUSY_EVERY_MS = 10_000
-const BUSY_MS_PER_MIB = 2_000
+/** How often a Session at work is copied, at the most: a large one waits longer, by its size (`MS_PER_MIB`). */
+const BUSY_EVERY_MS = 3_000
 /** And one at rest since before today, after it last went. */
 const REST_EVERY_MS = 60_000
+/**
+ * Any copy waits this long for each MiB its last one held, whatever its tier: a copy is drawn and written in one go on
+ * the catalog's thread (a 100 MB one held it 5 to 7 s), so spacing each by its size keeps copies to a small share of
+ * that thread, and the requests it answers meanwhile (the sync status, a page) never wait out their timeout.
+ */
+const MS_PER_MIB = 2_000
 /** How often copies are looked at; a look that finds nothing changed reads a stamp a Session. */
 const LOOK_EVERY_MS = 5_000
-/** Catching up on copies goes at no more than this, so a first upload of a month never fills the connection. */
+/** Catching up on copies goes at no more than this, so a first upload of a week never fills the connection. */
 const COPIES_BYTES_PER_SECOND = 1024 * 1024
 
 /**
@@ -92,6 +98,8 @@ export async function readCopyHeader(file: string): Promise<CopyHeader | null> {
 }
 
 type Copied = { stamp: string; at: number; bytes: number }
+type Wanted = SyncScope["sessions"][number]
+const keyOf = (session: { harness: string; nativeId: string }) => `${session.harness}\n${session.nativeId}`
 
 export class ReadingCopies {
   readonly #folder: string
@@ -103,10 +111,16 @@ export class ReadingCopies {
   #uploads: ScopedUploads | null = null
   #link: { current: RecordsLink } | null = null
   #scope: SyncScope | null = null
+  /** The scope's Sessions by `<harness>\n<native id>`, which a capture names. */
+  #inScope = new Map<string, Wanted>()
   /** What each Session's copy was last written from, by `<harness>\n<native id>`; read from the files after a restart. */
   readonly #copied = new Map<string, Copied>()
+  /** The one look under way: every other waits for it, merged into the next. */
   #looking: Promise<void> | undefined
-  #again = false
+  /** A look over the whole scope is wanted next. */
+  #all = false
+  /** Sessions captured since the look under way began, looked at once it ends: a burst of captures is one look. */
+  readonly #captured = new Map<string, Wanted>()
   #timer: ReturnType<typeof setInterval> | undefined
   #stopped = false
 
@@ -126,6 +140,7 @@ export class ReadingCopies {
   /** The Sessions to keep copies of, most wanted first; said again as the list changes. */
   scope(scope: SyncScope): void {
     this.#scope = scope
+    this.#inScope = new Map(scope.sessions.map((session) => [keyOf(session), session]))
     this.#uploads?.scope(scope)
     this.#look()
   }
@@ -162,14 +177,14 @@ export class ReadingCopies {
    * Whether another device can read the Session as it is now: its copy in the account, and drawn from the Session's
    * records as they are (a newer copy waits for its turn otherwise: `current`).
    */
-  readable(session: SyncScope["sessions"][number]): boolean {
+  readable(session: Wanted): boolean {
     return (this.#uploads?.inCloud(session.harness, session.nativeId) ?? false) && this.current(session)
   }
 
   /** Whether the Session's copy was written from its records as they are now; true when its records can't be read. */
-  current(session: SyncScope["sessions"][number]): boolean {
+  current(session: Wanted): boolean {
     const records = this.#views.stamp(session.path)
-    const copied = this.#copied.get(`${session.harness}\n${session.nativeId}`)
+    const copied = this.#copied.get(keyOf(session))
     return !records || !copied || copied.stamp === `${records}\n${this.#views.translator()}`
   }
 
@@ -191,42 +206,63 @@ export class ReadingCopies {
     return this.#store
   }
 
+  /**
+   * A Session's records were just captured: its copy is looked at now, alone, instead of at the next look over the
+   * whole scope, so a turn that just ended is readable elsewhere within seconds. One not in scope is nothing to do;
+   * captures that land while a look is under way are looked at together once it ends.
+   */
+  changed(harness: string, nativeId: string): void {
+    const key = keyOf({ harness, nativeId })
+    const session = this.#inScope.get(key)
+    if (!session) return
+    this.#captured.set(key, session)
+    this.#next()
+  }
+
   /** Looks at every Session in scope, now or once the look under way ends. */
   #look(): void {
-    if (this.#stopped || !this.#uploads || !this.#scope) return
-    if (this.#looking) {
-      this.#again = true
-      return
-    }
-    this.#looking = this.#lookOnce()
+    this.#all = true
+    this.#next()
+  }
+
+  /**
+   * Starts the look wanted unless one is under way: one look at a time, whatever asks, so neither a scope said again
+   * nor a run of captures stacks looks up behind it. A look over the whole scope takes in the captured ones.
+   */
+  #next(): void {
+    if (this.#stopped || !this.#uploads || !this.#scope || this.#looking) return
+    let only: Wanted[] | undefined
+    if (this.#all) this.#captured.clear()
+    else if (this.#captured.size) only = [...this.#captured.values()]
+    else return
+    this.#all = false
+    this.#captured.clear()
+    this.#looking = this.#lookOnce(only)
       .catch((error: Error) => this.#log("warn", "copies stopped looking", { error: error.message }))
       .finally(() => {
         this.#looking = undefined
-        if (this.#again) {
-          this.#again = false
-          this.#look()
-        }
+        this.#next()
       })
   }
 
-  async #lookOnce(): Promise<void> {
+  async #lookOnce(only?: readonly Wanted[]): Promise<void> {
     const scope = this.#scope
     if (!scope) return
     const translator = this.#views.translator()
-    for (const session of scope.sessions) {
+    for (const session of only ?? scope.sessions) {
       if (this.#stopped || !this.#uploads || this.#scope !== scope) return
       if (scope.paused && !session.busy) continue
       const records = this.#views.stamp(session.path)
       if (!records) continue
       const stamp = `${records}\n${translator}`
-      const key = `${session.harness}\n${session.nativeId}`
+      const key = keyOf(session)
       const file = copyFile(this.#folder, session.harness, session.nativeId)
       const copied = this.#copied.get(key) ?? (await this.#fromFile(key, file))
       if (copied?.stamp === stamp) continue
       const now = this.#now()
-      // One at work, or worked in today, goes again within seconds of a change (a large one as its size allows): a turn
-      // that just ended is the one another device opens next. Older ones changing again wait a minute.
-      const every = session.busy || session.tier === "day" ? Math.max(BUSY_EVERY_MS, ((copied?.bytes ?? 0) / (1024 * 1024)) * BUSY_MS_PER_MIB) : REST_EVERY_MS
+      // One at work, or worked in today, goes again within seconds of a change: a turn that just ended is the one another
+      // device opens next. Older ones changing again wait a minute. A large one, either way, as its size allows.
+      const every = Math.max(session.busy || session.tier === "day" ? BUSY_EVERY_MS : REST_EVERY_MS, ((copied?.bytes ?? 0) / (1024 * 1024)) * MS_PER_MIB)
       if (copied && now - copied.at < every) continue
       await this.#copy(session, key, file, stamp)
       // Yield to the person between Sessions: a large copy is written in one go.
@@ -243,7 +279,7 @@ export class ReadingCopies {
     return copied
   }
 
-  async #copy(session: SyncScope["sessions"][number], key: string, file: string, stamp: string): Promise<void> {
+  async #copy(session: Wanted, key: string, file: string, stamp: string): Promise<void> {
     await mkdir(dirname(file), { recursive: true })
     const served = await this.#views.view(session.path)
     if (!served || this.#stopped) return

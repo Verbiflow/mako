@@ -43,6 +43,7 @@ import { declareCloudAccountMethods } from "@mako/host/usage/cloud-account-metho
 import { RequestTraces } from "@mako/host/usage/request-trace"
 import { HostMethods } from "@mako/host/transport/methods"
 import { unwatchedWork } from "@mako/host/base/event-loop"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { CloudSignInSync } from "@mako/host/harnesses/cloud-sign-ins"
 import { HarnessAccounts } from "@mako/host/harnesses/accounts"
 import { AccountRoot } from "@mako/host/harnesses/accounts-common"
@@ -1076,6 +1077,7 @@ test("a grant or a revoke while signed in reads the sign-ins again, with nothing
         if (event.type === "cloud-sign-ins") shown.push(event.signIns)
       },
       fixture: false,
+      jobs: new HostJobs(),
       // Sharing is on by default; with no harnesses here, there's nothing of this Mac's to read.
       harnessSignIns: (options) => new CloudSignInSync({ ...options, accounts: new HarnessAccounts(registry, new AccountRoot(join(scratch, "user"))), capabilities: registry }),
     }

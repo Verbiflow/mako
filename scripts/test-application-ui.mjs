@@ -262,6 +262,7 @@ async function review() {
     behind: "21 new changes on origin/main",
     current: "You're already on 079f9b31",
     changes: "so Mako won't move it",
+    uncommitted: "Includes 41 uncommitted changes",
     branch: "The checkout is on approval-bar",
     offline: "Couldn't reach origin",
     installing: "Installing dependencies…",
@@ -278,6 +279,8 @@ async function review() {
       await until(`document.querySelector('[data-testid=updates-section]')?.textContent.includes(${JSON.stringify(text)})`)
       // A failure and the command under it are what the scene is for; keep them on screen.
       await evaluate("document.querySelector('[data-testid=updates-section] [role=alert]')?.scrollIntoView({ block: 'nearest' }); true")
+      // The files behind the count, opened as a person would to see them.
+      if (scene === "uncommitted") await evaluate("for (const list of document.querySelectorAll('[data-testid=updates-section] [data-testid=uncommitted]')) list.open = true; true")
       await screenshot(`updater-${scene}-${theme}.png`)
     }
   }
