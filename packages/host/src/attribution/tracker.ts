@@ -345,28 +345,40 @@ export class LaptopTracker implements AttributionTracker {
     const files = new Map(this.store.files().filter((file) => file.root === root.id).map((file) => [file.path, file]))
     const state = this.state(root, repo, this.store.stats(root.id), files)
     for (const path of state.stats.keys()) state.tracked.add(path)
-    await this.listen(state)
     const from = root.seenAt
-    const history = root.mark ? await this.ports.events.since(root.mark, root.path).catch(() => null) : null
     const gap = this.store.openGap(root.id, from, "restart")
     state.gap = { id: gap, from, reason: "restart" }
-    // HEAD first, so what a checkout or pull wrote while no host ran is read as the base it is.
-    if (repo) await this.queue(state, async () => {
-      state.moved = await this.checkHead(state)
-    })
-    try {
-      if (history?.complete) {
-        const paths = history.paths.filter((path) => within(root.path, path) && path !== root.path).map((path) => relative(root.path, path))
-        for (const path of paths) if (!isGitPath(path)) state.pending.set(path, "history")
-        await this.queue(state, async () => {
+    /*
+     * The catch-up is the first task on the root's queue, so nothing the new
+     * watch says is acted on before the history is read: the system reports
+     * a change made just before the watch started up to seconds late, as a
+     * live event, and that change belongs to the gap, not to whatever runs
+     * now. A watch that starts deaf rescans after it.
+     */
+    const listening = this.listen(state)
+    const caughtUp = this.queue(state, async () => {
+      // A root that can't be watched again is let go, from `listening` below.
+      if (!(await listening.then(() => true, () => false))) {
+        this.store.closeGap(gap, this.now())
+        return
+      }
+      const history = root.mark ? await this.ports.events.since(root.mark, root.path).catch(() => null) : null
+      try {
+        // HEAD first, so what a checkout or pull wrote while no host ran is read as the base it is.
+        if (repo) state.moved = await this.headChecked(state)
+        if (history?.complete) {
+          const paths = history.paths.filter((path) => within(root.path, path) && path !== root.path).map((path) => relative(root.path, path))
+          for (const path of paths) if (!isGitPath(path)) state.pending.set(path, "history")
           await this.flush(state)
           this.store.closeGap(gap, this.now())
           state.gap = undefined
-        })
-      } else await this.queue(state, () => this.rescan(state))
-    } finally {
-      state.moved = undefined
-    }
+        } else await this.rescan(state)
+      } finally {
+        state.moved = undefined
+      }
+    })
+    await listening
+    await caughtUp
   }
 
   private async listen(state: RootState): Promise<void> {
@@ -488,18 +500,37 @@ export class LaptopTracker implements AttributionTracker {
     return next
   }
 
-  /** Every file under the root, compared against the stat cache: what lost events may have hidden. */
+  /** `checkHead`, its failure logged: the files are read regardless, against the base as it stood. */
+  private headChecked(state: RootState): Promise<Map<string, ContentRef | null> | undefined> {
+    return this.checkHead(state).catch((error: Error) => {
+      this.options.log?.("a change could not be journaled", { root: state.root.path, error: error.message })
+      return undefined
+    })
+  }
+
+  /**
+   * Every file under the root, compared against the stat cache: what lost
+   * events may have hidden. HEAD first, as on a restart: a commit made
+   * meanwhile leaves every file as its stat says, so only the check finds
+   * it. A caller that checked already holds what moved.
+   */
   private async rescan(state: RootState): Promise<void> {
     const started = this.now()
-    const paths = await this.ports.fs.walk(state.root.path, (path) => untrackable(path, false) && !state.tracked.has(path))
-    for (const path of paths) if (!state.pending.has(path)) state.pending.set(path, "rescan")
-    for (const path of state.stats.keys()) if (!state.pending.has(path)) state.pending.set(path, "rescan")
-    await this.flush(state)
-    if (state.gap) {
-      this.store.closeGap(state.gap.id, this.now())
-      state.gap = undefined
+    const checking = Boolean(state.repo) && !state.moved
+    if (checking) state.moved = await this.headChecked(state)
+    try {
+      const paths = await this.ports.fs.walk(state.root.path, (path) => untrackable(path, false) && !state.tracked.has(path))
+      for (const path of paths) if (!state.pending.has(path)) state.pending.set(path, "rescan")
+      for (const path of state.stats.keys()) if (!state.pending.has(path)) state.pending.set(path, "rescan")
+      await this.flush(state)
+      if (state.gap) {
+        this.store.closeGap(state.gap.id, this.now())
+        state.gap = undefined
+      }
+      this.log("rescan", { root: state.root.path, files: paths.length, ms: this.now() - started })
+    } finally {
+      if (checking) state.moved = undefined
     }
-    this.log("rescan", { root: state.root.path, files: paths.length, ms: this.now() - started })
   }
 
   /** The root's content when tracking began: Git's view of a repository, every file's content for a folder. */

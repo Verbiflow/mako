@@ -203,7 +203,8 @@ export interface FileHistory {
   /** Where the history stands now. */
   mark(): Promise<HistoryMark>
   /**
-   * Every path under `roots` changed after `mark`; `lost` roots had events
+   * Every path under `roots` changed after `mark` and before the call,
+   * however far the system's history runs behind; `lost` roots had events
    * dropped, so theirs may be incomplete. Paths in or under an `ignore`
    * folder are left out in the reader and counted per folder in `ignored`.
    */

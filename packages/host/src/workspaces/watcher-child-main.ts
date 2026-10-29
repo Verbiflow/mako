@@ -1,7 +1,7 @@
 import parcel, { type AsyncSubscription } from "@parcel/watcher"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, WatcherRequestSchema, type CanaryTest, type HistoryMark, type WatcherReply } from "../contracts/watcher-child.js"
 
 /*
@@ -88,8 +88,46 @@ async function mark(id: number): Promise<void> {
   }
 }
 
+/** How often a read waiting for its sentinel replays the scratch folder again. */
+const CAUGHT_UP_POLL_MS = 20
+
+/*
+ * FSEvents replays its history only up to the newest id it has committed
+ * (FSEventsGetCurrentEventId), and that runs behind the events it has
+ * already handed out live: by seconds on a busy Mac. A change made just
+ * before a read can be past the history and yet before a new stream
+ * started, so neither the replay nor that stream ever reports it. The ids
+ * follow the order changes happen in, so a read first writes a sentinel and
+ * waits until a replay of the scratch folder holds it: every change made
+ * before the read is in the history from then on. The sentinel is on the
+ * temporary folder's volume, where checkouts usually are too. Resolves
+ * false when the history dropped events on the way, so a read can't be
+ * sure of being complete; a sentinel that never shows is a stuck history,
+ * which the host ends by its own deadline.
+ */
+async function caughtUp(): Promise<boolean> {
+  const mark = snapshotFile()
+  const sentinel = snapshotFile()
+  // The history reports real paths: /private/var, not /var.
+  const folder = realpathSync(dirname(sentinel))
+  const reported = join(folder, basename(sentinel))
+  try {
+    await parcel.writeSnapshot(folder, mark, { backend: "fs-events" })
+    writeFileSync(sentinel, "")
+    while (!(await parcel.getEventsSince(folder, mark, { backend: "fs-events" })).some((event) => event.path === reported))
+      await new Promise((resolve) => setTimeout(resolve, CAUGHT_UP_POLL_MS))
+    return true
+  } catch {
+    return false
+  } finally {
+    rmSync(sentinel, { force: true })
+    rmSync(mark, { force: true })
+  }
+}
+
 async function since(id: number, from: HistoryMark, roots: string[], ignore: readonly string[]): Promise<void> {
   if (process.platform !== "darwin") throw new Error("The file system's history is read through FSEvents, on macOS only.")
+  const complete = await caughtUp()
   const file = snapshotFile()
   writeFileSync(file, `${from.id}\n${from.at}`)
   const paths = new Set<string>()
@@ -106,6 +144,7 @@ async function since(id: number, from: HistoryMark, roots: string[], ignore: rea
           if (at < 0) paths.add(event.path)
           else ignored[at]! += 1
         }
+        if (!complete) lost.push(root)
       } catch {
         lost.push(root)
       }
