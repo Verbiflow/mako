@@ -212,6 +212,18 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelector('[data-turn-on-needs="private"] button')`), null, "nothing to press that would pretend to fix it")
   await both("turn-on-13-private", [card])
 
+  // A private project the cloud's GitHub App can be given: one button, to GitHub; back in Mako, it's asked again by itself.
+  await open("&invited&turnon=private-access")
+  said = await text()
+  assert.match(said, /Let cloud Threads work in mako\nmako is private\. Give Mako's GitHub App access to it on GitHub, and cloud Threads clone, push and open pull requests there\.\nGive access/)
+  await both("turn-on-15-private-access", [card])
+  await evaluate(`(() => { window.__opened = []; window.mako.openUrl = async (url) => void window.__opened.push(url); return true })()`)
+  await evaluate(`document.querySelector('[data-turn-on-fix="give-access"]').click(), true`)
+  assert.deepEqual(await evaluate("window.__opened"), ["https://github.com/apps/mako/installations/new"], "GitHub's page for it, in the browser")
+  await evaluate(`window.dispatchEvent(new Event("focus")), true`)
+  await until(`!document.querySelector('[data-turn-on-needs="private"]')`, "asked again on coming back, the row gone")
+  await both("turn-on-16-private-access-given", [card])
+
   await open("&invited&turnon=ready&carried=unasked")
   await until(`Boolean(document.querySelector('[data-turn-on-needs="carried"]'))`, "the carried files question")
   assert.match(await text(), /Bring \.env\.local and config\/dev\.local\.json to the cloud\?/)

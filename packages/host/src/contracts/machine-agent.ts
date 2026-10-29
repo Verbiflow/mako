@@ -17,6 +17,14 @@ import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall
 export const MACHINE_AGENT_PROTOCOL = 7
 
 /**
+ * Set by the agent as it starts the host: the folder in memory that holds the machine's GitHub access, an hour-long
+ * token for its Thread's repository that `gh` and Git read for each call (`token`), beside who the Thread's person is
+ * on GitHub (`access.json`: `{ repository, expiresAt, permissions, user: { id, login, name, email } }`). The agent
+ * writes and renews it; the host only reads who the person is.
+ */
+export const MACHINE_GITHUB_ENV = "MAKO_GITHUB_ACCESS"
+
+/**
  * One of the project's carried files the agent placed in the Thread's checkout (its `.env`, a local settings file):
  * its path and the variables it defines, never a value. The host checks a recipe's named secrets against them.
  */

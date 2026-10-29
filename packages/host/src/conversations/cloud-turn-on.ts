@@ -325,10 +325,13 @@ export class CloudTurnOnFollower {
     return this.#readAfter()
   }
 
-  /** "Try again" on the bases that failed: asked for again, and read again at once. */
+  /**
+   * "Try again" on the bases that failed, and on those the cloud couldn't read, which its person may have just given it
+   * access to: asked for again, and read again at once.
+   */
   async retryBases(): Promise<CloudTurnOn> {
     const projects = this.#last?.steps.find((step) => step.id === "projects")
-    const failed = projects?.id === "projects" ? projects.projects.filter(({ base }) => base.state === "failed") : []
+    const failed = projects?.id === "projects" ? projects.projects.filter(({ base }) => base.state === "failed" || noAccess(base)) : []
     if (failed.length) {
       await this.#sources.askBases(failed.map(({ folder, repository }) => this.#offered.get(folder) ?? { url: repository }))
       this.#standings = undefined

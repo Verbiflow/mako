@@ -1,8 +1,8 @@
-import { execFile, spawn } from "node:child_process"
+import { execFile, execFileSync, spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { createHash, randomUUID } from "node:crypto"
 import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
-import { networkInterfaces, tmpdir } from "node:os"
+import { homedir, networkInterfaces, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { parseArgs } from "node:util"
@@ -142,8 +142,10 @@ const { values } = parseArgs({
     "second-repository": { type: "string", default: "https://github.com/octocat/Spoon-Knife" },
     /**
      * A private repository (its HTTPS URL), which this Mac clones with the person's Git sign-in and a cloud machine
-     * can't: a Thread of `--private-harness` there must be kept here before anything is released, saying the machine
-     * couldn't clone it, its worktree untouched, a turn still running here.
+     * clones with the GitHub access its gateway gives it for the repository: a Thread of `--private-harness` there is
+     * moved; a turn in the cloud commits, pushes a branch and opens a pull request with the machine's own Git and `gh`
+     * (seen here through this Mac's `gh`); it comes back with its commit; a turn runs here after. The pull request is
+     * closed and its branch deleted as the proof ends. With `--scripted-opencode`, OpenCode's turns are scripted.
      */
     private: { type: "string" },
     "private-harness": { type: "string", default: "claude" },
@@ -184,7 +186,7 @@ if (values["spawn-host"]) {
   const electron = createRequire(import.meta.url)("electron") as string
   // Kept with the data root: its sign-ins and keychain go as the run ends, its sessions stay for the Threads left in the cloud.
   const { env } = scratchHostHome(dataRoot, { keep: true })
-  const command = hostCommand({ executable: electron, args: [process.cwd()], env: { ...env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_CLOUD_URL: values.cloud, MAKO_SCREENLESS: "1" } })
+  const command = hostCommand({ executable: electron, args: [process.cwd()], env: { ...env, ...values.private && privateGit(), MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_CLOUD_URL: values.cloud, MAKO_SCREENLESS: "1" } })
   const host = spawn(command.executable, command.args, { env: command.env, stdio: "ignore" })
   process.once("exit", () => host.kill("SIGTERM"))
   for (const deadline = Date.now() + 60_000; !(await runtimeInfo(socket).catch(() => null)); ) {
@@ -193,6 +195,17 @@ if (values["spawn-host"]) {
   }
   const release = await holdHostLease(runtimeLocation(dataRoot).directory)
   process.once("beforeExit", () => void release())
+}
+
+/**
+ * Git on this Mac reaching a private repository as the person's does, for a host in a scratch home, whose keychain
+ * holds none of the person's: through their own `gh` sign-in (`gh auth git-credential`), read where it is for each
+ * call and never copied. A Thread coming back from the cloud fetches its base from the repository (`--private`).
+ */
+function privateGit() {
+  const gh = execFileSync("/usr/bin/which", ["gh"], { encoding: "utf8" }).trim()
+  const config = process.env.GH_CONFIG_DIR ?? join(homedir(), ".config", "gh")
+  return { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.https://github.com.helper", GIT_CONFIG_VALUE_0: `!GH_CONFIG_DIR='${config}' '${gh}' auth git-credential` }
 }
 
 await assertOwnHarnessStores(call, dataRoot)
@@ -1395,10 +1408,10 @@ function everyKindScript(heard: string): ScriptedReply | undefined {
  * the model on an address of this computer's network, which this Mac and a local cloud machine both reach, committed so
  * the Thread's worktree and its machine have it. The model a Thread starts on is the profile's first Anthropic one.
  */
-async function scriptedOpenCode(cwd: string): Promise<{ model: string; close(): Promise<void> }> {
+async function scriptedOpenCode(cwd: string, reply: (heard: string) => ScriptedReply | undefined = everyKindScript): Promise<{ model: string; close(): Promise<void> }> {
   const address = Object.values(networkInterfaces()).flat().find((each) => each?.family === "IPv4" && !each.internal)?.address
   if (!address) throw new Error("this computer has no network address a cloud machine reaches it at")
-  const model = await scriptedModel({ reply: everyKindScript, host: address })
+  const model = await scriptedModel({ reply, host: address })
   await writeFile(join(cwd, "opencode.json"), `${JSON.stringify({ provider: { anthropic: { options: { baseURL: `${model.url}/v1`, apiKey: "mako-moves-proof" } } } }, null, 2)}\n`)
   await git(cwd, "add", "opencode.json")
   await git(cwd, "-c", "user.name=Mako proof", "-c", "user.email=proof@mako.invalid", "commit", "-q", "-m", "OpenCode answered by the proof's scripted model")
@@ -1459,39 +1472,104 @@ async function severalProof(harness: string): Promise<Proved> {
   return { steps, conversation: id }
 }
 
-/** A Thread in a private repository, which a cloud machine can't clone: kept here, nothing changed (`--private`). */
+/**
+ * A Thread in a private repository, moved to the cloud, where its machine's own GitHub access clones it, and a turn
+ * commits, pushes a branch and opens a pull request; back with its commit (`--private`). The pull request and its
+ * branch are this Mac's `gh`'s to check and to clean up, never the machine's token.
+ */
 async function privateProof(url: string, harness: string): Promise<Proved> {
   const { steps, timed } = stepper("private")
-  const id = randomUUID()
+  let id: string = randomUUID()
   const answered: string[] = []
   const own = join(scratch, "private")
   await run("git", ["clone", "-q", url, own])
+  const repository = /github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/.exec(url)?.[1]
+  if (!repository) throw new Error(`${url} isn't a GitHub repository`)
   const token = randomUUID().slice(0, 8)
+  const branch = `mako-private-proof-${token}`
   const first = randomUUID()
   const mode = widestMode(harness)
+  const scripted = harness === "opencode" && values["scripted-opencode"] ? await scriptedOpenCode(own, privateScript) : undefined
   let folder = ""
+  let pull = ""
   if (!(await timed("a Thread in it", async () => {
-    await call("mako:live-start", [harness, own, { conversationId: id, worktree: true, ...mode && { modeId: mode }, initialRequest: { id: first, text: `Create a file named private-proof.txt in the current folder containing exactly one line: ${token}\nDo not commit it. Then reply with one short sentence that includes the word WRITTEN.`, attachments: [] } }])
+    const model = scripted?.model ?? (await freeModel(harness, own))
+    await call("mako:live-start", [harness, own, { conversationId: id, worktree: true, ...mode && { modeId: mode }, ...model && { tuning: { model } }, initialRequest: { id: first, text: `Create a file named private-proof.txt in the current folder containing exactly one line: HERE-${token}\nDo not commit it. Then reply with one short sentence that includes the word WRITTEN.`, attachments: [] } }])
     const shot = await until(id, (current) => settled(current, first), 300_000, answered)
     folder = shot.session.cwd ?? ""
-    if ((await readFile(join(folder, "private-proof.txt"), "utf8")).trim() !== token) throw new Error("it didn't write the file")
+    if ((await readFile(join(folder, "private-proof.txt"), "utf8")).trim() !== `HERE-${token}`) throw new Error("it didn't write the file")
     return folder.replace(/^.*\/worktrees\//, "…/worktrees/")
   }))) return { steps, conversation: id }
-  await timed("kept here, saying why", async () => {
-    const move = randomUUID()
-    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, move]))
-    if (outcome.kind !== "kept-here") throw new Error(`it ${outcome.kind}: ${JSON.stringify(outcome)}`)
-    const plan = await movePlan(move)
-    if (plan.phase !== "kept-here" || "released" in plan.timings) throw new Error(`the plan reads ${plan.phase}, released ${plan.timings.released}`)
-    if ((await readFile(join(folder, "private-proof.txt"), "utf8")).trim() !== token) throw new Error("its worktree changed")
-    return `${outcome.reason.slice(0, 400)} (never released; ${timingsOf(plan.timings, ["made", "ready", "ahead"])})`
-  })
-  await timed("a turn here after", async () => {
-    const said = await turn(id, "Without running anything, reply with one short sentence that includes the word HERE.", answered)
-    if (!said.includes("HERE")) throw new Error(`said: ${said.slice(0, 200)}`)
-    return "it runs on this Mac as before"
-  })
+  try {
+    if (!(await timed("moved", async () => {
+      const move = randomUUID()
+      const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, move]))
+      if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+      if (outcome.conversation) id = outcome.conversation
+      const plan = await movePlan(move)
+      return `${timingsOf(plan.timings, ["made", "ready", "ahead", "released", "sent", "handed", "claimed", "started"])}`
+    }))) return { steps, conversation: id }
+
+    if (!(await timed("commit, push, pull request", async () => {
+      // The machine's Git and gh, with the access its gateway gave it: who commits, what it pushes, the pull request.
+      const command = `uname -s; git add private-proof.txt && git commit -q -m "Private proof ${token}" && git log -1 --format='AUTHOR %an <%ae>' && git push -q origin HEAD:refs/heads/${branch} && echo PUSHED && gh pr create --head ${branch} --title "Mako private proof ${token}" --body "Opened from a cloud Thread by Mako's moves proof, which closes it." && echo OPENED`
+      const said = await turn(id, `Run exactly this shell command: \`${command}\` and show its output. Reply with one short sentence that includes the word DONE.`, answered)
+      const flat = said.replace(/\\n/g, "\n")
+      if (!flat.includes("Linux")) throw new Error(`it didn't run on its machine: ${flat.replace(/\s+/g, " ").slice(0, 400)}`)
+      if (!flat.includes("PUSHED")) throw new Error(`it didn't push: ${flat.replace(/\s+/g, " ").slice(0, 600)}`)
+      pull = /https:\/\/github\.com\/[^\s"\\]+\/pull\/\d+/.exec(flat)?.[0] ?? ""
+      if (!pull || !flat.includes("OPENED")) throw new Error(`it didn't open a pull request: ${flat.replace(/\s+/g, " ").slice(0, 600)}`)
+      // The command as the tool showed it names the format too: the commit's own line has no `%`.
+      const author = [...flat.matchAll(/AUTHOR ([^\n<%]+<[^>\n%]+>)/g)].at(-1)?.[1]?.trim()
+      // Seen from here, with this Mac's own sign-in.
+      const seen = z.object({ state: z.string(), headRefName: z.string(), title: z.string() }).loose().parse(JSON.parse((await run("gh", ["pr", "view", pull, "--repo", repository, "--json", "state,headRefName,title"])).stdout))
+      if (seen.state !== "OPEN" || seen.headRefName !== branch) throw new Error(`GitHub has it ${seen.state} on ${seen.headRefName}`)
+      const pushed = (await run("git", ["ls-remote", url, `refs/heads/${branch}`], { cwd: own })).stdout.trim()
+      if (!pushed) throw new Error(`${branch} isn't on GitHub`)
+      return `committed as ${author ?? "?"}, pushed ${branch}, opened ${pull.replace(/^https:\/\/github\.com\//, "")}`
+    }))) return { steps, conversation: id }
+
+    if (!(await timed("back, with its commit", async () => {
+      const back = randomUUID()
+      const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, back]))
+      if (outcome.kind !== "back") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+      const subject = await git(folder, "log", "-1", "--format=%s")
+      if (subject !== `Private proof ${token}`) throw new Error(`the worktree's last commit reads ${JSON.stringify(subject)}`)
+      const plan = ReturnTimingsSchema.parse(JSON.parse(await readFile(join(dataRoot, "cloud", "returns", `${back}.json`), "utf8")))
+      return `its commit here; ${timingsOf(plan.timings, ["packed", "released", "applied", "claimed", "done"])}`
+    }))) return { steps, conversation: id }
+
+    await timed("a turn here after", async () => {
+      const said = await turn(id, "Without running anything, reply with one short sentence that includes the word HERE.", answered)
+      if (!said.includes("HERE")) throw new Error(`said: ${said.slice(0, 200)}`)
+      return "it runs on this Mac as before"
+    })
+  } finally {
+    // What the proof made on GitHub goes, by this Mac's own sign-in.
+    if (pull) await run("gh", ["pr", "close", pull, "--repo", repository, "--delete-branch"]).catch((error: Error) => console.error(`the proof's pull request ${pull} wasn't closed: ${error.message}`))
+    else await run("git", ["push", "-q", url, `:refs/heads/${branch}`], { cwd: own }).catch(() => undefined)
+    await scripted?.close()
+  }
   return { steps, conversation: id }
+}
+
+/**
+ * The private proof's turns as a model would take them, for OpenCode's `shell`: the file it's asked to write, then
+ * exactly the command it's given; otherwise a sentence with the word asked for.
+ */
+function privateScript(heard: string): ScriptedReply | undefined {
+  const body = ScriptedRequestSchema.safeParse(JSON.parse(heard)).data
+  if (!body) return undefined
+  const at = body.messages.findLastIndex((message) => message.role === "user" && message.content.some((block) => block.type === "text" && block.text))
+  const prompt = at < 0 ? "" : body.messages[at]!.content.map((block) => block.text ?? "").join("\n")
+  const done = body.messages.slice(at + 1).flatMap((message) => message.content).filter((block) => block.type === "tool_result").length
+  const shell = (command: string) => ({ name: "shell", arguments: { command } })
+  const here = /exactly one line: (HERE-\w+)/.exec(prompt)?.[1]
+  const command = /exactly this shell command: `([^`]+)`/.exec(prompt)?.[1]
+  const calls = here ? [shell(`printf '${here}\\n' > private-proof.txt`)] : command ? [shell(command)] : []
+  const call = calls[done]
+  if (call) return { call: { id: `call_${randomUUID().slice(0, 8)}`, ...call } }
+  return { text: here ? "WRITTEN" : command ? "DONE" : "HERE, on this Mac." }
 }
 
 /**

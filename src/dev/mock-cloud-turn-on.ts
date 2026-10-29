@@ -113,6 +113,20 @@ export function mockCloudTurnOn(emit: (event: HostEvent) => void, entitled: () =
             { id: "thread", state: "yours", folder: OTHERS[0]!.folder, repository: OTHERS[0]!.repository, fix: "start-thread" },
           ],
         }
+      case "private-access":
+        // The most recent project is private, and the cloud's GitHub App is what it lacks: one button, to GitHub.
+        return {
+          phase: "ready",
+          since,
+          readyAt: at(2.4),
+          steps: [
+            ...signedIn,
+            { id: "agents", state: "done", sharing: true, agents: agents([]), at: at(2.4) },
+            { id: "projects", state: "done", projects: [{ folder: PROJECT, repository: REPOSITORY, base: { state: "waiting", message: "the clone failed: fatal: could not read Username for 'https://github.com': terminal prompts disabled", reason: "no-access", install: "https://github.com/apps/mako/installations/new" } }, ...OTHERS.map((project) => ({ ...project, base: { state: "ready" as const, madeAt: new Date().toISOString() } }))], at: at(9.8) },
+            history(117, 11, "done"),
+            { id: "thread", state: "yours", folder: OTHERS[0]!.folder, repository: OTHERS[0]!.repository, fix: "start-thread" },
+          ],
+        }
       case "none":
         return {
           phase: "ready",
@@ -169,7 +183,7 @@ export function mockCloudTurnOn(emit: (event: HostEvent) => void, entitled: () =
     },
     cloudTurnOnRetryBases: async () => {
       await new Promise((resolve) => setTimeout(resolve, 500))
-      current = { ...current, steps: current.steps.map((step) => (step.id === "projects" ? { ...step, state: "working" as const, problem: undefined, fix: undefined, projects: step.projects.map((project) => (project.base.state === "failed" ? { ...project, base: { state: "making" as const, since: new Date().toISOString() } } : project)) } : step)) }
+      current = { ...current, steps: current.steps.map((step) => (step.id === "projects" ? { ...step, state: "working" as const, problem: undefined, fix: undefined, projects: step.projects.map((project) => (project.base.state === "failed" || ("reason" in project.base && project.base.reason === "no-access") ? { ...project, base: { state: "making" as const, since: new Date().toISOString() } } : project)) } : step)) }
       return current
     },
   }

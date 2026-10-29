@@ -37,17 +37,18 @@ export type BaseStanding =
   | { state: "making"; since: string }
   /**
    * Due and not yet started: waiting for room on the cloud's machines, or for its next try after a failure.
-   * `no-access`: the cloud can't read the repository (private, or gone), so trying again won't help.
+   * `no-access`: the cloud can't read the repository (private, or gone), so trying again won't help until someone
+   * gives it access; `install` is where on GitHub the person does that, when the cloud's GitHub App is what it lacks.
    */
-  | { state: "waiting"; message?: string; retryAt?: string; reason?: "no-access" }
+  | { state: "waiting"; message?: string; retryAt?: string; reason?: "no-access"; install?: string }
   /** Tried and given up until its next use: its Threads clone as they start. */
-  | { state: "failed"; message: string; reason?: "no-access" }
+  | { state: "failed"; message: string; reason?: "no-access"; install?: string }
   /** This cloud makes no bases (its machines can't be snapshotted): every Thread clones, as fast as that is. */
   | { state: "none" }
   /** A cloud that doesn't say, or a base it hasn't heard of. */
   | { state: "unknown" }
 
-/** A base the cloud can't read (a private repository, or one gone): settled, since no try would help. */
+/** A base the cloud can't read (a private repository, or one gone): settled, since no try would help until access is given. */
 export function noAccess(base: BaseStanding): boolean {
   return (base.state === "failed" || base.state === "waiting") && base.reason === "no-access"
 }
