@@ -2587,6 +2587,27 @@ batch over `MAX_EVENT_BYTES` goes as the notice that its history changed
 (`historyChangedNotice`, the same one a window's event stream sends for a
 batch over its limit), which the watcher answers by reading it again.
 
+`npm run bench:sync-latency` measures how long another device takes to see
+what one does, on the real code (`scripts/bench-sync-latency.ts`): two
+screenless hosts of the checkout signed in to one account, A running a sealed
+Codex against the stand-in model paced to 50 words a second (`pace` in
+`scripts/scripted-model.ts`), B opening A's conversation as a window does; a
+phone played through the web client's `Gateway`; and a cloud Thread's
+`MachineRuntime`, in process, fed A's batches. Each word is unique, so its
+first arrival anywhere is found by its text, and one clock times every hop.
+Each device's link is a proxy the bench stalls or cuts. Without `--cloud` the
+cloud is the protocol's fake gateway behind the routes a host and a browser
+use (`scripts/lib/sync-bench-cloud.ts`), which keeps no presence, so the quiet
+phase (`--quiet`) needs a real gateway; with `--cloud <url>` a helper on stdin
+and stdout plays the person there (`helperCloud` says the asks). It prints one
+JSON report: live content per hop, status on the phone's list and the second
+Mac, five link disturbances (words missed, time to current, rereads, a stall
+noticed), quiet devices, and messages and bytes per token per hop. Past the
+plan's budgets it exits 1 unless `--report-only`; a run that doesn't finish
+exits 2. It takes about two minutes and isn't in CI: it needs a real Codex
+CLI, and today's numbers fail several budgets by design. The first baseline
+is `docs/public-audits/2026-10-28/sync-latency/`.
+
 The account's rows here (`CloudConversations`) take nothing from a catalog that
 isn't read: until `catalog.ready()`, and while a lost reader is replaced,
 `keepsNative` says nothing (undefined), and a row it would decide is left as it
