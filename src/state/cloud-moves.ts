@@ -147,6 +147,12 @@ export function landedSentence(landed: ReturnLanded | undefined): string | undef
   // The cloud's copies are kept apart, which the toast's action opens.
   if (landed.outside.waiting.length) parts.push(`You changed ${landed.outside.waiting.length === 1 ? name(landed.outside.waiting[0] ?? "") : `${files(landed.outside.waiting.length)} outside its worktree`} meanwhile, so yours stayed.`)
   else if (landed.outside.placed.length) parts.push(`${files(landed.outside.placed.length)} outside its worktree came back to ${landed.outside.placed.length === 1 ? "its place" : "their places"}.`)
+  // Only what this Mac sent comes back to its place: what the agent wrote elsewhere waits apart, beside the person's.
+  const unsent = landed.outside.unsent ?? []
+  if (unsent.length) parts.push(`${unsent.length === 1 ? name(unsent[0] ?? "") : files(unsent.length)}, written outside its worktree in the cloud, ${unsent.length === 1 ? "is" : "are"} kept apart: this Mac never sent ${unsent.length === 1 ? "it" : "them"}.`)
+  const failed = landed.outside.failed ?? []
+  const [first] = failed
+  if (first) parts.push(failed.length === 1 ? `${name(first.path)} couldn't be written back: ${first.why}.` : `${files(failed.length)} outside its worktree couldn't be written back, such as ${name(first.path)}: ${first.why}.`)
   return parts.length ? parts.join(" ") : undefined
 }
 
@@ -214,11 +220,12 @@ export function threadReturnStepped(conversationId: string, move: string, step: 
     cloudMovesStore.set((state) => ({ ...state, returning: Object.fromEntries(Object.entries(state.returning).filter(([id]) => id !== conversationId)) }))
     if (step.kind === "back") {
       const landed = landedSentence(step.landed)
-      const conflicted = Boolean(step.landed?.conflicts.length)
-      // Conflicts to resolve read as a caution, and anything merged stays long enough to read.
+      const conflicted = Boolean(step.landed?.conflicts.length || step.landed?.outside.failed?.length)
+      // Conflicts to resolve, or files that didn't come back, read as a caution, and anything merged stays long enough to read.
       const say = conflicted ? toast.warning : toast.success
-      // The cloud's copies of files outside its worktree that the person changed meanwhile: one opens, several show.
-      const waiting = step.landed?.outside.waiting ?? []
+      // The cloud's copies kept apart (files outside its worktree the person changed meanwhile, or this Mac never sent):
+      // one opens, several show.
+      const waiting = [...step.landed?.outside.waiting ?? [], ...step.landed?.outside.unsent ?? []]
       const kept = step.landed?.outside.kept
       const compare = kept && waiting.length ? { label: waiting.length === 1 ? "Open the cloud's copy" : "Show the cloud's copies", onClick: () => void getMako().revealPath(waiting.length === 1 ? `${kept}${waiting[0]}` : kept).catch(() => undefined) } : undefined
       say("Back on this Mac", { id: `return:${move}`, description: landed ?? "It goes on here, with what it did in the cloud in its worktree. The cloud machine is gone.", ...landed && { duration: 12_000 }, ...compare && { action: compare } })

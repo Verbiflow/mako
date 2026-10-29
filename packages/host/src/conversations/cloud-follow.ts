@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto"
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
@@ -8,6 +9,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import { applyMoveCheckpoint, captureMoveCheckpoint, unchangedSince } from "../workspaces/index.js"
 import { MovePlanSchema } from "./cloud-moves.js"
+import type { CloudWorktrees } from "./cloud-worktrees.js"
 
 /**
  * The Mac's worktree of a Thread that runs in the cloud, following it: at each of the cloud Thread's turn ends, the
@@ -15,7 +17,9 @@ import { MovePlanSchema } from "./cloud-moves.js"
  * there to open and the Changes panel reads them. A mirror, never a second writer: each repository is laid only while
  * it still reads exactly as the checkpoint last laid there (or, before any, the one the move sent). When the person
  * changed it, following stops, nothing of theirs is written over, and the way back merges both (`mergeReturned`, from
- * `laid`). One follow at a time per cloud Thread; a turn that ends meanwhile follows again after.
+ * `laid`). One follow at a time per cloud Thread; a turn that ends meanwhile follows again after. Its writes and the way
+ * back's are one owner's (`CloudWorktrees`), so the two never overlap, and a follow that a way back began during lays
+ * nothing.
  *
  * Its state is a file per cloud Thread (`<data root>/cloud/follow/<cloud Thread>.json`): the checkpoint last laid in
  * each repository, and when the person's edit stopped it.
@@ -42,6 +46,8 @@ export type CloudFollowOptions = {
   callThread(cloudThread: string, channel: string, args: readonly unknown[]): Promise<EncodedValue>
   /** Whether a return of this cloud Thread is under way: nothing follows a Thread coming back. */
   returning(cloudThread: string): boolean
+  /** The owner of the worktrees' writes, which the way back writes through too. */
+  worktrees: CloudWorktrees
   /** Following stopped: the person changed the worktree here (`edited`), said to the windows. */
   stopped(cloudThread: string, state: FollowState): void
 }
@@ -104,47 +110,71 @@ export class CloudFollow {
     await rm(this.#file(cloudThread), { force: true })
   }
 
-  /** One follow: each repository's worktree checked as last laid, then the machine's checkout laid into it. */
+  /**
+   * One follow: each repository's worktree checked as last laid, then the machine's checkout laid into it. Both run as
+   * writes of the worktree's (`CloudWorktrees`), the machine asked and its checkout downloaded between them. Right before
+   * anything is laid, the worktree is read again: what's laid replaces only what Mako laid there, never an edit the person
+   * made while the machine answered, and nothing is laid once a way back began.
+   */
   async follow(cloudThread: string): Promise<"followed" | "unchanged" | "stopped" | "not-followed"> {
     if (this.#options.returning(cloudThread)) return "not-followed"
     const plan = await this.#forward(cloudThread)
     if (!plan?.checkpoint) return "not-followed"
-    const state = (await this.state(cloudThread)) ?? { cloudThread, laid: {} }
-    if (state.edited) return "stopped"
+    const worktrees = this.#options.worktrees
+    const began = worktrees.returnWrites(cloudThread)
     const bases = new Map<string, MoveCheckpoint>([[plan.folder, plan.checkpoint], ...plan.others.flatMap((other) => (other.checkpoint ? [[other.path, other.checkpoint] as const] : []))])
     await mkdir(this.#options.folder, { recursive: true })
     const scratch = await mkdtemp(join(this.#options.folder, "follow-"))
     try {
       // The person's worktree first: one they changed since the last lay stops following before the cloud is asked.
-      const edited: string[] = []
-      for (const [path, sent] of bases) {
-        const now = await captureMoveCheckpoint(this.#options.git, path, await mkdtemp(join(scratch, "here-")))
-        if (!unchangedSince(state.laid[path] ?? sent, now.checkpoint)) edited.push(path)
-      }
-      if (edited.length) {
-        state.edited = { at: Date.now(), folders: edited }
-        await this.#write(state)
-        hostLog("follow", "the person changed a followed worktree here; following stops and the way back merges", { cloudThread, folders: edited.join(", ") })
-        this.#options.stopped(cloudThread, state)
-        return "stopped"
-      }
+      const first = await worktrees.write(cloudThread, () => this.#asLaid(cloudThread, bases, scratch))
+      if (first === "stopped") return "stopped"
       const answer = FollowAnswerSchema.parse(decodeRuntimeValue(await this.#options.callThread(cloudThread, "mako:move-follow", [{ folder: plan.folder }])))
-      let laid = 0
+      const due: Array<{ path: string; checkpoint: MoveCheckpoint; file: string }> = []
       for (const { path, checkpoint } of answer.repositories) {
-        const was = state.laid[path] ?? bases.get(path)
+        const was = first.laid[path] ?? bases.get(path)
         if (!was || was.sha256 === checkpoint.sha256) continue
         const file = join(scratch, `${checkpoint.sha256}.bundle`)
         await this.#options.readCheckpoint(cloudThread, checkpoint.sha256, file)
-        await applyMoveCheckpoint(this.#options.git, path, file, checkpoint, { replace: true })
-        state.laid[path] = checkpoint
-        laid += 1
+        due.push({ path, checkpoint, file })
       }
-      if (!laid) return "unchanged"
-      await this.#write(state)
-      return "followed"
+      if (!due.length) return "unchanged"
+      return await worktrees.write(cloudThread, async () => {
+        // A way back that began while the machine answered owns the worktree from then.
+        if (this.#options.returning(cloudThread) || worktrees.returnWrites(cloudThread) !== began) return "not-followed"
+        const state = await this.#asLaid(cloudThread, bases, scratch)
+        if (state === "stopped") return "stopped"
+        for (const { path, checkpoint, file } of due) {
+          // Laid over a worktree just read as the checkpoint last laid there: `replace` clears only what Mako laid.
+          await applyMoveCheckpoint(this.#options.git, path, file, checkpoint, { replace: true })
+          state.laid[path] = checkpoint
+          await this.#write(state)
+        }
+        return "followed"
+      })
     } finally {
       await rm(scratch, { recursive: true, force: true })
     }
+  }
+
+  /**
+   * The follow's state, once each repository's worktree reads exactly as the checkpoint last laid there (or, before any,
+   * the one the move sent); `stopped` when one doesn't, which stops following and is said to the windows once.
+   */
+  async #asLaid(cloudThread: string, bases: ReadonlyMap<string, MoveCheckpoint>, scratch: string): Promise<FollowState | "stopped"> {
+    const state = (await this.state(cloudThread)) ?? { cloudThread, laid: {} }
+    if (state.edited) return "stopped"
+    const edited: string[] = []
+    for (const [path, sent] of bases) {
+      const now = await captureMoveCheckpoint(this.#options.git, path, await mkdtemp(join(scratch, "here-")))
+      if (!unchangedSince(state.laid[path] ?? sent, now.checkpoint)) edited.push(path)
+    }
+    if (!edited.length) return state
+    state.edited = { at: Date.now(), folders: edited }
+    await this.#write(state)
+    hostLog("follow", "the person changed a followed worktree here; following stops and the way back merges", { cloudThread, folders: edited.join(", ") })
+    this.#options.stopped(cloudThread, state)
+    return "stopped"
   }
 
   /** The move that took this cloud Thread there, started and not brought back. */
@@ -164,7 +194,8 @@ export class CloudFollow {
   async #write(state: FollowState): Promise<void> {
     await mkdir(this.#options.folder, { recursive: true })
     const file = this.#file(state.cloudThread)
-    await writeFile(`${file}.tmp`, JSON.stringify(FollowStateSchema.parse(state)))
-    await rename(`${file}.tmp`, file)
+    const beside = `${file}.${randomBytes(4).toString("hex")}.tmp`
+    await writeFile(beside, JSON.stringify(FollowStateSchema.parse(state)))
+    await rename(beside, file)
   }
 }

@@ -6,7 +6,7 @@ import type { Git } from "@mako/git"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { MethodTable } from "../base/methods.js"
 import type { CarriedFilesDecision, CarriedFilesSync, CarriedFilesView, CarriedFileView, CloudCarriedFile } from "../contracts/cloud-carried-files.js"
-import { projectRoot, type Recipe } from "./thread-recipe.js"
+import { projectRoot, type ProjectRecipeRead } from "./thread-recipe.js"
 import { holdsCredentials, matchedEntries } from "./worktree-carry.js"
 
 /**
@@ -69,8 +69,8 @@ export type CloudCarriedFilesOptions = {
   account(): Promise<{ id: string; store: CarriedFilesStore } | undefined>
   /** The project's GitHub repository, which the cloud knows it by; throws for a folder the cloud can't run. */
   repositoryOf(folder: string): Promise<string>
-  /** The project's recipe as its Threads run it. */
-  recipe(checkout: string): Promise<Recipe | undefined>
+  /** The project's recipe as its Threads run it: none, one, or one that couldn't be read, which says nothing of what goes. */
+  recipe(checkout: string): Promise<ProjectRecipeRead>
 }
 
 /** A file read from the main checkout, to be sent. */
@@ -90,8 +90,9 @@ export class CloudCarriedFiles {
   async view(folder: string): Promise<CarriedFilesView> {
     const project = await projectRoot(this.#options.git, folder)
     const repository = await this.#options.repositoryOf(project).catch(() => null)
-    const { locals, staying } = await this.#locals(project)
+    const { locals, staying, unreadable } = await this.#locals(project)
     const view: CarriedFilesView = { project, repository, decision: "unasked", files: [], staying }
+    if (unreadable) view.problem = `This project's recipe can't be read (${unreadable}), so what it carries isn't known; nothing in Mako Cloud changes until it can be.`
     const account = await this.#options.account()
     const state = account && repository ? (await this.#read()).accounts[account.id]?.[repository] : undefined
     if (state) view.decision = state.decision
@@ -168,7 +169,12 @@ export class CloudCarriedFiles {
     if (!repository) return none
     const state = (await this.#read()).accounts[account.id]?.[repository]
     if (state?.decision !== "allowed") return none
-    const { locals } = await this.#locals(project)
+    const { locals, unreadable } = await this.#locals(project)
+    // A recipe that can't be read says nothing of what goes: nothing is sent, and nothing the cloud keeps is removed.
+    if (unreadable) {
+      hostWarn("cloud-carried-files", "a project's recipe couldn't be read; its carried files stay as the cloud keeps them", { repository, why, unreadable })
+      return none
+    }
     const going = locals.filter((local) => !state.kept.includes(local.path))
     const cloud = await account.store.list(repository)
     const changed = going.filter((local) => {
@@ -189,10 +195,15 @@ export class CloudCarriedFiles {
     return result
   }
 
-  /** The files the recipe's `carry` copies, read from the main checkout; and what it carries that doesn't go, with why. */
-  async #locals(project: string): Promise<{ locals: Local[]; staying: Array<{ path: string; why: string }> }> {
-    const recipe = await this.#options.recipe(project)
-    const entries = recipe?.carry ?? []
+  /**
+   * The files the recipe's `carry` copies, read from the main checkout; and what it carries that doesn't go, with why.
+   * `unreadable`: why the recipe couldn't be read, when it couldn't, and nothing is listed: no recipe carries nothing,
+   * but one that can't be read isn't known to.
+   */
+  async #locals(project: string): Promise<{ locals: Local[]; staying: Array<{ path: string; why: string }>; unreadable?: string }> {
+    const read = await this.#options.recipe(project)
+    if (read.kind === "unreadable") return { locals: [], staying: [], unreadable: read.why }
+    const entries = read.kind === "recipe" ? (read.recipe.carry ?? []) : []
     const staying: Array<{ path: string; why: string }> = entries.filter((entry) => entry.link).map((entry) => ({ path: entry.path, why: "linked to the main folder, not copied" }))
     const paths: string[] = []
     for (const entry of await matchedEntries(this.#options.git, project, entries.filter((entry) => !entry.link).map((entry) => entry.path))) {

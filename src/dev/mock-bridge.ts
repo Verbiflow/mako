@@ -2911,7 +2911,7 @@ export function installMockBridge() {
       if (mockReturnOutdated.value === "merged") {
         // The person changed its worktree and a file outside it while it was away: merged, one conflict, one waiting.
         mockReturnOutdated.value = ""
-        const landed = { merged: ["src/webhooks/retry.ts", "notes/todo.md"], conflicts: ["src/webhooks/retry.ts"], outside: { placed: ["/tmp/billing-replay.sh"], removed: [], waiting: ["/Users/you/.config/billing/state.json"], kept: "/Users/you/.mako/cloud/outside/thread-billing" } }
+        const landed = { merged: ["src/webhooks/retry.ts", "notes/todo.md"], conflicts: ["src/webhooks/retry.ts"], outside: { placed: ["/tmp/billing-replay.sh"], removed: [], waiting: ["/Users/you/.config/billing/state.json"], failed: [{ path: "/Users/you/bin/billing-sync", why: "permission denied" }], kept: "/Users/you/.mako/cloud/outside/thread-billing" } }
         step({ kind: "back", conversations: [conversationId], landed })
         return { kind: "back" as const, landed }
       }
