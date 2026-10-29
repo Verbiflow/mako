@@ -48,7 +48,7 @@ import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from ".
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
-import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, REPORT_WORK, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -70,6 +70,8 @@ export interface CoreShell {
   retryMachineWorkspace?(): boolean
   /** On a cloud machine: asks its agent to place the project's carried files from the account's store again, and waits. */
   refreshMachineCarried?(): Promise<void>
+  /** On a cloud machine: reports its Sessions on its runtime's link now, as its tick does (`MachineRuntime.reportSessions`). */
+  reportMachineSessions?(): void
   owner: HostOwner
   methods: HostMethods
   jobs: HostJobs
@@ -252,10 +254,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       // On a cloud machine, the same reading says when to save the Thread.
       late.machineTracker?.observe(event.batch)
     }
-    // A conversation another device watches goes to it as it changes (`SessionPublisher`), and its row may change.
+    // A conversation another device watches goes to it as it changes (`SessionPublisher`), and its row, a Session
+    // archived here or a Thread renamed here changes what every device lists.
     late.sessions?.own(event)
-    // A Session archived here leaves the account's list on every device: its owner's word is the one that counts.
-    if (event.type === "thread-archives") late.sessions?.changed()
     // The account and the agents' sign-ins say each change here; turning the cloud on reads them again then.
     if (event.type === "cloud-account" || event.type === "cloud-sign-ins") void late.turnOn?.changed()
     web()?.event(event, client)
@@ -430,9 +431,18 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         now: Date.now,
       })
     },
-    // A change goes to the account within a fraction of a second, on the link this Mac serves then, named as the tick's
-    // job is. A cloud machine's link is its machine runtime's, reported on its own tick.
-    ...config.machineAgentFd === undefined && { reportNow: () => late.cloud?.reportSessions?.(), work: shell.work },
+    // What a list shows of one conversation, read as each of its batches comes, by the rule its row is made with: a
+    // batch that moved it is reported at once. It reads only what memory holds.
+    shown: (id) => {
+      const live = late.conversations?.live
+      const session = live?.session(id)
+      if (!live || !session) return undefined
+      return conversationShown({ session, working: live.workOf(id)?.status, waitingOn: (conversation) => live.waitingOn(conversation) })
+    },
+    // A change goes to the account within a fraction of a second, on the link this host serves then, named as the tick's
+    // job is: a Mac's account link, or a cloud machine's runtime link.
+    reportNow: config.machineAgentFd === undefined ? () => late.cloud?.reportSessions?.() : () => shell.reportMachineSessions?.(),
+    work: shell.work,
   })
   catalog.subscribe((event) => {
     if (event.type === "thread-ref") {
@@ -663,6 +673,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   const opened = await openConversations({
     streams,
+    // A new conversation is on the account's list before its harness has started.
+    opened: () => late.sessions?.showsChanged(),
     // A cloud machine's harnesses run on the account's sign-ins: nobody is there to sign one in.
     unattended: config.machineAgentFd !== undefined,
     environment,

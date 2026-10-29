@@ -168,6 +168,12 @@ const UnfinishedSignOutSchema = z.object({ version: z.literal(1), cloud: z.strin
 type UnfinishedSignOut = z.infer<typeof UnfinishedSignOutSchema>
 /** An unfinished sign-out is asked again this often while it lasts, and at every start and wake. */
 const SIGN_OUT_RETRY_MS = 60_000
+/**
+ * The last account event heard is kept at most this long after it's heard, with every other heard meanwhile: a
+ * keychain write for each event held each one back from delivery. The stream is said again after the kept one, and an
+ * event heard twice changes nothing, so a restart within it only hears a few again.
+ */
+const SEEN_SAVE_MS = 2_000
 
 /** The record a host's sign-in is kept under; each data root signs in as its own device. */
 export function cloudSignInName(dataRoot: string): string {
@@ -267,6 +273,11 @@ export class CloudAccounts {
   readonly #unavailable: string | undefined
   #state: CloudAccountState = { status: "signed-out" }
   #stored: Stored | undefined
+  /** The last event of the account's stream this device heard: kept with `#stored` when it's next written. */
+  #seen: number | undefined
+  #seenSave: NodeJS.Timeout | undefined
+  /** Every write of the sign-in to the keychain, one after another, so a later one never lands under an earlier one. */
+  #writes: Promise<unknown> = Promise.resolve()
   /** A sign-out the cloud hasn't heard of, held in memory when there's no keychain to keep it in. */
   #unfinished: UnfinishedSignOut | undefined
   #finishing: NodeJS.Timeout | undefined
@@ -838,6 +849,11 @@ export class CloudAccounts {
   close(): void {
     this.#goingQuiet("quit")
     this.#closed = true
+    if (this.#seenSave) {
+      clearTimeout(this.#seenSave)
+      this.#seenSave = undefined
+      this.#saveSeen()
+    }
     if (this.#finishing) clearTimeout(this.#finishing)
     if (this.#signIn) this.#endSignIn()
     this.#disconnect()
@@ -858,6 +874,7 @@ export class CloudAccounts {
     if (!response.ok) throw new CloudAccountError(await problemOf(response, "Mako couldn't finish signing in. Try again."))
     const enrollment = EnrollmentSchema.parse(await response.json())
     const stored: Stored = { version: 1, cloud: cloud.origin, credential: enrollment.credential, device: enrollment.device, account: enrollment.account }
+    this.#seen = undefined
     const saved = await this.#save(stored)
     const kept = this.#options.fixture ? "fixture" : saved ? "keychain" : "memory"
     this.#stored = stored
@@ -889,6 +906,7 @@ export class CloudAccounts {
     })
     if (!stored || this.#closed) return
     this.#stored = stored
+    this.#seen = stored.seen
     this.#set({ status: "signed-in", account: stored.account, device: stored.device, connection: "connecting", kept: "keychain" })
     this.#connect()
   }
@@ -907,18 +925,49 @@ export class CloudAccounts {
     return stored.cloud === this.#cloud?.origin ? stored : undefined
   }
 
-  /** False when the keychain is unavailable: the credential then lives in memory, until Mako quits. */
-  async #save(stored: Stored): Promise<boolean> {
+  /**
+   * False when the keychain is unavailable: the credential then lives in memory, until Mako quits. Written after any
+   * write before it, with the last account event heard.
+   */
+  #save(stored: Stored): Promise<boolean> {
     const { secrets, secretName } = this.#options
-    if (!(await secrets.durable())) return false
-    await secrets.write("mako-sign-in", secretName, JSON.stringify(stored))
-    return true
+    const write = this.#writes.then(async () => {
+      if (!(await secrets.durable())) return false
+      const seen = this.#seen
+      await secrets.write("mako-sign-in", secretName, JSON.stringify(seen === undefined ? stored : { ...stored, seen }))
+      return true
+    })
+    this.#writes = write.catch(() => undefined)
+    return write
+  }
+
+  /** Keeps the last account event heard soon, with every other heard meanwhile (`SEEN_SAVE_MS`). */
+  #rememberSeen(): void {
+    if (this.#seenSave) return
+    this.#seenSave = setTimeout(() => {
+      this.#seenSave = undefined
+      // A token refresh in flight may be keeping a new credential: this waits for it, rather than write the old one after.
+      if (this.#tokenRequest) return this.#rememberSeen()
+      this.#saveSeen()
+    }, SEEN_SAVE_MS)
+    this.#seenSave.unref?.()
+  }
+
+  #saveSeen(): void {
+    const stored = this.#stored
+    if (!stored || this.#seen === undefined) return
+    void this.#save(stored).catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
   }
 
   async #forget(notice?: CloudSignedOutNotice): Promise<void> {
     this.#stored = undefined
+    this.#seen = undefined
+    clearTimeout(this.#seenSave)
+    this.#seenSave = undefined
     this.#token = undefined
     this.#disconnect()
+    // A write already begun lands first, so the sign-in it writes is removed after it, never brought back.
+    await this.#writes
     await this.#options.secrets.delete("mako-sign-in", this.#options.secretName)
     this.#set(notice ? { status: "signed-out", notice } : { status: "signed-out" })
   }
@@ -1136,7 +1185,7 @@ export class CloudAccounts {
     })
     const following = this.#stored
     if (following && socket.readyState === WebSocket.OPEN)
-      socket.send(encodeClientFrame({ type: "subscribe", stream: accountStream(following.account.id), after: following.seen ?? 0 }))
+      socket.send(encodeClientFrame({ type: "subscribe", stream: accountStream(following.account.id), after: this.#seen ?? 0 }))
     socket.addEventListener("message", (event) => {
       const text = TextSchema.safeParse(event.data)
       if (!text.success) return
@@ -1149,18 +1198,20 @@ export class CloudAccounts {
       }
       if (frame.type === "renewed") renewing.renewed()
       else if (frame.type === "closing") end(endingOf(frame.problem))
-      else if (frame.type === "event") void this.#heard(frame.event)
+      else if (frame.type === "event") this.#heard(frame.event)
     })
     return { close: () => renewing.stop() }
   }
 
-  /** One event of the account's stream: told once, in order, and remembered as heard. */
-  async #heard(frame: EventFrame): Promise<void> {
+  /**
+   * One event of the account's stream: told once, in order, as it's heard, with nothing awaited before it, so the next
+   * can't overtake it; then remembered as heard, soon (`SEEN_SAVE_MS`).
+   */
+  #heard(frame: EventFrame): void {
     const stored = this.#stored
-    if (!stored || frame.stream !== accountStream(stored.account.id) || frame.seq <= (stored.seen ?? 0)) return
-    const heard = { ...stored, seen: frame.seq }
-    this.#stored = heard
-    await this.#save(heard).catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
+    if (!stored || frame.stream !== accountStream(stored.account.id) || frame.seq <= (this.#seen ?? 0)) return
+    this.#seen = frame.seq
+    this.#rememberSeen()
     const parsed = AccountEventSchema.safeParse(frame.event.decode())
     // A kind of event this build doesn't know is passed over, never refused.
     if (!parsed.success) return

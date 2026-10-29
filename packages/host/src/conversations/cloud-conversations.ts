@@ -27,7 +27,7 @@ import { sendWithRepeats, type GatewayCallLog } from "../contracts/gateway-host-
 import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
 import { CloudControlPreviews } from "./cloud-control-previews.js"
 import { cloudRuntimeOf, namedUuid } from "./cloud-moves.js"
-import { AccountSessions } from "@mako/protocol/account-sessions"
+import { AccountSessions, type AccountListHeard } from "@mako/protocol/account-sessions"
 import { CloudPreviews } from "./cloud-previews.js"
 import { conversationCallId } from "../contracts/conversation-calls.js"
 import type { ConversationRoutingResult } from "./shared-conversations.js"
@@ -1603,13 +1603,39 @@ export class CloudConversations {
         this.#list.clear()
         this.#reconcile()
         void this.#readList()
-      } else if (this.#list.heard(heard)) {
-        this.#reconcile()
+        return
+      }
+      const named = this.#named(heard)
+      if (this.#list.heard(heard)) {
+        // Only the rows the change names are looked at again: one Session's state, while hundreds are listed.
+        this.#reconcile(named)
         this.#takeWaiting()
         if (heard.event.type === "messages-waiting") this.#retoldWaiting(heard.event.session)
       } else if (!this.#list.known) void this.#readList()
     })
     void this.#readList()
+  }
+
+  /**
+   * The conversations a change to the list is about, as the list holds them before it and as the change says them (a
+   * Session that moved may be another conversation now); undefined when it may change any row: a device going quiet
+   * or coming back, a Thread archived or taken back.
+   */
+  #named(heard: AccountListHeard): ReadonlySet<string> | undefined {
+    const { event } = heard
+    const named = new Set<string>()
+    const held = (session: string) => {
+      const conversation = this.#list.sessions().get(session)?.conversation
+      if (conversation !== undefined) named.add(conversation)
+    }
+    if (event.type === "sessions-listed") for (const row of event.sessions) {
+      named.add(row.conversation)
+      held(row.session)
+    }
+    else if (event.type === "sessions-unlisted") for (const session of event.sessions) held(session)
+    else if (event.type === "messages-waiting") held(event.session)
+    else return undefined
+    return named
   }
 
   /** The account's list, read whole: once at start, after a sign-in, and after a wake while it isn't known. */
@@ -1639,8 +1665,8 @@ export class CloudConversations {
    * Holds the conversations known from the account's list to it: a Session another device has (in the cloud or on
    * itself) is listed here, changed as the list changes, and gone when it leaves it. This Mac's own Sessions, and the
    * cloud conversations this Mac started or moved, are never touched, and one a window opened goes on from its own
-   * batches, which say more and sooner, but for whether its device is quiet: a quiet device sends no batches, so that's
-   * the list's to say of every conversation, followed or not. Windows hear what changed and list it as they list a
+   * batches, which say more and sooner, but for whether its device is quiet (a quiet device sends no batches) and its
+   * Thread's name (no batch carries it): those are the list's to say of every conversation, followed or not. Windows hear what changed and list it as they list a
    * conversation at boot: nothing wakes a machine or reaches a Mac until one opens.
    *
    * `only` limits it to those conversations, as when the sessions this Mac keeps changed (`nativeChanged`). A row whose
@@ -1697,9 +1723,19 @@ export class CloudConversations {
       const summary = listedSummary(row, where, quietSince)
       if (known && this.#following.has(known.threadId)) {
         // A window follows it: its batches say the rest, but nothing comes from a device gone quiet, nor says it's back.
-        if (known.summary?.quietSince === summary.quietSince) continue
-        known.summary = summary
-        listed.push(summary)
+        const held = known.summary
+        if (held?.quietSince !== summary.quietSince) {
+          known.summary = summary
+          listed.push(summary)
+          continue
+        }
+        // Nor do they carry its Thread's name: the list is the one word on it on every device, followed or not.
+        if (!held || held.threadTitle === summary.threadTitle) continue
+        const named: LiveSummary = { ...held }
+        if (summary.threadTitle === undefined) delete named.threadTitle
+        else named.threadTitle = summary.threadTitle
+        known.summary = named
+        listed.push(named)
         continue
       }
       if (known?.summary && JSON.stringify(known.summary) === JSON.stringify(summary)) continue

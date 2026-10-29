@@ -1067,8 +1067,16 @@ test("every Session the account lists is listed here, unopened and waking nothin
   machine.batch(theirs, cloudConversation, 2, "ready")
   await until("its next batch relayed", () => events.some((event) => event.conversation === cloudConversation))
 
+  // The Thread is renamed on the Studio while a window here follows its conversation: the batches never carry the
+  // Thread's name, so the list's word on it reaches the window, the rest of what it shows left as the batches said it.
+  const followedBefore = shown(studioConversation)
+  say({ seq: 9, event: { type: "sessions-listed", sessions: [onStudio("idle", { title: "Retry the webhooks with backoff", threadTitle: "Webhook retries" })] } })
+  assert.equal(shown(studioConversation)?.threadTitle, "Webhook retries", "a followed conversation's Thread is named as the list says")
+  assert.deepEqual(told("live-listed").at(-1)?.summaries.map((summary: { session: { id: string }; threadTitle?: string }) => [summary.session.id, summary.threadTitle]), [[studioConversation, "Webhook retries"]], "and windows are told")
+  assert.deepEqual(shown(studioConversation)?.session, followedBefore?.session, "what its batches said stands")
+
   // The Studio's Session moved to the cloud: it leaves the Studio, and is listed where it runs now.
-  say({ seq: 9, event: { type: "sessions-listed", sessions: [row(studioConversation, { kind: "cloud", threadId: theirs }, "idle", { generation: 3, session: onStudio("idle").session })] } })
+  say({ seq: 10, event: { type: "sessions-listed", sessions: [row(studioConversation, { kind: "cloud", threadId: theirs }, "idle", { generation: 3, session: onStudio("idle").session })] } })
   assert.equal(told("live-unlisted").length, 0, "a move is never told as leaving")
   assert.equal(shown(studioConversation)?.elsewhere, "a cloud machine", "it's listed where it runs now")
   assert.equal(told("live-listed").at(-1)?.summaries[0]?.elsewhere, "a cloud machine")
@@ -1077,13 +1085,13 @@ test("every Session the account lists is listed here, unopened and waking nothin
 
   // Archived by its person on another device: its Sessions leave the list, and it's kept with the archived ones, at rest,
   // still named by its cloud Thread, and the host is told so (what every window shows as archived).
-  say({ seq: 10, event: { type: "sessions-unlisted", sessions: [inCloud("idle").session] } })
-  say({ seq: 11, event: { type: "thread-archived", thread: { thread: theirs, move: randomUUID(), archivedAt: "2026-10-27T10:00:00.000Z", sessions: [inCloud("working")] } } })
+  say({ seq: 11, event: { type: "sessions-unlisted", sessions: [inCloud("idle").session] } })
+  say({ seq: 12, event: { type: "thread-archived", thread: { thread: theirs, move: randomUUID(), archivedAt: "2026-10-27T10:00:00.000Z", sessions: [inCloud("working")] } } })
   await until("the host told it's archived", () => archived.at(-1)?.includes(theirs) === true)
   assert.deepEqual([shown(cloudConversation)?.session.status, shown(cloudConversation)?.elsewhere], ["ready", "a cloud machine"], "with the archived ones, at rest")
   assert.equal(await router.cloudThreadOf({ conversationId: cloudConversation }), theirs, "restoring it finds its cloud Thread")
   assert.equal(router.archiveOf(theirs)?.thread, theirs)
-  say({ seq: 12, event: { type: "thread-unarchived", thread: theirs } })
+  say({ seq: 13, event: { type: "thread-unarchived", thread: theirs } })
   await until("the host told it's back", () => archived.at(-1)?.includes(theirs) === false)
   assert.equal(shown(cloudConversation), undefined, "taken back by its Mac, which lists it as its own")
   assert.equal((await router.route("mako:live-snapshot", [cloudConversation])).handled, false, "no longer answered here")
@@ -1206,6 +1214,45 @@ test("the account's rows for sessions this Mac may keep wait for its catalog, a 
   await new Promise((resolve) => setTimeout(resolve, 80))
   assert.ok(shown(terminal) && shown(theirs), "a catalog being read again says nothing of what the stores keep")
   assert.equal(events.filter((event) => event.type === "live-unlisted").length, 0, "nothing unlisted")
+})
+
+test("an account event is looked at for the rows it names alone: one Session's change among many asks of that row only, a Session that left goes, and a device going quiet looks at every row", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const studio = "8e4b1f20-6a7c-4d9e-b0f1-2c3d4e5f6a7b"
+  const row = (n: number, extra: Partial<ListedSession> = {}): ListedSession => ({
+    session: randomUUID(), thread: randomUUID(), conversation: randomUUID(), harness: "claude", title: `Session ${n}`, state: "idle", folder: "/Users/ana/api", nativeId: `n-${n}`,
+    createdAt: "2026-10-27T07:20:00.000Z", activityAt: "2026-10-27T07:20:00.000Z", generation: 1, runsOn: { kind: "device", deviceId: studio }, listedAt: "2026-10-27T07:20:01.000Z", ...extra,
+  })
+  const rows = Array.from({ length: 20 }, (_, n) => row(n))
+  machine.account.sessionListings = async () => ({ sessions: rows, seq: 1 })
+  machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
+  let say: ((heard: AccountListHeard | "account-changed") => void) | undefined
+  machine.account.onThreadListings = (listener) => {
+    say = listener
+    return () => {}
+  }
+  // Each row of another device is asked whether this Mac keeps its session: what a look at a row costs.
+  let asked = 0
+  const router = new CloudConversations({
+    account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-named-")), "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY,
+    keepsNative: () => (asked++, false),
+    nativeChangedMs: 0,
+  })
+  after(() => router.dispose())
+  await router.start()
+  const shown = (each: ListedSession) => router.summaries().find((summary) => summary.session.id === each.conversation)
+  await until("the list read and listed here", () => rows.every((each) => shown(each) !== undefined))
+  asked = 0
+  say?.({ seq: 2, event: { type: "sessions-listed", sessions: [{ ...rows[3]!, state: "working" }] } })
+  assert.equal(shown(rows[3]!)?.session.status, "running", "the change is listed at once")
+  assert.equal(asked, 1, "one row named, one row looked at")
+  say?.({ seq: 3, event: { type: "sessions-unlisted", sessions: [rows[5]!.session] } })
+  assert.equal(shown(rows[5]!), undefined, "a Session that left the list goes")
+  assert.equal(asked, 1, "and nothing else is looked at for it")
+  say?.({ seq: 4, event: { type: "device-quiet", deviceId: studio, since: "2026-10-27T07:25:00.000Z" } })
+  assert.equal(asked, 1 + rows.length - 1, "a device going quiet may change any of its rows: every one is looked at")
+  assert.equal(shown(rows[3]!)?.session.status, "ready", "and none of a quiet device's is at work")
 })
 
 test("a quiet device's conversation a window has open stops working there too, and says it's back when it is", async () => {
