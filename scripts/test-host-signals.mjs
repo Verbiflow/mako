@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
 import { once } from "node:events"
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { probeRuntime } from "@mako/host/transport/connection"
 import { spawnHost } from "./lib/host-launch.mjs"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 // The host must shut down, with cleanup, on the signals a session ending, a
 // closed terminal or Ctrl+C send; signal-exit, which proper-lockfile installs,
@@ -55,5 +56,6 @@ try {
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) results.push(`${signal} ${await stopsOn(signal)} ms`)
   console.log(`host signals: the host stops with cleanup on ${results.join(", ")}`)
 } finally {
-  await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  // Each host stopped through its own quit, so nothing it started runs in its home any more.
+  await removeScratch(root)
 }

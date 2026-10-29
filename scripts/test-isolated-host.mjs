@@ -1,12 +1,13 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
-import { chmod, cp, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, cp, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, relative, resolve } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { setTimeout as delay } from "node:timers/promises"
 import { startHost } from "./linux-host/host-process.mjs"
+import { describeProcesses, processesLeftIn, removeScratch } from "./lib/scratch-processes.mjs"
 
 /*
  * A host started with a data root of its own (a test's, a proof's, outside
@@ -21,7 +22,10 @@ import { startHost } from "./linux-host/host-process.mjs"
  * home here is a scratch one holding an account layout and a Cursor SDK store
  * as the installed app keeps them, so a failure touches nobody's. Its catalog
  * lists the Cursor agent in its own root and not the person's: that store is
- * Mako's, not Cursor's, so it isn't shared the way `~/.cursor` is.
+ * Mako's, not Cursor's, so it isn't shared the way `~/.cursor` is. Stopped,
+ * it leaves no harness process behind: a Grok sign-in check it was still
+ * running once went on writing into the scratch home after it, and removing
+ * the home failed with ENOTEMPTY.
  *
  * Needs the built host: `npx tsgo -b packages/host`.
  */
@@ -35,6 +39,16 @@ await mkdir(bin)
 const program = resolve("packages/host/dist/mako-host.js")
 await chmod(program, 0o755)
 await symlink(program, join(bin, "mako-host"))
+// Grok, as a sign-in check that never answers and writes into its home meanwhile: what a host still running one as it
+// stops would leave behind. It gives up on its own after a minute, so even a failure leaves it running only that long.
+const probe = join(scratch, "grok-probe.pid")
+await writeFile(join(bin, "grok"), `#!/bin/sh
+case " $* " in *" stdio "*) ;; *) exit 2 ;; esac
+echo $$ > "${probe}"
+mkdir -p "$HOME/.grok"
+i=0
+while [ $i -lt 600 ]; do echo $i >> "$HOME/.grok/probe.log"; sleep 0.1; i=$((i + 1)); done
+`, { mode: 0o755 })
 
 // The person's Mako runs Codex on an account it keeps, and has chosen Claude Code's own login.
 const people = join(home, ".mako", "accounts")
@@ -82,6 +96,8 @@ const host = await startHost({
   env: { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("MAKO_"))), HOME: home, PATH: `${bin}:${process.env.PATH}` },
 })
 let codex
+let connections
+let stopped
 try {
   assert.ok((await host.call("mako:harness-descriptors")).length > 0, "the host answers")
   // The catalog opens its record store and views as it starts.
@@ -100,11 +116,20 @@ try {
   // Choosing an account takes the account lease and writes the selection, as every launch's lease does.
   await host.call("mako:account-select", "codex", null)
   codex = (await host.call("mako:accounts")).accounts.filter((account) => account.harness === "codex")
+  // Settings asks each harness's sign-in; Grok's is a process the host starts, and it is still running as the host stops.
+  connections = host.call("mako:provider-connections", true).catch(() => undefined)
+  for (const deadline = Date.now() + 30_000; Date.now() < deadline && !existsSync(probe); ) await delay(50)
+  assert.ok(existsSync(probe), "the host started Grok's sign-in check")
 } finally {
-  const stopped = await host.stop()
-  assert.equal(stopped.code, 0, `the host stopped cleanly: ${JSON.stringify(stopped)}`)
+  stopped = await host.stop()
+  await connections
 }
 try {
+  const left = await processesLeftIn(scratch, 5_000)
+  assert.deepEqual(left, [], `the stopped host left processes running in its scratch folders:\n${describeProcesses(left)}`)
+  assert.equal(stopped.code, 0, `the host stopped cleanly: ${JSON.stringify(stopped)}`)
+  const registry = join(dataRoot, "runtime", "provider-children.json")
+  assert.deepEqual(JSON.parse(readFileSync(registry, "utf8")).children, [], "the host recorded no provider process as still running when it stopped")
   const kept = listing(dataRoot)
   for (const store of ["records/records.sqlite", "views/unread.sqlite", "session-memory.sqlite", "threads.sqlite", "accounts/selection/codex.json"])
     assert.ok(kept.includes(store), `${store} is in the host's own root: ${kept.filter((path) => !path.includes("/")).join(", ")}`)
@@ -115,5 +140,5 @@ try {
   assert.ok(!existsSync(join(home, "Library", "LaunchAgents")), "no login sync is installed for the person")
   console.log(`isolated host: ${kept.filter((path) => !path.includes("/")).length} entries in its root, its accounts and its Cursor agent among them; ${relative(scratch, home)}/.mako as it was, cursor-sdk included`)
 } finally {
-  await rm(scratch, { recursive: true, force: true })
+  await removeScratch(scratch)
 }

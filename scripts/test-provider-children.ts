@@ -268,6 +268,31 @@ try {
   // No platform gives out a pid above 2^22.
   assert.equal(readMakoProcesses(roots).has(70005), false, "a record whose host is gone isn't Mako's now")
   process.kill(mine.pid!, "SIGTERM")
+
+  // A stopping host ends what it still records, with each one's process group, rather than leaving it to outlive the
+  // host: SIGTERM, then SIGKILL for one that ignores it. A process reported after that is ended as it is recorded.
+  const stopping = new ProviderChildren(join(dir, "stopping-host"))
+  const grouped = (script: string) => {
+    const child = spawn("/bin/sh", ["-c", `${script}; sleep 120 & echo $!; wait`], { stdio: ["ignore", "pipe", "ignore"], detached: true })
+    owned.push(child)
+    const grandchild = new Promise<number>((resolve) => child.stdout!.once("data", (chunk: Buffer) => resolve(Number(chunk.toString().trim()))))
+    return { child, grandchild }
+  }
+  const polite = grouped("true")
+  const stubborn = grouped("trap '' TERM")
+  stopping.track(polite.child, { kind: "discovery", owner: "grok" })
+  stopping.track(stubborn.child, { kind: "acp:test", owner: "conv-stubborn" })
+  const leftAt = [await polite.grandchild, await stubborn.grandchild]
+  const endedAt = performance.now()
+  assert.deepEqual((await stopping.end(300)).map((entry) => entry.owner), ["grok", "conv-stubborn"])
+  assert.ok(performance.now() - endedAt < 2_000, "ending waits for the exits, not out a fixed time")
+  await settle()
+  for (const pid of [polite.child.pid!, stubborn.child.pid!, ...leftAt]) assert.equal(alive(pid), false, `${pid} ended with the host`)
+  assert.deepEqual(JSON.parse(await readFile(stopping.path, "utf8")).children, [], "nothing is left for the next host to reap")
+  const late = spawn("sleep", ["120"], { stdio: "ignore", detached: true })
+  owned.push(late)
+  stopping.track(late, { kind: "discovery", owner: "late" })
+  await new Promise<void>((resolve) => late.once("exit", () => resolve()))
 } finally {
   await Promise.all(
     owned.map(
@@ -286,5 +311,5 @@ try {
   await rm(dir, { recursive: true, force: true })
 }
 console.log(
-  "Provider children: exited children leave the registry, a later host terminates only pids whose start time and executable still match after a title change, and its own children are untouched"
+  "Provider children: exited children leave the registry, a later host terminates only pids whose start time and executable still match after a title change, its own children are untouched until it stops, and stopping ends them with their groups"
 )

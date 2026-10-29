@@ -1270,7 +1270,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
       const callsDrained = methods.close()
       // The native launcher closes its own admission before anything it uses goes.
-      const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop()])
+      const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop(), providerHost.discovery.stop()])
       void providersDrained.catch(() => {})
       git.close()
       application.dispose()
@@ -1294,7 +1294,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       workspaces.close()
       turnMedia.close()
       void workspaceClients.dispose()
-      // Children that exited while stopping have left the registry by now.
+      // What an owner left running ends with the host rather than outliving it; children that exited while stopping
+      // have left the registry by now.
+      await children.end()
       for (const stop of unfollow) stop()
       await Promise.all([unknown.flush(), mismatches.flush()])
       hostLog("lifecycle", "stopped")

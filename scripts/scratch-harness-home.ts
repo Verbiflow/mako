@@ -7,6 +7,7 @@ import { promisify } from "node:util"
 import { z } from "zod"
 import { executableCandidates } from "@mako/host/base/executable"
 import { CURSOR_CLI_KEYCHAIN_ACCOUNT, CURSOR_CLI_KEYCHAIN_SERVICE } from "@mako/host/harnesses/cursor/sdk/cli-keychain"
+import { removeScratchSync } from "./lib/scratch-processes.mjs"
 
 /**
  * A home of its own for the real harness CLIs, signed in as this machine's
@@ -177,12 +178,11 @@ function removeSecrets(home: string, keep: boolean): void {
     // Out of the home's search list too; the file goes below either way.
     try { execFileSync(SECURITY, ["delete-keychain", keychain], { env: { ...process.env, HOME: home }, stdio: "ignore" }) } catch { /* removed below */ }
   }
-  if (keep) {
-    for (const parts of SECRET_FILES) rmSync(join(home, ...parts), { force: true })
-    rmSync(keychain, { force: true })
-  } else {
-    rmSync(home, { recursive: true, force: true })
-  }
+  // The sign-ins go first, so a home a process still writes into keeps none of them.
+  for (const parts of SECRET_FILES) rmSync(join(home, ...parts), { force: true })
+  rmSync(keychain, { force: true })
+  // A home that can't go fails naming what still runs in it; its registry entry stays for the next sweep.
+  if (!keep) removeScratchSync(home)
   rmSync(registryEntry(home), { force: true })
 }
 
