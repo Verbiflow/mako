@@ -160,7 +160,7 @@ export function runGatewayConformance(
   scenario(
     "a watcher back from a dropped link gets what it missed from what the gateway kept, then live updates, each once",
     async (gateway) => {
-      const { runtime, client, stream } = await watched(gateway)
+      const { runtime, stream } = await watched(gateway)
       // Another device watches throughout, so this one knows when the gateway has relayed what it misses.
       const other = (await gateway.connectClient(desktop)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: 0 })
       notice(await stream.next())
@@ -174,7 +174,10 @@ export function runGatewayConformance(
       live(runtime, 3)
       await other.next()
       await other.next()
-      const back = client.subscribe({ stream: sessionStream("rt-live", "c-1"), after: last })
+      // Back on a new connection, as after a dropped link. (On the connection it left, updates relayed before the gateway
+      // read its unsubscribe may still be on their way, and would reach a new subscription there ahead of its notice: a
+      // follower's cursor takes those as the repeats or the gap they are.)
+      const back = (await gateway.connectClient(phone)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: last })
       const head = notice(await back.next())
       assert.equal(head.streamNotice, "head")
       assert.equal(head.head, last + 2)
