@@ -34,7 +34,8 @@ function exported(exports, subpath) {
     if (star === -1) continue
     const [before, after] = [key.slice(0, star), key.slice(star + 1)]
     if (subpath.startsWith(before) && subpath.endsWith(after) && subpath.length >= key.length - 1)
-      return value?.replace("*", subpath.slice(before.length, subpath.length - after.length)) ?? null
+      // Every `*` in the target takes the match, as Node resolves package patterns.
+      return value?.replaceAll("*", subpath.slice(before.length, subpath.length - after.length)) ?? null
   }
   return null
 }
