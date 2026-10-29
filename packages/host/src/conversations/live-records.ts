@@ -1,7 +1,7 @@
 import { join } from "node:path"
 import { disconnectedContext } from "../base/execution-context.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
-import { hostLog } from "../base/host-log.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import type { Interruption, LiveRequest, LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
 import type { NativeActivity } from "../contracts/native-activity.js"
 import { disconnectNativeAgents, isBusyNativeAgent } from "../contracts/native-agents.js"
@@ -23,6 +23,20 @@ import { interruptRequests } from "./live-settlement.js"
  * 640MB minutes after starting.
  */
 export const CONVERSATION_MEMORY = { bytes: 128 * 1024 * 1024, recent: 2, sweepMs: 15_000 }
+
+/**
+ * One reader loading this many conversations from disk between two sweeps is
+ * named in the log: a window opens one at a time, so a count like this is a
+ * job or a call reading the rail in bulk, which the budget can only chase.
+ * The Sessions report once loaded every conversation this host had, every
+ * second, and the host ran out of heap 90 seconds after each start.
+ */
+export const BULK_LOADS = 8
+
+/** The name of a load nothing named: work outside a call, a job or a domain load. */
+const UNNAMED_READER = "unnamed work"
+/** The largest conversations in memory the readout lists. */
+const HELD_SHOWN = 12
 
 /** What an unloaded conversation keeps that its journal does not. */
 interface Unloaded {
@@ -62,6 +76,12 @@ export class LiveRecords {
   private readonly weights = new ContentWeights()
   /** The conversation each binding's driver events belong to; the journal's index doesn't hold it. */
   readonly owners = new Map<string, string>()
+  /** Who read conversations in from disk, by the work that was running (`HostWork.current`), this host life. */
+  private readonly loadsBy = new Map<string, number>()
+  /** The same since the last sweep: where a reader loading in bulk is caught. */
+  private sinceSweep = new Map<string, number>()
+  /** Readers already named for bulk loads since the last sweep: each is said once. */
+  private bulkSaid = new Set<string>()
   private sweepTimer?: ReturnType<typeof setTimeout>
   private stopped = false
 
@@ -186,20 +206,45 @@ export class LiveRecords {
       journal.close()
       return undefined
     }
+    const by = this.noteLoad()
     const unloaded = this.unloaded.get(id)
     if (unloaded) {
-      hostLog("residency", "conversation reloaded", { conversation: id, ms: Math.round(performance.now() - started), blocks: previous.blocks.length })
-      return this.reload(journal, previous, unloaded)
+      hostLog("residency", "conversation reloaded", { conversation: id, ms: Math.round(performance.now() - started), blocks: previous.blocks.length, by })
+      return this.reload(journal, previous, unloaded, by)
     }
     const snapshot = afterRestart(previous, this.dependencies.root)
     journal.commit(snapshot, previous)
-    const resident = residentOf(snapshot, journal, { usedAt: this.dependencies.now?.() ?? Date.now() })
+    const resident = residentOf(snapshot, journal, { usedAt: this.dependencies.now?.() ?? Date.now(), loadedBy: by })
     this.residents.set(id, resident)
     this.recovered.delete(id)
     this.ownBindings(resident)
     this.scheduleSweep()
     this.hooks.loaded(resident)
     return resident
+  }
+
+  /**
+   * A conversation is being read in from disk: counts it to the work that's
+   * running, and names that work once when it reads in bulk (`BULK_LOADS`).
+   */
+  private noteLoad(): string {
+    const by = this.dependencies.work?.current() ?? UNNAMED_READER
+    this.loadsBy.set(by, (this.loadsBy.get(by) ?? 0) + 1)
+    const sinceSweep = (this.sinceSweep.get(by) ?? 0) + 1
+    this.sinceSweep.set(by, sinceSweep)
+    if (sinceSweep >= BULK_LOADS && !this.bulkSaid.has(by)) {
+      this.bulkSaid.add(by)
+      hostWarn("residency", "one reader is loading conversations in bulk", {
+        by, loads: sinceSweep, loaded: this.residents.size, budget: this.memoryBudget().bytes,
+        hint: "a list or a job must read the listing (LiveSummary), never a journal; see BULK_LOADS",
+      })
+    }
+    return by
+  }
+
+  /** Every reader that loaded a conversation from disk this host life, most first. */
+  private loads(): ConversationMemory["loads"] {
+    return [...this.loadsBy].map(([by, count]) => ({ by, count })).sort((left, right) => right.count - left.count).slice(0, 10)
   }
 
   /** Lets go of a conversation now when nothing is using it, as the memory budget would. */
@@ -212,7 +257,7 @@ export class LiveRecords {
    * A conversation `unload` let go, back exactly as it left. None of a
    * restart's recovery applies: only what nothing was running could go.
    */
-  private reload(journal: LiveJournal, saved: LiveSnapshot, unloaded: Unloaded): Resident {
+  private reload(journal: LiveJournal, saved: LiveSnapshot, unloaded: Unloaded, by: string): Resident {
     const id = saved.session.id
     const session = { ...saved.session }
     if (unloaded.commands) session.commands = unloaded.commands
@@ -223,6 +268,7 @@ export class LiveRecords {
       // Past every generation a continuation of the resident it replaces could hold.
       generation: unloaded.generation + 1,
       usedAt: this.dependencies.now?.() ?? Date.now(),
+      loadedBy: by,
     })
     this.residents.set(id, resident)
     this.recovered.delete(id)
@@ -241,8 +287,15 @@ export class LiveRecords {
   memory(): ConversationMemory {
     const plan = this.memoryPlan()
     let bytes = 0
-    for (const resident of this.residents.values()) bytes += residentWeight(this.weights, resident)
-    return { loaded: this.residents.size, unloaded: this.unloaded.size, bytes, pinnedBytes: plan.pinned, budget: this.memoryBudget().bytes }
+    const held: ConversationMemory["held"] = []
+    for (const resident of this.residents.values()) {
+      const weight = residentWeight(this.weights, resident)
+      bytes += weight
+      const { session } = resident.snapshot
+      held.push({ conversation: session.id, bytes: weight, pinned: this.pinned(resident), ...session.title !== undefined && { title: session.title }, ...resident.loadedBy !== undefined && { by: resident.loadedBy } })
+    }
+    held.sort((left, right) => right.bytes - left.bytes).splice(HELD_SHOWN)
+    return { loaded: this.residents.size, unloaded: this.unloaded.size, bytes, pinnedBytes: plan.pinned, budget: this.memoryBudget().bytes, loads: this.loads(), held }
   }
 
   private memoryBudget() {
@@ -284,9 +337,14 @@ export class LiveRecords {
         count++
       }
     }
+    // Who read in since the last sweep goes with what the sweep let go: a line that frees a gigabyte names who filled it.
+    const loads = [...this.sinceSweep].sort((left, right) => right[1] - left[1]).slice(0, 5).map(([by, loaded]) => `${by}=${loaded}`).join(", ")
+    this.sinceSweep = new Map()
+    this.bulkSaid = new Set()
     if (count)
       hostLog("residency", "conversations unloaded", {
         count, freed, kept: plan.kept, pinned: plan.pinned, budget: this.memoryBudget().bytes, loaded: this.residents.size, unloaded: this.unloaded.size,
+        ...loads && { loads },
       })
   }
 
@@ -481,6 +539,9 @@ function residentSummary(snapshot: LiveSnapshot): LiveSummary {
     hasSessionQuestions: Boolean(snapshot.control?.questions?.length),
     nativePaths: snapshot.control?.bindings.flatMap((binding) =>
       binding.path ? [binding.path] : []
+    ),
+    nativeIds: snapshot.control?.bindings.flatMap((binding) =>
+      binding.nativeId ? [{ provider: binding.provider, nativeId: binding.nativeId }] : []
     ),
     session: snapshot.session,
     revision: snapshot.revision,

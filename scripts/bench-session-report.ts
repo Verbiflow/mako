@@ -50,7 +50,7 @@ function sources(rows: readonly NativeRow[], activity: Readonly<Record<string, E
     activity: (path) => activity[path],
     work: () => [],
     waitingOn: () => undefined,
-    archived: () => false,
+    hidden: () => new Set(),
     lastMoved: () => undefined,
     placement: () => undefined,
     execution: () => undefined,

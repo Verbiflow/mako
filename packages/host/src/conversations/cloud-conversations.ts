@@ -1766,6 +1766,7 @@ function summaryOf(snapshot: LiveSummary): LiveSummary {
   if (snapshot.epoch) summary.epoch = snapshot.epoch
   if (snapshot.threadPath) summary.threadPath = snapshot.threadPath
   if (snapshot.nativePaths) summary.nativePaths = snapshot.nativePaths
+  if (snapshot.nativeIds) summary.nativeIds = snapshot.nativeIds
   if (snapshot.hasSessionQuestions) summary.hasSessionQuestions = snapshot.hasSessionQuestions
   return summary
 }

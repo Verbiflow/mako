@@ -1,6 +1,7 @@
 import type { Git } from "@mako/git"
 import type { Admission } from "../base/admission.js"
 import type { Foreground } from "../base/foreground.js"
+import type { HostWork } from "../base/event-loop.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { dirname } from "node:path"
 import { hostWarn } from "../base/host-log.js"
@@ -72,6 +73,8 @@ export const STOPPED_FOR = {
 export type StoppedFor = (typeof STOPPED_FOR)[ProviderStop]
 
 export interface Resident {
+  /** The work that read this conversation in from disk (`HostWork.current`), for the memory readout. */
+  loadedBy?: string
   closing?: boolean
   closeOperation?: Promise<void>
   checkpointing?: boolean
@@ -161,6 +164,8 @@ export interface Dependencies {
   unattended?: boolean
   /** Held while a harness starts, so the host's routine work waits for it (`base/foreground.ts`). */
   foreground?: Pick<Foreground, "hold" | "started">
+  /** What the host is doing, named: who reads a conversation in from disk is counted to it (`LiveRecords`). */
+  work?: Pick<HostWork, "current">
   mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots
   /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */

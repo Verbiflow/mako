@@ -7,6 +7,7 @@ import { nativeConversation, ownedSessions, SessionPublisher, SessionReporter, t
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import { SessionUploads, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
 import { SYNC_WINDOW_MS } from "@mako/host/conversations/sync-window"
+import { threadArchiveKey } from "@mako/host/contracts/thread-lifecycle"
 import { parsePower, type PowerReading } from "@mako/host/base/power"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CatalogSyncStatus, SyncFailure, SyncScope } from "@mako/sessions/scoped-uploads"
@@ -40,7 +41,7 @@ function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; execu
     activity: (path) => options.activity?.[path],
     work: () => options.work ?? [],
     waitingOn: (id) => options.waiting?.[id],
-    archived: (id) => options.archived?.includes(id) ?? false,
+    hidden: () => new Set((options.archived ?? []).map((id) => threadArchiveKey({ kind: "live", id }))),
     lastMoved: (id) => options.moved?.[id],
     // SAFETY: test IDs in the Thread store's shapes, which brand plain UUIDs.
     placement: (id) => ({ thread: uuid(options.threads?.[id] ?? 100), session: uuid(index(id)) }) as never,
