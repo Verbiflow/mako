@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import type { HostJobs } from "../base/host-jobs.js"
 import type { MachineCapability } from "../base/machine.js"
 
 const run = promisify(execFile)
@@ -30,14 +31,15 @@ export async function macIdleSeconds(): Promise<number | undefined> {
 /**
  * Tells the account while its person is at this Mac, so a notice for a Thread that needs them waits for them to leave
  * it rather than buzzing their phone beside the Mac's own banner. Said once a minute while they're here, and once when
- * they've gone; nothing at all while they're away. Only while signed in to the cloud.
+ * they've gone; nothing at all while they're away. Only while signed in to the cloud. The minute is a host job
+ * (`HostJobs.every`), so it stops with the host.
  */
 export class CloudAttention {
   readonly #idle: () => Promise<number | undefined>
   readonly #say: (attending: boolean) => Promise<void>
   readonly #signedIn: () => boolean
   readonly #log: (message: string, fields?: Record<string, string | number>) => void
-  #timer: ReturnType<typeof setInterval> | undefined
+  #cancel: (() => void) | undefined
   #said: boolean | undefined
   #failing = false
 
@@ -48,16 +50,14 @@ export class CloudAttention {
     this.#log = options.log
   }
 
-  start(): void {
-    if (this.#timer) return
-    this.#timer = setInterval(() => void this.look(), EVERY_MS)
-    this.#timer.unref?.()
-    void this.look()
+  /** Looks now, then once a minute on the host's jobs. */
+  start(jobs: Pick<HostJobs, "every">): void {
+    this.#cancel ??= jobs.every("tell the account whether the person is at this Mac", EVERY_MS, () => this.look(), { firstAfterMs: 0 })
   }
 
   stop(): void {
-    clearInterval(this.#timer)
-    this.#timer = undefined
+    this.#cancel?.()
+    this.#cancel = undefined
   }
 
   /** Looks now: at a start, a wake, and once a minute. */

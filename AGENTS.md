@@ -129,6 +129,13 @@ conversations?.live`) rather than a domain importing another's files.
   says nothing as it changes gets a slow job that `needs` a demand on only
   while it's under way, and looks only while a window watches
   (`CloudTurnOnFollower`).
+- **Two file readers** (`workspaces/file-readers.ts`). `readSignedFile` serves
+  only a `mako-file://asset/…` URL this host signed; it is the one thing the
+  gateway's link (`PortRelay`: phones, other devices, cloud machines) reads
+  files through, and the relay itself passes on nothing but `/file/asset/…`.
+  `readWindowFile` also opens any path in a workspace, absolute ones included,
+  so it is for a window on this Mac alone; handing it to the link lets anyone
+  on the account read the Mac's files.
 - **No module-level state.** What the host holds lives in what `createHost`
   builds, so a test makes the one domain it needs. `check-host-module-state.mjs`
   (in `npm run lint`) fails on any module-level `let` and any empty

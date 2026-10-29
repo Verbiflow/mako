@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { FileIcon, MicIcon, PlusIcon, SquareIcon, XIcon } from "lucide-react"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { cn } from "@/lib/utils"
-import { ATTACHMENT_BUDGET, encodedBytes, kilobytes, readPicked, releasePicked, type Picked } from "./attachments"
+import { ATTACHMENT_BUDGET, encodedBytes, HeldPreviews, kilobytes, readPicked, type Picked } from "./attachments"
 import { useDictation, type Heard } from "./dictation"
 import { SendGlyph } from "./glyphs"
 
@@ -52,6 +52,7 @@ export function Composer({
   const before = useRef("")
   const pressedAt = useRef(0)
   const stopOnRelease = useRef(false)
+  const [previews] = useState(() => new HeldPreviews())
 
   useLayoutEffect(() => {
     const node = input.current
@@ -59,7 +60,8 @@ export function Composer({
     node.style.height = "auto"
     node.style.height = `${Math.min(node.scrollHeight, MAX_HEIGHT)}px`
   }, [text])
-  useEffect(() => () => releasePicked(picked), [picked])
+  // A chip's picture goes with its attachment (removed, or sent), and every one with the composer.
+  useEffect(() => () => previews.releaseAll(), [previews])
 
   const heard = useCallback((words: Heard) => {
     const spoken = [words.final, words.interim].filter(Boolean).join(" ")
@@ -81,10 +83,11 @@ export function Composer({
     setSending(true)
     try {
       const went = await onSend(message, attachments)
-      if (went) releasePicked(kept.picked)
+      if (went) previews.release(kept.picked)
       else {
+        // What didn't go comes back ahead of anything picked meanwhile, pictures and all.
         setText((current) => current || kept.text)
-        setPicked((current) => (current.length ? current : kept.picked))
+        setPicked((current) => [...kept.picked, ...current])
       }
     } finally {
       setSending(false)
@@ -98,6 +101,7 @@ export function Composer({
     for (const file of list) {
       try {
         const next = await readPicked(file)
+        previews.hold(next)
         setPicked((current) => [...current, next])
       } catch (error) {
         setProblem(error instanceof Error ? error.message : String(error))
@@ -105,6 +109,11 @@ export function Composer({
         setReading((count) => count - 1)
       }
     }
+  }
+
+  const remove = (each: Picked) => {
+    previews.release([each])
+    setPicked((current) => current.filter((other) => other.id !== each.id))
   }
 
   /**
@@ -144,7 +153,7 @@ export function Composer({
                   <span className="w-full truncate text-label text-muted-foreground">{each.attachment.name}</span>
                 </span>
               )}
-              <button type="button" aria-label={`Remove ${each.attachment.name}`} className="web-attachment-remove" onClick={() => setPicked((current) => current.filter((other) => other.id !== each.id))}>
+              <button type="button" aria-label={`Remove ${each.attachment.name}`} className="web-attachment-remove" onClick={() => remove(each)}>
                 <XIcon className="size-3" strokeWidth={2.5} />
               </button>
             </li>

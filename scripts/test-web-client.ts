@@ -1,4 +1,5 @@
 import assert from "node:assert/strict"
+import { resolveObjectURL } from "node:buffer"
 import { test } from "node:test"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import { foldThreads, openingSession } from "../src/web-client/threads"
@@ -9,6 +10,7 @@ import { rowDetail } from "../src/web-client/rows"
 import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, places } from "../src/web-client/places"
 import { rubberband, SETTLE, springPath } from "../src/web-client/motion"
 import { shouldOffer } from "../src/web-client/install"
+import { HeldPreviews, type Picked } from "../src/web-client/attachments"
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const STUDIO = uuid(900)
@@ -215,4 +217,25 @@ test("the install is offered once it has earned it: a second day, or an approval
   assert.equal(shouldOffer({ days: ["2026-10-27", "2026-10-28"], answered: false, snoozedUntil: 0 }), true)
   assert.equal(shouldOffer({ days: ["2026-10-28"], answered: true, snoozedUntil: 0 }), true)
   assert.equal(shouldOffer({ days: ["2026-10-27", "2026-10-28"], answered: true, snoozedUntil: Date.now() + 1_000 }), false)
+})
+
+test("a chip's picture lasts as long as its attachment: a message that didn't go keeps them, removed or sent lets go", () => {
+  const picked = (name: string): Picked => ({
+    id: name,
+    attachment: { name, mimeType: "image/png", size: 1, data: "AA==" },
+    preview: URL.createObjectURL(new Blob([name], { type: "image/png" })),
+  })
+  const live = (each: Picked) => resolveObjectURL(each.preview!) !== undefined
+  const previews = new HeldPreviews()
+  const [first, second, third] = [picked("a.png"), picked("b.png"), picked("c.png")]
+  for (const each of [first, second, third]) previews.hold(each)
+  // Picking another, or a send that failed and put them back, throws nothing away.
+  assert.ok([first, second, third].every(live), "held while they wait")
+  previews.release([first])
+  assert.deepEqual([first, second, third].map(live), [false, true, true], "a removed one lets go of its own picture alone")
+  previews.release([first])
+  previews.release([second])
+  assert.deepEqual([second, third].map(live), [false, true], "a sent one lets go")
+  previews.releaseAll()
+  assert.equal(live(third), false, "the composer gone, every picture with it")
 })
