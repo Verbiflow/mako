@@ -176,8 +176,9 @@ function useSummary(turnOn: CloudTurnOn): Summary {
 /**
  * The one thing that needs the person now, if any, worded as what to do. An agent signed out on this Mac comes
  * first (cloud Threads use this Mac's sign-in, so signing in here is all it takes); then the project's files Git
- * leaves out, asked once; then a project the cloud can't read, said plainly with no button, since there's nothing
- * to press yet. What Mako retries by itself is only in Details.
+ * leaves out, asked once; then a private project the cloud can't read yet: with a button to give Mako's GitHub App
+ * access to it when that's what's missing, otherwise said plainly with nothing to press. What Mako retries by itself
+ * is only in Details.
  */
 function whatNeedsYou(
   turnOn: CloudTurnOn,
@@ -213,6 +214,25 @@ function whatNeedsYou(
   if (latest && noAccess(latest.base)) {
     const name = repositoryName(latest.repository)
     const instead = startFolder ? ` Your first cloud Thread starts in ${folderName(startFolder)} instead.` : ""
+    const install = (latest.base.state === "failed" || latest.base.state === "waiting") && latest.base.install
+    if (install)
+      return {
+        acts: true,
+        short: `${name} needs GitHub access`,
+        node: (
+          <NeedRow
+            data="private"
+            icon={<LockIcon />}
+            title={`Let cloud Threads work in ${name}`}
+            detail={`${name} is private. Give Mako's GitHub App access to it on GitHub, and cloud Threads clone, push and open pull requests there.`}
+            action={
+              <Action tone="solid" size="sm" onClick={() => cloudTurnOn.giveAccess(install)} data-turn-on-fix="give-access">
+                Give access
+              </Action>
+            }
+          />
+        ),
+      }
     return {
       acts: false,
       short: `${name} is private`,

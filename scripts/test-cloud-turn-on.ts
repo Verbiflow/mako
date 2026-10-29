@@ -194,6 +194,18 @@ test("the follower keeps the times across a restart, says each change once, and 
   const retried = await follower.retryBases()
   assert.deepEqual(asked, [MAKO], "asked again with its branch")
   assert.equal(step(retried, "projects").state, "working")
+  // A private repository the cloud can be given access to: settled, until its person comes back from GitHub, when
+  // it's asked for again and read at once.
+  asked = []
+  now += 5_000
+  standing = { state: "waiting", message: "could not read Username", reason: "no-access", install: "https://github.com/apps/mako/installations/new" }
+  await follower.poll()
+  const waiting = step(await follower.read(), "projects").projects[0]!.base
+  assert.deepEqual(waiting.state === "waiting" ? [waiting.reason, waiting.install] : waiting, ["no-access", "https://github.com/apps/mako/installations/new"])
+  standing = { state: "making", since: "w" }
+  const given = await follower.retryBases()
+  assert.deepEqual(asked, [MAKO], "asked again once access may have been given")
+  assert.equal(step(given, "projects").projects[0]!.base.state, "making")
   const kept = JSON.parse(await readFile(file, "utf8"))
   assert.equal(kept.accounts.a1.since, 15_000 - 5_000)
   // A new follower (the host restarted) reads the same times.

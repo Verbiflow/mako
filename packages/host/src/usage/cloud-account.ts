@@ -115,12 +115,14 @@ const EnrollmentSchema = z.object({
 /** `credential`: a successor to this Mac's credential, once it's due to rotate; the old one works until it's used. */
 const RefreshSchema = EnrollmentSchema.omit({ credential: true }).extend({ credential: z.string().regex(/^mako_dc_[\w-]{43}$/).optional() })
 const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z.string() })
+/** Where on GitHub its person gives the cloud access to a repository: a GitHub page, or nothing. */
+const InstallSchema = z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional().catch(undefined)
 /** Read leniently: a state this build doesn't know reads as the cloud not saying. */
 const BaseStandingSchema = z.union([
   z.object({ state: z.literal("ready"), madeAt: z.string() }),
   z.object({ state: z.literal("making"), since: z.string() }),
-  z.object({ state: z.literal("waiting"), message: z.string().optional(), retryAt: z.string().optional(), reason: z.literal("no-access").optional().catch(undefined) }),
-  z.object({ state: z.literal("failed"), message: z.string(), reason: z.literal("no-access").optional().catch(undefined) }),
+  z.object({ state: z.literal("waiting"), message: z.string().optional(), retryAt: z.string().optional(), reason: z.literal("no-access").optional().catch(undefined), install: InstallSchema }),
+  z.object({ state: z.literal("failed"), message: z.string(), reason: z.literal("no-access").optional().catch(undefined), install: InstallSchema }),
   z.object({ state: z.literal("none") }),
   z.object({ state: z.literal("unknown") }),
 ]).catch({ state: "unknown" as const })

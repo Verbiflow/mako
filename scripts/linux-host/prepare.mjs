@@ -4,6 +4,7 @@ import { createHash } from "node:crypto"
 import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { parseArgs, promisify } from "node:util"
+import { downloadsDirectory, fetchSources, readManifest } from "../lib/control-media-sources.mjs"
 
 /**
  * The build context of runtime/host/Dockerfile, from a built checkout:
@@ -13,7 +14,8 @@ import { parseArgs, promisify } from "node:util"
  *           image installs the host from the same lockfile the Mac app ships
  *   proof/  the kit in scripts/linux-host that installs the harnesses and proves the host,
  *           and in proof/measure, scripts/measure-host.mjs with the fixtures it runs
- *   media/  the FFmpeg recipe and its pinned sources, which the image builds as the Mac does
+ *   media/  the FFmpeg recipe, its manifest and the source archives it pins, each checked by its hash, which the
+ *           image builds as the Mac does, with no network
  *
  * No source, test, environment file or .git enters it. `manifest.json`
  * records every file with its hash and the commit it was built from.
@@ -51,7 +53,11 @@ for (const { name, files: published } of packed) {
 for (const file of ["host-process.mjs", "install-harnesses.mjs", "prove.mjs"]) await copy(join("scripts/linux-host", file), join("proof", file))
 for (const file of ["measure-host.mjs", "lib/scratch-git.mjs", "fixtures/acp-stream-agent.mjs", "fixtures/host-measure-preload.cjs"])
   await copy(join("scripts", file), join("proof/measure/scripts", file))
-for (const file of ["scripts/build-control-media.mjs", "vendor/control-media/sources.json"]) await copy(file, join("media", file))
+for (const file of ["scripts/build-control-media.mjs", "scripts/lib/control-media-sources.mjs", "vendor/control-media/sources.json"])
+  await copy(file, join("media", file))
+const media = await readManifest(".")
+await fetchSources(media, downloadsDirectory("."))
+for (const { archive } of media.sources) await copy(join(downloadsDirectory("."), archive), join("media", downloadsDirectory("."), archive))
 
 const commit = (await run("git", ["rev-parse", "HEAD"])).stdout.trim()
 const dirty = (await run("git", ["status", "--porcelain", "--untracked-files=no"])).stdout.trim() !== ""

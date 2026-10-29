@@ -1,6 +1,20 @@
 # Recording media
 
-`sources.json` pins the source archives and checksums. The build recipe is
+`sources.json` pins the source archives and checksums. Each source lists the
+URLs that serve it, mirrors first and its project's own host last; the sha256
+alone decides whether the bytes are the source, so a mirror is as safe as the
+origin, and a host that is down or serves other bytes only moves the fetch to
+the next URL (`scripts/lib/control-media-sources.mjs`). FFmpeg's release comes
+from Debian's snapshot archive (content-addressed, permanent), then Alpine's
+distfiles, then ffmpeg.org. x264's GitLab archive has no byte-identical mirror,
+so it has its origin alone. Verified archives are kept in the ignored
+`downloads/`, so a checkout downloads each once; `node
+scripts/fetch-control-media-sources.mjs` fetches them alone. The Linux host
+image's context carries them and its media build has no network; CI restores
+them from its cache before building it. A new source or version adds its
+mirrors' URLs only after checking that each serves bytes with its sha256.
+
+The build recipe is
 `scripts/build-control-media.mjs`; run `npm run prepare:control-media` on macOS
 ARM64, and the Linux host image (`runtime/host/Dockerfile`) runs the same recipe
 for Linux x64. It builds FFmpeg/ffprobe with only the codecs, filters and file
