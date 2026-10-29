@@ -1,9 +1,14 @@
 import assert from "node:assert/strict"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { after, test } from "node:test"
-import { CloudTurnOnFollower, turnOnOf, type TurnOnReading, type TurnOnSources } from "@mako/host/conversations/cloud-turn-on"
+import { after, mock, test } from "node:test"
+import { CloudTurnOnFollower, TURN_ON_POLL_MS, turnOnOf, type TurnOnReading, type TurnOnSources } from "@mako/host/conversations/cloud-turn-on"
+import { CloudSignInSync, type CloudSignInStore } from "@mako/host/harnesses/cloud-sign-ins"
+import { HarnessAccounts } from "@mako/host/harnesses/accounts"
+import { AccountRoot } from "@mako/host/harnesses/accounts-common"
+import { ProviderRegistry } from "@mako/host/harnesses/registry"
+import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
 import type { CloudAccount } from "@mako/host/contracts/cloud-account"
 import type { CloudSignInRow, CloudSignInsState } from "@mako/host/contracts/cloud-sign-ins"
 import type { CloudRepository } from "@mako/host/contracts/cloud-threads"
@@ -146,7 +151,7 @@ test("on once every step is done; what stays done stays so, and the times are ea
   assert.equal(turnOnOf(reading(), kept, 100_000).turnOn.since, 1_000)
 })
 
-test("the follower keeps the times across a restart, says each change once, and reads a base's standing only as often as it changes", async () => {
+test("the follower keeps the times across a restart, says each change once, and reads a base's standing only on the slow tick or when asked", async () => {
   const file = join(scratch, "follower", "turn-on.json")
   let now = 10_000
   let account = signedIn([])
@@ -174,11 +179,13 @@ test("the follower keeps the times across a restart, says each change once, and 
   assert.equal((await follower.read()).phase, "no-cloud")
   assert.equal((await follower.checkPlan()).phase, "ready", "Check now hears the grant at once")
   assert.equal(heard.length, 2)
-  await follower.tick()
+  await follower.changed()
   assert.equal(heard.length, 2, "nothing new is said twice")
-  assert.equal(standingReads, 1, "read again only after a few seconds")
+  assert.equal(standingReads, 1, "a change the host hears of doesn't ask the cloud for the bases again")
   now += 5_000
   standing = { state: "failed", message: "no room" }
+  await follower.poll()
+  assert.equal(standingReads, 2, "the slow tick looks again at a base being made")
   const failed = await follower.read()
   assert.equal(standingReads, 2)
   assert.equal(step(failed, "projects").state, "stuck")
@@ -198,4 +205,127 @@ test("the follower keeps the times across a restart, says each change once, and 
   await writeFile(file, "{not json")
   assert.equal((await new CloudTurnOnFollower({ sources, file, emit: () => {} }).read()).phase, "ready")
   sync = syncing(20, "synced")
+})
+
+/**
+ * A follower over sources that count every read, ticked every `TURN_ON_POLL_MS` for `minutes`: `polls` counts the ticks
+ * the host's job would run (while the follower says something is under way). What each source was asked meanwhile.
+ */
+const SECRET: CloudRepository = { url: "https://github.com/acme/secret", branch: "main" }
+async function followFor(minutes: number, patch: { account?: CloudAccount; standing?: BaseStanding; behind?: BaseStanding; machine?: "warming" | "ready"; watching?: boolean; firstThread?: number } = {}) {
+  const counts = { account: 0, signIns: 0, sync: 0, projects: 0, standings: 0, machine: 0 }
+  let now = 1_000
+  let underWay = false
+  const sources: TurnOnSources = {
+    account: async () => (counts.account++, patch.account ?? signedIn(["cloud"])),
+    signIns: async () => (counts.signIns++, signIns([row("cursor", "sent")])),
+    sync: async () => (counts.sync++, syncing(20, "synced")),
+    // The newest project, and with `behind`, an older one behind it standing so.
+    projects: async () => (counts.projects++, [{ folder: "/Users/ada/newest", repository: SECRET }, ...patch.behind ? [{ folder: "/Users/ada/mako", repository: MAKO }] : []]),
+    standings: async (repositories) => (counts.standings++, repositories.map((repository) => ({ repository, standing: (repository === MAKO ? patch.behind : patch.standing) ?? { state: "ready", madeAt: "x" } }))),
+    askBases: async () => {},
+    checkPlan: async () => {},
+    firstThread: () => patch.firstThread,
+    machine: () => (counts.machine++, patch.machine),
+    now: () => now,
+  }
+  const file = join(scratch, `steady-${Math.random().toString(36).slice(2)}`, "turn-on.json")
+  const follower = new CloudTurnOnFollower({ sources, file, emit: () => {}, watching: () => patch.watching ?? true, underWay: (on) => void (underWay = on) })
+  await follower.changed()
+  const first = { ...counts }
+  let polls = 0
+  for (let at = 0; at < minutes * 60_000; at += TURN_ON_POLL_MS) {
+    now += TURN_ON_POLL_MS
+    if (underWay) polls += 1
+    // Ticked even when the job's demand is off: a tick with nothing under way reads nothing either.
+    await follower.poll()
+  }
+  const read = { ...counts }
+  return { first, counts: read, polls, underWay, turnOn: await follower.read(), follower, live: counts, later: (ms: number) => void (now += ms) }
+}
+
+test("in a steady state nothing is read again: signed out, waiting for the invite, ready with no Thread yet, a private project", async () => {
+  const states: Array<[string, Parameters<typeof followFor>[1]]> = [
+    ["signed out", { account: { cloud: "cloud.test", state: { status: "signed-out" } } }],
+    ["no invite", { account: signedIn([]) }],
+    ["ready, no Thread yet", {}],
+    ["the newest project private", { standing: { state: "waiting", message: "could not read Username", reason: "no-access" } }],
+    ["a private project that failed", { standing: { state: "failed", message: "could not read Username", reason: "no-access" } }],
+  ]
+  for (const [name, patch] of states) {
+    const { first, counts, polls, underWay } = await followFor(10, patch)
+    assert.equal(underWay, false, `${name}: nothing under way for the slow tick`)
+    assert.equal(polls, 0, `${name}: the slow tick never runs`)
+    assert.deepEqual(counts, first, `${name}: ten minutes read nothing more than the first read`)
+    assert.ok(counts.standings <= 1, `${name}: the bases' standing read once at most`)
+  }
+})
+
+test("a private project settles: never asked of the cloud again, even while the slow tick runs for a machine made ahead", async () => {
+  const { counts, polls, turnOn } = await followFor(10, { standing: { state: "waiting", reason: "no-access" }, behind: { state: "ready", madeAt: "x" }, machine: "warming" })
+  assert.ok(polls > 100, "the machine made ahead in the next project keeps the slow tick going")
+  assert.equal(counts.standings, 1, "the private project's standing is read once, not every tick")
+  assert.equal(step(turnOn, "projects").state, "done")
+  assert.equal(step(turnOn, "thread").folder, "/Users/ada/mako")
+})
+
+test("a base being made is looked at again only on the slow tick, and only while a window watches", async () => {
+  const watched = await followFor(1, { standing: { state: "making", since: "x" } })
+  assert.equal(watched.polls, 60_000 / TURN_ON_POLL_MS)
+  assert.equal(watched.counts.standings, 1 + watched.polls, "each tick reads its standing once")
+  const unwatched = await followFor(10, { standing: { state: "making", since: "x" }, watching: false })
+  assert.equal(unwatched.counts.standings, 1, "with no window there, nothing asks the cloud")
+  assert.deepEqual(unwatched.counts, unwatched.first)
+  // A client asking for the line (one not watching events) looks at it again too, but not at every ask.
+  await unwatched.follower.asked()
+  assert.equal(unwatched.live.standings, 2, "asked minutes after the last read: looked at again")
+  for (let ask = 0; ask < 10; ask++) await unwatched.follower.asked()
+  assert.equal(unwatched.live.standings, 2, "asked again at once: the standing just read stands")
+  unwatched.later(TURN_ON_POLL_MS)
+  await unwatched.follower.asked()
+  assert.equal(unwatched.live.standings, 3, "asked a tick later: looked at again")
+})
+
+test("the line's read of the sign-ins is the last check, never a new one: no store read, no cloud call, sharing on or off", async () => {
+  const dataRoot = join(scratch, "sign-ins")
+  const calls: string[] = []
+  const store: CloudSignInStore = {
+    blocked: async () => void calls.push("blocked"),
+    list: async () => (calls.push("list"), { signIns: [], kept: [] }),
+    put: async () => void calls.push("put"),
+    remove: async () => void calls.push("remove"),
+    share: async () => {
+      throw new Error(`shared: ${calls.push("share")}`)
+    },
+    pull: async () => (calls.push("pull"), null),
+    refresh: async () => (calls.push("refresh"), null),
+    disconnect: async () => void calls.push("disconnect"),
+  }
+  const registry = new ProviderRegistry<ProviderAccountCapability>()
+  const make = () => new CloudSignInSync({ accounts: new HarnessAccounts(registry, new AccountRoot(join(dataRoot, "user"))), capabilities: registry, store, dataRoot, onChange: () => {} })
+  const clock = mock.method(Date, "now", () => 0)
+  try {
+    await mkdir(join(dataRoot, "cloud"), { recursive: true })
+    await writeFile(join(dataRoot, "cloud", "sign-ins.json"), JSON.stringify({ version: 2, sharing: false, inStep: {} }))
+    const off = make()
+    for (let minute = 0; minute < 10; minute++) {
+      clock.mock.mockImplementation(() => minute * 60_000)
+      assert.deepEqual(await off.current(), { sharing: false, harnesses: [] })
+    }
+    assert.deepEqual([...calls], [], "sharing off: ten minutes of reads checked nothing")
+    await off.state()
+    assert.ok(calls.includes("blocked"), "Settings' read, by contrast, checks a state this old")
+    calls.length = 0
+    await writeFile(join(dataRoot, "cloud", "sign-ins.json"), JSON.stringify({ version: 2, inStep: {} }))
+    const on = make()
+    for (let minute = 0; minute < 10; minute++) {
+      clock.mock.mockImplementation(() => minute * 60_000)
+      const state = await on.current()
+      assert.equal(state.sharing, true)
+      assert.equal(state.checkedAt, undefined, "not checked yet, said as such")
+    }
+    assert.deepEqual([...calls], [], "sharing on, before its own check: still nothing checked by reading")
+  } finally {
+    clock.mock.restore()
+  }
 })

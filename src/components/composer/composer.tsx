@@ -117,6 +117,8 @@ import {
 } from "@/state/session"
 import { skills } from "@/state/skills"
 import { threads, threadsStore, useThreads } from "@/state/threads"
+import { freshViewedRef, openingHoldsSend } from "@/state/thread-viewing"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { useRestorePlans } from "@/state/restore-plan"
 import { descriptorFor } from "@/state/descriptors"
 import { XIcon, Maximize2Icon, Minimize2Icon } from "lucide-react"
@@ -190,13 +192,56 @@ function toAcpPromptAttachment(item: Attachment): PromptAttachment {
 }
 
 
+/** One notice for a send that can't go yet, so pressing again replaces it instead of stacking another. */
+const SEND_HELD_TOAST = "composer-send-held"
+
+/** How long a send waits for the fresh read of the conversation on screen before it goes by the transcript shown. */
+const FRESH_ROUTE_PATIENCE_MS = 4_000
+
+/** Says why the conversation being opened can't take a send yet, in the viewer's words, with its Retry. */
+function sayOpeningHolds(held: NonNullable<ReturnType<typeof openingHoldsSend>>) {
+  if (held.kind === "failed")
+    toast.error("Could not load this conversation", {
+      id: SEND_HELD_TOAST,
+      description: `${held.error.replace(/\.?$/, ".")} Your draft is saved.`,
+      duration: ACTION_TOAST_MS,
+      action: { label: "Retry loading", onClick: () => void threads.view(held.ref) },
+    })
+  else toast("Wait for this conversation to load before sending. Your draft is saved.", { id: SEND_HELD_TOAST })
+}
+
+/**
+ * Whether a send can go by the conversation on screen. While its fresh read
+ * lands, the ref shown is the last read's or the record's tail's. The host
+ * routes a reply by path, so most sends go at once; a session that only goes
+ * on from its transcript (`copyOnly`, `resumeUnavailable`) is routed here, so
+ * that send waits a moment for the read to say so still, and goes by the
+ * transcript shown when the read fails or is slow. False keeps the draft:
+ * another conversation took the viewer, or nothing of it is left on screen.
+ */
+async function settleViewedRoute(waiting: (on: boolean) => void): Promise<boolean> {
+  const { viewing, opening } = threadsStore.get()
+  if (!viewing || opening?.kind !== "loading" || opening.ref.path !== viewing.ref.path || !(viewing.ref.copyOnly || viewing.ref.resumeUnavailable)) return true
+  waiting(true)
+  try {
+    await freshViewedRef(viewing.ref.path, FRESH_ROUTE_PATIENCE_MS)
+  } finally {
+    waiting(false)
+  }
+  const held = openingHoldsSend(threadsStore.get())
+  if (held) sayOpeningHolds(held)
+  return !held && threadsStore.get().viewing?.ref.path === viewing.ref.path
+}
+
 export function Composer() {
   const hostConnected = useHostConnection((state) => state.kind === "connected")
   const workspaceCwd = useSession((state) => state.meta?.cwd ?? "")
   const viewingPath = useThreads(
     (state) => state.opening?.ref.path ?? state.viewing?.ref.path
   )
-  const opening = useThreads((state) => state.opening)
+  // The conversation being opened holds a send only while nothing of it is on screen, or its read failed.
+  const held = useThreads(openingHoldsSend)
+  const [confirmingRoute, setConfirmingRoute] = useState(false)
   const liveDraftKey = useAcp((state) => activeAcp(state)?.draftKey)
   const newSessionKey = useThreadGroups((state) => sessionDraftKey(openSessionDraft(state)))
   const draftKey = liveDraftKey ?? viewingPath ?? newSessionKey ?? projectDraftKey(workspaceCwd)
@@ -555,19 +600,20 @@ export function Composer() {
     async (mode?: "steer" | "followUp", deliver?: (message: string) => Promise<boolean>) => {
       if (hostConnectionStore.get().kind === "disconnected") {
         toast.error(
-          "Reconnect the Mako host before sending. Your draft is saved."
-        )
-        return
-      }
-      if (threadsStore.get().opening) {
-        toast.error(
-          "Wait for this conversation to load before sending. Your draft is saved."
+          "Reconnect the Mako host before sending. Your draft is saved.",
+          { id: SEND_HELD_TOAST }
         )
         return
       }
       const submittedDraftKey = draftKey
       const text = draft.trim()
       if (!text && attachments.items.length === 0) return
+      const opening = openingHoldsSend(threadsStore.get())
+      if (opening) {
+        sayOpeningHolds(opening)
+        return
+      }
+      if (!(await settleViewedRoute(setConfirmingRoute))) return
 
       const goalLine = deliver ? null : readGoalLine(text)
       if (goalLine) {
@@ -953,6 +999,8 @@ export function Composer() {
     if (event.key === "Enter" && !event.shiftKey) {
       promptHistory.current = null
       event.preventDefault()
+      // The send button turns while the conversation loads; Enter adds no notice of its own.
+      if (held?.kind === "loading") return
       const modified = event.metaKey || event.ctrlKey
       void submit(modified !== steerOnEnter ? "steer" : undefined)
     }
@@ -1032,9 +1080,9 @@ export function Composer() {
     canSteer: liveOwnsComposer && canSteer,
     steerOnEnter,
   })
-  const resume = useComposerResume(liveOwnsComposer && !turnRunning && hostConnected && !opening)
+  const resume = useComposerResume(liveOwnsComposer && !turnRunning && hostConnected && !held)
   const primaryAction = composerActionKind({
-    running: turnRunning && hostConnected && !opening,
+    running: turnRunning && hostConnected && !held,
     hasContent,
     steer: enterAction === "steer",
     resume: resume !== null,
@@ -1048,14 +1096,14 @@ export function Composer() {
   // A session whose records a newer version of its harness wrote goes on from its transcript until the harness is updated (`RestorePlan`).
   const viewingOutdated = useRestorePlans((state) => viewingPath !== undefined && state.plans[viewingPath]?.kind === "update")
   const newHarness = useThreads((state) => state.composerHarness)
-  const placeholder = planDecision && !opening
+  const placeholder = planDecision && !held
     ? `Tell ${harnessTitle(planDecision.harness ?? newHarness)} what to change in the plan`
-    : planning && !opening && !turnRunning
+    : planning && !held && !turnRunning
     ? `Describe what to plan — ${harnessTitle(newHarness)} proposes a plan before changing anything`
-    : opening
-    ? opening.kind !== "loading"
+    : held
+    ? held.kind !== "loading"
       ? `Draft a reply for ${harnessTitle(newHarness)} — conversation could not load`
-      : newHarness === opening.ref.harness
+      : newHarness === held.ref.harness
         ? `Draft a reply for ${harnessTitle(newHarness)} — loading conversation…`
         : `Draft a reply — moves this conversation to ${harnessTitle(newHarness)} once it loads`
     : liveOwnsComposer && liveHarness
@@ -1323,7 +1371,8 @@ export function Composer() {
                 action={primaryAction}
                 resumeLabel={resume?.resume.label}
                 onResume={() => void resume?.run()}
-                ready={hasContent && !opening && hostConnected}
+                ready={hasContent && !held && hostConnected}
+                waiting={confirmingRoute ? "Sending once this conversation has loaded…" : held?.kind === "loading" ? "Loading this conversation…" : undefined}
                 stopping={liveOwnsComposer && stopping}
                 steerTitle={steerTitle}
                 onSend={() => void submit(primaryAction === "steer" ? "steer" : undefined)}

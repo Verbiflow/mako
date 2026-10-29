@@ -72,7 +72,10 @@ export const cloudTurnOn = {
     prepareCloudNow(folder)
   },
 
-  /** A pointer resting on Start: the machine is made ahead while the person decides. */
+  /**
+   * Start pressed down: the machine is made ahead from the press rather than its release. A pointer only passing over
+   * makes nothing, since a machine made ahead and left unused makes the next one wait for more writing.
+   */
   warm(folder: string) {
     prepareCloudNow(folder)
   },

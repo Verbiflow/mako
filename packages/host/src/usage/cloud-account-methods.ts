@@ -60,7 +60,10 @@ export interface CloudAccount {
   account?(): Promise<CloudAccountView>
   /** Asks the cloud again what the account has, now: an invite (later a payment) lands at once. */
   checkPlan?(): Promise<CloudAccountView>
-  /** Each agent's sign-in as it stands in the cloud (`mako:cloud-sign-ins`); undefined where this Mac shares none. */
+  /**
+   * Each agent's sign-in as the last check found it (`CloudSignInSync.current`), never checked anew: a `cloud-sign-ins`
+   * event says when it changes. Undefined where this Mac shares none.
+   */
   signIns?(): Promise<CloudSignInsState | undefined>
   /** A move's checkpoint or carry, a bundle sent to the cloud Thread once by its hash (`CloudAccounts.sendCheckpoint`). */
   sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string): Promise<{ sent: boolean }>
@@ -144,6 +147,8 @@ export interface HarnessSignInSharing {
   start(): void
   stop(): void
   check(): Promise<CloudSignInsState>
+  /** The last check as it stands; never checks. */
+  current(): Promise<CloudSignInsState>
   state(): Promise<CloudSignInsState>
   share(sharing: boolean): Promise<CloudSignInsState>
   /** The machine woke: take what the cloud refreshed meanwhile, before anything runs on the old. */
@@ -298,7 +303,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     baseStandings: (repositories) => cloud.baseStandings(repositories),
     account: () => cloud.ready(),
     checkPlan: () => cloud.checkPlan(),
-    signIns: async () => sync?.state(),
+    signIns: async () => sync?.current(),
     sendCheckpoint: (threadId, checkpoint, file) => cloud.sendCheckpoint(threadId, checkpoint, file),
     handOverMove: (threadId, move, request) => cloud.handOverMove(threadId, move, request),
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),

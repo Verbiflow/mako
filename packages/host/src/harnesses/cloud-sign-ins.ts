@@ -324,7 +324,17 @@ export class CloudSignInSync {
     clearTimeout(timer)
   }
 
-  /** The last check, or a new one when there's none or it's stale. */
+  /**
+   * The last check as it stands, never a new one: what something that only says where the sign-ins stand reads (the
+   * line turning the cloud on), hearing of each new check through `onChange`. It reads no harness's store and nothing
+   * of the cloud. With sharing off there's no check to follow: the person keeps the sign-ins on this Mac.
+   */
+  async current(): Promise<CloudSignInsState> {
+    await this.#loaded
+    return this.#shares ? this.#state : { sharing: false, harnesses: [] }
+  }
+
+  /** The last check, or a new one when there's none or it's stale: for Settings, which a person opened to see them. */
   async state(): Promise<CloudSignInsState> {
     await this.#loaded
     const checkedAt = this.#state.checkedAt ? Date.parse(this.#state.checkedAt) : 0

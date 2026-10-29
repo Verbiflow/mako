@@ -47,6 +47,19 @@ export type BaseStanding =
   /** A cloud that doesn't say, or a base it hasn't heard of. */
   | { state: "unknown" }
 
+/** A base the cloud can't read (a private repository, or one gone): settled, since no try would help. */
+export function noAccess(base: BaseStanding): boolean {
+  return (base.state === "failed" || base.state === "waiting") && base.reason === "no-access"
+}
+
+/**
+ * Whether a base's standing is where it stays until someone asks again: everything but one being made or waiting for
+ * its next try. The one rule for what's still going, which the line, its reads of the cloud and the window all use.
+ */
+export function baseSettled(base: BaseStanding): boolean {
+  return (base.state !== "making" && base.state !== "waiting") || noAccess(base)
+}
+
 /** One of this Mac's recent projects offered for a base, the newest first. */
 export type TurnOnProject = {
   /** The project's folder on this Mac. */
