@@ -3,7 +3,7 @@ import { mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
 import { textOf } from "@/lib/format"
 import { causeWords, eventLabel } from "@/lib/transcript-events"
 import { foldUsageLimits } from "@/lib/usage-limit-folds"
-import { savedContinuation, type SavedContinuation } from "@mako/host/contracts/turn-continuation"
+import { opensContinuation, savedContinuation, type SavedContinuation } from "@mako/host/contracts/turn-continuation"
 
 /**
  * An exchange is one question and everything the agent did to answer it.
@@ -99,7 +99,10 @@ export type PlacedSection = ResponseSection | { kind: "made"; id: string; media:
  * words, and a saved history keeps nothing else. A steer is never one.
  */
 export function isContinuation(message: ChatMessage): SavedContinuation | undefined {
-  return message.role === "user" && !message.steeringFor ? savedContinuation(textOf(message.blocks)) : undefined
+  if (message.role !== "user" || message.steeringFor) return undefined
+  // Asked of every prompt as the projection runs: a prompt that doesn't open as one is never read whole.
+  const first = message.blocks.find((block) => block.type === "text" && block.text)
+  return first?.type === "text" && opensContinuation(first.text) ? savedContinuation(textOf(message.blocks)) : undefined
 }
 
 /** The requests an exchange's turn ran as: its prompt's, then each continuation's, in order. */

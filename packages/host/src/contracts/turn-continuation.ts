@@ -116,8 +116,9 @@ export interface SavedContinuation {
  * exit's three reasons share their words and read as `host-quit`.
  */
 export function savedContinuation(text: string): SavedContinuation | undefined {
+  // Asked of every prompt as it streams: anything else is told apart by its opening, without copying it.
+  if (!opensContinuation(text)) return undefined
   const words = text.trim()
-  if (!words.startsWith("Continue where you left off.")) return undefined
   for (const each of INTERRUPTION_REASONS) {
     const reason = SITUATIONS[each] === SITUATIONS["host-quit"] ? "host-quit" : each
     if (words === SITUATIONS[reason]) return { reason }
@@ -129,6 +130,16 @@ export function savedContinuation(text: string): SavedContinuation | undefined {
     }
   }
   return undefined
+}
+
+const CONTINUATION_OPENS = "Continue where you left off."
+
+/** Whether `text`, past any leading space, opens as every continuation does. */
+export function opensContinuation(text: string): boolean {
+  if (text.startsWith(CONTINUATION_OPENS)) return true
+  if (!/^\s/.test(text)) return false
+  const start = text.search(/\S/)
+  return start >= 0 && text.startsWith(CONTINUATION_OPENS, start)
 }
 
 /**

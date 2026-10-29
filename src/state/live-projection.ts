@@ -227,9 +227,10 @@ function remember(
     exchangeStart: opened !== undefined
       ? Math.max(0, opened)
       : start >= input.blocks.length ? result.exchanges.length : 0,
-    // Its opener on screen is a turn that began before these blocks (a continuation of one in the saved history):
-    // the next projection reads the whole conversation again rather than lose what came before.
-    tail: opened !== -1,
+    // A continuation opens the tail only when the turn it continues began before these blocks (in the saved
+    // history), and then it has no exchange of its own: the next projection reads the whole conversation again
+    // rather than lose what came before.
+    tail: !(opened === -1 && opener?.type === "user" && savedContinuation(opener.text)),
   })
 }
 
