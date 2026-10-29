@@ -1,4 +1,5 @@
 import { clockText } from "@/state/request-recovery"
+import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { draftText, rememberDraft, clearSubmittedDraft } from "@/state/drafts"
 import { useThreads } from "@/state/threads"
 import { useLayoutEffect, useRef, useState } from "react"
@@ -208,6 +209,8 @@ function QueueRow({
     : parsePlanContext(stripThreadReferenceAppendix(stripSkillAppendix(request.text))).body
   const parsedBody = wire.items.length ? rawBody : parseAttachmentAppendix(rawBody).body
   const body = request.text.startsWith(parsedBody) ? parsedBody : rawBody
+  // Mako's words picking up a turn cut short are not the person's to read as theirs, or to edit.
+  const continuation = savedContinuation(request.text) !== undefined
   const [editing, setEditing] = useState(false)
   const [editingSource, setEditingSource] = useState<PendingPrompt>()
   const editKey = `queue:${target.kind === "live" ? target.id : target.path}:${request.id}`
@@ -326,7 +329,7 @@ function QueueRow({
       ) : (
         <div className="flex items-start gap-2">
           <p className="line-clamp-2 min-w-0 flex-1 text-ui leading-relaxed whitespace-pre-wrap text-muted-foreground">
-            {body || `${request.attachments.length} attachments`}
+            {continuation ? "Continues the turn where it stopped" : body || `${request.attachments.length} attachments`}
           </p>
           <div className="flex shrink-0 items-center gap-0.5 text-faint">
             {request.status === "held" && !request.signIn ? <button type="button" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 rounded px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
@@ -346,7 +349,7 @@ function QueueRow({
               type="button"
               aria-label="Edit queued message"
               title="Edit queued message"
-              disabled={!editable || busy}
+              disabled={!editable || busy || continuation}
               className="pressable grid size-6 place-items-center rounded hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
               ref={editButton}
               onClick={() => void change("pause")}

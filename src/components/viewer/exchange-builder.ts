@@ -1,4 +1,4 @@
-import { LEAD_EXCHANGE_ID, type Exchange as ExchangeData } from "@/lib/exchanges"
+import { isContinuation, LEAD_EXCHANGE_ID, type Exchange as ExchangeData } from "@/lib/exchanges"
 import { entriesToMessages } from "@/lib/entry-messages"
 import type { ViewedThread } from "@/state/thread-state"
 import type { ChatMessage } from "@/lib/types"
@@ -98,6 +98,12 @@ export function createExchangeBuilder() {
 /** Draw `message` into `exchanges`, as `toExchanges` draws it; an exchange it joins is replaced, not changed. */
 function draw(exchanges: ExchangeData[], message: ChatMessage): void {
   const last = exchanges.at(-1)
+  // Mako's words picking up a turn cut short go on in the turn on screen, as one turn (`isContinuation`).
+  if (message.role === "user" && isContinuation(message)) {
+    if (last) exchanges[exchanges.length - 1] = { ...last, response: [...last.response, message] }
+    else exchanges.push({ id: LEAD_EXCHANGE_ID, response: [message], system: [], timestamp: message.timestamp })
+    return
+  }
   if (message.role === "user") {
     exchanges.push({ id: message.id, prompt: message, response: [], system: [], timestamp: message.timestamp })
     return

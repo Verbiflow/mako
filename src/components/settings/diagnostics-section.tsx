@@ -67,7 +67,7 @@ export function DiagnosticsSection() {
       <ListCard>
         <SettingRow
           title="Show originals"
-          description="Adds Original to each answer and marker in a conversation, showing the records the harness wrote it in"
+          description="Adds Original to each answer and marker in a conversation, showing the records the harness wrote it in, and marks where Mako continued a turn, with what it told the agent"
         >
           <Toggle label="Show originals" on={showOriginals} onChange={() => togglePref("showOriginals")} />
         </SettingRow>

@@ -3167,17 +3167,30 @@ loses the stamp with the host that made the promise. The renderer reads the
 stamp: the footer says "continuing automatically" with the live mark and
 offers no button, presence and the rail keep the row working, and no
 `failed` outcome is announced or marked for a drop Mako is about to pick up.
-Mako's continuation renders as Mako's line where the prompt would be ("Mako
-continued the turn after the connection to Cursor dropped"), never as the
-user's bubble, and so does the person's Continue turn ("You continued the
-turn after Mako closed"): its words are Mako's, not theirs. A store keeps
-only the words, so `continueTurnPrompt(reason, sender)` ends with a
-sentence naming who sent it, and `savedMakoPrompt` reads both back whole,
-as it reads the goal loop's prompts; words from before that sentence
-existed name no one ("The turn continued after …"). `test-live-conversations.ts` (`autoContinuedTurn`),
-`test-prompt-delivery.tsx`, `test-live-controls.tsx` and
-`test-notifications.ts` cover the send, the bound, the declines, the journal
-and the quiet.
+A continuation never reads as a new turn. Its words are Mako's, whether Mako
+sent them or the person pressed Continue turn, so they are never the
+person's bubble, and the turn reads as one run: `toExchanges` puts a
+continuation into the exchange it continues (in the lead exchange when that
+turn is on an earlier page), where it draws nothing. The fold times the
+turn's work without the wait before it went on. How the turn ended is its
+newest part's (`turnRequest`), so the stop it went on from leaves no footer,
+and the provider's own stop marker at that seam is dropped
+(`notesBesideContinuations`). Each part keeps its changes row. The words
+alone mark a continuation, the same live and saved: a store keeps only the
+words, so `continueTurnPrompt(reason, sender)` ends with a sentence naming
+who sent it, and `savedContinuation` reads both back whole; words from
+before that sentence existed name no one. The facts stay one switch away:
+with Settings › Diagnostics' originals on, the seam is a quiet line saying
+why and who ("Mako restarted Claude Code and continued the turn"), opening
+onto the exact words, with their Original. A step a lost machine undid
+changed the person's files, so that seam always says so ("The last step was
+interrupted; Claude Code picked it up again"). Wherever a list names a
+request by its words (Changes' turns, a failure's notice, the queue), a
+continuation is named by the turn it continued (`turnWords`), and the
+composer's recall leaves it out. `test-live-conversations.ts`
+(`autoContinuedTurn`), `test-prompt-delivery.tsx`, `test-live-controls.tsx`,
+`test-transcript-events.tsx` and `test-notifications.ts` cover the send, the
+bound, the declines, the journal, the one turn and the quiet.
 
 A turn whose provider process dies is continued the same way, for every
 harness. Between 2026-09-26 and 09-28 the Cursor SDK child died mid-turn eight

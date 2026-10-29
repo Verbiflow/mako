@@ -45,12 +45,17 @@ import { sentDraft } from "@/lib/context/draft"
 import { MARKER } from "@/lib/context/wire"
 import type { SentProse } from "@/lib/prompt-markdown"
 import {
+  exchangeRequests,
+  isContinuation,
+  notesBesideContinuations,
   notesBesideStop,
   responseSections,
   responseText,
+  turnRequest,
   type Exchange as ExchangeData,
   type PlacedSection,
 } from "@/lib/exchanges"
+import type { SavedContinuation } from "@mako/host/contracts/turn-continuation"
 import { EventNotes } from "./event-notes"
 import { EventLine } from "./event-line"
 import { ShowOriginal } from "./show-original"
@@ -113,25 +118,28 @@ export const Exchange = memo(function Exchange({
   streaming?: boolean
   /** True when the turn stopped early; a `TurnStop` also says why and whether it can be continued. */
   interrupted?: boolean | TurnStop
-  /** Mako sent this exchange's prompt itself, so it's drawn as Mako's line. */
+  /** Mako sent this exchange's prompt itself, so it's drawn as Mako's line. A continuation is never a prompt (`toExchanges`). */
   sentByMako?: MakoPrompt
   /** The conversation this exchange's prompt carried to a new session: one quiet line above the person's words. */
   carried?: CarriedHistory
   failed?: boolean
 }) {
   useHarnessIdentity()
-  // A saved conversation keeps no request, and the person's Continue turn
-  // sends Mako's words as an ordinary message: either is known by its words.
+  // A saved conversation keeps no request: Mako's goal steps are known by their words.
   const savedByMako = useMemo(
     () => (sentByMako || !exchange.prompt ? undefined : savedMakoPrompt(textOf(exchange.prompt.blocks))),
     [sentByMako, exchange.prompt]
   )
   const mako = sentByMako ?? savedByMako
-  const failureRow = useContext(FailedRequestsContext).has(exchange.prompt?.requestId ?? "")
+  // `toExchanges` never opens a turn on a continuation; one handed in that way is still never drawn as the person's words.
+  const continuedPrompt = useMemo(() => (exchange.prompt ? isContinuation(exchange.prompt) : undefined), [exchange.prompt])
+  // The request the turn stands on now: its newest continuation's, else its prompt's.
+  const standing = turnRequest(exchange)
+  const failureRow = useContext(FailedRequestsContext).has(standing ?? "")
   const stopShown = Boolean(interrupted) && !streaming
   const notes = useMemo(
-    () => (stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system),
-    [exchange.system, exchange.response.length, stopShown]
+    () => notesBesideContinuations(stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system, exchange.response),
+    [exchange.system, exchange.response, stopShown]
   )
   const answered = useMemo(
     () => responseSections(exchange.response, notes),
@@ -175,6 +183,8 @@ export const Exchange = memo(function Exchange({
         </p>
         <Prompt message={section.message} />
       </div>
+    ) : section.kind === "continued" ? (
+      <TurnWentOn key={section.id} continued={section.continued} message={section.message} provider={provider} />
     ) : section.kind === "prose" ? (
       <Response key={section.id} message={section.message} previewedFiles={section.previewedFiles} showWork />
     ) : section.kind === "shown" || section.kind === "made" ? (
@@ -209,7 +219,9 @@ export const Exchange = memo(function Exchange({
         stop={fold.part === steers ? interrupted : undefined}
         kept={fold.kept.map((at) => {
           const note = sections[at]!
-          return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline /> : note.kind === "shown" || note.kind === "made" ? <TurnMedia key={note.id} media={note.media} shown={note.kind === "shown"} /> : null
+          return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline />
+            : note.kind === "shown" || note.kind === "made" ? <TurnMedia key={note.id} media={note.media} shown={note.kind === "shown"} />
+              : note.kind === "continued" ? <TurnWentOn key={note.id} continued={note.continued} message={note.message} provider={provider} /> : null
         })}
       >
         {sections.slice(fold.start, fold.end).map((section, offset, hidden) =>
@@ -226,11 +238,11 @@ export const Exchange = memo(function Exchange({
       <HarnessContext value={provider}>
       {/* One gallery per exchange: every picture and video in the prompt, the answer and its work steps a step apart. */}
       <MediaGalleryScope>
-      <AnswerRequestContext.Provider value={exchange.prompt?.requestId}>
+      <AnswerRequestContext.Provider value={standing}>
       <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
         {exchange.prompt ? (
-          mako?.kind === "continued" ? (
-            <Continued continued={mako} provider={provider} said={textOf(exchange.prompt.blocks)} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
+          continuedPrompt ? (
+            <TurnWentOn continued={continuedPrompt} message={exchange.prompt} provider={provider} />
           ) : mako?.kind === "moved" ? (
             <MovedNote timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "goal" ? (
@@ -266,8 +278,8 @@ export const Exchange = memo(function Exchange({
             <ReviewFindings report={review} />
           </div>
         ) : null}
-        {streaming ? null : <TurnChanges requestId={exchange.prompt?.requestId} />}
-        <ExchangeFailure requestId={exchange.prompt?.requestId} />
+        {streaming ? null : exchangeRequests(exchange).map((requestId) => <TurnChanges key={requestId} requestId={requestId} />)}
+        <ExchangeFailure requestId={standing} />
         {exchange.response.length > 0 || interrupted ? (
           // A turn that ends on its failure row says there why it stopped, and what to do; the footer doesn't repeat it.
           <Footer exchange={exchange} streaming={streaming} interrupted={failureRow ? undefined : interrupted} />
@@ -300,10 +312,8 @@ function AgentByline({ provider, workingSince }: { provider?: string; workingSin
 /* the prompt                                                          */
 /* ------------------------------------------------------------------ */
 
-type ContinuedPrompt = Extract<MakoPrompt, { kind: "continued" }>
-
 /** What a continuation's line says, by who sent it; one read back from before the words named a sender says only what happened. */
-function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): string {
+function continuedTitle({ reason, sender }: SavedContinuation, provider: string): string {
   const who = sender === "mako" ? "Mako continued the turn" : sender === "person" ? "You continued the turn" : "The turn continued"
   switch (reason) {
     case "connection-lost":
@@ -328,28 +338,32 @@ function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): 
 }
 
 /**
- * A continuation of a turn that was cut short. Its words are Mako's,
- * whether Mako sent them on its own or the person pressed Continue turn, so
- * it does not get the user's bubble: one quiet line where the prompt would
- * be, saying what happened and who acted, with the moment. What the agent
- * was told opens under it.
+ * Where a turn that was cut short went on. The words are Mako's, whether
+ * Mako sent them on its own or the person pressed Continue turn, and the
+ * turn reads as one: nothing stands where they were sent. Two exceptions:
+ * a step the loss of a machine undid changed the person's files, so where
+ * it was picked up again is one quiet line; and with Settings › Diagnostics'
+ * originals on, the line says why and who, opens onto the exact words, and
+ * offers their Original.
  */
-function Continued({ continued, provider, said, timestamp, origin }: { continued: ContinuedPrompt; provider?: string; said: string; timestamp?: number; origin?: MessageOrigin }) {
+function TurnWentOn({ continued, message, provider }: { continued: SavedContinuation; message: ChatMessage; provider?: string }) {
   useHarnessIdentity()
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
+  const diagnosing = usePrefs((prefs) => prefs.showOriginals)
+  if (!diagnosing && continued.reason !== "machine-lost") return null
   const agent = provider ?? harness
+  const said = textOf(message.blocks).trim()
   return (
     <EventLine
-      align="end"
-      icon={continued.reason === "provider-exited" ? RefreshCwIcon : continued.reason === "handed-off" ? CloudIcon : continued.reason === "machine-lost" ? RefreshCwIcon : PlayIcon}
-      time={timestamp}
+      icon={continued.reason === "provider-exited" || continued.reason === "machine-lost" ? RefreshCwIcon : continued.reason === "handed-off" ? CloudIcon : PlayIcon}
+      time={message.timestamp}
       data-turn-continued={continued.reason}
       data-continued-by={continued.sender ?? "unknown"}
       words={{ title: continuedTitle(continued, agent ? harnessLabel(agent) : "the provider") }}
-      action={<ShowOriginal origins={[origin]} />}
+      action={<ShowOriginal origins={[message.origin]} />}
     >
-      {said.trim() ? <p className="text-faint">{said.trim()}</p> : null}
+      {diagnosing && said ? <p className="text-faint">{said}</p> : null}
     </EventLine>
   )
 }
@@ -783,7 +797,7 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
   const open = useTurnFolds((state) => state.open.has(foldKey))
   const work = useMemo(() => summarizeWork(fold.messages), [fold.messages])
   const { text } = describeWork(work)
-  const duration = fold.from !== undefined && fold.to !== undefined && fold.to >= fold.from ? formatDuration(fold.to - fold.from) : undefined
+  const duration = fold.worked !== undefined ? formatDuration(fold.worked) : undefined
   const yours = stop === true || (stop !== undefined && stop !== false && endedAsChosen(stop.reason))
   const cut = Boolean(stop) && !yours
   const verb = stop ? (yours ? "Stopped" : "Interrupted") : fold.continued ? "Continued" : "Worked"

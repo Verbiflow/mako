@@ -129,6 +129,13 @@ export interface TranscriptEvent {
   cause?: TurnCause
   /** The marker reports a usage limit refusing work (`usageLimitEvent`). */
   limit?: UsageLimit
+  /**
+   * The marker warns that a usage limit of the account is near, before it
+   * refuses anything. The harness says so again each time it starts, and
+   * Mako restarts harnesses often, so a conversation keeps the first warning
+   * for each window and reset (`sameNearLimit`) and drops the rest.
+   */
+  nearLimit?: UsageLimit
   /** The marker sums up a provider's retries (`retriesEvent`). */
   retries?: Retries
 }
@@ -136,6 +143,14 @@ export interface TranscriptEvent {
 /** `marker` as the report of a usage limit, with what the harness said of it. */
 export function usageLimitEvent<T extends TranscriptEvent>(marker: T, limit: UsageLimit = {}): T {
   return { ...marker, limit }
+}
+
+/** A warning for a window the conversation was already warned of: the same harness, window and reset. */
+export function sameNearLimit(left: TranscriptEvent, right: TranscriptEvent): boolean {
+  return left.nearLimit !== undefined && right.nearLimit !== undefined &&
+    left.nearLimit.window === right.nearLimit.window &&
+    left.source?.harness === right.source?.harness &&
+    sameUsageLimit(left.nearLimit, right.nearLimit)
 }
 
 /** Resets this close together are one reset, said by two clocks or two roundings. */

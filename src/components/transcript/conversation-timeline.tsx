@@ -22,8 +22,10 @@ import {
 } from "@/components/transcript/turn-navigator"
 import {
   LEAD_EXCHANGE_ID,
+  continuedFrom,
   isInterruptedNote,
   renamedExchanges,
+  turnRequest,
   type Exchange as ExchangeData,
 } from "@/lib/exchanges"
 import type { CarriedHistory, MakoPrompt, TurnStop } from "@/state/prompt-delivery"
@@ -1326,8 +1328,9 @@ export function ConversationTimeline({
       key={keys.get(exchange.id) ?? exchange.id}
       exchange={exchange}
       streaming={exchange.id === streamingId}
+      // How the turn stands is its newest part's: a stop it went on from is over.
       interrupted={
-        interruptedRequests?.get(exchange.prompt?.requestId ?? "") ??
+        interruptedRequests?.get(turnRequest(exchange) ?? "") ??
         (exchange.id === interruptedId || exchangeInterrupted(exchange))
       }
       sentByMako={makoPrompts?.get(exchange.prompt?.requestId ?? "")}
@@ -1489,5 +1492,6 @@ export function ConversationTimeline({
 }
 
 function exchangeInterrupted(exchange: ExchangeData): boolean {
-  return exchange.system.some((note) => isInterruptedNote(note.message))
+  const from = continuedFrom(exchange)
+  return exchange.system.some((note) => note.after >= from && isInterruptedNote(note.message))
 }

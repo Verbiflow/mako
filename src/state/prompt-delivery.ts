@@ -8,7 +8,7 @@ import type {
 import type { Entry } from "@mako/sessions/entries"
 import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { LiveHistoryWindow } from "@mako/host/contracts/live-history"
-import { continueTurnPrompt, savedContinuation, type ContinuationSender } from "@mako/host/contracts/turn-continuation"
+import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
 
 export { continueTurnPrompt }
@@ -65,14 +65,13 @@ export function turnStops(requests: readonly LiveRequest[], running: boolean): M
 }
 
 /**
- * A prompt Mako wrote: a continuation of a turn cut short, the note after an
+ * A prompt Mako wrote that opens a turn of its own: the note after an
  * agent's move onto its own branch, a step of the goal, or the review the
  * person picked, whose words are Mako's prompt or the harness's command. A
- * continuation names who sent it: Mako on its own, or the person through
- * Continue turn; one read back from before the words said so has no sender.
+ * continuation of a turn cut short opens none: it goes on in the turn it
+ * continues (`isContinuation` in `exchanges.ts`).
  */
 export type MakoPrompt =
-  | { kind: "continued"; reason: InterruptionReason; sender?: ContinuationSender }
   | { kind: "moved" }
   | { kind: "goal"; step: NonNullable<LiveRequest["goal"]> }
   | { kind: "review"; target: NonNullable<LiveRequest["review"]> }
@@ -84,8 +83,7 @@ export type MakoPrompt =
 export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoPrompt> {
   const prompts = new Map<string, MakoPrompt>()
   for (const request of requests) {
-    if (request.continues?.auto) prompts.set(request.id, { kind: "continued", reason: request.continues.reason, sender: "mako" })
-    else if (request.actor?.kind === "service" && request.actor.name === "workspace") prompts.set(request.id, { kind: "moved" })
+    if (request.actor?.kind === "service" && request.actor.name === "workspace") prompts.set(request.id, { kind: "moved" })
     else if (request.actor?.kind === "service" && request.actor.name === "goal" && request.goal) prompts.set(request.id, { kind: "goal", step: request.goal })
     else if (request.review) prompts.set(request.id, { kind: "review", target: request.review })
   }
@@ -117,22 +115,36 @@ export function carriedHistories(requests: readonly LiveRequest[]): Map<string, 
 }
 
 /**
- * A prompt Mako wrote, known by its words: a store keeps no request to say
- * who sent it, and the person's Continue turn sends Mako's words through the
- * ordinary send. The words are compared whole with what `goalStartPrompt` or
- * `goalContinuePrompt` writes for the objective they carry, and with each
- * continuation `continueTurnPrompt` writes. Anything else, a fragment or an
- * edit included, is the user's.
+ * A goal's prompt, known by its words: a store keeps no request to say who
+ * sent it. The words are compared whole with what `goalStartPrompt` or
+ * `goalContinuePrompt` writes for the objective they carry. Anything else,
+ * a fragment or an edit included, is the user's.
  */
 export function savedMakoPrompt(text: string): MakoPrompt | undefined {
-  const continued = savedContinuation(text)
-  if (continued) return { kind: "continued", ...continued }
   const objective = /\n<objective>\n([\s\S]*?)\n<\/objective>\n/.exec(text)?.[1]
   if (objective === undefined) return undefined
   const words = text.trim()
   if (words === goalContinuePrompt(objective)) return { kind: "goal", step: { step: "continue" } }
   if (words === goalStartPrompt(objective)) return { kind: "goal", step: { step: "set" } }
   return undefined
+}
+
+/**
+ * The words a request is named by wherever the person picks it from a list
+ * (Changes' turns, a failure's notice): its own, or for a continuation,
+ * which says Mako's words to the agent and not the person's, the words of
+ * the turn it continued. That is the request it names (`continues`), else
+ * the newest before it: Continue turn is offered only on the newest turn.
+ */
+export function turnWords(requests: readonly LiveRequest[], request: LiveRequest): string {
+  let named: LiveRequest | undefined = request
+  for (let hops = 0; named && hops <= requests.length && savedContinuation(named.text); hops++) {
+    const continued: LiveRequest = named
+    const at = requests.findIndex((each) => each.id === continued.id)
+    named = (continued.continues && requests.find((each) => each.id === continued.continues?.requestId)) ??
+      requests.slice(0, Math.max(0, at)).findLast((each) => each.status !== "canceled")
+  }
+  return named && !savedContinuation(named.text) ? (named.displayText ?? named.text).replace(/\s+/g, " ").trim() : ""
 }
 
 /**

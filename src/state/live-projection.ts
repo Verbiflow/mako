@@ -9,6 +9,8 @@ import { changedEntryStart, isTurnStart } from "@mako/sessions/live-content"
 import { touchedFiles, type TouchedFile } from "@/lib/context-files"
 import { nativePromptRequestIds } from "@mako/host/contracts/native-prompt-identity"
 import { releasedExchanges, type ReleasedTurn } from "@/state/transcript-residency"
+import { savedContinuation } from "@mako/host/contracts/turn-continuation"
+import type { Entry } from "@mako/sessions/entries"
 
 export interface LiveProjection {
   messages: ChatMessage[]
@@ -28,6 +30,8 @@ interface ProjectionCache {
   cursor: { start: number; turn: number; plan: PlanStep[] }
   messageStart: number
   exchangeStart: number
+  /** The projection's newest turn is one exchange from `cursor.start` on, so the next can re-project only that tail. */
+  tail: boolean
   tools: ReturnType<typeof toolInputs>
 }
 const cache = new WeakMap<LiveProjection, ProjectionCache>()
@@ -149,6 +153,7 @@ function canProjectTail(
   pending?: PendingPrompt[]
 ): boolean {
   if (
+    !held.tail ||
     held.starting ||
     held.pending !== pending ||
     held.input.base !== input.base ||
@@ -180,9 +185,10 @@ function remember(
   starting: boolean,
   previous?: ProjectionCache
 ): void {
+  // A continuation goes on in the turn it continues (`toExchanges`), so the tail starts where that turn did.
   const start = Math.max(
     localCovered(input),
-    input.blocks.findLastIndex(isTurnStart)
+    input.blocks.findLastIndex(opensTurn)
   )
   let turn = previous?.cursor.turn ?? input.history?.turnStart ?? 0
   let plan = previous?.cursor.plan ?? []
@@ -210,6 +216,7 @@ function remember(
           result.messages.findIndex((message) => message.id === id)
         )
       : start >= input.blocks.length ? result.messages.length : 0
+  const opened = unchanged ? previous.exchangeStart : id ? result.exchanges.findIndex((exchange) => exchange.id === id) : undefined
   cache.set(result, {
     input: { ...input, session: { ...input.session } },
     pending,
@@ -217,15 +224,19 @@ function remember(
     cursor: { start, turn, plan },
     messageStart,
     tools: toolInputs(result.messages.slice(messageStart)),
-    exchangeStart: unchanged
-      ? previous.exchangeStart
-      : id
-        ? Math.max(
-            0,
-            result.exchanges.findIndex((exchange) => exchange.id === id)
-          )
-        : start >= input.blocks.length ? result.exchanges.length : 0,
+    exchangeStart: opened !== undefined
+      ? Math.max(0, opened)
+      : start >= input.blocks.length ? result.exchanges.length : 0,
+    // A continuation opens the tail only when the turn it continues began before these blocks (in the saved
+    // history), and then it has no exchange of its own: the next projection reads the whole conversation again
+    // rather than lose what came before.
+    tail: !(opened === -1 && opener?.type === "user" && savedContinuation(opener.text)),
   })
+}
+
+/** A block that opens an exchange: a turn's start, less a continuation, which goes on in the turn before it. */
+function opensTurn(block: Entry | undefined): boolean {
+  return isTurnStart(block) && !(block?.type === "user" && savedContinuation(block.text))
 }
 
 function toolInputs(messages: ChatMessage[]) {

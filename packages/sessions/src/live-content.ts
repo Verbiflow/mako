@@ -7,7 +7,7 @@ import {
   type AttachmentContent,
   type ToolDetail,
 } from "./content.js"
-import { sameSetupEvent } from "./events.js"
+import { sameNearLimit, sameSetupEvent } from "./events.js"
 import { type ToolEffect } from "./tool-effects.js"
 import { effects, joined, MakoCommandSchema, plan, providerTurnFields, RecordRefSchema, transcriptEventFields as transcriptEvent, unfinished, type Entry, type EntryOf } from "./entries.js"
 
@@ -741,10 +741,10 @@ function reduce(
         break
       case "event": {
         if (
-          update.setup &&
+          (update.setup || update.nearLimit) &&
           next.some(
             (candidate) =>
-              candidate.type === "event" && sameSetupEvent(candidate, update)
+              candidate.type === "event" && (sameSetupEvent(candidate, update) || sameNearLimit(candidate, update))
           )
         )
           break
@@ -759,6 +759,7 @@ function reduce(
         if (update.setup) block.setup = true
         if (update.cause) block.cause = update.cause
         if (update.limit) block.limit = update.limit
+        if (update.nearLimit) block.nearLimit = update.nearLimit
         if (update.retries) block.retries = update.retries
         if (update.id) block.id = update.id
         if (update.completes) {
