@@ -201,6 +201,12 @@ async function fakeCloud() {
       bases.push(...repositories)
       return send(202, JSON.stringify({ bases: repositories.map((repository) => ({ name: "b-0123456789abcdef", repository })) }))
     }
+    if (request.method === "POST" && url.pathname === "/v1/bases/standing") {
+      const { repositories } = z.object({ repositories: z.array(z.object({ url: z.string(), branch: z.string().optional() })) }).parse(await json(request))
+      // A private repository the cloud's GitHub App isn't on, and one whose link would lead anywhere but GitHub.
+      const standing = (url: string) => ({ state: "waiting", message: "could not read Username", reason: "no-access", install: url.endsWith("/shop") ? "https://github.com/apps/mako/installations/new" : "https://elsewhere.example/install" })
+      return send(200, JSON.stringify({ bases: repositories.map((repository) => ({ repository, standing: standing(repository.url) })) }))
+    }
     if (request.method === "POST" && url.pathname === "/v1/threads") {
       const body = await json(request)
       threads.push(body)
@@ -907,6 +913,16 @@ test("a move handed over goes as JSON carries its handoff, and its refusal withi
   const { reason } = MoveRefuseRequestSchema.parse(cloud.moves[1]?.body)
   assert.equal(reason.length, MOVE_REASON_MAX)
   assert.ok(reason.startsWith("The arrival failed: ") && reason.endsWith("…"))
+})
+
+test("a base the cloud can't read says where on GitHub to give it access, and only ever a GitHub page", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/bases" })
+  const read = await mac.accounts.baseStandings([{ url: "https://github.com/acme/shop" }, { url: "https://github.com/acme/other" }])
+  assert.deepEqual(read?.map(({ standing }) => (standing.state === "waiting" ? [standing.reason, standing.install] : standing.state)), [
+    ["no-access", "https://github.com/apps/mako/installations/new"],
+    ["no-access", undefined],
+  ])
 })
 
 test("without a keychain the sign-in lasts until Mako quits and nothing is written", async () => {

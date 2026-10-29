@@ -1,5 +1,6 @@
 import type { CloudTurnOn, TurnOnStep, TurnOnStepId, TurnOnStepOf } from "@mako/host/contracts/cloud-turn-on"
 import { getMako, hasBridge } from "@/lib/bridge"
+import { desktop } from "@/state/desktop"
 import { actions } from "@/state/session"
 import { offerCloudProjects } from "@/state/cloud-projects"
 import { prepareCloudNow } from "@/state/prewarm"
@@ -57,6 +58,16 @@ export const cloudTurnOn = {
   checkPlan: () => run("check", () => getMako().cloudTurnOnCheck()),
 
   retryBases: () => run("retry", () => getMako().cloudTurnOnRetryBases()),
+
+  /**
+   * The repository's page on GitHub where its person gives Mako's GitHub App access to it. They come back to Mako
+   * once they have: the bases it couldn't read are asked for again as this window is next focused, so the row goes
+   * by itself and nothing asks them to press anything more.
+   */
+  giveAccess(install: string) {
+    void desktop.openUrl(install)
+    window.addEventListener("focus", () => void cloudTurnOn.retryBases(), { once: true })
+  },
 
   /**
    * The first Thread in the cloud: a new Thread in the project, with Cloud chosen, its machine made ahead at once
