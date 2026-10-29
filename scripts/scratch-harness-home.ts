@@ -187,7 +187,9 @@ function removeSecrets(home: string, keep: boolean): void {
 }
 
 function disposeOwned(): void {
-  for (const dispose of [...owned.values()]) dispose()
+  // Each dispose removes only its own entry, and a Map's iterator goes on past an entry removed under it, so the map
+  // is walked in place.
+  for (const dispose of owned.values()) dispose()
 }
 
 let ending = false

@@ -135,15 +135,13 @@ export class HostJobs {
   private async run(job: Job): Promise<void> {
     job.running = true
     job.state.runs += 1
-    const done = this.work.begin(job.state.name)
     try {
-      await job.run()
+      await this.work.run(job.state.name, () => job.run())
     } catch (error) {
       job.state.failures += 1
       job.state.lastError = error instanceof Error ? error.message : String(error)
       hostWarn("jobs", `${job.state.name} failed`, { error: job.state.lastError })
     } finally {
-      done()
       job.running = false
     }
   }

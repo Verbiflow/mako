@@ -130,9 +130,8 @@ export class HostDomains {
     for (const need of manifest.needs ?? []) await this.load(need, `${name} needs it`)
     const began = performance.now()
     Object.assign(record, { state: "loading", reason, startedAt: Math.round(began), modules: 0, sourceBytes: 0 })
-    const done = this.work.begin(`load the ${name} domain`)
     try {
-      const service = await this.loading.run(name, () => manifest.open(reason))
+      const service = await this.work.run(`load the ${name} domain`, () => this.loading.run(name, () => manifest.open(reason)))
       Object.assign(record, { state: "ready", loadMs: Math.round(performance.now() - began) })
       hostLog("domains", `${name} loaded`, { for: reason, ms: record.loadMs, modules: record.modules ?? 0 })
       return service
@@ -141,8 +140,6 @@ export class HostDomains {
       Object.assign(record, { state: "failed", error: message, loadMs: Math.round(performance.now() - began) })
       hostWarn("domains", `${name} failed to load`, { for: reason, error: message })
       throw error
-    } finally {
-      done()
     }
   }
 }

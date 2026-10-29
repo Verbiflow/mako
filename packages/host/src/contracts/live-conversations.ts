@@ -338,7 +338,13 @@ export interface LiveRequest {
 export interface LiveSummary {
   /** Saved session questions keep their conversation controls available after process exit. */
   hasSessionQuestions?: boolean
+  /** Every native session file the conversation's bindings read, loaded or not. */
   nativePaths?: string[]
+  /**
+   * Every native session the conversation's bindings ran in, loaded or not: with `nativePaths`, every key a Thread's
+   * archive can name it by (`liveArchiveKeys`), so the listing answers "archived?" without reading the journal in.
+   */
+  nativeIds?: { provider: string; nativeId: string }[]
   session: LiveSessionState
   revision: number
   /**

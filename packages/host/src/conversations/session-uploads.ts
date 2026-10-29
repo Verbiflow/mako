@@ -36,6 +36,8 @@ export type UploadSources = {
   /** The record store's backfill, as its last pass wrote it beside the store; undefined before the first. */
   backfill(): Promise<Backfill | undefined>
   now(): number
+  /** The status changed (`SessionUploads.status`): what follows it hears so, rather than asking on a timer. */
+  statusChanged?(status: SyncStatus): void
 }
 
 /**
@@ -75,6 +77,7 @@ export class SessionUploads {
   #paused: boolean | undefined
   #power: { reading: PowerReading; at: number } | undefined
   #status: SyncStatus = { state: "off", reason: "signed-out" }
+  #statusText = JSON.stringify(this.#status)
   /** Failures already logged, by when and what: the catalog keeps the newest few until they're pushed. */
   readonly #logged = new Set<string>()
 
@@ -96,7 +99,7 @@ export class SessionUploads {
         await this.#sources.originals(null)
         hostLog("sync", "this device's Sessions stopped going to the account", { reason: links.reason })
       }
-      this.#status = { state: "off", reason: links.reason }
+      this.#said({ state: "off", reason: links.reason })
       return
     }
     const rows = this.#sources.rows()
@@ -132,7 +135,15 @@ export class SessionUploads {
     ])
     for (const [form, status] of [["copies", catalog?.copies], ["originals", catalog?.originals]] as const)
       for (const failure of status?.failures ?? []) this.#logFailure(form, failure)
-    this.#status = syncStatusOf(scope, catalog, backfill)
+    this.#said(syncStatusOf(scope, catalog, backfill))
+  }
+
+  #said(status: SyncStatus): void {
+    this.#status = status
+    const text = JSON.stringify(status)
+    if (text === this.#statusText) return
+    this.#statusText = text
+    this.#sources.statusChanged?.(status)
   }
 
   #logFailure(form: "copies" | "originals", failure: SyncFailure): void {

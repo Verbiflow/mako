@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { setTimeout as sleep } from "node:timers/promises"
-import { EventLoopWatch } from "@mako/host/base/event-loop"
+import { EventLoopWatch, namedWork, type HostWork } from "@mako/host/base/event-loop"
 import { HostJobs } from "@mako/host/base/host-jobs"
 
 const hold = (ms: number) => {
@@ -95,4 +95,46 @@ async function timersScheduledBy(run: () => Promise<void>): Promise<number> {
   assert.equal(stopped, 0, "A stopped watch watches nothing")
 }
 
-console.log("Event loop: unwatched and timerless while idle; work and sent events are watched; a hold names the work running, longest first; jobs are named")
+// Named work names what runs for it only while it runs. `AsyncLocalStorage` hands the name to every timer, socket and
+// child listener the work sets up, so a domain load's timers, or a process a call spawned, would otherwise go on naming
+// it for good, and a journal they read in later would be counted to work long done.
+const works: [string, HostWork][] = [["the host's watch", new EventLoopWatch({ resolutionMs: 10, heldMs: 1_000, lingerMs: 0 })], ["a test's", namedWork()]]
+for (const [kind, work] of works) {
+  const named: Record<string, string | undefined> = {}
+  const fires = (name: string, ms: number) => new Promise<void>((resolve) => setTimeout(() => { named[name] = work.current(); resolve() }, ms))
+  let late: Promise<void> | undefined
+  await work.run("load the core domain", async () => {
+    named.inside = work.current()
+    await sleep(1)
+    named.afterAwait = work.current()
+    late = fires("timer after the load", 20)
+  })
+  assert.equal(named.inside, "load the core domain", `${kind}: work is named inside`)
+  assert.equal(named.afterAwait, "load the core domain", `${kind}: and through its awaits`)
+  await late
+  assert.equal(named["timer after the load"], undefined, `${kind}: a timer the work set that fires after it ended isn't its`)
+
+  let inner: Promise<void> | undefined
+  await work.run("mako:threads", async () => {
+    await work.run("load the core domain", async () => {
+      inner = fires("timer after the inner run", 5)
+    })
+    await sleep(30)
+    named.outerAfterInner = work.current()
+  })
+  await inner
+  assert.equal(named["timer after the inner run"], "mako:threads", `${kind}: one that outlives a nested run is the open run's around it`)
+  assert.equal(named.outerAfterInner, "mako:threads")
+
+  let thrown: Promise<void> | undefined
+  assert.throws(() => work.run("a call that throws", () => {
+    thrown = fires("timer after a throw", 5)
+    throw new Error("refused")
+  }), /refused/)
+  await thrown
+  assert.equal(named["timer after a throw"], undefined, `${kind}: work that threw has ended too`)
+  assert.equal(work.current(), undefined, `${kind}: outside any run, nothing is named`)
+  if (work instanceof EventLoopWatch) work.stop()
+}
+
+console.log("Event loop: unwatched and timerless while idle; work and sent events are watched; a hold names the work running, longest first; jobs are named; work is named only while it runs")

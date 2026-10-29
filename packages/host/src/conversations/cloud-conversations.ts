@@ -254,6 +254,11 @@ export type CloudConversationsOptions = {
    * shows as archived, from the account's word alone.
    */
   archivedChanged?(archived: ReadonlyMap<string, ArchivedThread>): void
+  /**
+   * What turning the cloud on reads of these changed: the projects offered, a cloud Thread made ahead or its machine
+   * ready, a cloud Thread made (`offeredProjects`, `preparedMachine`, `firstCloudThread`).
+   */
+  turnOnChanged?(): void
 }
 
 /** Copies another device keeps of its Sessions in the account (`ReadingCopies`), by that device, read here (`HostCatalog.copyPage`). */
@@ -855,6 +860,7 @@ export class CloudConversations {
       prepared = { threadId: newThreadId(), repository, since: Date.now(), askedAt: Date.now(), ready: false, asking: Promise.resolve(), made: false }
       this.#prepared.set(key, prepared)
       hostLog("cloud-conversations", "making a cloud Thread ahead of its first message", { threadId: prepared.threadId, repository: repository.url })
+      this.#options.turnOnChanged?.()
     }
     const asked = prepared
     asked.askedAt = Date.now()
@@ -863,13 +869,18 @@ export class CloudConversations {
     await this.#carried(folder, "a cloud Thread made ahead")
     asked.asking = account.createThread(asked.threadId, repository, making).then(({ ready }) => {
       asked.made = true
+      const was = asked.ready
       asked.ready = ready
+      if (ready !== was) this.#options.turnOnChanged?.()
     })
     try {
       await asked.asking
     } catch (error) {
       // Never made: the next ask starts afresh. Made already, it stays for its next ask or its first message.
-      if (!asked.made && this.#prepared.get(key) === asked) this.#prepared.delete(key)
+      if (!asked.made && this.#prepared.get(key) === asked) {
+        this.#prepared.delete(key)
+        this.#options.turnOnChanged?.()
+      }
       hostWarn("cloud-conversations", "a cloud Thread wasn't made ahead", { threadId: asked.threadId, error: error instanceof Error ? error.message : String(error) })
       return "none"
     }
@@ -891,6 +902,7 @@ export class CloudConversations {
       try {
         prepared.askedAt = Date.now()
         prepared.ready = (await account.createThread(prepared.threadId, prepared.repository, { prepare: true })).ready
+        if (prepared.ready) this.#options.turnOnChanged?.()
       } catch (error) {
         return hostWarn("cloud-conversations", "a cloud Thread made ahead wasn't asked again", { threadId: prepared.threadId, error: error instanceof Error ? error.message : String(error) })
       }
@@ -962,6 +974,7 @@ export class CloudConversations {
     await mkdir(dirname(file), { recursive: true })
     const accounts = before ? offered.accounts : [...offered.accounts, accountId]
     await writeFile(file, `${JSON.stringify({ accounts, projects: { ...offered.projects, [accountId]: projects } } satisfies Offered)}\n`)
+    this.#options.turnOnChanged?.()
     if (before) return "already"
     hostLog("cloud-conversations", "offered this Mac's recent projects for project bases", { repositories: projects.length })
     return projects.length ? "asked" : "none"
@@ -1013,6 +1026,7 @@ export class CloudConversations {
     if (!prepared || Date.now() - prepared.askedAt < PREPARED_KEPT_MS) return prepared
     this.#prepared.delete(key)
     clearTimeout(prepared.watching)
+    this.#options.turnOnChanged?.()
     const unused = (this.#unused.get(key) ?? 0) + 1
     this.#unused.set(key, unused)
     hostLog("cloud-conversations", "a cloud Thread made ahead went unused", { threadId: prepared.threadId, unused })
@@ -1026,6 +1040,7 @@ export class CloudConversations {
     if (!prepared) return undefined
     this.#prepared.delete(key)
     clearTimeout(prepared.watching)
+    this.#options.turnOnChanged?.()
     await prepared.asking.catch(() => undefined)
     if (!prepared.made) return undefined
     this.#unused.delete(key)
@@ -1095,6 +1110,8 @@ export class CloudConversations {
       await this.#save()
       hostLog("cloud-conversations", "made a cloud Thread", { threadId: entry.threadId, conversationId: entry.conversationId, harness, repository: repository.url })
     }
+    // Made now, or taken up from one made ahead: this Mac's first cloud Thread may be this one.
+    this.#options.turnOnChanged?.()
     this.#follow(entry)
     const cwd = ahead?.cwd ?? bootFolder(await this.#call(entry, "mako:boot", []))
     if (step !== "starting") this.#step(options.conversationId, "starting", repository)
@@ -1721,6 +1738,7 @@ export class CloudConversations {
       for (const entry of stored.data?.conversations ?? []) this.#entries.set(entry.conversationId, entry)
     }
     for (const entry of this.#entries.values()) if (entry.created && entry.summary?.session.status !== "closed") this.#follow(entry)
+    this.#options.turnOnChanged?.()
   }
 
   #saveSoon(): void {
@@ -1766,6 +1784,7 @@ function summaryOf(snapshot: LiveSummary): LiveSummary {
   if (snapshot.epoch) summary.epoch = snapshot.epoch
   if (snapshot.threadPath) summary.threadPath = snapshot.threadPath
   if (snapshot.nativePaths) summary.nativePaths = snapshot.nativePaths
+  if (snapshot.nativeIds) summary.nativeIds = snapshot.nativeIds
   if (snapshot.hasSessionQuestions) summary.hasSessionQuestions = snapshot.hasSessionQuestions
   return summary
 }

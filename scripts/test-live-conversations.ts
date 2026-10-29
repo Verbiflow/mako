@@ -26,6 +26,11 @@ import { projectLive } from "../src/state/live-projection.js"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
 import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { namedWork } from "@mako/host/base/event-loop"
+import { BULK_LOADS } from "@mako/host/conversations/live-records"
+import { ownedSessions } from "@mako/host/conversations/session-report"
+import { ThreadArchives } from "@mako/host/threads/archives"
+import { ThreadLifecycle } from "@mako/host/threads/lifecycle"
 import { OlderRequestSchema } from "./fixtures/older-request-schema.ts"
 
 const gitRunner = new Git()
@@ -676,6 +681,109 @@ async function boundsWarmProviders() {
     )
   } finally {
     owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/**
+ * The Sessions report and the Thread lifecycle read the listing, never a journal: with every conversation out of
+ * memory, a report and an archive check load none. And a reader that does load in bulk is named in the log and in
+ * the memory readout, by the work it ran as.
+ */
+async function bulkLoadsAreNamed() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-bulk-"))
+  const work = namedWork()
+  const ids = Array.from({ length: BULK_LOADS + 1 }, () => randomUUID())
+  let owner: LiveConversations
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => ({
+      id: options.conversationId,
+      nativeId: options.conversationId,
+      nativePath: join(root, options.conversationId),
+      harness: "test-provider",
+      cwd: root,
+      status: "ready",
+      connection: "connected",
+      modes: [],
+      currentMode: null,
+      configOptions: [],
+    }),
+    prompt: async (prompted, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
+      const current = owner.snapshot(prompted)?.session
+      assert.ok(current)
+      owner.observe({ type: "live-update", id: prompted, update: { kind: "text", text: "kept" } })
+      owner.observe({ type: "live-session", session: { ...current, status: "running" } })
+      owner.observe({ type: "live-session", session: { ...current, status: "ready" } })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: () => {},
+    setMode: async () => {},
+  }
+  owner = new LiveConversations({
+    appPath: root,
+    root: join(root, "journals"),
+    driver: () => driver,
+    history: async () => null,
+    emit: () => {},
+    work,
+    providerIdleMs: 50,
+    providerWarmLimit: 1,
+    conversationMemory: { bytes: 0, recent: 0, sweepMs: 0 },
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+  })
+  const warned: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => { if (line.scope === "residency" && line.level === "warn") warned.push(line) })
+  try {
+    for (const id of ids) {
+      await owner.start("test-provider", root, { conversationId: id })
+      owner.submit(id, randomUUID(), "seed")
+    }
+    await waitFor(() => owner.residency().memory.unloaded === ids.length, "the idle conversations were not all unloaded")
+
+    // The report, over every conversation of the host, loads none: it's a function of the listing.
+    const archives = new ThreadArchives(join(root, "archives.sqlite"))
+    const lifecycle = new ThreadLifecycle({ live: owner, archives, native: { list: () => [], editQueued: () => [] }, threads: () => [], nativeToken: () => null, abortNative: () => {}, external: () => false })
+    const sources = {
+      summaries: () => owner.summaries(),
+      native: () => [],
+      activity: () => undefined,
+      work: () => [],
+      waitingOn: (id: string) => owner.waitingOn(id),
+      hidden: () => new Set(archives.snapshot().keys),
+      lastMoved: (id: string, revision: number) => owner.lastMoved(id, revision),
+      // SAFETY: test IDs in the Thread store's shapes, which brand plain UUIDs.
+      placement: (id: string) => ({ thread: id, session: id }) as never,
+      execution: () => undefined,
+      thread: () => undefined,
+      now: Date.now,
+    }
+    const rows = work.run("tell the account this host's Sessions", () => ownedSessions(sources))
+    assert.equal(rows.length, ids.length, "every conversation is listed")
+    for (const id of ids) assert.equal(work.run("archive check", () => lifecycle.archived({ kind: "live", id })), false)
+    lifecycle.archive({ id: randomUUID(), target: { kind: "live", id: ids[0]! }, archived: true })
+    assert.equal(ownedSessions(sources).length, ids.length - 1, "an archived conversation leaves the list, by its listing's keys")
+    assert.equal(owner.residency().memory.loaded, 0, "neither the report nor the lifecycle read a journal in")
+    assert.equal(warned.length, 0, "and nothing was named for loading in bulk")
+
+    // A reader that does load in bulk is named: once in the log, and in the readout by what it loaded.
+    work.run("a list reading journals", () => { for (const id of ids) owner.snapshot(id) })
+    assert.equal(warned.length, 1, "one line names the reader, however many it loads past the bound")
+    assert.equal(warned[0]?.message, "one reader is loading conversations in bulk")
+    assert.deepEqual([warned[0]?.fields?.by, warned[0]?.fields?.loads], ["a list reading journals", BULK_LOADS])
+    const memory = owner.residency().memory
+    assert.deepEqual(memory.loads, [{ by: "a list reading journals", count: ids.length }])
+    assert.ok(memory.held.length > 0 && memory.held.every((held) => held.by === "a list reading journals"), "each conversation in memory says who read it in")
+    archives.close()
+    console.log("PASS: the report and the lifecycle load no journal; a reader loading in bulk is named")
+  } finally {
+    stopHearing()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -2570,6 +2678,7 @@ await backgroundWorkKeepsProviderResident()
 await boundsWarmProviders()
 await prewarmOverlapsTyping()
 await unloadsHibernatedConversations()
+await bulkLoadsAreNamed()
 await failedCloseKeepsOwnership()
 await heldUntilReset()
 await heldWakeResumes()

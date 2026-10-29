@@ -4,7 +4,7 @@ import type { RecordsLink } from "@mako/sessions/record-sync"
 import { encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
-import { stat } from "node:fs/promises"
+import { stat, writeFile } from "node:fs/promises"
 import { mediaExecutable } from "@mako/control-runtime/media"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -21,6 +21,7 @@ import { threadArchiveKey, type ArchiveAnswer, type ArchiveCommand, type CloudAr
 import type { ArchivedThread } from "@mako/protocol/thread-listing"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
+import { HeapWatch, readHeap } from "./base/heap-watch.js"
 import { cloudUrl } from "./base/build-identity.js"
 import { NativeUnknown } from "./base/native-unknown.js"
 import { StreamMismatches } from "./base/stream-mismatches.js"
@@ -47,7 +48,7 @@ import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from ".
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
-import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -167,6 +168,8 @@ interface LateParts {
   attribution?: Attribution
   /** On a cloud machine: its tracker (`openMachineTracker`), made once the conversations are. */
   machineTracker?: MachineTracker
+  /** Turning the cloud on, as one line: told when what it reads changes. */
+  turnOn?: CloudTurnOnFollower
 }
 
 export async function openCore(shell: CoreShell): Promise<Core> {
@@ -250,6 +253,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     late.sessions?.own(event)
     // A Session archived here leaves the account's list on every device: its owner's word is the one that counts.
     if (event.type === "thread-archives") late.sessions?.changed()
+    // The account and the agents' sign-ins say each change here; turning the cloud on reads them again then.
+    if (event.type === "cloud-account" || event.type === "cloud-sign-ins") void late.turnOn?.changed()
     web()?.event(event, client)
   }
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
@@ -414,7 +419,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         activity: (path) => activity[path],
         work: () => application.lifecycle.snapshot().work,
         waitingOn: (id) => live.waitingOn(id),
-        archived: (id) => late.archivedHere?.(id) ?? false,
+        hidden: () => new Set(threads.archives.snapshot().keys),
         lastMoved: (id, revision) => live.lastMoved(id, revision),
         placement: (id) => store.journalPlacement(id),
         execution: (session) => store.execution(session),
@@ -444,6 +449,24 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   late.sessions = sessions
   shell.jobs.every("tell the account this host's Sessions", 1_000, () => late.cloud?.reportSessions?.())
+  // The heap, watched so a host filling up says who with while it still can: an out-of-memory report has no
+  // JavaScript stack. The line names what memory holds and who read it in; the whole readout goes beside the log.
+  const heap = new HeapWatch(readHeap, (change, level, reading) => {
+    const memory = late.conversations?.live.residency().memory
+    const mb = (bytes: number | undefined) => Math.round((bytes ?? 0) / 1_048_576)
+    const fields = {
+      level, usedMB: mb(reading.used), limitMB: mb(reading.limit), rssMB: mb(reading.rss),
+      conversations: memory?.loaded ?? 0, conversationMB: mb(memory?.bytes), pinnedMB: mb(memory?.pinnedBytes),
+      loads: (memory?.loads ?? []).slice(0, 5).map((load) => `${load.by}=${load.count}`).join(", "),
+      held: (memory?.held ?? []).slice(0, 5).map((held) => `${held.conversation.slice(0, 8)}:${mb(held.bytes)}MB${held.by ? ` by ${held.by}` : ""}`).join(", "),
+    }
+    if (change === "easing") return hostLog("memory", "the heap eased", fields)
+    hostWarn("memory", "the heap is under pressure", fields)
+    const readout = { at: new Date().toISOString(), change, level, heap: reading, memory, jobs: shell.jobs.list() }
+    void writeFile(join(logsRoot(environment.dataRoot), "memory-pressure.json"), JSON.stringify(readout, null, 2)).catch((error: Error) =>
+      hostWarn("memory", "the memory readout couldn't be written", { error: error.message }))
+  })
+  shell.jobs.every("watch the heap", 10_000, () => void heap.tick(), { runsWhileHeld: true })
   // This Mac's Sessions in the sync window, kept in step in the account, the ones at work first: as Mako draws each, so
   // another device reads one with this Mac off, and as its harness wrote it, so it continues anywhere. A cloud machine
   // keeps its Thread's records instead; a fixture desk sends nothing.
@@ -467,6 +490,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       status: () => catalog.syncStatus(),
       backfill: () => readBackfill(records),
       now: Date.now,
+      statusChanged: () => void late.turnOn?.changed(),
     })
     const ticking = uploads
     shell.jobs.every("keep this Mac's Sessions in the account", 5_000, () => ticking.tick())
@@ -567,6 +591,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           accountArchived = archived
           late.archivedKeys?.()
         },
+        turnOnChanged: () => void late.turnOn?.changed(),
       })
   late.archivedKeys = () => {
     const keys = new Set<string>()
@@ -582,12 +607,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (snapshot) emit({ type: "thread-archives", snapshot })
   }
   late.cloudConversations = cloudConversations
-  // Turning the cloud on, as one line every window shows: followed from what owns each step while it's under way.
+  // Turning the cloud on, as one line every window shows: read again as what owns each step says it changed (above),
+  // never by asking them on a timer. Only a base being made and a machine made ahead say nothing as they change: the
+  // slow tick looks at those, while one is under way and a window is there to see it.
+  const turnOnUnderWay = shell.jobs.demand("turning the cloud on waits on the cloud")
   const turnOn = cloudConversations && uploads && new CloudTurnOnFollower({
     file: join(environment.dataRoot, "cloud", "turn-on.json"),
     emit: (state) => {
       if (!shell.closing()) emit({ type: "cloud-turn-on", turnOn: state })
     },
+    watching: () => shell.subscribed.on,
+    underWay: (on) => turnOnUnderWay.set(on),
     sources: {
       account: async () => late.cloud?.account?.(),
       signIns: async () => late.cloud?.signIns?.(),
@@ -604,7 +634,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareTurnOnMethods(methods, turnOn)
   if (turnOn) {
     const following = turnOn
-    shell.jobs.every("follow turning the cloud on", 1_500, () => following.tick())
+    late.turnOn = following
+    shell.jobs.every("look again at the cloud turning on", TURN_ON_POLL_MS, () => following.poll(), { needs: [turnOnUnderWay] })
+    void following.changed()
   }
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
   const residency = new ControlResidency({
@@ -626,6 +658,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     telemetry,
     emit,
     foreground: shell.foreground,
+    work: shell.work,
     mcpSnapshot: (cwd) => tools.mcp.discover(cwd),
     tools: (bindingId, conversationId) => residency.tools(bindingId, conversationId),
     controlInstructions: (bindingId, conversationId) => {
