@@ -1773,6 +1773,14 @@ async function quietTurnsCarryLastActivity() {
     const snapshot = f.owner.snapshot(f.id)
     assert.equal(snapshot?.activityAt, 12_000, "tool output counts")
     assert.deepEqual(batchActivity(), [2_000, 5_000, 12_000], "batches carry the time only when it moves")
+    // Within the same second it moves again: the host holds it, and batches say it once it's in another second.
+    clock.mock.mockImplementation(() => 12_400)
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool-update", id: "build", outputAppend: "\ncompiled 4 files" } })
+    assert.equal(f.owner.snapshot(f.id)?.activityAt, 12_400)
+    clock.mock.mockImplementation(() => 13_100)
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool-update", id: "build", outputAppend: "\ncompiled 5 files" } })
+    assert.equal(f.owner.snapshot(f.id)?.activityAt, 13_100)
+    assert.deepEqual(batchActivity(), [2_000, 5_000, 12_000, 13_100], "at most once a second")
 
     const journal = new DatabaseSync(join(f.root, `${f.id}.sqlite`), { readOnly: true })
     try {
@@ -1839,6 +1847,38 @@ async function nativeActivityLastsItsTurn() {
     assert.equal(published().at(-1), null, "and the renderer hears it end")
   } finally {
     clock.mock.restore()
+    f.cleanup()
+  }
+}
+
+/** A stream's first change goes out at once, and the rest one batch a frame (33 ms) at most, whatever the pace of its tokens. */
+async function batchesLeadThenPace() {
+  const f = fixture()
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.snapshot(f.id)
+    await sleep(50)
+    f.events.length = 0
+    const batches = () => f.events.filter((event) => event.type === "live-batch").length
+    const say = (text: string) => f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", text } })
+    const started = performance.now()
+    say("The")
+    await sleep(5)
+    assert.equal(batches(), 1, "the first token of a burst isn't held for a frame")
+    for (let word = 0; word < 80; word++) {
+      say(` w${word}`)
+      await sleep(2)
+    }
+    await sleep(50)
+    const elapsed = performance.now() - started
+    const count = batches()
+    assert.ok(count >= 3 && count <= Math.ceil(elapsed / 33) + 2, `${count} batches in ${Math.round(elapsed)} ms`)
+    const text = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates : [])).map((update) => (update.kind === "text" ? update.text : "")).join("")
+    assert.ok(text.startsWith("The w0 w1") && text.endsWith(" w79"), "every word, in order")
+  } finally {
     f.cleanup()
   }
 }
@@ -2652,6 +2692,7 @@ await autoContinuedTurn()
 await providerExitContinued()
 await restartContinued()
 await coalescedToolBursts()
+await batchesLeadThenPace()
 await quietTurnsCarryLastActivity()
 await nativeActivityLastsItsTurn()
 await failureIsolationAndAssets()

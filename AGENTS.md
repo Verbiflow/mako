@@ -964,7 +964,11 @@ conversation's ledger with where each number came from.
 
 Token streaming must never re-send the session. The host emits `stream` with
 only the in-flight message; `messages`, `tree`, and `git` go out only when they
-actually change, and every burst is coalesced into one flush per frame. On the
+actually change. A conversation's first change after a quiet frame flushes at
+once, and the rest of a burst one flush per 33 ms (`BATCH_MS` in
+`live-conversations.ts`): windows, watching devices and the journal get the
+same batches. A batch says `activityAt` only when it moved into another
+second. On the
 renderer side components subscribe through selectors, so a token wakes the one
 turn rendering it — not the rail, the stage strip, or the titlebar's readings.
 
@@ -988,14 +992,17 @@ Three rules hold this together, and each has a specific failure it prevents:
   prompt identity, prepend anchors and complete answer-copy data. Only actual
   user scrolling may release follow mode; virtualizer size adjustments must not.
 - **Streamed prose is throttled, not debounced.** `useThrottled` in
-  `markdown.tsx` repaints a streaming answer at most once per
-  `STREAM_FRAME_MS`, and a pending frame survives further tokens (cancelling
-  it per token would never fire under a steady stream). Only unmount clears
-  the timer, and clearing must empty the ref: StrictMode's simulated remount
-  once ran that cleanup, re-ran the scheduling effect against a ref that
-  still looked pending, and every answer sat on its first character until the
-  turn ended ("I", then the tool rows). `test-workspace-ui.mjs` streams a
-  reply and requires the prose to catch up while the turn is still running.
+  `markdown.tsx` paints through `StreamFrames` (`src/lib/stream-frames.ts`):
+  the first token of a burst at once, then at most every 50 ms, up to 90 ms
+  for a long piece, whose re-parse costs about 1.2 ms per 1,000 characters.
+  A pending frame survives further tokens (cancelling it per token would
+  never fire under a steady stream). Only unmount stops it, and stopping must
+  forget it was pending: StrictMode's simulated remount once ran that cleanup,
+  re-ran the scheduling effect against a ref that still looked pending, and
+  every answer sat on its first character until the turn ended ("I", then the
+  tool rows). `test-streaming-markdown.ts` holds `StreamFrames` to both, and
+  `test-workspace-ui.mjs` streams a reply and requires the prose to catch up
+  while the turn is still running.
 
 The rail bounds mounted rows through folder pagination and an explicit search
 result cap; it never renders the full catalog. Components that genuinely use
