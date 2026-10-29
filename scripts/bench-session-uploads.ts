@@ -115,8 +115,8 @@ const listed = ownedSessions({
   hidden: () => new Set(),
   lastMoved: () => undefined,
   placement: () => undefined,
-  execution: () => undefined,
-  thread: () => undefined,
+  executions: () => new Map(),
+  titles: () => new Map(),
   now: Date.now,
 })
 const pathOf = (harness: string, nativeId: string) => native.find((ref) => ref.harness === harness && ref.nativeId === nativeId)?.path

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import type { Payload } from "@mako/protocol"
+import { MAX_EVENT_BYTES, type Payload } from "@mako/protocol"
 import { rowsForLink, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import { AccountSessions } from "@mako/protocol/account-sessions"
 import { nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
@@ -16,7 +16,7 @@ import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { DeviceIdSchema, MoveIdSchema, RuntimeIdSchema, type SessionExecution } from "@mako/host/contracts/thread-execution"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
-import { encodeRuntimeEvent } from "@mako/host/contracts/runtime-value"
+import { encodeRuntimeEvent, splitRuntimeEventLine } from "@mako/host/contracts/runtime-value"
 
 /**
  * The account's list of Sessions on both of its ends in Mako: what a host owns and says of it (`ownedSessions`,
@@ -46,8 +46,11 @@ function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; execu
     lastMoved: (id) => options.moved?.[id],
     // SAFETY: test IDs in the Thread store's shapes, which brand plain UUIDs.
     placement: (id) => ({ thread: uuid(options.threads?.[id] ?? 100), session: uuid(index(id)) }) as never,
-    execution: (session) => options.executions?.[session],
-    thread: () => (options.title ? { title: options.title, titleSource: "user" } : { title: "made by an old build", titleSource: "auto" }),
+    executions: (sessions) => new Map(sessions.flatMap((session) => {
+      const execution = options.executions?.[session]
+      return execution ? [[session, execution] as const] : []
+    })),
+    titles: (threads) => new Map(threads.map((thread) => [thread, options.title ? { title: options.title, titleSource: "user" } : { title: "made by an old build", titleSource: "auto" }] as const)),
     now: () => NOW,
   }
 }
@@ -164,6 +167,22 @@ test("the sessions a terminal or another app runs are listed beside Mako's own, 
   assert.deepEqual(waiting?.capture, { path: nativeRow(21, 0).path }, "its device opens it by the path its catalog reads it at")
   assert.equal(rows[3]?.nativeId, "native-24", "the newer of a Session's two sessions")
   assert.equal(nativeConversation(uuid(21)), nativeConversation(uuid(21)), "named from its Session, the same on every device")
+})
+
+test("a report reads the Thread store once for every row's Session and once for their Threads, however many rows it has", () => {
+  const sources = host(Array.from({ length: 40 }, (_, index) => summary(`c-${index + 1}`, NOW - index * 1_000)), {
+    native: Array.from({ length: 40 }, (_, index) => nativeRow(100 + index, NOW - index * 1_000)),
+    title: "Webhooks",
+  })
+  const executions: number[] = []
+  const titles: number[] = []
+  const rows = ownedSessions({
+    ...sources,
+    executions: (sessions) => (executions.push(sessions.length), sources.executions(sessions)),
+    titles: (threads) => (titles.push(threads.length), sources.titles(threads)),
+  })
+  assert.equal(rows.length, 80)
+  assert.deepEqual({ executions, titles }, { executions: [80], titles: [41] }, "one read of the 80 Sessions, one of their 41 Threads")
 })
 
 test("a link older than version 6 hears neither a session Mako hasn't opened nor native IDs", () => {
@@ -285,6 +304,46 @@ test("a publisher reports when something changed, sweeps every half minute regar
   const before = sent.length
   older.report({ link: await newLink(), served: served(4) })
   assert.equal(sent.length, before)
+})
+
+test("a cloud machine's tick and an account with no link report on one publisher: the list is worked out once, not each second as a new link's", async () => {
+  let now = NOW
+  let computed = 0
+  const sent: SessionsReport[] = []
+  const publisher = new SessionPublisher({ rows: () => (computed++, [row(1)]), now: () => now, schedule: () => {} })
+  const link = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  publisher.report(link)
+  for (let second = 0; second < 20; second++) {
+    now += 1_000
+    publisher.report(undefined)
+    publisher.report(link)
+  }
+  assert.deepEqual([computed, sent.length], [1, 1], "nothing changed, the link is the one it was")
+  // A report that didn't go is said again in full on the next tick, as on a new link.
+  const refusing = { ...link, served: { ...link.served, sessions: () => false } }
+  const changed = new SessionPublisher({ rows: () => (computed++, [row(1)]), now: () => now, schedule: () => {} })
+  changed.report(refusing)
+  now += 1_000
+  changed.report(link)
+  assert.equal(sent.length, 2)
+  assert.ok(sent.at(-1)?.owned, "everything again")
+})
+
+test("a watched conversation's batch too large for the gateway goes as the notice to read it again, as a cloud Thread's does", async () => {
+  const live: string[] = []
+  const publisher = new SessionPublisher({ rows: () => [row(1)], now: () => NOW, schedule: () => {} })
+  const link = { link: await newLink(), served: { version: 6, sessions: () => true, live: (_conversation: string, event: Payload) => (live.push(event.text), true) } }
+  publisher.report(link)
+  publisher.watch(link.link, ["c-1"])
+  // SAFETY: a batch as a live driver sends one, filled only as far as the gateway's bound reads it.
+  const batch = (text: string) => encodeRuntimeEvent({ type: "live-batch", batch: { id: "c-1", revision: 7, epoch: "e-1", updates: [{ kind: "text", text }] } } as never)
+  publisher.event("event", batch("a line"))
+  publisher.event("event", batch("x".repeat(MAX_EVENT_BYTES)))
+  assert.equal(live.length, 2)
+  assert.ok(live.every((line) => Buffer.byteLength(line) <= MAX_EVENT_BYTES), "nothing over the gateway's bound")
+  const notice = splitRuntimeEventLine(live[1]!)
+  assert.deepEqual(JSON.parse(notice?.payload ?? "{}"), { type: "live-batch", batch: { id: "c-1", revision: 7, epoch: "e-1", updates: [], historyChanged: true } }, "its history changed, at its revision: the watcher reads it again")
+  assert.ok(live[0]!.includes("a line"), "one that fits goes whole")
 })
 
 test("macOS's power reads as pmset says it: the source, the battery, and Low Power Mode in either spelling", () => {

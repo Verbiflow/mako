@@ -5,9 +5,10 @@ import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { diagnostics } from "@/state/diagnostics"
 import { togglePref, usePrefs } from "@/state/prefs"
-import { formatBytes, formatRelative } from "@/lib/format"
+import { copyAge, formatBytes, formatRelative, formatTime } from "@/lib/format"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
+import type { SessionReaderEvent, SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { UnreadRecords } from "@/components/settings/unread-records"
 import { StoreFormatLine } from "@/components/shell/store-format-line"
@@ -27,6 +28,7 @@ export function DiagnosticsSection() {
   const [crashes, setCrashes] = useState<CrashReport[]>([])
   const [dir, setDir] = useState("")
   const [hostLog, setHostLog] = useState("")
+  const [reader, setReader] = useState<SessionReaderHistory | null>(null)
   const [residency, setResidency] =
     useState<ProviderResidencySnapshot | null>(null)
   const [openId, setOpenId] = useState<string>()
@@ -37,6 +39,7 @@ export function DiagnosticsSection() {
     void diagnostics.list().then(setCrashes).catch(() => setCrashes([]))
     void diagnostics.directory().then(setDir).catch(() => setDir(""))
     void diagnostics.hostLogPath().then(setHostLog).catch(() => setHostLog(""))
+    void diagnostics.sessionReader().then(setReader).catch(() => setReader(null))
     void diagnostics
       .providerResidency()
       .then(setResidency)
@@ -148,6 +151,8 @@ export function DiagnosticsSection() {
         </div>
       ) : null}
 
+      {reader ? <SessionReaderRow history={reader} /> : null}
+
       <UnreadRecords report={unread} />
 
       {residency ? (
@@ -242,6 +247,64 @@ export function DiagnosticsSection() {
           </Action>
         ) : null}
       </div>
+    </div>
+  )
+}
+
+const READER_EVENT = {
+  adopted: "Started",
+  lost: "Stopped",
+  exited: "Exited",
+  retired: "Replaced an older build",
+  unavailable: "Couldn't start",
+} satisfies Record<SessionReaderEvent["event"], string>
+
+const READER_KIND = {
+  process: "background sync",
+  shared: "shared reader",
+  worker: "this app's reader",
+} satisfies Record<SessionReaderEvent["kind"], string>
+
+/**
+ * How often the reader behind the session list stopped since the host
+ * started, the last few times with why, and its own log. A reader restarting
+ * every half minute once looked like nothing but a flickering sidebar.
+ */
+function SessionReaderRow({ history }: { history: SessionReaderHistory }) {
+  const recent = history.events.filter((event) => event.event !== "adopted").slice(0, 5)
+  const since = copyAge(new Date(history.since).getTime())
+  return (
+    <div data-session-reader="" className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+      <div className="flex items-center justify-between gap-3 px-3 py-2">
+        <div className="min-w-0">
+          <p className="text-ui">Session sync</p>
+          <p className="text-label text-faint">
+            {history.lost === 0
+              ? `The reader behind the session list hasn't stopped since the host started ${since}.`
+              : `The reader behind the session list stopped ${history.lost === 1 ? "once" : `${history.lost} times`} since the host started ${since}.`}
+          </p>
+        </div>
+        {history.logPath ? (
+          <IfCanReveal>
+            <Action tone="ghost" onClick={() => void desktop.revealPath(history.logPath)}>
+              Show the log
+            </Action>
+          </IfCanReveal>
+        ) : null}
+      </div>
+      {recent.length > 0 ? (
+        <div className="border-t border-hairline">
+          {recent.map((event) => (
+            <div key={`${event.at}-${event.event}-${event.pid ?? ""}`} className="flex items-baseline gap-3 border-b border-hairline px-3 py-1.5 last:border-b-0">
+              <span className="min-w-0 flex-1 truncate text-label" title={event.reason}>
+                {READER_EVENT[event.event]}, {READER_KIND[event.kind]}
+                {event.reason ? <span className="text-faint"> · {event.reason}</span> : null}
+              </span>
+              <span className="tabular shrink-0 text-label text-faint">{formatTime(event.at)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

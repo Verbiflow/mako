@@ -2564,6 +2564,36 @@ report has no JavaScript stack. `scripts/test-live-conversations.ts`
 (`bulkLoadsAreNamed`) holds the report and the lifecycle to loading nothing;
 `scripts/test-event-loop.ts` holds a run's name to the run.
 
+The report reads the Thread store once for all its rows: who executes each
+Session (`ThreadStore.executionsOf`) and each Thread's name (`titlesOf`), one
+query each, answered from memory until any commit, this host's or another's
+(`revision`); `groups()` is one query, kept the same way. Before, each row
+read both alone, about 900 queries a report on this Mac, and `groups()` took
+a query per group and per Session each time the window's rows were read;
+`npm run bench:session-report` measures it against a copy of this Mac's store.
+One link has one reporter: a cloud machine's is its machine runtime's tick,
+and a link the publisher already reported on, served again after a moment
+without one, isn't told everything again. A watched conversation's live
+updates go out through `gatewayEventLine`, as a cloud Thread's events do: a
+batch over `MAX_EVENT_BYTES` goes as the notice that its history changed
+(`historyChangedNotice`, the same one a window's event stream sends for a
+batch over its limit), which the watcher answers by reading it again.
+
+The account's rows here (`CloudConversations`) take nothing from a catalog that
+isn't read: until `catalog.ready()`, and while a lost reader is replaced,
+`keepsNative` says nothing (undefined), and a row it would decide is left as it
+is, listed or not. A catalog write names its native session
+(`nativeChanged`), and writes are looked at together every 250 ms, one look at
+a time, at the rows naming them alone. Whether a device is quiet is the list's
+to say of every one of its conversations, one a window follows included: a
+quiet device sends no batches, so nothing else ends its working spinner. The
+account's archived cloud Threads are said only from a list the account
+answered (`archivedChanged`), never as none at a sign-out, and
+`ThreadArchives` keeps their keys by account, so a restart shows them
+archived before the list is read again. `scripts/test-thread-store.ts`
+(`manyAtOnce`), `test-account-threads.ts`, `test-cloud-conversations.ts` and
+`test-thread-lifecycle.ts` cover these.
+
 A ready provider process is a warm cache, not active work. `LiveConversations`
 keeps at most two warm bindings per host and hibernates either the oldest excess
 or any one idle for ten minutes. Hibernation closes the provider and its MCP
@@ -3702,3 +3732,21 @@ prepared build is copied into `/Applications` before the host quits and its
 state lives only in that host, so every one an earlier host left is dead
 weight (four held 3.4 GB). `test-host-idle.ts`, `test-local-update-install.ts`
 and `test-local-build-source.ts` cover these.
+
+The sync reader keeps its own log at `~/.mako/logs/syncd.log`, with the
+user's shared state rather than in a profile's data root, because one reader
+serves every profile's host; Node's
+fatal-error reports go to `~/.mako/logs/syncd-reports` (newest five kept). It
+records its start (pid, role, build, socket, identity), each client, each
+backfill pass's process and how it ended, its memory when it moves 64 MB, what
+it prints, and why it exits: retired (`no clients`, `memory` with the guard's
+samples, `asked`), another reader holding the claim, discovery failed, a
+signal, or an uncaught exception or rejection with its stack, written
+synchronously. Its writer is `@mako/sessions/process-log`, the same format,
+rotation and scrub `host-log.ts` uses. A reader can't log its own SIGKILL or
+out-of-memory abort, so the host that spawned it logs its exit code or signal
+(`catalog-connection.ts`), and every host keeps the last 50 adoptions and
+losses of its reader with the reason it saw (`threads/reader-history.ts`),
+shown in Settings › Diagnostics with the reader's log. Once a reader restarted
+every 20 to 60 s for an hour and nothing said why. `test/syncd-log.mjs` and
+`test-reader-history.ts` cover these.

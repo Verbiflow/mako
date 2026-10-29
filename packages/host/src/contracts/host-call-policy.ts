@@ -149,6 +149,7 @@ const reads = [
   "mako:host-log-path",
   "mako:provider-residency",
   "mako:daemon-status",
+  "mako:session-reader-history",
   "mako:daemon-login",
   "mako:utility-model-settings",
   "mako:harness-order-saved",

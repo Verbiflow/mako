@@ -5,16 +5,27 @@ import { shownKeyOf, threadShownKey, type ArchiveCommand, type NativeArchive, ty
 
 /**
  * What this device archived of its own, kept here; and, beside it, the keys of the cloud Threads its account archived,
- * which the account's word sets (`account`) and nothing here writes: a cloud Thread's archive is its own object's, so a
- * device never keeps a second word on it. A snapshot is both, under one revision.
+ * which the account's word sets (`account`) and nothing here decides: a cloud Thread's archive is its own object's, so
+ * a device never keeps a second word on it. The account's are kept as its list last said them, by account, and the
+ * last account's are read back when the host starts: until the list is read again, its archived Threads stay archived
+ * here rather than showing for the seconds it takes. A snapshot is both, under one revision.
  */
 export class ThreadArchives {
   private readonly db: DatabaseSync
-  /** The keys of the account's archived cloud Threads' Sessions, as its list says them now. */
+  /** The account whose archived cloud Threads `accountKeys` are, if one has been heard from. */
+  private accountId: string | undefined
+  /** The keys of the account's archived cloud Threads' Sessions, as its list said them last. */
   private accountKeys: ReadonlySet<string> = new Set()
   constructor(path: string) {
     this.db = new DatabaseSync(path)
-    this.db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS archives (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, digest TEXT NOT NULL); CREATE TABLE IF NOT EXISTS revision (id INTEGER PRIMARY KEY CHECK (id=1), value INTEGER NOT NULL); INSERT OR IGNORE INTO revision VALUES (1,0)")
+    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS archives (key TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, digest TEXT NOT NULL); CREATE TABLE IF NOT EXISTS revision (id INTEGER PRIMARY KEY CHECK (id=1), value INTEGER NOT NULL); INSERT OR IGNORE INTO revision VALUES (1,0);
+      CREATE TABLE IF NOT EXISTS account_archives (account TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY (account, key));
+      CREATE TABLE IF NOT EXISTS account_heard (id INTEGER PRIMARY KEY CHECK (id=1), account TEXT NOT NULL)`)
+    const heard = this.db.prepare("SELECT account FROM account_heard WHERE id=1").get()
+    if (heard) {
+      this.accountId = z.object({ account: z.string() }).parse(heard).account
+      this.accountKeys = new Set(this.db.prepare("SELECT key FROM account_archives WHERE account=?").all(this.accountId).map((row) => z.object({ key: z.string() }).parse(row).key))
+    }
   }
   snapshot(): ThreadArchiveSnapshot {
     const revision = z.object({ value: z.number() }).parse(this.db.prepare("SELECT value FROM revision WHERE id=1").get()).value
@@ -23,14 +34,23 @@ export class ThreadArchives {
     return { revision, keys: [...new Set([...keys, ...this.accountKeys])].sort() }
   }
   /**
-   * The account's archived cloud Threads, as the keys of their Sessions: held in memory, never written. The snapshot
-   * after it, under a new revision, when they changed; null when they didn't.
+   * `account`'s archived cloud Threads, as the keys of their Sessions, from a list it answered: they replace what was
+   * held, kept as that account's. The snapshot after it, under a new revision, when they changed; null when they didn't.
    */
-  account(keys: Iterable<string>): ThreadArchiveSnapshot | null {
+  account(account: string, keys: Iterable<string>): ThreadArchiveSnapshot | null {
     const next = new Set(keys)
-    if (next.size === this.accountKeys.size && [...next].every((key) => this.accountKeys.has(key))) return null
+    if (account === this.accountId && next.size === this.accountKeys.size && [...next].every((key) => this.accountKeys.has(key))) return null
+    this.db.exec("BEGIN IMMEDIATE")
+    try {
+      this.db.prepare("DELETE FROM account_archives WHERE account=?").run(account)
+      const insert = this.db.prepare("INSERT INTO account_archives (account, key) VALUES (?, ?)")
+      for (const key of next) insert.run(account, key)
+      this.db.prepare("INSERT INTO account_heard (id, account) VALUES (1, ?) ON CONFLICT (id) DO UPDATE SET account=excluded.account").run(account)
+      this.db.prepare("UPDATE revision SET value=value+1 WHERE id=1").run()
+      this.db.exec("COMMIT")
+    } catch (error) { this.db.exec("ROLLBACK"); throw error }
+    this.accountId = account
     this.accountKeys = next
-    this.db.prepare("UPDATE revision SET value=value+1 WHERE id=1").run()
     return this.snapshot()
   }
   /**

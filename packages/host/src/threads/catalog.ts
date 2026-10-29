@@ -26,6 +26,9 @@ import { homedir } from "node:os"
 import { isAbsolute, join } from "node:path"
 import { MessageChannel, Worker } from "node:worker_threads"
 import { connectOnDemandCatalog } from "./catalog-connection.js"
+import { ReaderHistory } from "./reader-history.js"
+import type { SessionReaderHistory } from "../contracts/session-reader.js"
+import { syncdLogPath } from "@mako/sessions/process-log"
 import {
   connectDaemon,
   connectDaemonPort,
@@ -256,6 +259,8 @@ export interface ThreadCatalog {
   activity(): Record<string, ExternalThreadActivity>
   /** For the settings surface: is the daemon doing the work, and since when. */
   daemonStatus(): Promise<DaemonStats | null>
+  /** For Settings › Diagnostics: each time the reader serving this host was adopted or lost, and why. */
+  readerHistory(): SessionReaderHistory
   list(filter?: { cwd?: string; harness?: string }): ThreadRef[]
   /**
    * The window's rail list, by the same rule the window applies to every push.
@@ -272,9 +277,11 @@ export interface ThreadCatalog {
   nativePath(identity: NativeSourceIdentity): string | undefined
   /**
    * Whether this Mac's harness stores keep the native session `nativeId` of `harness`, run in `folder`, past the rail's
-   * cap too: another Mako reading the same stores lists it as well (`CloudConversations`' `keepsNative`).
+   * cap too: another Mako reading the same stores lists it as well (`CloudConversations`' `keepsNative`). Undefined
+   * until the serving reader's discovery is in (`ready`), and while a lost reader is replaced: a catalog not yet read
+   * says nothing about what the stores keep, never that they keep nothing.
    */
-  keepsNative(harness: string, nativeId: string, folder: string | undefined): boolean
+  keepsNative(harness: string, nativeId: string, folder: string | undefined): boolean | undefined
   /**
    * Read a file for a catalogued thread's viewer. Relative paths resolve
    * against the thread's workspace; absolute ones open as they are, so a file
@@ -490,6 +497,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   let discoveredSource: SessionCatalog | DaemonClient | null = null
   /** Who serves `daemon`: the user's detached daemon or this host's own worker thread. */
   let daemonKind: "process" | "shared" | "worker" | null = null
+  /** Each reader this host adopted and lost, and why (Settings › Diagnostics). */
+  const readers = new ReaderHistory()
+  /** Why this host closed a reader it served from, when it did: the loss is recorded with that, not `closed here`. */
+  const closingFor = new WeakMap<DaemonClient, string>()
   let catalogWorker: Worker | null = null
   let stopMonitoring: (() => void) | null = null
   let activityEngine: ProviderActivityEngine | null = null
@@ -509,7 +520,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     else folders.set(key, new Set([ref.cwd]))
   }
 
-  function keepsNative(harness: string, nativeId: string, folder: string | undefined): boolean {
+  function keepsNative(harness: string, nativeId: string, folder: string | undefined): boolean | undefined {
+    if (!threadsReady()) return undefined
     if (!nativeFolders) {
       const folders = new Map<string, Set<string | undefined>>()
       for (const ref of daemon ? mirror.values() : (catalog?.list() ?? [])) noteNativeFolder(folders, ref)
@@ -761,6 +773,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         message: "Session sync exceeded 512 MB and was restarted safely.",
       })
       stopDaemonMonitor()
+      closingFor.set(client, `memory over 512 MB (${Math.round((stats.rss ?? 0) / 1024 / 1024)} MB)`)
       void client.retire().catch(() => {})
       client.close()
     })
@@ -783,6 +796,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         }
         signal.throwIfAborted()
         const pid = client.stats.pid
+        readers.note("retired", "process", { reason: "another build's", pid })
         await Promise.race([
           client.retire().catch(() => {}),
           new Promise((resolve) => setTimeout(resolve, 150)),
@@ -849,6 +863,12 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     }
     daemon = client
     daemonKind = kind
+    // The worker's pid is this host's own, and its loss is recorded once by `runCatalogWorker`, with its exit code.
+    const pid = kind === "worker" ? undefined : client.stats.pid
+    readers.note("adopted", kind, { pid })
+    if (kind !== "worker") client.onClose((reason) => {
+      if (daemon === client && !stopping) readers.note("lost", kind, { reason: closingFor.get(client) ?? reason, pid })
+    })
     refreshFollowForReader(client)
     if (syncScope) void client.scopeSync(syncScope).catch((error: Error) => hostWarn("threads", "the sync scope not given to the catalog", { error: error.message }))
     if (copiesLink) void client.syncCopies(copiesLink).catch((error: Error) => hostWarn("threads", "copies' link not given to the catalog", { error: error.message }))
@@ -993,6 +1013,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const lost = (reason: string) => {
       if (daemon !== client && catalogWorker !== worker) return
       if (daemon === client) {
+        if (!stopping) readers.note("lost", "worker", { reason })
         daemon = null
         daemonKind = null
       }
@@ -1101,7 +1122,13 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       // A reader this host started would capture into the archive on its behalf.
       const identity = await catalogIdentity()
       signal.throwIfAborted()
-      const client = await connectOnDemandCatalog(signal, { script: daemonScript(app), identity, start: !catalogReadOnly, writer: deps.writer })
+      const client = await connectOnDemandCatalog(signal, {
+        script: daemonScript(app),
+        identity,
+        start: !catalogReadOnly,
+        writer: deps.writer,
+        onExit: (exit) => readers.note("exited", "shared", { pid: exit.pid, reason: exit.signal ? `signal ${exit.signal}` : `code ${exit.code}` }),
+      })
       if (client && await adoptClient(client, "shared", signal)) {
         hostLog("threads", "shared catalog connected", { pid: client.stats.pid })
         client.onClose(() => {
@@ -1114,9 +1141,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       }
     } catch (error) {
       signal.throwIfAborted()
-      hostWarn("threads", "shared catalog unavailable", {
-        error: error instanceof Error ? error.message : String(error),
-      })
+      readers.note("unavailable", "shared", { reason: error instanceof Error ? error.message : String(error) })
     }
     if (await runCatalogWorker(signal)) return
     await runInProcessCatalog(signal)
@@ -1164,6 +1189,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         signal.throwIfAborted()
         if (catalog !== source) return
         discoveredSource = source
+        // What another reader's rows said of the stores is this one's to say now.
+        nativeFolders = null
         for (const ref of source.list()) noteStoreWrite(ref, undefined)
         placeCatalog(source.list())
         push()
@@ -1202,6 +1229,12 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     // syncing while Mako is closed; Settings reports only the latter.
     const current = daemonKind === "process" ? daemon : null
     return current ? current.refresh().catch(() => current.stats) : null
+  }
+
+  function readerHistory(): SessionReaderHistory {
+    // The shared reader logs under the home it was spawned with, which is this host's.
+    const logPath = syncdLogPath()
+    return readers.snapshot(existsSync(logPath) ? logPath : "")
   }
 
   function stop(): void {
@@ -1691,6 +1724,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     ready: threadsReady,
     activity: threadActivitySnapshot,
     daemonStatus,
+    readerHistory,
     list: listThreads,
     rail: railThreads,
     ref: catalogRef,

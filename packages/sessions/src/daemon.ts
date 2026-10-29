@@ -162,7 +162,8 @@ export async function claimDaemon(
 export interface DaemonLink {
   send(frame: string): void
   onFrame(listener: (raw: string) => void): void
-  onClose(listener: () => void): void
+  /** Fires when the link ends, with the error that ended it when one did. */
+  onClose(listener: (error?: Error) => void): void
   close(): void
 }
 
@@ -207,8 +208,8 @@ function socketLink(socket: Socket, frameLimit: number, overflow: string): Daemo
       })
     },
     onClose(listener) {
-      socket.on("close", listener)
-      socket.on("error", listener)
+      socket.on("close", () => listener())
+      socket.on("error", (error) => listener(error))
     },
     close: () => socket.destroy(),
   }
@@ -243,8 +244,23 @@ export function portLink(port: DaemonPort, frameLimit: number): DaemonLink {
   }
 }
 
+/**
+ * Where a serving reader says what happens to it: clients coming and going,
+ * and why it retires. The detached reader keeps these lines in `syncd.log`
+ * (`daemon-main.ts`); nothing else is told why a reader went away.
+ */
+export type DaemonLogger = (
+  level: "info" | "warn" | "error",
+  message: string,
+  fields?: Record<string, string | number | boolean | undefined>
+) => void
+
+/** Why a serving catalog retires: its last client left long enough ago, its memory stayed over `MAX_DAEMON_RSS`, or a client asked (a newer build, or a host that saw its memory). */
+export type DaemonRetireReason = "no clients" | "memory" | "asked"
+
 /** Serve one catalog over the socket. Resolves once listening. */
 export interface ServeCatalogOptions {
+  log?: DaemonLogger
   catalogIdentity?: string
   /** On-demand readers retire after their last client leaves; login daemons omit this. */
   idleMs?: number
@@ -261,7 +277,7 @@ export interface ServeCatalogOptions {
 
 interface CatalogService {
   attach(link: DaemonLink): boolean
-  retire(): void
+  retire(reason: DaemonRetireReason): void
   /** Stop serving without stopping the catalog. */
   dispose(): void
   onRetire(listener: () => void): void
@@ -293,9 +309,10 @@ function catalogService(
   })
 
   let retiring = false
-  const retire = () => {
+  const retire = (reason: DaemonRetireReason, fields: Record<string, string | number> = {}) => {
     if (retiring) return
     retiring = true
+    options.log?.(reason === "memory" ? "warn" : "info", "retiring", { reason, clients: clients.size, ...fields })
     for (const listener of retireListeners) listener()
     setTimeout(() => {
       catalog.stop()
@@ -306,24 +323,27 @@ function catalogService(
     if (idleTimer) clearTimeout(idleTimer)
     idleTimer = undefined
     if (options.idleMs !== undefined && clients.size === 0 && !retiring)
-      idleTimer = setTimeout(retire, options.idleMs)
+      idleTimer = setTimeout(retire, options.idleMs, "no clients", { idleMs: options.idleMs })
   }
   watchIdle()
-  let highMemorySamples = 0
+  /** The RSS of each sample over the guard in a row, in MB: what a memory retirement logs. */
+  let highMemorySamples: number[] = []
   const memoryTimer = setInterval(() => {
     if (options.memoryGuard === false) return
-    highMemorySamples = daemonMemoryUnsafe(process.memoryUsage().rss)
-      ? highMemorySamples + 1
-      : 0
-    if (highMemorySamples >= 3) retire()
+    const { rss, heapUsed } = process.memoryUsage()
+    highMemorySamples = daemonMemoryUnsafe(rss) ? [...highMemorySamples, Math.round(rss / 1024 / 1024)] : []
+    if (highMemorySamples.length >= 3)
+      retire("memory", { rssMb: highMemorySamples.join(","), limitMb: MAX_DAEMON_RSS / 1024 / 1024, heapUsedMb: Math.round(heapUsed / 1024 / 1024) })
   }, 5_000)
 
   const attach = (link: DaemonLink): boolean => {
     if (clients.size >= MAX_CLIENTS) {
+      options.log?.("warn", "client refused", { clients: clients.size, max: MAX_CLIENTS })
       link.close()
       return false
     }
     clients.add(link)
+    options.log?.("info", "client connected", { clients: clients.size })
     watchIdle()
     follows.set(link, new Map())
 
@@ -457,7 +477,7 @@ function catalogService(
             // A newer client wants this vintage gone. Answer, then leave —
             // the socket frees, and the successor takes over the watchers.
             reply({ id: frame.id, ok: true, result: null })
-            retire()
+            retire("asked")
             return
           }
           case "unfollow": {
@@ -495,8 +515,10 @@ function catalogService(
       if (id !== undefined)
         reply({ id, ok: false, error: `The sync daemon couldn't read this ${op ?? "unnamed"} request: it may come from another Mako build (protocol ${PROTOCOL_VERSION})` })
     })
-    link.onClose(() => {
-      clients.delete(link)
+    link.onClose((error) => {
+      // A socket that errors closes too; the client left once.
+      if (!clients.delete(link)) return
+      options.log?.("info", "client left", { clients: clients.size, ...error && { error: error.message } })
       for (const stop of follows.get(link)?.values() ?? []) stop()
       follows.delete(link)
       watchIdle()
@@ -650,8 +672,12 @@ export interface DaemonClient {
   /** One entry of such a copy (`SessionCatalog.copyEntry`). */
   copyEntry(link: RecordsLink, harness: string, nativeId: string, entry: string): Promise<Entry | null>
   onEvent(listener: (event: DaemonEvent) => void): () => void
-  /** Fires once if the daemon goes away; the client is dead afterwards. */
-  onClose(listener: () => void): void
+  /**
+   * Fires once if the daemon goes away, with why: `closed here` when this
+   * client closed it, `closed` when the other end did, or the link's error.
+   * The client is dead afterwards.
+   */
+  onClose(listener: (reason: string) => void): void
   close(): void
 }
 
@@ -715,7 +741,8 @@ async function connectDaemonLink(
   let nextId = 1
   const pending = new Map<number, PendingRequest>()
   const eventListeners = new Set<(event: DaemonEvent) => void>()
-  const closeListeners = new Set<() => void>()
+  const closeListeners = new Set<(reason: string) => void>()
+  let closedHere = false
 
   link.onFrame((raw) => {
     const record = parseJsonRecord(raw)
@@ -790,7 +817,7 @@ async function connectDaemonLink(
   })
 
   let dead = false
-  link.onClose(() => {
+  link.onClose((error) => {
     if (dead) return
     dead = true
     for (const waiter of pending.values()) {
@@ -798,7 +825,8 @@ async function connectDaemonLink(
       waiter.reject(new Error("The sync daemon went away"))
     }
     pending.clear()
-    for (const listener of closeListeners) listener()
+    const reason = closedHere ? "closed here" : error ? error.message : "closed"
+    for (const listener of closeListeners) listener(reason)
     closeListeners.clear()
   })
 
@@ -1012,7 +1040,10 @@ async function connectDaemonLink(
         return () => eventListeners.delete(listener)
       },
       onClose: (listener) => void closeListeners.add(listener),
-      close: () => link.close(),
+      close: () => {
+        closedHere = true
+        link.close()
+      },
     }
   } catch (error) {
     link.close()

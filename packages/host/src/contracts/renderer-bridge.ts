@@ -85,6 +85,7 @@ import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSna
 import type { CrashReport } from "./crash-report.js"
 import type { TranscriptDepth, TranscriptDocument, TranscriptSource } from "./transcript-document.js"
 import type { ProviderResidencySnapshot } from "./provider-residency.js"
+import type { SessionReaderHistory } from "./session-reader.js"
 import type { AccountHarness, AccountLogin, AccountLoginResult, AccountProvider, AccountRemovalOutcome, AccountRemovalPlan, AccountUsage, AccountCatalog, ResetCreditOutcome } from "./accounts.js"
 
 export interface BridgeTransport {
@@ -896,6 +897,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<ProviderResidencySnapshot>(
         "mako:provider-residency"
       ),
+    /** Each time the reader serving the session list was lost or adopted, and its own log's path. */
+    sessionReaderHistory: () =>
+      invokeTrustedHost<SessionReaderHistory>("mako:session-reader-history"),
     clearCrashes: () => invokeTrustedHost<void>("mako:clear-crashes"),
     reportCrash: (
       kind: "renderer-error" | "renderer-rejection",

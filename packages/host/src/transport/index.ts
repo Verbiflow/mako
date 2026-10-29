@@ -6,7 +6,7 @@
  */
 export { HostMethods, type HostMethodsOptions, type RoutedCall } from "./methods.js"
 export { startWebHost, type HostInvoke } from "./server.js"
-export { serveHostThroughGateway, type GatewayHostOptions } from "./gateway.js"
+export { gatewayEventLine, serveHostThroughGateway, type GatewayHostOptions } from "./gateway.js"
 export { PortRelay } from "./port-relay.js"
 export { gatewayHostCalls, type GatewayHostCallsOptions } from "./gateway-client.js"
 export { invokeRuntime, invokeRuntimeEncoded, jsonBody, probeRuntime, runtimeInfo, runtimeRequest, settleRuntime, subscribeRuntime } from "./connection.js"

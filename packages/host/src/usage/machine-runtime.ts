@@ -5,7 +5,6 @@ import { Socket } from "node:net"
 import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import {
-  MAX_EVENT_BYTES,
   Payload,
   RuntimeRefusedError,
   RuntimeThreads,
@@ -26,9 +25,8 @@ import { cpuBetween, describeCpu, describeThreads, sampleCpu, type CpuSample } f
 import { HostProfiler } from "./host-profile.js"
 import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type CarriedFile, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
-import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
-import { runtimeEventRouting } from "../contracts/runtime.js"
-import { type HostInvoke, PortRelay, serveHostThroughGateway } from "../transport/index.js"
+import type { RuntimeEvent, RuntimeEventChannel } from "../contracts/runtime-value.js"
+import { gatewayEventLine, type HostInvoke, PortRelay, serveHostThroughGateway } from "../transport/index.js"
 import { appPorts } from "./app-ports.js"
 import { CloudLink, type CloudLinkEnding, type CloudLinkState } from "./cloud-link.js"
 import { ACTIVITY_HEARTBEAT_MS } from "@mako/protocol"
@@ -125,8 +123,6 @@ function onTimeline(line: HostLogLine): boolean {
   if (line.scope === "provider-startup") return line.fields?.state !== "started"
   return TIMELINE_SCOPES.has(line.scope)
 }
-
-const LiveBatchIdentity = z.object({ batch: z.object({ id: z.string(), revision: z.number(), epoch: z.string().optional() }) })
 
 /**
  * The host on a cloud machine, served to its Thread's object as the machine's runtime (`m-<16 hex>.g<generation>`).
@@ -233,18 +229,14 @@ export class MachineRuntime {
     if (event.type !== undefined && MACHINE_ONLY_EVENTS.has(event.type)) return
     const claims = threads.claims()
     if (!claims.length) return
-    let text = runtimeEventLine(channel, event).slice(0, -1)
-    if (text.length * 3 > MAX_EVENT_BYTES && Buffer.byteLength(text) > MAX_EVENT_BYTES) {
-      const notice = invalidated(event)
-      if (!notice) {
-        this.#state.events.dropped += 1
-        hostWarn("machine", "an event too large for the Thread wasn't sent", { type: runtimeEventRouting(event).type, bytes: Buffer.byteLength(text) })
-        return this.#changed()
-      }
-      this.#state.events.invalidated += 1
-      text = runtimeEventLine(channel, notice).slice(0, -1)
+    const line = gatewayEventLine(channel, event)
+    if (line.fit === "too-large") {
+      this.#state.events.dropped += 1
+      hostWarn("machine", "an event too large for the Thread wasn't sent", { type: line.type, bytes: line.bytes })
+      return this.#changed()
     }
-    const payload = Payload.encoded(text)
+    if (line.fit === "reread") this.#state.events.invalidated += 1
+    const payload = Payload.encoded(line.text)
     for (const { threadId } of claims) threads.emit(threadId, payload)
     this.#state.events.emitted += 1
     this.#changed()
@@ -731,13 +723,6 @@ function endingOf(problem: Problem | undefined): CloudLinkEnding {
 
 function describe(reason: Problem): string {
   return reason.detail ? `${problemType(reason)}: ${reason.detail}` : `${problemType(reason)}: ${reason.title}`
-}
-
-function invalidated(event: RuntimeEvent): RuntimeEvent | null {
-  if (runtimeEventRouting(event).type !== "live-batch") return null
-  const live = LiveBatchIdentity.safeParse(JSON.parse(event.payload))
-  if (!live.success) return null
-  return encodeRuntimeEvent({ type: "live-batch", batch: { ...live.data.batch, updates: [], historyChanged: true } })
 }
 
 /** The numbers reserved for each Thread's events, in one small file written as each block is reserved. */

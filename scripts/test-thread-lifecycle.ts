@@ -206,5 +206,23 @@ try {
   assert.equal(archivedByKeys(["file:/x"], new Set(["shown@7:file:/x"]), { nativeArchived: true, nativeArchiveStamp: "7" }), false)
   assert.equal(archivedByKeys(["file:/x"], new Set(["shown@7:file:/x"]), { nativeArchived: true, nativeArchiveStamp: "8" }), true, "a restore of another archive doesn't answer this one")
   assert.equal(archivedByKeys(["file:/x"], new Set(["shown:file:/x"]), { nativeArchived: true, nativeArchiveStamp: "8" }), true)
+
+  // The account's archived cloud Threads are kept by account: a restart shows them archived before the list is read.
+  const accountPath = join(root, "account-archives.sqlite")
+  const held = new ThreadArchives(accountPath)
+  const cloudKey = threadArchiveKey({ kind: "live", id: "cloud-conversation" })
+  assert.ok(held.account("account-a", [cloudKey]))
+  assert.equal(held.account("account-a", [cloudKey]), null, "the same keys again change nothing")
+  held.close()
+  const restarted = new ThreadArchives(accountPath)
+  assert.ok(restarted.snapshot().keys.includes(cloudKey), "archived from the start, before the account answers")
+  assert.equal(archivedByKeys([cloudKey], new Set(restarted.snapshot().keys), undefined), true)
+  // Another account's list replaces them; each account's are its own.
+  assert.equal(restarted.account("account-b", [])?.keys.includes(cloudKey), false)
+  assert.ok(restarted.account("account-a", [cloudKey])?.keys.includes(cloudKey))
+  restarted.close()
+  const again = new ThreadArchives(accountPath)
+  assert.ok(again.snapshot().keys.includes(cloudKey), "the last account's")
+  again.close()
   console.log("Thread lifecycle: shared archive/restore receipts, duplicate commands, exact-run Stop, held queue and unrelated-run isolation verified; a Session its harness archived is archived here until restored here, and archived again once its harness unarchives and re-archives it")
 } finally { owner.stop(); archives.close(); await rm(root,{recursive:true,force:true}) }

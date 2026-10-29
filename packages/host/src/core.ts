@@ -425,8 +425,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         hidden: () => new Set(threads.archives.snapshot().keys),
         lastMoved: (id, revision) => live.lastMoved(id, revision),
         placement: (id) => store.journalPlacement(id),
-        execution: (session) => store.execution(session),
-        thread: (id) => store.thread(id),
+        executions: (ids) => store.executionsOf(ids),
+        titles: (ids) => store.titlesOf(ids),
         now: Date.now,
       })
     },
@@ -441,8 +441,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       else {
         windowRows = undefined
         windowPaths = undefined
-        late.cloudConversations?.nativeChanged()
       }
+      // Whether this Mac keeps that session may have changed: the account's rows for it are looked at again, those alone.
+      late.cloudConversations?.nativeChanged([event.ref])
     } else if (event.type === "threads" || event.type === "thread-removed") {
       windowRows = undefined
       windowPaths = undefined
@@ -454,7 +455,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     sessions.changed()
   })
   late.sessions = sessions
-  shell.jobs.every(REPORT_WORK, 1_000, () => late.cloud?.reportSessions?.())
+  // One reporter a link: a cloud machine's link is its machine runtime's, whose tick reports on it. This job, with the
+  // account's link (none there), would make each second's report look like a new link's and work the list out again.
+  if (config.machineAgentFd === undefined) shell.jobs.every(REPORT_WORK, 1_000, () => late.cloud?.reportSessions?.())
   // The heap, watched so a host filling up says who with while it still can: an out-of-memory report has no
   // JavaScript stack. The line names what memory holds and who read it in; the whole readout goes beside the log.
   const heap = new HeapWatch(readHeap, (change, level, reading) => {
@@ -544,7 +547,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       })
   declareCarriedFilesMethods(methods, carriedFiles)
   /** The account's archived cloud Threads, as its list said them last: what every window shows as archived of them. */
-  let accountArchived: ReadonlyMap<string, ArchivedThread> = new Map()
+  /** The account's archived cloud Threads, as its list last said them; undefined until a list is read this run. */
+  let accountArchived: { account: string; archived: ReadonlyMap<string, ArchivedThread> } | undefined
   // A cloud machine runs its conversations itself; only a person's own Mac starts them on one.
   const cloudConversations = fixtureDesk || config.machineAgentFd !== undefined
     ? undefined
@@ -594,23 +598,27 @@ export async function openCore(shell: CoreShell): Promise<Core> {
             return cloud ? catalog.copyEntry(await cloud.deviceRecords(device), harness, nativeId, id) : null
           },
         },
-        archivedChanged: (archived) => {
-          accountArchived = archived
+        archivedChanged: (account, archived) => {
+          accountArchived = { account, archived }
           late.archivedKeys?.()
         },
         turnOnChanged: () => void late.turnOn?.changed(),
       })
+  // The keys those Threads' Sessions are archived by here. Until the account's list is read this run, and while the
+  // catalog can't yet say which of its rows are theirs, the ones kept from before stand (`ThreadArchives.account`).
   late.archivedKeys = () => {
+    if (!accountArchived) return
     const keys = new Set<string>()
     const sessionIds = new Set<string>()
-    for (const archived of accountArchived.values())
+    for (const archived of accountArchived.archived.values())
       for (const row of archived.sessions) {
         keys.add(threadArchiveKey({ kind: "live", id: row.conversation }))
         if (row.nativeId) keys.add(threadArchiveKey({ kind: "native", provider: row.harness, nativeId: row.nativeId }))
         sessionIds.add(row.session)
       }
+    if (sessionIds.size && !catalog.ready()) return
     if (sessionIds.size) for (const ref of catalog.list()) if (ref.sessionId && sessionIds.has(ref.sessionId)) keys.add(threadArchiveKey({ kind: "file", path: ref.path }))
-    const snapshot = threads.archives.account(keys)
+    const snapshot = threads.archives.account(accountArchived.account, keys)
     if (snapshot) emit({ type: "thread-archives", snapshot })
   }
   late.cloudConversations = cloudConversations

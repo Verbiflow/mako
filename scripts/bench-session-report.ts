@@ -1,10 +1,17 @@
 import { randomUUID } from "node:crypto"
-import { writeFile } from "node:fs/promises"
+import { readdirSync } from "node:fs"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { homedir, tmpdir } from "node:os"
+import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { parseArgs } from "node:util"
 import { z } from "zod"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import { ThreadRefSchema } from "@mako/sessions/thread-schema"
+import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { ownedSessions, SessionReporter, type NativeRow, type ReportSources } from "@mako/host/conversations/session-report"
+import { windowStart } from "@mako/host/conversations/sync-window"
+import { ThreadStore, threadStorePath } from "@mako/host/threads/store"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { invokeRuntime } from "@mako/host/transport/connection"
 import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
@@ -13,7 +20,11 @@ import { appDataFolder, runtimeDataRoot, runtimeLocation } from "@mako/host/tran
  * What telling the account this Mac's Sessions costs, on this Mac's own sessions: the rail and its activity read from
  * the installed host (`mako:threads`, read-only, the same rows its report reads), the report's rows computed from them
  * (`ownedSessions`), and the bytes its first report and a one-row change take on the link. Then the same at 2,000
- * rows, the most one owner lists. Prints counts and timings only, never a title or a path.
+ * rows, the most one owner lists. Then the report as the host makes it, against a copy of this Mac's Thread store
+ * (`VACUUM INTO`, so the store itself is only read): this host's conversations placed by their journals and the rail's
+ * rows in the sync window, with what the store says of every row read in one query each (`executionsOf`, `titlesOf`),
+ * once after another process committed and once with nothing committed since; and the Thread groups the window takes
+ * whole (`groups`), the same two ways. Prints counts and timings only, never a title or a path.
  *
  *   npx tsx scripts/bench-session-report.ts [--runs 200] [--report <file>]
  */
@@ -33,9 +44,11 @@ const readRail = async () => RailSchema.parse(await invokeRuntime(socket, client
 
 const median = (samples: number[]) => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)] ?? 0
 const p95 = (samples: number[]) => [...samples].sort((a, b) => a - b)[Math.floor(samples.length * 0.95)] ?? 0
-function timed(runs: number, work: () => void) {
+/** `work`'s time, `runs` times; `first` runs before each, untimed. */
+function timed(runs: number, work: () => void, first?: () => void) {
   const samples: number[] = []
   for (let run = 0; run < runs; run++) {
+    first?.()
     const began = performance.now()
     work()
     samples.push(performance.now() - began)
@@ -53,8 +66,8 @@ function sources(rows: readonly NativeRow[], activity: Readonly<Record<string, E
     hidden: () => new Set(),
     lastMoved: () => undefined,
     placement: () => undefined,
-    execution: () => undefined,
-    thread: () => undefined,
+    executions: () => new Map(),
+    titles: () => new Map(),
     now: Date.now,
   }
 }
@@ -104,12 +117,58 @@ const big = scaled(2_000)
 const bigTimed = timed(RUNS, () => ownedSessions(sources(big, activity)))
 const bigBytes = await reportBytes(big)
 
+// The report as the host makes it, against a copy of this Mac's Thread store.
+const scratch = await mkdtemp(join(tmpdir(), "bench-session-report-"))
+const copy = join(scratch, "threads.sqlite")
+const original = new DatabaseSync(threadStorePath(join(homedir(), ".mako")), { readOnly: true })
+original.prepare("VACUUM INTO ?").run(copy)
+original.close()
+const store = new ThreadStore(copy, { realPath: (path) => path })
+/** Another process's commit, as the sync daemon or another profile's host makes one: what's read of many is read again. */
+const other = new DatabaseSync(copy)
+other.exec("CREATE TABLE bench_commits (at INTEGER NOT NULL)")
+const commitElsewhere = () => void other.prepare("INSERT INTO bench_commits (at) VALUES (?)").run(performance.now())
+const conversationIds = [...new Set(readdirSync(join(appDataFolder(), "mako", "conversations")).map((name) => name.split(".")[0] ?? ""))].filter((id) => /^[0-9a-f-]{36}$/.test(id))
+const summaries: LiveSummary[] = conversationIds.map((id, index) => ({
+  session: { id, harness: "codex", cwd: "/", status: "ready", connection: "hibernated", modes: [], currentMode: null, configOptions: [] },
+  revision: 1,
+  createdAt: Date.now() - index * 600_000,
+}))
+const inWindow = real.filter((row) => (row.updatedAt ?? "") >= windowStart(Date.now()))
+const stored: ReportSources = {
+  ...sources(inWindow, activity),
+  summaries: () => summaries,
+  placement: (id) => store.journalPlacement(id),
+  executions: (ids) => store.executionsOf(ids),
+  titles: (ids) => store.titlesOf(ids),
+}
+const storedRows = ownedSessions(stored).length
+const afterCommit = timed(RUNS, () => {
+  store.groups()
+  ownedSessions(stored)
+}, commitElsewhere)
+const nothingCommitted = timed(RUNS, () => ownedSessions(stored))
+const groupsAfterCommit = timed(RUNS, () => store.groups(), commitElsewhere)
+const groups = store.groups().length
+other.close()
+store.close()
+await rm(scratch, { recursive: true, force: true })
+
 const result = {
   at: new Date().toISOString(),
   rail: { rows: real.length, placed, archived: real.filter((row) => row.archived || row.copyOnly).length, active: Object.values(activity).filter((each) => each.status !== "open").length },
   railReadMs: { median: median(reads), p95: Math.max(...reads) },
   thisMac: { ...realBytes, computeMs: realTimed },
   twoThousand: { ...bigBytes, computeMs: bigTimed },
+  withThreadStore: {
+    conversations: summaries.length,
+    windowRows: inWindow.length,
+    listed: storedRows,
+    groups,
+    reportAndGroupsAfterCommitMs: afterCommit,
+    reportNothingCommittedMs: nothingCommitted,
+    groupsAfterCommitMs: groupsAfterCommit,
+  },
 }
 const ms = (value: number) => `${value.toFixed(2)} ms`
 const kb = (value: number) => `${(value / 1024).toFixed(1)} KB`
@@ -118,6 +177,13 @@ console.log(`Reading the rail from the host (mako:threads, IPC included): median
 console.table({
   "this Mac": { listed: realBytes.listed, compute: `${ms(realTimed.median)} (p95 ${ms(realTimed.p95)})`, "first report": `${kb(realBytes.firstBytes)} in ${realBytes.firstFrames} frames`, "one change": `${realBytes.changeBytes} B` },
   "2,000 rows": { listed: bigBytes.listed, compute: `${ms(bigTimed.median)} (p95 ${ms(bigTimed.p95)})`, "first report": `${kb(bigBytes.firstBytes)} in ${bigBytes.firstFrames} frames`, "one change": `${bigBytes.changeBytes} B` },
+})
+const withStore = result.withThreadStore
+console.log(`With this Mac's Thread store: ${withStore.conversations} conversations and ${withStore.windowRows} rail rows in the sync window, ${withStore.listed} listed, ${withStore.groups} Thread groups`)
+console.table({
+  "report and groups, after another process's commit": { median: ms(withStore.reportAndGroupsAfterCommitMs.median), p95: ms(withStore.reportAndGroupsAfterCommitMs.p95) },
+  "report, nothing committed since": { median: ms(withStore.reportNothingCommittedMs.median), p95: ms(withStore.reportNothingCommittedMs.p95) },
+  "groups alone, after a commit": { median: ms(withStore.groupsAfterCommitMs.median), p95: ms(withStore.groupsAfterCommitMs.p95) },
 })
 if (values.report) await writeFile(values.report, `${JSON.stringify(result, null, 2)}\n`)
 process.exit(0)
