@@ -9,7 +9,7 @@ import { join } from "node:path"
 import { duplexPair } from "node:stream"
 import { parseArgs } from "node:util"
 import { z } from "zod"
-import { clientSessionOverSockets, sessionStream, threadStream, type Actor, type Subscription } from "@mako/protocol"
+import { NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, clientSessionOverSockets, followAgainInMs, sessionStream, threadStream, type Actor, type Subscription } from "@mako/protocol"
 import { accountStream } from "@mako/protocol/account-events"
 import { holdHostLease } from "@mako/host/base/host-idle"
 import { gatewayHostCalls } from "@mako/host/contracts/gateway-host-calls"
@@ -83,8 +83,6 @@ const BUDGETS = {
 const CURRENT_LAG_MS = 50
 /** How much earlier than the owner's own packet another device's may come (both leave the owner's host at once). */
 const EARLY_MS = 20
-/** As the web client follows a conversation again after its stream ends (`src/web-client/conversations.ts`). */
-const RESUBSCRIBE_MS = [250, 1_000, 2_000, 5_000, 10_000] as const
 
 const progress = (line: string) => process.stderr.write(`${line}\n`)
 const now = () => performance.now()
@@ -177,13 +175,16 @@ function windowOf(device: string, snapshot: () => Promise<string>) {
 
 /** A device's link to the cloud: a TCP proxy that can stall it (nothing moves, nothing closes) or cut it (reset). */
 /** One connection through a link: the device's end, the cloud's, and the WebSocket route it opened, if it opened one. */
-type Pair = { a: Socket; b: Socket; path?: string }
+type Pair = { a: Socket; b: Socket; path?: string; unpiped?: boolean }
 function link(name: string, upstream: URL) {
   const pairs = new Set<Pair>()
   let frozen = false
   /** Each WebSocket the device opened through it, by its route, and when. */
   const upgrades: Array<{ t: number; path: string }> = []
+  /** When each connection the device opened was accepted: while stalled, a new one is the device replacing a silent socket. */
+  const accepts: number[] = []
   const server: Server = createServer((a) => {
+    accepts.push(now())
     const b = connect(Number(upstream.port || 80), upstream.hostname)
     const pair: Pair = { a, b }
     pairs.add(pair)
@@ -212,28 +213,36 @@ function link(name: string, upstream: URL) {
   return {
     name,
     upgrades,
+    accepts,
     /** The routes of the WebSockets open through it now. */
     open: () => new Set([...pairs].flatMap((pair) => (pair.path ? [pair.path] : []))),
     listen: () => new Promise<string>((resolve) => server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${z.object({ port: z.number() }).parse(server.address()).port}`))),
     freeze() {
       frozen = true
-      for (const { a, b } of pairs) {
-        a.unpipe(b)
-        b.unpipe(a)
-        a.pause()
-        b.pause()
+      for (const pair of pairs) {
+        pair.a.unpipe(pair.b)
+        pair.b.unpipe(pair.a)
+        pair.a.pause()
+        pair.b.pause()
+        pair.unpiped = true
       }
     },
     thaw() {
       frozen = false
-      for (const { a, b } of pairs) {
-        a.pipe(b)
-        b.pipe(a)
-        a.resume()
-        b.resume()
+      for (const pair of pairs) {
+        // A connection opened during the stall was piped as it opened, and only held: piped twice, its bytes would go twice.
+        if (pair.unpiped) {
+          pair.a.pipe(pair.b)
+          pair.b.pipe(pair.a)
+          delete pair.unpiped
+        }
+        pair.a.resume()
+        pair.b.resume()
       }
     },
     cut() {
+      // The link comes back working: whatever opens next passes.
+      frozen = false
       for (const { a, b } of pairs) {
         a.resetAndDestroy()
         b.resetAndDestroy()
@@ -364,6 +373,7 @@ function watchHost(host: Host, conversation: () => string | undefined, window?: 
       const batch = batchOf(packet.payload)
       const permission = batch.permissions?.[0]
       showed(host.name, permission ? "waiting" : listedOf(batch.sessionChanges?.status), at)
+      showedLive(host.name, listedOf(batch.sessionChanges?.status), at)
       window?.(batch)
       if (permission && host.name === "A") asked ??= permission
       return
@@ -382,7 +392,15 @@ let following = true
 let exitCode = 0
 /** The first approval A asked for. */
 let asked: Permission | undefined
-const disturbances: Array<{ name: string; link: Link; turn: number; at: number; back: number; watchers: string[]; stall: boolean; open: Set<string> }> = []
+const disturbances: Array<{ name: string; link: Link; turn: number; at: number; back: number; watchers: string[]; stall: boolean; open: Set<string>; ended?: boolean }> = []
+/** By watching device: the state each live batch of C left it in, in order, for a turn's end that went missing. */
+const liveStates = new Map<string, Array<{ t: number; state: string }>>()
+function showedLive(device: string, state: string | undefined, at = now()) {
+  if (!state) return
+  const list = liveStates.get(device) ?? []
+  if (list.at(-1)?.state !== state) list.push({ t: at, state })
+  liveStates.set(device, list)
+}
 const quiet: Record<string, { ms: number | null; waitedMs: number }> = {}
 
 try {
@@ -399,6 +417,9 @@ try {
   const { account, deviceId: phoneDevice } = await phone.connection()
   const actor: Actor = { kind: "client", client: "web", deviceId: phoneDevice }
   let session: string | undefined
+  /** The phone follows the account's list before A starts anything, so a new Thread is timed from its first word there. */
+  let listening!: () => void
+  const phoneListening = new Promise<void>((resolve) => (listening = resolve))
   // The phone's list: read once, then followed after its number; a stream that ends is listed again (as `account-list.ts`).
   const Listing = z.object({ seq: z.number(), sessions: z.array(z.object({ conversation: z.string(), session: z.string(), state: z.string(), runsOn: z.object({ deviceId: z.string().optional() }).loose() }).loose()) }).loose()
   void (async () => {
@@ -408,8 +429,11 @@ try {
       if (!listing) continue
       const row = C ? listing.sessions.find((item) => item.conversation === C) : undefined
       if (row) showed("phone", row.state)
+      // A list read again after a dropped stream may be the first to name it.
+      if (row && !listed.has("phone")) listed.set("phone", now())
       try {
         const stream = phone.session.subscribe({ stream: accountStream(account.id), after: listing.seq })
+        listening()
         for (;;) {
           const frame = await stream.next()
           const at = now()
@@ -449,6 +473,7 @@ try {
   }
   const snapshotOn = (host: Host) => async () => JSON.stringify(await host.call("mako:live-snapshot", [conversation]))
   stops.push(watchHost(A, () => C), watchHost(B, () => C, windowOf("B", snapshotOn(B))))
+  await phoneListening
   phase = "first"
   const startedAt = now()
   await A.call("mako:live-start", ["codex", A.api, { conversationId: C, modeId: "access:ask", title: "Sync bench", initialRequest: { id: randomUUID(), text: "BENCH-T1 stream please", attachments: [] } }])
@@ -459,29 +484,64 @@ try {
   /* -- 2. the phone and B open it, as their windows do */
   const phoneWindow = windowOf("phone", async () => String(await fromPhone("mako:live-snapshot", [conversation])))
   let phoneLive: Subscription | undefined
+  /** Whether C is at work, as the phone last heard: while it is, a silent stream has its connection probed. */
+  let phoneWorking = false
+  // As `src/web-client/conversations.ts` follows a device's conversation: from what the gateway kept after the last
+  // update heard, a skipped number asked for again at once, a snapshot only where the stream can't be picked up.
+  const phoneStream = sessionStream(ownerRuntime, conversation)
   void (async () => {
     let failures = 0
+    let gapsInRow = 0
+    const cursor = new StreamCursor("live")
     for (let first = true; following; first = false) {
       try {
-        phoneLive = phone.session.subscribe({ stream: sessionStream(ownerRuntime, conversation), after: 0 })
-        // Followed again after the stream ended: what went by meanwhile is read as a snapshot.
-        if (!first) {
+        const resumes = cursor.numbered
+        phoneLive = phone.session.subscribe({ stream: phoneStream, after: cursor.resumeAfter() })
+        if (!first && !resumes) {
           rereads.push({ device: "phone", t: now(), why: "followed again" })
           void fromPhone("mako:live-snapshot", [conversation]).then((text) => void scan(reread, "phone", String(text))).catch(() => undefined)
         }
-        for (;;) {
-          const frame = await phoneLive.next()
+        let gap = false
+        while (!gap) {
+          let frame
+          try {
+            frame = await phoneLive.next(phoneWorking ? SILENT_WHILE_WORKING_MS : undefined)
+          } catch (error) {
+            if (!(error instanceof NothingArrivedError)) throw error
+            note("phone", "probe")
+            phone.session.probe(phoneStream, PROBE_ANSWER_MS)
+            continue
+          }
+          const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text })
+          if (verdict.kind === "notice" || verdict.kind === "duplicate") continue
+          if (verdict.kind === "reread") {
+            rereads.push({ device: "phone", t: now(), why: "past what the gateway kept" })
+            void fromPhone("mako:live-snapshot", [conversation]).then((text) => void scan(reread, "phone", String(text))).catch(() => undefined)
+            continue
+          }
+          if (verdict.kind === "gap") {
+            note("phone", "gap")
+            gap = true
+            continue
+          }
           const at = now()
           failures = 0
+          gapsInRow = 0
           scan(seen, "phone", frame.event.text, at)
           carry("phone", frame.event.text.length)
           const parts = splitRuntimeEventLine(frame.event.text)
-          if (parts) phoneWindow(batchOf(parts.payload))
+          if (!parts) continue
+          const batch = batchOf(parts.payload)
+          const status = batch.sessionChanges?.status
+          if (status !== undefined) phoneWorking = status === "running"
+          showedLive("phone", listedOf(status), at)
+          phoneWindow(batch)
         }
+        if (++gapsInRow <= 3) continue
       } catch (error) {
         note("phone", "live-ended", { detail: error instanceof Error ? error.message : String(error) })
       }
-      await sleep(RESUBSCRIBE_MS[Math.min(failures++, RESUBSCRIBE_MS.length - 1)]!)
+      await sleep(followAgainInMs(failures++))
     }
   })()
   scan(reread, "phone", String(await fromPhone("mako:live-snapshot", [C])))
@@ -603,6 +663,18 @@ try {
     await disturb("B's link cut", 52, B.link, ["B"], { settleMs: 8_000 })
     await disturb("A's link stalled 5 s", 53, A.link, ["phone", "B"], { stallMs: 5_000, settleMs: 5_000 })
     await disturb("A's link cut", 54, A.link, ["phone", "B"], { settleMs: 8_000 })
+    // The owner's last batch lost: its link stalls as the turn ends, so the end goes into a socket that then drops.
+    // Nothing comes after it to show a gap: only the owner sending again what its new link's gateway didn't relay.
+    await turn(55)
+    await until("turn 55 nearly done on A", () => saw("A", `t55w${WORDS - 10}`), 60_000)
+    const open = A.link.open()
+    const at = now()
+    A.link.freeze()
+    await until("turn 55 ended on A", () => saw("A", `t55w${WORDS}`) && liveStates.get("A")?.at(-1)?.state === "idle", 60_000)
+    await sleep(300)
+    A.link.cut()
+    disturbances.push({ name: "A's last batch lost", link: A.link, turn: 55, at, back: now(), watchers: ["phone", "B"], stall: false, open, ended: true })
+    await sleep(8_000)
   }
 
   /* -- 9. archived on A */
@@ -677,6 +749,27 @@ try {
     })
     return { ...stats(delays), missed }
   }
+  /**
+   * A turn's start, from the moment it was sent: the device's first `working` (or `waiting`) after the send and before
+   * the next. A list says a conversation is at work before the owner's own batch does (the report goes as the prompt is
+   * taken, the batch once the harness has it), so it's timed from the send rather than from A's batch.
+   */
+  // Two sends at once (the phone's and B's) are one start: the second waits behind the first, at work throughout.
+  const sends = notes
+    .filter((item) => item.src === "bench" && item.kind === "turn")
+    .map((item) => ({ t: item.t, n: item.n ?? 0 }))
+    .filter(({ n }) => n >= 2 && n < 50)
+    .filter((send, index, all) => index === 0 || send.t - all[index - 1]!.t > 1_000)
+  const startOn = (device: string) => {
+    const there = states.get(device) ?? []
+    let missed = 0
+    const delays = sends.flatMap((send, index) => {
+      const shown = there.find((item) => item.t >= send.t && item.t < (sends[index + 1]?.t ?? Infinity) && (item.state === "working" || item.state === "waiting"))
+      if (!shown) missed++
+      return shown ? [shown.t - send.t] : []
+    })
+    return { ...stats(delays), missed }
+  }
   const newOn = (device: string) => stats(listed.has(device) ? [listed.get(device)! - startedAt] : [])
   const titleOn = (device: string) => {
     const delays = titles.flatMap(({ title, at: when }) => (titled.get(device)?.has(title) ? [titled.get(device)!.get(title)! - when] : []))
@@ -684,7 +777,7 @@ try {
   }
   const archiveOn = (device: string) => stats(unlisted.has(device) ? [unlisted.get(device)! - archivedAt] : [])
   const status = Object.fromEntries(
-    ([["start", statusOf("working")], ["end", statusOf("idle")], ["waiting", statusOf("waiting")], ["new", newOn], ["title", titleOn], ["archive", archiveOn]] as const).map(([kind, of]) => [kind, { phone: of("phone"), secondMac: of("B") }])
+    ([["start", startOn], ["end", statusOf("idle")], ["waiting", statusOf("waiting")], ["new", newOn], ["title", titleOn], ["archive", archiveOn]] as const).map(([kind, of]) => [kind, { phone: of("phone"), secondMac: of("B") }])
   )
 
   // Reconnect: for each disturbance, what each watching device missed, how soon it was current, and how it got there.
@@ -698,16 +791,20 @@ try {
       const missed = words.filter((word) => !Number.isFinite(shownAt(device, word)))
       const late = words.filter((word) => shownAt(device, word) - at("A", word)! > CURRENT_LAG_MS).map((word) => shownAt(device, word))
       const caughtUp = late.length ? Math.max(...late) : disturbance.back
+      // Where the turn's end was in what went missing: when the device showed the conversation idle again.
+      const idle = disturbance.ended ? liveStates.get(device)?.find((item) => item.t > disturbance.at && item.state === "idle") : undefined
       return [name, {
+        ...(disturbance.ended && { turnEndShownMs: idle ? Math.max(0, Math.round(idle.t - disturbance.back)) : null }),
         wordsMissed: missed.length,
         wordsReread: words.filter((word) => !saw(device, word) && reread.get(device)?.has(word)).length,
         timeToCurrentMs: missed.length ? null : Math.max(0, Math.round(caughtUp - disturbance.back)),
         rereads: rereads.filter((item) => item.device === device && item.t >= disturbance.at && item.t <= end).length,
       }]
     }))
-    // A stall is noticed when the device replaces a socket that went silent: it opens the same route again while stalled.
-    const noticed = disturbance.link.upgrades.find((upgrade) => upgrade.t > disturbance.at && upgrade.t < disturbance.back && disturbance.open.has(upgrade.path))
-    return [disturbance.name, { link: disturbance.link.name, ...(disturbance.stall && { stallNoticedMs: noticed === undefined ? null : Math.round(noticed.t - disturbance.at) }), devices }]
+    // A stall is noticed when the device replaces a socket that went silent: it opens a connection again while stalled
+    // (accepted, though nothing crosses it until the link moves again).
+    const noticed = disturbance.link.accepts.find((t) => t > disturbance.at && t < disturbance.back)
+    return [disturbance.name, { link: disturbance.link.name, ...(disturbance.stall && { stallNoticedMs: noticed === undefined ? null : Math.round(noticed - disturbance.at) }), devices }]
   }))
 
   const tokens = steady.length
@@ -730,6 +827,7 @@ try {
       check(`reconnect.${name}.${device}.timeToCurrentMs`, seenThere.timeToCurrentMs, BUDGETS.reconnect.currentMs)
       check(`reconnect.${name}.${device}.wordsMissed`, seenThere.wordsMissed, BUDGETS.reconnect.wordsMissed)
       check(`reconnect.${name}.${device}.rereads`, seenThere.rereads, BUDGETS.reconnect.rereads)
+      if ("turnEndShownMs" in seenThere) check(`reconnect.${name}.${device}.turnEndShownMs`, seenThere.turnEndShownMs, BUDGETS.reconnect.currentMs)
     }
   }
   if (values.quiet && cloud.presence) {

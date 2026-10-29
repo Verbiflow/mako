@@ -67,6 +67,13 @@ import {
   Inbox,
   RuntimeThreads,
   threadStream,
+  LiveTail,
+  LINGER_MS,
+  NUMBERED_LIVE_VERSION,
+  StreamCursor,
+  followAgainInMs,
+  readStreamNotice,
+  streamNoticeText,
 } from "../dist/index.js"
 
 const operation = {
@@ -86,7 +93,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 8)
+    assert.equal(SUPPORTED_VERSIONS.max, 9)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -479,8 +486,9 @@ describe("a runtime served through serveRuntime", () => {
     await gateway.close()
   })
 
-  test("a conversation's live updates go to whoever watches it: the runtime is told on the first watcher and the last, and again on a new link", async () => {
-    const gateway = createFakeGateway()
+  test("a conversation's live updates go to whoever watches it: the runtime is told on the first watcher, again on a new link, and once the last has been gone a while", async () => {
+    let clock = Date.parse("2026-10-29T12:00:00.000Z")
+    const gateway = createFakeGateway({ now: () => new Date(clock) })
     const watching = []
     const serve = async () => serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", handle: async (operation) => answer(operation, null), watch: (conversations) => watching.push([...conversations]) })
     let runtime = await serve()
@@ -491,7 +499,8 @@ describe("a runtime served through serveRuntime", () => {
     const second = watcher.subscribe({ stream, after: 0 })
     await new Promise((resolve) => setImmediate(resolve))
     assert.deepEqual(watching, [["c-1"]], "a new link watches nothing until the first watcher")
-    assert.equal(runtime.live("c-1", Payload.of({ n: 1 })), true)
+    for (const reader of [first, second]) assert.equal(readStreamNotice((await reader.next(1_000)).event.text)?.streamNotice, "head", "each watcher hears the stream's head first")
+    assert.equal(runtime.live("c-1", Payload.of({ n: 1 }), { n: 1 }), true)
     assert.deepEqual([(await first.next(1_000)).event.decode(), (await second.next(1_000)).event.decode()], [{ n: 1 }, { n: 1 }])
     runtime.close()
     runtime = await serve()
@@ -500,8 +509,65 @@ describe("a runtime served through serveRuntime", () => {
     first.close()
     second.close()
     await new Promise((resolve) => setImmediate(resolve))
-    assert.deepEqual(watching.at(-1), [], "and the last watcher leaving")
+    assert.deepEqual(watching.at(-1), ["c-1"], "a stream the last watcher left lingers, so one back from a dropped link misses nothing")
+    clock += LINGER_MS
+    runtime.live("c-1", Payload.of({ n: 2 }), { n: 2 })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(watching.at(-1), [], "and goes once nobody has watched it for a while")
     runtime.close()
+    await gateway.close()
+  })
+
+  test("a live stream's tail serves a watcher back from a dropped link, and says to read again past what it keeps; a cursor tells each frame apart", () => {
+    const tail = new LiveTail(1_000, { frames: 3 })
+    const at = new Date()
+    for (const n of [1, 2, 3, 4]) tail.take(`u${n}`, at, { n })
+    assert.equal(tail.take("u4 again", at, { n: 4 }), undefined, "a runtime's resend is relayed once")
+    assert.equal(tail.head, 1_004)
+    assert.deepEqual(tail.since(1_002)?.map((frame) => frame.text), ["u3", "u4"])
+    assert.deepEqual(tail.since(1_004), [])
+    assert.equal(tail.since(1_000), undefined, "past what it keeps")
+    assert.equal(tail.since(999), undefined, "from before the stream began")
+    assert.equal(readStreamNotice(tail.opening(1)[0].text)?.streamNotice, "reread")
+    const cursor = new StreamCursor("live")
+    assert.equal(cursor.resumeAfter(), 0)
+    assert.deepEqual(cursor.heard({ seq: 1, text: "an update from a gateway that numbers by the clock" }), { kind: "apply" })
+    assert.deepEqual(cursor.heard({ seq: 1_004, text: streamNoticeText({ streamNotice: "head", head: 1_004 }) }), { kind: "notice" })
+    assert.equal(cursor.resumeAfter(), 1_004)
+    assert.deepEqual(cursor.heard({ seq: 1_005, text: "u5" }), { kind: "apply" })
+    assert.deepEqual(cursor.heard({ seq: 1_005, text: "u5" }), { kind: "duplicate" })
+    assert.deepEqual(cursor.heard({ seq: 1_007, text: "u7" }), { kind: "gap", after: 1_005 })
+    assert.deepEqual(cursor.heard({ seq: 1_008, text: "u8, still on its way" }), { kind: "duplicate" }, "dropped until what was asked for begins")
+    assert.deepEqual(cursor.heard({ seq: 1_008, text: streamNoticeText({ streamNotice: "head", head: 1_008 }) }), { kind: "notice" })
+    assert.deepEqual(cursor.heard({ seq: 1_006, text: "u6" }), { kind: "apply" })
+    assert.deepEqual(cursor.heard({ seq: 1_009, text: streamNoticeText({ streamNotice: "reread", head: 1_009 }) }), { kind: "reread" })
+    assert.equal(cursor.last, 1_009)
+    const log = new StreamCursor("log", 10)
+    assert.deepEqual(log.heard({ seq: 12, text: "{}" }), { kind: "gap", after: 10 })
+    assert.deepEqual(log.heard({ seq: 11, text: "{}" }), { kind: "apply" })
+    assert.equal(followAgainInMs(0, () => 0.5), 50)
+    assert.equal(followAgainInMs(1), 250)
+  })
+
+  test("a live update goes with its runtime's number and trace, and a report with when it went, only on a link that knows them; older links get them without", async () => {
+    const gateway = createFakeGateway()
+    const sent = []
+    const tap = (link) => ({ ...link, send: (frame) => { sent.push(frame); link.send(frame) } })
+    const newer = await serveRuntime(tap(await gateway.connectRuntime()), { runtimeId: "d-new", build: "test", handle: async (operation) => answer(operation, null) })
+    const older = await serveRuntime(tap(await gateway.connectRuntime()), { runtimeId: "d-old", build: "test", versions: { min: 1, max: NUMBERED_LIVE_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
+    const report = { listed: [], gone: [], reportedAt: "2026-10-29T12:00:00.000Z" }
+    for (const runtime of [newer, older]) {
+      runtime.live("c-1", Payload.of({}), { n: 3, correlationId: "st-1" })
+      runtime.sessions(report)
+    }
+    const of = (type) => sent.filter((frame) => frame.type === type)
+    assert.deepEqual(of("live").map(({ n, correlationId }) => [n, correlationId]), [[3, "st-1"], [undefined, undefined]])
+    assert.deepEqual(of("sessions").map((frame) => frame.report.reportedAt), ["2026-10-29T12:00:00.000Z", undefined])
+    const row = { session: crypto.randomUUID(), thread: crypto.randomUUID(), conversation: "c-1", harness: "codex", state: "idle", createdAt: report.reportedAt, activityAt: report.reportedAt, generation: 1, changedAt: report.reportedAt }
+    assert.equal(rowsForLink([row], NUMBERED_LIVE_VERSION)[0].changedAt, report.reportedAt)
+    assert.equal(rowsForLink([row], NUMBERED_LIVE_VERSION - 1)[0].changedAt, undefined)
+    newer.close()
+    older.close()
     await gateway.close()
   })
 
@@ -509,7 +575,7 @@ describe("a runtime served through serveRuntime", () => {
     const lines = []
     const gateway = createFakeGateway({ log: (line) => lines.push(line) })
     const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", handle: async (operation) => answer(operation, null) })
-    assert.equal(runtime.version, QUIET_VERSION)
+    assert.equal(runtime.version, LINK_VERSION)
     assert.equal(runtime.goingQuiet("sleep"), true)
     await runtime.done
     assert.deepEqual(lines.filter((line) => line.event === "going-quiet" || line.event === "disconnected").map((line) => line.event), ["going-quiet", "disconnected"])

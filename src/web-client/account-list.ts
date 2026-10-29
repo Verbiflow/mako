@@ -2,7 +2,7 @@ import { AccountEventSchema, accountStream } from "@mako/protocol/account-events
 import { AccountSessions, isAccountListEvent } from "@mako/protocol/account-sessions"
 import { SessionListingsSchema, type ArchivedThread, type ListedSession, type SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingMessage } from "@mako/protocol/waiting"
-import type { Subscription } from "@mako/protocol"
+import { followAgainInMs, type Subscription } from "@mako/protocol"
 import { errorMessage, type FailureBoundary } from "@mako/host/contracts/error-message"
 import { z } from "zod"
 import { createHook, createStore, type StorePatch } from "@/state/store"
@@ -61,7 +61,8 @@ export const useAccountList = createHook(accountListStore)
 type Cached = { at: number; listings: SessionListings; devices: WebDevice[] }
 const CachedSchema = z.object({ at: z.number(), listings: SessionListingsSchema, devices: z.array(WebDeviceSchema) }) satisfies z.ZodType<Cached>
 
-const RETRY_MS = [500, 1_000, 2_000, 5_000, 10_000, 30_000] as const
+/** A number its object may have given out but never kept, which it says in its place. */
+const LostSchema = z.object({ type: z.literal("lost") }).loose()
 /** Kept to storage at most this often: a busy account changes its list several times a second. */
 const SAVE_MS = 5_000
 
@@ -159,15 +160,25 @@ export class AccountList {
         failures = 0
         const subscription = this.#gateway.session.subscribe({ stream: accountStream(this.#accountId), after: listings.seq })
         this.#subscription = subscription
+        // The stream is numbered with no gaps: one skipped, or said lost, means the list may be wrong, and it's read
+        // whole again at once.
+        let last = listings.seq
         for (;;) {
           const frame = await subscription.next()
-          const parsed = AccountEventSchema.safeParse(frame.event.decode())
+          if (frame.seq <= last) continue
+          const skipped = frame.seq > last + 1
+          last = frame.seq
+          const decoded = frame.event.decode()
+          if (skipped || LostSchema.safeParse(decoded).success) break
+          const parsed = AccountEventSchema.safeParse(decoded)
           // A kind of event this build doesn't know is passed over, never refused.
           if (!parsed.success || !isAccountListEvent(parsed.data)) continue
           if (!this.#list.heard({ seq: frame.seq, event: parsed.data })) continue
           if (this.#unnamedDevice() && Date.now() - this.#devicesAsked > 10_000) void this.refreshDevices().catch((error) => this.#failed({ error }))
           this.#publish("live")
         }
+        subscription.close()
+        continue
       } catch (error) {
         if (this.#stopped) return
         if (error instanceof SignedOutError) {
@@ -177,7 +188,7 @@ export class AccountList {
         this.#failed({ error })
         if (accountListStore.get().phase === "live") accountListStore.set({ phase: "reconnecting" })
       }
-      await this.#pause(RETRY_MS[Math.min(failures++, RETRY_MS.length - 1)]!)
+      await this.#pause(followAgainInMs(failures++))
     }
   }
 

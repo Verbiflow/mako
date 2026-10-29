@@ -39,6 +39,8 @@ export class EncodedAnswer {
 export interface RuntimeEventRouting {
   type?: string
   conversation?: string
+  /** A sampled live batch's trace (`LiveBatch.trace`), which each hop that carries it logs. */
+  trace?: string
 }
 
 /** An event as its producer encoded it, with what a hop routes it by. */

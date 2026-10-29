@@ -215,7 +215,8 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         // The core's publisher, once it's loaded: events reach it through the core's own tap.
         sessions: {
           report: (current) => core.current()?.sessions.report(current),
-          watch: (link, conversations) => core.current()?.sessions.watch(link, conversations),
+          linked: (current) => core.current()?.sessions.linked(current),
+          watch: (link, conversations, after) => core.current()?.sessions.watch(link, conversations, after),
         },
         media: () => core.current()?.media,
         linked: async (link) => (await core.load("the machine's link")).machineLinked(link),

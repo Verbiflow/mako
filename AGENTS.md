@@ -2610,6 +2610,35 @@ batch over `MAX_EVENT_BYTES` goes as the notice that its history changed
 (`historyChangedNotice`, the same one a window's event stream sends for a
 batch over its limit), which the watcher answers by reading it again.
 
+A dropped or stalled link costs a watcher nothing it can see
+(`@mako/protocol/live-tail`, link version 9). The gateway numbers each
+watched conversation's stream itself, from a base above every number it gave
+before, and keeps its last 512 updates (256 KB) in memory (`LiveTail`); a
+stream its last watcher left lingers `LINGER_MS` (30 s), its owner still
+sending. A watcher hears the stream's head first (`streamNotice`), then, when
+it subscribes after the last number it holds, what it missed from the tail,
+or `reread` past it, the one case that reads a snapshot. Followers
+(`CloudConversations.#follow`, the web client's `#run`) keep their place with
+`StreamCursor`: a skipped number is asked for again at once from the tail, a
+stream that ends is followed again at once with jitter (`followAgainInMs`),
+and a conversation at work that goes silent `SILENT_WHILE_WORKING_MS` (3 s)
+has its connection pinged (`probe`) and replaced unless it answers in
+`PROBE_ANSWER_MS`. A gateway that sends no notice is read as before. The
+owner numbers what it sends (`live`'s `n`) and keeps each watched
+conversation's updates (`KEPT_BYTES`): its publisher learns its link when the
+link is served (`linked`), not at the next tick, and a new link's `watch`
+says what the gateway last relayed of each (`after`), so what went into a
+dead link's last moments is sent again, relayed once, or past the bound
+replaced by the notice to read it again. A Mac's runtime link silent while it
+sends what's watched is probed the same way (`CloudLink.probeIfSilent`), and
+a link that worked for `STABLE_MS` (5 s) comes back in a quarter second. A
+cloud Thread's watchers resume its log after the last event heard; the
+account's stream is gap-checked on every device, and a skipped or `lost`
+number reads the list whole again (`onAccountGap`). Before, a dropped watcher
+waited a second, missed what went by and read a snapshot; a lost last batch
+left a turn looking busy on every other device; a stall went unseen for a
+minute.
+
 `npm run bench:sync-latency` measures how long another device takes to see
 what one does, on the real code (`scripts/bench-sync-latency.ts`): two
 screenless hosts of the checkout signed in to one account, A running a sealed
@@ -2624,8 +2653,9 @@ use (`scripts/lib/sync-bench-cloud.ts`), which keeps no presence, so the quiet
 phase (`--quiet`) needs a real gateway; with `--cloud <url>` a helper on stdin
 and stdout plays the person there (`helperCloud` says the asks). It prints one
 JSON report: live content per hop, status on the phone's list and the second
-Mac, five link disturbances (words missed, time to current, rereads, a stall
-noticed), quiet devices, and messages and bytes per token per hop. Past the
+Mac, six link disturbances (words missed, time to current, rereads, a stall
+noticed, and with the owner's last batch lost, when the turn's end showed),
+quiet devices, and messages and bytes per token per hop. Past the
 plan's budgets it exits 1 unless `--report-only`; a run that doesn't finish
 exits 2. It takes about two minutes and isn't in CI: it needs a real Codex
 CLI, and today's numbers fail several budgets by design. The first baseline

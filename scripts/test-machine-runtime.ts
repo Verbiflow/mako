@@ -610,7 +610,8 @@ test("an unknown or malformed message from the agent is ignored, and a credentia
   // Node's WebSocket asks twice for an upgrade the server refuses, so attempts are counted by the requests' spacing.
   const attempts = cloud.attempts()
   assert.ok(attempts.length >= 2 && attempts.length <= 4, `${attempts.length} attempts in 2.5 s, with backoff: ${attempts.join(", ")} ms`)
-  assert.ok(attempts.every((at, index) => index === 0 || at - attempts[index - 1]! >= 350), `spaced by the backoff: ${attempts.join(", ")} ms`)
+  // The backoff's first step is a quarter second, jittered down to a fifth at least; the next a second.
+  assert.ok(attempts.every((at, index) => index === 0 || at - attempts[index - 1]! >= 190), `spaced by the backoff: ${attempts.join(", ")} ms`)
   assert.notEqual(agent.state()?.link, "connected")
 })
 

@@ -12,7 +12,7 @@ import type { PortHandler, PortRequest } from "./ports.js"
 import type { GatewayFrame, GoingQuietReason, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { ACTIVITY_VERSION, MEDIA_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { ACTIVITY_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 
 export class RuntimeRefusedError extends Error {
   readonly problem: Problem
@@ -49,9 +49,11 @@ export type RuntimeOptions = {
   ports?: PortHandler
   /**
    * The conversations another device watches now, the whole set, for this link alone (version 5 on): send their live
-   * updates with `live`, and no others'. A new link starts with none watched.
+   * updates with `live`, and no others'. A new link starts with none watched. From version 9, `after` says by
+   * conversation the runtime's number (`live`'s `n`) of the last update the gateway relayed of it: what came after it
+   * is sent on this link.
    */
-  watch?: (conversations: readonly string[]) => void
+  watch?: (conversations: readonly string[], after?: Readonly<Record<string, number>>) => void
 }
 
 export type ServedRuntime = {
@@ -72,8 +74,11 @@ export type ServedRuntime = {
    * later (false on an older one, or once the link closed). Not kept: the first report on each new link says them all.
    */
   sessions(report: SessionsReport): boolean
-  /** One live update of a watched conversation, as its event's line; false on a gateway older than version 5 or a closed link. */
-  live(conversation: string, event: Payload): boolean
+  /**
+   * One live update of a watched conversation, as its event's line; false on a gateway older than version 5 or a closed
+   * link. On version 9 and later it goes with the runtime's number for it (`n`) and its trace, if any; before, without.
+   */
+  live(conversation: string, event: Payload, numbered?: { n: number; correlationId?: string }): boolean
   /**
    * Says the runtime is going away on purpose, before it goes (`going-quiet`, version 8 on): the gateway takes its link
    * as down at once. False on an older gateway, which finds out from the missed heartbeats, or on a closed link.
@@ -228,7 +233,7 @@ export async function serveRuntime(
         void answer(frame.operation, frame.generation)
       else if (frame.type === "media-watch") watched(frame)
       else if (frame.type === "port-open") opened(frame)
-      else if (frame.type === "watch") options.watch?.(frame.conversations)
+      else if (frame.type === "watch") options.watch?.(frame.conversations, frame.after)
       else if (frame.type === "media-ack") {
         const sender = streams.get(frame.stream)
         if (sender?.kind === "port") options.ports?.acked(frame.stream, frame.received)
@@ -268,12 +273,18 @@ export async function serveRuntime(
     },
     sessions: (report) => {
       if (first.version < SESSIONS_VERSION || link.closed) return false
-      link.send({ type: "sessions", report })
+      if (first.version >= NUMBERED_LIVE_VERSION) link.send({ type: "sessions", report })
+      else {
+        // Before version 9 a gateway refuses when a report went and when a row changed.
+        const { reportedAt: _reportedAt, ...older } = report
+        link.send({ type: "sessions", report: { ...older, listed: older.listed.map(({ changedAt: _changedAt, ...row }) => row) } })
+      }
       return true
     },
-    live: (conversation, event) => {
+    live: (conversation, event, numbered) => {
       if (first.version < SESSIONS_VERSION || link.closed) return false
-      link.send({ type: "live", conversation, event })
+      if (numbered && first.version >= NUMBERED_LIVE_VERSION) link.send({ type: "live", conversation, event, n: numbered.n, ...(numbered.correlationId && { correlationId: numbered.correlationId }) })
+      else link.send({ type: "live", conversation, event })
       return true
     },
     goingQuiet: (reason) => {

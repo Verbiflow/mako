@@ -54,9 +54,17 @@ const WOKEN_QUIET_MS = PING_MS + 5_000
  * cloud's edge answers a ping in tens of milliseconds; a connection that survived the pause answers well within this.
  */
 const RESUME_PROBE_MS = 1_500
-/** Up this long, a connection counts as healthy: the next drop starts the backoff over. */
-const STABLE_MS = 30_000
-const BACKOFF_MS = [500, 1_000, 2_000, 5_000, 10_000, 30_000] as const
+/**
+ * Up this long, a connection counts as healthy: the next drop starts the backoff over, so a link that worked and then
+ * dropped (a network change) is back in a quarter second, while one the cloud keeps closing as it opens backs off.
+ */
+const STABLE_MS = 5_000
+/**
+ * After a drop, connect again this soon, then back off while it keeps failing. The first is a quarter second: what the
+ * other devices watch of this Mac's conversations is back within a second of a network change, and a cloud restart is
+ * still met by Macs spread over a tenth of a second by the jitter.
+ */
+const BACKOFF_MS = [250, 1_000, 2_000, 5_000, 10_000, 30_000] as const
 /** A link closed for a sleep (`quiet`) opens again after this should the Mac not go after all; a wake opens it at once. */
 const QUIET_HOLD_MS = 30_000
 const OFFLINE_AFTER_MS = 15_000
@@ -73,6 +81,8 @@ export class CloudLink {
   #state: CloudLinkState = "connecting"
   #everConnected = false
   #timers = new Set<NodeJS.Timeout>()
+  /** The connection a silence probe is waiting on an answer from, if any. */
+  #probing: Open | undefined
   #offlineTimer: NodeJS.Timeout | undefined
   #reconnectTimer: NodeJS.Timeout | undefined
 
@@ -129,6 +139,26 @@ export class CloudLink {
         return
       }
       this.#options.log?.(`cloud ${this.#options.name}: its connection didn't survive the pause; replacing it`, { probeMs: RESUME_PROBE_MS })
+      this.#attempt = 0
+      this.#reconnect(0)
+    })
+  }
+
+  /**
+   * Something someone waits for is going out on the link (a watched conversation's updates): a connection nothing has
+   * come from for `silentMs` is pinged, and replaced unless it answers within `answerMs`, so a stalled link is found in
+   * seconds rather than at the next missed heartbeat. One probe at a time; a connection heard from recently isn't asked.
+   */
+  probeIfSilent(silentMs: number, answerMs: number): void {
+    const open = this.#open
+    if (!this.#running || !open?.opened || this.#probing === open || open.socket.readyState !== WebSocket.OPEN || Date.now() - open.lastHeard < silentMs) return
+    this.#probing = open
+    const asked = Date.now()
+    open.socket.send(PING)
+    this.#after(answerMs, () => {
+      if (this.#probing === open) this.#probing = undefined
+      if (open !== this.#open || open.lastHeard >= asked) return
+      this.#options.log?.(`cloud ${this.#options.name}: silent while sending what's watched, and unanswered; replacing it`, { silentMs, answerMs })
       this.#attempt = 0
       this.#reconnect(0)
     })

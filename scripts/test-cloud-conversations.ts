@@ -12,7 +12,9 @@ import { WebSocketServer } from "ws"
 import {
   PING,
   PONG,
+  PROBE_ANSWER_MS,
   PROTOCOL_VERSION,
+  SILENT_WHILE_WORKING_MS,
   Payload,
   RuntimeThreads,
   problem,
@@ -23,7 +25,7 @@ import {
   type ClientSessionOverSockets,
   type Subscription,
 } from "@mako/protocol"
-import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { createFakeGateway, type FakeGatewayOptions } from "@mako/protocol/fake-gateway"
 import { Git } from "@mako/git"
 import { CloudConversations, folderRepository, type CloudConversationsOptions, type CloudCopies } from "@mako/host/conversations/cloud-conversations"
 import type { WaitingMessage } from "@mako/protocol/waiting"
@@ -92,8 +94,9 @@ interface MachineApp {
 }
 
 /** A cloud machine's host behind the fake gateway: what it was asked, and its Thread's event outbox. */
-async function cloudMachine(reach: Reach = {}) {
-  const gateway = createFakeGateway()
+/** A stream nobody watches goes at once here unless a test says otherwise, as the runtime's watch set is checked as it changes. */
+async function cloudMachine(reach: Reach = {}, gatewayOptions: FakeGatewayOptions = { lingerMs: 0 }) {
+  const gateway = createFakeGateway(gatewayOptions)
   const runtimeId = "m-0123456789abcdef.g1"
   const threads = new RuntimeThreads()
   const calls: Array<{ channel: string; args: unknown[] }> = []
@@ -245,6 +248,13 @@ async function sleepyNetwork(gateway: ReturnType<typeof createFakeGateway>, devi
     sleep: () => {
       for (const pair of pairs) pair.asleep = true
     },
+    /** Every open connection reset, as a network change drops them: connections opened after it pass. */
+    cut: () => {
+      for (const pair of pairs) {
+        pair.near.resetAndDestroy()
+        pair.far.destroy()
+      }
+    },
     open: () => [...pairs].filter((pair) => !pair.asleep).length,
   }
 }
@@ -257,6 +267,7 @@ function sessionOf(client: ClientSession): ClientSessionOverSockets {
     watch: (request) => client.watch(request),
     close: () => {},
     wake: () => {},
+    probe: () => {},
   }
 }
 
@@ -286,6 +297,59 @@ async function until(what: string, check: () => boolean, ms = 3_000) {
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
+
+test("another device's conversation followed here picks up where it was: a dropped link resumes from what the gateway kept, each batch once, and windows read it again only past that; a stall while it works is found in seconds", async () => {
+  // A gateway whose streams linger, as the cloud's do, reached over sockets this test can cut or stall.
+  const machine = await cloudMachine({ sockets: { heartbeatMs: 25_000 } }, {})
+  const studio = "4d2b8c1e-7a3f-4e5d-9b6c-0a1f2e3d4c5b"
+  const conversation = randomUUID()
+  const watched: string[][] = []
+  const studioRuntime = await serveHostThroughGateway(await machine.gateway.connectRuntime(), { runtimeId: `d-${studio}`, build: "test", invoke: async (channel) => JSON.stringify({ channel }), watch: (conversations) => watched.push([...conversations]) })
+  after(() => studioRuntime.close())
+  const row: ListedSession = { session: randomUUIDFor(conversation), thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", conversation, harness: "claude", title: "Retry the webhooks", state: "working", folder: CLONE, createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:00:00.000Z", generation: 1, runsOn: { kind: "device", deviceId: studio }, listedAt: "2026-10-24T20:00:01.000Z" }
+  machine.account.sessionListings = async () => ({ sessions: [row], seq: 1 })
+  machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: (await machine.account.deviceId())! })
+  machine.account.onThreadListings = () => () => {}
+  const { router, events } = conversations(machine.account, join(scratch, "resumed", "conversations.json"))
+  await router.start()
+  await until("the Studio's conversation listed", () => router.summaries().some((summary) => summary.session.id === conversation))
+  assert.ok((await router.route("mako:live-snapshot", [conversation])).handled)
+  await until("the Studio told it's watched", () => watched.at(-1)?.includes(conversation) === true)
+  let n = 0
+  // SAFETY: a batch as the Studio's live driver sends it, filled only as far as the router and summary read it.
+  const send = (revision: number) => studioRuntime.live(conversation, Payload.encoded(runtimeEventLine("event", encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status: "running" } } } as never)).slice(0, -1)), { n: ++n })
+  const relayed = () => events.filter((event) => event.conversation === conversation).map((event) => z.object({ batch: z.object({ revision: z.number(), historyChanged: z.boolean().optional() }).loose() }).parse(JSON.parse(event.payload)).batch)
+  const revisions = () => relayed().filter((batch) => !batch.historyChanged).map((batch) => batch.revision)
+  const rereads = () => relayed().filter((batch) => batch.historyChanged).length
+  for (const revision of [2, 3, 4]) send(revision)
+  await until("its batches relayed", () => revisions().length === 3)
+
+  // The link drops; two batches go by meanwhile. Followed again at once, from what the gateway kept: each once, none read again.
+  machine.network!.cut()
+  send(5)
+  send(6)
+  const cut = performance.now()
+  await until("what went by while the link was down", () => revisions().includes(6), 1_000)
+  assert.ok(performance.now() - cut < 1_000, "current within a second")
+  assert.deepEqual(revisions(), [2, 3, 4, 5, 6], "every batch, once, in order")
+  assert.equal(rereads(), 0, "no window reads it again")
+
+  // Down while more went by than the gateway keeps: windows read it again, once.
+  machine.network!.cut()
+  for (let revision = 7; revision < 7 + 600; revision++) send(revision)
+  await until("windows told to read it again", () => rereads() === 1, 2_000)
+  send(700)
+  await until("live again after", () => revisions().includes(700))
+
+  // Stalled while it works: nothing moves on the link and nothing closes it. Silent for a few seconds, its connection
+  // is asked whether it's alive, and replaced: the next batch arrives on the new one.
+  machine.network!.sleep()
+  const stalled = performance.now()
+  send(701)
+  await until("the stalled link replaced, and the batch from during the stall heard", () => revisions().includes(701), 6_000)
+  assert.ok(performance.now() - stalled < 5_500, `a stall found within ${SILENT_WHILE_WORKING_MS + PROBE_ANSWER_MS} ms and a bit: ${Math.round(performance.now() - stalled)} ms`)
+  assert.equal(rereads(), 1, "picked up from what the gateway kept")
+})
 
 test("a cloud start makes the Thread once, starts on the machine in its clone, and relays the conversation's events", async () => {
   const machine = await cloudMachine()
