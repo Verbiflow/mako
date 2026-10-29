@@ -54,7 +54,7 @@ import type { Machine } from "@mako/host/base/machine"
 import type { CloudSignInsState } from "@mako/host/contracts/cloud-sign-ins"
 import type { CloudAccount, CloudAccountState, CloudBrowserSession, CloudDevice } from "@mako/host/contracts/cloud-account"
 import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
-import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
+import { aesSealer, fileSecrets, wrappedKey, type Secrets } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-cloud-account-"))
@@ -725,9 +725,15 @@ test("a sign-in the cloud saw used from somewhere else signs this Mac out, sayin
 })
 
 /** Waits for `check` to hold, a few ms at a time, failing with `label` after five seconds. */
-async function waitFor(check: () => boolean, label: string): Promise<void> {
-  for (const deadline = Date.now() + 5_000; !check(); await new Promise((resolve) => setTimeout(resolve, 10)))
+async function waitFor(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
+  for (const deadline = Date.now() + 5_000; !(await check()); await new Promise((resolve) => setTimeout(resolve, 10)))
     if (Date.now() > deadline) throw new Error(`timed out: ${label}`)
+}
+
+/** The last account event the sealed sign-in under `secretName` says this Mac heard. */
+async function heardUpTo(secretName: string): Promise<number | undefined> {
+  const record = await secrets().read("mako-sign-in", secretName)
+  return record ? z.object({ seen: z.number().optional() }).parse(JSON.parse(record.value)).seen : undefined
 }
 
 test("the account's stream says when a device joins, once, and a Mac that was off hears it when it's back", async () => {
@@ -746,7 +752,9 @@ test("the account's stream says when a device joins, once, and a Mac that was of
   cloud.announce({ type: "device-removed", deviceId: self.id, reason: "removed", by: null }, new Date().toISOString())
   await waitFor(() => heard.length === 2, "a removal is said, as this Mac's own")
   assert.deepEqual(heard[1], { seq: 3, type: "device-removed", mine: true }, "an unknown kind is passed over, never refused")
+  // Heard, then kept: closing keeps the last one heard rather than wait for the next write.
   first.accounts.close()
+  await waitFor(async () => (await heardUpTo(secretName)) === 3, "the last event heard kept")
 
   // While this Mac was off a device joined; another joined before this Mac did, which isn't news to it.
   cloud.announce(joined(randomUUID()))
@@ -765,6 +773,37 @@ test("the account's stream says when a device joins, once, and a Mac that was of
   await new Promise((resolve) => setTimeout(resolve, 200))
   assert.deepEqual(seen, [], "a device that joined before this Mac did isn't news to it")
   newMac.accounts.close()
+})
+
+test("account events are told as they're heard, in order, while the keychain is still writing the last one heard, and it's kept with the newest", async () => {
+  const cloud = await fakeCloud()
+  const secretName = "cloud/account-events-held"
+  const base = secrets()
+  // A keychain that answers late: every write waits until it's let go.
+  let letGo: () => void = () => {}
+  let held = false
+  const late: Secrets = {
+    durable: () => base.durable(),
+    read: (kind, name) => base.read(kind, name),
+    write: async (kind, name, value, options) => {
+      if (held) await new Promise<void>((resolve) => (letGo = resolve))
+      return base.write(kind, name, value, options)
+    },
+    delete: (kind, name) => base.delete(kind, name),
+    list: (kind) => base.list(kind),
+  }
+  const heard: number[] = []
+  const mac = await signedIn(cloud, { secretName, secrets: late, onAccountEvent: (event) => heard.push(event.seq) })
+  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 0`), "followed the account's stream")
+  held = true
+  const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+  for (let event = 0; event < 5; event++) cloud.announce(joined())
+  await waitFor(() => heard.length === 5, "every event told, none waiting on the keychain")
+  assert.deepEqual(heard, [1, 2, 3, 4, 5], "in the order the stream said them")
+  held = false
+  mac.accounts.close()
+  letGo()
+  await waitFor(async () => (await heardUpTo(secretName)) === 5, "the newest kept")
 })
 
 test("a sign-out the cloud didn't hear is kept sealed and finished, here or after a restart, never leaving a working credential", async () => {

@@ -142,6 +142,66 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
   }
 }
 
+/**
+ * What the account's list reads of a conversation is said as it changes. A new one is said once it's written, before
+ * its harness starts and its first batch comes (`opened`). A turn's end is said by a batch: the "after" checkpoint it
+ * waits for is over by the last batch it sends, so whatever reads the conversation's work as that batch comes
+ * (`SessionPublisher.own`) reads it at rest, not still finishing with nothing after to say it stopped.
+ */
+async function turnEndBatchSaysItsWorkEnded() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-turn-end-"))
+  const id = randomUUID()
+  const emitters: Array<(event: LiveDriverEvent) => void> = []
+  const session = (bindingId: string, status: LiveSessionState["status"] = "ready"): LiveSessionState => ({
+    id: bindingId, nativeId: "native-turn-end", nativePath: join(root, "native"), harness: "test-provider", cwd: root,
+    status, connection: "connected", modes: [], currentMode: null, configOptions: [],
+  })
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => {
+      if (options.emit) emitters.push(options.emit)
+      return session(options.conversationId)
+    },
+    prompt: async (bindingId, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
+      emitters.at(-1)?.({ type: "live-session", session: session(bindingId, "running") })
+      emitters.at(-1)?.({ type: "live-session", session: session(bindingId) })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: async () => {},
+    setMode: async () => {},
+  }
+  // What the conversation was working on as each of its batches came, and how many had come when it was said opened.
+  const workAtBatch: Array<string | undefined> = []
+  const openedAfter: Array<[string, number]> = []
+  const owner: LiveConversations = new LiveConversations({
+    appPath: root, root: join(root, "journals"), driver: () => driver, history: async () => null,
+    emit: (event) => {
+      if (event.type === "live-batch" && event.batch.id === id) workAtBatch.push(owner.workOf(id)?.status)
+    },
+    opened: (conversation) => void openedAfter.push([conversation, workAtBatch.length]),
+    providerIdleMs: 60_000,
+    workspaceSnapshots: new WorkspaceSnapshots(gitRunner, join(root, "workspace-snapshots")),
+  })
+  try {
+    await owner.start("test-provider", root, { conversationId: id })
+    assert.deepEqual(openedAfter, [[id, 0]], "a new conversation is said once it's written, before its first batch")
+    owner.submit(id, randomUUID(), "a turn")
+    await waitFor(() => owner.snapshot(id)?.requests[0]?.snapshots?.after !== undefined, "the turn's after checkpoint")
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(owner.workOf(id), undefined, "nothing works once the turn is over")
+    assert.equal(workAtBatch.at(-1), undefined, "and its last batch said so, not that it was still finishing")
+    console.log("PASS: a new conversation is said before its harness starts, and a turn's last batch, after its checkpoint, says its work is over")
+  } finally {
+    owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
 /** Compaction is offered on an idle conversation, so asking for it reconnects first, as a follow-up would. */
 async function compactsAfterHibernation() {
   const root = mkdtempSync(join(tmpdir(), "mako-live-compact-idle-"))
@@ -2673,6 +2733,7 @@ await hibernatesAndWakesExactlyOnce(true)
 await hibernatesAndWakesExactlyOnce("close-during-preparation")
 await hibernatesAndWakesExactlyOnce("changed-store")
 await compactsAfterHibernation()
+await turnEndBatchSaysItsWorkEnded()
 await resumesAfterQuitInFirstTurn()
 await backgroundWorkKeepsProviderResident()
 await boundsWarmProviders()

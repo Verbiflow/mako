@@ -2581,7 +2581,23 @@ a query per group and per Session each time the window's rows were read;
 `npm run bench:session-report` measures it against a copy of this Mac's store.
 One link has one reporter: a cloud machine's is its machine runtime's tick,
 and a link the publisher already reported on, served again after a moment
-without one, isn't told everything again. A watched conversation's live
+without one, isn't told everything again. A change a list shows goes out at
+once, on a Mac and a cloud machine alike: each batch is checked against what
+the list shows of its conversation (`conversationShown`, the rule its row is
+made with), and one that moved it (working, waiting, idle, failed, what it
+waits on, its title) is reported on the next turn of the event loop, at most
+every 100 ms, without waiting for the second's pacing or a held foreground.
+A Thread renamed or a Session archived here goes the same way: no batch says
+either, and a rename once waited for whatever next marked the list changed. So
+does a new conversation, once its journal is placed (`opened`), before its
+harness starts and sends a batch; and a turn's last batch comes after its
+"after" checkpoint, so the list reads it at rest.
+On 2026-10-28 status waited for the 1 s tick and took 0.4 to 2.7 s to reach
+a phone. A row's `activityAt` alone is said at most once a minute
+(`ACTIVITY_REPORT_MS`): said with every batch, it was half the account's
+events. A Mac delivers each account event as it's heard, in order, and keeps
+the last one heard (`seen`) a couple of seconds later, with every keychain
+write of the sign-in in one queue. A watched conversation's live
 updates go out through `gatewayEventLine`, as a cloud Thread's events do: a
 batch over `MAX_EVENT_BYTES` goes as the notice that its history changed
 (`historyChangedNotice`, the same one a window's event stream sends for a
@@ -2613,14 +2629,18 @@ isn't read: until `catalog.ready()`, and while a lost reader is replaced,
 `keepsNative` says nothing (undefined), and a row it would decide is left as it
 is, listed or not. A catalog write names its native session
 (`nativeChanged`), and writes are looked at together every 250 ms, one look at
-a time, at the rows naming them alone. Whether a device is quiet is the list's
+a time, at the rows naming them alone. An account event is looked at for the
+rows it names alone too (`#named`); a device going quiet or a Thread archived
+looks at every row. Whether a device is quiet is the list's
 to say of every one of its conversations, one a window follows included: a
 quiet device sends no batches, so nothing else ends its working spinner. A Mac
 going to sleep, shutting down, quitting or signing out says so on its runtime's
 link first (`going-quiet`, link version 8; `mako:machine-leaving` from the
 desktop app's `suspend` and `shutdown`), and the link stays closed until the
 wake (`CloudLink.quiet`), so its device is quiet at once rather than after
-missed heartbeats; `test-cloud-account.ts` covers it. The
+missed heartbeats; `test-cloud-account.ts` covers it. A Thread's name is the
+list's to say too: no batch carries it, and a followed conversation once kept
+its old one on a second Mac while the phone showed the rename. The
 account's archived cloud Threads are said only from a list the account
 answered (`archivedChanged`), never as none at a sign-out, and
 `ThreadArchives` keeps their keys by account, so a restart shows them

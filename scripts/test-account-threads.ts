@@ -3,7 +3,7 @@ import { test } from "node:test"
 import { MAX_EVENT_BYTES, type Payload } from "@mako/protocol"
 import { rowsForLink, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import { AccountSessions } from "@mako/protocol/account-sessions"
-import { nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
+import { ACTIVITY_REPORT_MS, conversationShown, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import { SessionUploads, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
@@ -304,6 +304,110 @@ test("a publisher reports when something changed, sweeps every half minute regar
   const before = sent.length
   older.report({ link: await newLink(), served: served(4) })
   assert.equal(sent.length, before)
+})
+
+test("a row whose last activity alone moved is said once it's moved a minute; with anything else a list shows, at once", async () => {
+  const reporter = new SessionReporter()
+  const link = await newLink()
+  const at = (row: ReportedSession, ms: number): ReportedSession => ({ ...row, activityAt: new Date(NOW + ms).toISOString() })
+  reporter.sent(reporter.reports(link, [row(1)]).flatMap((report) => report.listed))
+  // A conversation streaming: its activity moves with every batch, and nothing else a list shows does.
+  for (const ms of [1_000, 20_000, 40_000, ACTIVITY_REPORT_MS - 1]) {
+    assert.deepEqual(reporter.reports(link, [at(row(1), ms)]), [], `nothing said ${ms} ms on`)
+    reporter.sent([at(row(1), ms)])
+  }
+  const minute = reporter.reports(link, [at(row(1), ACTIVITY_REPORT_MS)])
+  assert.equal(minute[0]?.listed[0]?.activityAt, new Date(NOW + ACTIVITY_REPORT_MS).toISOString(), "a minute after the one the link holds: said")
+  reporter.sent([at(row(1), ACTIVITY_REPORT_MS)])
+  const ended = reporter.reports(link, [at(row(1, "working"), ACTIVITY_REPORT_MS + 5_000)])
+  assert.deepEqual(ended[0]?.listed.map((each) => [each.state, each.activityAt]), [["working", new Date(NOW + ACTIVITY_REPORT_MS + 5_000).toISOString()]], "with a state that moved, at once and with its activity")
+})
+
+test("a batch that moves what a list shows of its conversation is reported on the next turn, whatever the second's pacing; a batch that moves nothing a list shows waits; a state that flaps is said ten times a second at most", async () => {
+  let now = NOW
+  let rows = [row(1)]
+  let shown: ConversationShown = { state: "idle" }
+  const sent: SessionsReport[] = []
+  const soon: Array<{ run: () => void; afterMs: number }> = []
+  let serving: SessionLink | undefined
+  const publisher = new SessionPublisher({
+    rows: () => rows,
+    shown: (conversation) => (conversation === "c-1" ? shown : undefined),
+    now: () => now,
+    reportNow: () => publisher.report(serving),
+    schedule: (run, afterMs) => { soon.push({ run, afterMs }) },
+  })
+  serving = { link: await newLink(), served: { version: 6, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  publisher.report(serving)
+  assert.equal(sent.length, 1, "everything, on a new link")
+  // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
+  const batch = (conversation = "c-1") => ({ type: "live-batch", batch: { id: conversation, revision: 3, updates: [] } }) as never
+  publisher.own(batch())
+  assert.deepEqual(soon.map((each) => each.afterMs), [0], "the first batch heard of it is looked at on the next turn")
+  soon.shift()?.run()
+  assert.equal(sent.length, 1, "nothing a list shows changed: nothing said")
+  now += 200
+  // Tokens: every batch is checked, none moves the list.
+  for (let token = 0; token < 50; token++) publisher.own(batch())
+  publisher.own(batch("c-2"))
+  assert.equal(soon.length, 0, "a batch that moves nothing a list shows asks for nothing")
+  // The turn starts: said on the next turn, not at the tick, though the last report was a fifth of a second ago.
+  shown = { state: "working" }
+  rows = [row(1, "working")]
+  publisher.own(batch())
+  publisher.own(batch())
+  assert.deepEqual(soon.map((each) => each.afterMs), [0], "once, on the next turn")
+  soon.shift()?.run()
+  assert.deepEqual(sent.at(-1)?.listed.map((each) => each.state), ["working"], "said within the second of the last report")
+  // Two changes a moment apart (an approval asked, then answered): gathered into the report on the next turn.
+  shown = { state: "waiting", waitingOn: "Approve: npm test" }
+  publisher.own(batch())
+  shown = { state: "working" }
+  publisher.own(batch())
+  assert.deepEqual(soon.map((each) => each.afterMs), [0], "gathered, on the next turn")
+  soon.shift()?.run()
+  // A tool call on and off, over and over: ten reports in any second, and the next waits for the second to pass.
+  const waits: number[] = []
+  for (let flap = 0; flap < 10; flap++) {
+    shown = { state: flap % 2 ? "working" : "waiting", waitingOn: flap % 2 ? undefined : "Approve: npm test" }
+    publisher.own(batch())
+    waits.push(soon[0]?.afterMs ?? -1)
+    if (waits.at(-1)! > 0) break
+    soon.shift()?.run()
+  }
+  // Three went at NOW and NOW + 200 (the first look, the turn starting, the approval): seven more go at once.
+  assert.deepEqual(waits, [0, 0, 0, 0, 0, 0, 0, 800], "held to ten a second")
+  now += 800
+  rows = [row(1, "idle")]
+  shown = { state: "idle" }
+  publisher.own(batch())
+  soon.shift()?.run()
+  assert.deepEqual([soon.length, sent.at(-1)?.listed.map((each) => each.state)], [0, ["idle"]], "what stands when it goes is what's said")
+  // A Thread renamed or a Session archived here: no batch says it, and it's reported at once all the same.
+  now += 1_000
+  for (const event of [{ type: "thread-titles", titles: [] }, { type: "thread-archives" }]) {
+    // SAFETY: host events as the Thread store emits them, filled only as far as the publisher reads them (their type).
+    publisher.own(event as never)
+    assert.deepEqual(soon.map((each) => each.afterMs), [0], `${event.type}: reported on the next turn`)
+    soon.shift()?.run()
+    now += 200
+  }
+  // A change before any link waits for the link's first report, which says everything.
+  const later = new SessionPublisher({ rows: () => rows, shown: () => ({ state: "working" }), now: () => now, reportNow: () => {}, schedule: (run, afterMs) => { soon.push({ run, afterMs }) } })
+  later.own(batch())
+  assert.equal(soon.length, 0, "no link yet: nothing to report on")
+})
+
+test("what a conversation's batch is checked against is what its row says", () => {
+  const sessions = [summary("c-1", NOW, { title: "Fix the build" }), summary("c-2", NOW), summary("c-3", NOW, { status: "failed" })]
+  const working = new Map<string, LifecycleWork["status"]>([["c-1", "waiting"], ["c-2", "running"]])
+  const waitingOn = (id: string) => (id === "c-1" ? "Approve: npm test" : undefined)
+  const listed = ownedSessions(host(sessions, { work: [...working].map(([id, status]) => work(id, status)), waiting: { "c-1": "Approve: npm test" } }))
+  for (const each of sessions) {
+    const listedRow = listed.find((candidate) => candidate.conversation === each.session.id)
+    const { state, title, waitingOn: on } = listedRow ?? {}
+    assert.deepEqual(conversationShown({ session: each.session, working: working.get(each.session.id), waitingOn }), { state, ...title !== undefined && { title }, ...on !== undefined && { waitingOn: on } })
+  }
 })
 
 test("a cloud machine's tick and an account with no link report on one publisher: the list is worked out once, not each second as a new link's", async () => {

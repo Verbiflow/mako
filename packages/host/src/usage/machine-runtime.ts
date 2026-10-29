@@ -65,7 +65,8 @@ export type MachineRuntimeOptions = {
   work(): LifecycleWork[]
   /**
    * What tells the account's list of its Sessions, and relays a watched conversation's live updates
-   * (`SessionPublisher`, which composition makes): reported on its link at each tick, and told what's watched there.
+   * (`SessionPublisher`, which composition makes): reported on its link at each tick and whenever the publisher asks
+   * (`reportSessions`), and told what's watched there.
    */
   sessions?: SessionPublishing | undefined
   /** The live streams its Threads' clients watch, such as a preview's video, once the host's core has loaded. */
@@ -619,11 +620,19 @@ export class MachineRuntime {
     this.#activity = { served, claims, busy, at: now }
   }
 
+  /**
+   * Reports the Sessions this machine owns on the link it serves now, as each tick does: what its publisher calls when
+   * a change a list shows can't wait for the tick (`SessionPublisher.showsChanged`).
+   */
+  reportSessions(): void {
+    const served = this.#served
+    this.#options.sessions?.report(served && this.#servedLink ? { link: this.#servedLink, served } : undefined)
+  }
+
   #watchClock(): void {
     const now = this.#now()
     this.#reportActivity(now)
-    const served = this.#served
-    this.#options.sessions?.report(served && this.#servedLink ? { link: this.#servedLink, served } : undefined)
+    this.reportSessions()
     const gapMs = now - this.#lastTick - TICK_MS
     this.#lastTick = now
     if (gapMs < RESUMED_GAP_MS) return

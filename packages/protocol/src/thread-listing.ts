@@ -179,7 +179,11 @@ export function sameRunsOn(left: RunsOn, right: RunsOn): boolean {
   return left.kind === "device" ? right.kind === "device" && left.deviceId === right.deviceId : right.kind === "cloud" && left.threadId === right.threadId
 }
 
-/** Whether two rows would show the same, so a change a list wouldn't show tells nobody. When it was heard isn't compared. */
+/**
+ * Whether two rows would show the same, so a change a list wouldn't show tells nobody. When it was heard isn't compared.
+ * `activityAt` is: an owner says it alone at most once a minute, and with any other change at once, so a row that
+ * differs here moved something a list shows.
+ */
 export function sameListed(left: ListedSession | undefined, right: ListedSession): boolean {
   return (
     left !== undefined &&

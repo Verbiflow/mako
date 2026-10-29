@@ -238,6 +238,11 @@ export interface Dependencies {
   /** A commit changed the conversation's requests; called on the write path, so it must be cheap and never throw. */
   turns?(previous: LiveSnapshot, next: LiveSnapshot): void
   /**
+   * A new conversation's journal was written and placed in its Thread, before its harness starts: nothing else says so
+   * until its first batch, which waits for the harness. Cheap, and never throws.
+   */
+  opened?(conversationId: string): void
+  /**
    * The per-user ledger of settings, access mode and live holds per native
    * session. Written from every flush that changes what a connected session
    * reports; consulted before a resume so two hosts never open one store.

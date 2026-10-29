@@ -315,6 +315,35 @@ test("the machine reports the Sessions it owns on its link: everything at first,
   await agent.until("linked again and everything said again", () => cloud.gateway.reports(RUNTIME).at(-1)?.owned !== undefined && cloud.gateway.reports(RUNTIME).length === 3, 6_000)
 })
 
+test("a change a list shows on the machine goes out at once, not at its next tick", async () => {
+  const cloud = await machineGateway()
+  const row = (state: ReportedSession["state"]): ReportedSession => ({ session: "0b8f3e1a-7c2d-4f6a-9e5b-1d3c8a7f2e60", thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", conversation: "c-1", harness: "claude", state, createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:00:00.000Z", generation: 1 })
+  let rows: ReportedSession[] | undefined
+  let shown: ReportedSession["state"] = "working"
+  // As composition makes it on a cloud machine: the early report goes on the machine's own link.
+  let runtime: MachineRuntime | undefined
+  const sessions = new SessionPublisher({ rows: () => rows, shown: () => ({ state: shown }), reportNow: () => runtime?.reportSessions() })
+  const agent = machineAgent({ dataRoot: join(scratch, "sessions-early"), sessions })
+  runtime = agent.runtime
+  await agent.until("the host's hello", () => agent.messages.some((message) => message.type === "hello"))
+  agent.tell({ type: "link", gatewayUrl: cloud.url, runtimeId: RUNTIME, credential: CREDENTIAL, machine: "m-0123456789abcdef", generation: 1 })
+  await agent.until("enrolled", () => agent.state()?.link === "connected")
+  rows = [row("working")]
+  await agent.until("everything said, at a tick", () => cloud.gateway.reports(RUNTIME).length === 1, 3_000)
+  // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
+  sessions.own({ type: "live-batch", batch: { id: "c-1", revision: 2, updates: [] } } as never)
+  // The turn ends just after that tick: the next is a second away.
+  rows = [row("idle")]
+  shown = "idle"
+  const changed = Date.now()
+  // SAFETY: as above, a host event filled only as far as the publisher reads it.
+  sessions.own({ type: "live-batch", batch: { id: "c-1", revision: 3, updates: [] } } as never)
+  await agent.until("the change said", () => cloud.gateway.reports(RUNTIME).length === 2, 3_000)
+  const ms = Date.now() - changed
+  assert.equal(cloud.gateway.reports(RUNTIME)[1]?.listed[0]?.state, "idle")
+  assert.ok(ms < 400, `said ${ms} ms after it changed`)
+})
+
 test("a machine that woke keeps a connection that survived its pause, and replaces one that didn't, within a second and a half", async () => {
   const cloud = await machineGateway()
   const agent = machineAgent({ dataRoot: join(scratch, "woke") })

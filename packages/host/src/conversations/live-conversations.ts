@@ -77,6 +77,19 @@ const SETTLE_AFTER_START_MS = 60_000
 const SETTLE_EVERY_MS = 15 * 60_000
 /** How often Mako tries again to write a conversation it couldn't save (`saveAgain`): soon after space comes back. */
 const SAVE_AGAIN_MS = 5_000
+/** What a conversation in memory is working on, as the lifecycle lists it; undefined while it works on nothing. */
+function residentWork(resident: Resident): LifecycleWork | undefined {
+  const { snapshot } = resident
+  const finishing = resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing
+  const requests = snapshot.requests.filter((request) => request.status === "dispatching" || request.status === "queued")
+  const native = snapshot.nativeAgents?.agents.filter(isBusyNativeAgent) ?? []
+  const background = Boolean(snapshot.session.backgroundTasks)
+  if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !background && !requests.length && !native.length && !snapshot.permissions.length))) return undefined
+  const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || background || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
+  return { id: snapshot.session.id, token: `${resident.generation}:${requests.map((request) => request.id).join(":")}:${JSON.stringify(native.map((agent) => [agent.nativeId, agent.nativeRunId ?? agent.observedAt]))}`, title: snapshot.session.title || "Untitled conversation", provider: snapshot.session.harness, cwd: snapshot.session.cwd, status, stoppable: !finishing }
+}
+
+const startingWork = (id: string): LifecycleWork => ({ id, token: id, title: "Starting an agent", provider: "", cwd: "", status: "finishing", stoppable: false })
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
@@ -307,19 +320,16 @@ export class LiveConversations {
   }
 
   lifecycleWork(): LifecycleWork[] {
-    const work: LifecycleWork[] = [...this.records.values()].flatMap((resident) => {
-      const { snapshot } = resident
-      const finishing = resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing
-      const requests = snapshot.requests.filter((request) => request.status === "dispatching" || request.status === "queued")
-      const native = snapshot.nativeAgents?.agents.filter(isBusyNativeAgent) ?? []
-      const background = Boolean(snapshot.session.backgroundTasks)
-      if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !background && !requests.length && !native.length && !snapshot.permissions.length))) return []
-      const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || background || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
-      return [{ id: snapshot.session.id, token: `${resident.generation}:${requests.map((request) => request.id).join(":")}:${JSON.stringify(native.map((agent) => [agent.nativeId, agent.nativeRunId ?? agent.observedAt]))}`, title: snapshot.session.title || "Untitled conversation", provider: snapshot.session.harness, cwd: snapshot.session.cwd, status, stoppable: !finishing }]
-    })
-    for (const id of this.launches.startingIds()) if (!work.some((item) => item.id === id)) work.push({ id, token: id, title: "Starting an agent", provider: "", cwd: "", status: "finishing", stoppable: false })
+    const work: LifecycleWork[] = [...this.records.values()].flatMap((resident) => residentWork(resident) ?? [])
+    for (const id of this.launches.startingIds()) if (!work.some((item) => item.id === id)) work.push(startingWork(id))
     for (const path of this.sources.capturing()) work.push({ id: `capture:${path}`, token: path, title: "Saving a conversation", provider: "", cwd: path, status: "finishing", stoppable: false })
     return work
+  }
+
+  /** One conversation's work, as `lifecycleWork` lists it; undefined while it has none. Reads only memory. */
+  workOf(id: string): LifecycleWork | undefined {
+    const resident = this.records.get(id)
+    return (resident && residentWork(resident)) ?? (this.launches.starting(id) ? startingWork(id) : undefined)
   }
 
   closeForExit(ids?: string[]): Promise<void> {

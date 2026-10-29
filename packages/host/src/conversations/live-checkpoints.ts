@@ -142,6 +142,9 @@ export class LiveCheckpoints {
       )
       .then((after) => {
         if (generation !== resident.generation) return
+        // Over before the batch that says it goes: what reads the conversation's work as its batch comes (the
+        // account's list) reads it at rest, and no later batch would say so.
+        resident.checkpointing = false
         resident.snapshot = {
           ...resident.snapshot,
           requests: resident.snapshot.requests.map((item) =>

@@ -69,6 +69,37 @@ function preferred(left: ReportedSession, right: ReportedSession): ReportedSessi
   return right.activityAt > left.activityAt ? right : left
 }
 
+/** What a list shows of a conversation that its own turns move: where it stands, its title, and what it waits on. */
+export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn">
+
+/**
+ * What a list shows of one of this host's conversations that its own turns move, as its row says it: each conversation's
+ * row is made with this (`ownedSessions`), and each of its batches is checked against it (`SessionPublisher.own`), so
+ * whether a batch moved anything a list shows is decided by the row's own rule, never a second one. `working` is the
+ * lifecycle's word on it; `execution`, when known, whether it's leaving this host.
+ */
+export function conversationShown(conversation: {
+  session: Pick<LiveSummary["session"], "id" | "status" | "title">
+  working: LifecycleWork["status"] | undefined
+  execution?: SessionExecution | undefined
+  waitingOn: (conversationId: string) => string | undefined
+}): ConversationShown {
+  const { session, working, execution } = conversation
+  const state: ListedState = execution?.state === "leaving" || execution?.state === "in-transit" ? "moving"
+    : working === "waiting" ? "waiting"
+    : working ? "working"
+    : session.status === "failed" ? "failed"
+    : session.status === "running" || session.status === "starting" ? "working"
+    : "idle"
+  const shown: ConversationShown = { state }
+  if (session.title) shown.title = line(session.title)
+  if (state === "waiting") {
+    const on = conversation.waitingOn(session.id)
+    if (on) shown.waitingOn = line(on)
+  }
+  return shown
+}
+
 /** Each Thread's last activity, as the newest of its rows': a Thread is in the window whole, its older Sessions too. */
 export function threadActivity(rows: readonly Pick<ReportedSession, "thread" | "activityAt">[]): Map<string, string> {
   const newest = new Map<string, string>()
@@ -133,31 +164,20 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const { session } = summary
     const execution = executions.get(placed.session)
     if (execution?.state === "elsewhere") continue
-    const working = work.get(session.id)
-    const state: ListedState = execution?.state === "leaving" || execution?.state === "in-transit" ? "moving"
-      : working === "waiting" ? "waiting"
-      : working ? "working"
-      : session.status === "failed" ? "failed"
-      : session.status === "running" || session.status === "starting" ? "working"
-      : "idle"
+    const shown = conversationShown({ session, working: work.get(session.id), execution, waitingOn: sources.waitingOn })
     const movedAt = Math.max(summary.createdAt, sources.lastMoved(session.id, summary.revision) ?? 0)
     const row: ReportedSession = {
       session: placed.session,
       thread: placed.thread,
       conversation: session.id,
       harness: session.harness,
-      state,
+      ...shown,
       createdAt: iso(summary.createdAt),
       activityAt: iso(movedAt),
       generation: execution?.generation ?? 1,
     }
     const titled = threadTitle(placed.thread)
     if (titled) row.threadTitle = titled
-    if (session.title) row.title = line(session.title)
-    if (state === "waiting") {
-      const on = sources.waitingOn(session.id)
-      if (on) row.waitingOn = line(on)
-    }
     if (session.cwd) row.folder = session.cwd
     if (session.nativeId) row.nativeId = session.nativeId
     // A harness or ID the protocol can't carry is left out, never the rest.
@@ -210,18 +230,35 @@ export function syncOrder(left: ReportedSession, right: ReportedSession, threads
   return byThread || right.activityAt.localeCompare(left.activityAt)
 }
 
-/** Whether two rows say the same, so an unchanged one isn't sent again. */
-function sameRow(left: ReportedSession | undefined, right: ReportedSession): boolean {
-  return left !== undefined && left.session === right.session && left.thread === right.thread && left.threadTitle === right.threadTitle && left.conversation === right.conversation &&
+/** Whether two rows show the same but for when they last moved. */
+function sameShown(left: ReportedSession, right: ReportedSession): boolean {
+  return left.session === right.session && left.thread === right.thread && left.threadTitle === right.threadTitle && left.conversation === right.conversation &&
     left.harness === right.harness && left.title === right.title && left.state === right.state && left.waitingOn === right.waitingOn &&
-    left.folder === right.folder && left.createdAt === right.createdAt && left.activityAt === right.activityAt && left.generation === right.generation &&
+    left.folder === right.folder && left.createdAt === right.createdAt && left.generation === right.generation &&
     left.nativeId === right.nativeId && left.capture?.path === right.capture?.path
+}
+
+/**
+ * A row's last activity alone is said at most this often. It moves with every batch a conversation streams, and a list
+ * shows it to the minute at most; said each time, it was half the account's events (each a write there and work on
+ * every device). With anything else a list shows, it goes at once.
+ */
+export const ACTIVITY_REPORT_MS = 60_000
+
+/**
+ * The row the link holds after `row` is reported over `sent`: `sent` still, when all that moved is the row's last
+ * activity, less than `ACTIVITY_REPORT_MS` on.
+ */
+function held(sent: ReportedSession | undefined, row: ReportedSession): ReportedSession {
+  if (!sent || !sameShown(sent, row)) return row
+  return Date.parse(row.activityAt) - Date.parse(sent.activityAt) < ACTIVITY_REPORT_MS ? sent : row
 }
 
 /**
  * Turns what this host owns into reports for its link: on a new link, every Session it owns by ID and generation
  * (`owned`, so the list drops what it no longer has), then its rows in batches; after that only what changed, and
- * what left (`gone`). What a link was sent is forgotten with it: the next one hears everything again.
+ * what left (`gone`). A row whose last activity alone moved waits until it's moved a minute (`ACTIVITY_REPORT_MS`).
+ * What a link was sent is forgotten with it: the next one hears everything again.
  */
 export class SessionReporter {
   #link: RuntimeLink | undefined
@@ -235,7 +272,10 @@ export class SessionReporter {
       this.#sent.clear()
     }
     const now = new Map(rows.map((row) => [row.session, row]))
-    const changed = rows.filter((row) => !sameRow(this.#sent.get(row.session), row))
+    const changed = rows.filter((row) => {
+      const sent = this.#sent.get(row.session)
+      return held(sent, row) !== sent
+    })
     const gone = [...this.#sent.values()].filter((row) => !now.has(row.session)).map(({ session, generation }) => ({ session, generation }))
     if (!fresh && !changed.length && !gone.length) return []
     const batches: SessionsReport[] = []
@@ -247,8 +287,9 @@ export class SessionReporter {
 
   /** The reports went: they're what the link holds now. */
   sent(rows: readonly ReportedSession[]): void {
+    const next = rows.map((row) => held(this.#sent.get(row.session), row))
     this.#sent.clear()
-    for (const row of rows) this.#sent.set(row.session, row)
+    for (const row of next) this.#sent.set(row.session, row)
   }
 
   /** A report didn't go: the next one starts over, as on a new link. */
@@ -266,14 +307,21 @@ const REPORT_MS = 1_000
 const SWEEP_MS = 30_000
 /** A change is reported this soon after it, the first in a quiet stretch; the tick then paces the rest. */
 const SOON_MS = 200
+/**
+ * A change a list shows (a conversation starting or ending work, waiting on a person, renamed; a Session archived) goes
+ * on the next turn of the event loop, with whatever else changed in that turn, at most this many times in any second:
+ * two changes a moment apart (a turn's request ending, then its session) both go at once, and a state that flaps (a
+ * tool call on and off) reports ten times a second at most, not once a batch.
+ */
+const SHOWN_PER_SECOND = 10
 /** The work a report runs as, on the host's tick and soon after a change alike: what it reads in is counted to it. */
 export const REPORT_WORK = "tell the account this host's Sessions"
 
 /**
- * What a host tells the cloud of its Sessions, on whichever link it serves: the list's rows when they change (within
- * `SOON_MS` of the first change, then at most once a second; nothing while nothing does; a sweep every half minute
- * catches what moves without an event), and a conversation's live updates
- * while another device watches it. A Mac and a cloud machine run the same one. What's watched belongs to the link it was
+ * What a host tells the cloud of its Sessions, on whichever link it serves: the list's rows when they change (a change a
+ * list shows, on the next turn of the event loop; any other within `SOON_MS` of the first, then at most once a second;
+ * nothing while nothing does; a sweep every half minute catches what moves without an event), and a conversation's live
+ * updates while another device watches it. A Mac and a cloud machine run the same one. What's watched belongs to the link it was
  * said on, so a reconnect never carries an old link's watchers onto a new one.
  */
 export class SessionPublisher {
@@ -291,9 +339,22 @@ export class SessionPublisher {
   readonly #work: Pick<HostWork, "run">
   readonly #schedule: (run: () => void, afterMs: number) => void
   #soonAsked = false
+  readonly #shown: ((conversation: string) => ConversationShown | undefined) | undefined
+  /** What a list shows of each conversation as its last batch left it, so a batch that moved it is told from one that didn't. */
+  readonly #shownOf = new Map<string, string>()
+  /** A change a list shows is waiting for its report: the next report goes whatever the second's pacing says. */
+  #urgent = false
+  #shownAsked = false
+  /** When the early reports of the last second went, oldest first, at most `SHOWN_PER_SECOND`. */
+  readonly #shownAt: number[] = []
 
   constructor(options: {
     rows: () => readonly ReportedSession[] | undefined
+    /**
+     * What a list shows of one conversation now (`conversationShown`), read when its batch comes: a batch that moved it
+     * is reported on the next turn of the event loop. Without it, every batch waits for the tick.
+     */
+    shown?: (conversation: string) => ConversationShown | undefined
     now?: () => number
     /**
      * Reports on the link the host serves now, exactly as its tick does (`report` with that link): a change is
@@ -305,6 +366,7 @@ export class SessionPublisher {
     schedule?: (run: () => void, afterMs: number) => void
   }) {
     this.#rows = options.rows
+    this.#shown = options.shown
     this.#now = options.now ?? Date.now
     this.#reportNow = options.reportNow
     this.#work = options.work ?? { run: (_label, fn) => fn() }
@@ -331,6 +393,25 @@ export class SessionPublisher {
     }, SOON_MS)
   }
 
+  /**
+   * Something a list shows changed for certain: a conversation's state, a Session archived here. Reported on the next
+   * turn of the event loop, on the link the host serves then, bypassing the second's pacing, at most
+   * `SHOWN_PER_SECOND` times a second. It doesn't wait for a held foreground: it reads what the host already holds.
+   */
+  showsChanged(): void {
+    this.#dirty = true
+    this.#urgent = true
+    const reportNow = this.#reportNow
+    if (this.#shownAsked || !reportNow || !this.#current) return
+    this.#shownAsked = true
+    this.#schedule(() => {
+      this.#shownAsked = false
+      this.#shownAt.push(this.#now())
+      if (this.#shownAt.length > SHOWN_PER_SECOND) this.#shownAt.shift()
+      this.#work.run(REPORT_WORK, reportNow)
+    }, this.#shownAt.length < SHOWN_PER_SECOND ? 0 : Math.max(0, this.#shownAt[0]! + 1_000 - this.#now()))
+  }
+
   /** Reports on the current link what changed since the last report there; called on the host's tick. */
   report(current: SessionLink | undefined): void {
     // A link reported on before, served again after a moment without one, already holds the rows.
@@ -338,12 +419,13 @@ export class SessionPublisher {
     this.#current = current
     if (!current || current.served.version < SESSIONS_VERSION) return
     const now = this.#now()
-    if (now - this.#reportedAt < REPORT_MS || (!this.#dirty && now - this.#reportedAt < SWEEP_MS)) return
+    if (!this.#urgent && (now - this.#reportedAt < REPORT_MS || (!this.#dirty && now - this.#reportedAt < SWEEP_MS))) return
     const all = this.#rows()
     if (!all) return
     this.#listed = all
     const rows = rowsForLink(all, current.served.version)
     this.#dirty = false
+    this.#urgent = false
     this.#reportedAt = now
     this.#reportedLink = current.link
     const reports = this.#reporter.reports(current.link, rows)
@@ -383,9 +465,23 @@ export class SessionPublisher {
    * goes to its watchers, encoded only then, so an event nobody elsewhere watches costs nothing.
    */
   own(event: HostEvent): void {
+    // A Session archived here leaves every device's list, and a Thread renamed here is renamed there: the owner's word
+    // is the one that counts, and no batch says either.
+    if (event.type === "thread-archives" || event.type === "thread-titles") return this.showsChanged()
     if (event.type !== "live-batch") return
     this.#dirty = true
+    this.#sawBatch(event.batch.id)
     if (this.#watched(event.batch.id)) this.event("event", encodeRuntimeEvent(event))
+  }
+
+  /** A conversation's batch came: whether it moved what a list shows of it, which then goes at once (`showsChanged`). */
+  #sawBatch(conversation: string): void {
+    const shown = this.#shown?.(conversation)
+    if (!shown) return
+    const key = `${shown.state}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}`
+    if (this.#shownOf.get(conversation) === key) return
+    this.#shownOf.set(conversation, key)
+    this.showsChanged()
   }
 
   /** The current link, when another device watches `conversation` on it. */

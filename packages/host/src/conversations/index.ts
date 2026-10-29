@@ -52,7 +52,7 @@ import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudHandOffs, workingThreads } from "./cloud-handoffs.js"
-export { ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ReportSources, type SessionLink } from "./session-report.js"
+export { conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ReportSources, type SessionLink } from "./session-report.js"
 export { CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, turnOnOf, type TurnOnReading, type TurnOnSources } from "./cloud-turn-on.js"
 export { SessionUploads, declareSyncMethods, readBackfill, syncStatusOf, uploadScope, type UploadSources } from "./session-uploads.js"
 export { SYNC_WINDOW_MS, syncTier, windowStart } from "./sync-window.js"
@@ -102,6 +102,8 @@ export interface ConversationsDeps {
   harnesses: Harnesses
   workspaces: Workspaces
   telemetry: HostTelemetry
+  /** A new conversation was written and placed, before its harness starts (`Dependencies.opened`). */
+  opened?(conversationId: string): void
   emit(event: HostEvent): void
   /** What each agent can call: Mako's tools and Local Control. */
   tools: NonNullable<LiveDependencies["tools"]>
@@ -153,6 +155,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     foreground: deps.foreground,
     work: deps.work,
     turns: deps.telemetry.turns,
+    opened: deps.opened,
     memory: memory ?? undefined,
     threads: threads.store ?? undefined,
     mcpSnapshot: deps.mcpSnapshot,

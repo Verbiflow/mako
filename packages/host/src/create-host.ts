@@ -140,6 +140,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         refreshMachineCarried: async () => {
           await machine?.refreshCarried()
         },
+        reportMachineSessions: () => machine?.reportSessions(),
         web: () => web,
         closing: () => closing,
         closeSocket,
