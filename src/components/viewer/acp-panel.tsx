@@ -10,7 +10,7 @@ import { useLasting } from "@/components/ui/use-lasting"
 import { Shimmer } from "@/components/ui/shimmer"
 import { durationText } from "@mako/sessions/events"
 import { loadEarlierLive } from "@/state/live-recovery"
-import { continueTurn } from "@/state/acp-queue"
+import { continueTurn, turnUnderWay } from "@/state/acp-queue"
 import { skipWorktree } from "@/state/acp-start"
 import { WorktreeOpening } from "@/components/viewer/worktree-opening"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
@@ -458,6 +458,11 @@ function GonePermission({ permission }: { permission: LivePermissionRequest }) {
   const key = useAcp((state) => activeLiveAcp(state)?.key)
   const harness = useAcp((state) => activeLiveAcp(state)?.harness)
   const canceling = useAcp((state) => activeLiveAcp(state)?.canceling ?? false)
+  // While a turn runs nothing is to be picked up: Continue turn would only queue Mako's words behind it.
+  const underWay = useAcp((state) => {
+    const live = activeLiveAcp(state)
+    return live ? turnUnderWay(live) : false
+  })
   const [continuing, setContinuing] = useState(false)
   const provider = harness ? harnessLabel(harness) : "The agent"
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
@@ -472,7 +477,7 @@ function GonePermission({ permission }: { permission: LivePermissionRequest }) {
         It asked about <span className={cn(!makoTool && !permission.detail && "font-mono")}>{makoTool ?? permission.title}</span>. Nothing can answer it now; continue the turn and it asks again if it still needs to.
       </p>
       <div className="flex flex-wrap gap-1.5 pl-5">
-        <button
+        {underWay ? null : <button
           type="button"
           disabled={!key || continuing}
           onClick={() => {
@@ -484,7 +489,7 @@ function GonePermission({ permission }: { permission: LivePermissionRequest }) {
         >
           <PlayIcon className="size-3 fill-current" strokeWidth={0} />
           {continuing ? "Continuing…" : "Continue turn"}
-        </button>
+        </button>}
         <button
           type="button"
           disabled={canceling}

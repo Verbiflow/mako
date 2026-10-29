@@ -18,6 +18,7 @@ import { recoveryLabel, requestRecovery, type RecoveryAction } from "@/state/req
 import { useTranscriptSource } from "./source-context"
 import { descriptorFor } from "@/state/descriptors"
 import { useThreads } from "@/state/threads"
+import { turnWords } from "@/state/prompt-delivery"
 
 
 /** The failure row an exchange ends on, when its request failed; nothing for every other exchange. */
@@ -132,6 +133,11 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
   const provider = harness ? harnessLabel(harness) : "The agent"
   const recovery = requestRecovery(request, { provider, compacted, canCompact: compactable, resetAt })
   const text = request.displayText ?? request.text
+  // Which message it was, by its words; a continuation says Mako's words to the agent, so it is named by the turn it continued.
+  const quote = useAcp((state) => {
+    const live = state.conversations[conversationId]
+    return quoted && live?.kind === "live" ? turnWords(live.requests ?? [], request) : text
+  })
   const { copy, copied } = useCopy(text)
   const [busy, setBusy] = useState<RecoveryAction["kind"] | null>(null)
   const [done, setDone] = useState<RecoveryAction["kind"] | null>(null)
@@ -200,7 +206,7 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
           {recovery.title}
           {recovery.description ? <span className="text-muted-foreground"> · {recovery.description}</span> : null}
         </p>
-        {quoted ? <p className="mt-0.5 line-clamp-2 text-label text-muted-foreground">“{text}”</p> : null}
+        {quoted && quote ? <p className="mt-0.5 line-clamp-2 text-label text-muted-foreground">“{quote}”</p> : null}
         {followed ? (
           <p data-failure-followed={followed.kind} className="mt-0.5 text-label text-muted-foreground">
             {followed.kind === "waiting" ? `Sends again at ${new Date(followed.at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}. It waits in the queue below.` : "A later message went through."}

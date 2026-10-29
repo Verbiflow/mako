@@ -102,6 +102,12 @@ export function continueTurnPrompt(reason: InterruptionReason, sender: Continuat
   return stopped.length ? `${SITUATIONS[reason]} ${stoppedSentence(reason, stopped)} ${SENDERS[sender]}` : `${SITUATIONS[reason]} ${SENDERS[sender]}`
 }
 
+/** A continuation read back by its words: what cut the turn short, and who sent it when the words say. */
+export interface SavedContinuation {
+  reason: InterruptionReason
+  sender?: ContinuationSender
+}
+
 /**
  * The continuation `text` is, read back from a saved conversation by its
  * whole words: what cut the turn short, and who sent it. Builds before
@@ -109,7 +115,7 @@ export function continueTurnPrompt(reason: InterruptionReason, sender: Continuat
  * `sender`: the store can't say whether Mako or the person sent it. A host
  * exit's three reasons share their words and read as `host-quit`.
  */
-export function savedContinuation(text: string): { reason: InterruptionReason; sender?: ContinuationSender } | undefined {
+export function savedContinuation(text: string): SavedContinuation | undefined {
   const words = text.trim()
   if (!words.startsWith("Continue where you left off.")) return undefined
   for (const each of INTERRUPTION_REASONS) {

@@ -15,13 +15,13 @@ import { TranscriptSourceContext } from "../src/components/transcript/source-con
 import { entriesToMessages } from "../src/lib/entry-messages"
 import { createExchangeBuilder } from "../src/components/viewer/exchange-builder"
 import type { ViewedThread } from "../src/state/thread-state"
-import { promptLabel, toExchanges, type Exchange as ExchangeData } from "../src/lib/exchanges"
+import { exchangeRequests, promptLabel, toExchanges, turnRequest, type Exchange as ExchangeData } from "../src/lib/exchanges"
 import { causeWords, eventLabel, eventWords, setupWords } from "../src/lib/transcript-events"
 import { textOf } from "../src/lib/format"
 import { acpStore, type LiveAcpConversation } from "../src/state/acp"
 import { threadsStore } from "../src/state/threads"
 import { fixtureHarnesses } from "../src/dev/harness-fixtures"
-import { continueTurnPrompt, makoPrompts, savedMakoPrompt, type MakoPrompt, type TurnStop } from "../src/state/prompt-delivery"
+import { continueTurnPrompt, type MakoPrompt, type TurnStop } from "../src/state/prompt-delivery"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-goals"
 import { setPref } from "@/state/prefs"
@@ -357,27 +357,78 @@ const prompted = (id: string, words = continueTurnPrompt("connection-lost", "mak
   response: [{ id: `${id}-a`, role: "assistant", timestamp: Date.parse(at(41)), blocks: [{ type: "text", text: "Picking up." }] }],
   system: [],
 })
-const continued = draw([prompted("c")], { mako: { c: { kind: "continued", reason: "connection-lost", sender: "mako" } } })
-assert.match(continued, /<button[^>]*data-event-line[^>]*>/, "what Mako told the agent opens under its line")
-assert.match(continued, /data-turn-continued="connection-lost" data-continued-by="mako"/)
-assert.match(text(continued), /Mako continued the turn after the connection to Cursor dropped \d{1,2}:40 [AP]M/)
-assert.doesNotMatch(continued, /Continue where you left off/, "its words wait until the line is opened")
-const restarted = draw([prompted("r", continueTurnPrompt("provider-exited", "mako"))], { mako: { r: { kind: "continued", reason: "provider-exited", sender: "mako" } } })
-assert.match(restarted, /lucide-refresh-cw/)
-assert.match(text(restarted), /Mako restarted Cursor and continued the turn/)
-assert.match(text(draw([prompted("m")], { mako: { m: { kind: "moved" } } })), /Mako moved this session onto its own branch/)
-assert.match(text(draw([prompted("g")], { mako: { g: { kind: "goal", step: { step: "continue", turn: 3 } } } })), /Mako continued toward the goal turn 3/)
+assert.match(text(draw([prompted("m", "You're on the Thread's own branch now.")], { mako: { m: { kind: "moved" } } })), /Mako moved this session onto its own branch/)
+assert.match(text(draw([prompted("g", "Continue toward the goal.")], { mako: { g: { kind: "goal", step: { step: "continue", turn: 3 } } } })), /Mako continued toward the goal turn 3/)
 
-// The person's Continue turn sends Mako's words, not theirs: a quiet line saying they continued it, live and saved.
-const pressed = draw([prompted("p", continueTurnPrompt("host-quit", "person"))])
-assert.match(text(pressed), /You continued the turn after Mako closed \d{1,2}:40 [AP]M/, "known by its words even with a request behind it")
-assert.doesNotMatch(pressed, /Copy question/, "not drawn as the person's bubble")
+// A continuation is never a turn of its own, nor the person's words: the turn it continues goes on, as one turn,
+// whether Mako sent it or the person pressed Continue turn, live with its requests or read back from a store.
+const cutThenContinued = (continuation: string, extra: LiveUpdate[] = []): LiveUpdate[] => [
+  { kind: "user", requestId: "cut", text: "Run the suite and fix what fails", at: Date.parse(at(30)) },
+  { kind: "tool", id: "test", name: "Bash", title: "Bash", status: "completed", input: '{"command":"npm test"}', output: "Tests  2 failed | 512 passed (514)", at: Date.parse(at(31)) },
+  { kind: "text", id: "a1", text: "Two footer tests fail. Fixing the stop label first." },
+  ...extra,
+  { kind: "user", requestId: "go-on", text: continuation, at: Date.parse(at(34)) },
+  { kind: "tool", id: "retest", name: "Bash", title: "Bash", status: "completed", input: '{"command":"npm test"}', output: "Tests  514 passed (514)", at: Date.parse(at(35)) },
+  { kind: "text", id: "a2", text: "Both footer tests pass now." },
+]
+for (const [who, words] of [["Mako", continueTurnPrompt("provider-exited", "mako")], ["the person", continueTurnPrompt("host-quit", "person")], ["no one named", legacyWords()]] as const) {
+  const turn = streamed(cutThenContinued(words))
+  assert.equal(turn.length, 1, `continued by ${who}: one turn`)
+  assert.deepEqual(exchangeRequests(turn[0]!), ["cut", "go-on"], "both requests' work is the turn's")
+  assert.equal(turnRequest(turn[0]!), "go-on", "how it ended is the continuation's")
+  assert.equal(promptLabel(turn[0]!), "Run the suite and fix what fails", "the navigator names the person's words")
+  const drawn = draw(turn)
+  assert.doesNotMatch(drawn, /Continue where you left off|data-turn-continued|continued the turn|restarted/, `continued by ${who}: nothing where the continuation was sent`)
+  assert.equal(drawn.match(/aria-label="Copy question"/g)?.length, 1, "one prompt, the person's")
+  assert.match(text(drawn), /Worked for 2m ran 2 commands/, "one fold over both parts, timed without the wait before it went on")
+  assert.match(text(drawn), /Both footer tests pass now\./)
+}
+// The provider's own stop marker where the turn went on said only that the part before it was cut short.
+const markedCut = draw(streamed(cutThenContinued(continueTurnPrompt("provider-exited", "mako"), [marker({ label: "Interrupted" })])))
+assert.doesNotMatch(text(markedCut), /Interrupted/, "the turn went on: its earlier part's stop is not said")
+// Read back from a store, with no request to say whose: still one turn.
+const savedTurn = saved([
+  { kind: "user", at: at(30), text: "Run the suite and fix what fails" }, say("Two footer tests fail."),
+  { kind: "user", at: at(34), text: continueTurnPrompt("connection-lost", "person") }, say("Both footer tests pass now."),
+], "cursor")
+assert.equal(savedTurn.length, 1, "saved: one turn")
+// The history viewer's own builder draws it the same.
+const viewedContinued = viewed([
+  { kind: "user", at: at(30), text: "Run the suite and fix what fails" }, say("Two footer tests fail."),
+  { kind: "user", at: at(34), text: continueTurnPrompt("provider-exited", "mako") }, say("Both footer tests pass now."),
+])
+assert.equal(viewedContinued.length, 1, "viewed: one turn")
+assert.doesNotMatch(draw(viewedContinued), /Continue where you left off|data-turn-continued/)
+assert.doesNotMatch(draw(savedTurn), /Continue where you left off|data-turn-continued/)
+// A continuation whose turn is on an earlier page goes on in the exchange that stands in for it: no prompt, no bubble.
+const leading = saved([{ kind: "user", at: at(34), text: continueTurnPrompt("provider-exited", "mako") }, say("Picking up.")], "cursor")
+assert.deepEqual(leading.map((exchange) => [exchange.id, exchange.prompt === undefined]), [["lead", true]])
+assert.doesNotMatch(draw(leading), /Continue where you left off|Copy question|data-turn-continued/)
+// A step a lost machine undid changed the person's files: where it was picked up again stays said, folded or not.
+const machine = draw(streamed(cutThenContinued(continueTurnPrompt("machine-lost", "mako"))))
+assert.match(text(machine), /The last step was interrupted; Claude Code picked it up again/)
+assert.doesNotMatch(machine, /Continue where you left off/, "its words are Mako's, not shown")
+// With Diagnostics' originals on, the seam says why and who, and opens onto the exact words.
+setPref("showOriginals", true)
+const diagnosed = streamed(cutThenContinued(continueTurnPrompt("provider-exited", "mako")))
+setTurnFoldOpen(turnFoldKey(LIVE, diagnosed[0]!.id, 0), true)
+const debug = draw(diagnosed)
+assert.match(debug, /data-turn-continued="provider-exited" data-continued-by="mako"/)
+assert.match(text(debug), /Mako restarted Claude Code and continued the turn \d{1,2}:34 [AP]M/)
+assert.match(debug, /<button[^>]*data-event-line[^>]*>[^]*Mako restarted Claude Code/, "the exact words open under its line, one switch away")
+const personDebug = streamed(cutThenContinued(continueTurnPrompt("host-quit", "person")))
+setTurnFoldOpen(turnFoldKey(LIVE, personDebug[0]!.id, 0), true)
+assert.match(draw(personDebug), /data-continued-by="person"/)
+assert.match(text(draw(personDebug)), /You continued the turn after Mako closed/)
+setPref("showOriginals", false)
+setTurnFoldOpen(turnFoldKey(LIVE, diagnosed[0]!.id, 0), false)
+setTurnFoldOpen(turnFoldKey(LIVE, personDebug[0]!.id, 0), false)
 
 // Who sent a continuation is in its words, so a saved one says who, as live does; one saved before the words said so claims no one.
 for (const reason of ["connection-lost", "provider-exited", "signed-out", "host-quit", "not-saved", "goal-budget"] as const)
   for (const sender of ["mako", "person"] as const)
     assert.deepEqual(savedContinuation(continueTurnPrompt(reason, sender)), { reason, sender }, `${reason} by ${sender} reads back`)
-assert.deepEqual(savedMakoPrompt(`  ${continueTurnPrompt("signed-out", "mako")}\n`), { kind: "continued", reason: "signed-out", sender: "mako" })
+assert.deepEqual(savedContinuation(`  ${continueTurnPrompt("signed-out", "mako")}\n`), { reason: "signed-out", sender: "mako" })
 const legacy = continueTurnPrompt("connection-lost", "mako").replace(/ Mako sent this on its own;.*$/, "")
 assert.deepEqual(savedContinuation(legacy), { reason: "connection-lost" }, "an older build's words name no sender")
 assert.equal(savedContinuation(`${continueTurnPrompt("connection-lost", "person")} Also fix the footer.`), undefined, "an edited continuation is the person's own message")
@@ -388,16 +439,6 @@ assert.match(stoppedWords, /Mako's exit stopped what you had left running in the
 assert.match(continueTurnPrompt("handed-off", "person", ["npm test"]), /The handoff stopped what you had left running in the background: `npm test`\./)
 for (const [reason, words] of [["host-quit", stoppedWords], ["handed-off", continueTurnPrompt("handed-off", "mako", ["npm test"])], ["host-quit", continueTurnPrompt("host-quit", "person", ["npm run dev"])]] as const)
   assert.equal(savedContinuation(words)?.reason, reason, `a continuation naming stopped work reads back: ${words}`)
-const savedOne = (words: string) => draw(saved([{ kind: "user", at: at(43), text: words }, { kind: "assistant", blocks: [{ type: "text", text: "Picking up." }] }], "cursor"))
-assert.match(text(savedOne(continueTurnPrompt("provider-exited", "mako"))), /Mako restarted Cursor and continued the turn \d{1,2}:43 [AP]M/, "saved history names the harness from the answer")
-assert.match(text(savedOne(continueTurnPrompt("connection-lost", "person"))), /You continued the turn after the connection to Cursor dropped/)
-const unknown = savedOne(legacy)
-assert.match(text(unknown), /The turn continued after the connection to Cursor dropped/, "honest about what isn't known")
-assert.match(unknown, /data-continued-by="unknown"/)
-assert.doesNotMatch(unknown, /Copy question/, "Mako's words are not drawn as the person's, whoever pressed it")
-// Live, Mako's own continuation is known from its request; the person's from its words.
-assert.deepEqual([...makoPrompts([{ id: "auto", text: continueTurnPrompt("connection-lost", "mako"), attachments: [], status: "completed", continues: { requestId: "x", reason: "connection-lost", auto: true } }])],
-  [["auto", { kind: "continued", reason: "connection-lost", sender: "mako" }]])
 
 // Read back from a store, Mako's goal loop is known by its own words, whole.
 const goalSaved = draw(saved([{ kind: "user", at: at(43), text: goalContinuePrompt("Ship the event lines") }, say("Next step.")]))
@@ -406,16 +447,21 @@ assert.doesNotMatch(goalSaved, /Copy question|&lt;objective&gt;/, "Mako's instru
 assert.match(draw(saved([{ kind: "user", text: goalStartPrompt("Ship the event lines") }, say("Starting.")])), /data-goal-step="set"/)
 assert.match(draw(saved([{ kind: "user", text: `${goalContinuePrompt("Ship the event lines")}\nAlso fix the footer.` }, say("Ok.")])), /Copy question/, "an edited goal prompt is the user's")
 
-// A live prompt carries the moment the host sent it, so a live line of Mako's shows its time as a saved one does.
-const sentLive = streamed([{ kind: "user", text: continueTurnPrompt("connection-lost", "person"), requestId: "r1", at: Date.parse(at(44)) }, { kind: "text", id: "t", text: "Picking up." }], "cursor")
+// A live prompt carries the moment the host sent it, so it shows its time as a saved one does.
+const sentLive = streamed([{ kind: "user", text: "Refactor the store", requestId: "r1", at: Date.parse(at(44)) }, { kind: "text", id: "t", text: "Picking up." }], "cursor")
 assert.equal(sentLive[0]!.prompt?.timestamp, Date.parse(at(44)))
-assert.match(text(draw(sentLive)), /You continued the turn after the connection to Cursor dropped \d{1,2}:44 [AP]M/)
+assert.match(text(draw(sentLive)), /Refactor the store Copy question \d{1,2}:44 [AP]M/)
 
 const yours = draw([prompted("s", "Refactor the store")], { stops: { s: { reason: "stopped", continuable: false, automatic: false } } })
 assert.match(yours, /data-turn-stopped="stopped"[^>]*>[^]*?lucide-circle-stop/)
 assert.doesNotMatch(yours, /text-caution/, "your own Stop is not an alarm")
-// The person's Continue on a turn Mako stopped unsaved says so, in the words it sent.
-assert.match(text(draw([prompted("n", continueTurnPrompt("not-saved", "person"))])), /You continued the turn Mako stopped when it couldn't save/)
+// A continuation handed to the transcript as a turn's prompt is still never the person's words.
+const handed = draw([prompted("n", continueTurnPrompt("not-saved", "person"))])
+assert.doesNotMatch(handed, /Continue where you left off|Copy question|data-turn-continued/)
+assert.match(text(handed), /Picking up\./)
+setPref("showOriginals", true)
+assert.match(text(draw([prompted("n", continueTurnPrompt("not-saved", "person"))])), /You continued the turn Mako stopped when it couldn't save/, "with originals on, it says why and who")
+setPref("showOriginals", false)
 const quit = draw([prompted("q", "Refactor the store")], { stops: { q: { reason: "host-quit", continuable: true, automatic: false } } })
 assert.match(quit, /data-turn-stopped="host-quit"[^>]*>[^]*?lucide-triangle-alert[^"]*text-caution/)
 assert.match(quit, /Continue turn/)
@@ -500,4 +546,9 @@ console.log("Mako's lines, stops, errors and system lines: one line where a prom
     delete host.window
   }
   console.log("Live originals: live blocks and merged entries name their stream frames by their address in the view, and offer them")
+}
+
+
+function legacyWords(): string {
+  return continueTurnPrompt("connection-lost", "mako").replace(/ Mako sent this on its own;.*$/, "")
 }

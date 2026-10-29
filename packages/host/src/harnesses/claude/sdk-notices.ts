@@ -127,7 +127,12 @@ export class ClaudeNotices {
     // Claude Code reports epoch seconds.
     const resetsAt = info.resetsAt ? info.resetsAt * 1000 : undefined
     const resets = resetsAt ? `resets ${resetTime(resetsAt, this.now())}` : ""
-    if (info.status === "allowed_warning") return notice(warning(line(`Approaching your ${limit}`, resets)))
+    if (info.status === "allowed_warning") {
+      // Said once a window and reset in the conversation, however many times Claude restarts (`TranscriptEvent.nearLimit`).
+      const near: UsageLimit = resetsAt ? { window: limit, resetsAt } : { window: limit }
+      const used = usedShare(info)
+      return notice({ ...warning(line(used === undefined ? `Approaching your ${limit}` : `${used}% of your ${limit} used`, resets)), nearLimit: near })
+    }
     if (info.isUsingOverage) return notice(event("Notice", `Reached your ${limit} · using extra usage`))
     const refused: UsageLimit = resetsAt ? { window: limit, resetsAt } : { window: limit }
     return notice(usageLimitEvent({ ...event("Rate limited", line(`Reached your ${limit}`, resets)), tone: "warning" }, refused))
@@ -191,6 +196,17 @@ const LIMITS = {
   seven_day_overage_included: "weekly limit",
   overage: "extra usage limit",
 } satisfies Record<NonNullable<SDKRateLimitInfo["rateLimitType"]>, string>
+
+/**
+ * How much of the window Claude says is used, as a whole percent: its
+ * reading (`utilization`), else the threshold it just passed
+ * (`surpassedThreshold`), each a 0–1 fraction as the usage reading's
+ * `utilization` is (`claudeRateLimitWindow`).
+ */
+function usedShare(info: SDKRateLimitInfo): number | undefined {
+  const share = info.utilization ?? info.surpassedThreshold
+  return share !== undefined && Number.isFinite(share) && share > 0 ? Math.round(share * 100) : undefined
+}
 
 function notice(marker: TranscriptEvent): NativeNotice[] {
   return [{ kind: "event", event: marker }]

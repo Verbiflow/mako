@@ -3,6 +3,7 @@ import { mergeMedia, type MediaCandidate } from "@mako/sessions/turn-media"
 import { textOf } from "@/lib/format"
 import { causeWords, eventLabel } from "@/lib/transcript-events"
 import { foldUsageLimits } from "@/lib/usage-limit-folds"
+import { savedContinuation, type SavedContinuation } from "@mako/host/contracts/turn-continuation"
 
 /**
  * An exchange is one question and everything the agent did to answer it.
@@ -35,10 +36,12 @@ export interface Exchange {
    */
   opener?: ChatMessage
   /**
-   * Everything after the prompt, in order: assistant and tool messages, and
-   * any message the user steered in while the agent was still working. A
-   * steer stays where it landed — after the work it interrupted, before the
-   * work it redirected — never hoisted next to the prompt.
+   * Everything after the prompt, in order: assistant and tool messages, any
+   * message the user steered in while the agent was still working, and each
+   * continuation that picked the turn up after it was cut short
+   * (`isContinuation`). A steer stays where it landed — after the work it
+   * interrupted, before the work it redirected — never hoisted next to the
+   * prompt; a continuation stays where the turn went on.
    */
   response: ChatMessage[]
   /** Notes and separators that landed inside this exchange, in order. */
@@ -66,6 +69,12 @@ export type ResponseSection =
   | { kind: "prose"; id: string; message: ChatMessage; previewedFiles?: readonly string[] }
   | { kind: "work"; id: string; messages: ChatMessage[] }
   | { kind: "steer"; id: string; message: ChatMessage }
+  /**
+   * Where a turn cut short went on: Mako's words to the agent, sent by Mako
+   * or by the person's Continue turn (`isContinuation`), and what they say
+   * of why and who. Not the person's words, so never drawn as theirs.
+   */
+  | { kind: "continued"; id: string; message: ChatMessage; continued: SavedContinuation }
   | { kind: "note"; id: string; message: ChatMessage }
   /**
    * What the agent put in front of the person with `show`, drawn where the
@@ -83,6 +92,47 @@ export type ResponseSection =
  */
 export type PlacedSection = ResponseSection | { kind: "made"; id: string; media: MediaCandidate[] }
 
+/**
+ * What a prompt says when it is Mako's continuation of a turn cut short,
+ * known by its words alone (`savedContinuation`), the same live and saved:
+ * Mako's own sends and the person's Continue turn send the same kind of
+ * words, and a saved history keeps nothing else. A steer is never one.
+ */
+export function isContinuation(message: ChatMessage): SavedContinuation | undefined {
+  return message.role === "user" && !message.steeringFor ? savedContinuation(textOf(message.blocks)) : undefined
+}
+
+/** The requests an exchange's turn ran as: its prompt's, then each continuation's, in order. */
+export function exchangeRequests(exchange: Exchange): string[] {
+  const ids: string[] = []
+  if (exchange.prompt?.requestId) ids.push(exchange.prompt.requestId)
+  for (const message of exchange.response)
+    if (message.role === "user" && !message.steeringFor && message.requestId) ids.push(message.requestId)
+  return ids
+}
+
+/**
+ * The request the turn stands on now: its newest continuation's, else its
+ * prompt's. How the turn ended (stopped, failed, still to be picked up) is
+ * that request's; an earlier part's stop was superseded when it went on.
+ */
+export function turnRequest(exchange: Exchange): string | undefined {
+  for (let index = exchange.response.length - 1; index >= 0; index--) {
+    const message = exchange.response[index]!
+    if (message.role === "user" && !message.steeringFor) return message.requestId
+  }
+  return exchange.prompt?.requestId
+}
+
+/** How many response messages come before the turn's newest continuation: the part the turn stands on starts there. */
+export function continuedFrom(exchange: Pick<Exchange, "response">): number {
+  for (let index = exchange.response.length - 1; index >= 0; index--) {
+    const message = exchange.response[index]!
+    if (message.role === "user" && !message.steeringFor) return index + 1
+  }
+  return 0
+}
+
 /** The provider's own marker for a turn that was stopped. */
 export function isInterruptedNote(message: ChatMessage): boolean {
   return message.blocks.some((block) =>
@@ -99,6 +149,19 @@ export function notesBesideStop(notes: readonly ExchangeNote[], responses: numbe
   return notes.filter(
     (note) => !isInterruptedNote(note.message) || (note.after > 0 && note.after < responses)
   )
+}
+
+/**
+ * The notes a continued turn shows: the provider's own stop marker right
+ * where the turn went on said only that the part before it was cut short,
+ * which the turn going on supersedes.
+ */
+export function notesBesideContinuations(notes: readonly ExchangeNote[], response: readonly ChatMessage[]): readonly ExchangeNote[] {
+  const kept = notes.filter((note) => {
+    const next = response[note.after]
+    return !isInterruptedNote(note.message) || next?.role !== "user" || Boolean(next.steeringFor)
+  })
+  return kept.length === notes.length ? notes : kept
 }
 
 /** `notes` must be ordered by `after`; notes at zero belong above the answer and are skipped. */
@@ -136,7 +199,8 @@ export function responseSections(
     placeNotes(index)
     if (message.role === "user") {
       flushWork()
-      sections.push({ kind: "steer", id: message.id, message })
+      const continued = isContinuation(message)
+      sections.push(continued ? { kind: "continued", id: message.id, message, continued } : { kind: "steer", id: message.id, message })
       continue
     }
     const generated: ChatMessage[] = []
@@ -226,6 +290,18 @@ export function toExchanges(
         : undefined
       if (steered) {
         steered.response.push(message)
+        continue
+      }
+      // Mako's words picking up a turn that was cut short are not a new
+      // question: the turn on screen goes on, as one turn. One whose turn is
+      // on an earlier page goes on the exchange that stands in for it.
+      if (isContinuation(message)) {
+        if (!current) {
+          current = { id: LEAD_EXCHANGE_ID, response: [], system: [], timestamp: message.timestamp }
+          exchanges.push(current)
+        }
+        current.response.push(message)
+        prompts.set(message.id, current)
         continue
       }
       if (message.steeringFor) {

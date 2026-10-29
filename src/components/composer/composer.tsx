@@ -1,4 +1,5 @@
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
+import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { gitConflictAttachment } from "@/state/git-conflicts"
 import { PULL_REQUEST_CONTEXT } from "@/lib/pull-request-context"
 import { pullRequestAttachment } from "@/state/github"
@@ -327,13 +328,13 @@ export function Composer() {
             entry.type === "user"
         )
         .map((entry) => entry.text.trim())
-        .filter(Boolean)
+        .filter(yourPrompt)
     }
     return sessionStore
       .get()
       .messages.filter((message) => message.role === "user")
       .map((message) => textOf(message.blocks).trim())
-      .filter(Boolean)
+      .filter(yourPrompt)
   }, [])
 
   /** Insert the markers the attachments produced at the caret. */
@@ -1384,4 +1385,9 @@ export function Composer() {
       </div>
     </div>
   )
+}
+
+/** A prompt the person wrote, to recall: not empty, and not Mako's words picking up a turn cut short (`savedContinuation`). */
+function yourPrompt(text: string): boolean {
+  return text !== "" && !savedContinuation(text)
 }

@@ -2360,6 +2360,8 @@ async function providerExitContinued() {
     update: (update: LiveUpdate) => void
     hooks: DriverHooks
     root: string
+    /** The connection a window reads, folded from the batches the host emitted, as the renderer folds them. */
+    heard: () => string | undefined
   }) => Promise<void>) => {
     const root = mkdtempSync(join(tmpdir(), "mako-live-provider-exit-"))
     const id = randomUUID()
@@ -2368,6 +2370,7 @@ async function providerExitContinued() {
     const emitters: Array<(event: LiveDriverEvent) => void> = []
     const bindings: string[] = []
     const hooks: DriverHooks = {}
+    let heard: string | undefined = "connected"
     const session = (bindingId: string, patch: Partial<LiveSessionState> = {}): LiveSessionState => ({
       id: bindingId,
       nativeId: "native-exit",
@@ -2414,7 +2417,9 @@ async function providerExitContinued() {
       root: join(root, "journals"),
       driver: () => driver,
       history: async () => null,
-      emit: () => {},
+      emit: (event) => {
+        if (event.type === "live-batch" && event.batch.sessionChanges?.connection) heard = event.batch.sessionChanges.connection
+      },
       autoContinueDelayMs: 20,
       resumeVerdict: async () => ({ kind: "resumable", record: "moved" }),
     })
@@ -2429,6 +2434,7 @@ async function providerExitContinued() {
         update: (update) => emitters.at(-1)?.({ type: "live-update", id: bindings.at(-1) ?? id, update }),
         hooks,
         root,
+        heard: () => heard,
       })
     } finally {
       owner.stop()
@@ -2439,7 +2445,7 @@ async function providerExitContinued() {
   const dispatched = (owner: LiveConversations, id: string, index: number) =>
     waitFor(() => owner.snapshot(id)?.requests[index]?.status === "dispatching", `request ${index} was not dispatched`)
 
-  await run(true, async ({ owner, id, starts, prompts, end }) => {
+  await run(true, async ({ owner, id, starts, prompts, end, heard }) => {
     const first = randomUUID()
     owner.submit(id, first, "first")
     await dispatched(owner, id, 0)
@@ -2454,6 +2460,10 @@ async function providerExitContinued() {
     assert.deepEqual(requests[1]?.continues, { requestId: first, reason: "provider-exited", auto: true })
     assert.deepEqual(requests[1]?.actor, { kind: "service", name: "auto-continue" })
     assert.match(prompts[1] ?? "", /process stopped/)
+    // The reopened process is what the windows hear of, not the one that exited: a window that kept `disconnected`
+    // took a question the running agent was still waiting on for one nothing could answer.
+    assert.equal(owner.snapshot(id)!.session.connection, "connected")
+    assert.equal(heard(), "connected", "the switch to the new process reached the windows")
     await dispatched(owner, id, 1)
     end(exited)
     await sleep(60)
