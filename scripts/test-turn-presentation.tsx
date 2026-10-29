@@ -121,6 +121,48 @@ const go: LiveUpdate = { kind: "user", text: "Fix the redirect", at: at(0) }
   assert.match(settled, /Copy answer/, "and its answer can be copied whole")
 }
 
+// A call that never returns holds only what began with it: the commands run one after another beside it each
+// settle into the summary once and stay there, so no update moves a finished call between the summary and the live rows.
+{
+  const stuck = tool("stuck", "Bash", { command: "npm run watch" }, "in_progress", { at: at(1) })
+  const quick = (index: number, done: boolean) =>
+    tool(`quick-${index}`, "Bash", { command: `git status ${index}` }, done ? "completed" : "in_progress", { at: at(10 + index * 2), ...(done && { endedAt: at(11 + index * 2) }) })
+  /** The turn after `step` updates: quick call `n` begins on update 2n and returns on update 2n + 1. */
+  const after = (step: number) => {
+    const quicks = Array.from({ length: Math.floor(step / 2) + 1 }, (_, index) => quick(index, 2 * index + 1 <= step))
+    return draw(exchangesOf([go, stuck, ...quicks], true).at(-1)!, { streaming: true })
+  }
+  const liveIds = (html: string) => [...liveStepOf(html).matchAll(/data-transcript-tool="([^"]*)"/g)].map((match) => match[1]!.replace(/^.*?(stuck|quick-\d+)$/, "$1"))
+  const ran = (html: string) => {
+    const said = /data-work-summary[^>]*>[^]*?Ran (a|\d+) commands?/.exec(html)?.[1]
+    return said === undefined ? 0 : said === "a" ? 1 : Number(said)
+  }
+  const placed = new Map<string, "live" | "summary">()
+  let summarized = 0
+  for (let step = 0; step < 12; step++) {
+    const html = after(step)
+    const live = new Set(liveIds(html))
+    assert.ok(live.has("stuck"), `update ${step}: the call that never returns stays in the live rows`)
+    for (let index = 0; 2 * index <= step; index++) {
+      const id = `quick-${index}`
+      const finished = 2 * index + 1 <= step
+      if (!finished) {
+        assert.ok(live.has(id), `update ${step}: the running ${id} has its live row`)
+        continue
+      }
+      const where = live.has(id) ? "live" : "summary"
+      const was = placed.get(id)
+      if (was) assert.equal(where, was, `update ${step}: ${id} stays where it settled`)
+      placed.set(id, where)
+    }
+    assert.ok(ran(html) >= summarized, `update ${step}: the summary never gives a command back (${ran(html)} after ${summarized})`)
+    summarized = ran(html)
+  }
+  assert.equal(placed.get("quick-0"), "live", "the call begun beside it before anything returned is its step")
+  assert.equal([...placed.values()].filter((where) => where === "summary").length, 5, "every later one settled into the summary")
+  assert.equal(summarized, 5)
+}
+
 // Only a running turn's calls sweep: a call a finished record left without a result keeps its settled words.
 {
   const [call] = pairTools(exchangesOf([go, tool("hung", "Bash", { command: "npm run dev" }, "in_progress")], true).at(-1)!.response.flatMap((message) => message.blocks))
