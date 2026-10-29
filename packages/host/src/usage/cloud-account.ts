@@ -32,6 +32,8 @@ import {
   renewal,
   runtimeLinkOverSocket,
   subprotocols,
+  PROBE_ANSWER_MS,
+  SILENT_WHILE_WORKING_MS,
 } from "@mako/protocol"
 import {
   CloudBrowserSessionSchema,
@@ -102,6 +104,8 @@ const REUSED: CloudSignedOutNotice = {
 }
 
 const ConnectionSchema = z.object({ token: z.string().min(1), expiresAt: z.number() })
+/** A number a stream's object may have given out but never kept, which it says in its place (`{"type":"lost"}`). */
+const LostEventSchema = z.object({ type: z.literal("lost") }).loose()
 const EnrollmentSchema = z.object({
   device: CloudDeviceSchema,
   credential: z.string().regex(/^mako_dc_[\w-]{43}$/),
@@ -194,7 +198,7 @@ export type RuntimeClaim = { threadId: string; generation: number }
 
 /** How this Mac serves the host to the cloud as a runtime: the host's own dispatcher, behind the protocol. */
 export type CloudRuntime = {
-  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: (conversations: readonly string[]) => void }): Promise<ServedRuntime>
+  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: (conversations: readonly string[], after?: Readonly<Record<string, number>>) => void }): Promise<ServedRuntime>
 }
 
 /** How a cloud Thread is made: ahead of its first message (`prepare`), and the harness that message is for. */
@@ -233,6 +237,11 @@ export type CloudAccountOptions = {
    * after it happened. `mine`: about this Mac. A device that joined before this Mac did isn't news to it.
    */
   onAccountEvent?: (heard: { seq: number; at: string; event: AccountEvent; mine: boolean }) => void
+  /**
+   * The account's stream skipped a number, or said one was lost: what the missing event said is unknown, so what lists
+   * the account reads it whole again rather than hold a list that may be wrong.
+   */
+  onAccountGap?: (gap: { after: number; seq: number; why: "skipped" | "lost" }) => void
 }
 
 export class CloudAccountError extends Error {
@@ -436,6 +445,14 @@ export class CloudAccounts {
   /** Its owner took it, as a request of the Session under the same ID. */
   async tookWaiting(session: string, id: string): Promise<void> {
     await this.#call("messages.taken", "POST", `/v1/sessions/${encodeURIComponent(session)}/waiting/${encodeURIComponent(id)}/taken`, {})
+  }
+
+  /**
+   * A watched conversation's update went out on the runtime link: one silent a while is asked whether it's alive, so a
+   * stalled link the watchers wait on is replaced in seconds.
+   */
+  liveSent(): void {
+    this.#runtimeLink?.probeIfSilent(SILENT_WHILE_WORKING_MS, PROBE_ANSWER_MS)
   }
 
   /** Tells the account's list what changed of this Mac's Sessions, on the runtime link it serves now (none while signed out). */
@@ -1210,11 +1227,17 @@ export class CloudAccounts {
   #heard(frame: EventFrame): void {
     const stored = this.#stored
     if (!stored || frame.stream !== accountStream(stored.account.id) || frame.seq <= (this.#seen ?? 0)) return
+    const before = this.#seen
     this.#seen = frame.seq
     this.#rememberSeen()
-    const parsed = AccountEventSchema.safeParse(frame.event.decode())
-    // A kind of event this build doesn't know is passed over, never refused.
-    if (!parsed.success) return
+    if (before !== undefined && frame.seq > before + 1) this.#options.onAccountGap?.({ after: before, seq: frame.seq, why: "skipped" })
+    const decoded = frame.event.decode()
+    const parsed = AccountEventSchema.safeParse(decoded)
+    // A kind of event this build doesn't know is passed over, never refused; one the gateway lost is a gap.
+    if (!parsed.success) {
+      if (LostEventSchema.safeParse(decoded).success) this.#options.onAccountGap?.({ after: frame.seq - 1, seq: frame.seq, why: "lost" })
+      return
+    }
     const event = parsed.data
     const mine = event.type === "device-joined" ? event.device.id === stored.device.id : event.type === "device-removed" ? event.deviceId === stored.device.id : false
     if (event.type === "device-joined" && Date.parse(frame.at) < Date.parse(stored.device.createdAt)) return
@@ -1228,11 +1251,12 @@ export class CloudAccounts {
     let served: ServedRuntime | undefined
     let closed = false
     if (runtime)
-      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations) => this.#options.sessions?.watch(link, conversations) }).then(
+      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations, after) => this.#options.sessions?.watch(link, conversations, after) }).then(
         (started) => {
           served = started
           if (closed) return started.close()
           this.#served = { link, served: started }
+          this.#options.sessions?.linked(this.#served)
           this.#options.log?.("cloud runtime enrolled", { runtimeId, claims: this.#claims.length })
           void started.ended.then((problem) => {
             this.#claims = started.claims()

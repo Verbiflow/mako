@@ -442,6 +442,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // A change goes to the account within a fraction of a second, on the link this host serves then, named as the tick's
     // job is: a Mac's account link, or a cloud machine's runtime link.
     reportNow: config.machineAgentFd === undefined ? () => late.cloud?.reportSessions?.() : () => shell.reportMachineSessions?.(),
+    // A Mac's runtime link, silent while it sends what another device watches, is asked whether it's alive.
+    sent: config.machineAgentFd === undefined ? () => late.cloud?.liveSent?.() : undefined,
     work: shell.work,
   })
   catalog.subscribe((event) => {

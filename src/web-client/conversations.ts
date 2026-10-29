@@ -1,4 +1,4 @@
-import type { Actor, Json, Subscription } from "@mako/protocol"
+import { NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, type Actor, type Json, type Subscription } from "@mako/protocol"
 import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
 import { conversationCallId } from "@mako/host/contracts/conversation-calls"
@@ -18,7 +18,6 @@ import type { WebSession } from "./threads"
 import { harnessDescriptors } from "@/dev/harness-descriptors"
 import type { HarnessDescriptor } from "@/lib/types"
 
-const RESUBSCRIBE_MS = [250, 1_000, 2_000, 5_000, 10_000] as const
 /** What `mako:resolve-file-references` names first: the conversation whose transcript's words are being resolved. */
 const FileReferencesSourceSchema = z.object({ liveId: z.string().optional() })
 /** A file read's signed URLs: what a browser can't load as they are. */
@@ -216,29 +215,69 @@ export class WebConversations {
     }
   }
 
+  /**
+   * Follows one owner's stream until it's let go. A cloud Thread's stream is its log: followed from its head the first
+   * time (the snapshot covers what came before), and after the last event heard each time after. A device's conversation
+   * streams while watched, and its gateway keeps the last few: followed again after the last update heard, a number
+   * skipped is asked for again from there, and one too old to have is read again as a snapshot. A stream that ends is
+   * followed again at once, then with a backoff (`followAgainInMs`); one silent while its conversation is at work has its
+   * connection asked whether it's alive, so a stalled link is replaced in seconds.
+   */
   async #run(owner: ListedOwner, follow: { subscription?: Subscription; conversations: Set<string>; stopped: boolean }): Promise<void> {
     let failures = 0
+    let gapsInRow = 0
     let first = true
+    const cursor = new StreamCursor(owner.kind === "cloud" ? "log" : "live")
     while (!follow.stopped) {
       try {
-        // A cloud Thread's stream keeps its events: followed from its head, the snapshot covers what came before. A
-        // device's conversation streams only while watched and keeps nothing: from now.
-        const subscription = this.#gateway.session.subscribe({ stream: owner.stream, after: owner.kind === "cloud" ? Number.MAX_SAFE_INTEGER : 0 })
+        const resumes = owner.kind === "cloud" ? cursor.last !== undefined : cursor.numbered
+        const subscription = this.#gateway.session.subscribe({ stream: owner.stream, after: owner.kind === "cloud" ? (cursor.last ?? Number.MAX_SAFE_INTEGER) : cursor.resumeAfter() })
         follow.subscription = subscription
-        // Followed again after the stream ended: what went by meanwhile is read as a snapshot.
-        if (!first) for (const conversation of follow.conversations) void hydrateLive(conversation, true)
+        // Followed again where the stream can't be picked up (nothing heard yet, or a gateway that keeps nothing): what
+        // went by meanwhile is read as a snapshot.
+        if (!first && !resumes) for (const conversation of follow.conversations) void hydrateLive(conversation, true)
         first = false
-        for (;;) {
-          const frame = await subscription.next()
+        let gap = false
+        while (!gap) {
+          let frame
+          try {
+            frame = await subscription.next(this.#working(follow.conversations) ? SILENT_WHILE_WORKING_MS : undefined)
+          } catch (error) {
+            if (!(error instanceof NothingArrivedError)) throw error
+            this.#gateway.session.probe(owner.stream, PROBE_ANSWER_MS)
+            continue
+          }
+          const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text })
+          if (verdict.kind === "notice" || verdict.kind === "duplicate") continue
+          if (verdict.kind === "reread") {
+            for (const conversation of follow.conversations) void hydrateLive(conversation, true)
+            continue
+          }
+          if (verdict.kind === "gap") {
+            gap = true
+            continue
+          }
           failures = 0
+          gapsInRow = 0
           this.#heard(frame.event.text, follow.conversations)
         }
+        // A number skipped: asked for again at once after the last one heard. Gap after gap is a stream that fails.
+        if (++gapsInRow <= 3) continue
       } catch (error) {
         if (follow.stopped) return
         CONSOLE_LOG.warn("a conversation's stream ended; following it again", { stream: owner.stream, error: error instanceof Error ? error.message : String(error) })
       }
-      await new Promise((resolve) => setTimeout(resolve, RESUBSCRIBE_MS[Math.min(failures++, RESUBSCRIBE_MS.length - 1)]))
+      await new Promise((resolve) => setTimeout(resolve, followAgainInMs(failures++)))
     }
+  }
+
+  /** Whether one of a stream's open conversations is at work, so silence on it may be a stalled link. */
+  #working(conversations: ReadonlySet<string>): boolean {
+    const held = acpStore.get().conversations
+    return [...conversations].some((conversation) => {
+      const conversationState = held[conversation]
+      return conversationState?.kind === "live" && conversationState.session.status === "running"
+    })
   }
 
   /** One line of an owner's stream: a batch of an open conversation goes to the renderer's live state. */

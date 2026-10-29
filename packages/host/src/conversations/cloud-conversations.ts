@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
+import { NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, threadStream, type Actor, type ClientSessionOverSockets, type EventFrame, type Subscription } from "@mako/protocol"
 import { MACHINE_NOTICE_PREFIX, ThreadMachineNoticeSchema } from "@mako/protocol/saves"
 import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
@@ -47,11 +47,8 @@ const COPY_PAGE = 100
 const COPY_READS = new Set(["mako:live-snapshot", "mako:live-read"])
 /** A message for this Mac's own Session that couldn't be taken yet (the host still starting) is tried again after this. */
 const TAKE_AGAIN_MS = 30_000
-const RETRY_MS = 1_000
-const RETRY_MAX_MS = 30_000
 /** For this long after a wake, a follow tries again this often: the network comes back within a second or two. */
 const WOKEN_MS = 15_000
-const WOKEN_RETRY_MS = 250
 const SAVE_MS = 1_000
 /** Where a routed call's repeats are said: this module's lines in the host's log. */
 const CALL_LOG: GatewayCallLog = { warn: (message, fields) => hostWarn("cloud-conversations", message, fields), info: (message, fields) => hostLog("cloud-conversations", message, fields) }
@@ -1440,54 +1437,99 @@ export class CloudConversations {
     return this.#session
   }
 
-  /** Relays the Thread's events from the last one relayed, resubscribing with a backoff whenever the stream ends. */
+  /**
+   * Relays the Thread's events from the last one relayed. A stream that ends is followed again at once, then with a
+   * backoff while it keeps failing (`followAgainInMs`). A Thread's stream is its log, gap-free from its first event;
+   * another device's conversation streams only while watched, numbered once its gateway says so (`StreamCursor`), which
+   * keeps the last few: a number skipped is asked for again from there, and one too old to have is read again whole
+   * (`#reread`). While the conversation is at work, a stream silent for `SILENT_WHILE_WORKING_MS` has its connection
+   * asked whether it's alive, so a stalled link is replaced in seconds.
+   */
   #follow(entry: Entry): void {
     if (this.#closed || this.#following.has(entry.threadId)) return
     this.#following.set(entry.threadId, undefined)
     const run = async () => {
-      let wait = RETRY_MS
+      let failures = 0
+      let gapsInRow = 0
       let failing = false
       let wakes = this.#wakes
+      const cursor = new StreamCursor(entry.runtime ? "live" : "log", entry.runtime || this.#fromHead.has(entry.threadId) ? undefined : entry.seq)
       // An archived Thread takes nothing and says nothing: it isn't followed.
       while (!this.#closed && this.#entries.get(entry.conversationId) === entry && !this.#list.archived().has(entry.threadId)) {
         try {
           const { session } = await this.#connected()
-          const fromHead = this.#fromHead.has(entry.threadId)
-          // Another device's conversation streams only while watched, and keeps nothing to replay: always from now.
-          const subscription = entry.runtime
-            ? session.subscribe({ stream: entry.threadId, after: 0 })
-            : session.subscribe({ stream: threadStream(entry.threadId), after: fromHead ? Number.MAX_SAFE_INTEGER : entry.seq })
+          const stream = entry.runtime ? entry.threadId : threadStream(entry.threadId)
+          const after = entry.runtime ? cursor.resumeAfter() : (cursor.last ?? (this.#fromHead.has(entry.threadId) ? Number.MAX_SAFE_INTEGER : entry.seq))
+          const subscription = session.subscribe({ stream, after })
           this.#following.set(entry.threadId, subscription)
-          for (;;) {
-            const frame = await subscription.next()
-            if (frame.seq <= entry.seq) continue
+          let gap = false
+          while (!gap) {
+            let frame: EventFrame
+            try {
+              frame = await subscription.next(this.#working(entry) ? SILENT_WHILE_WORKING_MS : undefined)
+            } catch (error) {
+              if (!(error instanceof NothingArrivedError)) throw error
+              // At work and silent: the link may have stalled. A ping it doesn't answer ends it, and this follows again.
+              session.probe(stream, PROBE_ANSWER_MS)
+              continue
+            }
+            const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text })
+            if (verdict.kind === "notice" || verdict.kind === "duplicate") continue
+            if (verdict.kind === "reread") {
+              this.#reread(entry)
+              continue
+            }
+            if (verdict.kind === "gap") {
+              gap = true
+              continue
+            }
+            // A gateway that doesn't number the stream numbers it by the clock: what came before the last is a repeat.
+            if (!cursor.numbered && frame.seq <= entry.seq) continue
             this.#fromHead.delete(entry.threadId)
             entry.seq = frame.seq
             this.#relay(entry, frame.event.text)
             this.#saveSoon()
-            wait = RETRY_MS
+            failures = 0
+            gapsInRow = 0
             failing = false
           }
+          // A number skipped: asked for again at once from the last one held, which the gateway serves from what it
+          // kept. One gap after another is a stream that keeps failing.
+          if (++gapsInRow <= 3) continue
         } catch (error) {
           if (this.#closed) return
           if (!failing) hostWarn("cloud-conversations", "a cloud Thread's events stopped; following again", { threadId: entry.threadId, error: error instanceof Error ? error.message : String(error) })
           failing = true
         }
         const woken = performance.now() - this.#wokeAt < WOKEN_MS
-        if (this.#wakes === wakes) await this.#pause(woken ? WOKEN_RETRY_MS : wait)
+        if (this.#wakes === wakes) await this.#pause(woken ? followAgainInMs(0) : followAgainInMs(failures++))
         if (this.#wakes !== wakes) {
           // Woken: the stream that ended went with the sleep, and the network may be back; no backoff carried over.
           wakes = this.#wakes
-          wait = RETRY_MS
-          continue
+          failures = 0
         }
-        wait = Math.min(wait * 2, RETRY_MAX_MS)
       }
     }
     void run().finally(() => {
       this.#following.delete(entry.threadId)
       this.#fromHead.delete(entry.threadId)
     })
+  }
+
+  /** Whether a followed conversation is at work, so silence on its stream may be a stalled link. */
+  #working(entry: Entry): boolean {
+    return entry.summary?.session.status === "running"
+  }
+
+  /**
+   * What another device's conversation said while this Mac couldn't hear it is gone from what its gateway keeps: every
+   * window reading it reads it again, as for any notice that its history changed.
+   */
+  #reread(entry: Entry): void {
+    const summary = entry.summary
+    const batch = { id: entry.conversationId, revision: (summary?.revision ?? 0) + 1, ...(summary?.epoch !== undefined && { epoch: summary.epoch }), updates: [], historyChanged: true }
+    hostLog("cloud-conversations", "a watched conversation's stream can't be picked up where it was; its windows read it again", { conversation: entry.conversationId })
+    this.#options.emit({ type: "live-batch", conversation: entry.conversationId, payload: JSON.stringify({ type: "live-batch", batch }) })
   }
 
   /** Waits `ms`, or less when the Mac wakes or this closes. */
@@ -1605,6 +1647,8 @@ export class CloudConversations {
         void this.#readList()
         return
       }
+      // The stream skipped a number: the list is read whole again, replacing what's held in one step.
+      if (heard === "account-gap") return void this.#readList()
       const named = this.#named(heard)
       if (this.#list.heard(heard)) {
         // Only the rows the change names are looked at again: one Session's state, while hundreds are listed.

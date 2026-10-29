@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
-import { NATIVE_SESSIONS_VERSION } from "./version.js"
+import { NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 
 /**
@@ -59,6 +59,11 @@ export const ReportedSessionSchema = z
      * another device does, by the path its catalog reads it at (`mako:live-capture`), as `conversation` (link version 6 on).
      */
     capture: z.object({ path: z.string().min(1).max(4096) }).strict().optional(),
+    /**
+     * When what a list shows of it last changed, on its owner's clock (link version 9 on): a device that hears the row
+     * knows how long the change took to reach it.
+     */
+    changedAt: z.iso.datetime().optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -107,6 +112,8 @@ export const SessionsReportSchema = z
     owned: z.array(z.object({ session: z.uuid(), generation: GenerationSchema }).strict()).max(LISTED_PER_OWNER).optional(),
     listed: z.array(ReportedSessionSchema).max(LISTED_PER_FRAME),
     gone: z.array(z.object({ session: z.uuid(), generation: GenerationSchema }).strict()).max(LISTED_PER_OWNER),
+    /** When the owner sent it, on its clock (link version 9 on), for the gateway's log of how long a report took. */
+    reportedAt: z.iso.datetime().optional(),
   })
   .strict()
 export type SessionsReport = z.infer<typeof SessionsReportSchema>
@@ -153,12 +160,14 @@ export type SessionListings = z.infer<typeof SessionListingsSchema>
  * Session Mako hasn't opened isn't listed there and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= NATIVE_SESSIONS_VERSION) return [...rows]
+  if (version >= NUMBERED_LIVE_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
-    if (row.capture) continue
+    if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
-    delete older.nativeId
+    // Before version 9 a gateway knows no `changedAt`; before 6, no native IDs either.
+    delete older.changedAt
+    if (version < NATIVE_SESSIONS_VERSION) delete older.nativeId
     kept.push(older)
   }
   return kept

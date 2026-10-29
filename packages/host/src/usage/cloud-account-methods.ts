@@ -97,6 +97,8 @@ export interface CloudAccount {
   sessionListings?(): Promise<SessionListings>
   /** Tells the account's list what changed of this host's Sessions (`SessionPublisher`); called on a tick. */
   reportSessions?(): void
+  /** A watched conversation's update went out: a silent runtime link is probed (`CloudAccount.liveSent`). */
+  liveSent?(): void
   /**
    * A message for a Session whose owner is off, kept by the account until its owner takes it (`waiting.ts`), under its
    * request ID: sent again, it's the same message. The Session's messages waiting, as they stand after it.
@@ -122,7 +124,7 @@ export interface CloudAccount {
    * Hears each change to the account's list of Sessions, in the stream's order, as it comes, and `account-changed` when
    * this Mac signs in, out or to another account, after which the list is another's; returns how to stop.
    */
-  onThreadListings?(listener: (heard: AccountListHeard | "account-changed") => void): () => void
+  onThreadListings?(listener: (heard: AccountListHeard | "account-changed" | "account-gap") => void): () => void
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   /** The Mac is going to sleep or shutting down: its runtime tells the cloud first (`CloudAccounts.leaving`). */
@@ -211,7 +213,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
-  const threadListeners = new Set<(heard: AccountListHeard | "account-changed") => void>()
+  const threadListeners = new Set<(heard: AccountListHeard | "account-changed" | "account-gap") => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -248,6 +250,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       }
       hostLog("cloud", "account event", { seq: heard.seq, type: event.type, mine: heard.mine })
       emit({ type: "cloud-account-event", seq: heard.seq, at: heard.at, event, mine: heard.mine })
+    },
+    // The stream skipped a number: what lists the account reads it whole again.
+    onAccountGap: (gap) => {
+      hostLog("cloud", "the account's stream skipped; its list is read again", gap)
+      for (const listener of threadListeners) listener("account-gap")
     },
     onRequest: request,
     sessions,
@@ -327,6 +334,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     unwaitMessage: (session, id) => cloud.unwaitMessage(session, id),
     tookWaiting: (session, id) => cloud.tookWaiting(session, id),
     reportSessions: () => cloud.reportSessions(),
+    liveSent: () => cloud.liveSent(),
     devices: () => cloud.devices(),
     cloudHarnesses: () => cloud.cloudHarnesses(),
     carriedFiles: {

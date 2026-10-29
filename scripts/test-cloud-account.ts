@@ -11,7 +11,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
-import { connect, createServer as createTcpServer, type Socket } from "node:net"
+import { connect, createServer as createTcpServer, Socket } from "node:net"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -35,6 +35,8 @@ import {
   offeredCredential,
   problem,
   serveRuntime,
+  PROBE_ANSWER_MS,
+  SILENT_WHILE_WORKING_MS,
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
@@ -346,6 +348,10 @@ async function fakeCloud() {
       const entry = { seq: accountEvents.length + 1, at, text: JSON.stringify(event) }
       accountEvents.push(entry)
       for (const ws of following) if (ws.readyState === ws.OPEN) ws.send(eventFrame(entry))
+    },
+    /** A number given out and never sent, as an event lost on its way would look to a follower. */
+    skip() {
+      accountEvents.push({ seq: accountEvents.length + 1, at: new Date().toISOString(), text: JSON.stringify({ type: "device-joined-elsewhere" }) })
     },
     stop: () => {
       server.closeAllConnections()
@@ -775,6 +781,25 @@ test("the account's stream says when a device joins, once, and a Mac that was of
   newMac.accounts.close()
 })
 
+test("a number the account's stream skipped, or one it says was lost, is said as a gap, so what lists the account reads it whole again", async () => {
+  const cloud = await fakeCloud()
+  const gaps: Array<{ after: number; seq: number; why: string }> = []
+  const heard: number[] = []
+  await signedIn(cloud, { secretName: "cloud/account-gaps", onAccountEvent: (event) => heard.push(event.seq), onAccountGap: (gap) => gaps.push(gap) })
+  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 0`), "followed the account's stream")
+  const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+  cloud.announce(joined())
+  await waitFor(() => heard.length === 1, "the first heard")
+  assert.deepEqual(gaps, [], "in order: no gap")
+  cloud.skip()
+  cloud.announce(joined())
+  await waitFor(() => heard.length === 2, "the one after the skipped number heard")
+  assert.deepEqual(gaps, [{ after: 1, seq: 3, why: "skipped" }])
+  cloud.announce({ type: "lost" })
+  await waitFor(() => gaps.length === 2, "a lost one said")
+  assert.deepEqual(gaps[1], { after: 3, seq: 4, why: "lost" })
+})
+
 test("account events are told as they're heard, in order, while the keychain is still writing the last one heard, and it's kept with the newest", async () => {
   const cloud = await fakeCloud()
   const secretName = "cloud/account-events-held"
@@ -1035,6 +1060,25 @@ test("the runtime's link comes back by itself and claims its Threads, so the gat
   while (cloud.enrolments.length < 2) await sleep(10)
   assert.deepEqual(cloud.enrolments[1]?.threads, [{ threadId: "th-1", generation }], "claimed again on the new link")
   assert.ok(connected(mac.accounts.account().state), "and no one saw it")
+})
+
+test("a runtime link silent while it sends what another device watches is asked whether it's alive: one that answers is kept, a stalled one is replaced within seconds", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { runtime: laptop })
+  while (cloud.enrolments.length === 0) await sleep(10)
+  await sleep(SILENT_WHILE_WORKING_MS + 100)
+  mac.accounts.liveSent()
+  await sleep(PROBE_ANSWER_MS + 300)
+  assert.equal(cloud.enrolments.length, 1, "it answered: kept")
+  // Stalled: nothing it sends is read, nothing answers, and nothing closes it.
+  const [socket] = cloud.runtimes()
+  // `ws` keeps the TCP socket under it as `_socket`: paused, it reads nothing and answers nothing, and stays open.
+  z.object({ _socket: z.instanceof(Socket) }).loose().parse(socket)._socket.pause()
+  const stalled = Date.now()
+  await sleep(SILENT_WHILE_WORKING_MS + 100)
+  mac.accounts.liveSent()
+  await waitFor(() => cloud.enrolments.length === 2, "replaced by a new link")
+  assert.ok(Date.now() - stalled < SILENT_WHILE_WORKING_MS + PROBE_ANSWER_MS + 1_500, `found in ${Date.now() - stalled} ms`)
 })
 
 test("a device removed while its runtime is connected signs out, and its runtime stops", async () => {

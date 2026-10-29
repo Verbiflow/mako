@@ -9,7 +9,7 @@ import { Payload, SESSIONS_VERSION, type RuntimeLink, type ServedRuntime } from 
 import type { HostWork } from "../base/event-loop.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { encodeRuntimeEvent, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
-import { gatewayEventLine } from "../transport/index.js"
+import { gatewayEventLine, historyChangedNotice } from "../transport/index.js"
 import { hostWarn } from "../base/host-log.js"
 import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.js"
 import { namedUuid } from "./cloud-moves.js"
@@ -264,8 +264,11 @@ export class SessionReporter {
   #link: RuntimeLink | undefined
   readonly #sent = new Map<string, ReportedSession>()
 
-  /** The reports to send now on `link`, in order; none when nothing changed. */
-  reports(link: RuntimeLink, rows: readonly ReportedSession[]): SessionsReport[] {
+  /**
+   * The reports to send now on `link`, in order; none when nothing changed. A row whose shown fields changed says when
+   * (`changedAt`, by its conversation), so the device that hears it knows how long the change took.
+   */
+  reports(link: RuntimeLink, rows: readonly ReportedSession[], changedAt: (row: ReportedSession) => string | undefined = () => undefined): SessionsReport[] {
     const fresh = link !== this.#link
     if (fresh) {
       this.#link = link
@@ -279,7 +282,12 @@ export class SessionReporter {
     const gone = [...this.#sent.values()].filter((row) => !now.has(row.session)).map(({ session, generation }) => ({ session, generation }))
     if (!fresh && !changed.length && !gone.length) return []
     const batches: SessionsReport[] = []
-    for (let start = 0; start < Math.max(changed.length, 1); start += LISTED_PER_FRAME) batches.push({ listed: changed.slice(start, start + LISTED_PER_FRAME), gone: [] })
+    const said = changed.map((row) => {
+      const sent = this.#sent.get(row.session)
+      const at = sent && sameShown(sent, row) ? undefined : changedAt(row)
+      return at ? { ...row, changedAt: at } : row
+    })
+    for (let start = 0; start < Math.max(said.length, 1); start += LISTED_PER_FRAME) batches.push({ listed: said.slice(start, start + LISTED_PER_FRAME), gone: [] })
     batches[0]!.gone = gone
     if (fresh) batches[0]!.owned = rows.map(({ session, generation }) => ({ session, generation }))
     return batches
@@ -314,6 +322,13 @@ const SOON_MS = 200
  * tool call on and off) reports ten times a second at most, not once a batch.
  */
 const SHOWN_PER_SECOND = 10
+/**
+ * A watched conversation's updates are kept this much, from the last the gateway said it relayed (`watch`'s `after`), to
+ * be sent again on a new link: what went into a link's last moments, or wasn't sent while it was down. Past it, the
+ * watchers are told to read the conversation again instead.
+ */
+const KEPT_BYTES = 512 * 1024
+const KEPT_UPDATES = 1_024
 /** The work a report runs as, on the host's tick and soon after a change alike: what it reads in is counted to it. */
 export const REPORT_WORK = "tell the account this host's Sessions"
 
@@ -336,6 +351,7 @@ export class SessionPublisher {
   #reportedAt = Number.NEGATIVE_INFINITY
   #listed: readonly ReportedSession[] | undefined
   readonly #reportNow: (() => void) | undefined
+  readonly #sent: (() => void) | undefined
   readonly #work: Pick<HostWork, "run">
   readonly #schedule: (run: () => void, afterMs: number) => void
   #soonAsked = false
@@ -347,6 +363,20 @@ export class SessionPublisher {
   #shownAsked = false
   /** When the early reports of the last second went, oldest first, at most `SHOWN_PER_SECOND`. */
   readonly #shownAt: number[] = []
+  /** When what a list shows of each conversation last changed, said with its row (`changedAt`). */
+  readonly #changedAt = new Map<string, number>()
+  /**
+   * This runtime's number for each update it sends of a watched conversation (`live`'s `n`): from the clock at its start,
+   * up by one each, so a host started again numbers above what it sent before.
+   */
+  #n: number
+  /**
+   * By conversation watched on the last link the gateway named it on: its updates since, kept to send again on a new
+   * link from where the gateway says it got to, and the highest number given up past the bound, if any.
+   */
+  readonly #kept = new Map<string, { updates: Array<{ n: number; event: RuntimeEvent; text: string; correlationId?: string }>; bytes: number; given?: number }>()
+  /** The gateway's word on a link not yet served: what it last relayed, to send the rest once the link is. */
+  #after: { link: RuntimeLink; after: Readonly<Record<string, number>> } | undefined
 
   constructor(options: {
     rows: () => readonly ReportedSession[] | undefined
@@ -361,6 +391,11 @@ export class SessionPublisher {
      * reported so within `SOON_MS`. Without it, a change waits for the tick.
      */
     reportNow?: () => void
+    /**
+     * A watched conversation's update went out: the link it went on is asked whether it's alive if it's been silent a
+     * while (`CloudLink.probeIfSilent`), so a stalled link the owner sends into is replaced in seconds.
+     */
+    sent?: () => void
     /** Names the early report as the tick's job is named (`REPORT_WORK`), so what it reads in is counted to it. */
     work?: Pick<HostWork, "run">
     schedule?: (run: () => void, afterMs: number) => void
@@ -369,8 +404,10 @@ export class SessionPublisher {
     this.#shown = options.shown
     this.#now = options.now ?? Date.now
     this.#reportNow = options.reportNow
+    this.#sent = options.sent
     this.#work = options.work ?? { run: (_label, fn) => fn() }
     this.#schedule = options.schedule ?? ((run, afterMs) => setTimeout(run, afterMs).unref?.())
+    this.#n = this.#now()
   }
 
   /** The Sessions the account lists of this host as last worked out, every link's version alike; undefined until then. */
@@ -428,8 +465,12 @@ export class SessionPublisher {
     this.#urgent = false
     this.#reportedAt = now
     this.#reportedLink = current.link
-    const reports = this.#reporter.reports(current.link, rows)
+    const reports = this.#reporter.reports(current.link, rows, (row) => {
+      const at = this.#changedAt.get(row.conversation)
+      return at === undefined ? undefined : new Date(at).toISOString()
+    })
     if (!reports.length) return
+    for (const report of reports) report.reportedAt = new Date(now).toISOString()
     if (reports.every((report) => current.served.sessions(report))) this.#reporter.sent(rows)
     else {
       // Told again in full on the next tick, as a new link is.
@@ -438,9 +479,51 @@ export class SessionPublisher {
     }
   }
 
-  /** The gateway says which of this host's conversations another device watches, on `link`: the whole set. */
-  watch(link: RuntimeLink, conversations: readonly string[]): void {
+  /**
+   * The host's link to the cloud is up and served (enrolled): watched conversations go out on it from now, without
+   * waiting for the next report to learn of it, and what the gateway said it missed is sent.
+   */
+  linked(current: SessionLink): void {
+    this.#current = current
+    this.#resend()
+  }
+
+  /**
+   * The gateway says which of this host's conversations another device watches, on `link`: the whole set, and from link
+   * version 9 the number of the last update it relayed of each (`after`), so a new link sends what came after.
+   */
+  watch(link: RuntimeLink, conversations: readonly string[], after?: Readonly<Record<string, number>>): void {
     this.#watching = { link, conversations: new Set(conversations) }
+    for (const conversation of this.#kept.keys()) if (!this.#watching.conversations.has(conversation)) this.#kept.delete(conversation)
+    if (after) this.#after = { link, after }
+    this.#resend()
+  }
+
+  /** Once the link the gateway's `after` was said on is the one served: what each watched conversation missed, in order. */
+  #resend(): void {
+    const said = this.#after
+    const current = this.#current
+    if (!said || !current || said.link !== current.link || this.#watching?.link !== current.link) return
+    this.#after = undefined
+    for (const [conversation, last] of Object.entries(said.after)) {
+      const kept = this.#kept.get(conversation)
+      if (!kept || !this.#watching.conversations.has(conversation)) continue
+      const missed = kept.updates.filter((update) => update.n > last)
+      kept.updates = missed
+      kept.bytes = missed.reduce((sum, update) => sum + update.text.length, 0)
+      if (!missed.length) continue
+      if (kept.given !== undefined && kept.given > last) {
+        // More went by than was kept: its watchers read the conversation again rather than miss part of it.
+        const notice = historyChangedNotice(missed.at(-1)!.event)
+        const line = notice && gatewayEventLine("event", notice)
+        if (line && line.fit !== "too-large") current.served.live(conversation, Payload.encoded(line.text), { n: missed.at(-1)!.n })
+        kept.updates = []
+        kept.bytes = 0
+        delete kept.given
+        continue
+      }
+      for (const update of missed) current.served.live(conversation, Payload.encoded(update.text), { n: update.n, ...(update.correlationId && { correlationId: update.correlationId }) })
+    }
   }
 
   /**
@@ -453,11 +536,29 @@ export class SessionPublisher {
     if (channel !== "event") return
     if (event.type === "live-batch") this.#dirty = true
     const conversation = event.conversation
-    const current = this.#watched(conversation)
-    if (!conversation || !current) return
+    // Watched on the last link the gateway named it on: numbered and kept, sent now if that link is the one up.
+    if (!conversation || !this.#watching?.conversations.has(conversation)) return
     const line = gatewayEventLine(channel, event)
     if (line.fit === "too-large") return hostWarn("sessions", "a watched conversation's event too large for the gateway wasn't sent", { conversation, type: line.type, bytes: line.bytes })
-    current.served.live(conversation, Payload.encoded(line.text))
+    const n = ++this.#n
+    const correlationId = event.trace
+    this.#keep(conversation, { n, event, text: line.text, ...(correlationId && { correlationId }) })
+    const current = this.#watched(conversation)
+    if (!current) return
+    current.served.live(conversation, Payload.encoded(line.text), { n, ...(correlationId && { correlationId }) })
+    this.#sent?.()
+  }
+
+  #keep(conversation: string, update: { n: number; event: RuntimeEvent; text: string; correlationId?: string }): void {
+    let kept = this.#kept.get(conversation)
+    if (!kept) this.#kept.set(conversation, (kept = { updates: [], bytes: 0 }))
+    kept.updates.push(update)
+    kept.bytes += update.text.length
+    while (kept.updates.length > KEPT_UPDATES || (kept.bytes > KEPT_BYTES && kept.updates.length > 1)) {
+      const given = kept.updates.shift()!
+      kept.bytes -= given.text.length
+      kept.given = given.n
+    }
   }
 
   /**
@@ -471,7 +572,7 @@ export class SessionPublisher {
     if (event.type !== "live-batch") return
     this.#dirty = true
     this.#sawBatch(event.batch.id)
-    if (this.#watched(event.batch.id)) this.event("event", encodeRuntimeEvent(event))
+    if (this.#watching?.conversations.has(event.batch.id)) this.event("event", encodeRuntimeEvent(event))
   }
 
   /** A conversation's batch came: whether it moved what a list shows of it, which then goes at once (`showsChanged`). */
@@ -481,6 +582,7 @@ export class SessionPublisher {
     const key = `${shown.state}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}`
     if (this.#shownOf.get(conversation) === key) return
     this.#shownOf.set(conversation, key)
+    this.#changedAt.set(conversation, this.#now())
     this.showsChanged()
   }
 

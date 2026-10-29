@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { MAX_EVENT_BYTES, type Payload } from "@mako/protocol"
+import { z } from "zod"
+import { MAX_EVENT_BYTES, NUMBERED_LIVE_VERSION, serveRuntime, type Payload } from "@mako/protocol"
 import { rowsForLink, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import { AccountSessions } from "@mako/protocol/account-sessions"
 import { ACTIVITY_REPORT_MS, conversationShown, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
@@ -448,6 +449,87 @@ test("a watched conversation's batch too large for the gateway goes as the notic
   const notice = splitRuntimeEventLine(live[1]!)
   assert.deepEqual(JSON.parse(notice?.payload ?? "{}"), { type: "live-batch", batch: { id: "c-1", revision: 7, epoch: "e-1", updates: [], historyChanged: true } }, "its history changed, at its revision: the watcher reads it again")
   assert.ok(live[0]!.includes("a line"), "one that fits goes whole")
+})
+
+test("a watched conversation's updates go out on a link as soon as it's served; what the gateway didn't relay goes again on the next, from what it says it got, once; past what's kept, its watchers read it again", async () => {
+  type Sent = { revision: number; n?: number; historyChanged?: boolean }
+  const live: Sent[] = []
+  const served = { version: 9, sessions: () => true, live: (_conversation: string, event: Payload, numbered?: { n: number }) => {
+    const parts = splitRuntimeEventLine(event.text)
+    const { batch } = z.object({ batch: z.object({ revision: z.number(), historyChanged: z.boolean().optional() }).loose() }).parse(JSON.parse(parts?.payload ?? "{}"))
+    live.push({ revision: batch.revision, ...(numbered && { n: numbered.n }), ...(batch.historyChanged && { historyChanged: true }) })
+    return true
+  } }
+  const publisher = new SessionPublisher({ rows: () => [row(1)], now: () => NOW, schedule: () => {} })
+  // SAFETY: a batch as a live driver sends one, filled only as far as the publisher reads it.
+  const batch = (revision: number) => encodeRuntimeEvent({ type: "live-batch", batch: { id: "c-1", revision, epoch: "e-1", updates: [] } } as never)
+  const first = { link: await newLink(), served }
+  publisher.linked(first)
+  publisher.watch(first.link, ["c-1"])
+  publisher.event("event", batch(1))
+  publisher.event("event", batch(2))
+  assert.deepEqual(live.map((each) => each.revision), [1, 2], "sent on the link served, with no report first")
+  const [one, two] = live.map((each) => each.n!)
+  assert.ok(one! < two!, "numbered, rising")
+  // The link drops: 2 went into it and was lost; 3 and 4 come while it's down, kept.
+  publisher.report(undefined)
+  publisher.event("event", batch(3))
+  publisher.event("event", batch(4))
+  assert.equal(live.length, 2)
+  // The gateway on the new link says it relayed 1: 2, 3 and 4 go, in order, under their numbers. Said before or after
+  // the link is served, the same.
+  const second = { link: await newLink(), served }
+  publisher.watch(second.link, ["c-1"], { "c-1": one! })
+  assert.equal(live.length, 2, "not before the link is served")
+  publisher.linked(second)
+  assert.deepEqual(live.slice(2).map((each) => [each.revision, each.n]), [[2, two], [3, two! + 1], [4, two! + 2]])
+  // Said again with the same word, nothing goes twice.
+  publisher.watch(second.link, ["c-1"], { "c-1": two! + 2 })
+  assert.equal(live.length, 5)
+  // Down while more went by than is kept: its watchers are told to read it again, at the newest revision.
+  publisher.report(undefined)
+  for (let revision = 5; revision < 5 + 1_100; revision++) publisher.event("event", batch(revision))
+  const third = { link: await newLink(), served }
+  publisher.linked(third)
+  publisher.watch(third.link, ["c-1"], { "c-1": two! + 2 })
+  assert.deepEqual(live.slice(5).map(({ revision, historyChanged }) => [revision, historyChanged]), [[1_104, true]], "one notice, at the newest revision, nothing else")
+  // A conversation no longer watched keeps nothing.
+  publisher.watch(third.link, [])
+  publisher.event("event", batch(2_000))
+  publisher.watch(third.link, ["c-1"], { "c-1": 1 })
+  assert.equal(live.length, 6)
+})
+
+test("a report says when it went, and each row whose list-shown fields changed says when they did; an older link hears neither", async () => {
+  let now = NOW
+  let rows = [row(1)]
+  const sent: SessionsReport[] = []
+  let shown: ConversationShown = { state: "idle" }
+  const publisher = new SessionPublisher({ rows: () => rows, shown: () => shown, now: () => now, reportNow: () => {}, schedule: () => {} })
+  const link = { link: await newLink(), served: { version: 9, sessions: (report: SessionsReport) => (sent.push(report), true), live: () => true } }
+  publisher.report(link)
+  // SAFETY: a host event as a live driver emits one, filled only as far as the publisher reads it.
+  const batch = { type: "live-batch", batch: { id: "c-1", revision: 3, updates: [] } } as never
+  now += 5_000
+  shown = { state: "working" }
+  publisher.own(batch)
+  const changedAt = new Date(now).toISOString()
+  now += 40
+  rows = [row(1, "working")]
+  publisher.report(link)
+  const report = sent.at(-1)!
+  assert.equal(report.reportedAt, new Date(now).toISOString())
+  assert.equal(report.listed[0]?.changedAt, changedAt, "when the batch moved it, not when the report went")
+  const older: SessionsReport[] = []
+  const gateway = createFakeGateway()
+  const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-old", build: "test", versions: { min: 1, max: NUMBERED_LIVE_VERSION - 1 }, handle: async (operation) => ({ v: 1, id: operation.id, ok: true }) })
+  runtime.sessions(report)
+  await new Promise((resolve) => setImmediate(resolve))
+  older.push(...gateway.reports("d-old"))
+  assert.equal(older[0]?.reportedAt, undefined)
+  assert.equal(older[0]?.listed[0]?.changedAt, undefined)
+  runtime.close()
+  await gateway.close()
 })
 
 test("macOS's power reads as pmset says it: the source, the battery, and Low Power Mode in either spelling", () => {

@@ -90,7 +90,9 @@ export type MachineRuntimeOptions = {
 /** What the machine asks of the publisher of its Sessions (`SessionPublisher`). */
 export type SessionPublishing = {
   report(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> } | undefined): void
-  watch(link: RuntimeLink, conversations: readonly string[]): void
+  /** The link is up and served: watched conversations go out on it at once, not from the next report. */
+  linked(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> }): void
+  watch(link: RuntimeLink, conversations: readonly string[], after?: Readonly<Record<string, number>>): void
 }
 
 /** A stream's frames come as often as its acks; they change nothing the agent hears about. */
@@ -543,11 +545,12 @@ export class MachineRuntime {
     }
     // A phone reaches this machine's Threads' apps and signed files through the same link, as it does a Mac's.
     const ports = new PortRelay({ allowed: () => appPorts(this.#options.invoke), signedFiles: this.#options.signedFiles })
-    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, ports, onFrame, watch: (conversations) => this.#options.sessions?.watch(runtimeLink, conversations) }).then(
+    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, ports, onFrame, watch: (conversations, after) => this.#options.sessions?.watch(runtimeLink, conversations, after) }).then(
       (served) => {
         if (closed) return served.close()
         this.#served = served
         this.#servedLink = runtimeLink
+        this.#options.sessions?.linked({ link: runtimeLink, served })
         this.#state.enrolls += 1
         this.#state.lastEnrolledAt = this.#iso()
         hostLog("machine", "enrolled", { runtimeId: link.runtimeId, claims: threads.claims().length, enrolls: this.#state.enrolls })

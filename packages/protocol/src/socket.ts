@@ -178,6 +178,12 @@ export type ClientSessionOverSockets = ClientSession & {
    * network the wake didn't keep can take minutes.
    */
   wake(): void
+  /**
+   * Asks the connection that carries `stream` whether it's alive, as a follower does when a conversation at work goes
+   * silent: a ping that isn't answered within `answerMs` (anything heard counts) ends the connection, so its
+   * subscriptions end and their readers follow again on a new one. Nothing happens without such a connection.
+   */
+  probe(stream: StreamId, answerMs?: number): void
 }
 
 export type ClientSessionOptions = {
@@ -413,6 +419,14 @@ export function clientSessionOverSockets(
         connection.renewal?.stop()
         void connection.socket.then((socket) => socket.close(1000, "done"))
       }
+    },
+    probe(stream, answerMs = 1_500) {
+      const connection = connections.get(endpointKey(endpointOfStream(stream)))
+      if (!connection) return
+      const asked = Date.now()
+      void connection.socket.then((socket) => socket.readyState === OPEN && socket.send(PING), () => undefined)
+      const probe = setTimeout(() => connection.heard < asked && connection.drop(), answerMs)
+      probe.unref?.()
     },
     wake() {
       const asked = Date.now()
