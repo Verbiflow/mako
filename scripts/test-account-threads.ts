@@ -1,3 +1,4 @@
+import type { Waiting } from "@mako/protocol/attention"
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { z } from "zod"
@@ -37,7 +38,7 @@ const summary = (id: string, createdAt: number, session: Partial<LiveSummary["se
 const work = (id: string, status: LifecycleWork["status"]): LifecycleWork => ({ id, token: id, title: "", provider: "codex", cwd: "", status, stoppable: true })
 
 /** A host with conversations c-1.. filed under Sessions uuid(1).. of Thread uuid(100), each owned here unless `executions` says. */
-function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; executions?: Record<string, SessionExecution>; waiting?: Record<string, string>; moved?: Record<string, number>; title?: string; native?: NativeRow[]; activity?: Record<string, ExternalThreadActivity>; archived?: string[]; threads?: Record<string, number> } = {}): ReportSources {
+function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; executions?: Record<string, SessionExecution>; waiting?: Record<string, Waiting>; moved?: Record<string, number>; title?: string; native?: NativeRow[]; activity?: Record<string, ExternalThreadActivity>; archived?: string[]; threads?: Record<string, number> } = {}): ReportSources {
   const index = (id: string) => Number(id.slice(2))
   return {
     summaries: () => summaries,
@@ -72,7 +73,7 @@ test("a host lists the Sessions it owns, at work first, then newest first, each 
     ],
     {
       work: [work("c-2", "waiting"), work("c-3", "running")],
-      waiting: { "c-2": "Approve: npm test" },
+      waiting: { "c-2": { for: "approval", line: "Approve: npm test" } },
       executions: {
         [uuid(4)]: here(3),
         [uuid(6)]: { state: "elsewhere", owner: { kind: "cloud", runtime: RuntimeIdSchema.parse(uuid(901)) }, generation: 5 },
@@ -90,6 +91,7 @@ test("a host lists the Sessions it owns, at work first, then newest first, each 
     ["c-1", "failed", 1],
   ], "the ones at work first, then the newest; a closed conversation is listed (another device's message reopens it), one elsewhere isn't; a Session in transit is, as moving, at its generation")
   assert.equal(rows[0]?.waitingOn, "Approve: npm test")
+  assert.equal(rows[0]?.waitingFor, "approval", "what it waits for is said, never left to be read from the words")
   assert.equal(rows[0]?.threadTitle, "Webhooks")
   assert.equal(rows.find((row) => row.conversation === "c-1")?.title, "Fix the flaky test")
   assert.equal(ownedSessions(host([summary("c-1", NOW)]))[0]?.threadTitle, undefined, "an older build's automatic title isn't shown anywhere")
@@ -165,6 +167,7 @@ test("the sessions a terminal or another app runs are listed beside Mako's own, 
   assert.equal(rows[0]?.capture, undefined, "and is called as itself")
   const waiting = rows[1]
   assert.equal(waiting?.waitingOn, "Approve: rm -rf dist")
+  assert.equal(waiting?.waitingFor, "needs-you", "a terminal's harness says only that it waits for input")
   assert.equal(waiting?.title, "Terminal session 21")
   assert.equal(waiting?.folder, "/Users/ana/api")
   assert.deepEqual(waiting?.capture, { path: nativeRow(21, 0).path }, "its device opens it by the path its catalog reads it at")
@@ -404,13 +407,15 @@ test("a batch that moves what a list shows of its conversation is reported on th
 test("what a conversation's batch is checked against is what its row says", () => {
   const sessions = [summary("c-1", NOW, { title: "Fix the build" }), summary("c-2", NOW), summary("c-3", NOW, { status: "failed" })]
   const working = new Map<string, LifecycleWork["status"]>([["c-1", "waiting"], ["c-2", "running"]])
-  const waitingOn = (id: string) => (id === "c-1" ? "Approve: npm test" : undefined)
-  const listed = ownedSessions(host(sessions, { work: [...working].map(([id, status]) => work(id, status)), waiting: { "c-1": "Approve: npm test" } }))
+  const asked: Waiting = { for: "question", line: "A question: which branch?" }
+  const waitingOn = (id: string) => (id === "c-1" ? asked : undefined)
+  const listed = ownedSessions(host(sessions, { work: [...working].map(([id, status]) => work(id, status)), waiting: { "c-1": asked } }))
   for (const each of sessions) {
     const listedRow = listed.find((candidate) => candidate.conversation === each.session.id)
-    const { state, title, waitingOn: on } = listedRow ?? {}
-    assert.deepEqual(conversationShown({ session: each.session, working: working.get(each.session.id), waitingOn }), { state, ...title !== undefined && { title }, ...on !== undefined && { waitingOn: on } })
+    const { state, title, waitingOn: on, waitingFor } = listedRow ?? {}
+    assert.deepEqual(conversationShown({ session: each.session, working: working.get(each.session.id), waitingOn }), { state, ...title !== undefined && { title }, ...on !== undefined && { waitingOn: on }, ...waitingFor !== undefined && { waitingFor } })
   }
+  assert.equal(listed.find((row) => row.conversation === "c-1")?.waitingFor, "question")
 })
 
 test("a cloud machine's tick and an account with no link report on one publisher: the list is worked out once, not each second as a new link's", async () => {

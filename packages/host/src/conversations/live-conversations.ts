@@ -41,6 +41,7 @@ import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
 import { changedEntryStart, deliverLiveUpdates } from "@mako/sessions/live-content"
 import { bareCommand } from "@mako/sessions/tool-identity"
+import { questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { LiveAccounts } from "./live-accounts.js"
 import { LiveActions } from "./live-actions.js"
@@ -379,18 +380,19 @@ export class LiveConversations {
   }
 
   /**
-   * What a conversation waits on, in a line: its first approval, else its latest open question. Memory keeps whatever
+   * What a conversation waits on, as every surface says it (`requestWaiting`): its first request of the person (a
+   * question, even one asked as an approval, or an approval), else its latest open question. Memory keeps whatever
    * waits, so one only on disk waits on nothing, and isn't read back in to find out.
    */
-  waitingOn(id: string): string | undefined {
+  waitingOn(id: string): Waiting | undefined {
     const resident = this.records.has(id) ? this.records.load(id) : undefined
     if (!resident) return undefined
     const permission = resident.snapshot.permissions[0]
     // A command as its person would type it: Codex asks about `/bin/zsh -lc '…'`, which says nothing more.
-    if (permission) return `Approve: ${bareCommand(permission.title)}`
+    if (permission) return requestWaiting(permission, bareCommand)
     const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
     const asked = question?.native.questions.find((item) => !question.answered?.includes(item.id))
-    return asked ? `A question: ${asked.question}` : undefined
+    return asked ? questionWaiting(asked.question) : undefined
   }
 
   /**

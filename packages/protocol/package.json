@@ -16,6 +16,7 @@
     "./saves": "./dist/saves.js",
     "./account-events": "./dist/account-events.js",
     "./thread-listing": "./dist/thread-listing.js",
+    "./attention": "./dist/attention.js",
     "./account-sessions": "./dist/account-sessions.js",
     "./live-tail": "./dist/live-tail.js",
     "./waiting": "./dist/waiting.js",

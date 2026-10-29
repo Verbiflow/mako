@@ -10,6 +10,7 @@ import { createFakeGateway } from "../dist/fake-gateway.js"
 import { sessionStream, streamConversation } from "../dist/socket.js"
 import { AccountEventSchema } from "../dist/account-events.js"
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
+import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
 import { ArchivedThreadSchema, ListedSessionSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
@@ -70,6 +71,7 @@ import {
   LiveTail,
   LINGER_MS,
   NUMBERED_LIVE_VERSION,
+  WAITING_FOR_VERSION,
   StreamCursor,
   followAgainInMs,
   readStreamNotice,
@@ -93,7 +95,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 9)
+    assert.equal(SUPPORTED_VERSIONS.max, 10)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -1679,6 +1681,12 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.throws(() => ReportedSessionSchema.parse({ ...terminal, capture: { path: "" } }))
     assert.deepEqual(rowsForLink([session, terminal], 5), [session], "a link older than 6 hears neither")
     assert.deepEqual(rowsForLink([session, terminal], 6), [session, terminal])
+    const asking = { ...session, waitingFor: "approval" }
+    assert.deepEqual(ReportedSessionSchema.parse(asking), asking)
+    assert.throws(() => ReportedSessionSchema.parse({ ...session, waitingFor: "a nudge" }), "what a Session waits on is one of three")
+    assert.equal(rowsForLink([asking], WAITING_FOR_VERSION)[0].waitingFor, "approval")
+    assert.equal(rowsForLink([asking], WAITING_FOR_VERSION - 1)[0].waitingFor, undefined, "a gateway before 10 refuses it, so it goes without")
+    assert.equal(rowsForLink([asking], WAITING_FOR_VERSION - 1)[0].waitingOn, "Approve: npm test", "and reads the words it always did")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, state: "thinking" }), "a state is one of five")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, title: "x".repeat(201) }), "a title is a row's, not a message's")
     assert.throws(() => SessionsReportSchema.parse({ listed: Array.from({ length: 201 }, () => session), gone: [] }), "at most 200 rows a report")
@@ -1738,5 +1746,82 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.equal(SessionListingsSchema.parse({ sessions: [], seq: 4 }).archived, undefined, "a gateway from before archiving says none")
     assert.deepEqual(AccountEventSchema.parse({ type: "thread-archived", thread: archived }), { type: "thread-archived", thread: archived })
     assert.deepEqual(AccountEventSchema.parse({ type: "thread-unarchived", thread: cloud.threadId }), { type: "thread-unarchived", thread: cloud.threadId })
+  })
+})
+
+describe("what tells the person a Session needs them, the same on every surface", () => {
+  const at = "2026-10-28T18:00:00.000Z"
+  const row = (state, fields = {}) => ({ state, generation: 1, activityAt: at, ...fields })
+
+  test("five kinds; three of them ask the person, and are withdrawn once answered", () => {
+    assert.deepEqual(AttentionKindSchema.options, ["needs-you", "question", "approval", "failed", "finished"])
+    assert.deepEqual(AttentionKindSchema.options.filter(asks), ["needs-you", "question", "approval"])
+  })
+
+  test("a row's change says one fact, by one rule, under one key", () => {
+    assert.equal(attentionFact(row("working"), row("waiting", { waitingFor: "approval", waitingOn: "Approve: npm test" }))?.kind, "approval")
+    assert.equal(attentionFact(row("working"), row("waiting", { waitingFor: "question", waitingOn: "A question: which branch?" }))?.kind, "question")
+    assert.equal(attentionFact(row("working"), row("waiting", { waitingFor: "needs-you" }))?.kind, "needs-you")
+    assert.equal(attentionFact(row("working"), row("failed"))?.kind, "failed")
+    assert.equal(attentionFact(row("working"), row("idle"))?.kind, "finished")
+    assert.equal(attentionFact(row("waiting", { waitingFor: "approval", waitingOn: "Approve: a" }), row("idle"))?.kind, "finished", "an approval refused that ends the turn")
+    assert.equal(attentionFact(row("waiting", { waitingFor: "approval", waitingOn: "Approve: a" }), row("waiting", { waitingFor: "approval", waitingOn: "Approve: b" }))?.kind, "approval", "a second approval in one turn is a new fact")
+    assert.equal(attentionFact(row("waiting", { waitingFor: "approval", waitingOn: "Approve: a" }), row("waiting", { waitingFor: "approval", waitingOn: "Approve: a", activityAt: "2026-10-28T18:01:00.000Z" })), undefined, "the same ask moving on the clock is no new fact")
+    assert.equal(attentionFact(undefined, row("idle")), undefined, "a Session first heard at rest says nothing")
+    assert.equal(attentionFact(row("idle"), row("idle")), undefined)
+    assert.equal(attentionFact(row("failed"), row("failed")), undefined)
+    assert.equal(attentionFact(row("working"), row("moving")), undefined, "a move isn't the person's to hear")
+    const waiting = row("waiting", { waitingFor: "approval", waitingOn: "Approve: npm test" })
+    const asked = attentionFact(row("working"), waiting)
+    assert.deepEqual(asked, { kind: "approval", key: attentionKey(waiting), generation: 1, waitingOn: "Approve: npm test" })
+    assert.equal(factStands(asked, waiting), true)
+    assert.equal(factStands(asked, { ...waiting, activityAt: "2026-10-28T18:02:00.000Z" }), true, "still waiting on the same thing")
+    assert.equal(factStands(asked, row("working")), false, "answered: the notice goes from every device")
+    assert.equal(factStands(asked, row("waiting", { waitingFor: "approval", waitingOn: "Approve: rm" })), false, "a new ask is its own notice")
+    assert.equal(factStands(asked, { ...waiting, generation: 2 }), false, "another owner's word")
+    assert.equal(factStands(asked, undefined), false, "a Session off the list says nothing")
+    const done = attentionFact(row("working"), row("idle"))
+    assert.equal(factStands(done, row("idle", { activityAt: "2026-10-28T18:03:00.000Z" })), true)
+    assert.equal(factStands(done, row("working")), false, "the person replied: what it said is retired, as on the desktop")
+  })
+
+  test("a push says a notice, or takes notices back; anything else is not ours", () => {
+    const base = "/app/"
+    const notice = { type: "notice", kind: "approval", title: "Webhooks", body: "Approve: npm test", tag: noticeTag("t1"), url: "/app/t/t1", at: 1 }
+    assert.deepEqual(readNotice(JSON.stringify(notice), base), notice)
+    const { type: _type, ...older } = notice
+    assert.deepEqual(readNotice(JSON.stringify(older), base), notice, "a payload from before `type` is a notice")
+    assert.deepEqual(readNotice(JSON.stringify({ type: "withdraw", tags: [noticeTag("t1")], at: 2 }), base), { type: "withdraw", tags: ["thread:t1"], at: 2 })
+    assert.equal(readNotice(JSON.stringify({ ...notice, url: "https://elsewhere.example/" }), base), undefined, "a tap only opens the app")
+    assert.equal(readNotice(JSON.stringify({ ...notice, kind: "nudge" }), base), undefined)
+    assert.equal(readNotice("{", base), undefined)
+    assert.equal(readNotice(undefined, base), undefined)
+  })
+
+  test("an owner from before waitingFor is read from its words, once, here", () => {
+    assert.equal(rowWaitingFor({ waitingOn: "Approve: npm test" }), "approval")
+    assert.equal(rowWaitingFor({ waitingOn: "A question: which branch?" }), "question")
+    assert.equal(rowWaitingFor({ waitingOn: "Input needed" }), "needs-you")
+    assert.equal(rowWaitingFor({ waitingOn: "Approve: x", waitingFor: "question" }), "question", "the owner's word wins")
+  })
+
+  test("what a request says: a question is a question, even inside an approval; anything else is an approval", () => {
+    assert.deepEqual(requestWaiting({ title: "Bash", questions: [{ question: "Which branch?" }] }), { for: "question", line: "A question: Which branch?" })
+    assert.deepEqual(requestWaiting({ title: "/bin/zsh -lc 'npm test'" }, () => "npm test"), { for: "approval", line: "Approve: npm test" })
+    assert.deepEqual(questionWaiting("Ship it?"), { for: "question", line: "A question: Ship it?" })
+    assert.deepEqual(needsYouWaiting(undefined), { for: "needs-you", line: "Waiting for you" })
+    assert.equal(requestWaiting({ title: "x".repeat(400) }).line.length, 200, "a line is a line")
+  })
+
+  test("one wording: the headline, the line, a summary, and a body for a platform with no subtitle", () => {
+    assert.equal(attentionHeadline("approval", "Codex"), "Codex needs your approval")
+    assert.equal(attentionHeadline("finished"), "Finished")
+    assert.equal(attentionLine("failed"), ATTENTION_WORDS.failed.line)
+    assert.equal(attentionLine("finished", "  Done.  "), "Done.")
+    assert.deepEqual(attentionSummary([{ kind: "finished", title: "A" }, { kind: "finished", title: "B" }, { kind: "finished", title: "C" }]), { title: "3 Threads finished", body: "A, B, C" })
+    assert.deepEqual(attentionSummary(["A", "B", "C", "D", "E"].map((title, index) => ({ kind: index ? "finished" : "question", title }))), { title: "5 Threads need you", body: "A, B, C, D and 1 more" })
+    assert.equal(ATTENTION_SUMMARY_FROM, 3)
+    assert.equal(foldedBody({ subtitle: "Codex finished", body: "Done." }), "Codex finished\nDone.")
+    assert.equal(foldedBody({ body: "Done." }), "Done.")
   })
 })

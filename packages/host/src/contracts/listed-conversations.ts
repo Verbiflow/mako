@@ -1,5 +1,6 @@
 import { sessionStream } from "@mako/protocol"
 import type { ListedSession, ListedState } from "@mako/protocol/thread-listing"
+import { rowWaitingFor } from "@mako/protocol/attention"
 import type { LiveSummary } from "./live-conversations.js"
 
 /**
@@ -42,6 +43,7 @@ export function listedSummary(row: ListedSession, where: string, quietSince: str
   if (row.title) summary.session.title = row.title
   if (row.threadTitle) summary.threadTitle = row.threadTitle
   if (row.waitingOn && !quiet) summary.waitingOn = row.waitingOn
+  if (row.state === "waiting" && !quiet) summary.waitingFor = rowWaitingFor(row)
   if (quiet) summary.quietSince = Date.parse(quietSince)
   return summary
 }

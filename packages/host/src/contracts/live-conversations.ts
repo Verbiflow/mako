@@ -1,5 +1,6 @@
 import type { PromptDelivery } from "./prompt-delivery.js"
 import { TRACE_PREFIX } from "@mako/protocol/live-tail"
+import type { AttentionKind, WaitingFor } from "@mako/protocol/attention"
 import type {
   NativeAgentObservation,
   NativeAgentRoster,
@@ -368,6 +369,14 @@ export interface LiveSummary {
    * person there: the row asks for them as a local one would.
    */
   waitingOn?: string
+  /** What it waits on the person for, with `waitingOn` (`attention.ts`). */
+  waitingFor?: WaitingFor
+  /**
+   * What the change that listed it again says, when it says something the person is told of (`attentionFact`, the
+   * rule the account's notices use, under the same key): another device's Session finished, failed or started waiting.
+   * Only on the listing that carries the change; never on one a window reads at its start.
+   */
+  attention?: { kind: AttentionKind; key: string }
   /**
    * Listed from a device the account hasn't heard from since then (`QuietDevice`): nothing on it is shown at work or
    * waiting, and a window says when it was last seen.

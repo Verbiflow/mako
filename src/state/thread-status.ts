@@ -285,7 +285,7 @@ export function applyThreadRun(run: ThreadRunState) {
     const subject = threadSubject(run.path, run.harness)
     if (run.status === "running") retireSubject(subject.id)
     else if (run.status === "done" && !queue)
-      noteOutcome({ kind: "ready", subject, marker: `run:${Date.now()}` })
+      noteOutcome({ kind: "finished", subject, marker: `run:${Date.now()}` })
     else if (run.status === "failed")
       noteOutcome({ kind: "failed", subject, marker: `run:${Date.now()}`, detail: run.error })
   }

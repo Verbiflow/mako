@@ -3,18 +3,47 @@
 How Mako reaches you when an agent needs you, and the plan for reaching you
 somewhere other than the desk.
 
-## What ships today
+## One model on every surface
 
-Three outcomes exist. Every provider's events reduce to them:
+The desktop's banners, in-app cards and marks, the web app's notifications
+(a phone's Home Screen app or a browser tab) and the account's Web Push are
+one model, declared once in `@mako/protocol/attention` and re-exported for
+the renderer by `@mako/host/contracts/notifications`:
 
-| Kind     | Meaning                                       | Source transitions                                                        |
-| -------- | --------------------------------------------- | ------------------------------------------------------------------------- |
-| `ready`  | A turn finished; there is an answer to read.  | Live `running → ready` with no queue and no cancel; native run `done`; a built-in tab that stops streaming. |
-| `ask`    | The agent is blocked on you.                  | A new permission request or question (keyed by its id).                    |
-| `failed` | The run stopped with an error.                | Live `→ failed`; native run `failed`.                                      |
+| Kind        | Meaning                                              | Words (`ATTENTION_WORDS`)                          |
+| ----------- | ---------------------------------------------------- | -------------------------------------------------- |
+| `needs-you` | It waits on you for something else (a terminal's harness waits for input, a sign-in). | "Codex needs you" · "Waiting for you" |
+| `question`  | The agent asked something, even inside an approval. | "Codex has a question" · "A question: …"         |
+| `approval`  | A permission or a plan waits for a yes or no.        | "Codex needs your approval" · "Approve: …"        |
+| `failed`    | The turn ended in an error Mako isn't continuing.    | "Codex failed" · "Its turn failed"                 |
+| `finished`  | The turn ended with an answer.                       | "Codex finished" · "Finished its turn"             |
 
-A question is an `ask` with `questions`, not a fourth kind. Starting, tool
-calls, and attach/detach never notify: the working mark is enough.
+- **One source.** A Session's owner says where it stands in its row of the
+  account's list (`ReportedSession`): `state`, `waitingOn` and, from link
+  version 10, `waitingFor`, the kind of ask, which the host decides once
+  (`requestWaiting`: a permission carrying questions is a question).
+  Nothing reads the kind back out of the words.
+- **One rule and key.** `attentionFact(previous, next)` says what a row's
+  change is, under `attentionKey`; `factStands` says whether it is still
+  true. The account's Web Push and a Mac's host both run it over the same
+  rows: a Mac announces another device's Session (`LiveSummary.attention`)
+  under the key the phone's notice has.
+- **Withdrawn everywhere.** An ask answered on any device, a Session back at
+  work, or a Thread opened on another device takes its notice back: the
+  desktop retires the item and its banner, and the account sends each
+  browser that shows it a withdrawal under the same tag and topic.
+- **Where the person is.** While a Mac is in use or the web app is in front,
+  that device tells them. A finished or failed turn then isn't said again on
+  the phone; an unanswered ask is, once they've left.
+- **Same words.** Banner subtitles, toasts, push bodies, burst summaries
+  ("3 Threads need you", from `ATTENTION_SUMMARY_FROM`) and list lines come
+  from the one table.
+
+The renderer still notices its own conversations' transitions from their
+live batches (below); its kinds, keys for asks and words are the shared ones.
+
+Starting, tool calls, and attach/detach never notify: the working mark is
+enough.
 
 ### Where it lives
 

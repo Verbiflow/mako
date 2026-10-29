@@ -1,4 +1,5 @@
 import "./lib/scratch-git.mjs"
+import { attentionKey } from "@mako/protocol/attention"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
@@ -39,7 +40,7 @@ import { githubRepositoryUrl } from "@mako/host/contracts/cloud-threads"
 import { decodeRuntimeEvent, decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ThreadAppView } from "@mako/host/contracts/thread-app"
-import type { LiveBatch } from "@mako/host/contracts/live-conversations"
+import type { LiveBatch, LiveSummary } from "@mako/host/contracts/live-conversations"
 import { TURN_CHANGES_VERSION } from "@mako/host/contracts/turn-changes"
 import { followHostLog } from "@mako/host/base/host-log"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
@@ -1094,12 +1095,17 @@ test("every Session the account lists is listed here, unopened and waking nothin
   assert.equal(shown(studioConversation)?.sessionId, onStudio("idle").session, "filed under its own Session")
   const told = (type: string) => events.filter((event) => event.type === type).map((event) => JSON.parse(event.payload))
   assert.equal(told("live-listed").length, 1, "windows list them as they list one at boot")
+  assert.equal(told("live-listed")[0].summaries.some((summary: LiveSummary) => summary.attention), false, "the first listing is where things stand: nothing is announced")
+  assert.equal(shown(studioConversation)?.waitingFor, "approval", "what it waits for, read once by the account's rule")
   assert.deepEqual([machine.calls.length, studioCalls.length], [0, 0], "listing them called nothing anywhere")
 
   say({ seq: 5, event: { type: "sessions-listed", sessions: [inCloud("idle")] } })
   assert.equal(shown(cloudConversation)?.session.status, "running", "a change from before the list read changes nothing")
   say({ seq: 6, event: { type: "sessions-listed", sessions: [onStudio("idle", { title: "Retry the webhooks with backoff" })] } })
   assert.deepEqual([shown(studioConversation)?.session.status, shown(studioConversation)?.waitingOn, shown(studioConversation)?.session.title], ["ready", undefined, "Retry the webhooks with backoff"])
+  const finished = told("live-listed").at(-1).summaries.find((summary: LiveSummary) => summary.session.id === studioConversation)
+  assert.deepEqual(finished?.attention, { kind: "finished", key: attentionKey(onStudio("idle")) }, "the Studio's turn ended: what the account would tell the phone, under its key")
+  assert.equal(shown(studioConversation)?.attention, undefined, "said on that listing alone, so a window reloaded since never hears it again")
   const before = told("live-listed").length
   say({ seq: 7, event: { type: "sessions-listed", sessions: [onStudio("idle", { title: "Retry the webhooks with backoff", listedAt: "2026-10-24T21:00:00.000Z" })] } })
   assert.equal(told("live-listed").length, before, "a change a row wouldn't show tells nobody")

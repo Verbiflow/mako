@@ -1,3 +1,4 @@
+import { attentionLine } from "@mako/host/contracts/notifications"
 import { formatRelative } from "@/lib/format"
 import { CLOUD_WHERE, type WebThread } from "./threads"
 
@@ -15,7 +16,7 @@ export interface RowDetail {
  */
 export function rowDetail(thread: WebThread, named: boolean): RowDetail {
   if (thread.archived) return { text: `Archived ${formatRelative(Date.parse(thread.archived.archivedAt))}`, tone: "faint" }
-  if (thread.standing === "waiting") return { text: thread.waitingOn ?? "Waiting for you", tone: "caution" }
+  if (thread.standing === "waiting") return { text: attentionLine("needs-you", thread.waitingOn), tone: "caution" }
   if (thread.standing === "failed") return { text: "Failed", tone: "negative" }
   if (thread.standing === "working") return { text: "Working", tone: "working" }
   if (thread.standing === "moving") return { text: "Moving", tone: "working" }

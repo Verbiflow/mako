@@ -1,7 +1,8 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
-import { NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION } from "./version.js"
+import { NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
+import { WaitingForSchema } from "./attention.js"
 
 /**
  * An account's Threads as every device lists them: one row per Session, keyed by Mako's own Session and Thread IDs,
@@ -42,6 +43,11 @@ export const ReportedSessionSchema = z
     state: ListedStateSchema,
     /** What a `waiting` Session waits on, in a line: "Approve: npm test", "A question: which branch?". */
     waitingOn: z.string().max(200).optional(),
+    /**
+     * What a `waiting` Session waits on the person for (`attention.ts`): an approval, a question, or anything else. Said
+     * by its owner, so no device reads it from `waitingOn`'s words (link version 10 on).
+     */
+    waitingFor: WaitingForSchema.optional(),
     /** The folder it works in, where it runs: a Thread moved from a device keeps the device's own path. */
     folder: z.string().max(1024).optional(),
     createdAt: z.iso.datetime(),
@@ -156,17 +162,20 @@ export const SessionListingsSchema = z.object({
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
 /**
- * The rows a link of `version` takes: from link version 6, every one; before, a gateway knows neither field, so a
- * Session Mako hasn't opened isn't listed there and the rest go without their native IDs.
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 10, every one
+ * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
+ * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= NUMBERED_LIVE_VERSION) return [...rows]
+  if (version >= WAITING_FOR_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
-    // Before version 9 a gateway knows no `changedAt`; before 6, no native IDs either.
-    delete older.changedAt
+    // Before version 10 a gateway knows no `waitingFor` (it reads `waitingOn`'s words); before 9, no `changedAt`;
+    // before 6, no native IDs either.
+    delete older.waitingFor
+    if (version < NUMBERED_LIVE_VERSION) delete older.changedAt
     if (version < NATIVE_SESSIONS_VERSION) delete older.nativeId
     kept.push(older)
   }
@@ -204,6 +213,7 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.title === right.title &&
     left.state === right.state &&
     left.waitingOn === right.waitingOn &&
+    left.waitingFor === right.waitingFor &&
     left.folder === right.folder &&
     left.createdAt === right.createdAt &&
     left.activityAt === right.activityAt &&
