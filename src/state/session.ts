@@ -91,7 +91,7 @@ import { machineNoticed } from "@/state/cloud-machines"
 import { cloudArchiveStepped } from "@/state/cloud-archive"
 import { noteOutcome, openSubjectId, retireSubject, subjectId } from "@/state/notifications"
 import { toast } from "sonner"
-import { recoverThreadReader } from "@/state/thread-viewing"
+import { recoverThreadReader, rereadFailedOpening } from "@/state/thread-viewing"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mcpStore } from "@/state/mcp"
 
@@ -794,6 +794,8 @@ export const actions = {
       void providers.loadAll()
       void providers.loadRuntimeUpdates()
       void threads.load()
+      // A conversation whose read the outage broke is read again, not left on its error.
+      rereadFailedOpening()
       void loadGroups()
       void loadPlanBuilds().catch(() => {})
       if (!boot.archives) void threadLifecycle.load()

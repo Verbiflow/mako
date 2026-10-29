@@ -84,7 +84,9 @@ export function ThreadViewer() {
     return () => window.removeEventListener("keydown", onKey)
   }, [globalOpening, scope, thread])
 
-  if (opening && (!shown || opening.kind === "failed"))
+  // A failed read takes the column only when there is nothing of the conversation to show.
+  const unread = opening?.kind === "failed" && thread?.ref.path !== opening.ref.path
+  if (opening && (!shown || unread))
     return (
       <ThreadLoadingShell
         opening={opening.ref}
@@ -101,6 +103,7 @@ export function ThreadViewer() {
       className="flex min-h-0 flex-1 flex-col bg-surface"
     >
       <NativeRequestNotice path={shown.ref.path} />
+      {opening?.kind === "failed" && !held ? <RefreshFailedLine opening={opening.ref} error={opening.error} /> : null}
       <Conversation key={shown.ref.path} thread={shown} held={held} />
     </div>
   )
@@ -110,6 +113,26 @@ export function ThreadViewer() {
 function useScopedHistory() {
   const scope = useConversationScope()
   return scope?.kind === "history" ? scope : null
+}
+
+/**
+ * Saved messages whose fresh read failed stay readable and sendable to; one
+ * quiet line says they weren't refreshed, the reason under the pointer.
+ */
+function RefreshFailedLine({ opening, error }: { opening: ThreadRef; error: string }) {
+  return (
+    <p role="status" data-refresh-failed className="flex shrink-0 items-center gap-1 px-4 pt-2 text-label text-faint">
+      <span title={error}>Couldn't refresh</span>
+      <span aria-hidden>·</span>
+      <button
+        type="button"
+        onClick={() => void threads.view(opening)}
+        className="pressable rounded-sm text-muted-foreground transition-colors duration-100 hover:text-foreground"
+      >
+        Retry
+      </button>
+    </p>
+  )
 }
 
 function ThreadLoadingShell({
