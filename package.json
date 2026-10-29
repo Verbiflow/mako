@@ -74,6 +74,8 @@
     "bench:footprint": "tsx scripts/bench-footprint.ts",
     "bench:watcher": "tsx scripts/bench-watcher.ts",
     "bench:session-report": "tsx scripts/bench-session-report.ts",
+    "test:scripted-model": "tsx scripts/test-scripted-model-pace.ts",
+    "bench:sync-latency": "npm run -s build:electron 1>&2 && tsx --tsconfig tsconfig.scripts.json scripts/bench-sync-latency.ts",
     "bench:session-uploads": "tsx scripts/bench-session-uploads.ts",
     "bench:streams": "tsx --tsconfig tsconfig.app.json scripts/bench-native-streams.ts",
     "bench:backfill": "tsx scripts/bench-backfill.ts",
