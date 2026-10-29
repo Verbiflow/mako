@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { stripVTControlCharacters } from "node:util"
 import type { ApprovalSubmission, ApprovalEndSource } from "../../contracts/approval-response.js"
 import { claudeProposedPlan } from "@mako/sessions/claude-projection"
 import { planFeedbackMessage } from "@mako/sessions/harnesses"
@@ -9,6 +10,7 @@ import type { ClaudePermissionObserver } from "./permission-observer.js"
 import type { LiveDriverEvent } from "../../contracts/live-conversations.js"
 import type { LivePermissionRequest, LivePermissionResponse } from "../../contracts/providers-acp.js"
 import { heavy } from "../../base/heavy-packages.js"
+import { hostLog } from "../../base/host-log.js"
 import { adapters } from "../heavy.js"
 
 const QuestionsSchema = z.object({
@@ -43,6 +45,30 @@ const ToolPathSchema = z.object({
   file_path: z.string().optional(),
 })
 
+/**
+ * Why Claude Code asks, as its CLI says on the wire (`decision_reason_type`,
+ * `decision_reason`). The Agent SDK hands both to canUseTool beside the
+ * options it declares; one it stops passing reads as absent, and the call
+ * then asks the person as before.
+ */
+const AskReasonSchema = z.object({
+  decisionReasonType: z.string().optional(),
+  decisionReason: z.string().optional(),
+}).loose()
+
+/**
+ * A call Claude Code asks about because one of its safety checks tripped,
+ * and no permission rule of the person's: an `rm` whose target a variable or
+ * a command's output could turn into `/` or the home folder, a critical
+ * system directory. For a compound command Claude may name the wrapper
+ * (`subcommandResults`), whose reason is then the nested check's own text.
+ */
+function safetyCheck(options: { decisionReasonType?: string; decisionReason?: string; matchedAskRule?: unknown }): string | undefined {
+  if (options.matchedAskRule || !options.decisionReason) return undefined
+  if (options.decisionReasonType !== "safetyCheck" && options.decisionReasonType !== "subcommandResults") return undefined
+  return stripVTControlCharacters(options.decisionReason)
+}
+
 export class ClaudePermissions {
   private readonly pending = new Map<
     string,
@@ -58,11 +84,14 @@ export class ClaudePermissions {
    * access the session had before planning.
    */
   planReturn: PermissionMode | undefined
-  constructor(id: string, emit: (event: LiveDriverEvent) => void, approvals?: ClaudeApprovalObserver, toolApprovals?: ClaudePermissionObserver) {
+  /** The session's permission mode now: Full access is `bypassPermissions`. */
+  private readonly mode: () => PermissionMode | undefined
+  constructor(id: string, emit: (event: LiveDriverEvent) => void, approvals?: ClaudeApprovalObserver, toolApprovals?: ClaudePermissionObserver, mode: () => PermissionMode | undefined = () => undefined) {
     this.approvals = approvals
     this.toolApprovals = toolApprovals
     this.id = id
     this.emit = emit
+    this.mode = mode
   }
 
   get open(): number {
@@ -144,6 +173,16 @@ export class ClaudePermissions {
         answers[question.question] = values.join(", ")
       }
       return { behavior: "allow", updatedInput: { ...input, answers } }
+    }
+    // Full access asks nothing: the one ask Claude Code still sends there, besides the
+    // person's own ask rules and the agent's questions, is a safety check it reserves
+    // for a person and never lets a rule allow. Its own desktop host declines those in
+    // bypass without showing a card; so does Mako. The agent hears Claude's reason, which
+    // names the rewrite that passes (a literal path, a `${D:?}` guard), and goes on.
+    const check = name === "ExitPlanMode" || this.mode() !== "bypassPermissions" ? undefined : safetyCheck({ ...AskReasonSchema.parse(options), matchedAskRule: options.matchedAskRule })
+    if (check !== undefined) {
+      hostLog("claude-sdk", "full access declined a safety check", { conversation: this.id, tool: name, agent: options.agentID, reason: check })
+      return { behavior: "deny", message: `${check}. Claude Code keeps this check for a person, and this session runs in Full access, which asks nobody: rewrite the command so it passes the check, as the check suggests, and run it again.` }
     }
     const detail = ToolPathSchema.parse(input)
     const title =

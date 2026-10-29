@@ -675,7 +675,9 @@ export function createClaudeSdkDriver(
         options.conversationId,
         options.emit,
         approvals,
-        toolApprovals
+        toolApprovals,
+        // The mode Claude reports, and the one the session launched in until it has.
+        () => ClaudeModeSchema.safeParse(sessions.get(options.conversationId)?.state.currentMode ?? options.modeId).data
       )
       if (options.modeId === "plan") permissions.planReturn = ClaudeModeSchema.safeParse(options.launchModeId).data
       let exited = Promise.resolve()

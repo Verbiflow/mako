@@ -12,6 +12,7 @@ import type {
   SDKUserMessage,
   SDKAssistantMessage,
   SDKAssistantMessageError,
+  PermissionMode,
   PermissionUpdate,
   Options,
 } from "@anthropic-ai/claude-agent-sdk"
@@ -404,6 +405,36 @@ assert.ok(offered?.type === "live-permission")
 assert.deepEqual(offered.request.options.map((option) => option.optionId), ["allow_once", "reject_once"], "no saved rule when Claude says it would grant more than the ask")
 permissions.respond(options.requestId, { kind: "choice", optionId: "reject_once" })
 await suppressed
+
+// Full access asks nobody about Claude Code's own safety checks; every other ask, and every other mode, is unchanged.
+let mode: PermissionMode = "bypassPermissions"
+const full = new ClaudePermissions("full-fixture", (event) => permissionEvents.push(event), undefined, undefined, () => mode)
+const reason = "Dangerous rm operation on possibly-empty variable path: $D/$t in `rm -rf $D/$t` (rewrite it as \"${D:?}\"/\"${t:?}\" or use a literal path)"
+/** The options as the Agent SDK hands them to canUseTool, with the CLI's `decision_reason_type` it passes beside the ones it declares. */
+const askedFor = (why: { decisionReason?: string; decisionReasonType: string; matchedAskRule?: { source: string; toolName: string } }) =>
+  // SAFETY: the Agent SDK's runtime passes `decisionReasonType` though its declared options leave it out; the rest is declared.
+  ({ ...options, ...why }) as Parameters<typeof full.tool>[2]
+const before = permissionEvents.length
+for (const decisionReasonType of ["safetyCheck", "subcommandResults"]) {
+  const declined = await full.tool("Bash", { command: "rm -rf $D/$t" }, askedFor({ decisionReason: `\u001b[1m${reason}\u001b[22m`, decisionReasonType }))
+  assert.ok(declined?.behavior === "deny")
+  assert.equal(declined.message.startsWith(`${reason}. `), true, "the agent hears Claude's own reason, which names the rewrite, without its escapes")
+  assert.equal(declined.decisionClassification, undefined, "nobody clicked")
+}
+assert.equal(permissionEvents.length, before, "no card opened")
+const asksRule = full.tool("Bash", { command: "git push" }, askedFor({ decisionReasonType: "rule" }))
+assert.equal(permissionEvents.at(-1)?.type, "live-permission", "the person's own ask rule still asks in Full access")
+full.respond(options.requestId, { kind: "choice", optionId: "allow_once" })
+assert.equal((await asksRule)?.behavior, "allow")
+const ruleForced = full.tool("Bash", { command: "rm -rf $D/x" }, askedFor({ decisionReason: reason, decisionReasonType: "safetyCheck", matchedAskRule: { source: "userSettings", toolName: "Bash" } }))
+assert.equal(permissionEvents.at(-1)?.type, "live-permission", "a check the person's ask rule also covers asks them")
+full.respond(options.requestId, { kind: "choice", optionId: "reject_once" })
+await ruleForced
+mode = "default"
+const lesser = full.tool("Bash", { command: "rm -rf $D/x" }, askedFor({ decisionReason: reason, decisionReasonType: "safetyCheck" }))
+assert.equal(permissionEvents.at(-1)?.type, "live-permission", "a lesser mode asks the person, as before")
+full.respond(options.requestId, { kind: "choice", optionId: "reject_once" })
+await lesser
 const queue = new ClaudeInput()
 queue.close()
 assert.throws(() => queue.send(steered.value), /closed/)
