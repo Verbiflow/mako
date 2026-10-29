@@ -1,7 +1,6 @@
 import type { Gateway } from "./gateway"
 
-/** How long a page in front counts as the person being here, after it last said so. */
-export const ATTENTION_MS = 120_000
+/** Said again this often while it lasts; the account counts a page attended for two minutes after it last said so. */
 const ATTENTION_EVERY_MS = 60_000
 
 /**
@@ -26,7 +25,7 @@ export function reportAttention(gateway: Gateway): () => void {
       if (attending) say(false)
     }
   }
-  const events = ["visibilitychange", "focus", "blur"] as const
+  const events = ["focus", "blur"] as const
   for (const event of events) window.addEventListener(event, look)
   document.addEventListener("visibilitychange", look)
   look()

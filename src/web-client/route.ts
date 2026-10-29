@@ -16,7 +16,7 @@ function depthNow(): number {
   return DepthSchema.safeParse("history" in globalThis ? history.state : undefined).data?.depth ?? 0
 }
 
-/** The route a path names under `base` (`/app/`); anything else is the list. */
+/** The route a path names under `base` (`/` at the root of the app's own host); anything else is the list. */
 export function parseRoute(pathname: string, search: string, base: string): WebRoute {
   const rest = pathname.startsWith(base) ? pathname.slice(base.length) : ""
   const [first, second] = rest.split("/").filter(Boolean).map(decodeURIComponent)

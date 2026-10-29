@@ -31,7 +31,11 @@ async function appStage(client: WebClient, owner: Owner, folder: string | undefi
   if (!folder) return { kind: "none", reason: "This Session has no folder to run an app in." }
   try {
     const next = stageOf(await ownerCall<ThreadAppView>(client.gateway, client.deviceId, owner, "mako:thread-app", [folder]))
-    return next.kind === "open" ? { ...next, url: await previewAddress(client.gateway, owner, next.port) } : next
+    if (next.kind !== "open") return next
+    const url = await previewAddress(client.gateway, owner, next.port)
+    // An agent's page runs only on a user-content origin of its own: on the app's, its scripts would act as the person.
+    if (new URL(url).origin === location.origin) return { kind: "failed", reason: "The gateway offered this app on Mako's own address, so it isn't opened here." }
+    return { ...next, url }
   } catch (error) {
     return { kind: "failed", reason: error instanceof Error ? error.message : String(error) }
   }
@@ -88,7 +92,17 @@ export function PreviewSheet({ open, onDismiss, owner, folder, title }: { open: 
       </div>
       <div className="relative min-h-0 flex-1 overflow-hidden rounded-t-xl bg-surface ring-1 ring-hairline">
         {stage.kind === "open" ? (
-          <iframe ref={frame} key={stage.url} src={stage.url} title={`${title}: its app`} className="size-full border-0 bg-white" allow="clipboard-write; fullscreen" />
+          // Its own origin keeps its storage and scripts; it never navigates the app's window, nor learns its address.
+          <iframe
+            ref={frame}
+            key={stage.url}
+            src={stage.url}
+            title={`${title}: its app`}
+            className="size-full border-0 bg-white"
+            allow="clipboard-write; fullscreen"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads"
+            referrerPolicy="no-referrer"
+          />
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
             {stage.kind === "asking" || stage.kind === "starting" ? (

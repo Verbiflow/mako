@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon } from "lucide-react"
 import { modelByIdentity } from "@mako/sessions/settings"
+import { errorMessage } from "@mako/host/contracts/error-message"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { Spinner } from "@/components/ui/spinner"
 import { copyAge, formatRelative } from "@/lib/format"
@@ -85,10 +86,13 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
       let macs: Catalog | undefined
       let cloudHarnessList: string[] | undefined
       const tell = () => current && cloudHarnessList && setCatalog(cloudCatalog(cloudHarnessList, macs))
-      void cloudHarnesses(client.gateway).then((found) => {
-        cloudHarnessList = found.length ? found : [...WEB_HARNESSES]
-        tell()
-      })
+      void cloudHarnesses(client.gateway).then(
+        (found) => {
+          cloudHarnessList = found.length ? found : [...WEB_HARNESSES]
+          tell()
+        },
+        (error) => current && setFailure(errorMessage({ error }))
+      )
       if (mac)
         void macCatalog(client.gateway, client.deviceId, mac.deviceId, undefined, (found) => {
           macs = found

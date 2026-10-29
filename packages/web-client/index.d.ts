@@ -23,7 +23,7 @@ export interface WebConnection {
 export interface WebClientOptions {
   /** The gateway's origin: the page's own. */
   origin: string
-  /** The path the app is served under, ending in `/`: `/app/`. */
+  /** The path the app is served under, ending in `/`: `/` for an app at the root of its own host. */
   base: string
   /** A connection token for this browser's sign-in; rejects with `SignedOutError` once it ended. */
   connect(): Promise<WebConnection>

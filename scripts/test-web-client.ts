@@ -117,11 +117,14 @@ test("archived cloud Threads fold apart, as the account keeps them", () => {
 
 test("a route survives its address: Back, a reload and a notification land where they should", () => {
   const routes: WebRoute[] = [{ kind: "list" }, { kind: "thread", thread: uuid(1) }, { kind: "thread", thread: uuid(1), session: uuid(2) }, { kind: "new" }, { kind: "settings" }]
-  for (const route of routes) {
-    const href = new URL(routeHref(route, "/app/"), "https://example.test")
-    assert.deepEqual(parseRoute(href.pathname, href.search, "/app/"), route)
-  }
+  // At the root of the app's own host, and under a path of another's.
+  for (const base of ["/", "/app/"])
+    for (const route of routes) {
+      const href = new URL(routeHref(route, base), "https://example.test")
+      assert.deepEqual(parseRoute(href.pathname, href.search, base), route, `${base} ${href.pathname}`)
+    }
   assert.deepEqual(parseRoute("/elsewhere", "", "/app/"), { kind: "list" })
+  assert.deepEqual(parseRoute("/elsewhere", "", "/"), { kind: "list" })
 })
 
 test("a repository typed in any of Git's shapes is the cloud's", () => {

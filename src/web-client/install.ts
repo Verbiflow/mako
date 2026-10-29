@@ -35,12 +35,15 @@ export function holdInstallPrompt(): void {
   })
 }
 
-/** Opened from the Home Screen (or installed elsewhere): nothing to offer. */
+/** Opened from the Home Screen (Safari's own `navigator.standalone`) or installed elsewhere: nothing to offer. */
 export function installed(): boolean {
   return matchMedia("(display-mode: standalone)").matches || ("standalone" in navigator && navigator.standalone === true)
 }
 
-/** An iPhone or iPad, where no browser offers to install and the Share menu's "Add to Home Screen" is the way. */
+/**
+ * An iPhone or iPad, where no browser offers to install and the Share menu's "Add to Home Screen" is the way, and whose
+ * Safari gives Web Push only to an app on the Home Screen. An iPad asks for the desktop site, as a Mac with touch.
+ */
 export function onIos(): boolean {
   return /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.userAgent.includes("Macintosh") && navigator.maxTouchPoints > 1)
 }
