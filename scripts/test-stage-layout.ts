@@ -1646,7 +1646,7 @@ console.log(
     "a turn that ended while the renderer was disconnected still marks its row"
   )
   const { items } = notificationsStore.get()
-  const replay = items.find((item) => item.subject.target.kind === "thread" && item.subject.target.path === ref.path && item.kind === "ready")
+  const replay = items.find((item) => item.subject.target.kind === "thread" && item.subject.target.path === ref.path && item.kind === "finished")
   assert.ok(replay, "the reconnect replay reaches the badge")
 
   // Putting the thread away is a dismissal: the row's mark stands down and

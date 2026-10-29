@@ -212,7 +212,7 @@ function noteTabTurn(id: string, before: SessionMeta | undefined, cache: TabCach
   }
   if (!tabWorking(before) || tabWorking(after)) return
   noteOutcome({
-    kind: "ready",
+    kind: "finished",
     subject: tabSubject(id, cache),
     marker: `turn:${after.messageCount}:${after.leafId ?? ""}`,
     detail: lastReplyOf(cache.messages),

@@ -17,9 +17,11 @@ export const PROTOCOL_VERSION = 1
  * says it's going away on purpose (sleep, quit, sign-out) before it goes. 9 numbers what a runtime sends of a watched
  * conversation (`live`'s `n`), so a gateway takes a resend once and says on a new link what it last relayed (`watch`'s
  * `after`), and lets `live` carry a trace (`correlationId`) and `sessions` say when each row changed and when it was
- * reported (`changedAt`, `reportedAt`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ * reported (`changedAt`, `reportedAt`). 10 lets a `sessions` row say what a waiting Session waits on the person for
+ * (`waitingFor`: an approval, a question, or anything else). Every envelope stays at `PROTOCOL_VERSION` on every link
+ * version.
  */
-export const LINK_VERSION = 9
+export const LINK_VERSION = 10
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -48,6 +50,9 @@ export const QUIET_VERSION = 8
  * report went (`reportedAt`). A gateway that agreed less refuses all four.
  */
 export const NUMBERED_LIVE_VERSION = 9
+
+/** The first link version whose `sessions` rows say what a waiting Session waits on (`waitingFor`); a gateway that agreed less refuses it. */
+export const WAITING_FOR_VERSION = 10
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

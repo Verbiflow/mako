@@ -1,7 +1,8 @@
-import type {
-  DesktopNotification,
-  NotificationDelivery,
-  NotificationPermission,
+import {
+  foldedBody,
+  type DesktopNotification,
+  type NotificationDelivery,
+  type NotificationPermission,
 } from "@mako/host/contracts/notifications"
 
 /**
@@ -104,10 +105,7 @@ export function createDesktopNotifier(
         handle = platform.create({
           title: notification.title,
           subtitle: notification.subtitle,
-          body:
-            platform.platform === "darwin" || !notification.subtitle
-              ? notification.body
-              : `${notification.subtitle}\n${notification.body}`,
+          body: platform.platform === "darwin" ? notification.body : foldedBody(notification),
           silent: notification.silent,
         })
       } catch {

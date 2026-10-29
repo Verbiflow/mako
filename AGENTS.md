@@ -1937,9 +1937,14 @@ there and are never shortened.
 
 ## Notifications
 
-Three outcomes and no more: an answer is `ready`, the agent must `ask` you
-(a question is an ask with `questions`, not a fourth kind), or the run
-`failed`. Starting, tool calls, and attach/detach never notify. The attention
+Five kinds, the same on every surface (desktop, web app, Web Push), declared
+once in `@mako/protocol/attention` (re-exported by
+`@mako/host/contracts/notifications`): `needs-you`, `question`, `approval`,
+`failed`, `finished`, with one rule (`attentionFact`), one key, one test of
+whether a fact still stands (`factStands`) and one wording table
+(`ATTENTION_WORDS`). A Session's owner says what it waits on in its row
+(`waitingFor`); never read the kind back out of `waitingOn`'s words. Starting,
+tool calls, and attach/detach never notify. The attention
 centre (`src/state/notifications.ts`, React-free; `docs/notifications.md`
 has the full design and the remote-channel plan) decides per outcome from
 four facts: kind, thread on screen, window in front, replay. Watching the
@@ -1974,7 +1979,7 @@ built by `scripts/build-notification-status.mjs` with the bundle id embedded
 as `__info_plist`) beside its executable in `Contents/MacOS`, which is the
 only place `UNUserNotificationCenter` answers from; it is listed for signing.
 `notify` resolves on `show`, `failed`, or a 1.5 s grace, never before.
-`scripts/test-notifications.ts` covers the policy, bursts, retirement,
+`npm run test:notifications` (`scripts/test-notifications.ts`, in CI) covers the policy, bursts, retirement,
 replays, live and external transitions, the readout, and the platform side.
 
 ## Working on the UI

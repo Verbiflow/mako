@@ -1,3 +1,5 @@
+import { attentionHeadline, type AttentionKind } from "@mako/host/contracts/notifications"
+
 /**
  * The words on a notification.
  *
@@ -42,22 +44,20 @@ export function excerpt(text: string, limit = NOTIFICATION_BODY_LIMIT): string {
   return `${(boundary > limit * 0.6 ? cut.slice(0, boundary) : cut).trimEnd()}…`
 }
 
-export type NotificationKind = "ready" | "ask" | "failed"
+export type NotificationKind = AttentionKind
 
 /**
- * What happened, as the subtitle under a thread's name. `alongside` names the
- * Thread's other Sessions still working, so one agent finishing doesn't read
- * as the Thread being done: "Codex finished · Claude still working".
+ * What happened, as the subtitle under a thread's name, in the words every
+ * surface uses (`attentionHeadline`). `alongside` names the Thread's other
+ * Sessions still working, so one agent finishing doesn't read as the Thread
+ * being done: "Codex finished · Claude still working".
  */
 export function notificationHeadline(
   kind: NotificationKind,
   agent: string,
   alongside: readonly string[] = []
 ): string {
-  const happened =
-    kind === "ready" ? `${agent} finished`
-    : kind === "ask" ? `${agent} needs you`
-    : `${agent} failed`
+  const happened = attentionHeadline(kind, agent)
   return alongside.length ? `${happened} · ${stillWorking(agent, alongside)}` : happened
 }
 
@@ -69,43 +69,4 @@ function stillWorking(agent: string, others: readonly string[]): string {
     return name === agent ? `another ${name} session still working` : `${name} still working`
   }
   return `${names.slice(0, -1).join(", ")} and ${names.at(-1)} still working`
-}
-
-export function notificationFallbackBody(kind: NotificationKind): string {
-  switch (kind) {
-    case "ready":
-      return "Answer ready to read."
-    case "ask":
-      return "Waiting for your approval."
-    case "failed":
-      return "The run stopped with an error."
-  }
-}
-
-/**
- * One banner for a burst. Four threads finishing in the same second are one
- * fact, not four interruptions; the list is the body so the banner still
- * says which.
- */
-export interface NotificationCopy {
-  title: string
-  body: string
-}
-
-export function summaryNotification(
-  items: ReadonlyArray<{ kind: NotificationKind; title: string }>
-): NotificationCopy {
-  const asks = items.filter((item) => item.kind !== "ready").length
-  const count = items.length
-  const title =
-    asks > 0
-      ? `${count} threads need you`
-      : `${count} answers ready`
-  const names = items.map((item) => item.title)
-  const shown = names.slice(0, 4)
-  const rest = names.length - shown.length
-  return {
-    title,
-    body: rest > 0 ? `${shown.join(", ")} and ${rest} more` : shown.join(", "),
-  }
 }

@@ -28,6 +28,20 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   const [adding, setAdding] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   useEffect(() => heading.current?.focus({ preventScroll: true }), [threadId])
+  const client = useWebClient()
+  // A Thread on screen is seen: its notices go from this device and every other (`WebPush.seen`), now and each time the
+  // page comes back to the front on it (a notification tapped while it was open lands here without a new route). By its
+  // Mako Thread ID, which the notices are kept by, whichever ID the route named it by.
+  const seenThread = thread?.id
+  useEffect(() => {
+    if (!seenThread) return
+    const seen = () => {
+      if (document.visibilityState === "visible") void client.push.seen(seenThread).catch(() => undefined)
+    }
+    seen()
+    document.addEventListener("visibilitychange", seen)
+    return () => document.removeEventListener("visibilitychange", seen)
+  }, [client, seenThread])
   if (!thread) {
     // A Thread started from here is listed once its owner reports it, a moment after its harness starts.
     const starting = startingWhere(threadId)

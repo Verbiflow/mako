@@ -1,6 +1,7 @@
 import { ActivityMark, type ActivityState } from "@/components/ui/activity-mark"
 import { formatRelative } from "@/lib/format"
 import { notificationHeadline } from "@/lib/notification-text"
+import { asks } from "@mako/host/contracts/notifications"
 import { openItem, type NotificationItem } from "@/state/notifications"
 
 /**
@@ -20,7 +21,7 @@ export function AttentionRow({
   time?: boolean
 }) {
   const state: ActivityState =
-    item.kind === "ask" ? "waiting" : item.kind === "failed" ? "failed" : "complete"
+    asks(item.kind) ? "waiting" : item.kind === "failed" ? "failed" : "complete"
   return (
     <button
       type="button"

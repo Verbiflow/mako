@@ -15,6 +15,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.js"
 import { namedUuid } from "./cloud-moves.js"
 import { syncTier } from "./sync-window.js"
+import { needsYouWaiting, type Waiting } from "@mako/protocol/attention"
 
 /** A rail row as the report reads it: a session one of this Mac's harnesses keeps, placed in its Thread and Session. */
 export type NativeRow = Pick<ThreadRef, "harness" | "nativeId" | "path" | "cwd" | "title" | "startedAt" | "updatedAt" | "threadId" | "sessionId" | "archived" | "copyOnly" | "nativeArchived">
@@ -33,8 +34,8 @@ export type ReportSources = {
   activity(path: string): ExternalThreadActivity | undefined
   /** The lifecycle's work, which says which conversations work or wait (`lifecycleWork`). */
   work(): readonly LifecycleWork[]
-  /** What a conversation waits on, in a line, while it waits. */
-  waitingOn(conversationId: string): string | undefined
+  /** What a conversation waits on, and its line, while it waits (`LiveConversations.waitingOn`). */
+  waitingOn(conversationId: string): Waiting | undefined
   /**
    * The keys of everything archived here (`ThreadArchives.snapshot().keys`), read once a report: a conversation whose
    * listing names one (`liveArchiveKeys`) is its owner's word, so every other device's list drops it too.
@@ -71,7 +72,7 @@ function preferred(left: ReportedSession, right: ReportedSession): ReportedSessi
 }
 
 /** What a list shows of a conversation that its own turns move: where it stands, its title, and what it waits on. */
-export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn">
+export type ConversationShown = Pick<ReportedSession, "state" | "title" | "waitingOn" | "waitingFor">
 
 /**
  * What a list shows of one of this host's conversations that its own turns move, as its row says it: each conversation's
@@ -83,7 +84,7 @@ export function conversationShown(conversation: {
   session: Pick<LiveSummary["session"], "id" | "status" | "title">
   working: LifecycleWork["status"] | undefined
   execution?: SessionExecution | undefined
-  waitingOn: (conversationId: string) => string | undefined
+  waitingOn: (conversationId: string) => Waiting | undefined
 }): ConversationShown {
   const { session, working, execution } = conversation
   const state: ListedState = execution?.state === "leaving" || execution?.state === "in-transit" ? "moving"
@@ -95,8 +96,10 @@ export function conversationShown(conversation: {
   const shown: ConversationShown = { state }
   if (session.title) shown.title = line(session.title)
   if (state === "waiting") {
-    const on = conversation.waitingOn(session.id)
-    if (on) shown.waitingOn = line(on)
+    // A native agent of its waiting on the person says nothing more than that it does.
+    const on = conversation.waitingOn(session.id) ?? needsYouWaiting(undefined)
+    shown.waitingOn = on.line
+    shown.waitingFor = on.for
   }
   return shown
 }
@@ -213,7 +216,12 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const titled = threadTitle(thread)
     if (titled) row.threadTitle = titled
     if (ref.title) row.title = line(ref.title)
-    if (state === "waiting" && activity?.detail) row.waitingOn = line(activity.detail)
+    if (state === "waiting") {
+      // A terminal's harness says only that it waits for input, in its own words when it has some.
+      const on = needsYouWaiting(activity?.detail)
+      row.waitingOn = on.line
+      row.waitingFor = on.for
+    }
     if (ref.cwd) row.folder = ref.cwd
     const parsed = ReportedSessionSchema.safeParse(row)
     if (parsed.success) add(parsed.data)
@@ -234,7 +242,7 @@ export function syncOrder(left: ReportedSession, right: ReportedSession, threads
 /** Whether two rows show the same but for when they last moved. */
 function sameShown(left: ReportedSession, right: ReportedSession): boolean {
   return left.session === right.session && left.thread === right.thread && left.threadTitle === right.threadTitle && left.conversation === right.conversation &&
-    left.harness === right.harness && left.title === right.title && left.state === right.state && left.waitingOn === right.waitingOn &&
+    left.harness === right.harness && left.title === right.title && left.state === right.state && left.waitingOn === right.waitingOn && left.waitingFor === right.waitingFor &&
     left.folder === right.folder && left.createdAt === right.createdAt && left.generation === right.generation &&
     left.nativeId === right.nativeId && left.capture?.path === right.capture?.path
 }
@@ -594,7 +602,7 @@ export class SessionPublisher {
   #sawBatch(conversation: string): void {
     const shown = this.#shown?.(conversation)
     if (!shown) return
-    const key = `${shown.state}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}`
+    const key = `${shown.state}\0${shown.waitingFor ?? ""}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}`
     if (this.#shownOf.get(conversation) === key) return
     this.#shownOf.set(conversation, key)
     this.#changedAt.set(conversation, this.#now())

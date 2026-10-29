@@ -1,4 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
+import { attentionLine } from "@mako/host/contracts/notifications"
 import { useState } from "react"
 import { CloudIcon, LaptopIcon } from "lucide-react"
 import { AppMarkIcon } from "@/components/rail/app-mark"
@@ -71,7 +72,7 @@ export function LiveAgentRow({
   const where = presence.elsewhere ? `on ${presence.elsewhere}${lastSeen ? `, ${lastSeen}` : ""}` : undefined
   const label =
     presence.status === "needs-permission"
-      ? (presence.waitingOn ?? "Needs your approval")
+      ? attentionLine("approval", presence.waitingOn)
       : presence.status === "running"
         ? "Working"
         : presence.status === "starting"

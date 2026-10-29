@@ -1,4 +1,4 @@
-import type { LivePermissionRequest, LiveSessionState } from "@/lib/types"
+import type { LivePermissionRequest, LiveSessionState, LiveSummary } from "@/lib/types"
 import type { Entry } from "@mako/sessions/entries"
 import { harnessLabel } from "@/lib/harness-label"
 import { workspaceName } from "@/lib/format"
@@ -19,6 +19,8 @@ import { setThreadAttention, setThreadRunning, threadsStore } from "@/state/thre
 import { describeProviderFailure } from "@mako/host/contracts/provider-failure"
 import { autoContinuePending } from "@/state/prompt-delivery"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
+import { asks, requestWaiting, type Waiting } from "@mako/host/contracts/notifications"
+import { bareCommand } from "@mako/sessions/tool-identity"
 
 export function updateLive(
   id: string,
@@ -74,10 +76,9 @@ function failureDetail(conversation: LiveAcpConversation): string | undefined {
     : undefined
 }
 
-function permissionDetail(permission: LivePermissionRequest): string {
-  const question = permission.questions?.[0]
-  if (question) return [question.header, question.question].filter(Boolean).join(": ")
-  return permission.title
+/** What a permission asks, as every surface says it: a question even when asked as one, else an approval. */
+function permissionWaiting(permission: LivePermissionRequest): Waiting {
+  return requestWaiting(permission, bareCommand)
 }
 
 /** The permission each conversation was last asked about, to retire it once answered. */
@@ -110,11 +111,12 @@ function noteLiveOutcome(
   if (permission) {
     if (asked !== permission.id) {
       askedPermissions.set(conversation.key, permission.id)
+      const waiting = permissionWaiting(permission)
       noteOutcome({
-        kind: "ask",
+        kind: waiting.for,
         subject,
         marker: permission.id,
-        detail: permissionDetail(permission),
+        detail: waiting.line,
         quiet,
       })
     }
@@ -123,7 +125,7 @@ function noteLiveOutcome(
   if (asked !== undefined) {
     askedPermissions.delete(conversation.key)
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath))
-      retireSubject(id, "ask")
+      retireSubject(id, "asks")
   }
   if (session.status === "closed") {
     for (const id of liveSubjectIds(conversation.key, conversation.threadPath)) retireSubject(id)
@@ -133,7 +135,7 @@ function noteLiveOutcome(
   if (pause) {
     if (announcedSignIns.get(conversation.key) !== pause.hold.at) {
       announcedSignIns.set(conversation.key, pause.hold.at)
-      noteOutcome({ kind: "ask", subject, marker: `sign-in:${pause.hold.at}`, detail: signedOutDetail(conversation), quiet })
+      noteOutcome({ kind: "needs-you", subject, marker: `sign-in:${pause.hold.at}`, detail: signedOutDetail(conversation), quiet })
     }
     return
   }
@@ -155,12 +157,38 @@ function noteLiveOutcome(
     !/(?:cancel|interrupt|abort)/i.test(session.lastStop ?? "")
   )
     noteOutcome({
-      kind: "ready",
+      kind: "finished",
       subject,
       marker: `turn:${conversation.revision ?? conversation.updatedAt}`,
       detail: lastReplyText(conversation.blocks),
       quiet,
     })
+}
+
+/**
+ * Another device's Session as the account lists it here, unopened: what its
+ * change says is read by the host with the account's own rule and key
+ * (`LiveSummary.attention`, `attentionFact`), so this Mac tells the person
+ * what their phone would, under the same words. An ask answered anywhere, or
+ * the Session back at work, retires what it said.
+ */
+export function noteListedOutcome(
+  previous: LiveAcpConversation,
+  conversation: LiveAcpConversation,
+  attention: LiveSummary["attention"]
+): void {
+  const ids = liveSubjectIds(conversation.key, conversation.threadPath)
+  if (previous.waitingOn && conversation.waitingOn !== previous.waitingOn)
+    for (const id of ids) retireSubject(id, "asks")
+  if (conversation.session.status === "running" && !conversation.waitingOn && previous.session.status !== "running")
+    for (const id of ids) retireSubject(id)
+  if (!attention) return
+  noteOutcome({
+    kind: attention.kind,
+    subject: liveSubject(conversation),
+    marker: attention.key,
+    detail: asks(attention.kind) ? conversation.waitingOn : undefined,
+  })
 }
 
 export function syncThreadStatus(

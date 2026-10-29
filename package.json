@@ -114,6 +114,7 @@
     "harness:descriptors": "tsx scripts/harness-descriptors.ts",
     "harness:catalogs": "tsx scripts/record-model-catalogs.ts",
     "test:cloud-account": "tsx scripts/test-cloud-account.ts",
+    "test:notifications": "tsx --tsconfig tsconfig.app.json scripts/test-notifications.ts",
     "test:account-devices-ui": "node scripts/test-account-devices-ui.mjs",
     "test:sync-status-ui": "node scripts/test-sync-status-ui.mjs",
     "test:cloud-turn-on-ui": "node scripts/test-cloud-turn-on-ui.mjs",

@@ -6,6 +6,7 @@ import { MACHINE_NOTICE_PREFIX, ThreadMachineNoticeSchema } from "@mako/protocol
 import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import type { ArchivedThread, ListedSession } from "@mako/protocol/thread-listing"
+import { attentionFact } from "@mako/protocol/attention"
 import { CLOUD_FOLDER_WHERE, listedOwner, listedSummary } from "../contracts/listed-conversations.js"
 import type { FollowRecorder, SyncRecorder } from "../contracts/sync-readings.js"
 import { listedArchiveInputs, type ArchiveInputs } from "../contracts/cloud-archive.js"
@@ -348,6 +349,8 @@ export async function folderRepository(git: { output(cwd: string, args: readonly
 export class CloudConversations {
   readonly #options: CloudConversationsOptions
   readonly #entries = new Map<string, Entry>()
+  /** The row each listed conversation was last listed from: what its next row's change is read against (`attentionFact`). */
+  readonly #heardRows = new Map<string, ListedSession>()
   readonly #following = new Map<string, Subscription | undefined>()
   #loading: Promise<void> | undefined
   #session: { deviceId: string; session: ClientSessionOverSockets } | undefined
@@ -1741,12 +1744,12 @@ export class CloudConversations {
   #reconcile(only?: ReadonlySet<string>): void {
     this.#archivedNow()
     const picked = (conversation: string) => !only || only.has(conversation)
-    const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string; quietSince: string | undefined }>()
+    const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string; quietSince: string | undefined; archived?: true }>()
     const undecided = new Set<string>()
     // An archived cloud Thread's Sessions, as they were listed when it was archived: every device shows them with the
     // archived ones (`archivedChanged`), at rest, and nothing runs them.
     for (const archived of this.#list.archived().values())
-      for (const row of archived.sessions) if (picked(row.conversation)) wanted.set(row.conversation, { row: { ...row, state: "idle" }, threadId: archived.thread, where: CLOUD_FOLDER_WHERE, quietSince: undefined })
+      for (const row of archived.sessions) if (picked(row.conversation)) wanted.set(row.conversation, { row: { ...row, state: "idle" }, threadId: archived.thread, where: CLOUD_FOLDER_WHERE, quietSince: undefined, archived: true })
     const rows = [...this.#list.sessions().values()].filter((row) => picked(row.conversation))
     const executions = this.#executions(rows)
     for (const row of rows) {
@@ -1774,6 +1777,7 @@ export class CloudConversations {
     for (const entry of this.#entries.values()) {
       if (!entry.listed || !picked(entry.conversationId) || undecided.has(entry.conversationId) || wanted.get(entry.conversationId)?.threadId === entry.threadId) continue
       this.#entries.delete(entry.conversationId)
+      this.#heardRows.delete(entry.conversationId)
       this.controlPreviews.forget(entry.conversationId)
       this.#capturing.delete(entry.conversationId)
       unlisted.push(entry.conversationId)
@@ -1782,10 +1786,16 @@ export class CloudConversations {
       if (left <= 0) this.#following.get(entry.threadId)?.close()
     }
     const listed: LiveSummary[] = []
-    for (const [id, { row, threadId, runtime, where, quietSince }] of wanted) {
+    for (const [id, { row, threadId, runtime, where, quietSince, archived }] of wanted) {
       const known = this.#entries.get(id)
       if (known && !known.listed) continue
       const summary = listedSummary(row, where, quietSince)
+      // What its change says, by the rule the account's notices use: only of a row heard here before (the first
+      // listing is where things stand, which a window marks without announcing), never of an archive's rows (listed
+      // at rest, not finished) nor of a quiet device's (nothing there runs).
+      const heard = this.#heardRows.get(id)
+      if (!archived) this.#heardRows.set(id, row)
+      const fact = heard && !archived && quietSince === undefined ? attentionFact(heard, row) : undefined
       if (known && this.#following.has(known.threadId)) {
         // A window follows it: its batches say the rest, but nothing comes from a device gone quiet, nor says it's back.
         const held = known.summary
@@ -1811,7 +1821,8 @@ export class CloudConversations {
       if (row.nativeId) entry.nativeId = row.nativeId
       entry.summary = summary
       this.#entries.set(id, entry)
-      listed.push(summary)
+      // Said on this listing alone: a later one (a rename) carries no fact, so a window reloaded since never hears it again.
+      listed.push(fact ? { ...summary, attention: { kind: fact.kind, key: fact.key } } : summary)
     }
     // A Session that moved (another device's to the cloud, or back) is listed where it runs now, never unlisted on the way.
     const relisted = new Set(listed.map((summary) => summary.session.id))

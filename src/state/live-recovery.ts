@@ -5,7 +5,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
 import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
-import { syncThreadStatus } from "@/state/acp-live"
+import { noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
 import { threadsStore } from "@/state/thread-store"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { changesSession, requestsAfter, sessionAfter } from "@mako/host/contracts/live-conversations"
@@ -581,6 +581,9 @@ function admitLiveSummaries(summaries: LiveSummary[], reconnect: boolean): void 
         summary.session.status !== "running"
       )
         syncThreadStatus(restored, previous.session.status, previous.threadPath, "hydrate")
+      // Another device's Session changed: what the change says (the account's own rule, read by the host) is told
+      // here as it would be on any device, and an ask answered anywhere goes.
+      if (restored?.kind === "live" && summary.elsewhere !== undefined) noteListedOutcome(previous, restored, summary.attention)
       continue
     }
     replaceAcpConversation(summary.session.id, {

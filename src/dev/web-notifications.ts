@@ -1,4 +1,4 @@
-import type { DesktopNotification, NotificationDelivery, NotificationPermission } from "@mako/host/contracts/notifications"
+import { foldedBody, type DesktopNotification, type NotificationDelivery, type NotificationPermission } from "@mako/host/contracts/notifications"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 
 /**
@@ -33,9 +33,7 @@ export function createWebNotificationChannels(
       shown.get(notification.subject)?.close()
       try {
         const native = new api(notification.title, {
-          body: notification.subtitle
-            ? `${notification.subtitle}\n${notification.body}`
-            : notification.body,
+          body: foldedBody(notification),
           tag: notification.subject,
           silent: notification.silent,
         })

@@ -2,13 +2,8 @@ import { toast } from "sonner"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import type { NotificationPermission } from "@/lib/types"
-import {
-  excerpt,
-  notificationFallbackBody,
-  notificationHeadline,
-  summaryNotification,
-  type NotificationKind,
-} from "@/lib/notification-text"
+import { excerpt, notificationHeadline, type NotificationKind } from "@/lib/notification-text"
+import { ATTENTION_SUMMARY_FROM, asks, attentionLine, attentionSummary } from "@mako/host/contracts/notifications"
 import { workspaceName } from "@/lib/format"
 import { playFeedback } from "@/state/feedback"
 import { prefsStore, type Prefs } from "@/state/prefs"
@@ -17,9 +12,10 @@ import { createHook, createStore } from "@/state/store"
 /**
  * The attention centre: what happened while you were not looking.
  *
- * Every provider's outcomes arrive here as one of three kinds — an answer is
- * ready, the agent needs you, the run failed — keyed by the thread they are
- * about. The centre decides, per outcome, whether you already saw it and
+ * Every provider's outcomes arrive here as one of the kinds every surface
+ * shares (`@mako/host/contracts/notifications`): it needs you, asks a
+ * question, waits for an approval, failed, or finished — keyed by the thread
+ * they are about, and worded as the web app's notices are. The centre decides, per outcome, whether you already saw it and
  * which channel reaches you: a cue when the thread is in front of you, an
  * in-app card when Mako is in front but the thread is not, a desktop banner
  * when Mako is not. The unseen items are the badge on the app icon and the
@@ -100,8 +96,8 @@ export interface DeliveryDecision {
 export const NOTIFICATION_LIMIT = 200
 /** How long a burst of desktop banners waits to become one. */
 export const BURST_SETTLE_MS = 600
-/** More than this many banners in a burst collapse into a summary. */
-export const BURST_SUMMARY_FROM = 4
+/** From this many banners in a burst they collapse into a summary, as the account's notices do. */
+export const BURST_SUMMARY_FROM = ATTENTION_SUMMARY_FROM
 export const SUMMARY_SUBJECT = "mako:summary"
 
 export function subjectId(target: NotificationTarget): string {
@@ -140,7 +136,7 @@ export function unseenItems(items: readonly NotificationItem[]): NotificationIte
   const latest = new Map<string, NotificationItem>()
   for (const item of items)
     if (!item.seen && !latest.has(item.subject.id)) latest.set(item.subject.id, item)
-  const rank = { ask: 0, failed: 1, ready: 2 } satisfies Record<NotificationKind, number>
+  const rank = { approval: 0, question: 0, "needs-you": 0, failed: 1, finished: 2 } satisfies Record<NotificationKind, number>
   return [...latest.values()].sort(
     (left, right) => rank[left.kind] - rank[right.kind] || right.at - left.at
   )
@@ -149,14 +145,8 @@ export function unseenItems(items: readonly NotificationItem[]): NotificationIte
 type NotifyPrefs = Pick<Prefs, "notifyDesktop" | "notifyReady" | "notifyAsk" | "notifyFailed">
 
 function kindEnabled(prefs: NotifyPrefs, kind: NotificationKind): boolean {
-  switch (kind) {
-    case "ready":
-      return prefs.notifyReady
-    case "ask":
-      return prefs.notifyAsk
-    case "failed":
-      return prefs.notifyFailed
-  }
+  if (asks(kind)) return prefs.notifyAsk
+  return kind === "finished" ? prefs.notifyReady : prefs.notifyFailed
 }
 
 /**
@@ -247,9 +237,7 @@ export function noteOutcome(outcome: AttentionOutcome): NotificationItem | null 
     quiet: outcome.quiet === true || !env?.announces(),
     prefs,
   })
-  const body =
-    (outcome.detail ? excerpt(outcome.detail) : "") ||
-    notificationFallbackBody(outcome.kind)
+  const body = attentionLine(outcome.kind, outcome.detail ? excerpt(outcome.detail) : undefined)
   const siblings = env?.siblings?.(outcome.subject.target)
   const item: NotificationItem = {
     id,
@@ -292,7 +280,7 @@ function flushBanners() {
   burst = []
   if (!env || pending.length === 0) return
   if (pending.length >= BURST_SUMMARY_FROM) {
-    const summary = summaryNotification(
+    const summary = attentionSummary(
       pending.map(({ item }) => ({ kind: item.kind, title: item.subject.title }))
     )
     void env
@@ -333,13 +321,15 @@ export function flushNotificationBursts(): void {
 
 /**
  * A thread started working again. Whatever it had waiting is stale: the user
- * (or another client) answered it. Announced banners go with it.
+ * (or another client) answered it. Announced banners go with it. `"asks"`
+ * retires only what asked the person (an approval, a question, a "needs you"):
+ * the ask was answered, wherever it was.
  */
-export function retireSubject(id: string, kind?: NotificationKind): void {
+export function retireSubject(id: string, only?: "asks"): void {
   const env = environment
   const state = notificationsStore.get()
   const stale = (item: NotificationItem) =>
-    item.subject.id === id && !item.seen && (kind === undefined || item.kind === kind)
+    item.subject.id === id && !item.seen && (only === undefined || asks(item.kind))
   if (!state.items.some(stale)) return
   notificationsStore.set({ items: state.items.filter((item) => !stale(item)) })
   burst = burst.filter((pending) => !stale(pending.item))

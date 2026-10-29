@@ -1,6 +1,13 @@
 import { z } from "zod"
 import type { Gateway } from "./gateway"
 import { installed, onIos } from "./install"
+import { noticeTag } from "@mako/host/contracts/notifications"
+
+/** The app icon's count (the Badging API, an installed app's on iOS 16.4 and later): none where a browser has no badge. */
+async function showBadge(count: number): Promise<void> {
+  if (!("setAppBadge" in navigator)) return
+  await (count ? navigator.setAppBadge(count) : navigator.clearAppBadge()).catch(() => undefined)
+}
 
 /** Hours a browser's notices wait for, in its own time zone: `22:00` to `07:00`. */
 export interface QuietHours {
@@ -89,6 +96,19 @@ export class WebPush {
     const subscription = await (await navigator.serviceWorker.getRegistration())?.pushManager.getSubscription()
     await this.#gateway.rest("DELETE", "/v1/push/subscription")
     await subscription?.unsubscribe()
+  }
+
+  /**
+   * The person has a Thread in front of them here: what this browser shows of it goes now, the app's badge counts what's
+   * left, and the account withdraws its notices from every other device and drops any still to come.
+   */
+  async seen(thread: string): Promise<void> {
+    const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : undefined
+    if (registration) {
+      for (const notification of await registration.getNotifications({ tag: noticeTag(thread) })) notification.close()
+      await showBadge((await registration.getNotifications()).length)
+    }
+    await this.#gateway.rest("POST", "/v1/notices/seen", { thread })
   }
 
   /** At each start: a subscription this browser holds is given to the account again, so the two never disagree. */
