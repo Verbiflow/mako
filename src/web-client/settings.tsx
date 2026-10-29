@@ -1,4 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react"
+import { describeFollow, describeList } from "@mako/host/contracts/sync-readings"
+import { webSync } from "./sync-readings"
 import { BellIcon, BellOffIcon, ChevronLeftIcon, CopyIcon, LogOutIcon, MoonIcon, ShareIcon, SmartphoneIcon } from "lucide-react"
 import { toast } from "sonner"
 import { Avatar } from "@/components/ui/avatar"
@@ -221,6 +223,11 @@ function Diagnostics() {
     ["Rows", String(list.rows.length)],
   ]
   if (list.failure) lines.push(["Last failure", `${list.failure.message} (${copyAge(list.failure.at)})${list.failure.correlationId ? ` · ${list.failure.correlationId}` : ""}`])
+  // How this browser follows the account's devices: the list's stream, then each conversation it followed, latest first.
+  const sync = webSync.readings()
+  lines.push(["Sync", describeList(sync.list)])
+  for (const follow of [...sync.follows].sort((left, right) => (right.lastHeardAt ?? 0) - (left.lastHeardAt ?? 0)).slice(0, 3))
+    lines.push([follow.label ?? "Live", describeFollow(follow)])
   if (client.options.build) lines.push(["Build", client.options.build])
   const text = lines.map(([label, value]) => `${label}: ${value}`).join("\n")
   return (

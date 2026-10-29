@@ -1,4 +1,5 @@
 import type { PromptDelivery } from "./prompt-delivery.js"
+import { TRACE_PREFIX } from "@mako/protocol/live-tail"
 import type {
   NativeAgentObservation,
   NativeAgentRoster,
@@ -496,6 +497,13 @@ export interface LiveSnapshot extends LiveSummary {
 
 export interface LiveBatch {
   activityAt?: number
+  /**
+   * On a sampled batch (`traceOf`): when its host emitted it, by that host's clock, and a trace each hop that carries it
+   * logs (`sync`), so one update can be followed from its owner through the gateway to every device, and each device
+   * reads how long it took to arrive.
+   */
+  emittedAt?: number
+  trace?: string
   /** `null` when the activity ended; absent when it did not change. */
   nativeActivity?: NativeActivity | null
   /** Absolute retained-block coordinates for consumers holding a history window. */
@@ -689,3 +697,15 @@ export type LiveDriverEvent =
   /** The goal the harness is working toward; `null` when it has none. */
   | { type: "live-goal"; id: string; goal: import("./live-goals.js").GoalObservation | null }
   | { type: "live-permission"; request: LivePermissionRequest }
+
+/** One batch in this many of a conversation is traced, besides each that changes its status, approvals or requests. */
+export const TRACE_EVERY = 25
+
+/**
+ * The trace a batch carries, if it's one of the sampled: every `TRACE_EVERY`th, and each one that starts or ends a turn,
+ * asks the person something or answers them, the moments a watcher waits for. Undefined for the rest.
+ */
+export function traceOf(batch: Pick<LiveBatch, "revision" | "sessionChanges" | "permissions" | "requests" | "requestChanges">, random: () => string): string | undefined {
+  const moment = batch.sessionChanges?.status !== undefined || batch.permissions !== undefined || batch.requests !== undefined || batch.requestChanges !== undefined
+  return moment || batch.revision % TRACE_EVERY === 0 ? `${TRACE_PREFIX}${random()}` : undefined
+}

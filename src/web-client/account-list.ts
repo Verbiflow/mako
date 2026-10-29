@@ -7,6 +7,7 @@ import { errorMessage, type FailureBoundary } from "@mako/host/contracts/error-m
 import { z } from "zod"
 import { createHook, createStore, type StorePatch } from "@/state/store"
 import { GatewayError, SignedOutError, type Gateway } from "./gateway"
+import { webSync } from "./sync-readings"
 
 /** One of the account's devices as a list names it. */
 export interface WebDevice {
@@ -167,12 +168,16 @@ export class AccountList {
           const frame = await subscription.next()
           if (frame.seq <= last) continue
           const skipped = frame.seq > last + 1
-          last = frame.seq
           const decoded = frame.event.decode()
-          if (skipped || LostSchema.safeParse(decoded).success) break
+          const lost = LostSchema.safeParse(decoded).success
+          if (skipped || lost) webSync.listGap({ after: last, seq: frame.seq, why: skipped ? "skipped" : "lost" })
+          last = frame.seq
+          webSync.listHeard(frame.seq)
+          if (skipped || lost) break
           const parsed = AccountEventSchema.safeParse(decoded)
           // A kind of event this build doesn't know is passed over, never refused.
           if (!parsed.success || !isAccountListEvent(parsed.data)) continue
+          if (parsed.data.type === "sessions-listed") for (const row of parsed.data.sessions) if (row.changedAt) webSync.listChanged(row.changedAt)
           if (!this.#list.heard({ seq: frame.seq, event: parsed.data })) continue
           if (this.#unnamedDevice() && Date.now() - this.#devicesAsked > 10_000) void this.refreshDevices().catch((error) => this.#failed({ error }))
           this.#publish("live")

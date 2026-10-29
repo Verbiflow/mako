@@ -18,6 +18,8 @@ import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import { DeviceIdSchema, MoveIdSchema, RuntimeIdSchema, type SessionExecution } from "@mako/host/contracts/thread-execution"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { encodeRuntimeEvent, splitRuntimeEventLine } from "@mako/host/contracts/runtime-value"
+import { traceOf } from "@mako/host/contracts/live-conversations"
+import { SyncRecorder, describeFollow, describeList, describeOwner } from "@mako/host/contracts/sync-readings"
 
 /**
  * The account's list of Sessions on both of its ends in Mako: what a host owns and says of it (`ownedSessions`,
@@ -483,6 +485,7 @@ test("a watched conversation's updates go out on a link as soon as it's served; 
   assert.equal(live.length, 2, "not before the link is served")
   publisher.linked(second)
   assert.deepEqual(live.slice(2).map((each) => [each.revision, each.n]), [[2, two], [3, two! + 1], [4, two! + 2]])
+  assert.deepEqual(publisher.readings(), { watched: 1, resent: 3, notices: 0 }, "Diagnostics counts what went again")
   // Said again with the same word, nothing goes twice.
   publisher.watch(second.link, ["c-1"], { "c-1": two! + 2 })
   assert.equal(live.length, 5)
@@ -493,6 +496,7 @@ test("a watched conversation's updates go out on a link as soon as it's served; 
   publisher.linked(third)
   publisher.watch(third.link, ["c-1"], { "c-1": two! + 2 })
   assert.deepEqual(live.slice(5).map(({ revision, historyChanged }) => [revision, historyChanged]), [[1_104, true]], "one notice, at the newest revision, nothing else")
+  assert.equal(publisher.readings().notices, 1)
   // A conversation no longer watched keeps nothing.
   publisher.watch(third.link, [])
   publisher.event("event", batch(2_000))
@@ -530,6 +534,37 @@ test("a report says when it went, and each row whose list-shown fields changed s
   assert.equal(older[0]?.listed[0]?.changedAt, undefined)
   runtime.close()
   await gateway.close()
+})
+
+test("one batch in twenty-five is traced, and each that starts or ends a turn, asks or answers; the readings say each followed stream and the account's list in words, every number with its noun", () => {
+  const random = () => "0f3a9c2e-71b4"
+  assert.equal(traceOf({ revision: 24 }, random), undefined, "an ordinary batch")
+  assert.equal(traceOf({ revision: 25 }, random), "st-0f3a9c2e-71b4", "the sampled one")
+  // SAFETY: a batch as a live driver emits one, filled only as far as `traceOf` reads it (its revision and status).
+  assert.equal(traceOf({ revision: 3, sessionChanges: { status: "running" } } as never, random), "st-0f3a9c2e-71b4", "a turn starting")
+  assert.equal(traceOf({ revision: 4, permissions: [] }, random), "st-0f3a9c2e-71b4", "an approval asked or answered")
+  let now = NOW
+  const readings = new SyncRecorder(() => now)
+  const follow = readings.follow("session:d-1:c-1", "Retry the webhooks")
+  for (const lag of [40, 60, 80, 400]) follow.heard(now - lag)
+  follow.heard()
+  follow.gap()
+  follow.followedAgain("gap")
+  follow.followedAgain("silent")
+  follow.reread()
+  readings.listHeard(512)
+  readings.listChanged(new Date(now - 38).toISOString())
+  readings.listGap({ after: 500, seq: 502, why: "skipped" })
+  readings.ownerFrom(() => ({ watched: 2, resent: 14, notices: 0 }))
+  now += 1_000
+  const read = readings.readings()
+  assert.deepEqual(read.follows[0]?.lagMs, { samples: 4, p50: 80, p95: 400 })
+  assert.equal(describeFollow(read.follows[0]!), "updates arrive in 80 ms typically, 400 ms at worst · 1 skipped update asked for again · read again whole once · followed again twice (skipped an update, went silent)")
+  assert.equal(describeList(read.list), "at event 512 · changes arrive in 38 ms typically, 38 ms at worst · read whole again after 1 gap")
+  assert.equal(describeOwner(read.owner), "2 conversations watched from another device · 14 updates sent again after a reconnect")
+  assert.equal(describeOwner({ watched: 0, resent: 0, notices: 0 }), undefined, "nothing to say")
+  for (let index = 0; index < 60; index++) readings.follow(`session:d-1:c-${index + 2}`)
+  assert.equal(readings.readings().follows.length, 50, "the latest fifty followed")
 })
 
 test("macOS's power reads as pmset says it: the source, the battery, and Low Power Mode in either spelling", () => {

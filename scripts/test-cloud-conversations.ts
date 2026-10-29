@@ -28,6 +28,7 @@ import {
 import { createFakeGateway, type FakeGatewayOptions } from "@mako/protocol/fake-gateway"
 import { Git } from "@mako/git"
 import { CloudConversations, folderRepository, type CloudConversationsOptions, type CloudCopies } from "@mako/host/conversations/cloud-conversations"
+import { SyncRecorder } from "@mako/host/contracts/sync-readings"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import { cloudRuntimeOf, namedUuid } from "@mako/host/conversations/cloud-moves"
 import { MoveIdSchema, type RuntimeId } from "@mako/host/contracts/thread-execution"
@@ -272,7 +273,7 @@ function sessionOf(client: ClientSession): ClientSessionOverSockets {
 }
 
 /** The router, the conversations' events it relays, and apart from them, what it tells windows of each start. */
-function conversations(account: CloudAccount, file: string, copies?: CloudCopies, asleepMs?: number) {
+function conversations(account: CloudAccount, file: string, copies?: CloudCopies, asleepMs?: number, readings?: SyncRecorder) {
   const events: RuntimeEvent[] = []
   /** The archived cloud Threads each time the host was told of them, by their IDs. */
   const archived: string[][] = []
@@ -284,6 +285,7 @@ function conversations(account: CloudAccount, file: string, copies?: CloudCopies
   const options: CloudConversationsOptions = { account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id), turnEnded: (conversation, thread) => ended.push(`${conversation} ${thread}`) }
   if (copies) options.copies = copies
   if (asleepMs) options.asleepMs = asleepMs
+  if (readings) options.readings = readings
   options.archivedChanged = (_account, threads) => archived.push([...threads.keys()])
   const router = new CloudConversations(options)
   after(() => router.dispose())
@@ -310,7 +312,8 @@ test("another device's conversation followed here picks up where it was: a dropp
   machine.account.sessionListings = async () => ({ sessions: [row], seq: 1 })
   machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: (await machine.account.deviceId())! })
   machine.account.onThreadListings = () => () => {}
-  const { router, events } = conversations(machine.account, join(scratch, "resumed", "conversations.json"))
+  const readings = new SyncRecorder()
+  const { router, events } = conversations(machine.account, join(scratch, "resumed", "conversations.json"), undefined, undefined, readings)
   await router.start()
   await until("the Studio's conversation listed", () => router.summaries().some((summary) => summary.session.id === conversation))
   assert.ok((await router.route("mako:live-snapshot", [conversation])).handled)
@@ -349,6 +352,12 @@ test("another device's conversation followed here picks up where it was: a dropp
   await until("the stalled link replaced, and the batch from during the stall heard", () => revisions().includes(701), 6_000)
   assert.ok(performance.now() - stalled < 5_500, `a stall found within ${SILENT_WHILE_WORKING_MS + PROBE_ANSWER_MS} ms and a bit: ${Math.round(performance.now() - stalled)} ms`)
   assert.equal(rereads(), 1, "picked up from what the gateway kept")
+  // Diagnostics' readings of it: what went by, what was read again, and why it was followed again each time.
+  const reading = readings.readings().follows.find((follow) => follow.stream.endsWith(conversation))
+  assert.ok(reading)
+  assert.equal(reading.rereads, 1)
+  assert.ok(reading.probes >= 1, "a probe while it was silent")
+  assert.deepEqual([...new Set(reading.reconnects.map((reconnect) => reconnect.why))].sort(), ["closed", "silent"], "a dropped link and a silent one, told apart")
 })
 
 test("a cloud start makes the Thread once, starts on the machine in its clone, and relays the conversation's events", async () => {

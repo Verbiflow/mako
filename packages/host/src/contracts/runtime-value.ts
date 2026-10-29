@@ -52,7 +52,8 @@ export type RuntimeEventChannel = "event" | "terminal"
 
 /** An event encoded once, for every subscriber of every host and window it reaches. */
 export function encodeRuntimeEvent(event: HostEvent | TerminalEvent): RuntimeEvent {
-  return { type: event.type, conversation: event.type === "live-batch" ? event.batch.id : undefined, payload: JSON.stringify(event) }
+  if (event.type !== "live-batch") return { type: event.type, conversation: undefined, payload: JSON.stringify(event) }
+  return { type: event.type, conversation: event.batch.id, ...(event.batch.trace && { trace: event.batch.trace }), payload: JSON.stringify(event) }
 }
 
 /** An event for its window, decoded once; only the host and the desktop's main process write what reaches it. */

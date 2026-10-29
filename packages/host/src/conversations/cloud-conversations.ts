@@ -1,12 +1,13 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, threadStream, type Actor, type ClientSessionOverSockets, type EventFrame, type Subscription } from "@mako/protocol"
+import { LinkClosedError, NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, threadStream, type Actor, type ClientSessionOverSockets, type EventFrame, type Subscription } from "@mako/protocol"
 import { MACHINE_NOTICE_PREFIX, ThreadMachineNoticeSchema } from "@mako/protocol/saves"
 import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 import type { ArchivedThread, ListedSession } from "@mako/protocol/thread-listing"
 import { CLOUD_FOLDER_WHERE, listedOwner, listedSummary } from "../contracts/listed-conversations.js"
+import type { FollowRecorder, SyncRecorder } from "../contracts/sync-readings.js"
 import { listedArchiveInputs, type ArchiveInputs } from "../contracts/cloud-archive.js"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -204,6 +205,8 @@ const ControlActivityEventSchema = z.object({ type: z.literal("control-activity"
 export type CloudConversationsOptions = {
   /** The Mako account, once its domain is loaded. */
   account(): CloudAccount | undefined
+  /** Where how this Mac's following of other devices' work goes is kept, for Diagnostics' Sync. */
+  readings?: SyncRecorder
   /** Where the cloud conversations this Mac started are remembered. */
   file: string
   /** Sends an event to this host's windows, as its own conversations' events go. */
@@ -1454,12 +1457,15 @@ export class CloudConversations {
       let failing = false
       let wakes = this.#wakes
       const cursor = new StreamCursor(entry.runtime ? "live" : "log", entry.runtime || this.#fromHead.has(entry.threadId) ? undefined : entry.seq)
+      let readings: FollowRecorder | undefined
+      let probedAt: number | undefined
       // An archived Thread takes nothing and says nothing: it isn't followed.
       while (!this.#closed && this.#entries.get(entry.conversationId) === entry && !this.#list.archived().has(entry.threadId)) {
         try {
           const { session } = await this.#connected()
           const stream = entry.runtime ? entry.threadId : threadStream(entry.threadId)
           const after = entry.runtime ? cursor.resumeAfter() : (cursor.last ?? (this.#fromHead.has(entry.threadId) ? Number.MAX_SAFE_INTEGER : entry.seq))
+          readings = this.#options.readings?.follow(stream, entry.summary?.session.title)
           const subscription = session.subscribe({ stream, after })
           this.#following.set(entry.threadId, subscription)
           let gap = false
@@ -1471,15 +1477,20 @@ export class CloudConversations {
               if (!(error instanceof NothingArrivedError)) throw error
               // At work and silent: the link may have stalled. A ping it doesn't answer ends it, and this follows again.
               session.probe(stream, PROBE_ANSWER_MS)
+              readings?.probe()
+              probedAt = performance.now()
               continue
             }
             const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text })
             if (verdict.kind === "notice" || verdict.kind === "duplicate") continue
             if (verdict.kind === "reread") {
+              readings?.reread()
               this.#reread(entry)
               continue
             }
             if (verdict.kind === "gap") {
+              readings?.gap()
+              readings?.followedAgain("gap")
               gap = true
               continue
             }
@@ -1498,6 +1509,9 @@ export class CloudConversations {
           if (++gapsInRow <= 3) continue
         } catch (error) {
           if (this.#closed) return
+          // Ended by its probe going unanswered, the link had gone silent; otherwise it closed, or couldn't be followed.
+          readings?.followedAgain(!(error instanceof LinkClosedError) ? "failed" : probedAt !== undefined && performance.now() - probedAt < PROBE_ANSWER_MS * 2 ? "silent" : "closed")
+          probedAt = undefined
           if (!failing) hostWarn("cloud-conversations", "a cloud Thread's events stopped; following again", { threadId: entry.threadId, error: error instanceof Error ? error.message : String(error) })
           failing = true
         }
@@ -1569,6 +1583,8 @@ export class CloudConversations {
     const target = head.data.type === "live-batch" && head.data.conversation ? this.#entries.get(head.data.conversation) : undefined
     if (!target || target.threadId !== entry.threadId) return
     const { batch } = z.object({ batch: LiveBatchSchema }).parse(JSON.parse(parts.payload))
+    this.#options.readings?.follow(entry.runtime ? entry.threadId : threadStream(entry.threadId)).heard(batch.emittedAt)
+    if (batch.trace) hostLog("sync", "traced update heard", { trace: batch.trace, conversation: target.conversationId, ...(batch.emittedAt !== undefined && { lagMs: Date.now() - batch.emittedAt }) })
     const before = target.summary?.session.status
     if (target.summary) {
       const summary: LiveSummary = { ...target.summary, session: sessionAfter(target.summary.session, batch), revision: batch.revision }
@@ -1648,7 +1664,12 @@ export class CloudConversations {
         return
       }
       // The stream skipped a number: the list is read whole again, replacing what's held in one step.
-      if (heard === "account-gap") return void this.#readList()
+      if ("gap" in heard) {
+        this.#options.readings?.listGap(heard.gap)
+        return void this.#readList()
+      }
+      this.#options.readings?.listHeard(heard.seq)
+      if (heard.event.type === "sessions-listed") for (const row of heard.event.sessions) if (row.changedAt) this.#options.readings?.listChanged(row.changedAt)
       const named = this.#named(heard)
       if (this.#list.heard(heard)) {
         // Only the rows the change names are looked at again: one Session's state, while hundreds are listed.

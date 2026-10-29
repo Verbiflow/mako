@@ -27,7 +27,7 @@ import { hostCallInput, hostOperations, hostReplyValue, toHostOperation } from "
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { SessionPublisher } from "@mako/host/conversations/session-report"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
-import type { RuntimeEvent } from "@mako/host/contracts/runtime-value"
+import { encodeRuntimeEvent, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import { cpuBetween, type CpuSample } from "@mako/host/usage/process-cpu"
 import { HostProfiler } from "@mako/host/usage/host-profile"
 
@@ -245,6 +245,13 @@ test("the agent's link makes the host the machine's runtime: the Thread's operat
   const [notice] = (await hostEvents(cloud.gateway, 4)).slice(3)
   assert.deepEqual(notice?.payload, { type: "live-batch", batch: { id: "c-1", revision: 7, updates: [], historyChanged: true } })
   assert.deepEqual(agent.state()?.events, { emitted: 4, invalidated: 1, dropped: 1 })
+
+  // A sampled batch's trace rides as its event's correlation ID, which the Thread logs and gives every reader.
+  const reader = (await cloud.gateway.connectClient(desktop)).subscribe({ stream: threadStream("th-1"), after: 6 })
+  // SAFETY: a batch as a live driver emits one, filled only as far as the machine runtime reads it (its trace).
+  agent.runtime.event("event", encodeRuntimeEvent({ type: "live-batch", batch: { id: "c-1", revision: 25, updates: [], emittedAt: Date.now(), trace: "st-0f3a9c2e-71b4" } } as never))
+  assert.equal((await reader.next(5_000)).correlationId, "st-0f3a9c2e-71b4")
+  reader.close()
 
   // Silenced: the link closes and stays closed, and nothing more is sent for the Thread.
   agent.tell({ type: "unlink", reason: "this machine is a copy of another" })

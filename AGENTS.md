@@ -2639,6 +2639,26 @@ waited a second, missed what went by and read a snapshot; a lost last batch
 left a turn looking busy on every other device; a stall went unseen for a
 minute.
 
+One update can be followed from its owner to every device. One batch in
+`TRACE_EVERY` (25) of a conversation, and each that starts or ends a turn or
+asks or answers the person, carries `emittedAt` and a trace (`traceOf`,
+`TRACE_PREFIX` `st-`), which rides as the event's correlation ID (a cloud
+Thread's `event`, a watched conversation's `live`): the owner's host logs
+`traced update sent`, the gateway `event trace` or `live trace`, and each
+Mac that hears it `traced update heard` with its lag, all under `sync` and
+the trace. Search one trace across host logs and the gateway's to see
+every hop's time. Each device keeps its readings in memory
+(`SyncRecorder`, `contracts/sync-readings.ts`): for each stream it follows,
+traced lag, skipped numbers asked for again, rereads, probes, and why it
+followed again (`closed`, `silent`, `gap`, `failed`); for the account's
+list, its stream's number, its gaps, and each change's time from its owner
+(`changedAt`); and on a Mac what it sends of its own watched conversations
+(resent, notices). Settings › Diagnostics shows them as Sync
+(`mako:sync-readings`, `SyncReadout`), the phone's Diagnostics in its
+lines, both in the same words (`describeFollow`, `describeList`). Lags are
+each device's clock against its owner's, good to a few milliseconds where
+clocks keep time.
+
 `npm run bench:sync-latency` measures how long another device takes to see
 what one does, on the real code (`scripts/bench-sync-latency.ts`): two
 screenless hosts of the checkout signed in to one account, A running a sealed
