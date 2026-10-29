@@ -105,6 +105,23 @@ test("a command run at a repository's root names none of its files by its folder
   await w.tracker.close()
 })
 
+test("a commit made while the watch lost events moves the base once the loss is heard", async () => {
+  // A busy fseventsd delivers nothing for a while; meanwhile the person
+  // commits. The rescan that follows sees no file differ from its stat, so
+  // only a HEAD check finds the commit.
+  const w = await world({ "src/a.ts": "export const a = 1\n" })
+  w.write("src/a.ts", "export const a = 2\n")
+  await w.tracker.settled()
+  w.events.drop()
+  execFileSync("git", ["commit", "-q", "-am", "while deaf"], { cwd: w.repo })
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: w.repo, encoding: "utf8" }).trim()
+  w.events.restore()
+  await w.tracker.settled()
+  assert.equal(w.tracker.rootStates().get("repo")?.root.head, head)
+  assert.equal(w.tracker.rootStates().get("repo")?.files.size, 0, "nothing is uncommitted")
+  await w.tracker.close()
+})
+
 test("a change an agent's reported edit already explained doesn't name the next writer of that file", async () => {
   // T1 edits a file with a reported, proven edit; one second after the call
   // ends, the person appends a line to the same file in their editor.
