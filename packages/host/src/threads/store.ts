@@ -207,6 +207,9 @@ export interface ThreadRecord {
   sessions: SessionId[]
 }
 
+/** A Thread's name and where it came from, as a list of many Threads reads it (`titlesOf`). */
+export type ThreadTitle = Pick<ThreadRecord, "title" | "titleSource">
+
 export interface StoreConflict {
   sessions: [SessionId, SessionId]
   reason: string
@@ -307,6 +310,16 @@ const ExecutionRowSchema = z.object({
   generation: z.number().int().positive(),
   move_id: z.string().nullable(),
 })
+type ExecutionRow = z.infer<typeof ExecutionRowSchema>
+/** A Session's row beside its execution's, when it has one (`held`): what `executionsOf` reads of many at once. */
+const SessionExecutionRowSchema = ExecutionRowSchema.extend({
+  id: z.string(),
+  merged_into: z.string().nullable(),
+  held: z.string().nullable(),
+  generation: z.number().int().positive().nullable(),
+})
+const ThreadTitleRowSchema = z.object({ id: z.string(), title: z.string().nullable(), title_source: z.enum(["user", "frozen", "auto"]).nullable(), merged_into: z.string().nullable() })
+const GroupMemberRowSchema = z.object({ thread_id: z.string(), merged_into: z.string().nullable(), session_id: z.string(), added_at: z.number(), origin: z.string(), started: z.number() })
 const MovePhaseSchema = z.enum(["leaving", "cancelled", "released", "arrived", "refused", "reclaimed"])
 const MoveRowSchema = z.object({
   id: MoveIdSchema,
@@ -553,6 +566,14 @@ export class ThreadStore {
   private readonly keysBySession = new Map<string, Set<string>>()
   private readonly executions = new Map<string, SessionExecution>()
   private dataVersion = -1
+  /**
+   * Counts the commits this store has seen, this host's and every other's. What's read of many Sessions or Threads at
+   * once (`executionsOf`, `titlesOf`, `groups`) is answered from memory until it moves; never inside a write.
+   */
+  private revision = 0
+  private readonly executionsSeen = new Map<string, SessionExecution | null>()
+  private readonly titlesSeen = new Map<string, ThreadTitle | null>()
+  private groupsSeen: { revision: number; groups: ThreadGroup[] } | undefined
   private changeSeq = 0
   private titleSeq = 0
   /** Threads whose name another host changed since `takeExternalTitles` last ran. */
@@ -704,13 +725,36 @@ export class ThreadStore {
     return placed
   }
 
-  /** Every Thread with more than one Session, each with its Sessions in tab order. */
+  /**
+   * Every Thread with more than one Session, each with its Sessions in tab order: read in one query, then answered from
+   * memory until any commit (`revision`). A Thread merged into another reads as that one, as `group` says it.
+   */
   groups(): ThreadGroup[] {
-    return this.sql("SELECT thread_id FROM memberships GROUP BY thread_id HAVING count(*) > 1 ORDER BY min(added_at), thread_id").all()
-      .flatMap((row) => {
-        const group = this.group(ThreadIdSchema.parse(MembershipRowSchema.parse(row).thread_id))
-        return group ? [group] : []
-      })
+    this.syncVersion()
+    const held = this.groupsSeen
+    if (held && held.revision === this.revision && this.depth === 0) return held.groups
+    // Grouped by the index alone; the order (each Thread's first Session added, then its ID) is worked out here, which
+    // spares reading every membership's row.
+    const rows = this.sql(`WITH grouped AS (SELECT thread_id FROM memberships GROUP BY thread_id HAVING count(*) > 1)
+      SELECT g.thread_id, t.merged_into, m.session_id, m.added_at, s.origin,
+        EXISTS (SELECT 1 FROM journals WHERE session_id = m.session_id) OR EXISTS (SELECT 1 FROM sources WHERE session_id = m.session_id) AS started
+      FROM grouped g JOIN threads t ON t.id = g.thread_id JOIN memberships m ON m.thread_id = g.thread_id JOIN sessions s ON s.id = m.session_id
+      ORDER BY g.thread_id, m.position, m.session_id`).all().map((row) => GroupMemberRowSchema.parse(row))
+    const found: { first: number; id: string; group: ThreadGroup }[] = []
+    for (let start = 0; start < rows.length;) {
+      const head = rows[start]!
+      let end = start
+      while (end < rows.length && rows[end]!.thread_id === head.thread_id) end += 1
+      const members = rows.slice(start, end)
+      start = end
+      const group = head.merged_into
+        ? this.group(ThreadIdSchema.parse(head.thread_id))
+        : ThreadGroupSchema.parse({ id: head.thread_id, sessions: members.map((member) => ({ id: member.session_id, origin: member.origin, started: member.started !== 0 })) })
+      if (group) found.push({ first: Math.min(...members.map((member) => member.added_at)), id: head.thread_id, group })
+    }
+    const groups = found.sort((left, right) => left.first - right.first || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)).map(({ group }) => group)
+    if (this.depth === 0) this.groupsSeen = { revision: this.revision, groups }
+    return groups
   }
 
   /** One Thread's group, following merges; undefined while it has one Session. */
@@ -1147,8 +1191,78 @@ export class ThreadStore {
 
   /** Who may execute a Session now, following merges; undefined for a Session this store never saw. */
   execution(session: SessionId): SessionExecution | undefined {
-    const current = this.canonical(session)
-    return current ? this.executionState(current) : undefined
+    return this.executionsOf([session]).get(session)
+  }
+
+  /**
+   * Who may execute each of `sessions` now, as `execution` says it, the ones this store never saw left out: read in one
+   * query, then answered from memory until any commit, this host's or another's (`revision`). A report of every Session
+   * in the sync window asks this once, not once a row.
+   */
+  executionsOf(sessions: Iterable<SessionId>): Map<SessionId, SessionExecution> {
+    this.syncVersion()
+    const remember = this.depth === 0
+    const found = new Map<SessionId, SessionExecution>()
+    const unread = new Set<SessionId>()
+    for (const session of sessions) {
+      if (!remember || !this.executionsSeen.has(session)) unread.add(session)
+      else {
+        const known = this.executionsSeen.get(session)
+        if (known) found.set(session, known)
+      }
+    }
+    if (!unread.size) return found
+    const read = new Map<string, SessionExecution>()
+    const rows = this.sql(`SELECT s.id, s.merged_into, e.session_id AS held, e.owner_kind, e.owner_id, e.generation, e.move_id
+      FROM sessions s LEFT JOIN executions e ON e.session_id = s.id WHERE s.id IN (SELECT value FROM json_each(?))`).all(JSON.stringify([...unread]))
+    for (const row of rows) {
+      const parsed = SessionExecutionRowSchema.parse(row)
+      if (parsed.merged_into) {
+        const current = this.canonical(parsed.id)
+        if (current) read.set(parsed.id, this.executionState(current))
+      } else read.set(parsed.id, this.executionFrom(parsed.held === null || parsed.generation === null ? undefined : { ...parsed, generation: parsed.generation }))
+    }
+    for (const session of unread) {
+      const execution = read.get(session)
+      if (remember) this.executionsSeen.set(session, execution ?? null)
+      if (execution) found.set(session, execution)
+    }
+    return found
+  }
+
+  /**
+   * Each of `threads`' name and where it came from, following merges, the ones this store never saw left out: read in
+   * one query, then answered from memory until any commit (`revision`), as `executionsOf` is.
+   */
+  titlesOf(threads: Iterable<ThreadId>): Map<ThreadId, ThreadTitle> {
+    this.syncVersion()
+    const remember = this.depth === 0
+    const found = new Map<ThreadId, ThreadTitle>()
+    const unread = new Set<ThreadId>()
+    for (const thread of threads) {
+      if (!remember || !this.titlesSeen.has(thread)) unread.add(thread)
+      else {
+        const known = this.titlesSeen.get(thread)
+        if (known) found.set(thread, known)
+      }
+    }
+    if (!unread.size) return found
+    const read = new Map<string, ThreadTitle>()
+    const rows = this.sql("SELECT id, title, title_source, merged_into FROM threads WHERE id IN (SELECT value FROM json_each(?))").all(JSON.stringify([...unread]))
+    for (const row of rows) {
+      const parsed = ThreadTitleRowSchema.parse(row)
+      const record = parsed.merged_into ? this.thread(ThreadIdSchema.parse(parsed.id)) : undefined
+      if (parsed.merged_into && !record) continue
+      const title = record ? record.title : (parsed.title ?? undefined)
+      const titleSource = record ? record.titleSource : (parsed.title_source ?? undefined)
+      read.set(parsed.id, { ...title !== undefined && { title }, ...titleSource !== undefined && { titleSource } })
+    }
+    for (const thread of unread) {
+      const title = read.get(thread)
+      if (remember) this.titlesSeen.set(thread, title ?? null)
+      if (title) found.set(thread, title)
+    }
+    return found
   }
 
   /**
@@ -1860,8 +1974,12 @@ export class ThreadStore {
   /** A Session without a row was minted here by a build that predates ownership. */
   private executionState(session: string): SessionExecution {
     const found = this.sql("SELECT owner_kind, owner_id, generation, move_id FROM executions WHERE session_id = ?").get(session)
-    if (!found) return { state: "here", owner: this.self, generation: 1 }
-    const row = ExecutionRowSchema.parse(found)
+    return this.executionFrom(found ? ExecutionRowSchema.parse(found) : undefined)
+  }
+
+  /** A Session's execution from its row; one with none runs here, as every Session did before executions were kept. */
+  private executionFrom(row: ExecutionRow | undefined): SessionExecution {
+    if (!row) return { state: "here", owner: this.self, generation: 1 }
     const move = row.move_id ? this.moveRow(MoveIdSchema.parse(row.move_id)) : undefined
     if (row.owner_kind === null || row.owner_id === null) {
       if (!move) throw new Error("A Session in transit has no move in the Thread store")
@@ -2061,6 +2179,7 @@ export class ThreadStore {
     // Another host committed: a newer Mako may have raised the format since this one opened.
     if (!this.reader) this.format = readStoreFormat(this.db, "store_meta") ?? this.format
     this.executions.clear()
+    this.committed()
     this.consumeChanges(true)
   }
 
@@ -2084,6 +2203,14 @@ export class ThreadStore {
       }
     }
     this.changeSeq = rows.at(-1)?.seq ?? this.changeSeq
+  }
+
+  /** A commit landed, this host's or another's (or a write was rolled back): what was read of many at once is read again. */
+  private committed(): void {
+    this.revision += 1
+    this.executionsSeen.clear()
+    this.titlesSeen.clear()
+    this.groupsSeen = undefined
   }
 
   private remember(key: string, placed: ThreadPlacement): void {
@@ -2117,12 +2244,14 @@ export class ThreadStore {
       if (raised) throw declinedThreads(raised)
       const result = work()
       this.db.exec("COMMIT")
+      this.committed()
       this.consumeChanges(false)
       return result
     } catch (error) {
       this.db.exec("ROLLBACK")
       this.forgetPlacements()
       this.executions.clear()
+      this.committed()
       // A newer Mako's guard stopped the write inside SQLite: it raised the format after this check.
       if (error instanceof Error && guardRefused(error)) {
         this.format = readStoreFormat(this.db, "store_meta") ?? this.format

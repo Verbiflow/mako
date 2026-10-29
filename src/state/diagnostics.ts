@@ -1,5 +1,6 @@
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
+import type { SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { getMako } from "@/lib/bridge"
 
@@ -14,6 +15,11 @@ export const diagnostics = {
 
   hostLogPath(): Promise<string> {
     return getMako().hostLogPath()
+  },
+
+  /** Each time the reader behind the session list stopped or started, and where it logs. */
+  sessionReader(): Promise<SessionReaderHistory> {
+    return getMako().sessionReaderHistory()
   },
 
   providerResidency(): Promise<ProviderResidencySnapshot> {

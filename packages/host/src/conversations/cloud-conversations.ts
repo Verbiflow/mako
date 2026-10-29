@@ -248,17 +248,20 @@ export type CloudConversationsOptions = {
    * second Mako on this Mac (another profile, a build being tried) reads the same stores and lists the same sessions
    * as its own, under Sessions of its own; listed here too, each would show twice.
    */
-  keepsNative?(harness: string, nativeId: string, folder: string | undefined): boolean
+  keepsNative?(harness: string, nativeId: string, folder: string | undefined): boolean | undefined
   /**
    * The account's archived cloud Threads changed (`ArchivedThread`), as its list and stream say them: what each device
-   * shows as archived, from the account's word alone.
+   * shows as archived, from the account's word alone. Said only from a list read of `account`: a list not read yet,
+   * or forgotten at a sign-out, says nothing of what's archived.
    */
-  archivedChanged?(archived: ReadonlyMap<string, ArchivedThread>): void
+  archivedChanged?(account: string, archived: ReadonlyMap<string, ArchivedThread>): void
   /**
    * What turning the cloud on reads of these changed: the projects offered, a cloud Thread made ahead or its machine
    * ready, a cloud Thread made (`offeredProjects`, `preparedMachine`, `firstCloudThread`).
    */
   turnOnChanged?(): void
+  /** How long changes to the sessions this Mac keeps are gathered before they're looked at (`NATIVE_CHANGED_MS`). */
+  nativeChangedMs?: number
 }
 
 /** Copies another device keeps of its Sessions in the account (`ReadingCopies`), by that device, read here (`HostCatalog.copyPage`). */
@@ -270,6 +273,8 @@ export type CloudCopies = {
 /** What a conversation begun in a moved Thread reads and records of this Mac's Thread store. */
 export type AwayThreads = {
   execution(session: SessionId): SessionExecution | undefined
+  /** `execution` for many Sessions in one read (`ThreadStore.executionsOf`). */
+  executionsOf(sessions: Iterable<SessionId>): ReadonlyMap<SessionId, SessionExecution>
   sessionPlacement(session: SessionId): ThreadPlacement | undefined
   journalPlacement(conversationId: string): ThreadPlacement | undefined
   adoptElsewhere(input: { operationId: string; conversationId: string; actor: StoreActor } & ({ session: SessionId } | { forkOf: string; forkSession: SessionId })): ThreadPlacement
@@ -300,6 +305,8 @@ const MACHINE_WORDS = {
 } as const satisfies Record<CloudMachineState, string>
 /** A window following a cloud conversation's folder reads its Git again at most this often while its agent works. */
 const CHANGED_MS = 1_000
+/** The sessions this Mac's stores keep changed: what changed in this long is looked at together, one look at a time. */
+const NATIVE_CHANGED_MS = 250
 
 /** The folder the machine's host works in: its tab in front, which is the clone. */
 
@@ -384,8 +391,13 @@ export class CloudConversations {
   readonly #askedNames = new Set<string>()
   #unlisten: (() => void) | undefined
   #listing: Promise<void> | undefined
-  /** The archived cloud Threads last told of (`archivedChanged`), by their IDs. */
+  /** The archived cloud Threads last told of (`archivedChanged`), by their account and IDs. */
   #archivedKey: string | undefined
+  /** The account whose list was read last: its archived Threads are the ones told of. */
+  #accountId: string | undefined
+  /** The native sessions whose keeping changed since the last look (`nativeChanged`), by `nativeKey`; "all" for every one. */
+  #nativeChanges: Set<string> | "all" | undefined
+  #nativeLook: ReturnType<typeof setTimeout> | undefined
   /**
    * Threads followed from the stream's head rather than from an event relayed: a listed conversation a window opened,
    * whose history its snapshot reads on the machine. Replaying the Thread from its first event would carry all of it.
@@ -825,6 +837,7 @@ export class CloudConversations {
     this.#closed = true
     clearTimeout(this.#waking)
     clearTimeout(this.#takeAgain)
+    clearTimeout(this.#nativeLook)
     this.#unlisten?.()
     for (const resume of this.#pauses) resume()
     clearTimeout(this.#saving)
@@ -1603,12 +1616,15 @@ export class CloudConversations {
   #readList(): Promise<void> {
     this.#listing ??= (async () => {
       const account = this.#options.account()
-      if (this.#closed || !account?.sessionListings || !(await account.id())) return
+      const accountId = account?.sessionListings ? await account.id() : undefined
+      if (this.#closed || !account?.sessionListings || !accountId) return
       try {
         this.#device = await account.deviceId()
         const [listings, devices] = await Promise.all([account.sessionListings(), account.devices?.().catch(() => undefined)])
         for (const device of devices?.devices ?? []) this.#deviceNames.set(device.id, device.name)
+        this.#accountId = accountId
         if (this.#list.listed(listings)) this.#reconcile()
+        else this.#archivedNow()
         this.#takeWaiting()
       } catch (error) {
         hostLog("cloud-conversations", "the account's Threads couldn't be listed; listed again when the account or the network changes", { error: error instanceof Error ? error.message : String(error) })
@@ -1623,20 +1639,35 @@ export class CloudConversations {
    * Holds the conversations known from the account's list to it: a Session another device has (in the cloud or on
    * itself) is listed here, changed as the list changes, and gone when it leaves it. This Mac's own Sessions, and the
    * cloud conversations this Mac started or moved, are never touched, and one a window opened goes on from its own
-   * batches, which say more and sooner. Windows hear what changed and list it as they list a conversation at boot:
-   * nothing wakes a machine or reaches a Mac until one opens.
+   * batches, which say more and sooner, but for whether its device is quiet: a quiet device sends no batches, so that's
+   * the list's to say of every conversation, followed or not. Windows hear what changed and list it as they list a
+   * conversation at boot: nothing wakes a machine or reaches a Mac until one opens.
+   *
+   * `only` limits it to those conversations, as when the sessions this Mac keeps changed (`nativeChanged`). A row whose
+   * keeping this Mac can't say yet (its catalog isn't read, or is being read again) is left as it is, listed or not:
+   * a list replaces only what it's the word on.
    */
-  #reconcile(): void {
+  #reconcile(only?: ReadonlySet<string>): void {
     this.#archivedNow()
+    const picked = (conversation: string) => !only || only.has(conversation)
     const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string; quietSince: string | undefined }>()
+    const undecided = new Set<string>()
     // An archived cloud Thread's Sessions, as they were listed when it was archived: every device shows them with the
     // archived ones (`archivedChanged`), at rest, and nothing runs them.
     for (const archived of this.#list.archived().values())
-      for (const row of archived.sessions) wanted.set(row.conversation, { row: { ...row, state: "idle" }, threadId: archived.thread, where: CLOUD_FOLDER_WHERE, quietSince: undefined })
-    for (const row of this.#list.sessions().values()) {
-      if (!this.#listable(row)) continue
+      for (const row of archived.sessions) if (picked(row.conversation)) wanted.set(row.conversation, { row: { ...row, state: "idle" }, threadId: archived.thread, where: CLOUD_FOLDER_WHERE, quietSince: undefined })
+    const rows = [...this.#list.sessions().values()].filter((row) => picked(row.conversation))
+    const executions = this.#executions(rows)
+    for (const row of rows) {
+      if (!this.#listable(row, executions)) continue
       if (row.runsOn.kind === "device") {
-        if (row.runsOn.deviceId === this.#device || this.#keptHere(row)) continue
+        if (row.runsOn.deviceId === this.#device) continue
+        const kept = this.#keptHere(row)
+        if (kept === undefined) {
+          undecided.add(row.conversation)
+          continue
+        }
+        if (kept) continue
         const owner = listedOwner(row)
         if (owner.kind !== "device") continue
         const name = this.#deviceNames.get(owner.deviceId)
@@ -1644,21 +1675,33 @@ export class CloudConversations {
         wanted.set(row.conversation, { row, threadId: owner.stream, runtime: owner.runtimeId, where: name ?? "another computer", quietSince: this.#list.quietSince(owner.deviceId) })
       } else if (!this.#options.returning?.(row.runsOn.threadId)) wanted.set(row.conversation, { row, threadId: row.runsOn.threadId, where: CLOUD_FOLDER_WHERE, quietSince: undefined })
     }
+    // How many conversations each Thread has here: one that leaves the last of its Thread's stops its following.
+    const perThread = new Map<string, number>()
+    for (const entry of this.#entries.values()) perThread.set(entry.threadId, (perThread.get(entry.threadId) ?? 0) + 1)
     const unlisted: string[] = []
     // Deleting from a Map as it's walked is safe: the walk goes on past what went.
     for (const entry of this.#entries.values()) {
-      if (!entry.listed || wanted.get(entry.conversationId)?.threadId === entry.threadId) continue
+      if (!entry.listed || !picked(entry.conversationId) || undecided.has(entry.conversationId) || wanted.get(entry.conversationId)?.threadId === entry.threadId) continue
       this.#entries.delete(entry.conversationId)
       this.controlPreviews.forget(entry.conversationId)
       this.#capturing.delete(entry.conversationId)
       unlisted.push(entry.conversationId)
-      if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
+      const left = (perThread.get(entry.threadId) ?? 1) - 1
+      perThread.set(entry.threadId, left)
+      if (left <= 0) this.#following.get(entry.threadId)?.close()
     }
     const listed: LiveSummary[] = []
     for (const [id, { row, threadId, runtime, where, quietSince }] of wanted) {
       const known = this.#entries.get(id)
-      if (known && (!known.listed || this.#following.has(known.threadId))) continue
+      if (known && !known.listed) continue
       const summary = listedSummary(row, where, quietSince)
+      if (known && this.#following.has(known.threadId)) {
+        // A window follows it: its batches say the rest, but nothing comes from a device gone quiet, nor says it's back.
+        if (known.summary?.quietSince === summary.quietSince) continue
+        known.summary = summary
+        listed.push(summary)
+        continue
+      }
       if (known?.summary && JSON.stringify(known.summary) === JSON.stringify(summary)) continue
       const entry: Entry = known ?? { conversationId: id, threadId, harness: row.harness, createdAt: summary.createdAt, created: true, seq: 0, listed: true }
       if (runtime) entry.runtime = runtime
@@ -1670,24 +1713,52 @@ export class CloudConversations {
       listed.push(summary)
     }
     // A Session that moved (another device's to the cloud, or back) is listed where it runs now, never unlisted on the way.
-    const gone = unlisted.filter((id) => !listed.some((summary) => summary.session.id === id))
+    const relisted = new Set(listed.map((summary) => summary.session.id))
+    const gone = unlisted.filter((id) => !relisted.has(id))
     if (listed.length) this.#options.emit(encodeRuntimeEvent({ type: "live-listed", summaries: listed }))
     if (gone.length) this.#options.emit(encodeRuntimeEvent({ type: "live-unlisted", ids: gone }))
     if (listed.length || gone.length) hostLog("cloud-conversations", "the account's list changed what's listed here", { listed: listed.length, unlisted: gone.length, moved: unlisted.length - gone.length })
   }
 
-  /** The sessions this Mac's harness stores keep changed: another device's rows that are this Mac's own go, or come back. */
-  nativeChanged(): void {
-    if (this.#list.known && this.#options.keepsNative) this.#reconcile()
+  /**
+   * The sessions this Mac's harness stores keep changed: another device's rows that are this Mac's own go, or come back.
+   * `changed` names the native sessions a write touched; none means any may have (the catalog was read anew, or lost a
+   * row). Changes are gathered for `NATIVE_CHANGED_MS` and looked at together, only the rows they name, one look at a
+   * time: a catalog writes on every turn of every session, and each used to list the account's rows here anew.
+   */
+  nativeChanged(changed?: readonly { harness: string; nativeId: string }[]): void {
+    if (!this.#options.keepsNative || this.#closed) return
+    const held = this.#nativeChanges
+    if (!changed) this.#nativeChanges = "all"
+    else if (held !== "all") {
+      const keys = held ?? new Set<string>()
+      for (const each of changed) keys.add(nativeKey(each.harness, each.nativeId))
+      this.#nativeChanges = keys
+    }
+    if (this.#nativeLook) return
+    this.#nativeLook = setTimeout(() => {
+      this.#nativeLook = undefined
+      const changes = this.#nativeChanges
+      this.#nativeChanges = undefined
+      // A list not read yet has nothing of this Mac's to hide; reading it reconciles it whole.
+      if (!changes || !this.#list.known || this.#closed) return
+      if (changes === "all") return this.#reconcile()
+      const only = new Set<string>()
+      for (const row of this.#list.sessions().values()) if (row.nativeId !== undefined && changes.has(nativeKey(row.harness, row.nativeId))) only.add(row.conversation)
+      if (only.size) this.#reconcile(only)
+    }, this.#options.nativeChangedMs ?? NATIVE_CHANGED_MS)
+    this.#nativeLook.unref?.()
   }
 
   /**
    * Another device's row for a session this Mac's own harness stores keep in the same folder: a second Mako on this Mac
    * reading the same stores, listing what this Mac lists already. One session, one row: this Mac's, read from its own
    * disk. A cloud machine's row is never one: a Session that moved there runs there, whatever copy is left here.
+   * Undefined while this Mac's catalog can't say.
    */
-  #keptHere(row: ListedSession): boolean {
-    return row.nativeId !== undefined && this.#options.keepsNative?.(row.harness, row.nativeId, row.folder) === true
+  #keptHere(row: ListedSession): boolean | undefined {
+    if (row.nativeId === undefined || !this.#options.keepsNative) return false
+    return this.#options.keepsNative(row.harness, row.nativeId, row.folder)
   }
 
   /**
@@ -1705,14 +1776,19 @@ export class CloudConversations {
     }, () => {})
   }
 
-  /** Tells the host of the archived cloud Threads when they changed, and stops following each: it says nothing now. */
+  /**
+   * Tells the host of the archived cloud Threads when they changed, and stops following each: it says nothing now. Only
+   * a list read says: before one is, or after a sign-out forgot it, the host keeps what it was told last.
+   */
   #archivedNow(): void {
+    const account = this.#accountId
+    if (!this.#list.known || !account) return
     const archived = this.#list.archived()
-    const key = [...archived.keys()].sort().join(",")
+    const key = `${account}\n${[...archived.keys()].sort().join(",")}`
     if (key === this.#archivedKey) return
     this.#archivedKey = key
     for (const thread of archived.keys()) this.#following.get(thread)?.close()
-    this.#options.archivedChanged?.(archived)
+    this.#options.archivedChanged?.(account, archived)
   }
 
   /**
@@ -1720,11 +1796,20 @@ export class CloudConversations {
    * moves and returns route it (`adopt`, `release`): the list hears of each a moment later, and a row from before a
    * return would send this Mac's calls to the cloud Thread that gave it back. Listed only where the store has it too.
    */
-  #listable(row: ListedSession): boolean {
-    const session = SessionIdSchema.safeParse(row.session)
-    const execution = session.success ? this.#options.threads?.()?.execution(session.data) : undefined
+  #listable(row: ListedSession, executions: ReadonlyMap<string, SessionExecution>): boolean {
+    const execution = executions.get(row.session)
     if (!execution) return true
     return execution.state === "elsewhere" && execution.owner.kind === "cloud" && row.runsOn.kind === "cloud" && execution.owner.runtime === cloudRuntimeOf(row.runsOn.threadId)
+  }
+
+  /** What this Mac's Thread store says of the rows' Sessions, read once for all of them (`#listable`). */
+  #executions(rows: readonly ListedSession[]): ReadonlyMap<string, SessionExecution> {
+    const store = this.#options.threads?.()
+    if (!store || !rows.length) return new Map()
+    return store.executionsOf(rows.flatMap((row) => {
+      const session = SessionIdSchema.safeParse(row.session)
+      return session.success ? [session.data] : []
+    }))
   }
 
   async #load(): Promise<void> {
@@ -1773,6 +1858,9 @@ export class CloudConversations {
 const ENDED_REQUEST = new Set<LiveRequest["status"]>(["completed", "failed", "interrupted", "canceled", "uncertain"])
 /** How many of a conversation's ended requests are remembered: far more than a batch restates. */
 const ENDED_KEPT = 64
+
+/** A native session of a harness, as `nativeChanged` names it. */
+const nativeKey = (harness: string, nativeId: string) => `${harness}\n${nativeId}`
 
 /** A snapshot's summary fields, which are all a window needs to list the conversation before it opens it. */
 function summaryOf(snapshot: LiveSummary): LiveSummary {

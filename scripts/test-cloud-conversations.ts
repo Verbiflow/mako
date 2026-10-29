@@ -273,7 +273,7 @@ function conversations(account: CloudAccount, file: string, copies?: CloudCopies
   const options: CloudConversationsOptions = { account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id), turnEnded: (conversation, thread) => ended.push(`${conversation} ${thread}`) }
   if (copies) options.copies = copies
   if (asleepMs) options.asleepMs = asleepMs
-  options.archivedChanged = (threads) => archived.push([...threads.keys()])
+  options.archivedChanged = (_account, threads) => archived.push([...threads.keys()])
   const router = new CloudConversations(options)
   after(() => router.dispose())
   return { router, events, starts, changed, archived, ended }
@@ -1126,6 +1126,7 @@ test("a second Mako on this Mac, which lists this Mac's own sessions as its own,
   const router = new CloudConversations({
     account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-listed-here-")), "conversations.json"), emit: (event) => events.push(event), repositoryOf: async () => REPOSITORY,
     keepsNative: (harness, nativeId, at) => kept.has(`${harness}\n${nativeId}\n${at}`),
+    nativeChangedMs: 0,
   })
   after(() => router.dispose())
   await router.start()
@@ -1142,8 +1143,147 @@ test("a second Mako on this Mac, which lists this Mac's own sessions as its own,
   // The session leaves this Mac's stores (its harness deleted it here): the other profile's row is listed.
   kept.delete(`cursor\n4c1d\n${folder}`)
   router.nativeChanged()
-  assert.equal(shown(opened.conversation)?.elsewhere, "Ana's MacBook Pro (2)")
+  await until("looked at again", () => shown(opened.conversation)?.elsewhere === "Ana's MacBook Pro (2)")
   assert.equal(shown(terminal.conversation), undefined)
+})
+
+test("the account's rows for sessions this Mac may keep wait for its catalog, a lost catalog takes none away, and a burst of its writes is one look at the rows they name", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const profile = "2d7c5e10-4f3a-4b6e-9c8d-1a2b3c4d5e6f"
+  const folder = "/Users/ana/api"
+  const row = (runsOn: ListedSession["runsOn"], extra: Partial<ListedSession> = {}): ListedSession => ({
+    session: randomUUID(), thread: randomUUID(), conversation: randomUUID(), harness: "claude", title: "Retry the webhooks", state: "idle", folder,
+    createdAt: "2026-10-27T07:20:00.000Z", activityAt: "2026-10-27T07:20:00.000Z", generation: 1, runsOn, listedAt: "2026-10-27T07:20:01.000Z", ...extra,
+  })
+  // The other profile's rows: one for a session this Mac's stores keep, one for a session they don't; and a cloud row.
+  const terminal = row({ kind: "device", deviceId: profile }, { nativeId: "0b7e" })
+  const theirs = row({ kind: "device", deviceId: profile }, { nativeId: "9f2a" })
+  const inCloud = row({ kind: "cloud", threadId: "t-00000000000000ad" })
+  machine.account.sessionListings = async () => ({ sessions: [terminal, theirs, inCloud], seq: 1 })
+  machine.account.devices = async () => ({ devices: [{ id: profile, name: "Ana's MacBook Pro (2)" }], current: myDevice! })
+  machine.account.onThreadListings = () => () => {}
+  // This Mac's catalog, not read yet: it can't say what the stores keep.
+  let ready = false
+  const kept = new Set([`claude\n0b7e\n${folder}`])
+  let asked = 0
+  const events: RuntimeEvent[] = []
+  const router = new CloudConversations({
+    account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-keeps-")), "conversations.json"), emit: (event) => events.push(event), repositoryOf: async () => REPOSITORY,
+    keepsNative: (harness, nativeId, at) => {
+      asked += 1
+      return ready ? kept.has(`${harness}\n${nativeId}\n${at}`) : undefined
+    },
+    nativeChangedMs: 20,
+  })
+  after(() => router.dispose())
+  await router.start()
+  const shown = (each: ListedSession) => router.summaries().find((summary) => summary.session.id === each.conversation)
+  await until("the list read", () => shown(inCloud) !== undefined)
+  assert.equal(shown(terminal), undefined, "a row this Mac may keep isn't listed while its catalog can't say")
+  assert.equal(shown(theirs), undefined, "nor one it may not: it isn't listed and then taken away")
+
+  ready = true
+  router.nativeChanged()
+  await until("the catalog read, the rows looked at", () => shown(theirs) !== undefined)
+  assert.equal(shown(terminal), undefined, "the session this Mac keeps is listed once, as this Mac's")
+
+  // A session at work writes over and over: a hundred writes are one look, at the rows that name its session alone.
+  const listedBefore = events.filter((event) => event.type === "live-listed").length
+  asked = 0
+  for (let write = 0; write < 100; write++) router.nativeChanged([{ harness: "codex", nativeId: "a-session-no-row-names" }])
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(asked, 0, "no row names it: nothing is looked at")
+  kept.delete(`claude\n0b7e\n${folder}`)
+  for (let write = 0; write < 100; write++) router.nativeChanged([{ harness: "claude", nativeId: "0b7e" }])
+  await until("the session left this Mac's stores: the other profile's row is listed", () => shown(terminal) !== undefined)
+  assert.equal(asked, 1, "one look, at the one row that names it")
+  assert.equal(events.filter((event) => event.type === "live-listed").length, listedBefore + 1)
+
+  // The catalog's reader is lost and read again: until it's back, the rows stay as they are.
+  ready = false
+  router.nativeChanged()
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.ok(shown(terminal) && shown(theirs), "a catalog being read again says nothing of what the stores keep")
+  assert.equal(events.filter((event) => event.type === "live-unlisted").length, 0, "nothing unlisted")
+})
+
+test("a quiet device's conversation a window has open stops working there too, and says it's back when it is", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const studio = "6a1f0c3e-2b4d-4e8f-9a7c-5d3e1b0f2c4a"
+  const listed: ListedSession = {
+    session: randomUUID(), thread: randomUUID(), conversation: randomUUID(), harness: "claude", title: "Retry the webhooks", state: "working", folder: "/Users/ana/api",
+    createdAt: "2026-10-27T07:20:00.000Z", activityAt: "2026-10-27T07:20:00.000Z", generation: 1, runsOn: { kind: "device", deviceId: studio }, listedAt: "2026-10-27T07:20:01.000Z",
+  }
+  machine.account.sessionListings = async () => ({ sessions: [listed], seq: 1 })
+  machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
+  const listeners = new Set<(heard: AccountListHeard | "account-changed") => void>()
+  machine.account.onThreadListings = (listener) => {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  }
+  const say = (heard: AccountListHeard) => {
+    for (const listener of listeners) listener(heard)
+  }
+  const studioRuntime = await serveHostThroughGateway(await machine.gateway.connectRuntime(), {
+    runtimeId: `d-${studio}`,
+    build: "test",
+    invoke: async () => JSON.stringify({ session: { id: listed.conversation } }),
+  })
+  after(() => studioRuntime.close())
+  const events: RuntimeEvent[] = []
+  const router = new CloudConversations({ account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-quiet-open-")), "conversations.json"), emit: (event) => events.push(event), repositoryOf: async () => REPOSITORY })
+  after(() => router.dispose())
+  await router.start()
+  await until("listed", () => router.summaries().some((summary) => summary.session.id === listed.conversation))
+  // A window opens it: from now its batches come here from its stream, and the list's rows for it aren't listed again.
+  assert.ok((await router.route("mako:live-state", [listed.conversation])).handled)
+  const told = () => events.flatMap((event) => event.type === "live-listed" ? decodeRuntimeEvent<Extract<HostEvent, { type: "live-listed" }>>(event.payload).summaries : [])
+    .filter((summary) => summary.session.id === listed.conversation)
+  const before = told().length
+  // The Studio goes quiet mid-turn: it sends nothing more, so nothing but the list can say its turn isn't going on.
+  const since = "2026-10-27T08:00:00.000Z"
+  say({ seq: 2, event: { type: "device-quiet", deviceId: studio, since } })
+  assert.equal(told().length, before + 1, "the window is told")
+  assert.deepEqual([told().at(-1)?.session.status, told().at(-1)?.quietSince], ["ready", Date.parse(since)], "not at work, and since when it's been quiet")
+  say({ seq: 3, event: { type: "device-quiet", deviceId: studio, since: null } })
+  assert.equal(told().length, before + 2, "and told it's back, so it reads it there again")
+  assert.equal(told().at(-1)?.quietSince, undefined)
+  // Anything else the list says of it is the window's own batches' to say.
+  say({ seq: 4, event: { type: "sessions-listed", sessions: [{ ...listed, state: "idle", listedAt: "2026-10-27T08:01:00.000Z" }] } })
+  assert.equal(told().length, before + 2)
+})
+
+test("the account's archived cloud Threads are said only from a list it answered, never as none at a sign-out or before the list is read", async () => {
+  const machine = await cloudMachine()
+  const archivedThread = { thread: "t-00000000000000ae", move: randomUUID(), archivedAt: "2026-10-27T09:00:00.000Z", sessions: [] }
+  let listings: SessionListings = { sessions: [], seq: 1, archived: [archivedThread] }
+  machine.account.sessionListings = async () => listings
+  machine.account.devices = async () => ({ devices: [], current: (await machine.account.deviceId())! })
+  let tell: ((heard: AccountListHeard | "account-changed") => void) | undefined
+  machine.account.onThreadListings = (listener) => ((tell = listener), () => {})
+  const heard: [string, string[]][] = []
+  const router = new CloudConversations({
+    account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-archived-")), "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY,
+    archivedChanged: (account, archived) => heard.push([account, [...archived.keys()]]),
+  })
+  after(() => router.dispose())
+  await router.start()
+  const account = await machine.account.id()
+  await until("the list read", () => heard.length > 0)
+  assert.deepEqual(heard, [[account, [archivedThread.thread]]])
+  // Signed out, or another account: the list is forgotten, but that says nothing of what's archived.
+  listings = { sessions: [], seq: 1 }
+  let answer: () => void = () => {}
+  const answered = new Promise<void>((resolve) => (answer = resolve))
+  machine.account.sessionListings = async () => (await answered, listings)
+  tell?.("account-changed")
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.deepEqual(heard, [[account, [archivedThread.thread]]], "the archived Threads stand until a list says otherwise")
+  answer()
+  await until("the new list read", () => heard.length > 1)
+  assert.deepEqual(heard.at(-1), [account, []], "a list read says it, even when it's the same as before but for what's archived")
 })
 
 test("a quiet device's rows are listed as it left them, but none at work or waiting on the person; heard from again, each says its state again", async () => {

@@ -126,7 +126,7 @@
     "test:account-threads-ui": "node scripts/test-account-threads-ui.mjs",
     "test:cloud-archive-ui": "node scripts/test-cloud-archive-ui.mjs",
     "test:telemetry": "tsx scripts/test-telemetry.ts",
-    "test:host": "tsx scripts/test-host.ts && tsx scripts/test-repeated-calls.ts && tsx scripts/test-heap-watch.ts",
+    "test:host": "tsx scripts/test-host.ts && tsx scripts/test-repeated-calls.ts && tsx scripts/test-heap-watch.ts && tsx scripts/test-reader-history.ts",
     "test:host-linux": "npm run build:control-runtime && node scripts/test-host-linux.mjs",
     "test:linux-locks": "npm run -s build --workspace @mako/sessions && node scripts/test-linux-locks.mjs",
     "host:inspect": "tsx packages/host/src/mako-host.ts inspect",

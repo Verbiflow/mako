@@ -759,8 +759,8 @@ async function bulkLoadsAreNamed() {
       lastMoved: (id: string, revision: number) => owner.lastMoved(id, revision),
       // SAFETY: test IDs in the Thread store's shapes, which brand plain UUIDs.
       placement: (id: string) => ({ thread: id, session: id }) as never,
-      execution: () => undefined,
-      thread: () => undefined,
+      executions: () => new Map(),
+      titles: () => new Map(),
       now: Date.now,
     }
     const rows = work.run("tell the account this host's Sessions", () => ownedSessions(sources))

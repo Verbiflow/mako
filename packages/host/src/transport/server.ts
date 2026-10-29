@@ -10,9 +10,10 @@ import { packageLoads } from "@mako/lazy"
 import { z } from "zod"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { TerminalEvent } from "../contracts/terminal.js"
-import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRuntimeArgs, runtimeEventRouting, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
+import { CORRELATION_HEADER, CorrelationIdSchema, RuntimeCallSchema, decodeRuntimeArgs, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
 import { encodeRuntimeEvent, runtimeEventLine, runtimeSuccessBody, type EncodedValue, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
+import { historyChangedNotice } from "./gateway.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { filePolicyHeaders } from "../base/file-policy.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
@@ -42,7 +43,6 @@ async function readRequest(request: IncomingMessage) {
 }
 
 const SecretKeyOfferSchema = z.object({ key: z.base64() }).strict()
-const LiveBatchIdentity = z.object({ batch: z.object({ id: z.string(), revision: z.number(), epoch: z.string().optional() }) })
 
 async function readSecretKeyOffer(request: IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = []
@@ -303,10 +303,8 @@ export async function startWebHost(
   }, { needs: [subscribed] })
   /** A live batch too large for a history-paging subscriber, as the notice that its history changed. */
   const invalidated = (event: RuntimeEvent) => {
-    if (runtimeEventRouting(event).type !== "live-batch") return null
-    const live = LiveBatchIdentity.safeParse(JSON.parse(event.payload))
-    if (!live.success) return null
-    return runtimeEventLine("event", encodeRuntimeEvent({ type: "live-batch", batch: { ...live.data.batch, updates: [], historyChanged: true } }))
+    const notice = historyChangedNotice(event)
+    return notice ? runtimeEventLine("event", notice) : null
   }
   const send = (channel: RuntimeEventChannel, event: RuntimeEvent, client?: string) => {
     if (!client) outlet?.(channel, event)

@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import { SessionIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
+import { SessionIdSchema, ThreadIdSchema, type Actor } from "@mako/host/contracts/thread-identity"
 import { MoveIdSchema, RuntimeIdSchema } from "@mako/host/contracts/thread-execution"
 import {
   THREAD_STORE_SCHEMA,
@@ -320,6 +320,63 @@ function threadGroups(): void {
   reopened.close()
 }
 
+/**
+ * What a report of every Session in the sync window reads of the store, many at once: each read once, then answered from
+ * memory until any commit, this host's or another's; the same as reading each alone.
+ */
+function manyAtOnce(): void {
+  const path = join(root, "many.sqlite")
+  const first = new ThreadStore(path, { now })
+  const parent = journal({ harness: "claude", bindings: [{ provider: "claude", nativeId: "m-p", path: "/claude/m/p.jsonl" }] })
+  const home = first.registerJournal(parent, migration)
+  const forked = first.registerJournal(journal({ harness: "codex", ancestry: { parentId: parent.conversationId, placement: "parent-thread" } }), migration)
+  const alone = first.registerJournal(journal({ harness: "grok" }), migration)
+  const other = first.registerJournal(journal({ harness: "cursor" }), migration)
+  const tab = first.createSession({ operationId: randomUUID(), thread: other.thread, actor: first.person() })
+  first.renameThread({ operationId: randomUUID(), thread: home.thread, title: "Parser", actor: first.person() })
+  const unknown = SessionIdSchema.parse(randomUUID())
+  const sessions = [home.session, forked.session, alone.session, tab.session, unknown]
+  const executions = first.executionsOf(sessions)
+  assert.deepEqual([...executions.keys()], [home.session, forked.session, alone.session, tab.session], "a Session the store never saw is left out")
+  for (const session of sessions) assert.deepEqual(executions.get(session), first.execution(session), "as each reads alone")
+  const titles = first.titlesOf([home.thread, alone.thread])
+  assert.deepEqual(titles.get(home.thread), { title: "Parser", titleSource: "user" })
+  assert.deepEqual(titles.get(alone.thread), {})
+
+  // The groups, as reading each Thread alone gives them, in the order of each one's first Session.
+  const expected = () => {
+    const db = new DatabaseSync(path, { readOnly: true })
+    const ids = db.prepare("SELECT thread_id FROM memberships GROUP BY thread_id HAVING count(*) > 1 ORDER BY min(added_at), thread_id").all().map((each) => String(each.thread_id))
+    db.close()
+    return ids.flatMap((id) => first.group(ThreadIdSchema.parse(id)) ?? [])
+  }
+  const groups = first.groups()
+  assert.deepEqual(groups, expected())
+  assert.deepEqual(groups.map((group) => group.id), [home.thread, other.thread])
+
+  // Nothing committed since: answered from memory.
+  assert.equal(first.groups(), groups, "the groups again, not read again")
+  assert.equal(first.executionsOf([home.session]).get(home.session), executions.get(home.session), "an execution again, not read again")
+
+  // Another host's commit: read again, and what it changed is said.
+  const second = new ThreadStore(path, { now })
+  second.renameThread({ operationId: randomUUID(), thread: alone.thread, title: "Lexer", actor: second.person() })
+  assert.deepEqual(first.titlesOf([alone.thread]).get(alone.thread), { title: "Lexer", titleSource: "user" }, "another host's rename")
+  assert.notEqual(first.groups(), groups, "read again after another host's commit")
+  second.createSession({ operationId: randomUUID(), thread: alone.thread, actor: second.person() })
+  assert.deepEqual(first.groups(), expected(), "a Session another host added to a Thread")
+  assert.equal(first.groups().length, 3)
+  second.close()
+
+  // This host's own write: read again too.
+  const before = first.executionsOf([home.session]).get(home.session)
+  first.beginMove({ move: MoveIdSchema.parse(randomUUID()), thread: home.thread, target: { kind: "cloud", runtime: RuntimeIdSchema.parse(randomUUID()) }, actor: first.person() })
+  assert.equal(before?.state, "here")
+  assert.equal(first.executionsOf([home.session]).get(home.session)?.state, "leaving", "a move begun here")
+  assert.deepEqual(first.executionsOf([forked.session]).get(forked.session), first.execution(forked.session))
+  first.close()
+}
+
 function twoHosts(): void {
   const path = join(root, "shared.sqlite")
   const first = new ThreadStore(path, { now })
@@ -501,6 +558,7 @@ try {
   conflicts()
   receipts()
   threadGroups()
+  manyAtOnce()
   twoHosts()
   placementLog()
   membership()

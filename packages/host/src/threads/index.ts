@@ -220,6 +220,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   methods.handle("mako:thread-unfollow", () => catalog.unfollow())
   methods.handle("mako:thread-remember-mode", (path: string, modeId: string) => catalog.rememberMode(path, modeId))
   methods.handle("mako:daemon-status", () => catalog.daemonStatus())
+  methods.handle("mako:session-reader-history", () => catalog.readerHistory())
   methods.handle("mako:store-formats", () => threads.formats())
   methods.handle("mako:daemon-login", () => daemonLoginEnabled())
   methods.handle("mako:daemon-login-set", (enabled: boolean) => setDaemonLogin(threads.app, enabled))

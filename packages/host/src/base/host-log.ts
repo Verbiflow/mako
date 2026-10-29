@@ -1,8 +1,17 @@
-import { appendFile, mkdir, rename, stat } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
 import { format } from "node:util"
+import {
+  formatLogLine,
+  LOG_MAX_BYTES,
+  openProcessLog,
+  type LogFields,
+  type LogFieldValue,
+  type LogLevel,
+} from "@mako/sessions/process-log"
 import { hostCorrelation } from "./host-client.js"
 import { topic } from "./topic.js"
+
+export { scrubSecrets } from "@mako/sessions/process-log"
 
 /**
  * The host's durable record of what it did.
@@ -14,17 +23,17 @@ import { topic } from "./topic.js"
  * process that stalled it. Crash reports remain separate files; this log
  * mirrors their one-line summary so the timeline is in one place.
  *
- * Bounded by rotation: when the file passes `maxBytes` it becomes `<path>.1`
- * and the previous `.1` is dropped. Writes are serialized and never throw; a
- * logging failure must not fail the host.
+ * The line format, the rotation to `<path>.1` and the secret scrub are
+ * `@mako/sessions/process-log`'s, shared with the sync reader's own log
+ * (`daemon-main.ts`), which can't import the host.
  *
  * Nothing secret belongs here. Callers pass explicit fields, never an
  * environment, a header list or a request body; provider stderr tails are
  * scrubbed of bearer tokens and `token=` query values before they are written.
  */
-export type HostLogLevel = "info" | "warn" | "error"
-export type HostLogFieldValue = string | number | boolean | null | undefined
-export type HostLogFields = Record<string, HostLogFieldValue>
+export type HostLogLevel = LogLevel
+export type HostLogFieldValue = LogFieldValue
+export type HostLogFields = LogFields
 
 export interface HostLog {
   readonly path: string
@@ -33,67 +42,16 @@ export interface HostLog {
   flush(): Promise<void>
 }
 
-export const HOST_LOG_MAX_BYTES = 4 * 1024 * 1024
-const FIELD_LIMIT = 1_200
+export const HOST_LOG_MAX_BYTES = LOG_MAX_BYTES
 
-const SECRET_PATTERNS: readonly RegExp[] = [
-  /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/g,
-  /\b(token|key|secret|password|authorization)=([^\s&"']+)/gi,
-]
+export const formatHostLogLine = formatLogLine
 
-/** Provider stderr can echo a launch header; keep the shape, drop the value. */
-export function scrubSecrets(text: string): string {
-  return text
-    .replace(SECRET_PATTERNS[0]!, "Bearer …")
-    .replace(SECRET_PATTERNS[1]!, (_match, name: string) => `${name}=…`)
-}
-
-function fieldText(value: HostLogFieldValue): string {
-  if (value === undefined || value === null) return "-"
-  const text = scrubSecrets(String(value)).replace(/\s+/g, " ").trim()
-  const bounded = text.length > FIELD_LIMIT ? `${text.slice(0, FIELD_LIMIT)}…` : text
-  return /[\s"=]/.test(bounded) || bounded === "" ? JSON.stringify(bounded) : bounded
-}
-
-export function formatHostLogLine(
-  at: Date,
-  level: HostLogLevel,
-  scope: string,
-  message: string,
-  fields?: HostLogFields
-): string {
-  const head = `${at.toISOString()} ${level.padEnd(5)} ${scope} ${scrubSecrets(message).replace(/\s+/g, " ").trim()}`
-  const tail = Object.entries(fields ?? {})
-    .filter(([, value]) => value !== undefined)
-    .map(([key, value]) => `${key}=${fieldText(value)}`)
-  return `${[head, ...tail].join(" ")}\n`
-}
-
+/** Bounded by rotation; writes are serialized and never throw: a logging failure must not fail the host. */
 export function openHostLog(
   path: string,
   options: { maxBytes?: number; now?: () => Date } = {}
 ): HostLog {
-  const maxBytes = options.maxBytes ?? HOST_LOG_MAX_BYTES
-  const now = options.now ?? (() => new Date())
-  let queue: Promise<void> = Promise.resolve()
-
-  const append = async (line: string) => {
-    await mkdir(dirname(path), { recursive: true })
-    const size = await stat(path)
-      .then((entry) => entry.size)
-      .catch(() => 0)
-    if (size > 0 && size + line.length > maxBytes) await rename(path, `${path}.1`)
-    await appendFile(path, line, "utf8")
-  }
-
-  return {
-    path,
-    write(level, scope, message, fields) {
-      const line = formatHostLogLine(now(), level, scope, message, fields)
-      queue = queue.then(() => append(line)).catch(() => undefined)
-    },
-    flush: () => queue,
-  }
+  return openProcessLog(path, options)
 }
 
 /** Where a process with this data root keeps its log and what is kept beside it. */

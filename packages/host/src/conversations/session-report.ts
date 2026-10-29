@@ -8,7 +8,9 @@ import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId, type Th
 import { Payload, SESSIONS_VERSION, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
 import type { HostWork } from "../base/event-loop.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
-import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
+import { encodeRuntimeEvent, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
+import { gatewayEventLine } from "../transport/index.js"
+import { hostWarn } from "../base/host-log.js"
 import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.js"
 import { namedUuid } from "./cloud-moves.js"
 import { syncTier } from "./sync-window.js"
@@ -40,8 +42,13 @@ export type ReportSources = {
   /** When a conversation last moved (its journal's last write), if known; read again only once its revision moved. */
   lastMoved(conversationId: string, revision: number): number | undefined
   placement(conversationId: string): ThreadPlacement | undefined
-  execution(session: SessionId): SessionExecution | undefined
-  thread(id: ThreadId): { title?: string; titleSource?: string } | undefined
+  /**
+   * Who may execute each of these Sessions (`ThreadStore.executionsOf`), asked once a report for every row's Session,
+   * so a report reads the store once however many rows it has, and not at all while nothing was committed.
+   */
+  executions(sessions: readonly SessionId[]): ReadonlyMap<SessionId, SessionExecution>
+  /** Each of these Threads' names (`ThreadStore.titlesOf`), asked once a report as `executions` is. */
+  titles(threads: readonly ThreadId[]): ReadonlyMap<ThreadId, { title?: string; titleSource?: string }>
   now(): number
 }
 
@@ -81,11 +88,6 @@ export function threadActivity(rows: readonly Pick<ReportedSession, "thread" | "
 export function ownedSessions(sources: ReportSources): ReportedSession[] {
   const work = new Map(sources.work().map((item) => [item.id, item.status]))
   const now = sources.now()
-  const bySession = new Map<string, ReportedSession>()
-  const add = (row: ReportedSession) => {
-    const held = bySession.get(row.session)
-    bySession.set(row.session, held ? preferred(held, row) : row)
-  }
   // Every path a conversation of this host reads, closed ones included: its session is that conversation's to list.
   const opened = new Set<string>()
   const summaries = sources.summaries()
@@ -94,14 +96,42 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     for (const path of summary.nativePaths ?? []) opened.add(path)
   }
   const hidden = sources.hidden()
+  // The rows that may be listed, each placed in its Thread and Session; what the store says of those is read for all
+  // of them at once below.
+  const conversations: { summary: LiveSummary; placed: ThreadPlacement }[] = []
   for (const summary of summaries) {
-    const { session } = summary
     // A closed conversation is the person's still: another device's message reopens it (`reopenClosed`). An archived one
     // is read off the listing, never by loading the journal: this is a pure function of what the host already holds.
     if (archivedByKeys(liveArchiveKeys(summary), hidden, undefined)) continue
-    const placed = sources.placement(session.id)
+    const placed = sources.placement(summary.session.id)
     if (!placed) continue
-    const execution = sources.execution(placed.session)
+    conversations.push({ summary, placed })
+  }
+  const natives: { ref: NativeRow; session: SessionId; thread: ThreadId }[] = []
+  for (const ref of sources.native()) {
+    if (ref.archived || ref.copyOnly || ref.nativeArchived || !ref.updatedAt) continue
+    const sessionId = SessionIdSchema.safeParse(ref.sessionId)
+    const threadId = ThreadIdSchema.safeParse(ref.threadId)
+    if (!sessionId.success || !threadId.success) continue
+    if (opened.has(ref.path)) continue
+    natives.push({ ref, session: sessionId.data, thread: threadId.data })
+  }
+  const executions = sources.executions([...conversations.map(({ placed }) => placed.session), ...natives.map(({ session }) => session)])
+  const titles = sources.titles([...new Set([...conversations.map(({ placed }) => placed.thread), ...natives.map(({ thread }) => thread)])])
+  // A title the person or Mako gave the Thread; an older build's automatic one isn't shown anywhere.
+  const threadTitle = (thread: ThreadId) => {
+    const found = titles.get(thread)
+    return found?.title && found.titleSource !== "auto" ? line(found.title) : undefined
+  }
+
+  const bySession = new Map<string, ReportedSession>()
+  const add = (row: ReportedSession) => {
+    const held = bySession.get(row.session)
+    bySession.set(row.session, held ? preferred(held, row) : row)
+  }
+  for (const { summary, placed } of conversations) {
+    const { session } = summary
+    const execution = executions.get(placed.session)
     if (execution?.state === "elsewhere") continue
     const working = work.get(session.id)
     const state: ListedState = execution?.state === "leaving" || execution?.state === "in-transit" ? "moving"
@@ -121,9 +151,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
       activityAt: iso(movedAt),
       generation: execution?.generation ?? 1,
     }
-    const thread = sources.thread(placed.thread)
-    // A title the person or Mako gave the Thread; an older build's automatic one isn't shown anywhere.
-    if (thread?.title && thread.titleSource !== "auto") row.threadTitle = line(thread.title)
+    const titled = threadTitle(placed.thread)
+    if (titled) row.threadTitle = titled
     if (session.title) row.title = line(session.title)
     if (state === "waiting") {
       const on = sources.waitingOn(session.id)
@@ -135,27 +164,23 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const parsed = ReportedSessionSchema.safeParse(row)
     if (parsed.success) add(parsed.data)
   }
-  const conversations = new Set(bySession.keys())
-  for (const ref of sources.native()) {
-    if (ref.archived || ref.copyOnly || ref.nativeArchived || !ref.updatedAt) continue
-    const sessionId = SessionIdSchema.safeParse(ref.sessionId)
-    const threadId = ThreadIdSchema.safeParse(ref.threadId)
-    if (!sessionId.success || !threadId.success) continue
-    if (conversations.has(sessionId.data) || opened.has(ref.path)) continue
-    const execution = sources.execution(sessionId.data)
+  const listedConversations = new Set(bySession.keys())
+  for (const { ref, session, thread } of natives) {
+    if (listedConversations.has(session)) continue
+    const execution = executions.get(session)
     if (execution?.state === "elsewhere") continue
     const activity = sources.activity(ref.path)
     const state: ListedState = execution?.state === "leaving" || execution?.state === "in-transit" ? "moving"
       : activity?.status === "needs-input" ? "waiting"
       : activity?.status === "active" ? "working"
       : "idle"
-    const movedAt = Date.parse(ref.updatedAt)
+    const movedAt = Date.parse(ref.updatedAt ?? "")
     if (!Number.isFinite(movedAt)) continue
     const startedAt = ref.startedAt ? Date.parse(ref.startedAt) : Number.NaN
     const row: ReportedSession = {
-      session: sessionId.data,
-      thread: threadId.data,
-      conversation: nativeConversation(sessionId.data),
+      session,
+      thread,
+      conversation: nativeConversation(session),
       harness: ref.harness,
       state,
       createdAt: iso(Number.isFinite(startedAt) ? Math.min(startedAt, movedAt) : movedAt),
@@ -164,8 +189,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
       nativeId: ref.nativeId,
       capture: { path: ref.path },
     }
-    const thread = sources.thread(threadId.data)
-    if (thread?.title && thread.titleSource !== "auto") row.threadTitle = line(thread.title)
+    const titled = threadTitle(thread)
+    if (titled) row.threadTitle = titled
     if (ref.title) row.title = line(ref.title)
     if (state === "waiting" && activity?.detail) row.waitingOn = line(activity.detail)
     if (ref.cwd) row.folder = ref.cwd
@@ -256,6 +281,8 @@ export class SessionPublisher {
   readonly #rows: () => readonly ReportedSession[] | undefined
   readonly #now: () => number
   #current: SessionLink | undefined
+  /** The link the last report went out on: a link not reported on yet is told every row. */
+  #reportedLink: RuntimeLink | undefined
   #watching: { link: RuntimeLink; conversations: ReadonlySet<string> } | undefined
   #dirty = true
   #reportedAt = Number.NEGATIVE_INFINITY
@@ -306,7 +333,8 @@ export class SessionPublisher {
 
   /** Reports on the current link what changed since the last report there; called on the host's tick. */
   report(current: SessionLink | undefined): void {
-    if (current?.link !== this.#current?.link) this.#dirty = true
+    // A link reported on before, served again after a moment without one, already holds the rows.
+    if (current && current.link !== this.#reportedLink) this.#dirty = true
     this.#current = current
     if (!current || current.served.version < SESSIONS_VERSION) return
     const now = this.#now()
@@ -317,10 +345,15 @@ export class SessionPublisher {
     const rows = rowsForLink(all, current.served.version)
     this.#dirty = false
     this.#reportedAt = now
+    this.#reportedLink = current.link
     const reports = this.#reporter.reports(current.link, rows)
     if (!reports.length) return
     if (reports.every((report) => current.served.sessions(report))) this.#reporter.sent(rows)
-    else this.#reporter.forget()
+    else {
+      // Told again in full on the next tick, as a new link is.
+      this.#reporter.forget()
+      this.#reportedLink = undefined
+    }
   }
 
   /** The gateway says which of this host's conversations another device watches, on `link`: the whole set. */
@@ -328,14 +361,21 @@ export class SessionPublisher {
     this.#watching = { link, conversations: new Set(conversations) }
   }
 
-  /** One of the host's outgoing events, encoded: a watched conversation's batch goes to its watchers, and every batch may change a row. */
+  /**
+   * One of the host's outgoing events, encoded: a watched conversation's batch goes to its watchers, and every batch may
+   * change a row. The gateway carries a cloud Thread's events and these alike, up to `MAX_EVENT_BYTES`: a batch larger
+   * goes as the notice to read the conversation again (`gatewayEventLine`), so the watcher reads it rather than the link
+   * closing on it.
+   */
   event(channel: RuntimeEventChannel, event: RuntimeEvent): void {
     if (channel !== "event") return
     if (event.type === "live-batch") this.#dirty = true
     const conversation = event.conversation
     const current = this.#watched(conversation)
     if (!conversation || !current) return
-    current.served.live(conversation, Payload.encoded(runtimeEventLine(channel, event).slice(0, -1)))
+    const line = gatewayEventLine(channel, event)
+    if (line.fit === "too-large") return hostWarn("sessions", "a watched conversation's event too large for the gateway wasn't sent", { conversation, type: line.type, bytes: line.bytes })
+    current.served.live(conversation, Payload.encoded(line.text))
   }
 
   /**
