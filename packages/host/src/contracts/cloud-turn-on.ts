@@ -80,7 +80,7 @@ export type TurnOnStep =
   | Step<"agents", { sharing: boolean; agents: TurnOnAgent[] }>
   /** The bases of the recent projects onboarding offered, the newest first; empty when none is on GitHub. */
   | Step<"projects", { projects: TurnOnProject[] }>
-  /** The last 30 days, in Threads; `today` counts the Threads at work and worked in today. */
+  /** The last 7 days, in Threads; `today` counts the Threads at work and worked in today. */
   | Step<"history", { threads: number; inCloud: number; today: { threads: number; inCloud: number }; paused: boolean; failures: number; correlationIds: string[] }>
   /** The first cloud Thread: in which project it would start, and its machine if one is warming for it. */
   | Step<"thread", { folder?: string; repository?: string; machine?: "warming" | "ready" }>

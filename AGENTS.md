@@ -3560,6 +3560,20 @@ and respawns it from its own executable, so an update never keeps serving from
 the bundle it replaced. Terminal scrollback is persisted first; live shells
 are reported interrupted.
 
+A request the sync daemon can't read is never dropped: it's logged
+(`mako-syncd: refused a request it couldn't read`) and answered with an error
+its sender shows at once, not at its 3 s timeout. `daemonIsForeign` keeps
+builds apart, but the wire still reads an earlier build's sync words: the
+sync window was 30 days before it was 7 (`SYNC_WINDOW_MS`), so a scope naming
+a `month` tier reads as `week`, and the status carries an empty `month` for a
+host that requires one (`syncStatusOnWire`). The daemon answers requests on
+the thread that writes reading copies, so a copy waits for its turn by its size
+whatever its tier (2 s a MiB, `MS_PER_MIB` in `reading-copies.ts`): a 100 MB
+copy, drawn and written in one go, holds its thread 5 to 7 s. Captures of
+Sessions outside the scope (the backfill's) look at nothing, and captures
+during a look are looked at together after it, one look at a time.
+`test/daemon.mjs` and `test/reading-copies.mjs` cover both.
+
 When the sync daemon is not enabled, the host still never reads a store on
 its main thread: `packages/host/src/threads/catalog-worker.ts` runs the catalog on a
 `worker_threads` Worker that serves the daemon's own frame protocol

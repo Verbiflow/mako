@@ -6,6 +6,7 @@ import type { LiveSummary } from "../contracts/live-conversations.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
 import { SessionIdSchema, ThreadIdSchema, type SessionId, type ThreadId, type ThreadPlacement } from "../contracts/thread-identity.js"
 import { Payload, SESSIONS_VERSION, type RuntimeLink, type ServedRuntime } from "@mako/protocol"
+import type { HostWork } from "../base/event-loop.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.js"
@@ -238,10 +239,15 @@ export type SessionLink = { link: RuntimeLink; served: Pick<ServedRuntime, "vers
 /** Recomputed at most this often while things change, and at least this often regardless (a rename, a move's step). */
 const REPORT_MS = 1_000
 const SWEEP_MS = 30_000
+/** A change is reported this soon after it, the first in a quiet stretch; the tick then paces the rest. */
+const SOON_MS = 200
+/** The work a report runs as, on the host's tick and soon after a change alike: what it reads in is counted to it. */
+export const REPORT_WORK = "tell the account this host's Sessions"
 
 /**
- * What a host tells the cloud of its Sessions, on whichever link it serves: the list's rows when they change (nothing
- * while nothing does; a sweep every half minute catches what moves without an event), and a conversation's live updates
+ * What a host tells the cloud of its Sessions, on whichever link it serves: the list's rows when they change (within
+ * `SOON_MS` of the first change, then at most once a second; nothing while nothing does; a sweep every half minute
+ * catches what moves without an event), and a conversation's live updates
  * while another device watches it. A Mac and a cloud machine run the same one. What's watched belongs to the link it was
  * said on, so a reconnect never carries an old link's watchers onto a new one.
  */
@@ -254,10 +260,28 @@ export class SessionPublisher {
   #dirty = true
   #reportedAt = Number.NEGATIVE_INFINITY
   #listed: readonly ReportedSession[] | undefined
+  readonly #reportNow: (() => void) | undefined
+  readonly #work: Pick<HostWork, "run">
+  readonly #schedule: (run: () => void, afterMs: number) => void
+  #soonAsked = false
 
-  constructor(options: { rows: () => readonly ReportedSession[] | undefined; now?: () => number }) {
+  constructor(options: {
+    rows: () => readonly ReportedSession[] | undefined
+    now?: () => number
+    /**
+     * Reports on the link the host serves now, exactly as its tick does (`report` with that link): a change is
+     * reported so within `SOON_MS`. Without it, a change waits for the tick.
+     */
+    reportNow?: () => void
+    /** Names the early report as the tick's job is named (`REPORT_WORK`), so what it reads in is counted to it. */
+    work?: Pick<HostWork, "run">
+    schedule?: (run: () => void, afterMs: number) => void
+  }) {
     this.#rows = options.rows
     this.#now = options.now ?? Date.now
+    this.#reportNow = options.reportNow
+    this.#work = options.work ?? { run: (_label, fn) => fn() }
+    this.#schedule = options.schedule ?? ((run, afterMs) => setTimeout(run, afterMs).unref?.())
   }
 
   /** The Sessions the account lists of this host as last worked out, every link's version alike; undefined until then. */
@@ -265,9 +289,19 @@ export class SessionPublisher {
     return this.#listed
   }
 
-  /** Something a row may show changed: a batch, a move, a rename. */
+  /**
+   * Something a row may show changed: a batch, a move, a rename. Reported soon, on the link the host serves then
+   * (`reportNow`), never on one held from before: a link that closed or was replaced meanwhile isn't reported on.
+   */
   changed(): void {
     this.#dirty = true
+    const reportNow = this.#reportNow
+    if (this.#soonAsked || !reportNow || !this.#current) return
+    this.#soonAsked = true
+    this.#schedule(() => {
+      this.#soonAsked = false
+      this.#work.run(REPORT_WORK, reportNow)
+    }, SOON_MS)
   }
 
   /** Reports on the current link what changed since the last report there; called on the host's tick. */

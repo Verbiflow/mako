@@ -93,7 +93,7 @@ export type QuietDevice = z.infer<typeof QuietDeviceSchema>
 
 /** At most this many rows in one frame or event, well under a message's megabyte. */
 export const LISTED_PER_FRAME = 200
-/** An owner lists at most this many Sessions: the last 30 days' and any older one at work. */
+/** An owner lists at most this many Sessions: its sync window's (a week's) and any older one at work. */
 export const LISTED_PER_OWNER = 2_000
 
 /**

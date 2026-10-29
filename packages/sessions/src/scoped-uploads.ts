@@ -6,12 +6,17 @@ import { RecordSync, RecordSyncConflictError, describeSync } from "./record-sync
 
 /**
  * How recently a Session's Thread was worked in, which sets when its turn comes: `now` while it works or waits, then
- * the last day, the last week, and the rest of the sync window. The device's host decides it (`syncTier`); here it
- * only orders and counts.
+ * the last day, then the rest of the week, which is the whole sync window. The device's host decides it
+ * (`syncTier`); here it only orders and counts.
  */
-export const SyncTierSchema = z.enum(["now", "day", "week", "month"])
+export const SyncTierSchema = z.enum(["now", "day", "week"])
 export type SyncTier = z.infer<typeof SyncTierSchema>
 export const SYNC_TIERS = SyncTierSchema.options
+
+/** One Session of a scope: its native session, where the catalog reads it, its Thread, and its tier. */
+export const SyncScopeSessionSchema = z.object({ harness: z.string().min(1), nativeId: z.string().min(1), path: z.string().min(1), thread: z.string().min(1), busy: z.boolean(), tier: SyncTierSchema })
+/** At most this many Sessions in a scope. */
+export const SYNC_SCOPE_MOST = 10_000
 
 /**
  * The Sessions a device keeps in the account, the most wanted first, each by its native session, where the catalog
@@ -19,7 +24,7 @@ export const SYNC_TIERS = SyncTierSchema.options
  * Session goes up in: its reading copy and its records.
  */
 export const SyncScopeSchema = z.object({
-  sessions: z.array(z.object({ harness: z.string().min(1), nativeId: z.string().min(1), path: z.string().min(1), thread: z.string().min(1), busy: z.boolean(), tier: SyncTierSchema })).max(10_000),
+  sessions: z.array(SyncScopeSessionSchema).max(SYNC_SCOPE_MOST),
   /** Catching up waits: only Sessions at work go meanwhile. */
   paused: z.boolean(),
 })
@@ -77,7 +82,7 @@ export type TierCount = z.infer<typeof TierCountSchema>
  */
 export const CatalogSyncStatusSchema = z.object({
   paused: z.boolean(),
-  tiers: z.object({ now: TierCountSchema, day: TierCountSchema, week: TierCountSchema, month: TierCountSchema }),
+  tiers: z.object({ now: TierCountSchema, day: TierCountSchema, week: TierCountSchema }),
   stale: z.number().int().nonnegative(),
   copies: UploadsStatusSchema.nullable(),
   originals: UploadsStatusSchema.nullable(),
@@ -292,7 +297,7 @@ const keyOf = (session: { harness: string; nativeId: string }) => `${session.har
  * stores' marks for the status, so the window, the log and the uploads never disagree about a Session.
  */
 export function countTiers(scope: SyncScope, forms: { readable(session: Wanted): boolean; held(session: Wanted): boolean; whole(session: Wanted): boolean }): CatalogSyncStatus["tiers"] {
-  const tiers = { now: emptyTier(), day: emptyTier(), week: emptyTier(), month: emptyTier() }
+  const tiers = { now: emptyTier(), day: emptyTier(), week: emptyTier() }
   const threads = new Map<string, { tier: SyncTier; whole: boolean }>()
   for (const session of scope.sessions) {
     const tier = tiers[session.tier]
@@ -316,7 +321,7 @@ export function countTiers(scope: SyncScope, forms: { readable(session: Wanted):
   return tiers
 }
 
-const emptyTier = (): TierCount => ({ sessions: 0, threads: 0, readable: 0, held: 0, whole: 0, inCloud: 0, threadsInCloud: 0 })
+export const emptyTier = (): TierCount => ({ sessions: 0, threads: 0, readable: 0, held: 0, whole: 0, inCloud: 0, threadsInCloud: 0 })
 
 function failureOf(error: Error, session: Wanted, at: number): SyncFailure {
   const failure: SyncFailure = { at, harness: session.harness, nativeId: session.nativeId, message: describeGatewayFailure(error) }

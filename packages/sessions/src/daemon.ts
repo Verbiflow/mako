@@ -50,7 +50,9 @@ import {
   parseDaemonResponse,
   parseJsonRecord,
   readDaemonFrameId,
+  refusedRequest,
   serializeDaemonFrame,
+  syncStatusOnWire,
   type DaemonEvent,
   type DaemonRequestFrame,
   type DaemonResponseFrame,
@@ -434,7 +436,7 @@ function catalogService(
             reply({ id: frame.id, ok: true, result: null })
             return
           case "sync-status":
-            reply({ id: frame.id, ok: true, result: await catalog.syncStatus() })
+            reply({ id: frame.id, ok: true, result: syncStatusOnWire(await catalog.syncStatus()) })
             return
           case "send-records":
             reply({ id: frame.id, ok: true, result: await catalog.sendRecords(frame.link, frame.paths) })
@@ -482,7 +484,16 @@ function catalogService(
 
     link.onFrame((raw) => {
       const frame = parseDaemonRequest(raw)
-      if (frame) void handle(frame)
+      if (frame) {
+        void handle(frame)
+        return
+      }
+      // A request this build can't read (another build's, or a malformed one) is said, and answered when it can be:
+      // its sender hears why at once rather than waiting out its timeout.
+      const { id, op } = refusedRequest(raw)
+      console.warn("mako-syncd: refused a request it couldn't read", JSON.stringify({ op: op ?? "unknown", id: id ?? "none", protocol: PROTOCOL_VERSION }))
+      if (id !== undefined)
+        reply({ id, ok: false, error: `The sync daemon couldn't read this ${op ?? "unnamed"} request: it may come from another Mako build (protocol ${PROTOCOL_VERSION})` })
     })
     link.onClose(() => {
       clients.delete(link)

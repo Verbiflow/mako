@@ -19,7 +19,7 @@ import { useThreads } from "@/state/thread-store"
 /**
  * Mako Cloud in Settings › Account: one calm surface that says where the cloud stands and what it's doing, in the
  * person's words, with the one thing worth doing next. What happens by itself (this Mac's agent sign-ins carried
- * over, the projects set up, the last 30 days synced) is said as it goes, never as a checklist; only what needs the
+ * over, the projects set up, the last 7 days synced) is said as it goes, never as a checklist; only what needs the
  * person is asked, one thing at a time, as what to do. Each step's time and the cloud's own words are folded into
  * Details, for whoever is looking into it.
  */
@@ -143,13 +143,13 @@ function useSummary(turnOn: CloudTurnOn): Summary {
     line = agents?.state === "working" ? "Bringing your agents over from this Mac…" : "Almost there…"
   } else {
     headline = firstThread ? "Mako Cloud is on" : "Mako Cloud is ready"
-    const parts = [settingUp ? "setting up your projects" : undefined, syncing ? "syncing your last 30 days" : undefined].filter((part) => part !== undefined)
+    const parts = [settingUp ? "setting up your projects" : undefined, syncing ? "syncing your last 7 days" : undefined].filter((part) => part !== undefined)
     if (thread?.machine === "ready" && project) line = `A machine is ready for ${project}. Your first message starts at once.`
     else if (thread?.machine === "warming" && project) line = `Warming up a machine for ${project}…`
     else if (parts.length) line = `${sentence(parts.join(" and "))}${syncing && todayIn ? ". Today's are already in." : "…"}`
     else {
       going = false
-      line = projects?.projects.length || firstThread ? "Your agents, projects and last 30 days are in the cloud." : "Your agents and last 30 days are in the cloud."
+      line = projects?.projects.length || firstThread ? "Your agents, projects and last 7 days are in the cloud." : "Your agents and last 7 days are in the cloud."
     }
   }
   if (account?.state === "stuck") {
@@ -332,7 +332,7 @@ function Details({ turnOn }: { turnOn: CloudTurnOn }) {
   if (history && history.state !== "later")
     rows.push({
       id: "history",
-      label: "Last 30 days",
+      label: "Last 7 days",
       value: history.threads ? `${history.inCloud.toLocaleString()} of ${count(history.threads, "Thread")}` : "Reading this Mac",
       status: history.failures ? `${count(history.failures, "Session")} retrying` : history.paused ? "Waiting for power" : history.state === "done" ? took(history) ?? "In the cloud" : "Syncing",
     })
