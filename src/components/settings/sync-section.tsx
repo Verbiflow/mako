@@ -13,7 +13,6 @@ const TIER_LABELS = {
   now: "Working now",
   day: "Today",
   week: "This week",
-  month: "Earlier this month",
 } satisfies Record<SyncTierName, string>
 
 type Running = Extract<SyncStatus, { tiers: unknown }>
@@ -26,7 +25,7 @@ const CHIPS = {
 } satisfies Record<Running["state"], { tone: "positive" | "neutral" | "caution" | "negative"; label: string }>
 
 /**
- * What of this Mac is in the cloud: every Thread worked in within the last 30 days, whole, the newest first. Each
+ * What of this Mac is in the cloud: every Thread worked in within the last 7 days, whole, the newest first. Each
  * tier counts its Threads in the cloud (every Session readable on another device and its records there to continue
  * from), what's catching up, when the last one went, and what didn't, in the cloud's words with its correlation ID.
  */
@@ -39,9 +38,9 @@ export function SyncSection() {
       <ListCard>
         <ListCardRow className="flex items-start justify-between gap-6">
           <div className="min-w-0">
-            <div className="text-ui font-medium">Your last 30 days, in the cloud</div>
+            <div className="text-ui font-medium">Your last 7 days, in the cloud</div>
             <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
-              Every Thread you worked in during the last 30 days goes up whole: the one you're working in within seconds of each turn, then today's, this week's and the rest. Your other devices can read each one, and continue it, even while this Mac is off.
+              Every Thread you worked in during the last 7 days goes up whole, the newest first: the one you're working in within seconds of each turn, then today's, then the rest of the week. Your other devices can read each one, and continue it, even while this Mac is off.
             </p>
           </div>
           <StateChip status={status} />
@@ -53,7 +52,7 @@ export function SyncSection() {
             ))}
             {status.tiers.every((tier) => tier.sessions === 0) ? (
               <ListCardRow>
-                <p className="text-label text-faint">No Threads in the last 30 days yet.</p>
+                <p className="text-label text-faint">No Threads in the last 7 days yet.</p>
               </ListCardRow>
             ) : null}
             <ListCardRow>

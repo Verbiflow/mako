@@ -2,12 +2,12 @@ import { z } from "zod"
 
 /**
  * How this device's Sessions stand in the account (`mako:sync-status`), for Settings › Account. With Mako Cloud,
- * every Thread worked in within the last 30 days goes up whole, in turn: the Sessions at work now, then the last day,
- * the last week and the rest of the window, the newest first. Each Session goes up twice: as Mako draws it (its
+ * every Thread worked in within the last 7 days goes up whole, in turn: the Sessions at work now, then the last day,
+ * then the rest of the week, the newest first. Each Session goes up twice: as Mako draws it (its
  * reading copy, which any device shows at once) and as its harness wrote it (its records, from which it continues
  * anywhere). Counted from what the account confirmed holding, which the stores keep beside what they push.
  */
-export const SyncTierNameSchema = z.enum(["now", "day", "week", "month"])
+export const SyncTierNameSchema = z.enum(["now", "day", "week"])
 export type SyncTierName = z.infer<typeof SyncTierNameSchema>
 
 export const SyncTierSchema = z.object({

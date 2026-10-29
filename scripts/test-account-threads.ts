@@ -3,7 +3,8 @@ import { test } from "node:test"
 import type { Payload } from "@mako/protocol"
 import { rowsForLink, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import { AccountSessions } from "@mako/protocol/account-sessions"
-import { nativeConversation, ownedSessions, SessionPublisher, SessionReporter, type NativeRow, type ReportSources } from "@mako/host/conversations/session-report"
+import { nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
+import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import { SessionUploads, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
 import { SYNC_WINDOW_MS } from "@mako/host/conversations/sync-window"
@@ -88,11 +89,11 @@ test("a host lists the Sessions it owns, at work first, then newest first, each 
   assert.equal(ownedSessions(host([summary("c-1", NOW)]))[0]?.threadTitle, undefined, "an older build's automatic title isn't shown anywhere")
 })
 
-test("a Thread worked in within 30 days is listed whole, its older Sessions too; an older one only while a Session of it works or waits; when it moved is its journal's last write", () => {
+test("a Thread worked in within the week is listed whole, its older Sessions too; an older one only while a Session of it works or waits; when it moved is its journal's last write", () => {
   const old = NOW - SYNC_WINDOW_MS - 1
   const threads = { "c-1": 101, "c-2": 102, "c-3": 103, "c-4": 103 }
   const rows = ownedSessions(host([summary("c-1", old), summary("c-2", old), summary("c-3", old), summary("c-4", old)], { work: [work("c-2", "running")], moved: { "c-3": NOW - 60_000 }, threads }))
-  assert.deepEqual(rows.map((row) => row.conversation), ["c-2", "c-3", "c-4"], "at work first; then Thread 103 whole, its Session of 31 days ago with it")
+  assert.deepEqual(rows.map((row) => row.conversation), ["c-2", "c-3", "c-4"], "at work first; then Thread 103 whole, its Session of 8 days ago with it")
   assert.equal(rows.find((row) => row.conversation === "c-3")?.activityAt, new Date(NOW - 60_000).toISOString())
 })
 
@@ -130,7 +131,7 @@ test("the sessions a terminal or another app runs are listed beside Mako's own, 
       // Two sessions of one Session (a conversation that went on in another harness): the newer is the row.
       nativeRow(23, NOW - 9_000),
       nativeRow(24, NOW - 4_000, { sessionId: uuid(23), threadId: uuid(223) }),
-      // At rest, within 30 days; and older than the list keeps.
+      // At rest, within the week; and older than the list keeps.
       nativeRow(25, NOW - 6_000),
       nativeRow(26, NOW - SYNC_WINDOW_MS - 1),
       // Deleted or archived by its harness; moved to the cloud; never placed in a Thread.
@@ -204,8 +205,22 @@ test("a publisher reports when something changed, sweeps every half minute regar
   const sent: SessionsReport[] = []
   const live: string[] = []
   const served = (version = 5) => ({ version, sessions: (report: SessionsReport) => (sent.push(report), true), live: (conversation: string, event: Payload) => (live.push(`${conversation} ${event.text.length > 0}`), true) })
-  const publisher = new SessionPublisher({ rows: () => rows, now: () => now })
+  const soon: Array<{ run: () => void; afterMs: number }> = []
+  // The link the host serves now, as its account holds it: what a report soon after a change goes on, as the tick's does.
+  let serving: SessionLink | undefined
+  const work = namedWork()
+  const computedAs: (string | undefined)[] = []
+  const publisher = new SessionPublisher({
+    rows: () => (computedAs.push(work.current()), rows),
+    now: () => now,
+    reportNow: () => publisher.report(serving),
+    work,
+    schedule: (run, afterMs) => { soon.push({ run, afterMs }) },
+  })
+  publisher.changed()
+  assert.equal(soon.length, 0, "before a link, a change waits for the tick")
   const link = { link: await newLink(), served: served() }
+  serving = link
   publisher.report(link)
   assert.equal(sent.length, 1)
   publisher.report(link)
@@ -215,13 +230,32 @@ test("a publisher reports when something changed, sweeps every half minute regar
   assert.equal(sent.length, 1, "nothing changed: nothing recomputed")
   rows = [row(1, "working")]
   publisher.changed()
+  publisher.changed()
+  assert.deepEqual(soon.map((each) => each.afterMs), [200], "a change asks for a report soon, once")
+  soon.shift()?.run()
+  assert.equal(sent.length, 2, "and the report goes then, not at the next tick")
+  assert.equal(computedAs.at(-1), REPORT_WORK, "named as the tick's job is, so what it reads in is counted to it")
+  rows = [row(1, "waiting")]
+  publisher.changed()
+  soon.shift()?.run()
+  assert.equal(sent.length, 2, "within the second of the last, it waits for the tick")
+  now += 2_000
+  // The link changed between the change and its report: the report goes on the one served now, never the one before.
+  const replaced: SessionsReport[] = []
+  const replacement = { link: await newLink(), served: { ...served(), sessions: (report: SessionsReport) => (replaced.push(report), true) } }
+  rows = [row(1, "working")]
+  publisher.changed()
+  serving = replacement
+  soon.shift()?.run()
+  assert.deepEqual([sent.length, replaced.length], [2, 1], "reported on the link served when it went")
+  serving = link
   now += 2_000
   publisher.report(link)
-  assert.equal(sent.length, 2)
+  assert.equal(sent.length, 3, "and back on the first, everything again")
   rows = [row(1, "idle")]
   now += 31_000
   publisher.report(link)
-  assert.equal(sent.length, 3, "the sweep finds what changed without an event")
+  assert.equal(sent.length, 4, "the sweep finds what changed without an event")
 
   // SAFETY: a batch as a live driver sends one, filled only as far as the publisher reads it (its conversation).
   const batch = (conversation: string) => encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision: 2, updates: [] } } as never)
@@ -247,7 +281,7 @@ test("a publisher reports when something changed, sweeps every half minute regar
   publisher.own(own("c-1"))
   assert.deepEqual(live, ["c-1 true", "c-1 true", "c-1 true"], "its own batch a device watches goes to it")
   // A gateway older than the frame hears nothing.
-  const older = new SessionPublisher({ rows: () => rows, now: () => now })
+  const older = new SessionPublisher({ rows: () => rows, now: () => now, schedule: () => {} })
   const before = sent.length
   older.report({ link: await newLink(), served: served(4) })
   assert.equal(sent.length, before)
@@ -271,7 +305,7 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
     { ...at(row(2, "working"), hoursAgo(30), 102), nativeId: "n-2" },
     { ...at(row(3), hoursAgo(2), 103), nativeId: "n-3" },
     { ...at(row(4, "waiting"), hoursAgo(24 * 40), 104), nativeId: "n-4" },
-    // Thread 105: three days ago; Thread 106: twelve days ago.
+    // Thread 105: three days ago; Thread 106: twelve days ago, outside the week.
     { ...at(row(7), hoursAgo(72), 105), nativeId: "n-7" },
     { ...at(row(8), hoursAgo(24 * 12), 106), nativeId: "n-8" },
     at(row(5), hoursAgo(1), 107),
@@ -283,8 +317,7 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
     ["n-1", "day", false],
     ["n-6", "day", false],
     ["n-7", "week", false],
-    ["n-8", "month", false],
-  ], "at work first, then each Thread whole by its last activity, each in its Thread's tier; one with no native session yet, or the catalog doesn't list, waits")
+  ], "at work first, then each Thread whole by its last activity, each in its Thread's tier; one older than the week isn't kept; one with no native session yet, or the catalog doesn't list, waits")
   assert.equal(uploadScope(rows, { onBattery: true, percent: UPLOAD_BATTERY_FLOOR - 1, lowPower: false }, pathOf, NOW).paused, true)
   assert.equal(uploadScope(rows, { onBattery: true, percent: UPLOAD_BATTERY_FLOOR, lowPower: false }, pathOf, NOW).paused, false)
   assert.equal(uploadScope(rows, { ...plugged, lowPower: true }, pathOf, NOW).paused, true)
@@ -295,7 +328,7 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
   let power = plugged
   let powerReads = 0
   let now = NOW
-  const tiers = { now: tierCount(2), day: tierCount(2), week: tierCount(1), month: tierCount(1) }
+  const tiers = { now: tierCount(2), day: tierCount(2), week: tierCount(1) }
   const failure = { at: NOW, harness: "codex", nativeId: "n-8", message: "The gateway answered 500 (PUT /chunks answered 500, correlation c-9)", correlationId: "c-9" }
   let catalog: CatalogSyncStatus | null = null
   const uploads = new SessionUploads({
@@ -318,8 +351,8 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
   assert.deepEqual(said, [], "no links before the Sessions are known: they would catch up on the whole store")
   listedRows = rows
   await uploads.tick()
-  assert.deepEqual(said, ["scope n-2,n-4,n-1,n-6,n-7,n-8", "copies Bearer a", "originals Bearer a"])
-  assert.deepEqual(uploads.status(), { state: "starting", sessions: 6 })
+  assert.deepEqual(said, ["scope n-2,n-4,n-1,n-6,n-7", "copies Bearer a", "originals Bearer a"])
+  assert.deepEqual(uploads.status(), { state: "starting", sessions: 5 })
   await uploads.tick()
   assert.equal(said.length, 3, "nothing changed: nothing said")
   links = { state: "on", copies: link("records", "Bearer b"), originals: link("originals", "Bearer b") }
@@ -338,7 +371,7 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
   assert.equal(said.length, 5, "the power read at most once a minute")
   now += 30_000
   await uploads.tick()
-  assert.deepEqual(said.slice(5), ["scope n-2,n-4,n-1,n-6,n-7,n-8 waiting"])
+  assert.deepEqual(said.slice(5), ["scope n-2,n-4,n-1,n-6,n-7 waiting"])
   assert.equal(powerReads, 2)
   links = { state: "off", reason: "signed-out" }
   await uploads.tick()

@@ -48,7 +48,7 @@ import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from ".
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
-import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, REPORT_WORK, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -430,6 +430,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         now: Date.now,
       })
     },
+    // A change goes to the account within a fraction of a second, on the link this Mac serves then, named as the tick's
+    // job is. A cloud machine's link is its machine runtime's, reported on its own tick.
+    ...config.machineAgentFd === undefined && { reportNow: () => late.cloud?.reportSessions?.(), work: shell.work },
   })
   catalog.subscribe((event) => {
     if (event.type === "thread-ref") {
@@ -451,7 +454,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     sessions.changed()
   })
   late.sessions = sessions
-  shell.jobs.every("tell the account this host's Sessions", 1_000, () => late.cloud?.reportSessions?.())
+  shell.jobs.every(REPORT_WORK, 1_000, () => late.cloud?.reportSessions?.())
   // The heap, watched so a host filling up says who with while it still can: an out-of-memory report has no
   // JavaScript stack. The line names what memory holds and who read it in; the whole readout goes beside the log.
   const heap = new HeapWatch(readHeap, (change, level, reading) => {

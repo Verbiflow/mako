@@ -85,7 +85,7 @@ async function reportBytes(rows: readonly NativeRow[]) {
 
 /**
  * The real rail's listable rows made up to `size`, each copy its own session, newest first: what an owner with that
- * many sessions in 30 days lists. Rows the window files as archived (a harness deleted them) are no model of one.
+ * many sessions in its sync window lists. Rows the window files as archived (a harness deleted them) are no model of one.
  */
 function scaled(size: number): NativeRow[] {
   const listable = real.filter((row) => !row.archived && !row.copyOnly && !row.nativeArchived)
