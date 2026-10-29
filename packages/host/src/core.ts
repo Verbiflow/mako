@@ -1099,6 +1099,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     admission,
     updates: appUpdates,
     wake,
+    leaving: (source) => {
+      hostLog("host", "leaving", { source })
+      late.cloud?.leaving?.(source === "suspend" ? "sleep" : "quit")
+    },
     jobs: shell.jobs,
     subscribed: shell.subscribed,
     emit,

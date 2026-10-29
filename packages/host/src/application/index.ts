@@ -50,6 +50,8 @@ export interface ApplicationDependencies {
   /** Stops this host for a client's quit, restart or update, once its work allows. */
   finish(action: LifecycleAction, install?: () => void): void
   wake: WakeWatch
+  /** The Mac is going to sleep (`suspend`) or shutting down, as the desktop app hears it: said to the cloud while it can be. */
+  leaving(source: "suspend" | "shutdown"): void
   jobs: HostJobs
   /** On while any client is subscribed to events; the lifecycle is published only to subscribers. */
   subscribed: JobDemand
@@ -165,6 +167,10 @@ export function declareApplicationMethods(methods: MethodTable, dependencies: Ap
   /** The desktop app heard the Mac resume or the screen unlock. */
   methods.handle("mako:machine-woke", (source: "resume" | "unlock-screen") => {
     dependencies.wake.notify(source)
+  })
+  /** The desktop app heard the Mac start to sleep or shut down. */
+  methods.handle("mako:machine-leaving", (source: "suspend" | "shutdown") => {
+    dependencies.leaving(source)
   })
   const { crashes } = dependencies
   methods.handle("mako:crashes", () => crashes.list())

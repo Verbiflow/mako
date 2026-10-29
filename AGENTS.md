@@ -2594,7 +2594,12 @@ is, listed or not. A catalog write names its native session
 (`nativeChanged`), and writes are looked at together every 250 ms, one look at
 a time, at the rows naming them alone. Whether a device is quiet is the list's
 to say of every one of its conversations, one a window follows included: a
-quiet device sends no batches, so nothing else ends its working spinner. The
+quiet device sends no batches, so nothing else ends its working spinner. A Mac
+going to sleep, shutting down, quitting or signing out says so on its runtime's
+link first (`going-quiet`, link version 8; `mako:machine-leaving` from the
+desktop app's `suspend` and `shutdown`), and the link stays closed until the
+wake (`CloudLink.quiet`), so its device is quiet at once rather than after
+missed heartbeats; `test-cloud-account.ts` covers it. The
 account's archived cloud Threads are said only from a list the account
 answered (`archivedChanged`), never as none at a sign-out, and
 `ThreadArchives` keeps their keys by account, so a restart shows them

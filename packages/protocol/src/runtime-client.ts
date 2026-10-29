@@ -9,10 +9,10 @@ import type { RuntimeLink } from "./gateway.js"
 import { type MediaHandler, type MediaSender, type MediaStreamId, encodeMediaMessage } from "./media.js"
 import type { Payload } from "./payload.js"
 import type { PortHandler, PortRequest } from "./ports.js"
-import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
+import type { GatewayFrame, GoingQuietReason, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { ACTIVITY_VERSION, MEDIA_VERSION, PORTS_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { ACTIVITY_VERSION, MEDIA_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 
 export class RuntimeRefusedError extends Error {
   readonly problem: Problem
@@ -74,6 +74,11 @@ export type ServedRuntime = {
   sessions(report: SessionsReport): boolean
   /** One live update of a watched conversation, as its event's line; false on a gateway older than version 5 or a closed link. */
   live(conversation: string, event: Payload): boolean
+  /**
+   * Says the runtime is going away on purpose, before it goes (`going-quiet`, version 8 on): the gateway takes its link
+   * as down at once. False on an older gateway, which finds out from the missed heartbeats, or on a closed link.
+   */
+  goingQuiet(reason: GoingQuietReason): boolean
   /** Settles when the link closes. */
   done: Promise<void>
   /** Why the link ended: the gateway's refusal, or undefined when the connection just closed. */
@@ -269,6 +274,11 @@ export async function serveRuntime(
     live: (conversation, event) => {
       if (first.version < SESSIONS_VERSION || link.closed) return false
       link.send({ type: "live", conversation, event })
+      return true
+    },
+    goingQuiet: (reason) => {
+      if (first.version < QUIET_VERSION || link.closed) return false
+      link.send({ type: "going-quiet", reason })
       return true
     },
     done,

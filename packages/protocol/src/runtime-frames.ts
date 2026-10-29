@@ -107,7 +107,16 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       problem: ProblemSchema.optional(),
     })
     .strict(),
+  /**
+   * The runtime is going away on purpose, said before it goes (version 8 on): its Mac is going to sleep, Mako is
+   * quitting, or the device is signing out. The gateway takes the link as down at once, and the device as quiet,
+   * rather than waiting for it to miss its heartbeats; the runtime connects again when it's back.
+   */
+  z.object({ type: z.literal("going-quiet"), reason: z.enum(["sleep", "quit", "sign-out"]) }).strict(),
 ])
+
+/** Why a runtime says it's going quiet (`going-quiet`). */
+export type GoingQuietReason = Extract<RuntimeFrameEnvelope, { type: "going-quiet" }>["reason"]
 
 /** A busy runtime says so at least this often; a gateway takes three missed as idle. */
 export const ACTIVITY_HEARTBEAT_MS = 60_000

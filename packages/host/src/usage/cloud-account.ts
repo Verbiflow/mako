@@ -23,6 +23,7 @@ import {
   clientSessionOverSockets,
   type RuntimeLink,
   RuntimeRefusedError,
+  type GoingQuietReason,
   type ServedRuntime,
   WireError,
   decodeGatewayClientFrame,
@@ -732,6 +733,8 @@ export class CloudAccounts {
     const stored = this.#stored
     let unfinished: UnfinishedSignOut | undefined
     if (stored) {
+      // Said first, so the account's other devices stop waiting on this one at once, whether or not the removal lands.
+      this.#goingQuiet("sign-out")
       try {
         await this.#call("devices.remove", "DELETE", `/v1/devices/${encodeURIComponent(stored.device.id)}`, undefined, false, [401, 404])
       } catch (error) {
@@ -821,7 +824,19 @@ export class CloudAccounts {
     for (const session of this.#sessions) session.wake()
   }
 
+  /**
+   * This Mac is going to sleep, or shutting down: its runtime says so to the cloud while it still can, so the account's
+   * other devices take it as quiet at once (`going-quiet`), and its link stays closed until the wake. A gateway too old
+   * for the frame sees the link close cleanly, and the device goes quiet after the usual wait.
+   */
+  leaving(why: "sleep" | "quit"): void {
+    if (this.#state.status !== "signed-in" || this.#closed) return
+    this.#goingQuiet(why)
+    this.#runtimeLink?.quiet()
+  }
+
   close(): void {
+    this.#goingQuiet("quit")
     this.#closed = true
     if (this.#finishing) clearTimeout(this.#finishing)
     if (this.#signIn) this.#endSignIn()
@@ -1184,6 +1199,13 @@ export class CloudAccounts {
         link.close()
       },
     }
+  }
+
+  /** Tells the cloud this runtime is going away on purpose, on a link that knows the frame. */
+  #goingQuiet(reason: GoingQuietReason): void {
+    const served = this.#served?.served
+    if (!served || this.#closed) return
+    if (served.goingQuiet(reason)) this.#options.log?.("cloud runtime going quiet", { reason })
   }
 
   /** One state for both links, the account's leading: a runtime still connecting doesn't make this Mac look offline. */

@@ -61,6 +61,8 @@ const fixtureReads = [
   "mako:telemetry",
   /** The desktop's notice of a wake the host's own clock also gives it; writes and starts nothing. */
   "mako:machine-woke",
+  /** The desktop's notice of a sleep or a shutdown: the cloud runtime says it's going quiet; writes and starts nothing. */
+  "mako:machine-leaving",
 ] as const
 
 export const fixtureDeskHostCalls: ReadonlySet<string> = new Set<string>(fixtureReads)

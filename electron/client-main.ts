@@ -420,6 +420,13 @@ async function start() {
   }
   powerMonitor.on("resume", woke("resume"))
   powerMonitor.on("unlock-screen", woke("unlock-screen"))
+  // Said before the Mac goes, while the network is still up: the cloud takes this Mac as quiet at once, not a minute on.
+  const leaving = (source: "suspend" | "shutdown") => () => {
+    void invokeRuntime(runtime.socket, desktopClient, "mako:machine-leaving", [source]).catch((error) =>
+      hostLog("desktop", "leaving not delivered", { source, reason: error instanceof Error ? error.message : String(error) }))
+  }
+  powerMonitor.on("suspend", leaving("suspend"))
+  powerMonitor.on("shutdown", leaving("shutdown"))
   await serveWindows()
   // What only this process can do for the host: Mako.app's grants, window capture, agents' windows and its own update.
   const pages = deskPageAnswers({ agentView: (previewId) => openWindow({ agentView: previewId }), frame: (frame) => desktopLink?.frame(frame) })

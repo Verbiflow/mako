@@ -125,6 +125,8 @@ export interface CloudAccount {
   onThreadListings?(listener: (heard: AccountListHeard | "account-changed") => void): () => void
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
+  /** The Mac is going to sleep or shutting down: its runtime tells the cloud first (`CloudAccounts.leaving`). */
+  leaving?(why: "sleep" | "quit"): void
   stop(): void
 }
 
@@ -336,6 +338,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       threadListeners.add(listener)
       return () => threadListeners.delete(listener)
     },
+    leaving: (why) => cloud.leaving(why),
     wake: () => {
       cloud.wake()
       sync?.wake()
