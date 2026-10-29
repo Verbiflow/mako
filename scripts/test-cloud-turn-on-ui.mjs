@@ -11,7 +11,8 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
  * account waiting for its invite (Check now hears it), the surface from the moment the cloud came on, getting ready,
  * ready with what's going said in plain words, a machine warming for the first Thread, one thing at a time that needs
  * the person (an agent signed out here, a private project, the files Git leaves out), what Mako retries by itself only
- * in Details, on with how it went, the sidebar's line, and Start opening the first Thread in the cloud. Each state is
+ * in Details, on with how it went, the sidebar's line, Start making its machine ahead when pressed (never on a hover,
+ * and asking again shortly after the host's "later"), and Start opening the first Thread in the cloud. Each state is
  * photographed dark and light, and the surface as it changes, a frame each 400 ms.
  *
  *   node scripts/test-cloud-turn-on-ui.mjs [--shots <dir>]
@@ -236,12 +237,30 @@ async function checkWindow() {
   await evaluate(`document.querySelector('${rail}').click(), true`)
   await until(`Boolean(document.querySelector('[data-turn-on]'))`, "Settings › Account from the sidebar")
 
-  // 5. Start opens the first Thread with Cloud chosen, Settings closed.
+  // 5. A pointer passing over Start makes no machine; pressing it does. The host's "later" (a few made ahead went
+  // unused) lets the next ask come shortly, as it does for the composer, rather than holding it off half a minute.
+  await evaluate(`(() => { window.__prepares = []; window.mako.cloudPrepare = async (...args) => (window.__prepares.push(args), "later"); return true })()`)
+  const start = `document.querySelector('[data-turn-on-fix="start-thread"]')`
+  await evaluate(`(() => { const start = ${start}; for (const type of ["pointerover", "pointerenter", "mouseover", "mouseenter", "pointermove", "mousemove"]) start.dispatchEvent(new PointerEvent(type, { bubbles: !type.endsWith("enter"), pointerType: "mouse" })); return true })()`)
+  await new Promise((resolveWait) => setTimeout(resolveWait, 300))
+  assert.equal(await evaluate("window.__prepares.length"), 0, "hovering Start makes no machine")
+  await evaluate(`${start}.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse", button: 0 })), true`)
+  await until("window.__prepares.length === 1", "pressing Start makes its machine ahead")
+  const later = `import('/src/state/prewarm.ts').then(({ prepareCloudNow }) => (prepareCloudNow("/Users/me/later", window.__laterAt), true))`
+  await evaluate(`window.__prepares.length = 0, window.__laterAt = Date.now() + 120_000, true`)
+  await evaluate(later)
+  await until("window.__prepares.length === 1", "the first ask")
+  await new Promise((resolveWait) => setTimeout(resolveWait, 50))
+  await evaluate(`window.__laterAt += 2_500, true`)
+  await evaluate(later)
+  await until("window.__prepares.length === 2", "asked again shortly after \"later\"")
+
+  // 6. Start opens the first Thread with Cloud chosen, Settings closed.
   await evaluate(`document.querySelector('[data-turn-on-fix="start-thread"]').click(), true`)
   await until(`!document.querySelector('[data-turn-on]')`, "Settings closed")
   assert.equal(await evaluate(`import('/src/state/run-place.ts').then(({ runPlaceStore }) => runPlaceStore.get().cloud)`), true, "Cloud chosen for the new Thread")
 
-  console.log("Turn-on UI: the invite and Check now, the line playing, getting ready, ready with what's going in plain words, a machine warming, one thing at a time that needs the person (an agent signed out, a private project, the files Git leaves out), what Mako retries only in Details, on with how it went, the sidebar line, and Start opening the first cloud Thread")
+  console.log("Turn-on UI: the invite and Check now, the line playing, getting ready, ready with what's going in plain words, a machine warming, one thing at a time that needs the person (an agent signed out, a private project, the files Git leaves out), what Mako retries only in Details, on with how it went, the sidebar line, Start making its machine on a press (never a hover), and Start opening the first cloud Thread")
   clearTimeout(watchdog)
   app.exit(0)
 }

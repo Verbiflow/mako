@@ -122,6 +122,13 @@ conversations?.live`) rather than a domain importing another's files.
   `setInterval`: each job is named, runs on an unreferenced timer that varies
   by a tenth either way, skips a run while the last is still going, logs a
   failure as `jobs <name> failed`, and stops with the host.
+- **Follow, don't poll.** What only says where something stands (a line a
+  window shows) reads what each owner already holds, and is woken by the
+  owner's own change (its event or callback). That read never sets off the
+  work it reports (a sign-in check, a harness's store, a network call). What
+  says nothing as it changes gets a slow job that `needs` a demand on only
+  while it's under way, and looks only while a window watches
+  (`CloudTurnOnFollower`).
 - **No module-level state.** What the host holds lives in what `createHost`
   builds, so a test makes the one domain it needs. `check-host-module-state.mjs`
   (in `npm run lint`) fails on any module-level `let` and any empty
