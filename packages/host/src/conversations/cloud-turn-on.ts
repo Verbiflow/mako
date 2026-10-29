@@ -6,7 +6,7 @@ import type { MethodTable } from "../base/methods.js"
 import type { CloudAccount } from "../contracts/cloud-account.js"
 import type { CloudSignInRow, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
-import { TURN_ON_STEPS, type BaseStanding, type CloudTurnOn, type TurnOnAgent, type TurnOnProject, type TurnOnStep, type TurnOnStepId, type TurnOnStepOf } from "../contracts/cloud-turn-on.js"
+import { TURN_ON_STEPS, baseSettled, noAccess, type BaseStanding, type CloudTurnOn, type TurnOnAgent, type TurnOnProject, type TurnOnStep, type TurnOnStepId, type TurnOnStepOf } from "../contracts/cloud-turn-on.js"
 import type { SyncStatus } from "../contracts/sync-status.js"
 
 /**
@@ -15,12 +15,17 @@ import type { SyncStatus } from "../contracts/sync-status.js"
  * sign-ins go up (`CloudSignInSync`), the recent projects' bases are asked for (`CloudConversations.offerProjects`),
  * and the last 7 days start syncing (`SessionUploads`). This only follows them, and keeps when each was first seen
  * done, per account, in `turn-on.json` beside the cloud conversations.
+ *
+ * It follows by what its owners say, never by asking them on a timer: each owner's change (the account, the sign-ins,
+ * the sync, the projects offered, a cloud Thread made or made ahead) wakes one read (`changed`), and a read is only
+ * what each owner already holds, so it never sets off the work it reports (a sign-in check, a harness's store read).
+ * Only what says nothing as it changes, a base the cloud is making and a machine made ahead, is looked at again on the
+ * host's slow tick (`poll`), and only while one is under way and a window is there to see it.
  */
 
 const CLOUD = "cloud"
-/** While a base is being made or waits, its standing is read again this often; once every one is settled, this. */
-const STANDING_BUSY_MS = 4_000
-const STANDING_SETTLED_MS = 5 * 60_000
+/** How often the slow tick looks again at a base being made or a machine made ahead, while a window watches. */
+export const TURN_ON_POLL_MS = 5_000
 
 /** What a step's state is read from. */
 export type TurnOnReading = {
@@ -112,15 +117,10 @@ function agentsStep(signIns: CloudSignInsState | undefined): TurnOnStepOf<"agent
   return step
 }
 
-/** A base the cloud can't read (a private repository, or one gone): settled, since no try would help. */
-export function noAccess(base: BaseStanding): boolean {
-  return (base.state === "failed" || base.state === "waiting") && base.reason === "no-access"
-}
-
 function projectsStep(projects: TurnOnProject[] | undefined): TurnOnStepOf<"projects"> {
   if (!projects) return { id: "projects", state: "working", projects: [] }
   const step: TurnOnStepOf<"projects"> = { id: "projects", state: "done", projects }
-  if (projects.some(({ base }) => (base.state === "making" || base.state === "waiting") && !noAccess(base))) step.state = "working"
+  if (projects.some(({ base }) => !baseSettled(base))) step.state = "working"
   else {
     const failed = projects.find(({ base }) => base.state === "failed" && !noAccess(base))
     if (failed?.base.state === "failed") {
@@ -215,9 +215,14 @@ export function turnOnOf(reading: TurnOnReading, kept: Kept | undefined, now: nu
   return { turnOn, kept: next }
 }
 
-/** What turning the cloud on reads of the host. */
+/**
+ * What turning the cloud on reads of the host. Each read is of what its owner already holds: none may set off work of
+ * its own (a check, a store read, a network call), since every change of its owner reads it again. Only `standings`
+ * and the asks reach the cloud.
+ */
 export type TurnOnSources = {
   account(): Promise<CloudAccount | undefined>
+  /** The agents' sign-ins as last checked (`CloudSignInSync.current`), never checked anew for this. */
   signIns(): Promise<CloudSignInsState | undefined>
   sync(): Promise<SyncStatus>
   /** The recent projects offered for bases for this account, the newest first; undefined until offered. */
@@ -240,20 +245,38 @@ export class CloudTurnOnFollower {
   readonly #sources: TurnOnSources
   readonly #file: string
   readonly #emit: (turnOn: CloudTurnOn) => void
+  readonly #watching: () => boolean
+  readonly #underWay: ((on: boolean) => void) | undefined
   #stored: z.infer<typeof FileSchema> | undefined
   #last: CloudTurnOn | undefined
   #lastText: string | undefined
-  #standings: { key: string; at: number; read: Array<{ repository: CloudRepository; standing: BaseStanding }> | null } | undefined
+  /** The bases' standing as last read, and when; `failed` when that read didn't reach the cloud, so it's read again. */
+  #standings: { key: string; at: number; read: Array<{ repository: CloudRepository; standing: BaseStanding }> | null; failed: boolean } | undefined
+  /** The slow tick, or a client asking, wants the bases' standing again if one isn't settled, for the next read. */
+  #lookAgain = false
+  /** A base being made, or a machine made ahead, said nothing the last read could follow: the slow tick looks again. */
+  #timed = false
   #reading: Promise<CloudTurnOn> | undefined
+  #again: Promise<void> | undefined
   /** The repositories offered, by folder, branch included, as last read. */
   #offered = new Map<string, CloudRepository>()
   #writing: Promise<void> = Promise.resolve()
   readonly #loaded: Promise<void>
 
-  constructor(options: { sources: TurnOnSources; file: string; emit: (turnOn: CloudTurnOn) => void }) {
+  constructor(options: {
+    sources: TurnOnSources
+    file: string
+    emit: (turnOn: CloudTurnOn) => void
+    /** Whether a window is there to see the line: the slow tick looks at nothing without one. */
+    watching?: () => boolean
+    /** Told whether something under way says nothing as it changes, so the slow tick runs only then (a `JobDemand`). */
+    underWay?: (on: boolean) => void
+  }) {
     this.#sources = options.sources
     this.#file = options.file
     this.#emit = options.emit
+    this.#watching = options.watching ?? (() => true)
+    this.#underWay = options.underWay
     this.#loaded = this.#load()
   }
 
@@ -264,22 +287,42 @@ export class CloudTurnOnFollower {
   }
 
   /**
-   * On the host's tick: read while the cloud is being turned on, so each step's time is its own and every window hears
-   * it; once it's on, only the account is looked at, which is in memory.
+   * A client asks for the line (`mako:cloud-turn-on`): a base still being made is looked at again for it too, as the
+   * slow tick would, and no oftener however often it asks. A window that stays hears the rest as events.
    */
-  async tick(): Promise<void> {
-    await this.#loaded
-    if (this.#last?.phase === "on") {
-      const account = await this.#sources.account()
-      const state = account?.state
-      if (state?.status === "signed-in" && state.account.entitlements.includes(CLOUD) && this.#kept(state.account.id)?.onAt !== undefined) return
-    }
-    await this.read()
+  asked(): Promise<CloudTurnOn> {
+    this.#lookAgain = true
+    return this.#readAfter()
   }
 
+  /**
+   * Something a step reads from changed: the account, the sign-ins, the sync, the projects offered, a cloud Thread.
+   * Read again, after any read under way (which may have read before the change); calls meanwhile share that one.
+   */
+  changed(): Promise<void> {
+    this.#again ??= (async () => {
+      await this.#reading?.catch(() => undefined)
+      this.#again = undefined
+      await this.read()
+    })().catch((error: Error) => hostWarn("cloud-turn-on", "turning the cloud on wasn't read", { error: error.message }))
+    return this.#again
+  }
+
+  /**
+   * The host's slow tick: a base being made, or a machine made ahead, is looked at again, while one is under way and a
+   * window watches. Anything else waits for its owner to say it changed.
+   */
+  async poll(): Promise<void> {
+    if (!this.#timed || !this.#watching()) return
+    this.#lookAgain = true
+    await this.changed()
+  }
+
+  /** Check now: the account asked again what it has, and the bases' standing read again with it. */
   async checkPlan(): Promise<CloudTurnOn> {
     await this.#sources.checkPlan()
-    return this.read()
+    this.#standings = undefined
+    return this.#readAfter()
   }
 
   /** "Try again" on the bases that failed: asked for again, and read again at once. */
@@ -290,6 +333,12 @@ export class CloudTurnOnFollower {
       await this.#sources.askBases(failed.map(({ folder, repository }) => this.#offered.get(folder) ?? { url: repository }))
       this.#standings = undefined
     }
+    return this.#readAfter()
+  }
+
+  /** A read begun after now, not one under way that may have read before. */
+  async #readAfter(): Promise<CloudTurnOn> {
+    await this.#reading?.catch(() => undefined)
     return this.read()
   }
 
@@ -316,6 +365,7 @@ export class CloudTurnOnFollower {
     const kept = accountId ? this.#kept(accountId) : undefined
     const { turnOn, kept: next } = turnOnOf(reading, kept, this.#sources.now())
     if (accountId && next && next !== kept) await this.#keep(accountId, kept, next)
+    this.#follow(turnOn)
     const text = JSON.stringify(turnOn)
     this.#last = turnOn
     if (text !== this.#lastText) {
@@ -325,19 +375,42 @@ export class CloudTurnOnFollower {
     return turnOn
   }
 
-  /** Each offered project with its base's standing, read again only as often as it can change. */
+  /**
+   * Whether the line waits on something that says nothing as it changes: a base being made (or a standing the cloud
+   * didn't answer), a machine made ahead.
+   */
+  #follow(turnOn: CloudTurnOn): void {
+    const projects = turnOn.steps.find((step) => step.id === "projects")
+    const thread = turnOn.steps.find((step) => step.id === "thread")
+    const bases = projects?.state === "working" || (turnOn.phase !== "on" && this.#standings?.failed === true)
+    const timed = bases || (thread?.id === "thread" && thread.machine !== undefined)
+    if (timed === this.#timed) return
+    this.#timed = timed
+    this.#underWay?.(timed)
+  }
+
+  /**
+   * Each offered project with its base's standing: read from the cloud when the projects offered change, when a person
+   * asks again (Check now, Try again), and while one isn't settled, on the slow tick or a client's ask; any other read
+   * uses the last.
+   */
   async #projects(offered: Array<{ folder: string; repository: CloudRepository }>): Promise<TurnOnProject[]> {
     this.#offered = new Map(offered.map(({ folder, repository }) => [folder, repository]))
     const key = JSON.stringify(offered.map(({ repository }) => repository))
-    const now = this.#sources.now()
     const cached = this.#standings
-    const settled = cached?.read?.every(({ standing }) => standing.state !== "making" && standing.state !== "waiting") ?? false
-    if (!cached || cached.key !== key || now - cached.at >= (settled ? STANDING_SETTLED_MS : STANDING_BUSY_MS)) {
+    const now = this.#sources.now()
+    const lookAgain = this.#lookAgain
+    this.#lookAgain = false
+    const unsettled = cached !== undefined && (cached.failed || (cached.read?.some(({ standing }) => !baseSettled(standing)) ?? false))
+    // Looked at again at most twice a tick: a client asking every moment doesn't ask the cloud every moment.
+    if (!cached || cached.key !== key || (lookAgain && unsettled && now - cached.at >= TURN_ON_POLL_MS / 2)) {
+      let failed = false
       const read = await this.#sources.standings(offered.map(({ repository }) => repository)).catch((error: Error) => {
         hostWarn("cloud-turn-on", "the bases' standing wasn't read", { error: error.message })
+        failed = true
         return cached?.key === key ? cached.read : null
       })
-      this.#standings = { key, at: now, read }
+      this.#standings = { key, at: now, read, failed }
     }
     const read = this.#standings?.read
     return offered.map(({ folder, repository }) => ({
@@ -387,7 +460,7 @@ export class CloudTurnOnFollower {
 const NOWHERE: CloudTurnOn = { phase: "unavailable", steps: TURN_ON_STEPS.map(laterStep) }
 
 export function declareTurnOnMethods(methods: MethodTable, follower: CloudTurnOnFollower | undefined): void {
-  methods.handle("mako:cloud-turn-on", () => follower?.read() ?? NOWHERE)
+  methods.handle("mako:cloud-turn-on", () => follower?.asked() ?? NOWHERE)
   methods.handle("mako:cloud-turn-on-check", () => follower?.checkPlan() ?? NOWHERE)
   methods.handle("mako:cloud-turn-on-retry-bases", () => follower?.retryBases() ?? NOWHERE)
 }

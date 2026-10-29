@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react"
 import { CheckIcon, ChevronRightIcon, CopyIcon, FileLockIcon, FolderGitIcon, LockIcon } from "lucide-react"
 import { toast } from "sonner"
 import type { CarriedFilesView } from "@mako/host/contracts/cloud-carried-files"
-import type { BaseStanding, CloudTurnOn, TurnOnStep } from "@mako/host/contracts/cloud-turn-on"
+import { noAccess, type BaseStanding, type CloudTurnOn, type TurnOnStep } from "@mako/host/contracts/cloud-turn-on"
 import { Action } from "@/components/ui/kit"
 import { Collapse } from "@/components/ui/collapse"
 import { MakoTile } from "@/components/ui/mako-mark"
@@ -277,8 +277,7 @@ function StartThread({ folder, quiet }: { folder: string; quiet: boolean }) {
     <Action
       tone={quiet ? "outline" : "solid"}
       size="md"
-      onPointerEnter={() => cloudTurnOn.warm(folder)}
-      onFocus={() => cloudTurnOn.warm(folder)}
+      onPointerDown={() => cloudTurnOn.warm(folder)}
       onClick={() => void cloudTurnOn.startThread(folder)}
       data-turn-on-fix="start-thread"
     >
@@ -437,11 +436,6 @@ function RailLine({ turnOn }: { turnOn: CloudTurnOn }) {
 function useHarnessNames(): (harness: string) => string {
   const descriptors = useThreads((state) => state.descriptors)
   return (harness) => descriptors.find((entry) => entry.provider === harness)?.displayName ?? harness
-}
-
-/** A base the cloud can't read: a private repository, or one gone. */
-function noAccess(base: BaseStanding): boolean {
-  return (base.state === "failed" || base.state === "waiting") && base.reason === "no-access"
 }
 
 function repositoryName(repository: string): string {

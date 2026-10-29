@@ -122,6 +122,13 @@ conversations?.live`) rather than a domain importing another's files.
   `setInterval`: each job is named, runs on an unreferenced timer that varies
   by a tenth either way, skips a run while the last is still going, logs a
   failure as `jobs <name> failed`, and stops with the host.
+- **Follow, don't poll.** What only says where something stands (a line a
+  window shows) reads what each owner already holds, and is woken by the
+  owner's own change (its event or callback). That read never sets off the
+  work it reports (a sign-in check, a harness's store, a network call). What
+  says nothing as it changes gets a slow job that `needs` a demand on only
+  while it's under way, and looks only while a window watches
+  (`CloudTurnOnFollower`).
 - **No module-level state.** What the host holds lives in what `createHost`
   builds, so a test makes the one domain it needs. `check-host-module-state.mjs`
   (in `npm run lint`) fails on any module-level `let` and any empty
@@ -2392,6 +2399,22 @@ sent every Cursor reply to `cursor-agent -p --resume` without a word.
 reopens a stopped session through `session/load` in place. Cursor reopens
 through the SDK's own resume (below); `test-cursor-resume.ts` covers its
 verdicts.
+
+So a send needs a target, not a fresh read. A conversation opened from the
+window's cache (or painted from its record's tail) is on screen while its
+fresh read lands, and the composer sends to it at once (`openingHoldsSend`
+in `thread-viewing.ts`). Only a session the window itself routes from its
+ref (`copyOnly`, `resumeUnavailable`: straight to a move) waits for that
+read, at most four seconds, its send button turning meanwhile. With nothing
+on screen yet the button turns and Enter says nothing. A refresh that
+fails leaves the saved messages on screen under one quiet "Couldn't refresh
+· Retry" line, and they still take a send. An open that fails with nothing
+to show is said by the viewer alone; Enter there says "Could not load this
+conversation" with its reason and Retry loading, one notice however often
+it is pressed. A reconnect reads either again.
+Before this, every Enter on a cached conversation stacked "Wait for this
+conversation to load" while a slow host read it. `test-thread-opening.ts`
+and `test-opening-send-ui.mjs` cover it.
 
 What a session ran under is remembered per user, not per host.
 `packages/host/src/threads/session-memory.ts` keeps `~/.mako/session-memory.sqlite`, keyed by

@@ -3,8 +3,11 @@ import assert from "node:assert/strict"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { type ThreadPage, type ThreadRef } from "@mako/host/contracts/conversation-session"
 import {
+  freshViewedRef,
   loadThreadEntry,
+  openingHoldsSend,
   recoverThreadReader,
+  rereadFailedOpening,
   threadViewingActions,
 } from "../src/state/thread-viewing.ts"
 import { threadsStore } from "../src/state/thread-store.ts"
@@ -210,6 +213,72 @@ await late
 assert.equal(threadsStore.get().viewing,null)
 assert.equal(follows.length,count,"a departed view never follows a late recovered snapshot")
 threadViewingActions.closeViewer()
+
+// A conversation on screen takes a send while its fresh read lands: the last
+// read painted from the cache is the target. Only nothing on screen yet, or
+// a read that failed, holds a send, and a failed read is read again once the
+// host is back.
+{
+  const held: ThreadRef = { harness: "claude", nativeId: "held", path: "/held" }
+  pending.delete(held.path)
+  const firstOpen = threadViewingActions.view(held)
+  await waitFor(held.path)
+  assert.equal(openingHoldsSend(threadsStore.get())?.kind, "loading", "nothing of it is on screen yet")
+  pending.get(held.path)!.resolve({ ref: held, entries: [{ type: "user", id: "u", text: "hello" }], start: 0, total: 1, hasEarlier: false })
+  await firstOpen
+  threadViewingActions.closeViewer()
+
+  pending.delete(held.path)
+  await threadViewingActions.view(held)
+  await waitFor(held.path)
+  assert.equal(threadsStore.get().opening?.kind, "loading", "the fresh read is still under way")
+  assert.equal(threadsStore.get().viewing?.ref.path, held.path, "the last read is on screen")
+  assert.equal(openingHoldsSend(threadsStore.get()), null, "and it takes a send now")
+  const confirmed = freshViewedRef(held.path, 5_000)
+  const fresh = { ...held, copyOnly: true as const }
+  pending.get(held.path)!.resolve({ ref: fresh, entries: [{ type: "user", id: "u", text: "hello" }], start: 0, total: 1, hasEarlier: false })
+  assert.deepEqual(await confirmed, fresh, "a send that waits gets the ref the fresh read brought")
+  assert.equal(await freshViewedRef(held.path, 5_000), threadsStore.get().viewing?.ref, "a settled view answers at once")
+  assert.equal(await freshViewedRef("/elsewhere", 5_000), null, "another conversation's view answers nothing")
+
+  pending.delete(held.path)
+  await threadViewingActions.view(held)
+  await waitFor(held.path)
+  const failing = freshViewedRef(held.path, 5_000)
+  pending.get(held.path)!.reject(new Error("The host stopped answering"))
+  assert.equal(await failing, null, "a failed read gives a waiting send nothing to go by")
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(threadsStore.get().opening?.kind, "failed")
+  assert.equal(threadsStore.get().viewing?.ref.path, held.path, "the saved messages stay on screen")
+  assert.equal(openingHoldsSend(threadsStore.get()), null, "and a send still goes to them: the host routes it by path")
+
+  // Read again after a reconnect, whether the saved messages or nothing was on screen.
+  const settles = async (ref: ThreadRef) => {
+    pending.delete(ref.path)
+    rereadFailedOpening()
+    await waitFor(ref.path)
+    pending.get(ref.path)!.resolve({ ref, entries: [{ type: "user", id: "u", text: "hello" }], start: 0, total: 1, hasEarlier: false })
+    for (let i = 0; i < 30 && threadsStore.get().opening; i++) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.equal(threadsStore.get().opening, null, "after a reconnect the failed read is read again and the view settles")
+    assert.equal(threadsStore.get().viewing?.ref.path, ref.path)
+  }
+  await settles(held)
+  pending.delete(held.path)
+  rereadFailedOpening()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(pending.has(held.path), false, "a settled view is not read again")
+
+  // Nothing read before: a failed read leaves nothing to send to, and holds a send with its reason.
+  const cold: ThreadRef = { harness: "claude", nativeId: "cold", path: "/cold" }
+  pending.delete(cold.path)
+  const coldOpen = threadViewingActions.view(cold)
+  await waitFor(cold.path)
+  pending.get(cold.path)!.reject(new Error("The host stopped answering"))
+  await coldOpen
+  assert.deepEqual(openingHoldsSend(threadsStore.get()), { kind: "failed", ref: cold, error: "The host stopped answering" }, "a failed read with nothing on screen holds a send with its reason")
+  await settles(cold)
+  threadViewingActions.closeViewer()
+}
 console.log(
-  "Thread opening: exact draft/provider ownership, out-of-order results, readable failure state, explicit close and in-place entry loading verified"
+  "Thread opening: exact draft/provider ownership, out-of-order results, readable failure state, explicit close, in-place entry loading, sends to a conversation on screen while it refreshes and a failed read read again on reconnect verified"
 )

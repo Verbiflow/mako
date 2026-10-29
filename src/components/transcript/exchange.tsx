@@ -728,20 +728,33 @@ function liveStep(messages: readonly ChatMessage[]): LiveStepData {
 
 /**
  * The calls one step stands for, in the order they began: every call
- * running now, and every call that ran beside them, finished after the
- * first of them began and begun no later than the last. A call that
- * finishes among others keeps its place until the whole step is done;
- * agents started together (`group`) are one step whole. The times are the
- * host's, so a reopened conversation draws the same step as a watched one.
+ * running now, and every call begun together with one of them. Calls begin
+ * together when none returned between their starts, so a call that
+ * finishes among others keeps its place until its step is done, while calls
+ * made one after another are steps of their own: beside a call that never
+ * returns, each later call settles into the summary once it finishes and
+ * stays there. Agents started together (`group`) are one step whole. The
+ * times are the host's, so a reopened conversation draws the same step as a
+ * watched one.
  */
 function stepCalls(calls: readonly ToolCall[], group: readonly ToolCall[] = []): ToolCall[] {
-  const starts = calls.flatMap((call) => (call.pending && call.startedAt !== undefined ? [call.startedAt] : []))
-  const first = Math.min(...starts)
-  const last = Math.max(...starts)
+  const ends = calls.flatMap((call) => (!call.pending && call.endedAt !== undefined ? [call.endedAt] : [])).sort((a, b) => a - b)
+  // A step is named by how many calls had returned when it began: two calls share it when none returned between their starts.
+  const returnedBy = (at: number) => {
+    let low = 0
+    let high = ends.length
+    while (low < high) {
+      const middle = (low + high) >> 1
+      if (ends[middle]! <= at) low = middle + 1
+      else high = middle
+    }
+    return low
+  }
+  const running = new Set(calls.flatMap((call) => (call.pending && call.startedAt !== undefined ? [returnedBy(call.startedAt)] : [])))
   const together = new Set(group.map((call) => call.id))
   return calls.filter((call) =>
     call.pending || together.has(call.id) ||
-    (call.endedAt !== undefined && call.startedAt !== undefined && call.endedAt > first && call.startedAt <= last)
+    (call.endedAt !== undefined && call.startedAt !== undefined && running.has(returnedBy(call.startedAt)))
   )
 }
 
