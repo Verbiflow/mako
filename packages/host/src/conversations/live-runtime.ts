@@ -110,6 +110,8 @@ export interface Resident {
   /** See `LiveSnapshot.activityAt`; the next flush publishes it. */
   activityAt?: number
   timer: ReturnType<typeof setTimeout> | null
+  /** When it last flushed (`performance.now()`): the next change waits until a batch's frame has passed since. */
+  flushedAt?: number
   displayPrompt?: string
   /** When anything last loaded or changed it; the memory budget lets the oldest go first. */
   usedAt?: number

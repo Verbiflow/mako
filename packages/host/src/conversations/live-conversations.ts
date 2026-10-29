@@ -1241,14 +1241,21 @@ export class LiveConversations {
     return this.closing.stop()
   }
 
+  /**
+   * A change goes out in the next batch: at once (the next turn of the event loop) when the conversation hasn't
+   * flushed for a frame, else when the frame since its last flush has passed. So the first token of a burst isn't held,
+   * and a stream goes at most every `BATCH_MS`, in batches every window, watching device and the journal share.
+   */
   private schedule(resident: Resident): void {
-    resident.timer ??= setTimeout(() => {
+    if (resident.timer) return
+    const wait = resident.flushedAt === undefined ? 0 : Math.max(0, resident.flushedAt + BATCH_MS - performance.now())
+    resident.timer = setTimeout(() => {
       try {
         this.flush(resident)
       } catch (error) {
         this.storageFailed(resident, { error })
       }
-    }, 16)
+    }, wait)
   }
 
   /** See `LiveAccess.keep`. */
@@ -1291,6 +1298,7 @@ export class LiveConversations {
       activityAt: resident.activityAt,
     }
     resident.journal.commit(snapshot, previous, previous.blocks === resident.snapshot.blocks ? delivery.grown : undefined)
+    resident.flushedAt = performance.now()
     resident.storageFault = false
     resident.updates = []
     resident.pendingCharacters = 0
@@ -1335,10 +1343,7 @@ export class LiveConversations {
             ? snapshot.permissions
             : undefined,
         ...requestsDelta(previous.requests, snapshot.requests),
-        activityAt:
-          previous.activityAt !== snapshot.activityAt
-            ? snapshot.activityAt
-            : undefined,
+        activityAt: activityMoved(previous.activityAt, snapshot.activityAt) ? snapshot.activityAt : undefined,
         nativeActivity:
           previous.nativeActivity !== snapshot.nativeActivity
             ? (snapshot.nativeActivity ?? null)
@@ -1417,3 +1422,18 @@ export class LiveConversations {
   }
 }
 
+/**
+ * A streaming conversation's batches go at most this often, the first of a burst at once. No screen paints more than
+ * about twenty a second (`StreamFrames`), so each batch on 2026-10-28's 16 ms was mostly sent to be thrown away, on every
+ * hop to every device, and written to the journal.
+ */
+const BATCH_MS = 33
+
+/**
+ * Whether a batch says when the conversation last showed work: when it moved into another second. It moves with every
+ * token, and what reads it waits a minute for quiet (`QUIET_AFTER_MS`), so a second late costs nothing; said each
+ * time, it was in nearly every batch to every device.
+ */
+function activityMoved(before: number | undefined, after: number | undefined): boolean {
+  return after !== undefined && (before === undefined || Math.floor(after / 1_000) !== Math.floor(before / 1_000))
+}
