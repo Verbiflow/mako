@@ -148,10 +148,13 @@ try {
   const pkg = JSON.parse(await readFile(join(stage, "package.json"), "utf8"))
   const revision = process.env.MAKO_BUILD_REVISION ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: project, encoding: "utf8" }).trim()
   assert.match(revision, /^[a-f0-9]{40}$/)
-  const dirty = process.env.MAKO_BUILD_DIRTY === undefined
-    ? Boolean(execFileSync("git", ["status", "--porcelain"], { cwd: project, encoding: "utf8" }).trim())
-    : process.env.MAKO_BUILD_DIRTY === "1"
-  const makoBuild = { id: createHash("sha256").update(JSON.stringify(before)).digest("hex").slice(0, 16), builtAt: new Date().toISOString(), revision, dirty }
+  // The uncommitted files the build takes, as the updater named them before building, so the installed app names
+  // the same ones; packaged directly, the checkout's own, read now. The project's packages were just compiled.
+  const { buildUncommitted, readUncommitted } = await import("@mako/host/application/local-update-source")
+  const { Git } = await import("@mako/git")
+  const git = new Git()
+  const taken = await buildUncommitted(process.env, () => readUncommitted(git, project)).finally(() => git.close())
+  const makoBuild = { id: createHash("sha256").update(JSON.stringify(before)).digest("hex").slice(0, 16), builtAt: new Date().toISOString(), revision, ...taken }
   // The Mako cloud a release signs in to and reports to; a build packaged without one offers neither. A local build
   // signs in to production's unless MAKO_CLOUD_URL names another.
   const cloudUrl = process.env.MAKO_CLOUD_URL || (localIdentity ? PRODUCTION_CLOUD : undefined)

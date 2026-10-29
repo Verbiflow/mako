@@ -12,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { basename, dirname, join, relative } from "node:path"
-import { spawn, execFile } from "node:child_process"
+import { execFile } from "node:child_process"
 import { promisify, stripVTControlCharacters } from "node:util"
 import { z } from "zod"
 import { createHash } from "node:crypto"
@@ -26,7 +26,8 @@ import {
 } from "../contracts/app-lifecycle.js"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { unregisterBundle } from "./local-update-installer.js"
-import { bringForward, changesSince, readUpdateSource } from "./local-update-source.js"
+import { BUILD_UNCOMMITTED_VARIABLE, bringForward, changesSince, readUncommitted, readUpdateSource } from "./local-update-source.js"
+import { runProcessGroup } from "./process-group.js"
 import { DependencyInstallError, installDependencies, missingDependencies, uninstalledPackages } from "./local-update-dependencies.js"
 import type { Git } from "@mako/git"
 
@@ -431,11 +432,13 @@ export class LocalUpdates {
     const job = await mkdtemp(join(this.root, "build-"))
     const output = join(job, "output")
     try {
-      const [revision, dirty, fingerprint] = await Promise.all([
+      // The uncommitted files are read as the copy is taken, and the build carries them by name.
+      const [revision, uncommitted, fingerprint] = await Promise.all([
         this.git.text({ cwd: source, args: ["rev-parse", "HEAD"], timeoutMs: 10_000 }),
-        this.git.text({ cwd: source, args: ["status", "--porcelain"], read: true, timeoutMs: 10_000 }).then(Boolean),
+        readUncommitted(this.git, source),
         syncBuildCheckout(source, checkout),
       ])
+      const dirty = uncommitted.count > 0
       const stamp = `${fingerprint}:${revision}:${dirty ? 1 : 0}:${this.identity}`
       // Identical inputs produce an identical candidate: when the prepared
       // output from a successful build is still on disk there is nothing to
@@ -455,6 +458,7 @@ export class LocalUpdates {
         MAKO_LOCAL_SIGNING_IDENTITY: this.identity,
         MAKO_BUILD_REVISION: revision,
         MAKO_BUILD_DIRTY: dirty ? "1" : "0",
+        [BUILD_UNCOMMITTED_VARIABLE]: JSON.stringify(uncommitted),
       }
       // The copy has no history; a performance row over budget is measured beside a commit exported from here.
       if (this.options.buildSource !== false) variables.MAKO_BUILD_SOURCE = source
@@ -773,73 +777,27 @@ async function runBuild(
   env: NodeJS.ProcessEnv,
   signal?: AbortSignal
 ): Promise<void> {
-  signal?.throwIfAborted()
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-    })
-    // Keep a bounded diagnostic tail. Discarding all output made a failed
-    // Settings check report only "exited with 1", hiding the failing test.
-    let stdout = ""
-    let stderr = ""
-    child.stdout.setEncoding("utf8").on("data", (text: string) => { stdout = (stdout + text).slice(-8192) })
-    child.stderr.setEncoding("utf8").on("data", (text: string) => { stderr = (stderr + text).slice(-8192) })
-    let timedOut = false
-    let stopping = false
-    let force: ReturnType<typeof setTimeout> | undefined
-    const kill = (signal: NodeJS.Signals) => {
-      if (!child.pid) return
-      try {
-        process.kill(-child.pid, signal)
-      } catch (error) {
-        if (
-          !(error instanceof Error) ||
-          !("code" in error) ||
-          error.code !== "ESRCH"
-        )
-          reject(error)
-      }
-    }
-    // The whole group goes: npm's own children (install scripts) with it.
-    const stop = () => {
-      if (stopping) return
-      stopping = true
-      kill("SIGTERM")
-      force = setTimeout(() => kill("SIGKILL"), 5000)
-    }
-    const timer = setTimeout(() => {
-      timedOut = true
-      stop()
-    }, 20 * 60_000)
-    signal?.addEventListener("abort", stop, { once: true })
-    const settle = () => {
-      clearTimeout(timer)
-      clearTimeout(force)
-      signal?.removeEventListener("abort", stop)
-    }
-    child.once("error", (error) => {
-      settle()
-      reject(error)
-    })
-    child.once("close", (code) => {
-      settle()
-      // The pipes can drain out of order: a stdout burst must not erase the
-      // final stderr failure, even if the child wrote stderr last.
-      const diagnostic = [stdout.slice(stderr ? -600 : -1200), stderr.slice(stdout ? -600 : -1200)]
-        .map(text => stripVTControlCharacters(text).trim()).filter(Boolean).join("\n")
-      if (signal?.aborted) reject(signal.reason)
-      else if (code === 0 && !timedOut) resolve()
-      else
-        reject(
-          new Error(
-            timedOut
-              ? "The build step exceeded its time limit."
-              : `${basename(command)} ${args.join(" ")} exited with ${code ?? "a signal"}. ${diagnostic || "The step produced no diagnostic output."}`
-          )
-        )
-    })
+  // Keep a bounded diagnostic tail. Discarding all output made a failed
+  // Settings check report only "exited with 1", hiding the failing test.
+  let stdout = ""
+  let stderr = ""
+  const { code, stopped } = await runProcessGroup(command, args, {
+    cwd,
+    env,
+    stdio: "pipe",
+    signal,
+    timeoutMs: 20 * 60_000,
+    output: (stream, text) => {
+      if (stream === "stdout") stdout = (stdout + text).slice(-8192)
+      else stderr = (stderr + text).slice(-8192)
+    },
   })
+  if (signal?.aborted) throw signal.reason
+  if (code === 0 && !stopped) return
+  if (stopped === "timeout") throw new Error("The build step exceeded its time limit.")
+  // The pipes can drain out of order: a stdout burst must not erase the
+  // final stderr failure, even if the child wrote stderr last.
+  const diagnostic = [stdout.slice(stderr ? -600 : -1200), stderr.slice(stdout ? -600 : -1200)]
+    .map(text => stripVTControlCharacters(text).trim()).filter(Boolean).join("\n")
+  throw new Error(`${basename(command)} ${args.join(" ")} exited with ${code ?? "a signal"}. ${diagnostic || "The step produced no diagnostic output."}`)
 }

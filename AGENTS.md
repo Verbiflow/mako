@@ -3298,9 +3298,19 @@ verified installed signer, or an unambiguous signer from existing local release
 artifacts during the first transition; builds to a unique output; asks before
 installation; waits for safe shutdown; installs and reopens Mako; and removes
 the output whether it installed, was declined or failed. It never
-force-stops agents. `npm run update:local -- --check` is read-only, and
-`npm run test:update-local` exercises orchestration and signer selection without
-building or replacing the user's app.
+force-stops agents. It runs under plain node but loads every `@mako/*`
+package from the checkout's source (`scripts/lib/workspace-source.mjs`: tsx
+plus a resolve hook mapping each export's `dist/x.js` to `src/x.ts`), never
+from `packages/*/dist`: that was whatever was last compiled, so the fetch,
+fast-forward and dependency code that ran was stale, and a checkout compiled
+before a module existed failed to import it. Keep its workspace imports
+dynamic and after `useCheckoutSource()`, and its failure handler free of
+imports. Its npm steps stop with their whole process group on Ctrl+C or the
+install's time limit, as Settings' do. `npm run update:local -- --check` is
+read-only, and `npm run test:update-local` exercises orchestration and signer
+selection without building or replacing the user's app;
+`test-update-local-cli.mjs` (in `test:update-source`) covers the source
+loading against a stale and an incomplete dist, and the group stop.
 
 Local installed builds use `npm run package:mac:local`, with
 `MAKO_LOCAL_SIGNING_IDENTITY=<certificate SHA-1>` for the first build. Later
@@ -3458,7 +3468,8 @@ the complete Settings build service against a private profile without installing
 They preserve npm security configuration, run build,
 lint and regression checks, and verify the existing signing identity. Public
 release updates remain separate from local builds. `package-mac.mjs` stamps the
-actual packaged inputs with a build ID, timestamp and source revision.
+actual packaged inputs with a build ID, timestamp and source revision, and
+the uncommitted files the build took (`makoBuild.uncommitted`, below).
 The local installer prepares outside the running bundle, waits for its processes
 to exit, retains the previous app, and rolls back failed replacement verification.
 Never install over a running app or turn Stop into an automatic prompt replay.
@@ -3494,6 +3505,24 @@ the revision already running, and the update read as done. `npm run
 test:update-source` covers it against scratch repositories and a local bare
 remote, and draws every state.
 
+Built as it is, the checkout goes in with every uncommitted file in it, other
+agents' work in progress included, and nobody should be surprised by that.
+`readUncommitted` (`local-update-source.ts`, `git status -z` with renames)
+names each tracked change and untracked, non-ignored file (edited, added,
+deleted, renamed from, untracked, conflicted; the first 200 by name, the rest
+counted), and the reading carries it: Settings › Updates says "Includes 41
+uncommitted changes" on the offer with the files behind a disclosure, and
+`update:local` lists them before it builds. Each updater reads them again as
+the build takes its source and hands that list to packaging
+(`MAKO_BUILD_UNCOMMITTED`); `package-mac.mjs` stamps it into the bundle as
+`makoBuild.uncommitted` beside `dirty` (`buildUncommitted`; packaged by hand
+it reads the checkout itself). That stamp is the one record of what an app
+took: Settings shows it on the ready build and under the installed revision
+("Revision 9a7a5c0c with 41 uncommitted changes"), and the CLI prints it for
+the build it made and the app installed. A build from an older updater has
+`dirty` only and says just "with uncommitted changes". Nothing answers the
+install question for the person: `update:local` takes no `--yes`.
+
 Then the checkout's node_modules must hold what its package-lock.json lists
 (`local-update-dependencies.ts`: each lockfile entry against npm's
 `node_modules/.package-lock.json`, by version; optional and peer entries
@@ -3505,7 +3534,11 @@ never `npm ci` (it deletes node_modules under whatever else reads it), and
 `--no-save` so package.json and package-lock.json stay as Git has them. It's
 refused while any package.json or package-lock.json has uncommitted
 changes, stopped with its process group after 10 minutes, and every failure
-ends with the command to run by hand. No dependency install script is
+ends with the command to run by hand. Every build step, in Settings and the
+CLI, runs through `runProcessGroup` (`application/process-group.ts`): its
+own process group, SIGTERM to the group then SIGKILL after 5 s, and a
+stopped step settles only once its group is empty, so a rerun never installs
+over an install still running. No dependency install script is
 approved: the build needs none of the ones npm's `allowScripts` would hold
 back, and `test-local-update-dependencies.mjs` (in `test:update-source`)
 names each and fails when one arrives or leaves.

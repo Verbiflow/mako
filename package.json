@@ -169,7 +169,7 @@
     "test:application": "node scripts/test-daemon-login.mjs && node scripts/test-isolated-host.mjs && tsx scripts/test-application-lifecycle.ts && tsx scripts/test-window-shutdown.ts && tsx scripts/test-host-idle.ts && tsx scripts/test-local-build-source.ts && npm run -s test:update-source && tsx scripts/test-local-update-install.ts && tsx scripts/test-local-update-startup.ts && node scripts/test-application-runtime.mjs && node scripts/test-checkout-copy.mjs && node scripts/test-application-ui.mjs",
     "test:provider-ui": "node scripts/test-provider-ui.mjs",
     "test:application-ui": "node scripts/test-application-ui.mjs",
-    "test:update-source": "tsx scripts/test-local-update-source.ts && tsx scripts/test-local-update-dependencies.mjs && esbuild scripts/test-updates-section-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-updates-section-ui.mjs --log-level=warning && node node_modules/.tmp/test-updates-section-ui.mjs",
+    "test:update-source": "tsx scripts/test-local-update-source.ts && tsx scripts/test-local-update-dependencies.mjs && node scripts/test-update-local-cli.mjs && esbuild scripts/test-updates-section-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-updates-section-ui.mjs --log-level=warning && node node_modules/.tmp/test-updates-section-ui.mjs",
     "test:checkout-copy": "node scripts/test-checkout-copy.mjs",
     "test:settings-build": "node scripts/test-local-build.mjs",
     "install:mac:local": "node scripts/install-local-mac.mjs",
