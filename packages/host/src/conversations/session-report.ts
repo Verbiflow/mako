@@ -10,7 +10,8 @@ import type { HostWork } from "../base/event-loop.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { encodeRuntimeEvent, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { gatewayEventLine, historyChangedNotice } from "../transport/index.js"
-import { hostWarn } from "../base/host-log.js"
+import type { OwnerReading } from "../contracts/sync-readings.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
 import { archivedByKeys, liveArchiveKeys } from "../contracts/thread-lifecycle.js"
 import { namedUuid } from "./cloud-moves.js"
 import { syncTier } from "./sync-window.js"
@@ -377,6 +378,9 @@ export class SessionPublisher {
   readonly #kept = new Map<string, { updates: Array<{ n: number; event: RuntimeEvent; text: string; correlationId?: string }>; bytes: number; given?: number }>()
   /** The gateway's word on a link not yet served: what it last relayed, to send the rest once the link is. */
   #after: { link: RuntimeLink; after: Readonly<Record<string, number>> } | undefined
+  /** Updates sent again on a new link, and notices to read a conversation again sent in their place, for Diagnostics. */
+  #resent = 0
+  #notices = 0
 
   constructor(options: {
     rows: () => readonly ReportedSession[] | undefined
@@ -517,13 +521,22 @@ export class SessionPublisher {
         const notice = historyChangedNotice(missed.at(-1)!.event)
         const line = notice && gatewayEventLine("event", notice)
         if (line && line.fit !== "too-large") current.served.live(conversation, Payload.encoded(line.text), { n: missed.at(-1)!.n })
+        this.#notices += 1
+        hostLog("sync", "a watched conversation missed more than was kept on a new link; its watchers read it again", { conversation, missed: missed.length })
         kept.updates = []
         kept.bytes = 0
         delete kept.given
         continue
       }
       for (const update of missed) current.served.live(conversation, Payload.encoded(update.text), { n: update.n, ...(update.correlationId && { correlationId: update.correlationId }) })
+      this.#resent += missed.length
+      hostLog("sync", "a watched conversation's updates the gateway didn't relay went again on a new link", { conversation, updates: missed.length })
     }
+  }
+
+  /** What this host sends of its own watched conversations, for Diagnostics' Sync. */
+  readings(): OwnerReading {
+    return { watched: this.#watching?.conversations.size ?? 0, resent: this.#resent, notices: this.#notices }
   }
 
   /**
@@ -546,6 +559,8 @@ export class SessionPublisher {
     const current = this.#watched(conversation)
     if (!current) return
     current.served.live(conversation, Payload.encoded(line.text), { n, ...(correlationId && { correlationId }) })
+    // A sampled update: logged here, at the gateway and on each device that hears it, under its trace.
+    if (correlationId) hostLog("sync", "traced update sent", { trace: correlationId, conversation, n })
     this.#sent?.()
   }
 

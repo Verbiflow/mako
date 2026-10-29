@@ -588,7 +588,9 @@ try {
     let tee = false
     stops.push(subscribeRuntime(A.socket, A.client, (packet) => {
       if (!tee || !("payload" in packet) || packet.type !== "live-batch" || packet.conversation !== C) return
-      machine?.event(packet.channel, { type: packet.type, conversation: packet.conversation, payload: packet.payload })
+      // As the host hands its events to its machine runtime: a sampled batch's trace named beside its payload.
+      const trace = z.object({ batch: z.object({ trace: z.string().optional() }).loose() }).safeParse(JSON.parse(packet.payload)).data?.batch.trace
+      machine?.event(packet.channel, { type: packet.type, conversation: packet.conversation, ...(trace && { trace }), payload: packet.payload })
     }, () => undefined))
     await sleep(3_000)
     tee = true

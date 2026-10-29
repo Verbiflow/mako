@@ -240,7 +240,9 @@ export class MachineRuntime {
     }
     if (line.fit === "reread") this.#state.events.invalidated += 1
     const payload = Payload.encoded(line.text)
-    for (const { threadId } of claims) threads.emit(threadId, payload)
+    // A sampled update's trace rides as the event's correlation ID, which the Thread logs and gives each reader.
+    for (const { threadId } of claims) threads.emit(threadId, payload, event.trace)
+    if (event.trace) hostLog("sync", "traced update sent", { trace: event.trace, conversation: event.conversation })
     this.#state.events.emitted += 1
     this.#changed()
   }

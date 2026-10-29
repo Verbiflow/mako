@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises"
+import type { SyncRecorder } from "../contracts/sync-readings.js"
 import { join } from "node:path"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { BACKFILL_PROGRESS, BackfillProgressSchema } from "@mako/sessions/record-backfill"
@@ -200,7 +201,11 @@ export async function readBackfill(records: string): Promise<Backfill | undefine
   return { sessions, done, startedAt, ...endedAt !== undefined && { endedAt } }
 }
 
-/** How this device's Sessions stand in the account, for Settings (`SessionUploads.status`); off where nothing uploads. */
-export function declareSyncMethods(methods: MethodTable, uploads: Pick<SessionUploads, "status"> | undefined): void {
+/**
+ * How this device's Sessions stand in the account, for Settings (`SessionUploads.status`), off where nothing uploads;
+ * and how its sync goes, for Diagnostics (`SyncRecorder.readings`).
+ */
+export function declareSyncMethods(methods: MethodTable, uploads: Pick<SessionUploads, "status"> | undefined, readings: Pick<SyncRecorder, "readings">): void {
   methods.handle("mako:sync-status", () => uploads?.status() ?? { state: "off", reason: "signed-out" })
+  methods.handle("mako:sync-readings", () => readings.readings())
 }

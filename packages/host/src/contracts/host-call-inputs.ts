@@ -1427,6 +1427,7 @@ const inputs = {
       }),
     ]),
   "mako:surface-window": () => z.tuple([]),
+  "mako:sync-readings": () => z.tuple([]),
   "mako:sync-status": () => z.tuple([]),
   "mako:telemetry": () => z.tuple([]),
   "mako:telemetry-choose": () =>
@@ -1969,6 +1970,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:stage-file-path", "workspaces"],
   ["mako:store-formats", "threads"],
   ["mako:stream-original", "threads"],
+  ["mako:sync-readings", "conversations"],
   ["mako:sync-status", "conversations"],
   ["mako:telemetry", "usage"],
   ["mako:telemetry-choose", "usage"],

@@ -44,3 +44,13 @@ Two figures in the first baseline were the bench's, not the product's:
 ## Budgets
 
 After: every live, status, reconnect and quiet budget is met (49 of 57). The eight over are messages and bytes per token on each hop, unchanged by this (0.70 messages and 418 bytes a token on the owner's hop, before and after).
+
+## With traces
+
+`after-with-traces.json` is the same run with one batch in 25 traced (and every one that starts or ends a turn, or asks or answers the person): it carries `emittedAt` and a trace that every hop logs. Every budget it met before it meets; bytes per token on the owner's hop went from 418 to 424. One trace, `st-328a1b52-86df`, as each hop logged it:
+
+- A's host: `sync traced update sent trace=st-328a1b52-86df conversation=6ffc4282-… n=1793248272032`
+- the gateway: `{"msg":"live trace","trace":"st-328a1b52-86df","conversation":"6ffc4282-…","seq":1793248281598,"watchers":2}`
+- B's host: `sync traced update heard trace=st-328a1b52-86df conversation=6ffc4282-… lagMs=1`
+
+Settings › Diagnostics shows the readings as Sync (a development build, its fixture readings): `sync-readout-light.png`, `sync-readout-dark.png`.

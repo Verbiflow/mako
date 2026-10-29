@@ -1,4 +1,4 @@
-import { NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, type Actor, type Json, type Subscription } from "@mako/protocol"
+import { LinkClosedError, NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, type Actor, type Json, type Subscription } from "@mako/protocol"
 import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
 import { conversationCallId } from "@mako/host/contracts/conversation-calls"
@@ -14,6 +14,7 @@ import { acp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
 import { threadsStore } from "@/state/thread-store"
 import { CONSOLE_LOG, type Gateway } from "./gateway"
+import { webSync } from "./sync-readings"
 import type { WebSession } from "./threads"
 import { harnessDescriptors } from "@/dev/harness-descriptors"
 import type { HarnessDescriptor } from "@/lib/types"
@@ -228,6 +229,8 @@ export class WebConversations {
     let gapsInRow = 0
     let first = true
     const cursor = new StreamCursor(owner.kind === "cloud" ? "log" : "live")
+    const readings = webSync.follow(owner.stream, this.#labelOf(follow.conversations))
+    let probedAt: number | undefined
     while (!follow.stopped) {
       try {
         const resumes = owner.kind === "cloud" ? cursor.last !== undefined : cursor.numbered
@@ -245,30 +248,47 @@ export class WebConversations {
           } catch (error) {
             if (!(error instanceof NothingArrivedError)) throw error
             this.#gateway.session.probe(owner.stream, PROBE_ANSWER_MS)
+            readings.probe()
+            probedAt = Date.now()
             continue
           }
           const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text })
           if (verdict.kind === "notice" || verdict.kind === "duplicate") continue
           if (verdict.kind === "reread") {
+            readings.reread()
             for (const conversation of follow.conversations) void hydrateLive(conversation, true)
             continue
           }
           if (verdict.kind === "gap") {
+            readings.gap()
+            readings.followedAgain("gap")
             gap = true
             continue
           }
           failures = 0
           gapsInRow = 0
-          this.#heard(frame.event.text, follow.conversations)
+          readings.heard(this.#heard(frame.event.text, follow.conversations))
         }
         // A number skipped: asked for again at once after the last one heard. Gap after gap is a stream that fails.
         if (++gapsInRow <= 3) continue
       } catch (error) {
         if (follow.stopped) return
+        readings.followedAgain(!(error instanceof LinkClosedError) ? "failed" : probedAt !== undefined && Date.now() - probedAt < PROBE_ANSWER_MS * 2 ? "silent" : "closed")
+        probedAt = undefined
         CONSOLE_LOG.warn("a conversation's stream ended; following it again", { stream: owner.stream, error: error instanceof Error ? error.message : String(error) })
       }
       await new Promise((resolve) => setTimeout(resolve, followAgainInMs(failures++)))
     }
+  }
+
+  /** What Diagnostics calls a followed stream: its open conversation's title, when it has one. */
+  #labelOf(conversations: ReadonlySet<string>): string | undefined {
+    const held = acpStore.get().conversations
+    for (const conversation of conversations) {
+      const conversationState = held[conversation]
+      if (conversationState?.kind === "live" && conversationState.session.title) return conversationState.session.title
+    }
+    return undefined
   }
 
   /** Whether one of a stream's open conversations is at work, so silence on it may be a stalled link. */
@@ -280,16 +300,21 @@ export class WebConversations {
     })
   }
 
-  /** One line of an owner's stream: a batch of an open conversation goes to the renderer's live state. */
-  #heard(line: string, open: ReadonlySet<string>): void {
+  /**
+   * One line of an owner's stream: a batch of an open conversation goes to the renderer's live state. Returns when its
+   * owner emitted it, for a traced batch, and logs its trace.
+   */
+  #heard(line: string, open: ReadonlySet<string>): number | undefined {
     const parts = splitRuntimeEventLine(line)
-    if (!parts) return
+    if (!parts) return undefined
     const head = LineHeadSchema.safeParse(JSON.parse(parts.head)).data
-    if (!head || head.channel !== "event" || head.type !== "live-batch" || !head.conversation || !open.has(head.conversation)) return
+    if (!head || head.channel !== "event" || head.type !== "live-batch" || !head.conversation || !open.has(head.conversation)) return undefined
     // SAFETY: the owner's host encoded this line from its own `live-batch` event, as its windows read it.
     const event = JSON.parse(parts.payload) as Extract<HostEvent, { type: "live-batch" }>
     applyLiveBatch(event.batch)
     for (const listener of this.#listeners) listener(event)
+    if (event.batch.trace) CONSOLE_LOG.info("traced update heard", { trace: event.batch.trace, conversation: head.conversation, ...(event.batch.emittedAt !== undefined && { lagMs: Date.now() - event.batch.emittedAt }) })
+    return event.batch.emittedAt
   }
 
   /** After a sleep or a network change: every followed stream that went quiet is followed again at once. */

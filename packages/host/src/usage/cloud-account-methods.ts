@@ -30,6 +30,9 @@ import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac, systemName, systemVersion } from "../base/platform.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
+/** The account's stream skipped a number, or said one was lost: the list is read whole again (`onAccountGap`). */
+export type AccountListGap = { gap: { after: number; seq: number; why: "skipped" | "lost" } }
+
 export interface CloudAccount {
   /** A connection token while this Mac is signed in to Mako. */
   token(): Promise<string | undefined>
@@ -124,7 +127,7 @@ export interface CloudAccount {
    * Hears each change to the account's list of Sessions, in the stream's order, as it comes, and `account-changed` when
    * this Mac signs in, out or to another account, after which the list is another's; returns how to stop.
    */
-  onThreadListings?(listener: (heard: AccountListHeard | "account-changed" | "account-gap") => void): () => void
+  onThreadListings?(listener: (heard: AccountListHeard | "account-changed" | AccountListGap) => void): () => void
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
   /** The Mac is going to sleep or shutting down: its runtime tells the cloud first (`CloudAccounts.leaving`). */
@@ -213,7 +216,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
-  const threadListeners = new Set<(heard: AccountListHeard | "account-changed" | "account-gap") => void>()
+  const threadListeners = new Set<(heard: AccountListHeard | "account-changed" | AccountListGap) => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -254,7 +257,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     // The stream skipped a number: what lists the account reads it whole again.
     onAccountGap: (gap) => {
       hostLog("cloud", "the account's stream skipped; its list is read again", gap)
-      for (const listener of threadListeners) listener("account-gap")
+      for (const listener of threadListeners) listener({ gap })
     },
     onRequest: request,
     sessions,

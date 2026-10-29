@@ -16,7 +16,9 @@ import {
   requestsDelta,
   sessionDelta,
   sharedSession,
+  traceOf,
   type InterruptionReason,
+  type LiveBatch,
   type LiveDriverEvent,
   type LiveRequest,
   type LiveSnapshot,
@@ -1310,9 +1312,7 @@ export class LiveConversations {
     if (previous.requests !== snapshot.requests) this.dependencies.turns?.(previous, snapshot)
     if (previous.control !== snapshot.control || previous.threadPath !== snapshot.threadPath)
       this.threads.register(snapshot, undefined)
-    this.dependencies.emit({
-      type: "live-batch",
-      batch: {
+    const batch: LiveBatch = {
         id: snapshot.session.id,
         revision: snapshot.revision,
         epoch: this.epoch,
@@ -1348,8 +1348,14 @@ export class LiveConversations {
           previous.nativeActivity !== snapshot.nativeActivity
             ? (snapshot.nativeActivity ?? null)
             : undefined,
-      },
-    })
+    }
+    // A sampled batch says when it left and carries a trace every hop logs (`traceOf`).
+    const trace = traceOf(batch, () => randomUUID().slice(0, 13))
+    if (trace) {
+      batch.emittedAt = Date.now()
+      batch.trace = trace
+    }
+    this.dependencies.emit({ type: "live-batch", batch })
     this.relocations.changed(resident)
     // A turn that ended, as it ended, failed included: what its record holds is all it will.
     if (previous.session.status === "running" && settled(snapshot.session.status))

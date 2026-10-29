@@ -3088,6 +3088,7 @@ export function installMockBridge() {
     crashesDir: async () => "/tmp/mako/crashes",
     hostLogPath: async () => "",
     sessionReaderHistory: async () => ({ since: new Date().toISOString(), lost: 0, events: [], logPath: "" }),
+    syncReadings: async () => ({ at: Date.now(), follows: [], list: { gaps: [], changeMs: { samples: 0 } } }),
     providerResidency: async () => ({
       entries: [],
       active: 0,

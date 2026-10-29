@@ -11,6 +11,8 @@ import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-re
 import type { SessionReaderEvent, SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { UnreadRecords } from "@/components/settings/unread-records"
+import { SyncReadout } from "@/components/settings/sync-readout"
+import type { SyncReadings } from "@mako/host/contracts/sync-readings"
 import { StoreFormatLine } from "@/components/shell/store-format-line"
 import { changedStores } from "@/lib/store-formats"
 import { loadStoreFormats, useStoreFormats } from "@/state/store-formats"
@@ -33,6 +35,7 @@ export function DiagnosticsSection() {
     useState<ProviderResidencySnapshot | null>(null)
   const [openId, setOpenId] = useState<string>()
   const [unread, setUnread] = useState<UnreadReport | null>(null)
+  const [sync, setSync] = useState<SyncReadings | null>(null)
   const stores = useStoreFormats((state) => state.stores)
 
   const load = useCallback(() => {
@@ -45,6 +48,7 @@ export function DiagnosticsSection() {
       .then(setResidency)
       .catch(() => setResidency(null))
     void diagnostics.unreadRecords().then(setUnread).catch(() => setUnread(null))
+    void diagnostics.syncReadings().then(setSync).catch(() => setSync(null))
     // Asked again here, so a store another Mako changed since the window opened is said.
     void loadStoreFormats().catch(() => undefined)
   }, [])
@@ -152,6 +156,8 @@ export function DiagnosticsSection() {
       ) : null}
 
       {reader ? <SessionReaderRow history={reader} /> : null}
+
+      {sync ? <SyncReadout readings={sync} /> : null}
 
       <UnreadRecords report={unread} />
 

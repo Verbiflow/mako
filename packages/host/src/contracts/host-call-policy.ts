@@ -123,6 +123,8 @@ const reads = [
   "mako:cloud-account",
   /** How this device's Sessions stand in the account, as last read. */
   "mako:sync-status",
+  /** How this device's sync goes, from memory. */
+  "mako:sync-readings",
   /** Turning the cloud on, read from what owns each step; keeps only when each was first seen done. */
   "mako:cloud-turn-on",
   /** Asks the cloud again what the account has: a repeat asks the same. */

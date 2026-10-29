@@ -18,6 +18,8 @@ const fixtureReads = [
   "mako:capabilities",
   /** Answers from memory: a fixture desk uploads nothing, so it's always off. */
   "mako:sync-status",
+  /** Answers from memory: a fixture desk follows nothing. */
+  "mako:sync-readings",
   /** Answers from memory: a fixture desk turns no cloud on. */
   "mako:cloud-turn-on",
   "mako:lifecycle-state",

@@ -48,6 +48,7 @@ import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from ".
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
+import { SyncRecorder } from "./contracts/sync-readings.js"
 import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
@@ -467,6 +468,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     sessions.changed()
   })
   late.sessions = sessions
+  // How this Mac's sync goes, for Diagnostics: what it follows of other devices' work, the account's list, and what it
+  // sends of its own watched conversations.
+  const syncReadings = new SyncRecorder()
+  syncReadings.ownerFrom(() => sessions.readings())
   // One reporter a link: a cloud machine's link is its machine runtime's, whose tick reports on it. This job, with the
   // account's link (none there), would make each second's report look like a new link's and work the list out again.
   if (config.machineAgentFd === undefined) shell.jobs.every(REPORT_WORK, 1_000, () => late.cloud?.reportSessions?.())
@@ -516,7 +521,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const ticking = uploads
     shell.jobs.every("keep this Mac's Sessions in the account", 5_000, () => ticking.tick())
   }
-  declareSyncMethods(methods, uploads)
+  declareSyncMethods(methods, uploads, syncReadings)
   late.cloud = declareCloudAccountMethods(methods, {
     sessions,
     signedFiles: (request) => withHostClient("gateway:files", () => readSignedFile(request, renditions)),
@@ -566,6 +571,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     ? undefined
     : new CloudConversations({
         account: () => late.cloud,
+        readings: syncReadings,
         file: join(environment.dataRoot, "cloud", "conversations.json"),
         emit: (event) => {
           if (!shell.closing()) web()?.conversationEvent(event)
