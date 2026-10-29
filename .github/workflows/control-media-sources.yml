@@ -1,0 +1,35 @@
+name: Recording media sources
+
+# Keeps the recording media's verified source archives cached for main, the one
+# cache every pull request's Linux host build can restore: a cache a pull
+# request saves is visible to that pull request alone.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/actions/control-media-sources/**
+      - .github/workflows/control-media-sources.yml
+      - scripts/fetch-control-media-sources.mjs
+      - scripts/lib/control-media-sources.mjs
+      - vendor/control-media/sources.json
+  schedule:
+    # GitHub evicts a cache no run has restored for seven days; restoring renews it.
+    - cron: "17 5 * * 1,4"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/control-media-sources

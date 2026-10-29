@@ -131,6 +131,7 @@
     "test:telemetry": "tsx scripts/test-telemetry.ts",
     "test:host": "tsx scripts/test-host.ts && tsx scripts/test-repeated-calls.ts && tsx scripts/test-heap-watch.ts && tsx scripts/test-reader-history.ts",
     "test:host-linux": "npm run build:control-runtime && node scripts/test-host-linux.mjs",
+    "test:control-media-sources": "node scripts/test-control-media-sources.mjs",
     "test:linux-locks": "npm run -s build --workspace @mako/sessions && node scripts/test-linux-locks.mjs",
     "host:inspect": "tsx packages/host/src/mako-host.ts inspect",
     "host:budget": "npm run build:electron && node scripts/measure-host.mjs --budget",
