@@ -26,7 +26,7 @@ import "./lib/scratch-git.mjs"
 // its own; one that isn't installed is skipped.
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, readFile, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -38,11 +38,12 @@ import { LiveRequestSchema } from "@mako/host/conversations/live-journal"
 import { EntrySchema, type Entry } from "@mako/sessions"
 import { storeDrawing } from "./decode-compare.ts"
 import { planFile, script, type Call, type Turn } from "./decode-scenarios.ts"
-import { sandboxed, type Sandbox } from "./harness-sandbox.ts"
+import { sandboxed } from "./harness-sandbox.ts"
 import type { ScriptedReply } from "./scripted-model.ts"
 import { scriptedModel } from "./scripted-model.ts"
 import { scriptedWindsurf } from "./scripted-windsurf.ts"
 import { startHost, type StartedHost } from "./linux-host/host-process.mjs"
+import { pointAt, SCRIPTED_GETS } from "./scripted-harness-env.ts"
 
 /** What this test reads of a live snapshot. */
 const SnapshotSchema = z.object({
@@ -108,44 +109,6 @@ function turns(harness: string, ask: Call): Turn[] {
   return [asked]
 }
 
-/** Points the harness Mako launches at the stand-in model, through what the person's own setup would hold. */
-async function pointAt(harness: string, sandbox: Sandbox, url: string, env: NodeJS.ProcessEnv): Promise<void> {
-  switch (harness) {
-    case "claude":
-      // Mako launches the CLI's own login without a key or endpoint from its environment (`nativeEnv`); the CLI's settings are the person's.
-      await mkdir(join(sandbox.home, ".claude"), { recursive: true })
-      await writeFile(join(sandbox.home, ".claude", "settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: url, ANTHROPIC_API_KEY: "mako-questions", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } }))
-      // As Claude Code leaves it after its first run; Mako reads who is signed in from it.
-      await writeFile(join(sandbox.home, ".claude.json"), "{}")
-      return
-    case "codex":
-      await mkdir(join(sandbox.home, ".codex"), { recursive: true })
-      await writeFile(join(sandbox.home, ".codex", "config.toml"), `openai_base_url = "${url}/v1"\nchatgpt_base_url = "${url}/backend-api"\n\n[features]\nplugins = false\n`)
-      await writeFile(join(sandbox.home, ".codex", "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "mako-questions" }))
-      if (process.env.CODEX_EXECUTABLE) env.CODEX_EXECUTABLE = process.env.CODEX_EXECUTABLE
-      return
-    case "grok":
-      Object.assign(env, { GROK_HOME: join(sandbox.home, ".grok"), XAI_API_KEY: "mako-questions", GROK_XAI_API_BASE_URL: `${url}/v1`, GROK_CLI_CHAT_PROXY_BASE_URL: `${url}/v1`, GROK_MODELS_BASE_URL: `${url}/v1` })
-      return
-    case "opencode":
-      if (process.env.OPENCODE_BIN_PATH) env.OPENCODE_BIN_PATH = process.env.OPENCODE_BIN_PATH
-      Object.assign(env, {
-        // Anthropic's models only, through the stand-in: OpenCode's own free hosted models would answer otherwise.
-        OPENCODE_CONFIG_CONTENT: JSON.stringify({ enabled_providers: ["anthropic"], provider: { anthropic: { options: { baseURL: `${url}/v1`, apiKey: "mako-questions" } } } }),
-        OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_DISABLE_AUTOUPDATE: "1",
-      })
-      return
-    case "devin":
-      await mkdir(join(sandbox.home, ".config", "devin"), { recursive: true })
-      await writeFile(join(sandbox.home, ".config", "devin", "config.json"), JSON.stringify({ auto_update: false }))
-      if (process.env.DEVIN_CLI_PATH) env.DEVIN_CLI_PATH = process.env.DEVIN_CLI_PATH
-      Object.assign(env, { WINDSURF_API_KEY: "mako-questions", WINDSURF_API_SERVER_URL: url, DEVIN_API_URL: url, WINDSURF_WEBSITE_URL: url, DEVIN_WEBAPP_URL: url })
-      return
-    default:
-      throw new Error(`${harness} declares questions, and this test has no stand-in for its model`)
-  }
-}
-
 /** Reads the snapshot as the window does, no faster than four times a second, until `done` holds. */
 async function until(read: () => Promise<Snapshot>, done: (snapshot: Snapshot) => boolean, label: string): Promise<Snapshot> {
   const deadline = Date.now() + 120_000
@@ -195,13 +158,9 @@ try {
       }
       const model = harness === "devin" ? await scriptedWindsurf({ reply, waits: steps.waits }) : await scriptedModel({
         reply,
-        // Grok's key check and model catalog, as harness-decode-pairs.ts answers them.
-        answers: new Map([
-          ["/v1/api-key", JSON.stringify({ redacted_api_key: "xai-...questions", user_id: "questions", name: "questions", acls: ["api-key:model:*", "api-key:endpoint:*"], api_key_blocked: false, api_key_disabled: false, team_blocked: false })],
-          ["/v1/models", JSON.stringify({ object: "list", data: [{ id: "grok-4.6", object: "model", name: "Grok", context_window: 256_000 }] })],
-        ]),
+        answers: SCRIPTED_GETS,
       })
-      if (ask) await pointAt(harness, sandbox, model.url, env)
+      if (ask) await pointAt(harness, sandbox, model.url, env, "mako-questions")
       let host = await start()
       try {
         const descriptors = DescriptorsSchema.parse(await host.call("mako:harness-descriptors"))
