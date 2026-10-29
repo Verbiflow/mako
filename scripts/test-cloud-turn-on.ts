@@ -312,7 +312,7 @@ test("the line's read of the sign-ins is the last check, never a new one: no sto
       clock.mock.mockImplementation(() => minute * 60_000)
       assert.deepEqual(await off.current(), { sharing: false, harnesses: [] })
     }
-    assert.deepEqual(calls, [], "sharing off: ten minutes of reads checked nothing")
+    assert.deepEqual([...calls], [], "sharing off: ten minutes of reads checked nothing")
     await off.state()
     assert.ok(calls.includes("blocked"), "Settings' read, by contrast, checks a state this old")
     calls.length = 0
@@ -324,7 +324,7 @@ test("the line's read of the sign-ins is the last check, never a new one: no sto
       assert.equal(state.sharing, true)
       assert.equal(state.checkedAt, undefined, "not checked yet, said as such")
     }
-    assert.deepEqual(calls, [], "sharing on, before its own check: still nothing checked by reading")
+    assert.deepEqual([...calls], [], "sharing on, before its own check: still nothing checked by reading")
   } finally {
     clock.mock.restore()
   }
