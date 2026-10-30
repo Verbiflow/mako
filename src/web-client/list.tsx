@@ -33,9 +33,9 @@ function sections(threads: readonly WebThread[]) {
 
 /**
  * The account's Threads under a finger. On a phone, the first screen: its bar says where you are and holds your
- * account, rows run edge to edge, parted by hairlines, and New waits at the bottom right of a toolbar, in thumb's reach,
- * as Mail's and Notes' compose does. On a tablet, the rail beside what's open: rows inset and rounded, the one open
- * lit, New at its head and your account at its foot.
+ * account, rows run edge to edge, parted by hairlines, and New floats at the bottom right in thumb's reach, a small
+ * round button that steps aside while the list is scrolled down and comes back on the way up. On a tablet, the rail
+ * beside what's open: rows inset and rounded, the one open lit, New at its head and your account at its foot.
  */
 export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting = false, settings = false }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onSettings: () => void; wide: boolean; starting?: boolean; settings?: boolean }) {
   const client = useWebClient()
@@ -57,6 +57,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
     return () => observer.disconnect()
   }, [])
   const pull = usePullToRefresh(scroller, content, () => client.list.refresh())
+  const away = useAwayWhileScrolling(scroller, !wide)
   useRowFlip(scroller, showArchived ? "archived" : "threads")
   const named = macCount(list) > 1
   return (
@@ -71,9 +72,12 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
             </button>
           </>
         ) : (
-          <button type="button" aria-label="Settings" onClick={onSettings} className="web-icon-button">
-            <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} className="rounded-full" />
-          </button>
+          <>
+            <ListPhase list={list} />
+            <button type="button" aria-label="Settings" onClick={onSettings} className="web-icon-button">
+              <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} className="rounded-full" />
+            </button>
+          </>
         )}
       </header>
       <div ref={scroller} className="web-scroll relative min-h-0 flex-1 overflow-y-auto">
@@ -119,21 +123,16 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
           ) : null}
         </div>
       </div>
-      {/* What floats at the foot of the list: the install offer while it shows, above the Home indicator. */}
+      {/* What floats at the foot of the list, stacked so nothing covers anything: on a phone New, and under it the
+          install offer while it shows, above the Home indicator. */}
       <div ref={dock} className="web-list-foot">
+        {wide ? null : (
+          <button type="button" aria-label="New thread" onClick={onNew} data-away={away || undefined} className="web-fab">
+            <SquarePenIcon aria-hidden className="size-[21px]" strokeWidth={1.9} />
+          </button>
+        )}
         <InstallCard />
       </div>
-      {wide ? null : (
-        <footer className="web-toolbar">
-          <span aria-hidden className="size-11" />
-          <span className="flex min-w-0 justify-center">
-            <ListPhase list={list} />
-          </span>
-          <button type="button" aria-label="New thread" onClick={onNew} className="web-icon-button text-foreground">
-            <SquarePenIcon className="size-[21px]" />
-          </button>
-        </footer>
-      )}
       {wide ? (
         <footer className="shrink-0 border-t border-hairline p-2">
           <button type="button" aria-label="Settings" aria-current={settings ? "page" : undefined} onClick={onSettings} className="web-account">
@@ -242,4 +241,37 @@ export function ThreadRow({ thread, selected, named, onOpen }: { thread: WebThre
       </span>
     </button>
   )
+}
+
+/** How far the list must travel one way before New steps aside or comes back: a nudge doesn't move it. */
+const AWAY_AFTER_PX = 24
+
+/**
+ * Whether New steps aside: scrolled down past a short run it leaves, scrolled back up it returns, and at the top or
+ * the bottom of the list it's always there. Read per frame from the scroll, so a reversal mid-way brings it straight back.
+ */
+function useAwayWhileScrolling(scroller: React.RefObject<HTMLDivElement | null>, on: boolean): boolean {
+  const [away, setAway] = useState(false)
+  useEffect(() => {
+    const node = scroller.current
+    if (!node || !on) return
+    let turnedAt = node.scrollTop
+    let last = node.scrollTop
+    let down = false
+    const scrolled = () => {
+      const top = node.scrollTop
+      const going = top > last
+      if (going !== down) {
+        down = going
+        turnedAt = last
+      }
+      last = top
+      const atEnd = top <= 0 || top + node.clientHeight >= node.scrollHeight - 2
+      if (atEnd) setAway(false)
+      else if (Math.abs(top - turnedAt) > AWAY_AFTER_PX) setAway(down)
+    }
+    node.addEventListener("scroll", scrolled, { passive: true })
+    return () => node.removeEventListener("scroll", scrolled)
+  }, [scroller, on])
+  return away
 }
