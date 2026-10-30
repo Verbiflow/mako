@@ -15,14 +15,17 @@ import { useTheme, type WebTheme } from "./theme"
 
 const DEFAULT_QUIET: QuietHours = { start: "22:00", end: "07:00" }
 
-export function Settings({ onBack }: { onBack: () => void }) {
+/** Settings: a screen of its own on a phone, Back to the list; wide, the pane beside the rail, opened from its foot. */
+export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
   const client = useWebClient()
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-shell">
-      <header className="web-bar flex shrink-0 items-center gap-1 px-1.5">
-        <button type="button" aria-label="Back to threads" onClick={onBack} className="web-icon-button">
-          <ChevronLeftIcon className="size-6" strokeWidth={2} />
-        </button>
+      <header className={cn("web-bar flex shrink-0 items-center gap-1", onBack ? "px-1.5" : "px-5")}>
+        {onBack ? (
+          <button type="button" aria-label="Back to threads" onClick={onBack} className="web-icon-button">
+            <ChevronLeftIcon className="size-6" strokeWidth={2} />
+          </button>
+        ) : null}
         <h1 className="flex-1 text-ui font-semibold">Settings</h1>
       </header>
       <div className="web-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+24px)]">

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArchiveIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MessageSquareTextIcon, MoonIcon, PlusIcon, Settings2Icon } from "lucide-react"
+import { ArchiveIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
+import { Avatar } from "@/components/ui/avatar"
 import { useRowFlip } from "@/components/rail/use-row-flip"
 import { MarkStack, StackedMark } from "@/components/ui/mark-stack"
 import { Shimmer } from "@/components/ui/shimmer"
@@ -30,7 +31,12 @@ function sections(threads: readonly WebThread[]) {
   ].filter((section) => section.threads.length > 0)
 }
 
-export function ThreadList({ selected, onOpen, onNew, onSettings, wide }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onSettings: () => void; wide: boolean }) {
+/**
+ * The account's Threads. On a phone, the first screen: its bar says where you are and holds New and your account, and
+ * rows run edge to edge, parted by hairlines. Wide, it's the desk's rail: on the shell, rows inset and rounded, the one
+ * open lit, New at its head and your account at its foot.
+ */
+export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting = false, settings = false }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onSettings: () => void; wide: boolean; starting?: boolean; settings?: boolean }) {
   const client = useWebClient()
   const list = useAccountList((state) => state)
   const { threads, archived } = useMemo(() => foldThreads(list), [list])
@@ -38,7 +44,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide }: { sele
   const scroller = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
   const dock = useRef<HTMLDivElement>(null)
-  // The list scrolls clear of what floats at its foot: its last row ends above New and the install offer, however tall.
+  // The list scrolls clear of what floats at its foot: its last row ends above the install offer, however tall.
   useEffect(() => {
     const floating = dock.current
     const rows = content.current
@@ -54,26 +60,28 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide }: { sele
   const named = macCount(list) > 1
   const quietMacs = [...list.quiet].map(([deviceId, since]) => ({ name: list.devices.get(deviceId)?.name ?? "A Mac", since }))
   return (
-    <div className={cn("relative flex min-h-0 flex-1 flex-col", wide ? "bg-shell" : "bg-surface")}>
-      <header className="web-bar flex shrink-0 items-center gap-1 pr-2 pl-5">
-        <h1 className="flex flex-1 items-center gap-2 text-title font-semibold">
-          <MakoMark className="size-[18px] opacity-90" />
-          Threads
-        </h1>
+    <div data-list={wide ? "rail" : "screen"} className={cn("web-list relative flex min-h-0 flex-1 flex-col", wide ? "bg-shell" : "bg-surface")}>
+      <header className="web-bar flex shrink-0 items-center gap-0.5 pr-1.5 pl-4">
+        <h1 className="min-w-0 flex-1 truncate text-title font-semibold">Threads</h1>
         <ListPhase list={list} />
-        <button type="button" aria-label="Settings" onClick={onSettings} className="web-icon-button">
-          <Settings2Icon className="size-[18px]" />
+        {wide ? null : (
+          <button type="button" aria-label="Settings" onClick={onSettings} className="web-icon-button">
+            <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} className="rounded-full" />
+          </button>
+        )}
+        <button type="button" aria-label="New thread" aria-pressed={wide ? starting : undefined} onClick={onNew} className={cn("web-icon-button", starting && "bg-fill-selected text-foreground")}>
+          <SquarePenIcon className="size-[19px]" />
         </button>
       </header>
       <div ref={scroller} className="web-scroll relative min-h-0 flex-1 overflow-y-auto">
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
-        <div ref={content} className="pb-[calc(var(--dock,96px)+16px)]">
+        <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
           {threads.length === 0 && archived.length === 0 ? (
             <EmptyList phase={list.phase} onNew={onNew} />
           ) : (
             <>
               {quietMacs.length ? (
-                <p className="flex flex-col gap-0.5 px-5 pt-2 text-label text-faint">
+                <p className="flex flex-col gap-0.5 px-4 pt-2 text-label text-faint">
                   {quietMacs.map((mac) => (
                     <span key={mac.name} className="flex items-center gap-1.5">
                       <MoonIcon aria-hidden className="size-3" />
@@ -83,12 +91,11 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide }: { sele
                 </p>
               ) : null}
               {sections(threads).map((section) => (
-                <section key={section.id} aria-labelledby={`section-${section.id}`} className="pt-4">
-                  <h2 id={`section-${section.id}`} className="flex items-center gap-2 px-5 pb-1.5 text-label font-medium text-faint">
+                <section key={section.id} aria-labelledby={`section-${section.id}`} className="web-section">
+                  <h2 id={`section-${section.id}`} className="web-section-label">
                     {section.label}
-                    {section.id === "needs" ? <span className="tabular rounded-full bg-caution/15 px-1.5 text-caution">{section.threads.length}</span> : null}
                   </h2>
-                  <ul role="list" className={cn("flex flex-col", section.id === "needs" && "web-needs mx-3 overflow-hidden rounded-2xl")}>
+                  <ul role="list" className="web-rows">
                     {section.threads.map((thread) => (
                       <li key={thread.id} data-flip-key={thread.id}>
                         <ThreadRow thread={thread} selected={thread.id === selected} named={named} onOpen={() => onOpen(thread)} />
@@ -101,14 +108,13 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide }: { sele
           )}
           {archived.length ? (
             <section className="pt-5">
-              <button type="button" onClick={() => setShowArchived((shown) => !shown)} aria-expanded={showArchived} className="pressable flex min-h-11 w-full items-center gap-1.5 px-5 text-label font-medium text-faint">
+              <button type="button" onClick={() => setShowArchived((shown) => !shown)} aria-expanded={showArchived} className="web-section-label pressable flex min-h-11 w-full items-center gap-1.5">
                 <ArchiveIcon className="size-3.5" />
-                Archived
-                <span className="tabular">{archived.length}</span>
+                {archived.length === 1 ? "1 archived" : `${archived.length} archived`}
                 <ChevronRightIcon className={cn("size-3.5 transition-transform duration-200 ease-[var(--ease-out)]", showArchived && "rotate-90")} />
               </button>
               {showArchived ? (
-                <ul role="list" className="flex flex-col">
+                <ul role="list" className="web-rows">
                   {archived.map((thread) => (
                     <li key={thread.id} data-flip-key={`archived:${thread.id}`}>
                       <ThreadRow thread={thread} selected={thread.id === selected} named={named} onOpen={() => onOpen(thread)} />
@@ -120,14 +126,18 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide }: { sele
           ) : null}
         </div>
       </div>
-      {/* What floats at the foot of the list, stacked so nothing covers anything: New, and under it the install offer
-          while it shows, each above the Home indicator. */}
+      {/* What floats at the foot of the list: the install offer while it shows, above the Home indicator. */}
       <div ref={dock} className="web-list-foot">
-        <button type="button" aria-label="New thread" onClick={onNew} className="web-fab">
-          <PlusIcon className="size-6" strokeWidth={2.2} />
-        </button>
         <InstallCard />
       </div>
+      {wide ? (
+        <footer className="shrink-0 border-t border-hairline p-2">
+          <button type="button" aria-label="Settings" aria-current={settings ? "page" : undefined} onClick={onSettings} className="web-account">
+            <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} className="rounded-full" />
+            <span className="min-w-0 flex-1 truncate text-left">{client.account.name || client.account.email}</span>
+          </button>
+        </footer>
+      ) : null}
     </div>
   )
 }
@@ -148,33 +158,33 @@ function ListPhase({ list }: { list: AccountListState }) {
 function EmptyList({ phase, onNew }: { phase: AccountListState["phase"]; onNew: () => void }) {
   if (phase === "starting")
     return (
-      <div className="flex flex-col gap-2 px-5 pt-5" aria-hidden>
-        {[0, 1, 2, 3].map((row) => (
-          <div key={row} className="flex items-center gap-3.5 py-2.5">
-            <span className="skeleton size-5 rounded-md" />
+      <div className="skeleton-rows flex flex-col gap-1 px-4 pt-5" aria-hidden>
+        {[0.62, 0.48, 0.7, 0.4].map((width) => (
+          <div key={width} className="flex items-center gap-3 py-2.5">
+            <span className="skeleton size-[18px] rounded-md" />
             <span className="flex flex-1 flex-col gap-1.5">
-              <span className="skeleton h-3.5 w-3/5 rounded" />
-              <span className="skeleton h-3 w-2/5 rounded" />
+              <span className="skeleton h-3.5 rounded" style={{ width: `${width * 100}%` }} />
+              <span className="skeleton h-3 w-1/3 rounded" />
             </span>
           </div>
         ))}
       </div>
     )
   return (
-    <div className="mx-auto flex max-w-[320px] flex-col items-center px-6 pt-24 text-center">
-      <MessageSquareTextIcon className="size-7 text-faint" />
-      <p className="mt-4 text-title font-medium">No threads yet</p>
-      <p className="mt-1.5 text-ui text-muted-foreground">Start one here, or on a Mac. Every Thread shows up here as it runs.</p>
+    <div className="web-enter mx-auto flex max-w-[300px] flex-col items-center px-6 pt-28 text-center">
+      <MakoMark className="size-8 opacity-35" />
+      <p className="mt-5 text-title font-medium">No threads yet</p>
+      <p className="mt-1.5 text-ui text-muted-foreground">Start one here or on a Mac; it shows up here as it runs.</p>
       <button type="button" onClick={onNew} className="web-button mt-6">
-        <PlusIcon className="size-4" />
+        <SquarePenIcon className="size-4" />
         New thread
       </button>
     </div>
   )
 }
 
-/** Marks a stack draws at a phone's size: one is read at a glance, three still fit side by side in the row's mark column. */
-const STACK_SIZES = [20, 18, 12] as const
+/** Marks a stack draws in a row's mark column: one is read at a glance, three still fit side by side. */
+const STACK_SIZES = [18, 15, 11] as const
 
 /** The harnesses of a Thread's Sessions, one mark each, as the rail stacks them. */
 export function HarnessMarks({ thread, size }: { thread: WebThread; size?: number }) {
@@ -206,12 +216,12 @@ export function ThreadRow({ thread, selected, named, onOpen }: { thread: WebThre
       aria-label={threadLabel(thread, detail.text)}
       data-thread={thread.id}
       data-standing={thread.standing}
-      className={cn("web-row group relative flex w-full items-center gap-3 py-3 pr-4 pl-5 text-left", selected && "bg-fill-selected", thread.quietSince && "opacity-60")}
+      className={cn("web-row group relative flex w-full items-center text-left", thread.quietSince && "opacity-60")}
     >
-      <span className="flex w-10 shrink-0 items-center justify-center">
+      <span className="web-row-mark">
         <HarnessMarks thread={thread} />
       </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-[3px]">
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">{thread.title}</span>
           <span className="tabular shrink-0 text-label text-faint">{formatRelative(thread.activityAt)}</span>

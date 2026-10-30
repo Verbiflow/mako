@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState, useSyncExternalStore } from "react"
 import { z } from "zod"
+import { SquarePenIcon } from "lucide-react"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
@@ -8,6 +9,7 @@ import { ThreadList } from "./list"
 import { routeHref, useRoute, useWide, type ScreenRoute } from "./route"
 import { ScreenStack } from "./screens"
 import { startedFromHere } from "./started"
+import type { Started } from "./start"
 
 /** What the service worker says when a notice is tapped: the app's address to go to. */
 const OpenNoticeSchema = z.object({ type: z.literal("mako:open"), url: z.string().min(1) })
@@ -74,8 +76,9 @@ function afterFirstPaint(then: () => void): () => void {
 
 /**
  * The web app: the account's Threads, one open, a new one, and Settings. On a phone the list stays under and what's
- * open slides over it (Back is the edge swipe, or the system's); a new Thread is a sheet over whatever is open. On a
- * tablet the list stays beside what's open.
+ * open slides over it (Back is the edge swipe, or the system's); a new Thread is a sheet over whatever is open. Wide,
+ * it's the desk's two panes: the list as a rail on the shell, and what's open beside it, a new Thread included, which
+ * opens in the pane as the desk's new tab does.
  */
 export function WebApp() {
   const client = useWebClient()
@@ -101,9 +104,10 @@ export function WebApp() {
         .then(() => client.options.painted?.())
     })
   }, [painted, settled, client])
-  // New's sheet is mounted from its first opening on, so it leaves on its own path when closed.
+  // New's sheet is mounted from its first opening on, so it leaves on its own path when closed. Wide, New is a pane.
   const [startOpened, setStartOpened] = useState(false)
   if (route.kind === "new" && !startOpened) setStartOpened(true)
+  const startPane = wide && route.kind === "new"
   // A screen asked for before its code arrived (opened from an address, or tapped at once) reads it now.
   const threadCode = threadChunk.use()
   const startCode = startChunk.use()
@@ -135,17 +139,28 @@ export function WebApp() {
   // A new Thread is a sheet over what's open, with an address of its own, so Back closes it.
   const under: ScreenRoute = route.kind === "new" ? (route.over ?? { kind: "list" }) : route
   const open = (next: ScreenRoute) => navigate(next, { replace: wide && under.kind !== "list" })
+  const onStarted = (started: Started, where: string) => {
+    startedFromHere(started.threadId, where)
+    navigate({ kind: "thread", thread: started.threadId }, { replace: true })
+  }
   const list = (
     <ThreadList
       wide={wide}
-      selected={under.kind === "thread" ? under.thread : undefined}
+      starting={startPane}
+      settings={under.kind === "settings" && !startPane}
+      selected={under.kind === "thread" && !startPane ? under.thread : undefined}
       onOpen={(thread) => open({ kind: "thread", thread: thread.id })}
       onNew={() => navigate({ kind: "new", over: under })}
       onSettings={() => open({ kind: "settings" })}
     />
   )
-  const detail =
-    under.kind === "thread" ? (
+  const detail = startPane ? (
+    startCode ? (
+      <startCode.StartPane onDismiss={back} onStarted={onStarted} />
+    ) : (
+      <div className="flex-1 bg-surface" />
+    )
+  ) : under.kind === "thread" ? (
       threadCode ? (
         <threadCode.ThreadScreen
           key={under.thread}
@@ -160,26 +175,16 @@ export function WebApp() {
       )
     ) : under.kind === "settings" ? (
       <Suspense fallback={null}>
-        <Settings onBack={back} />
+        <Settings onBack={wide ? undefined : back} />
       </Suspense>
     ) : null
-  const sheet =
-    startOpened && startCode ? (
-      <startCode.StartSheet
-        open={route.kind === "new"}
-        onDismiss={back}
-        onStarted={(started, where) => {
-          startedFromHere(started.threadId, where)
-          navigate({ kind: "thread", thread: started.threadId }, { replace: true })
-        }}
-      />
-    ) : null
+  const sheet = startOpened && startCode && !wide ? <startCode.StartSheet open={route.kind === "new"} onDismiss={back} onStarted={onStarted} /> : null
   return (
     <div className="web-app flex w-full overflow-hidden bg-shell text-foreground">
       {wide ? (
         <>
-          <div className="flex w-[min(380px,40vw)] shrink-0 flex-col border-r border-hairline">{list}</div>
-          <main className="flex min-w-0 flex-1 flex-col">{detail ?? <NothingOpen />}</main>
+          <div className="web-rail flex shrink-0 flex-col border-r border-hairline">{list}</div>
+          <main className="flex min-w-0 flex-1 flex-col">{detail ?? <NothingOpen onNew={() => navigate({ kind: "new", over: under })} />}</main>
         </>
       ) : (
         <main className="flex min-w-0 flex-1 flex-col">
@@ -196,11 +201,15 @@ export function WebApp() {
   )
 }
 
-function NothingOpen() {
+/** The pane with nothing open: the fin, and the one thing to do from here besides picking a Thread. */
+function NothingOpen({ onNew }: { onNew: () => void }) {
   return (
-    <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-surface text-center">
-      <MakoMark className="size-8 opacity-50" />
-      <p className="text-ui text-faint">Open a Thread to read it live.</p>
+    <div className="web-enter flex flex-1 flex-col items-center justify-center gap-5 bg-surface text-center">
+      <MakoMark className="size-9 opacity-35" />
+      <button type="button" onClick={onNew} className="web-quiet-button gap-2 text-foreground">
+        <SquarePenIcon className="size-4 text-muted-foreground" />
+        New thread
+      </button>
     </div>
   )
 }

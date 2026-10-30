@@ -38,7 +38,7 @@
   .web-send,
   .web-chip,
   .web-tab,
-  .web-fab,
+  .web-account,
   .web-attachment-remove {
     transition:
       transform 160ms var(--ease-out),
@@ -47,18 +47,27 @@
       opacity 160ms ease;
   }
   .web-icon-button:active:not(:disabled),
-  .web-button:active:not(:disabled),
-  .web-quiet-button:active:not(:disabled),
   .web-send:active:not(:disabled),
-  .web-chip:active:not(:disabled),
-  .web-tab:active:not(:disabled),
   .web-attachment-remove:active {
     transform: scale(0.94);
     transition-duration: 40ms;
   }
-  .web-fab:active {
-    transform: scale(0.92);
+  .web-button:active:not(:disabled),
+  .web-quiet-button:active:not(:disabled),
+  .web-chip:active:not(:disabled),
+  .web-tab:active:not(:disabled),
+  .web-account:active {
+    transform: scale(0.97);
     transition-duration: 40ms;
+  }
+  /* Focus from a keyboard: the desk's ring, a tint of the text, never the accent. */
+  .web-app :is(button, a, [role="tab"], [role="switch"], [role="radio"]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  .web-row:focus-visible,
+  .web-choice:focus-visible {
+    outline-offset: -2px;
   }
 
   .web-bar {
@@ -77,52 +86,103 @@
   .web-scroll::-webkit-scrollbar {
     display: none;
   }
+  /* A row that scrolls sideways says so: its last chip fades out at the edge rather than being cut. */
+  .web-fade-x {
+    mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+  }
 
   .web-icon-button {
-    @apply flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground;
+    @apply relative flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground;
   }
   .web-icon-button:disabled {
     @apply opacity-40;
-  }
-
-  /* A row lights on touch-down and fades back after: the press is seen even on a quick tap. */
-  .web-row {
-    transition: background-color 220ms ease;
-  }
-  .web-row:active {
-    @apply bg-fill-selected;
-    transition-duration: 0ms;
   }
   @media (hover: hover) {
     .web-icon-button:hover:not(:disabled) {
       @apply bg-fill-hover text-foreground;
     }
+  }
+  /* Under a pointer, the desk's size: a 36px square with soft corners, not a thumb's circle. */
+  @media (pointer: fine) {
+    .web-icon-button:not(.web-composer-add) {
+      @apply size-9 rounded-lg;
+    }
+  }
+
+  /* The desk's rail, at a width the desk's own would take. */
+  .web-rail {
+    width: clamp(272px, 30vw, 340px);
+  }
+
+  /*
+   * The list. A phone's: rows edge to edge, parted by hairlines under their words. The rail's: rows inset and rounded on
+   * the shell, the open one raised, as the desk's rail draws them.
+   */
+  .web-section {
+    @apply pt-3;
+  }
+  .web-section + .web-section {
+    @apply pt-5;
+  }
+  .web-section-label {
+    @apply px-4 pb-1 text-label font-medium text-faint;
+  }
+  .web-row {
+    @apply gap-3 py-2.5 pr-4 pl-4;
+    min-height: 60px;
+    transition: background-color 220ms ease;
+  }
+  .web-row-mark {
+    @apply flex w-7 shrink-0 items-center justify-center;
+  }
+  /* A row lights on touch-down and fades back after: the press is seen even on a quick tap. */
+  .web-row:active {
+    @apply bg-fill-selected;
+    transition-duration: 0ms;
+  }
+  @media (hover: hover) {
     .web-row:hover {
       @apply bg-fill-hover;
     }
   }
-  /* Rows part with a hairline under their words, not under their mark, as a phone's lists do. */
-  li + li > .web-row::before {
+  [data-list="screen"] li + li > .web-row::before {
     content: "";
     position: absolute;
     top: 0;
     right: 0;
-    left: 72px;
+    left: 56px;
     border-top: 1px solid var(--hairline);
   }
-  /* What needs the person sits on a card of its own, at the head of the list. */
-  .web-needs {
-    @apply bg-raised/70 ring-1 ring-hairline;
+  [data-list="rail"] .web-rows {
+    @apply flex flex-col gap-px px-2;
   }
-  .web-needs .web-row {
-    @apply pl-3.5;
+  [data-list="rail"] .web-section-label {
+    @apply px-4;
   }
-  .web-needs li + li > .web-row::before {
-    left: 66px;
+  [data-list="rail"] .web-row {
+    @apply gap-2.5 rounded-lg py-2 pr-2.5 pl-2;
+    min-height: 0;
+  }
+  [data-list="rail"] .web-row[aria-current="page"] {
+    @apply bg-raised;
+  }
+  [data-list="rail"] .web-row-mark {
+    @apply w-6;
+  }
+  .web-account {
+    @apply flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-ui text-muted-foreground;
+  }
+  .web-account[aria-current="page"] {
+    @apply bg-raised text-foreground;
+  }
+  @media (hover: hover) {
+    .web-account:hover {
+      @apply bg-fill-hover text-foreground;
+    }
   }
 
   .web-button {
-    @apply inline-flex h-11 items-center gap-2 rounded-xl bg-primary px-5 text-ui font-medium text-primary-foreground;
+    @apply inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-5 text-ui font-medium text-primary-foreground;
   }
   .web-button:disabled {
     @apply opacity-40;
@@ -136,32 +196,27 @@
   .web-quiet-button:active {
     @apply bg-fill-selected;
   }
+  @media (hover: hover) {
+    .web-quiet-button:hover:not(:disabled) {
+      @apply bg-fill-hover;
+    }
+  }
 
-  /* New, in the thumb's reach. */
-  /* The list's foot: New 20px in from the corner, and the install offer, when it shows, across the bottom under it. */
+  /* The list's foot: the install offer, when it shows, across the bottom above the Home indicator. */
   .web-list-foot {
     @apply pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-end gap-3;
     padding: 0 calc(env(safe-area-inset-right) + 12px) calc(env(safe-area-inset-bottom) + 12px) calc(env(safe-area-inset-left) + 12px);
   }
+  [data-list="rail"] .web-list-foot {
+    bottom: 57px;
+  }
   .web-list-foot > * {
     pointer-events: auto;
   }
-  .web-fab {
-    @apply mr-2 mb-2 flex size-14 shrink-0 items-center justify-center rounded-full bg-foreground text-surface;
-    box-shadow:
-      0 1px 0 0 color-mix(in oklab, var(--foreground) 12%, transparent) inset,
-      0 10px 28px -8px rgb(0 0 0 / 0.5),
-      0 2px 6px rgb(0 0 0 / 0.18);
-  }
-
   .web-install {
     @apply self-stretch bg-raised ring-1 ring-hairline;
-    box-shadow: 0 12px 32px -12px rgb(0 0 0 / 0.35);
-    animation: web-rise 320ms var(--ease-out) both;
-  }
-  /* With the offer under it, New sits the foot's gap above it rather than 20px off the edge. */
-  .web-list-foot:has(.web-install) .web-fab {
-    @apply mb-0;
+    box-shadow: var(--elevation-floating);
+    animation: web-rise 240ms var(--ease-out) both;
   }
   .web-step {
     @apply flex size-6 shrink-0 items-center justify-center rounded-full bg-fill-selected text-label font-semibold text-foreground;
@@ -175,6 +230,11 @@
   }
   .web-field:focus {
     @apply ring-ring;
+  }
+
+  /* What arrives without a gesture (a pane's empty state, New's pane) rises a little into place. */
+  .web-enter {
+    animation: web-rise 220ms var(--ease-out) both;
   }
 
   /* Screens: the list under, what's open sliding over it from the right. */
@@ -196,7 +256,7 @@
     background: rgb(0 0 0 / 0.1);
   }
 
-  /* Sheets from the bottom. */
+  /* Sheets from the bottom on a phone; wide, the desk's popovers and dialogs. */
   .web-sheet-layer {
     @apply fixed inset-x-0 top-0 z-50;
     height: var(--app-height, 100dvh);
@@ -208,13 +268,22 @@
   :root.light .web-sheet-backdrop {
     background: rgb(0 0 0 / 0.22);
   }
+  .web-sheet-layer[data-form="pop"] .web-sheet-backdrop {
+    background: transparent;
+  }
+  .web-sheet-layer[data-form="dialog"] .web-sheet-backdrop {
+    background: rgb(0 0 0 / 0.32);
+  }
+  :root.light .web-sheet-layer[data-form="dialog"] .web-sheet-backdrop {
+    background: rgb(0 0 0 / 0.14);
+  }
   .web-sheet {
     @apply absolute inset-x-0 flex flex-col bg-popover text-popover-foreground;
     bottom: 0;
     max-height: calc(var(--app-height, 100dvh) - env(safe-area-inset-top) - 12px);
-    border-radius: 22px 22px 0 0;
+    border-radius: 20px 20px 0 0;
     box-shadow:
-      0 -1px 0 var(--hairline),
+      0 -0.5px 0 var(--glass-rim),
       0 -16px 48px -16px rgb(0 0 0 / 0.45);
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
@@ -222,15 +291,25 @@
   .web-sheet-tall {
     height: calc((var(--app-height, 100dvh) - env(safe-area-inset-top)) * 0.86);
   }
-  /* A new Thread's composer has room for a paragraph: the field starts four lines tall. */
-  .web-start-sheet .web-composer-input {
-    min-height: 96px;
+  .web-sheet[data-form="pop"],
+  .web-sheet[data-form="dialog"] {
+    background: var(--popover);
+    border-radius: 12px;
+    box-shadow: var(--elevation-overlay);
+    padding: 6px 0;
   }
-  .web-start-sheet .web-composer-field {
-    @apply rounded-[20px];
+  .web-sheet[data-form="pop"] {
+    position: fixed;
+    right: auto;
+    width: 360px;
+    height: auto;
   }
-  .web-preview-sheet {
-    height: calc(var(--app-height, 100dvh) - env(safe-area-inset-top) - 8px);
+  .web-sheet[data-form="dialog"] {
+    inset: 0;
+    margin: auto;
+    width: min(480px, calc(100% - 48px));
+    height: fit-content;
+    max-height: min(640px, calc(100% - 96px));
   }
   .web-sheet-grab {
     @apply flex h-6 shrink-0 cursor-grab items-center justify-center;
@@ -242,15 +321,60 @@
   .web-sheet[data-dragging] .web-sheet-grab {
     @apply cursor-grabbing;
   }
+  .web-sheet-title {
+    @apply px-5 pb-2 text-title font-semibold;
+  }
+  .web-sheet-note {
+    @apply px-5 pb-2 text-label text-muted-foreground;
+  }
+  .web-sheet[data-form="pop"] .web-sheet-title {
+    @apply px-3.5 pt-1.5 pb-1 text-label font-medium text-faint;
+  }
+  .web-sheet[data-form="pop"] .web-sheet-note {
+    @apply px-3.5;
+  }
+  .web-sheet[data-form="pop"] [data-sheet-scroll] {
+    @apply px-1.5 pb-0;
+  }
+  .web-sheet[data-form="pop"] .web-choice {
+    @apply min-h-9 rounded-md px-2 text-ui;
+  }
+  .web-sheet[data-form="dialog"] .web-sheet-title {
+    @apply pt-3;
+  }
 
+  /*
+   * A start's choices, as the desk's composer shows them: quiet, a glyph and a value, filled only under a finger or the
+   * pointer. In a picker, a harness's tab is the same chip, lit when it's the one shown.
+   */
   .web-chip {
-    @apply inline-flex h-8 max-w-[44vw] shrink-0 items-center gap-1 rounded-full bg-fill-hover px-3 text-label font-medium text-foreground ring-1 ring-hairline;
+    @apply relative inline-flex h-8 min-w-0 shrink-0 items-center gap-1 rounded-lg px-2 text-label font-medium text-muted-foreground;
+  }
+  @media (pointer: coarse) {
+    .web-chip {
+      @apply h-9;
+    }
+  }
+  .web-chip-shrinks {
+    flex-shrink: 1;
   }
   .web-chip:disabled {
-    @apply text-muted-foreground;
+    @apply text-faint;
+  }
+  .web-chip:active:not(:disabled) {
+    @apply bg-fill-selected;
+  }
+  @media (hover: hover) {
+    .web-chip:hover:not(:disabled) {
+      @apply bg-fill-hover text-foreground;
+    }
+  }
+  .web-chip-tab {
+    @apply h-9 px-3;
   }
   .web-chip-tab[aria-selected="true"] {
-    @apply bg-foreground text-surface ring-transparent;
+    @apply bg-fill-selected text-foreground;
+    box-shadow: inset 0 0 0 1px var(--border);
   }
   .web-choice {
     @apply flex min-h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-ui;
@@ -260,15 +384,20 @@
     @apply bg-fill-selected;
     transition-duration: 0ms;
   }
+  @media (hover: hover) {
+    .web-choice:hover:not(:disabled) {
+      @apply bg-fill-hover;
+    }
+  }
   .web-choice:disabled {
     @apply opacity-45;
   }
 
   .web-tab {
-    @apply flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-label font-medium text-muted-foreground ring-1 ring-hairline;
+    @apply flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-label font-medium text-muted-foreground;
   }
   .web-tab-on {
-    @apply bg-fill-selected text-foreground ring-border;
+    @apply bg-fill-selected text-foreground;
   }
   .web-tab-add {
     @apply w-8 justify-center px-0;
@@ -284,27 +413,70 @@
     padding-bottom: max(0px, calc(env(safe-area-inset-bottom) - var(--keyboard, 0px)));
   }
 
+  /*
+   * The composer: one card, as the desk's composer is one tile. A message is one row in it, `+`, the field and its
+   * action; a start adds where above the field and a bar under it, `+`, what it starts with, and Start.
+   */
   .web-composer {
-    @apply mx-auto flex w-full max-w-content items-end gap-1 px-2 pt-1.5 pb-2;
-  }
-  .web-composer-add {
-    @apply size-11 text-muted-foreground;
+    @apply mx-auto flex w-full max-w-content px-2 pt-1.5 pb-2;
   }
   .web-composer-field {
-    @apply flex min-h-11 min-w-0 flex-1 items-end gap-1 rounded-[22px] bg-raised py-1 pr-1 pl-4 ring-1 ring-hairline;
+    @apply grid min-w-0 flex-1 items-end rounded-[22px] bg-raised p-1;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    box-shadow: inset 0 0 0 1px var(--hairline);
     transition: box-shadow 160ms ease;
   }
   .web-composer-field:focus-within {
-    @apply ring-ring;
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .web-composer-field > .web-attachments,
+  .web-composer-field > .web-where {
+    grid-column: 1 / -1;
+  }
+  .web-composer-field > .web-composer-input {
+    grid-column: 2;
+  }
+  .web-composer-field[data-tools] {
+    @apply flex flex-col items-stretch rounded-[20px] p-1.5;
+  }
+  .web-composer-add {
+    @apply size-9 text-muted-foreground;
   }
   .web-composer-input {
-    @apply min-w-0 flex-1 resize-none bg-transparent py-[6px] text-foreground outline-none placeholder:text-faint;
+    @apply min-w-0 resize-none bg-transparent px-2 py-[7px] text-foreground caret-ember outline-none placeholder:text-faint;
     font-size: max(16px, var(--text-ui));
     line-height: 22px;
     max-height: 180px;
   }
+  .web-composer-field:not(:has(.web-composer-add)) > .web-composer-input {
+    @apply pl-3;
+  }
+  .web-composer-field[data-tools] .web-composer-input {
+    @apply px-2.5 pt-1.5 pb-2;
+    min-height: 72px;
+  }
+  .web-where {
+    @apply flex min-w-0 items-center gap-0.5;
+  }
+  .web-where > .web-chip {
+    flex-shrink: 1;
+  }
+  .web-composer-bar {
+    @apply flex min-w-0 items-center gap-1;
+  }
+  .web-composer-tools {
+    @apply flex min-w-0 flex-1 items-center gap-0.5;
+  }
   .web-send {
-    @apply flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground text-surface;
+    @apply relative flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground text-surface;
+  }
+  /* 36px drawn, 44px under a finger. */
+  .web-send::after,
+  .web-composer-add::after,
+  .web-chip::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
   }
   .web-send:disabled {
     @apply bg-fill-selected text-faint;
@@ -320,9 +492,26 @@
     animation: web-listening 1.6s ease-in-out infinite;
   }
 
+  /* New: the composer, waiting in the middle of the pane. */
+  .web-start-pane-body {
+    @apply mx-auto flex w-full min-h-0 max-w-[680px] flex-1 flex-col justify-center px-6 pb-[12vh];
+  }
+  .web-start-pane .web-composer {
+    @apply px-0;
+  }
+  .web-start-line {
+    @apply mx-auto w-full max-w-content px-4 pb-1.5;
+  }
+  .web-start-sheet .web-start-form {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .web-attachments {
+    @apply px-1 pt-1 pb-1.5;
+  }
   .web-attachment {
-    @apply relative size-16 shrink-0 overflow-hidden rounded-xl bg-raised ring-1 ring-hairline;
-    animation: web-pop 220ms var(--ease-out) both;
+    @apply relative size-16 shrink-0 overflow-hidden rounded-xl bg-surface ring-1 ring-hairline;
+    animation: web-pop 200ms var(--ease-out) both;
   }
   .web-attachment-remove {
     @apply absolute top-1 right-1 flex size-5 items-center justify-center rounded-full bg-black/65 text-white;
@@ -348,20 +537,20 @@
   }
 
   .web-waiting {
-    animation: web-rise 260ms var(--ease-out) both;
+    animation: web-rise 240ms var(--ease-out) both;
   }
 }
 
 @keyframes web-rise {
   from {
     opacity: 0;
-    transform: translate3d(0, 12px, 0);
+    transform: translate3d(0, 8px, 0);
   }
 }
 @keyframes web-pop {
   from {
     opacity: 0;
-    transform: scale(0.88);
+    transform: scale(0.92);
   }
 }
 /* The mic while it listens: a ring that breathes, slow enough to read as listening, not as an alarm. */
@@ -391,7 +580,9 @@
  */
 .web-live [data-permission],
 .web-approval-ghost {
-  margin: 0 12px 8px;
+  margin: 0 auto 8px;
+  width: calc(100% - 16px);
+  max-width: calc(var(--container-content) - 16px);
   border: 0;
   border-radius: 18px;
   background: var(--raised);
@@ -415,7 +606,7 @@
 }
 .web-live [data-permission-option],
 .web-approval-ghost [data-permission-option] {
-  min-height: 46px;
+  min-height: 44px;
   width: 100%;
   justify-content: center;
   border-radius: 12px;
@@ -424,6 +615,27 @@
     transform 160ms var(--ease-out),
     background-color 160ms ease,
     opacity 160ms ease;
+}
+/* Only the answer that lets it go on is lit; the others are quiet fills, so the card reads as one choice. */
+.web-live [data-permission-option]:not([data-permission-option="allow_once"], [data-permission-option="allow"]),
+.web-approval-ghost [data-permission-option]:not([data-permission-option="allow_once"], [data-permission-option="allow"]) {
+  border-color: transparent;
+  background: var(--fill-hover);
+}
+/* With room, the answers sit side by side, as the desk's do. */
+@media (min-width: 768px) {
+  .web-live [data-permission] > div:last-child,
+  .web-approval-ghost > div:last-child {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+  .web-live [data-permission-option],
+  .web-approval-ghost [data-permission-option] {
+    width: auto;
+    flex: 1 0 auto;
+    min-height: 40px;
+    white-space: nowrap;
+  }
 }
 .web-live [data-permission-option]:active {
   transform: scale(0.97);
@@ -453,7 +665,7 @@
   .web-send:active,
   .web-chip:active,
   .web-tab:active,
-  .web-fab:active,
+  .web-account:active,
   .web-live [data-permission-option]:active {
     transform: none !important;
   }

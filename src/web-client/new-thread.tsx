@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon, ShieldIcon, TriangleAlertIcon, XIcon } from "lucide-react"
+import { MakoMark } from "@/components/ui/mako-mark"
 import { modelByIdentity } from "@mako/sessions/settings"
 import { startFailure } from "@mako/host/contracts/cloud-threads"
 import { errorMessage } from "@mako/host/contracts/error-message"
@@ -37,16 +38,35 @@ export interface AddingTo {
 type Picking = "place" | "project" | "loadout" | "access" | undefined
 
 /**
- * New: one composer, its keyboard up, and above the field what a start needs, each already chosen: where it runs, the
- * project, the harness and model, and the access it runs with (the person's choice for that harness, which their
- * account keeps for every device). So the common start is New, a sentence, Send. Each chip opens a sheet of its own.
- * Adding a Session to a Thread is the same sheet with the Thread's place and project fixed.
+ * New: one composer, its keyboard up, and in its card what a start needs, each already chosen: where it runs and the
+ * project above the field, the harness and model and the access it runs with (the person's choice for that harness,
+ * which their account keeps for every device) in the bar under it, as the desk's composer carries them. So the common
+ * start is New, a sentence, Send. Each chip opens its own choices. Adding a Session to a Thread is the same sheet with
+ * the Thread's place and project fixed.
  */
 export function StartSheet({ open, onDismiss, onStarted, adding }: { open: boolean; onDismiss: () => void; onStarted: (started: Started, where: string) => void; adding?: AddingTo }) {
   return (
     <Sheet open={open} onDismiss={onDismiss} label={adding ? "Add a Session" : "New thread"} className="web-start-sheet">
       {open ? <StartForm onStarted={onStarted} adding={adding} /> : null}
     </Sheet>
+  )
+}
+
+/** New on a wide screen: the pane beside the list, as the desk's new tab, its composer waiting in the middle. */
+export function StartPane({ onDismiss, onStarted }: { onDismiss: () => void; onStarted: (started: Started, where: string) => void }) {
+  return (
+    <section aria-label="New thread" className="web-start-pane flex min-h-0 flex-1 flex-col bg-surface">
+      <header className="web-bar flex shrink-0 items-center gap-1 pr-1.5 pl-5">
+        <h1 className="min-w-0 flex-1 truncate text-ui font-semibold">New thread</h1>
+        <button type="button" aria-label="Close" onClick={onDismiss} className="web-icon-button">
+          <XIcon className="size-[18px]" />
+        </button>
+      </header>
+      <div className="web-start-pane-body web-enter">
+        <MakoMark className="mx-auto mb-7 size-8 opacity-30" />
+        <StartForm onStarted={onStarted} />
+      </div>
+    </section>
   )
 }
 
@@ -70,6 +90,12 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
   const [pickedProject, setPickedProject] = useState<string | undefined>(undefined)
   const [picked, setPicked] = useState<{ harness: string; model: string | undefined } | undefined>(undefined)
   const [picking, setPicking] = useState<Picking>(undefined)
+  // The chip a choice was opened from: wide, its choices grow from it.
+  const [chip, setChip] = useState<HTMLElement | null>(null)
+  const pick = (which: Exclude<Picking, undefined>) => (from: HTMLElement) => {
+    setChip(from)
+    setPicking(which)
+  }
   const [status, setStatus] = useState<string | undefined>(undefined)
   const [failure, setFailure] = useState<string | undefined>(undefined)
   // The person's access choices, as the account keeps them; each harness's ladder, as a Mac of theirs declares it.
@@ -186,41 +212,47 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
     }
   }
 
-  const chips = (
-    // Wrapped, never scrolled sideways: the access a start runs with is always in view.
-    <div className="flex flex-wrap gap-1.5 px-3 pt-1 pb-2" role="group" aria-label="Where and with what">
-      <Chip label="Where it runs" disabled={Boolean(adding)} onClick={() => setPicking("place")}>
+  // Where, above the field: the place and its project, fixed when adding to a Thread.
+  const where = (
+    <div className="web-where" role="group" aria-label="Where it starts">
+      <Chip label="Where it runs" disabled={Boolean(adding)} onClick={pick("place")}>
         {place?.kind === "cloud" ? <CloudIcon className="size-3.5" /> : <LaptopIcon className="size-3.5" />}
         <span>{adding ? adding.where : place ? (place.kind === "cloud" ? "Cloud" : place.name) : "Choose"}</span>
       </Chip>
-      <Chip label="Project" disabled={Boolean(adding)} onClick={() => setPicking("project")}>
+      <span aria-hidden className="text-label text-faint/60">/</span>
+      <Chip label="Project" disabled={Boolean(adding)} onClick={pick("project")}>
         <FolderIcon className="size-3.5" />
         {projectName ? <span>{projectName}</span> : projects === undefined && place && startable(place) ? <span className="skeleton h-3 w-12 rounded" /> : <span>Choose</span>}
       </Chip>
-      <Chip label="Harness and model" onClick={() => setPicking("loadout")}>
+    </div>
+  )
+  // With what, in the bar under it: the model gives way first; the access a start runs with is always in view.
+  const how = (
+    <>
+      <Chip label="Harness and model" onClick={pick("loadout")} shrinks>
         {preferred ? <WebHarnessIcon harness={preferred.harness} className="size-3.5" /> : null}
         {chosenHarness ? <span>{modelLabel ?? webHarnessLabel(chosenHarness.harness)}</span> : preferred?.pending || !catalog ? <span className="skeleton h-3 w-16 rounded" /> : <span>Choose</span>}
       </Chip>
-      <Chip label={access ? `Access: ${access.label}` : "Access"} disabled={!harness} onClick={() => setPicking("access")}>
+      <Chip label={access ? `Access: ${access.label}` : "Access"} disabled={!harness} onClick={pick("access")}>
         {access?.tier === "full" ? <TriangleAlertIcon className="size-3.5 text-caution" /> : <ShieldIcon className="size-3.5" />}
         {access ? <span>{access.label}</span> : <span className="skeleton h-3 w-14 rounded" />}
       </Chip>
-    </div>
+    </>
   )
 
   return (
-    <div className="flex min-h-0 flex-col pb-[env(safe-area-inset-bottom)]">
+    <div className="web-start-form flex min-h-0 flex-col">
       <h2 className="sr-only">{adding ? "Add a Session" : "New thread"}</h2>
       {status ? (
-        <p role="status" className="flex items-center gap-2 px-4 pb-1 text-label text-muted-foreground">
+        <p role="status" className="web-start-line flex items-center gap-2 text-label text-muted-foreground">
           <Spinner aria-hidden className="size-3.5" />
           {status}
         </p>
       ) : failure ? (
         <StartFailed message={failure} />
       ) : null}
-      <Composer autoFocus placeholder="What should it work on?" accessory={chips} sendable={ready} onSend={start} sendLabel="Start" />
-      <PlaceSheet open={picking === "place"} onDismiss={() => setPicking(undefined)} all={all} chosen={chosenPlace} onPick={(next) => {
+      <Composer autoFocus placeholder="What should it work on?" header={where} tools={how} sendable={ready} onSend={start} sendLabel="Start" />
+      <PlaceSheet anchor={chip} open={picking === "place"} onDismiss={() => setPicking(undefined)} all={all} chosen={chosenPlace} onPick={(next) => {
         if (next !== chosenPlace) {
           setProjects(undefined)
           setCatalog(undefined)
@@ -229,11 +261,12 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
         setChosenPlace(next)
         setPicking(undefined)
       }} />
-      <ProjectSheet open={picking === "project"} onDismiss={() => setPicking(undefined)} place={place} projects={projects} chosen={project} onPick={(next) => {
+      <ProjectSheet anchor={chip} open={picking === "project"} onDismiss={() => setPicking(undefined)} place={place} projects={projects} chosen={project} onPick={(next) => {
         setPickedProject(next)
         setPicking(undefined)
       }} />
       <AccessSheet
+        anchor={chip}
         open={picking === "access"}
         onDismiss={() => setPicking(undefined)}
         harness={harness}
@@ -252,7 +285,7 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
           }
         }}
       />
-      <LoadoutSheet open={picking === "loadout"} onDismiss={() => setPicking(undefined)} offered={offered} harness={preferred?.harness} model={model} onPick={(nextHarness, nextModel) => {
+      <LoadoutSheet anchor={chip} open={picking === "loadout"} onDismiss={() => setPicking(undefined)} offered={offered} harness={preferred?.harness} model={model} onPick={(nextHarness, nextModel) => {
         setPicked({ harness: nextHarness, model: nextModel })
         setPicking(undefined)
       }} />
@@ -267,7 +300,7 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
 function StartFailed({ message }: { message: string }) {
   const { said, install } = startFailure(message)
   return (
-    <div role="alert" className="flex items-start gap-3 px-4 pb-2">
+    <div role="alert" className="web-start-line flex items-start gap-3">
       <p className="min-w-0 flex-1 text-label text-pretty text-negative">{said}</p>
       {install ? (
         <a href={install} target="_blank" rel="noopener noreferrer" className="web-button h-8 shrink-0 px-3 text-label" data-start-fix="give-access">
@@ -278,11 +311,12 @@ function StartFailed({ message }: { message: string }) {
   )
 }
 
-function Chip({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
+/** A choice a start is made with, as the desk's composer shows one: its glyph, its value, and a chevron while it can change. */
+function Chip({ label, disabled, onClick, children, shrinks }: { label: string; disabled?: boolean; onClick: (chip: HTMLElement) => void; children: React.ReactNode; shrinks?: boolean }) {
   return (
-    <button type="button" aria-label={label} disabled={disabled} onClick={onClick} className="web-chip">
+    <button type="button" aria-label={label} disabled={disabled} onClick={(event) => onClick(event.currentTarget)} className={cn("web-chip", shrinks && "web-chip-shrinks")}>
       <span className="flex min-w-0 items-center gap-1.5 [&>span:last-child]:truncate">{children}</span>
-      {disabled ? null : <ChevronDownIcon aria-hidden className="size-3 opacity-60" />}
+      {disabled ? null : <ChevronDownIcon aria-hidden className="size-3 shrink-0 opacity-50" />}
     </button>
   )
 }
@@ -297,10 +331,10 @@ function Choice({ chosen, disabled, onClick, children, detail }: { chosen: boole
   )
 }
 
-function PlaceSheet({ open, onDismiss, all, chosen, onPick }: { open: boolean; onDismiss: () => void; all: Place[]; chosen: string | undefined; onPick: (place: string) => void }) {
+function PlaceSheet({ anchor, open, onDismiss, all, chosen, onPick }: { anchor: HTMLElement | null; open: boolean; onDismiss: () => void; all: Place[]; chosen: string | undefined; onPick: (place: string) => void }) {
   return (
-    <Sheet open={open} onDismiss={onDismiss} label="Where it runs">
-      <h3 className="px-5 pb-2 text-title font-semibold">Where it runs</h3>
+    <Sheet open={open} onDismiss={onDismiss} label="Where it runs" anchor={anchor}>
+      <h3 className="web-sheet-title">Where it runs</h3>
       <SheetScroll className="flex flex-col px-2 pb-[calc(env(safe-area-inset-bottom)+12px)]">
         {all.length === 0 ? <p className="px-3 py-4 text-ui text-muted-foreground">No Mac is signed in to this account yet, and the cloud isn't on for it.</p> : null}
         {all.map((place) => (
@@ -314,12 +348,12 @@ function PlaceSheet({ open, onDismiss, all, chosen, onPick }: { open: boolean; o
   )
 }
 
-function ProjectSheet({ open, onDismiss, place, projects, chosen, onPick }: { open: boolean; onDismiss: () => void; place: Place | undefined; projects: StartProject[] | undefined; chosen: string | undefined; onPick: (project: string) => void }) {
+function ProjectSheet({ anchor, open, onDismiss, place, projects, chosen, onPick }: { anchor: HTMLElement | null; open: boolean; onDismiss: () => void; place: Place | undefined; projects: StartProject[] | undefined; chosen: string | undefined; onPick: (project: string) => void }) {
   const [typed, setTyped] = useState("")
   const repository = typed.trim() ? typedRepository(typed) : undefined
   return (
-    <Sheet open={open} onDismiss={onDismiss} label="Project" tall>
-      <h3 className="px-5 pb-2 text-title font-semibold">Project</h3>
+    <Sheet open={open} onDismiss={onDismiss} label="Project" tall anchor={anchor}>
+      <h3 className="web-sheet-title">Project</h3>
       <SheetScroll className="flex flex-col px-2 pb-[calc(env(safe-area-inset-bottom)+12px)]">
         {projects === undefined ? (
           <span className="mx-3 my-2 flex items-center gap-2 text-ui text-muted-foreground">
@@ -354,7 +388,7 @@ function ProjectSheet({ open, onDismiss, place, projects, chosen, onPick }: { op
   )
 }
 
-function LoadoutSheet({ open, onDismiss, offered, harness, model, onPick }: { open: boolean; onDismiss: () => void; offered: OfferedHarness[]; harness: string | undefined; model: string | undefined; onPick: (harness: string, model: string | undefined) => void }) {
+function LoadoutSheet({ anchor, open, onDismiss, offered, harness, model, onPick }: { anchor: HTMLElement | null; open: boolean; onDismiss: () => void; offered: OfferedHarness[]; harness: string | undefined; model: string | undefined; onPick: (harness: string, model: string | undefined) => void }) {
   // The harness whose models are shown: the chosen one until another is tapped, and again each time it opens.
   const [tapped, setTapped] = useState<string | undefined>(undefined)
   const shown = tapped ?? harness
@@ -368,9 +402,9 @@ function LoadoutSheet({ open, onDismiss, offered, harness, model, onPick }: { op
     onPick(next, nextModel)
   }
   return (
-    <Sheet open={open} onDismiss={close} label="Harness and model" tall>
-      <h3 className="px-5 pb-2 text-title font-semibold">Harness and model</h3>
-      <div className="web-scroll flex shrink-0 gap-1.5 overflow-x-auto px-4 pb-3" role="tablist" aria-label="Harness">
+    <Sheet open={open} onDismiss={close} label="Harness and model" tall anchor={anchor}>
+      <h3 className="web-sheet-title">Harness and model</h3>
+      <div className="web-scroll web-fade-x flex shrink-0 gap-1.5 overflow-x-auto px-4 pb-3" role="tablist" aria-label="Harness">
         {offered.map((each) => (
           <button key={each.harness} type="button" role="tab" aria-selected={each.harness === shown} disabled={!each.available && !each.pending} onClick={() => (each.models.length ? setTapped(each.harness) : pick(each.harness, undefined))} className="web-chip web-chip-tab">
             <WebHarnessIcon harness={each.harness} className="size-4" />
@@ -402,12 +436,12 @@ function LoadoutSheet({ open, onDismiss, offered, harness, model, onPick }: { op
  * that harness on every device, the desk's composer included. Without a Mac to list the ladder, it says what's in
  * effect and where to change it.
  */
-function AccessSheet({ open, onDismiss, harness, ladder, access, onPick }: { open: boolean; onDismiss: () => void; harness: string | undefined; ladder: Ladder | undefined; access: AccessInEffect | undefined; onPick: (mode: Ladder["modes"][number]) => void }) {
+function AccessSheet({ anchor, open, onDismiss, harness, ladder, access, onPick }: { anchor: HTMLElement | null; open: boolean; onDismiss: () => void; harness: string | undefined; ladder: Ladder | undefined; access: AccessInEffect | undefined; onPick: (mode: Ladder["modes"][number]) => void }) {
   const name = harness ? webHarnessLabel(harness) : "this harness"
   return (
-    <Sheet open={open} onDismiss={onDismiss} label="Access">
-      <h3 className="px-5 text-title font-semibold">Access</h3>
-      <p className="px-5 pb-2 text-label text-muted-foreground">Every new {name} session starts with it, on any of your devices.</p>
+    <Sheet open={open} onDismiss={onDismiss} label="Access" anchor={anchor}>
+      <h3 className="web-sheet-title pb-0">Access</h3>
+      <p className="web-sheet-note">Every new {name} session starts with it, on any of your devices.</p>
       <SheetScroll className="flex flex-col px-2 pb-[calc(env(safe-area-inset-bottom)+12px)]">
         {ladder ? (
           orderedModes(ladder.modes).map((mode) => (

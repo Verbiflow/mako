@@ -11,10 +11,12 @@ const HOLD_MS = 300
 const MAX_HEIGHT = 180
 
 /**
- * The phone's composer, one for every place a message is written: a Thread's, a quiet Mac's, and a new Thread's. `+`
- * opens the phone's own picker (photos, camera, files); the field grows with its words; the mic dictates while the field
- * is empty, Send sends once it isn't, and Stop stops a turn at work while it's empty. `onSend` says whether the message
- * went; one that didn't stays in the field.
+ * The web's composer, one for every place a message is written: a Thread's, a quiet Mac's, and a new Thread's. One card,
+ * as the desk's composer is one tile: `+` opens the phone's own picker (photos, camera, files); the field grows with its
+ * words; the mic dictates while the field is empty, Send sends once it isn't, and Stop stops a turn at work while it's
+ * empty. A message to a Thread is one row, `+`, the field and its action; a new Thread's card adds what it starts with,
+ * where above the field (`header`) and how in a bar under it with `+` and Send (`tools`), as the desk's composer carries
+ * its model and access under its field. `onSend` says whether the message went; one that didn't stays in the field.
  */
 export function Composer({
   placeholder,
@@ -25,7 +27,8 @@ export function Composer({
   disabled = false,
   sendable = true,
   attach = true,
-  accessory,
+  header,
+  tools,
   autoFocus = false,
   sendLabel = "Send",
 }: {
@@ -38,7 +41,10 @@ export function Composer({
   /** Whether a message can go yet: the field takes words before (a new Thread's place still being read), Send waits. */
   sendable?: boolean
   attach?: boolean
-  accessory?: ReactNode
+  /** Inside the card, above the field: where a new Thread starts. */
+  header?: ReactNode
+  /** Inside the card, in a bar under the field with `+` and Send: what a new Thread starts with. */
+  tools?: ReactNode
   autoFocus?: boolean
   sendLabel?: string
 }) {
@@ -140,31 +146,74 @@ export function Composer({
   const showStop = running && empty && onStop !== undefined
   const showMic = empty && !running && dictation.offered
   const budget = encodedBytes(picked)
+  const attachments =
+    picked.length || reading ? (
+      <ul role="list" aria-label="Attachments" className="web-scroll web-attachments flex gap-2 overflow-x-auto">
+        {picked.map((each) => (
+          <li key={each.id} className="web-attachment">
+            {each.preview ? <img src={each.preview} alt="" className="size-full object-cover" /> : (
+              <span className="flex size-full flex-col items-center justify-center gap-1 px-1.5 text-center">
+                <FileIcon className="size-4 text-muted-foreground" />
+                <span className="w-full truncate text-label text-muted-foreground">{each.attachment.name}</span>
+              </span>
+            )}
+            <button type="button" aria-label={`Remove ${each.attachment.name}`} className="web-attachment-remove" onClick={() => remove(each)}>
+              <XIcon className="size-3" strokeWidth={2.5} />
+            </button>
+          </li>
+        ))}
+        {Array.from({ length: reading }, (_, index) => (
+          <li key={`reading-${index}`} className="web-attachment skeleton" aria-label="Reading a file" />
+        ))}
+      </ul>
+    ) : null
+  const addButton = attach ? (
+    <>
+      <button type="button" aria-label="Add photos or files" className="web-icon-button web-composer-add" disabled={disabled} onClick={() => files.current?.click()}>
+        <PlusIcon className="size-5" />
+      </button>
+      <input
+        ref={files}
+        type="file"
+        multiple
+        hidden
+        onChange={(event) => {
+          void add(event.target.files)
+          event.target.value = ""
+        }}
+      />
+    </>
+  ) : null
+  const action = showStop ? (
+    <button type="button" onClick={onStop} disabled={stopping} className="web-send web-stop" aria-label="Stop the turn">
+      <SquareIcon className="size-3 fill-current" />
+    </button>
+  ) : showMic || dictation.listening ? (
+    <button
+      type="button"
+      aria-label={dictation.listening ? "Stop dictating" : "Dictate"}
+      aria-pressed={dictation.listening}
+      className={cn("web-send web-mic", dictation.listening && "web-mic-on")}
+      disabled={disabled}
+      onPointerDown={micDown}
+      onPointerUp={micUp}
+      onPointerCancel={micUp}
+      onClick={(event) => {
+        // A keyboard's Enter or Space: no pointer pressed it, so it toggles.
+        if (event.detail === 0) micKey()
+      }}
+    >
+      <MicIcon className="size-[18px]" />
+    </button>
+  ) : (
+    <button type="submit" disabled={empty || over || sending || disabled || !sendable} className="web-send" aria-label={running ? "Queue message" : sendLabel}>
+      <SendGlyph />
+    </button>
+  )
   return (
     <div className="web-composer-wrap">
-      {accessory}
-      {picked.length || reading ? (
-        <ul role="list" aria-label="Attachments" className="web-scroll flex gap-2 overflow-x-auto px-3 pt-2 pb-1">
-          {picked.map((each) => (
-            <li key={each.id} className="web-attachment">
-              {each.preview ? <img src={each.preview} alt="" className="size-full object-cover" /> : (
-                <span className="flex size-full flex-col items-center justify-center gap-1 px-1.5 text-center">
-                  <FileIcon className="size-4 text-muted-foreground" />
-                  <span className="w-full truncate text-label text-muted-foreground">{each.attachment.name}</span>
-                </span>
-              )}
-              <button type="button" aria-label={`Remove ${each.attachment.name}`} className="web-attachment-remove" onClick={() => remove(each)}>
-                <XIcon className="size-3" strokeWidth={2.5} />
-              </button>
-            </li>
-          ))}
-          {Array.from({ length: reading }, (_, index) => (
-            <li key={`reading-${index}`} className="web-attachment skeleton" aria-label="Reading a file" />
-          ))}
-        </ul>
-      ) : null}
       {over || problem || dictation.failure ? (
-        <p role="alert" className="px-4 pt-1 text-label text-negative">
+        <p role="alert" className="mx-auto w-full max-w-content px-5 pt-1 text-label text-negative">
           {over ? `Too large to send from a phone yet: ${kilobytes(budget)} of ${kilobytes(ATTACHMENT_BUDGET)}.` : (problem ?? dictation.failure)}
         </p>
       ) : null}
@@ -175,24 +224,10 @@ export function Composer({
           void send()
         }}
       >
-        {attach ? (
-          <>
-            <button type="button" aria-label="Add photos or files" className="web-icon-button web-composer-add" disabled={disabled} onClick={() => files.current?.click()}>
-              <PlusIcon className="size-5" />
-            </button>
-            <input
-              ref={files}
-              type="file"
-              multiple
-              hidden
-              onChange={(event) => {
-                void add(event.target.files)
-                event.target.value = ""
-              }}
-            />
-          </>
-        ) : null}
-        <div className={cn("web-composer-field", dictation.listening && "web-listening")}>
+        <div className={cn("web-composer-field", dictation.listening && "web-listening")} data-tools={tools !== undefined || undefined}>
+          {attachments}
+          {header}
+          {tools === undefined ? addButton : null}
           <textarea
             ref={input}
             value={text}
@@ -212,31 +247,14 @@ export function Composer({
               }
             }}
           />
-          {showStop ? (
-            <button type="button" onClick={onStop} disabled={stopping} className="web-send web-stop" aria-label="Stop the turn">
-              <SquareIcon className="size-3 fill-current" />
-            </button>
-          ) : showMic || dictation.listening ? (
-            <button
-              type="button"
-              aria-label={dictation.listening ? "Stop dictating" : "Dictate"}
-              aria-pressed={dictation.listening}
-              className={cn("web-send web-mic", dictation.listening && "web-mic-on")}
-              disabled={disabled}
-              onPointerDown={micDown}
-              onPointerUp={micUp}
-              onPointerCancel={micUp}
-              onClick={(event) => {
-                // A keyboard's Enter or Space: no pointer pressed it, so it toggles.
-                if (event.detail === 0) micKey()
-              }}
-            >
-              <MicIcon className="size-[18px]" />
-            </button>
+          {tools !== undefined ? (
+            <div className="web-composer-bar">
+              {addButton}
+              <div className="web-composer-tools">{tools}</div>
+              {action}
+            </div>
           ) : (
-            <button type="submit" disabled={empty || over || sending || disabled || !sendable} className="web-send" aria-label={running ? "Queue message" : sendLabel}>
-              <SendGlyph />
-            </button>
+            action
           )}
         </div>
       </form>

@@ -27,6 +27,9 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   const heading = useRef<HTMLHeadingElement>(null)
   const [adding, setAdding] = useState(false)
   const [previewing, setPreviewing] = useState(false)
+  // The Session it opened on, when the address names none: kept while the screen is open, so a Session that stops
+  // waiting or working doesn't hand the screen to another tab under the person's thumb.
+  const [openedOn, setOpenedOn] = useState<string | undefined>(undefined)
   useEffect(() => heading.current?.focus({ preventScroll: true }), [threadId])
   const client = useWebClient()
   // A Thread on screen is seen: its notices go from this device and every other (`WebPush.seen`), now and each time the
@@ -56,7 +59,8 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
       </div>
     )
   }
-  const session = thread.sessions.find((each) => each.row.session === sessionId) ?? openingSession(thread)
+  const session = thread.sessions.find((each) => each.row.session === (sessionId ?? openedOn)) ?? openingSession(thread)
+  if (sessionId === undefined && openedOn !== session.row.session && !thread.sessions.some((each) => each.row.session === openedOn)) setOpenedOn(session.row.session)
   const owner = ownerOf(session)
   const addingTo: AddingTo | undefined = session.row.folder && !thread.archived && !session.quietSince ? { thread: thread.id, folder: session.row.folder, owner, where: session.where === CLOUD_WHERE ? "Cloud" : session.where } : undefined
   return (

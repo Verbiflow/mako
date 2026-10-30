@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { cn } from "@/lib/utils"
-import { catchElement, reducedMotion, rubberband, SETTLE, SLOP_PX, springTo, THROWN, Velocity } from "./motion"
+import { catchElement, EASE_OUT, EASE_SWIFT, reducedMotion, rubberband, SETTLE, SLOP_PX, springTo, THROWN, Velocity } from "./motion"
+import { useWide } from "./route"
 
 /** The sheets open now, the newest last: Escape and Back close only the one on top. */
 const stacked = new Set<object>()
@@ -10,6 +11,32 @@ const stacked = new Set<object>()
 const FLICK = 0.5
 /** A release past this share of the sheet's height dismisses it. */
 const PAST = 1 / 3
+/** A popover keeps this far from its chip and from the window's edges. */
+const GAP_PX = 6
+const EDGE_PX = 12
+
+/**
+ * How a sheet is drawn: from the bottom on a phone; wide, as the desk draws a choice, a popover under (or over) the chip
+ * that opened it, or a dialog in the middle when nothing did.
+ */
+type Form = "sheet" | "pop" | "dialog"
+
+/** Where a popover goes: under its chip when there's room, else over it; never past the window's edges. */
+function place(panel: HTMLElement, anchor: HTMLElement): void {
+  const chip = anchor.getBoundingClientRect()
+  const width = panel.offsetWidth
+  const below = innerHeight - chip.bottom - GAP_PX - EDGE_PX
+  const above = chip.top - GAP_PX - EDGE_PX
+  const under = below >= Math.min(panel.scrollHeight, 360) || below >= above
+  const left = Math.max(EDGE_PX, Math.min(chip.left, innerWidth - width - EDGE_PX))
+  Object.assign(panel.style, {
+    left: `${left}px`,
+    top: under ? `${chip.bottom + GAP_PX}px` : "auto",
+    bottom: under ? "auto" : `${innerHeight - chip.top + GAP_PX}px`,
+    maxHeight: `${Math.max(160, under ? below : above)}px`,
+    transformOrigin: `${chip.left + chip.width / 2 - left}px ${under ? "0" : "100%"}`,
+  })
+}
 
 /**
  * A sheet from the bottom of the screen, as a phone draws its choices: it rises from below, follows the finger 1:1 when
@@ -17,8 +44,13 @@ const PAST = 1 / 3
  * closes if it was flicked down or pulled past a third, else springs back at the finger's speed. Tapping outside, Back
  * and Escape close it too. It can be caught mid-flight. `open` is the parent's; `onDismiss` asks it to close, and the
  * sheet leaves on its own path before it unmounts.
+ *
+ * Wide, the same choices are the desk's: a popover grown from `anchor` (the chip that opened it), or without one a
+ * dialog in the middle, each in under 200 ms and gone faster.
  */
-export function Sheet({ open, onDismiss, label, children, className, tall }: { open: boolean; onDismiss: () => void; label: string; children: ReactNode; className?: string; tall?: boolean }) {
+export function Sheet({ open, onDismiss, label, children, className, tall, anchor }: { open: boolean; onDismiss: () => void; label: string; children: ReactNode; className?: string; tall?: boolean; anchor?: HTMLElement | null }) {
+  const wide = useWide()
+  const form: Form = !wide ? "sheet" : anchor ? "pop" : "dialog"
   const [mounted, setMounted] = useState(open)
   const panel = useRef<HTMLDivElement>(null)
   const backdrop = useRef<HTMLDivElement>(null)
@@ -33,6 +65,26 @@ export function Sheet({ open, onDismiss, label, children, className, tall }: { o
     if (!sheet || !shade || !mounted) return
     const height = sheet.getBoundingClientRect().height
     const fade = (progress: number): Keyframe => ({ opacity: String(progress) })
+    const done = () => {
+      setMounted(false)
+      if (opener.current instanceof HTMLElement && document.contains(opener.current)) opener.current.focus({ preventScroll: true })
+    }
+    if (form !== "sheet") {
+      // The desk's: grown from its chip (or the middle) on the arriving curve, gone on the leaving one, faster.
+      const lift = form === "pop" && sheet.style.bottom !== "auto" && sheet.style.bottom !== "" ? 4 : -4
+      const from = { opacity: 0, transform: reducedMotion() ? "none" : `translate3d(0, ${form === "dialog" ? 8 : lift}px, 0) scale(0.97)` }
+      if (open) {
+        opener.current = document.activeElement
+        if (form === "pop" && anchor) place(sheet, anchor)
+        if (!sheet.contains(document.activeElement)) sheet.querySelector<HTMLElement>("textarea:not([disabled]), input:not([disabled]), button:not([disabled])")?.focus({ preventScroll: true })
+        sheet.animate([from, { opacity: 1, transform: "none" }], { duration: 180, easing: EASE_OUT })
+        shade.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: EASE_OUT, fill: "forwards" })
+        return
+      }
+      shade.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: EASE_SWIFT, fill: "forwards" })
+      void sheet.animate([{ opacity: 1, transform: "none" }, from], { duration: 120, easing: EASE_SWIFT, fill: "forwards" }).finished.then(done, done)
+      return
+    }
     if (open) {
       opener.current = document.activeElement
       // Focus goes into the sheet, so keys never reach what's behind it (a field asks for it first by `autoFocus`).
@@ -48,17 +100,13 @@ export function Sheet({ open, onDismiss, label, children, className, tall }: { o
     }
     const velocity = release.current
     release.current = 0
-    const done = () => {
-      setMounted(false)
-      if (opener.current instanceof HTMLElement && document.contains(opener.current)) opener.current.focus({ preventScroll: true })
-    }
     if (reducedMotion()) {
       void sheet.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 120, easing: "ease-in", fill: "forwards" }).finished.then(done, done)
       return
     }
     const from = catchElement(sheet).y
     void springTo(sheet, "y", height, { from, velocity: Math.max(velocity, 0), spring: velocity > FLICK ? THROWN : SETTLE, also: [{ element: shade, frame: (progress) => fade(1 - progress) }] }).then(done)
-  }, [open, mounted])
+  }, [open, mounted, form, anchor])
 
   // Escape closes the sheet on top, the one opened last; Back (a route the parent pushed) is the parent's.
   const dismiss = useRef(onDismiss)
@@ -81,10 +129,11 @@ export function Sheet({ open, onDismiss, label, children, className, tall }: { o
     }
   }, [open])
 
-  // The drag: by pointer on the grab area (it never scrolls), by touch on the content when it's at its top.
+  // The drag: by pointer on the grab area (it never scrolls), by touch on the content when it's at its top. Only a
+  // sheet is dragged; the desk's popovers and dialogs aren't.
   useEffect(() => {
     const sheet = panel.current
-    if (!sheet || !open) return
+    if (!sheet || !open || form !== "sheet") return
     let start: { y: number; at: number; from: number; scroller: HTMLElement | null } | undefined
     let dragging = false
     const velocity = new Velocity()
@@ -163,16 +212,18 @@ export function Sheet({ open, onDismiss, label, children, className, tall }: { o
       sheet.removeEventListener("touchcancel", end)
     }
     // Held across the parent's renders (a live list re-renders it every few seconds): a drag never loses its finger.
-  }, [open])
+  }, [open, form])
 
   if (!mounted) return null
   return createPortal(
-    <div className="web-sheet-layer" data-open={open || undefined}>
+    <div className="web-sheet-layer" data-open={open || undefined} data-form={form}>
       <div ref={backdrop} className="web-sheet-backdrop" style={{ opacity: 0 }} onClick={onDismiss} aria-hidden />
-      <div ref={panel} role="dialog" aria-modal aria-label={label} className={cn("web-sheet", tall && "web-sheet-tall", className)}>
-        <div data-sheet-grab className="web-sheet-grab" aria-hidden>
-          <span />
-        </div>
+      <div ref={panel} role="dialog" aria-modal aria-label={label} data-form={form} className={cn("web-sheet", tall && "web-sheet-tall", className)}>
+        {form === "sheet" ? (
+          <div data-sheet-grab className="web-sheet-grab" aria-hidden>
+            <span />
+          </div>
+        ) : null}
         {children}
       </div>
     </div>,

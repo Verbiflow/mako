@@ -73,12 +73,16 @@ export function useRoute(base: string): [WebRoute, (route: WebRoute, how?: { rep
   return [route, navigate, back]
 }
 
-/** Whether the viewport is wide enough for the list and a Thread side by side: a tablet, or a phone turned. */
+/**
+ * Whether the viewport is wide enough for the desk's two panes, the list as a rail beside what's open: an iPad either way
+ * up, a laptop's window. A phone, turned or not, has one screen at a time.
+ */
+export const WIDE_QUERY = "(min-width: 768px)"
+
 export function useWide(): boolean {
-  const query = "(min-width: 880px)"
-  const [wide, setWide] = useState(() => matchMedia(query).matches)
+  const [wide, setWide] = useState(() => matchMedia(WIDE_QUERY).matches)
   useEffect(() => {
-    const media = matchMedia(query)
+    const media = matchMedia(WIDE_QUERY)
     const changed = () => setWide(media.matches)
     media.addEventListener("change", changed)
     return () => media.removeEventListener("change", changed)
