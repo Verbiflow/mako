@@ -143,6 +143,8 @@ interface Step {
   name: string
   ok: boolean
   detail?: string
+  /** Why a step that passed did nothing for a harness (its flows need a program this runner lacks): never a pass. */
+  skipped?: string
 }
 
 function run(name: string, command: string, args: string[], steps: Step[], env: NodeJS.ProcessEnv = process.env): boolean {
@@ -152,6 +154,10 @@ function run(name: string, command: string, args: string[], steps: Step[], env: 
   const ok = result.status === 0
   const step: Step = { name, ok }
   if (!ok) step.detail = failureOf(result.stderr ?? "") || `exited with ${result.status ?? result.signal}`
+  else {
+    const skipped = skippedOf(result.stderr ?? "")
+    if (skipped) step.skipped = skipped
+  }
   steps.push(step)
   return ok
 }
@@ -165,6 +171,18 @@ export function failureOf(stderr: string): string {
   const named = lines.filter((line) => /^(?:\w*Error\b.*?:|AssertionError|✗ )/.test(line) && !/^\s*at /.test(line))
   const said = [...new Set(named.map((line) => line.replace(/^AssertionError \[ERR_ASSERTION\]: /, "").replace(/^Error: /, "")))]
   return (said.length ? said.slice(0, 4).join(" · ") : (lines.at(-1) ?? "")).slice(0, 600)
+}
+
+/** What a step that passed skipped whole (`harness-decode-pairs.ts` says so on stderr: `<harness>: skipped; <why>`). */
+export function skippedOf(stderr: string): string | undefined {
+  const said = stderr.split("\n").map((line) => line.trim().match(/^[\w-]+: skipped; (.+)$/)?.[1]).filter((why) => why !== undefined)
+  return said.length ? [...new Set(said)].join(" · ").slice(0, 600) : undefined
+}
+
+/** A step's result as its row or line says it. */
+function outcome(step: Step): string {
+  if (!step.ok) return `**failed**${step.detail ? `: ${step.detail}` : ""}`
+  return step.skipped ? `**skipped**: ${step.skipped}` : "passed"
 }
 
 /** Moves one declaration: tested, and the bundled package's version for a bundled runtime. */
@@ -285,7 +303,7 @@ function summary(reading: Reading, steps: Step[]): string {
     "",
     "| Step | Result |",
     "| --- | --- |",
-    ...steps.map((step) => `| ${step.name} | ${step.ok ? "passed" : `**failed**${step.detail ? `: ${step.detail.replaceAll("|", "\\|").replaceAll("\n", " ")}` : ""}`} |`),
+    ...steps.map((step) => `| ${step.name} | ${outcome(step).replaceAll("|", "\\|").replaceAll("\n", " ")} |`),
   ]
   return `${lines.join("\n")}\n`
 }
@@ -326,9 +344,12 @@ if (options.write || options.verify || options.install) {
   } else {
     await installTested(provider, steps)
     if (options.verify) run("session flows against the scripted model", "npm", ["run", "harness:decode-pairs", "--", provider, "--sealed"], steps)
-    if (options.summary) writeFileSync(options.summary, steps.map((step) => `- ${step.name}: ${step.ok ? "passed" : `failed${step.detail ? `: ${step.detail}` : ""}`}`).join("\n") + "\n")
+    if (options.summary) writeFileSync(options.summary, steps.map((step) => `- ${step.name}: ${outcome(step).replaceAll("**", "")}`).join("\n") + "\n")
   }
-  for (const step of steps) console.log(`${step.ok ? "ok    " : "FAILED"} ${step.name}${step.detail ? ` · ${step.detail}` : ""}`)
+  for (const step of steps) {
+    const said = step.detail ?? step.skipped
+    console.log(`${!step.ok ? "FAILED" : step.skipped ? "SKIP  " : "ok    "} ${step.name}${said ? ` · ${said}` : ""}`)
+  }
   process.exitCode = steps.every((step) => step.ok) ? 0 : 1
 } else {
   const found = await readings(only)
