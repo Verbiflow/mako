@@ -4,6 +4,7 @@ import { z } from "zod"
 import type { RecordStore } from "./record-store.js"
 import { namedWork, type WorkUnderWay } from "./loop-watch.js"
 import { RecordSync, RecordSyncConflictError, describeSync, refusedBy } from "./record-sync.js"
+import type { UploadBudget } from "./upload-budget.js"
 
 /**
  * How recently a Session's Thread was worked in, which sets when its turn comes: `now` while it works or waits, then
@@ -161,21 +162,28 @@ export class ScopedUploads {
   #reconciling: Promise<void> | undefined
   /** Names each push while it runs, for the watch on the process's loop. */
   readonly #work: WorkUnderWay | undefined
+  /** The bytes this process's uploads share (`UploadBudget`); while it sheds, no push starts. */
+  readonly #budget: UploadBudget | undefined
+  readonly #unhear: () => void
 
   constructor(
     store: RecordStore,
     remote: RecordRemote,
     log: (level: "info" | "warn", message: string, fields: Record<string, string | number>) => void,
-    options: { now?: () => number; bytesPerSecond?: number; work?: WorkUnderWay } = {}
+    options: { now?: () => number; bytesPerSecond?: number; work?: WorkUnderWay; budget?: UploadBudget } = {}
   ) {
     this.#work = options.work
     this.#store = store
     this.#remote = remote
     this.#log = log
     this.#now = options.now ?? Date.now
-    this.#urgent = new RecordSync(store, remote)
+    const budget = options.budget
+    this.#budget = budget
+    this.#urgent = new RecordSync(store, remote, budget ? { budget } : {})
     // Paced, one pack in flight: more would only be held in memory waiting for the pace.
-    this.#paced = options.bytesPerSecond ? new RecordSync(store, pacedRemote(remote, options.bytesPerSecond), { uploads: 1 }) : this.#urgent
+    this.#paced = options.bytesPerSecond ? new RecordSync(store, pacedRemote(remote, options.bytesPerSecond), { uploads: 1, ...budget && { budget } }) : this.#urgent
+    // A budget that sheds holds back new pushes (`#pump`); they start once it stops.
+    this.#unhear = budget?.onResumed(() => this.#pump()) ?? (() => {})
   }
 
   get remote(): string {
@@ -291,6 +299,7 @@ export class ScopedUploads {
 
   stop(): void {
     this.#stopped = true
+    this.#unhear()
     if (this.#wake) clearTimeout(this.#wake)
   }
 
@@ -303,7 +312,7 @@ export class ScopedUploads {
 
   /** Starts the most wanted pushes due, within the flights: a Session at work has a flight of its own. */
   #pump(): void {
-    if (this.#stopped || !this.#heads) return
+    if (this.#stopped || !this.#heads || this.#budget?.shedding) return
     const now = this.#now()
     let nextRetry = Number.POSITIVE_INFINITY
     for (const session of this.#scope.sessions) {

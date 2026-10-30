@@ -1,15 +1,16 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process"
-import { randomBytes, randomUUID } from "node:crypto"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage, type Server } from "node:http"
 import { join, resolve } from "node:path"
 import { performance } from "node:perf_hooks"
+import { DatabaseSync } from "node:sqlite"
 import { parseArgs } from "node:util"
 import { zstdDecompressSync } from "node:zlib"
 import { z } from "zod"
 import { decodeChunkPack, decodeRecordPush, RecordBundleSchema, type RecordBundle, type RecordPushAnswer } from "@mako/protocol/records"
 import { BackfillProgressSchema } from "../packages/sessions/src/record-backfill.ts"
-import { ON_DEMAND_CATALOG_NODE_ARGS } from "../packages/host/src/threads/daemon-command.ts"
+import { ON_DEMAND_CATALOG_ENV, ON_DEMAND_CATALOG_NODE_ARGS } from "../packages/host/src/threads/daemon-command.ts"
 import { connectDaemon, type DaemonClient } from "../packages/sessions/src/daemon.ts"
 import { removeScratch } from "./lib/scratch-processes.mjs"
 
@@ -26,15 +27,25 @@ import { removeScratch } from "./lib/scratch-processes.mjs"
  *
  * Scenarios: `quiet`, a line every 2 s; `turn`, a line every 50 ms for 10 s, as an answer streams; `large`, the same turn
  * on a session of `--large-mib` MiB (its first upload timed too); `busy-host`, the turn while a process of its own
- * plays the host, asking the status every 5 s and holding its own loop 1.5 s in every 3 (`--play-host`). The harness
- * stores are never touched: only the scratch home is.
+ * plays the host, asking the status every 5 s and holding its own loop 1.5 s in every 3 (`--play-host`); `cursor`, a
+ * Cursor chat of `--cursor-rows` rows caught up whole, each row a unit as a long chat's are (a Mac's 342,965-row chat
+ * was what its daemon's memory guard retired it over). Each says the daemon's peak resident memory, whether it lived
+ * through, and versions the stand-in was sent twice. The harness stores are never touched: only the scratch home is.
  *
- *   npm run bench:sync-pipeline [-- --daemon <daemon-main.js>] [--large-mib 150] [--out <file>] [--keep]
+ * `--gateway-ms` holds each upload's answer that long, as a busy account does (its packs took 7.5 s at the median on
+ * 2026-10-30), so what the daemon holds in flight shows. `--retire-at <share>` retires the daemon mid-upload once the
+ * account holds that share of the chat's rows, and starts the next as the host would: the chat must still arrive whole,
+ * no version twice.
+ *
+ *   npm run bench:sync-pipeline [-- --daemon <daemon-main.js>] [--large-mib 150] [--cursor-rows 300000] [--gateway-ms 0] [--out <file>] [--keep]
  */
 const { values } = parseArgs({
   options: {
     daemon: { type: "string" },
     "large-mib": { type: "string", default: "150" },
+    "cursor-rows": { type: "string", default: "300000" },
+    "gateway-ms": { type: "string", default: "0" },
+    "retire-at": { type: "string" },
     port: { type: "string", default: "20024" },
     out: { type: "string" },
     keep: { type: "boolean", default: false },
@@ -44,6 +55,7 @@ const { values } = parseArgs({
 })
 const daemonScript = resolve(values.daemon ?? join(import.meta.dirname, "../packages/sessions/dist/daemon-main.js"))
 const port = Number(values.port)
+const gatewayMs = Number(values["gateway-ms"])
 const say = (line: string) => process.stderr.write(`${line}\n`)
 
 /** The account's records routes for one device's two forms, in memory: chunks by hash, each bundle taken. */
@@ -54,6 +66,10 @@ class StandIn {
   readonly sent = { originals: 0, copies: 0 }
   readonly calls: Record<string, number> = {}
   readonly holdings = new Map<string, Record<string, number>>()
+  /** Each session's harness, by native id, as its bundles named it. */
+  readonly harnesses = new Map<string, string>()
+  /** Versions sent again that the stand-in already held: an upload taken twice. */
+  duplicates = 0
   server: Server | undefined
 
   async start(): Promise<void> {
@@ -84,6 +100,8 @@ class StandIn {
     const key = `${request.method} ${route.split("?")[0]}`
     this.calls[key] = (this.calls[key] ?? 0) + 1
     this.sent[form] += body.length
+    // A gateway that takes its time over what's uploaded, as the account's did (`--gateway-ms`): the client holds each pack until it answers.
+    if (gatewayMs && (key === "PUT /chunks" || key === "POST /sessions/with-chunks")) await delay(gatewayMs)
     if (key === "POST /chunks/missing") {
       const { hashes } = z.object({ hashes: z.array(z.string()) }).parse(JSON.parse(body.toString()))
       return { status: 200, body: { missing: hashes.filter((hash) => !this.chunks.has(hash)) } }
@@ -104,7 +122,7 @@ class StandIn {
     if (key === "GET /sessions/holdings") return { status: 200, body: { holdings: this.holdings.get(`${form}\n${url.searchParams.get("nativeId")}`) ?? {}, next: null } }
     if (key === "GET /sessions") {
       const sessions = [...this.holdings].filter(([held]) => held.startsWith(`${form}\n`)).map(([held, units]) => ({
-        harness: "codex", nativeId: held.slice(form.length + 1), units: Object.keys(units).length, versions: Object.values(units).reduce((total, head) => total + head + 1, 0), through: 0,
+        harness: this.harnesses.get(held.slice(form.length + 1)) ?? "codex", nativeId: held.slice(form.length + 1), units: Object.keys(units).length, versions: Object.values(units).reduce((total, head) => total + head + 1, 0), through: 0,
       }))
       return { status: 200, body: { sessions } }
     }
@@ -120,10 +138,12 @@ class StandIn {
   #take(form: "originals" | "copies", bundle: RecordBundle): RecordPushAnswer {
     const now = performance.now()
     const held = this.holdings.get(`${form}\n${bundle.nativeId}`) ?? {}
+    this.harnesses.set(bundle.nativeId, bundle.harness)
     let versions = 0
     for (const unit of bundle.units)
       for (const version of unit.versions) {
         versions += 1
+        if ((held[unit.key] ?? -1) >= version.seq) this.duplicates += 1
         held[unit.key] = Math.max(held[unit.key] ?? -1, version.seq)
         for (const hash of hashesOf(version.chunks)) for (const mark of this.chunks.get(hash) ?? []) if (!this.arrived[form].has(mark)) this.arrived[form].set(mark, now)
       }
@@ -161,9 +181,81 @@ function rollout(home: string, filler = 0) {
   return { path, id, append: (text: string) => appendFileSync(path, message("assistant", text)) }
 }
 
+/**
+ * A Cursor chat in the scratch home (`~/.cursor/chats/<workspace>/<id>/store.db`): its messages as content-addressed
+ * blobs, `rows` of them, each of a few hundred bytes to a few KiB that compress as a chat's JSON does, and the root
+ * naming them all.
+ */
+function cursorChat(home: string, rows: number) {
+  const id = randomUUID()
+  const folder = join(home, ".cursor", "chats", "b".repeat(32), id)
+  mkdirSync(folder, { recursive: true })
+  const path = join(folder, "store.db")
+  const db = new DatabaseSync(path)
+  db.exec("CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB); CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+  const insert = db.prepare("INSERT INTO blobs VALUES (?, ?)")
+  const root: Buffer[] = []
+  db.exec("BEGIN")
+  for (let row = 0; row < rows; row++) {
+    const role = row % 4 === 0 ? "user" : row % 4 === 2 ? "tool" : "assistant"
+    const text = `${role === "user" ? "<user_query>" : ""}row ${row} ${randomBytes(120 + (row % 17) * 60).toString("base64")} ${"the same words a chat repeats ".repeat(row % 9)}`
+    const data = Buffer.from(JSON.stringify({ role, content: [{ type: "text", text }] }))
+    const hash = createHash("sha256").update(data).digest()
+    insert.run(hash.toString("hex"), data)
+    root.push(Buffer.from([10, 32]), hash)
+  }
+  insert.run("root", Buffer.concat(root))
+  db.prepare("INSERT INTO meta VALUES ('0', ?)").run(JSON.stringify({ agentId: id, name: "A long chat", latestRootBlobId: "root" }))
+  db.exec("COMMIT")
+  db.close()
+  return { id, path }
+}
+
+/**
+ * A Cursor chat caught up whole: how long, what went, and whether every row's unit is in the account, once. With
+ * `retireAt`, the daemon is retired mid-upload at that share of the rows and the next one started (`restart`).
+ */
+async function catchUpCursor(order: number, stand: StandIn, first: DaemonClient, chat: { id: string; path: string }, rows: number, restart: () => Promise<DaemonClient>, retireAt?: number) {
+  let client = first
+  let memory = sampleMemory(daemon?.pid)
+  let peak = 0
+  const started = performance.now()
+  const sentBefore = stand.sent.originals
+  const duplicatesBefore = stand.duplicates
+  const scope = { sessions: [{ harness: "cursor", nativeId: chat.id, path: chat.path, thread: `t-${order}`, busy: true, tier: "now" as const }], paused: false }
+  await client.scopeSync(scope)
+  const units = () => Object.keys(stand.holdings.get(`originals\n${chat.id}`) ?? {}).length
+  let retired: { units: number; puts: number; restartMs: number } | undefined
+  // Whole once the daemon says so: every row's unit, the root's and the meta's, in the account.
+  const whole = async () => units() >= rows && (await client.syncStatus().then((status) => status.tiers.now.whole >= 1 && !status.originals?.sending.length, () => false))
+  for (let waited = 0; !(await whole()) && waited < 9_000 && daemon?.exitCode === null; waited++) {
+    if (retireAt !== undefined && !retired && units() >= retireAt * rows) {
+      // Mid-upload, as a guard's or a newer build's retirement lands: packs in flight, the rest of the chat waiting.
+      const at = { units: units(), puts: stand.calls["PUT /chunks"] ?? 0 }
+      const stopping = performance.now()
+      const exited = new Promise((done) => daemon?.once("exit", done))
+      await client.retire().catch(() => undefined)
+      client.close()
+      await exited
+      peak = Math.max(peak, memory.stop())
+      client = await restart()
+      memory = sampleMemory(daemon?.pid)
+      await client.scopeSync(scope)
+      retired = { ...at, restartMs: Math.round(performance.now() - stopping) }
+    }
+    await delay(100)
+  }
+  const ms = Math.round(performance.now() - started)
+  const mib = (stand.sent.originals - sentBefore) / 1048576
+  return {
+    rows, ms, mib: +mib.toFixed(1), mibPerSecond: +(mib / (ms / 1000)).toFixed(1), unitsHeld: units(), duplicates: stand.duplicates - duplicatesBefore,
+    daemonPeakMb: Math.max(peak, memory.stop()), daemonAlive: daemon?.exitCode === null, ...retired && { retired },
+  }
+}
+
 type Probe = { ms: number[]; timedOut: number }
 
-/** The sync daemon's resident memory, sampled every 250 ms: its guard retires it past 512 MB. */
+/** The sync daemon's resident memory, sampled every 250 ms: what its guard weighs, beside its heap and buffers. */
 function sampleMemory(pid: number | undefined) {
   let peak = 0
   const timer = setInterval(() => {
@@ -281,13 +373,13 @@ async function playHost(socket: string): Promise<void> {
 }
 if (values["play-host"]) await playHost(values["play-host"])
 
-const results: Record<string, Awaited<ReturnType<typeof scenario>>> = {}
+const results: Record<string, Awaited<ReturnType<typeof scenario>> | Awaited<ReturnType<typeof catchUpCursor>>> = {}
 const home = mkdtempSync("/tmp/mako-sp-")
 let daemon: ChildProcess | undefined
 const stand = new StandIn()
 try {
   await stand.start()
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home }
+  const env: NodeJS.ProcessEnv = { ...process.env, ...ON_DEMAND_CATALOG_ENV, HOME: home }
   for (const name of ["CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_DATA_HOME", "OPENCODE_DB", "MAKO_DATA_ROOT"]) delete env[name]
   mkdirSync(join(home, ".mako"), { recursive: true })
   mkdirSync(join(home, ".codex", "sessions"), { recursive: true })
@@ -295,18 +387,24 @@ try {
   // The large session is there before the daemon starts, as a long Session is: the backfill's pass, in a process of its
   // own, takes it into the record store, and the daemon captures only what's written to it after.
   const large = wanted.has("large") ? rollout(home, Number(values["large-mib"]) * 1048576) : undefined
-  // As the host starts it (`ON_DEMAND_CATALOG_NODE_ARGS`): its heap and its GC are what its memory guard sees.
-  daemon = spawn(process.execPath, [...ON_DEMAND_CATALOG_NODE_ARGS, daemonScript], { env, stdio: "ignore" })
-  let client: DaemonClient | undefined
-  for (let tries = 0; !client && tries < 100; tries++) {
-    await delay(200)
-    client = await connectDaemon(join(home, ".mako", "syncd.sock")).catch(() => undefined)
+  const cursorRows = Number(values["cursor-rows"])
+  const chat = wanted.has("cursor") ? cursorChat(home, cursorRows) : undefined
+  const start = async () => {
+    // As the host starts it (`ON_DEMAND_CATALOG_NODE_ARGS`, `ON_DEMAND_CATALOG_ENV`): its heap, its GC and its malloc are what its memory guard sees.
+    daemon = spawn(process.execPath, [...ON_DEMAND_CATALOG_NODE_ARGS, daemonScript], { env, stdio: "ignore" })
+    let started: DaemonClient | undefined
+    for (let tries = 0; !started && tries < 100; tries++) {
+      await delay(200)
+      started = await connectDaemon(join(home, ".mako", "syncd.sock")).catch(() => undefined)
+    }
+    if (!started) throw new Error("the sync daemon didn't answer")
+    const base = (form: string) => `http://127.0.0.1:${port}/v1/devices/d-bench/${form}`
+    await started.syncOriginals({ id: base("originals"), base: base("originals"), authorization: "Bearer bench" })
+    await started.syncCopies({ id: base("records"), base: base("records"), authorization: "Bearer bench" })
+    return started
   }
-  if (!client) throw new Error("the sync daemon didn't answer")
-  const base = (form: string) => `http://127.0.0.1:${port}/v1/devices/d-bench/${form}`
-  await client.syncOriginals({ id: base("originals"), base: base("originals"), authorization: "Bearer bench" })
-  await client.syncCopies({ id: base("records"), base: base("records"), authorization: "Bearer bench" })
-  if (large) {
+  let client = await start()
+  if (large || chat) {
     for (let waited = 0; waited < 600; waited++) {
       let text = "{}"
       try {
@@ -329,9 +427,17 @@ try {
     results[name] = await scenario(Object.keys(results).length + 1, stand, home, client, writes)
     say(`${name}: ${JSON.stringify(results[name])}`)
   }
+  if (chat) {
+    const retireAt = values["retire-at"] === undefined ? undefined : Number(values["retire-at"])
+    let latest = client
+    results.cursor = await catchUpCursor(Object.keys(results).length + 1, stand, client, chat, cursorRows, async () => (latest = await start()), retireAt)
+    client = latest
+    say(`cursor: ${JSON.stringify(results.cursor)}`)
+  }
   client.close()
   const held = readFileSync(join(home, ".mako", "logs", "syncd.log"), "utf8").split("\n").filter((line) => line.includes("loop held"))
-  const report = { daemon: daemonScript, scenarios: results, requests: stand.calls, sentMiB: { originals: +(stand.sent.originals / 1048576).toFixed(1), copies: +(stand.sent.copies / 1048576).toFixed(1) }, loopHeld: held.map((line) => line.slice(0, 300)) }
+  const retired = readFileSync(join(home, ".mako", "logs", "syncd.log"), "utf8").split("\n").filter((line) => line.includes("retiring") || line.includes("memory over its limit") || line.includes("back under its limit"))
+  const report = { daemon: daemonScript, scenarios: results, requests: stand.calls, duplicates: stand.duplicates, guard: retired.map((line) => line.slice(0, 300)), sentMiB: { originals: +(stand.sent.originals / 1048576).toFixed(1), copies: +(stand.sent.copies / 1048576).toFixed(1) }, loopHeld: held.map((line) => line.slice(0, 300)) }
   const text = JSON.stringify(report, null, 2)
   if (values.out) writeFileSync(values.out, text)
   process.stdout.write(`${text}\n`)

@@ -2,7 +2,8 @@ import { createHash } from "node:crypto"
 import { mkdirSync, readdirSync } from "node:fs"
 import { open, type FileHandle } from "node:fs/promises"
 import { join } from "node:path"
-import { zstdCompressSync, zstdDecompressSync, constants } from "node:zlib"
+import { zstdDecompressSync } from "node:zlib"
+import { ZstdFrames } from "./zstd-frames.js"
 
 /**
  * Bytes cut where their content says, so the same run of bytes is the same
@@ -160,8 +161,7 @@ const PACK_NAME = /^(\d{8})\.pack$/
 /**
  * Entries are copied into a buffer of this size and written a buffer at a
  * time: one write per chunk was a round trip to the thread pool for each of
- * a large store's half million chunks. Copied, because zstd's output is a
- * view of a 64 KiB allocation, which a list of waiting entries would keep.
+ * a large store's half million chunks.
  */
 const FLUSH_BYTES = 8 * 1024 * 1024
 
@@ -204,6 +204,8 @@ export class Packs {
    * read in flight on it would meet ("file closed"). A reader closes once no read is using it.
    */
   private readers = new Map<number, Reader>()
+  /** One zstd context each way for every chunk this store writes or reads (`ZstdFrames`), not one per chunk. */
+  private readonly frames = new ZstdFrames()
 
   constructor(readonly folder: string) {
     mkdirSync(folder, { recursive: true })
@@ -211,7 +213,7 @@ export class Packs {
 
   /** Stores `bytes`, compressed when that saves, and says where. */
   async write(hash: Buffer, bytes: Buffer): Promise<ChunkPlace> {
-    const compressed = zstdCompressSync(bytes, { params: { [constants.ZSTD_c_compressionLevel]: 3 } })
+    const compressed = await this.frames.compress(bytes)
     const codec = compressed.length < bytes.length * 0.95 ? ZSTD : RAW
     return this.writeBody(hash, codec, bytes.length, codec === ZSTD ? compressed : bytes)
   }
@@ -265,8 +267,8 @@ export class Packs {
     return this.decoded(place, body)
   }
 
-  private decoded(place: ChunkPlace, body: Buffer): Buffer {
-    const bytes = place.codec === ZSTD ? zstdDecompressSync(body) : body
+  private async decoded(place: ChunkPlace, body: Buffer): Promise<Buffer> {
+    const bytes = place.codec === ZSTD ? await this.frames.decompress(body) : body
     if (bytes.length !== place.size) throw new Error(`The chunk at ${packName(place.pack)}:${place.offset} decodes to ${bytes.length} bytes, not ${place.size}`)
     return bytes
   }
@@ -308,6 +310,7 @@ export class Packs {
 
   /** Entries still waiting were never synced, so no committed index names them. */
   async close(): Promise<void> {
+    this.frames.close()
     await this.writing?.handle.close()
     this.writing = null
     const readers = [...this.readers.values()]

@@ -33,6 +33,7 @@ import {
   connectDaemon,
   connectDaemonPort,
   daemonMemoryUnsafe,
+  MAX_DAEMON_RSS,
   ChildSidecars,
   defaultCatalog,
   buildTranscript,
@@ -770,10 +771,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       emit({
         type: "notice",
         level: "error",
-        message: "Session sync exceeded 512 MB and was restarted safely.",
+        message: `Session sync exceeded ${MAX_DAEMON_RSS / 1024 / 1024} MB and was restarted safely.`,
       })
       stopDaemonMonitor()
-      closingFor.set(client, `memory over 512 MB (${Math.round((stats.rss ?? 0) / 1024 / 1024)} MB)`)
+      closingFor.set(client, `memory over ${MAX_DAEMON_RSS / 1024 / 1024} MB (${Math.round((stats.rss ?? 0) / 1024 / 1024)} MB)`)
       void client.retire().catch(() => {})
       client.close()
     })

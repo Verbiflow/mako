@@ -91,7 +91,7 @@ class MemoryRemote {
 /** A Session's view as the catalog serves it: entries by index, the decoder build that drew them. */
 function sessionView(nativeId, entries) {
   return {
-    view: { total: entries.length, translator: "t-1", json: (start, end) => entries.slice(start, end).map((entry) => Buffer.from(JSON.stringify(entry))) },
+    view: { total: entries.length, translator: "t-1", json: async (start, end) => entries.slice(start, end).map((entry) => Buffer.from(JSON.stringify(entry))) },
     ref: { harness: "claude", nativeId, path: `/rail/${nativeId}.jsonl`, title: `Session ${nativeId}`, cwd: "/Users/ana/api" },
   }
 }
@@ -267,7 +267,7 @@ test("a Session changed before its turn goes when its turn comes, unasked; a lar
         view: {
           total: entries.length,
           translator: "t-1",
-          json: (start, end) => {
+          json: async (start, end) => {
             if (slices++ >= closeAfter) throw new Error("database is not open")
             return entries.slice(start, end).map((entry) => Buffer.from(JSON.stringify(entry)))
           },
