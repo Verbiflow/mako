@@ -9,8 +9,13 @@ import { CommentDetailSchema } from "../src/lib/context-detail.ts"
 const target = new EventTarget()
 Object.assign(globalThis, { window: target })
 const added: ContextInput[] = []
+// The composer on screen, as the desk's takes a chip: one about another conversation isn't its to take.
+const { AddContextEvent } = await import("../src/state/composer-context.ts")
+const ON_SCREEN = "conversation-on-screen"
 target.addEventListener("mako:add-context", (event) => {
-  if (event instanceof CustomEvent) added.push(event.detail)
+  if (!(event instanceof AddContextEvent) || (event.conversation !== undefined && event.conversation !== ON_SCREEN)) return
+  added.push(event.detail)
+  event.preventDefault()
 })
 
 const { addReviewToMessage, review, reviewContext, reviewStore } = await import("../src/state/review.ts")
@@ -74,3 +79,18 @@ review.save("with base, edited")
 assert.equal(reviewStore.get().comments.find((comment) => comment.path === "src/c.ts")?.base, "main")
 
 console.log("Review notes: each note becomes a chip with its side, base and line, ordered by file and line, and leaves the diff once added")
+
+// A review of one Session's turn names that Session: its notes go only into that Session's composer, and a note no
+// composer took stays on the diff.
+{
+  start("src/c.ts", 5, "additions", "for the open Session", "the start of that turn")
+  const note = reviewStore.get().comments.find((comment) => comment.path === "src/c.ts")
+  assert.ok(note)
+  const before = added.length
+  addReviewToMessage([note], "/work/mako", "another-conversation")
+  assert.equal(added.length, before, "another conversation's composer isn't on screen")
+  assert.equal(reviewStore.get().comments.some((comment) => comment.id === note.id), true, "kept, to add once it is")
+  addReviewToMessage([note], "/work/mako", ON_SCREEN)
+  assert.equal(added.at(-1)?.label, "c.ts:5")
+  assert.equal(reviewStore.get().comments.some((comment) => comment.id === note.id), false)
+}

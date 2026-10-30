@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
 import { ChevronDownIcon, CheckIcon } from "lucide-react"
 import type { TurnFileHunks } from "@mako/host/contracts/turn-review"
-import { LineCounts } from "@/components/inspector/change-marks"
+import { LineCounts, UnsureCount } from "@/components/inspector/change-marks"
 import { lineWords, writerLabel } from "@/lib/turn-writers"
 import { cn } from "@/lib/utils"
 import { hunksReader, type HunksKey } from "./review-data"
@@ -41,19 +41,21 @@ type Read =
   | { kind: "ready"; hunks: TurnFileHunks }
   | { kind: "failed"; message: string }
 
-export const FileCard = memo(function FileCard({ index, file, conversation, requestId, through, settled, cwd, viewed, onViewed, onComment }: {
+/** One file's card. Every prop is a value or a callback that keeps its identity, so a card redraws only for its own file. */
+export const FileCard = memo(function FileCard({ index, file, conversation, requestId, journal, through, settled, cwd, viewed, onViewed, onComment }: {
   index: number
   file: ReviewFile
   conversation: string
   requestId: string
+  journal: string
   through: number
   settled: boolean
   cwd: string | undefined
   viewed: boolean
-  onViewed: (on: boolean) => void
+  onViewed: (path: string, on: boolean) => void
   onComment: (ask: CommentAsk) => void
 }) {
-  const key = useMemo<HunksKey>(() => ({ conversation, requestId, path: file.path, through, settled }), [conversation, requestId, file.path, through, settled])
+  const key = useMemo<HunksKey>(() => ({ conversation, requestId, path: file.path, journal, through, settled }), [conversation, requestId, file.path, journal, through, settled])
   const [read, setRead] = useState<Read>(() => {
     const held = hunksReader.held(key)
     return held ? { kind: "ready", hunks: held } : { kind: "waiting" }
@@ -126,8 +128,9 @@ export const FileCard = memo(function FileCard({ index, file, conversation, requ
           </span>
           {file.kind === "create" ? <span className="rv-kind">New</span> : file.kind === "delete" ? <span className="rv-kind">Deleted</span> : file.kind === "rename" ? <span className="rv-kind">Renamed</span> : null}
           {counted ? <LineCounts insertions={file.added} deletions={file.removed} className="text-label" /> : null}
+          {file.unsure ? <UnsureCount unsure={{ lines: file.unsure, files: 0 }} className="shrink-0 text-label" /> : null}
         </button>
-        <button type="button" role="checkbox" aria-checked={viewed} aria-label={`Viewed ${name}`} className="rv-viewed" onClick={() => onViewed(!viewed)}>
+        <button type="button" role="checkbox" aria-checked={viewed} aria-label={`Viewed ${name}`} className="rv-viewed" onClick={() => onViewed(file.path, !viewed)}>
           <span className="rv-check" aria-hidden>
             {viewed ? <CheckIcon className="size-3" strokeWidth={3} /> : null}
           </span>
@@ -198,7 +201,7 @@ function Reading() {
  * The rows. Tap one to comment on it; hold one, then tap another, for a range. One scroller per file, so its lines
  * move sideways together under the pinned numbers.
  */
-function DiffBody({ view, file, path, conversation, onComment }: { view: FileView; file: ReviewFile; path: string; conversation: string; onComment: (ask: CommentAsk) => void }) {
+const DiffBody = memo(function DiffBody({ view, file, path, conversation, onComment }: { view: FileView; file: ReviewFile; path: string; conversation: string; onComment: (ask: CommentAsk) => void }) {
   const [anchor, setAnchor] = useState<RowPick | null>(null)
   const hold = useRef<{ timer: number; x: number; y: number; pick: RowPick; held: boolean } | null>(null)
   const notes = useReviewNotes(conversation)
@@ -290,7 +293,7 @@ function DiffBody({ view, file, path, conversation, onComment }: { view: FileVie
             </div>
           )
         })}
-        {view.limited ? <p className="rv-gap">The rest of this file’s changes are past what a phone reads; open it on a computer.</p> : null}
+        {view.limited ? <p className="rv-gap">The rest of this file’s changes are too long to read here.</p> : null}
       </div>
       {anchor ? (
         <div className="rv-range-hint" role="status">
@@ -309,7 +312,7 @@ function DiffBody({ view, file, path, conversation, onComment }: { view: FileVie
       ) : null}
     </div>
   )
-}
+})
 
 /** Unchanged lines between two stretches, said with their count. */
 function Gap({ lines }: { lines: number }) {

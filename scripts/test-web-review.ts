@@ -1,12 +1,15 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { parseDiffFromFile } from "@pierre/diffs"
+import { getSingularPatch, parseDiffFromFile } from "@pierre/diffs"
+import type { GitDiff } from "@mako/host/contracts/git-workspace-search"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import type { TurnChanges } from "@mako/host/contracts/turn-changes"
-import type { TurnFileHunks } from "@mako/host/contracts/turn-review"
+import type { TurnFileHunks, TurnFileWriters } from "@mako/host/contracts/turn-review"
 import { readMessage } from "@mako/sessions/context-wire"
 import { textHunks } from "@mako/host/conversations/turn-hunks"
-import { commentDetails, sessionPath, fileView, hunksFromParsed, largeByRecord, largeByView, rangeLabel, readsAsEdit, reviewFiles, wordRanges, type FileView } from "../src/web-client/review-model"
-import { withReviewNotes, type ReviewNote } from "../src/web-client/review-notes"
+import { changedRequests, commentDetails, hunksDiff, hunksWriters, sessionPath, fileView, hunksFromParsed, largeByRecord, largeByView, rangeLabel, readsAsEdit, reviewFiles, wordRanges, type FileView } from "../src/web-client/review-model"
+import { addReviewNotes, reviewNotes, sendWithReviewNotes, withReviewNotes, type ReviewNote } from "../src/web-client/review-notes"
+import { evictions, HunksReader, hunksKeyOf, type DeviceStore, type HunksKey, type HunksSource } from "../src/web-client/review-data"
 
 /*
  * The phone's Changes screen, without a page: a turn's files from its
@@ -131,4 +134,177 @@ test("an older host's whole versions make the same changed rows the bounded read
   // The diff engine keeps a line more around each change; the changes themselves, and their numbers, are the same.
   const rows = (view: FileView) => view.hunks.flatMap((hunk) => hunk.rows.filter((row) => row.kind !== " ").map((row) => `${row.kind}${row.old ?? "."}/${row.new ?? "."} ${row.text}`))
   assert.deepEqual(rows(fallback), rows(host))
+})
+
+test("a laptop's desk draws the bounded read with the desktop's own review: the stretches as a patch it parses, the writers beside", () => {
+  const before = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join("\n") + "\n"
+  const after = before.replace("line 7\n", "line seven\n").replace("line 30\n", "line 30\nline 30b\n")
+  const writers = [{ side: "additions" as const, start: 7, length: 1, writer: "person" as const }]
+  const read: TurnFileHunks = { kind: "text", path: "src/f.ts", ...textHunks(before, after), writers, body: "journal" }
+  const diff = hunksDiff(read)
+  assert.equal(diff.preview?.kind, "patch")
+  // Parsed as the desk parses a shortened patch, it is the same stretches the phone draws.
+  const parsed = getSingularPatch(diff.preview?.kind === "patch" ? diff.preview.contents : "")
+  assert.equal(parsed.name, "src/f.ts")
+  assert.deepEqual(hunksFromParsed("src/f.ts", parsed, undefined, "journal").hunks, read.hunks)
+  assert.deepEqual(hunksWriters(read), { path: "src/f.ts", runs: writers, body: "journal" } satisfies TurnFileWriters)
+  assert.equal(hunksWriters({ ...read, writers: undefined }), null)
+  // A new file and a rename keep what they are; a cut file says it was shortened.
+  const created = hunksDiff({ kind: "text", path: "n.ts", ...textHunks(null, "a\nb\n"), body: "journal" })
+  assert.equal(getSingularPatch(created.preview?.kind === "patch" ? created.preview.contents : "").type, "new")
+  const renamed = hunksDiff({ ...read, from: "src/old.ts", limited: true })
+  assert.equal(getSingularPatch(renamed.preview?.kind === "patch" ? renamed.preview.contents : "").prevName, "src/old.ts")
+  assert.equal(renamed.preview?.kind === "patch" && renamed.preview.limited, true)
+  // A binary file and one that couldn't be read come through as the desk reads them.
+  assert.deepEqual(hunksDiff({ kind: "binary", path: "a.png", before: null, after: 2048 }), { path: "a.png", binary: true, oldFile: null, newFile: null, before: null, after: { bytes: 2048 } } satisfies GitDiff)
+  assert.deepEqual(hunksDiff({ kind: "unavailable", path: "x", reason: "Too large" }).preview, { kind: "unavailable", reason: "Too large" })
+})
+
+test("the turns to review are those that changed something, or kept both checkpoints from before the record", () => {
+  const request = (id: string, fields: Partial<LiveRequest>): LiveRequest => ({ id, text: id, attachments: [], status: "completed", ...fields })
+  const none = { ...record, own: { files: 0, added: 0, removed: 0 }, files: [] }
+  const unsure = { ...record, own: { files: 0, added: 0, removed: 0 }, maybe: { files: 1, added: 2, removed: 0 }, files: [{ ...record.files[0]!, own: undefined, maybe: { added: 2, removed: 0 } }] }
+  const ready = { kind: "ready" as const, snapshot: { id: "00000000-0000-4000-8000-000000000001", scope: "/repo", createdAt: 0, files: 1 } }
+  const picked = changedRequests([
+    request("counted", { changes: record }),
+    request("nothing", { changes: none }),
+    request("unsure", { changes: unsure }),
+    request("pending", { changes: { version: 1, state: "pending" } }),
+    request("old", { snapshots: { before: ready, after: ready } }),
+    request("old-half", { snapshots: { before: ready } }),
+  ])
+  assert.deepEqual(picked.map((each) => each.id), ["counted", "unsure", "old"])
+})
+
+/** A Session's owner for the reader: each read answered when the test says, every call counted. */
+function owner(options: { older?: boolean } = {}) {
+  const asked: string[] = []
+  const waiting = new Map<string, () => void>()
+  const answer = (path: string): TurnFileHunks => text(" +", ["a", path])
+  const source: HunksSource = {
+    hunks: async (key) => {
+      asked.push(`hunks ${key.path}`)
+      if (options.older) throw new Error("This host has no such call")
+      await new Promise<void>((resolve) => waiting.set(key.path, resolve))
+      return answer(key.path)
+    },
+    diff: async (key) => {
+      asked.push(`diff ${key.path}`)
+      return { path: key.path, binary: false, oldFile: { name: key.path, contents: "a\n" }, newFile: { name: key.path, contents: `a\n${key.path}\n` } }
+    },
+    writers: async (key) => {
+      asked.push(`writers ${key.path}`)
+      return null
+    },
+  }
+  const stored = new Map<string, TurnFileHunks>()
+  const device: DeviceStore = {
+    get: async (key) => stored.get(key),
+    put: async (key, value) => void stored.set(key, value),
+  }
+  return { asked, waiting, stored, device, source, finish: (path: string) => waiting.get(path)?.() }
+}
+
+const keyFor = (path: string, fields: Partial<HunksKey> = {}): HunksKey => ({ conversation: "c1", requestId: "r1", path, journal: "j1", through: 3, settled: true, ...fields })
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+test("the reader asks four at a time, nearest the screen first, each file once, and holds what it read", async () => {
+  const mac = owner()
+  const reader = new HunksReader(mac.source, mac.device)
+  const reads = ["a", "b", "c", "d", "e", "f"].map((path, index) => reader.read(keyFor(path), index))
+  // The same file asked again, nearer the screen, is the same read, moved up the queue.
+  const again = reader.read(keyFor("f"), -1)
+  await tick()
+  assert.deepEqual(mac.asked, ["hunks a", "hunks b", "hunks c", "hunks d"])
+  mac.finish("a")
+  await tick()
+  await tick()
+  assert.equal(mac.asked[4], "hunks f", "the file moved nearer the screen goes next")
+  for (const path of ["b", "c", "d", "e", "f"]) {
+    mac.finish(path)
+    await tick()
+    await tick()
+  }
+  await Promise.all([...reads, again])
+  assert.equal(mac.asked.length, 6)
+  // Held for this page: asked again, nothing is read.
+  assert.ok(reader.held(keyFor("a")))
+  await reader.read(keyFor("a"))
+  assert.equal(mac.asked.length, 6)
+})
+
+test("a settled record's read is kept on the device and paints from there next time; a settling one is read again once it settles", async () => {
+  const mac = owner()
+  const first = new HunksReader(mac.source, mac.device)
+  const settling = first.read(keyFor("a", { settled: false }))
+  await tick()
+  mac.finish("a")
+  await settling
+  assert.equal(mac.stored.size, 0, "nothing kept while the record may still move")
+  assert.equal(await first.kept(keyFor("a", { settled: false })), undefined)
+  // Settled: its writers may have moved, so it's read again, and kept.
+  const settled = first.read(keyFor("a"))
+  await tick()
+  mac.finish("a")
+  await settled
+  assert.deepEqual([...mac.stored.keys()], [hunksKeyOf(keyFor("a"))])
+  // The next visit's page paints from the device without asking the owner.
+  const next = new HunksReader(mac.source, mac.device)
+  const asked = mac.asked.length
+  assert.deepEqual(await next.read(keyFor("a")), text(" +", ["a", "a"]))
+  assert.equal(mac.asked.length, asked)
+  // Another journal, or a recount, is another record: read again.
+  assert.notEqual(hunksKeyOf(keyFor("a", { journal: "j2" })), hunksKeyOf(keyFor("a")))
+  assert.notEqual(hunksKeyOf(keyFor("a", { through: 4 })), hunksKeyOf(keyFor("a")))
+})
+
+test("an older Mac without the bounded read is asked the older way, once found, and gives the same stretches", async () => {
+  const mac = owner({ older: true })
+  const reader = new HunksReader(mac.source, mac.device)
+  const first = await reader.read(keyFor("a"))
+  const second = await reader.read(keyFor("b"))
+  assert.deepEqual(mac.asked, ["hunks a", "diff a", "writers a", "diff b", "writers b"])
+  assert.equal(first.kind, "text")
+  assert.deepEqual(first.kind === "text" && first.hunks.map((hunk) => hunk.kinds), [" +"])
+  assert.equal(second.kind === "text" && second.hunks[0]!.lines.at(-1), "b")
+  // Any other refusal is the read's own failure, not an older Mac.
+  const failing = new HunksReader({ ...mac.source, hunks: async () => Promise.reject(new Error("Not connected")) }, mac.device)
+  await assert.rejects(failing.read(keyFor("c", { conversation: "c2" })), /Not connected/)
+})
+
+test("the device's budget lets go of the least recently opened first, never the one just written", () => {
+  const sizes = new Map([
+    ["old-but-opened", { chars: 40, at: 50 }],
+    ["written-first", { chars: 40, at: 10 }],
+    ["middle", { chars: 40, at: 20 }],
+    ["new", { chars: 40, at: 60 }],
+  ])
+  assert.deepEqual(evictions(sizes, "new", 200), [])
+  assert.deepEqual(evictions(sizes, "new", 120), ["written-first", "middle"])
+  assert.deepEqual(evictions(new Map([["new", { chars: 500, at: 1 }]]), "new", 100), [])
+})
+
+test("comments leave the draft only with the message that carried them: kept on a refusal or a failure, sent once", async () => {
+  const detail = commentDetails({ path: "src/retry.ts", base: "the start of that turn", view: fileView(text(" -+", ["one", "two", "new two"])), from: { hunk: 0, row: 2 }, to: { hunk: 0, row: 2 }, comment: "Use jitter here" })
+  addReviewNotes("c-send", detail)
+  const sent: string[] = []
+  // Refused: nothing goes, the comment waits.
+  assert.equal(await sendWithReviewNotes("c-send", "First try", async (message) => (sent.push(message), false)), false)
+  assert.equal(reviewNotes("c-send").length, 1)
+  // Failed on its way (Finish review's start of a new Session, say): kept as well.
+  await assert.rejects(sendWithReviewNotes("c-send", "Second try", async () => Promise.reject(new Error("offline"))))
+  assert.equal(reviewNotes("c-send").length, 1)
+  // Taken: the message carries the comment, and the draft lets go of it; one written meanwhile waits for the next.
+  assert.equal(await sendWithReviewNotes("c-send", "Third try", async (message) => {
+    sent.push(message)
+    addReviewNotes("c-send", detail)
+    return true
+  }), true)
+  assert.equal(readMessage(sent.at(-1)!).items.length, 1)
+  assert.match(readMessage(sent.at(-1)!).body, /^Third try/)
+  assert.equal(reviewNotes("c-send").length, 1, "the comment written while it was on its way")
+  // Finish review with no words: the comments are the message.
+  assert.equal(await sendWithReviewNotes("c-send", "", async (message) => (sent.push(message), true)), true)
+  assert.equal(readMessage(sent.at(-1)!).items.length, 1)
+  assert.equal(reviewNotes("c-send").length, 0)
 })

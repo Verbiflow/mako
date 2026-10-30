@@ -68,15 +68,26 @@ export function textHunks(before: string | null, after: string | null, context: 
       limited = true
       break
     }
-    // One stretch past the bound alone is cut at it, so the first change always shows.
-    const keep = Math.min(lines.length, TURN_HUNK_LIMITS.rows)
-    if (keep < lines.length) limited = true
-    const hunk = { oldStart: oldFrom + 1, newStart: newFrom + 1, kinds: kinds.slice(0, keep).join(""), lines: lines.slice(0, keep).map((line) => (line.length > TURN_HUNK_LIMITS.chars ? line.slice(0, TURN_HUNK_LIMITS.chars) : line)) }
+    // The first stretch alone past the bound is cut at it, by rows and by characters, so the first change always
+    // shows and the answer stays within the bound; a row cut short or left out says so.
+    const kept: string[] = []
+    let keptChars = 0
+    for (const line of lines) {
+      // Each row counts its line ending, as `size` does.
+      const room = TURN_HUNK_LIMITS.chars - keptChars - 1
+      if (kept.length === TURN_HUNK_LIMITS.rows || room < 0) break
+      kept.push(line.length > room ? line.slice(0, room) : line)
+      keptChars += Math.min(line.length, room) + 1
+      if (line.length > room) break
+    }
+    const keep = kept.length
+    if (keep < lines.length || kept.at(-1)!.length < lines[keep - 1]!.length) limited = true
+    const hunk = { oldStart: oldFrom + 1, newStart: newFrom + 1, kinds: kinds.slice(0, keep).join(""), lines: kept }
     if (!hunk.kinds.includes("-") && !hunk.kinds.includes(" ")) hunk.oldStart = oldFrom
     if (!hunk.kinds.includes("+") && !hunk.kinds.includes(" ")) hunk.newStart = newFrom
     hunks.push(hunk)
     rows += keep
-    chars += size
+    chars += keptChars
     if (limited) break
     index = last + 1
   }

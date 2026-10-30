@@ -10,6 +10,7 @@ import { Annotation, GutterAdd } from "@/components/inspector/review"
 import { TurnUndoDialog } from "@/components/inspector/turn-undo"
 import { WriterRow } from "@/components/inspector/turn-writers"
 import { PickedDiffLines } from "@/components/inspector/diff-line-pick"
+import { useCommentTarget } from "@/components/inspector/comment-target"
 import { isPickEnd, pickEnd, workspacePath } from "@/lib/line-comments"
 import { LineCounts, StatusLetter, UnsureCount } from "@/components/inspector/change-marks"
 import { FileTypeIcon } from "@/components/ui/file-type-icon"
@@ -33,7 +34,7 @@ import { useGitHub } from "@/state/github"
 import { setPref, usePrefs } from "@/state/prefs"
 import { review, useReview } from "@/state/review"
 import { releaseReviewTurn, requestedTurn, useReviewScope, type TurnScope } from "@/state/review-scope"
-import { actions, store, useSession } from "@/state/session"
+import { actions, useSession } from "@/state/session"
 import { createHook, createStore } from "@/state/store"
 import { viewer } from "@/state/viewer"
 import { readWorktreeReview, useWorktrees, worktreeAt } from "@/state/worktrees"
@@ -188,8 +189,8 @@ function diffQueue(first: (path: string) => Promise<GitDiff>, firstWriters: Writ
 }
 
 /** Puts `@path` in the composer, as ⌘↩ in the file palette does: relative to the workspace when the file is inside it. */
-function mention(root: string, path: string): void {
-  const cwd = store.get().meta?.cwd ?? root
+function mention(root: string, path: string, folder: string | undefined): void {
+  const cwd = folder ?? root
   const absolute = `${root}/${path}`
   const named = absolute.startsWith(`${cwd}/`) ? absolute.slice(cwd.length + 1) : absolute
   window.dispatchEvent(new CustomEvent("mako:insert", { detail: `@${named} ` }))
@@ -262,6 +263,35 @@ export function ReviewStream({ files, workspace, staged, onReviewInCenter }: { f
   return <ReviewFiles key={only ? `${key}:only` : key} files={shown} workspace={workspace} staged={scope.kind === "uncommitted" ? staged : 0} scope={scope} picker={picker} bar={bar} load={load} writers={writers} only={only} onReviewInCenter={onReviewInCenter} />
 }
 
+/**
+ * A turn's diffs read from somewhere other than this window's host: the web
+ * app on a laptop reads them from the Session's own computer through the
+ * account, in the bounded stretches a phone reads, kept on the device.
+ */
+export interface TurnReads {
+  /** A file's diff over the turn; with `only`, the turn's own lines alone. */
+  diff: (path: string, only: boolean) => Promise<GitDiff>
+  /** Who wrote each changed line of a file's diff. */
+  writers: (path: string) => Promise<TurnFileWriters | null>
+}
+
+/**
+ * One turn as Changes › Turn draws it, for a Session whose checkout isn't
+ * this window's (the web app on a laptop): its counts, its bar (Only this
+ * thread's lines, Undo) and every file in one scroll, read through
+ * `reads`. Nothing here opens, refreshes or discards in a checkout, and
+ * comments go to the Session `CommentTargetContext` names.
+ */
+export function TurnReview({ scope, files, workspace, reads, picker }: { scope: TurnScope; files: readonly GitFile[]; workspace: string; reads: TurnReads; picker: ReactNode }) {
+  const key = scopeKey(scope)
+  const [onlyFor, setOnlyFor] = useState<string | null>(null)
+  const only = onlyFor === key
+  const load = useCallback((path: string) => reads.diff(path, only), [reads, only])
+  if (files.length === 0) return <ScopeMessage picker={picker} text="That turn changed no files." />
+  const bar = <TurnBar scope={scope} only={only} onOnly={(on) => setOnlyFor(on ? key : null)} away />
+  return <ReviewFiles key={only ? `${key}:only` : key} files={files} workspace={workspace} staged={0} scope={scope} picker={picker} bar={bar} load={load} writers={only ? undefined : reads.writers} only={only} away />
+}
+
 /** The request a turn scope reviews, as its conversation holds it: its record of changes and its undo. */
 function useTurnRequest(scope: Scope): LiveRequest | undefined {
   return useAcp((state) => {
@@ -298,7 +328,7 @@ function TurnCounts({ files, insertions, deletions, unsure }: { files: number; i
  * each diff with every other writer's change on both sides, and undoing the
  * turn, or every change of the Thread, keeping everyone else's lines.
  */
-function TurnBar({ scope, only, onOnly }: { scope: TurnScope; only: boolean; onOnly: (on: boolean) => void }) {
+function TurnBar({ scope, only, onOnly, away = false }: { scope: TurnScope; only: boolean; onOnly: (on: boolean) => void; away?: boolean }) {
   const [undo, setUndo] = useState<TurnUndoScope | null>(null)
   const undone = useTurnRequest(scope)?.undone
   return (
@@ -340,7 +370,7 @@ function TurnBar({ scope, only, onOnly }: { scope: TurnScope; only: boolean; onO
           prompt={undo.kind === "turn" ? scope.prompt : undefined}
           open
           onOpenChange={(open) => { if (!open) setUndo(null) }}
-          onUndone={() => void actions.refreshGit()}
+          onUndone={away ? undefined : () => void actions.refreshGit()}
         />
       ) : null}
     </div>
@@ -455,7 +485,13 @@ function useTurns(workspace: string): TurnChoice[] {
  * one, named by GitHub or else by the repository itself; in a Thread's
  * worktree it is the same Since main its branch bar shows.
  */
-function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: string; onChoose: (scope: Scope) => void }) {
+export function ScopePicker({ scope, workspace, onChoose, turnsOnly = false }: {
+  scope: Scope
+  workspace: string
+  onChoose: (scope: Scope) => void
+  /** Only the conversation's turns: a review of a Session whose checkout isn't this window's has no Git of its own here. */
+  turnsOnly?: boolean
+}) {
   const repository = useSession((state) => state.git?.root)
   const branch = useSession((state) => state.git?.branch)
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, repository)?.worktree)
@@ -469,7 +505,7 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
   const [since, setSince] = useState<{ ref: string; label: string } | null>(null)
   const [commits, setCommits] = useState<readonly GitCommitEntry[] | null>(null)
   const open = (next: boolean) => {
-    if (!next) return
+    if (!next || turnsOnly) return
     void gitActions.log(RECENT_COMMITS).then(setCommits, () => setCommits([]))
     if (worktree) {
       void readWorktreeReview(worktree.path).then(
@@ -497,7 +533,7 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
         </Action>
       </MenuTrigger>
       <MenuContent align="start" className="max-h-96 w-72 overflow-y-auto">
-        <ScopeItem on={scope.kind === "uncommitted"} onSelect={() => onChoose(UNCOMMITTED)} title="Uncommitted" detail="What isn't committed yet, staged or not" />
+        {turnsOnly ? null : <ScopeItem on={scope.kind === "uncommitted"} onSelect={() => onChoose(UNCOMMITTED)} title="Uncommitted" detail="What isn't committed yet, staged or not" />}
         {since ? <ScopeItem on={scope.kind === "since" && scope.ref === since.ref} onSelect={() => onChoose({ kind: "since", ...since })} title={since.label} detail="Every commit on this branch and what isn't committed" /> : null}
         {otherTurn ? <ScopeItem on onSelect={() => onChoose(otherTurn)} title="Turn" detail={otherTurn.prompt || "What the agent changed in that answer"} /> : null}
         {lastTurn ? <ScopeItem on={turnOn} onSelect={() => onChoose(lastTurn)} title="Last turn" detail={lastTurn.prompt || "What the agent changed in its last answer"} /> : null}
@@ -531,11 +567,13 @@ function ScopePicker({ scope, workspace, onChoose }: { scope: Scope; workspace: 
             </MenuSubContent>
           </MenuSub>
         ) : null}
-        <MenuSeparator />
-        <MenuLabel>A commit</MenuLabel>
-        {commits === null ? <MenuItem disabled>Reading history…</MenuItem> : commits.length === 0 ? <MenuItem disabled>No commits yet</MenuItem> : commits.map((commit) => (
-          <ScopeItem key={commit.hash} on={scope.kind === "commit" && scope.hash === commit.hash} onSelect={() => onChoose({ kind: "commit", hash: commit.hash, shortHash: commit.shortHash, subject: commit.subject })} title={commit.subject} detail={commit.shortHash} mono />
-        ))}
+        {turnsOnly ? null : <>
+          <MenuSeparator />
+          <MenuLabel>A commit</MenuLabel>
+          {commits === null ? <MenuItem disabled>Reading history…</MenuItem> : commits.length === 0 ? <MenuItem disabled>No commits yet</MenuItem> : commits.map((commit) => (
+            <ScopeItem key={commit.hash} on={scope.kind === "commit" && scope.hash === commit.hash} onSelect={() => onChoose({ kind: "commit", hash: commit.hash, shortHash: commit.shortHash, subject: commit.subject })} title={commit.subject} detail={commit.shortHash} mono />
+          ))}
+        </>}
       </MenuContent>
     </Menu>
   )
@@ -561,7 +599,7 @@ function ScopeItem({ on, title, detail, mono = false, onSelect }: { on: boolean;
  * visible ones do. A status change re-reads only the files in view, and the
  * old diff stays up until the new one lands.
  */
-function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, writers, only, onReviewInCenter }: {
+function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, writers, only, onReviewInCenter, away = false }: {
   files: readonly GitFile[]
   workspace: string
   staged: number
@@ -574,8 +612,11 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
   writers?: Writers
   /** The diffs show only the turn's own lines. */
   only?: boolean
-  onReviewInCenter: () => void
+  onReviewInCenter?: () => void
+  /** The checkout isn't this window's (`TurnReview`): nothing to open, refresh or review in the center here. */
+  away?: boolean
 }) {
+  const target = useCommentTarget()
   const diffStyle = usePrefs((prefs) => prefs.diffStyle)
   const wrapDiff = usePrefs((prefs) => prefs.wrapDiff)
   const marks = useViewed((state) => state.marks)
@@ -799,14 +840,16 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
           <IconAction label={wrapDiff ? "Disable line wrapping" : "Wrap long lines"} size="xs" data-on={wrapDiff || undefined} onClick={() => setPref("wrapDiff", !wrapDiff)}>
             <WrapTextIcon />
           </IconAction>
-          {scope.kind === "uncommitted" ? (
+          {scope.kind === "uncommitted" && onReviewInCenter ? (
             <IconAction label="Review current changes in the center" size="xs" onClick={onReviewInCenter}>
               <Maximize2Icon />
             </IconAction>
           ) : null}
-          <IconAction label="Refresh" size="xs" onClick={() => void actions.refreshGit()}>
-            <RefreshCwIcon />
-          </IconAction>
+          {away ? null : (
+            <IconAction label="Refresh" size="xs" onClick={() => void actions.refreshGit()}>
+              <RefreshCwIcon />
+            </IconAction>
+          )}
         </div>
       </div>
       {bar}
@@ -844,6 +887,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
                 discardable={scope.kind === "uncommitted"}
                 only={only}
                 unsure={unsure.get(file.path)}
+                away={away}
               />
             )
           }}
@@ -869,7 +913,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
                 comments={comments}
                 selection={picks && picked ? (
                   <PickedDiffLines
-                    path={workspacePath(`${workspace}/${item.id}`, store.get().meta?.cwd)}
+                    path={workspacePath(`${workspace}/${item.id}`, target.cwd())}
                     base={base}
                     diff={loaded?.kind === "diff" ? loaded.fileDiff : null}
                     range={picked.range}
@@ -905,7 +949,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
  * One file's header. The stream mounts headers only for files in its window,
  * so a header asks for its own diff while it is mounted and the diff is due.
  */
-function FileHeader({ file, entry, open, viewed, root, queue, load, base, discardable, only = false, unsure, onToggle, onViewed }: {
+function FileHeader({ file, entry, open, viewed, root, queue, load, base, discardable, only = false, unsure, away = false, onToggle, onViewed }: {
   file: GitFile
   entry: Entry | undefined
   open: boolean
@@ -921,9 +965,12 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
   only?: boolean
   /** A turn's lines in the file not sure whose (null: not counted by lines); absent when it has none. */
   unsure?: TurnChangeLines | null
+  /** The checkout isn't this window's: no file to open, no center to review it in. */
+  away?: boolean
   onToggle: (path: string) => void
   onViewed: (path: string, on: boolean) => void
 }) {
+  const target = useCommentTarget()
   const due = entry ? entry.stale : open
   useEffect(() => {
     if (!due) return
@@ -935,7 +982,7 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
   const name = file.path.slice(slash + 1)
   const loaded = entry?.loaded
   const lines = loaded?.kind === "diff" ? loaded.lines : changedLines(file)
-  const center = () => void viewer.openDiff(file.path, async () => ({ diffs: [await load(file.path)], base, root }))
+  const center = away ? undefined : () => void viewer.openDiff(file.path, async () => ({ diffs: [await load(file.path)], base, root }))
   const note = loaded?.kind === "binary"
     ? (loaded.diff.before?.image || loaded.diff.after?.image ? binarySizes(loaded.diff) : `Binary${binarySizes(loaded.diff) ? ` · ${binarySizes(loaded.diff)}` : ""}`)
     : loaded?.kind === "unavailable"
@@ -956,8 +1003,8 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
       <button
         type="button"
         aria-expanded={loaded?.kind === "binary" ? undefined : open}
-        aria-label={loaded?.kind === "binary" ? `Review ${file.path} in the center` : `${open ? "Fold" : "Unfold"} ${file.path}`}
-        onClick={() => (loaded?.kind === "binary" ? center() : onToggle(file.path))}
+        aria-label={loaded?.kind === "binary" ? (center ? `Review ${file.path} in the center` : file.path) : `${open ? "Fold" : "Unfold"} ${file.path}`}
+        onClick={() => (loaded?.kind === "binary" ? center?.() : onToggle(file.path))}
         title={file.path}
         className="pressable flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
       >
@@ -997,17 +1044,19 @@ function FileHeader({ file, entry, open, viewed, root, queue, load, base, discar
           </IconAction>
         </MenuTrigger>
         <MenuContent align="end" className="min-w-48">
-          {file.status !== "deleted" ? (
+          {file.status !== "deleted" && !away ? (
             <MenuItem onSelect={() => void viewer.open(`${root}/${file.path}`)}>
               <FileIcon className="size-3.5 text-faint" />
               Open file
             </MenuItem>
           ) : null}
-          <MenuItem onSelect={center}>
-            <Maximize2Icon className="size-3.5 text-faint" />
-            Review in the center
-          </MenuItem>
-          <MenuItem onSelect={() => mention(root, file.path)}>
+          {center ? (
+            <MenuItem onSelect={center}>
+              <Maximize2Icon className="size-3.5 text-faint" />
+              Review in the center
+            </MenuItem>
+          ) : null}
+          <MenuItem onSelect={() => mention(root, file.path, target.cwd())}>
             <MessageSquareIcon className="size-3.5 text-faint" />
             Ask the agent about this file
           </MenuItem>

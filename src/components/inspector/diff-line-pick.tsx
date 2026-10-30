@@ -3,6 +3,7 @@ import type { FileDiffMetadata } from "@pierre/diffs"
 import { LineCommentField } from "@/components/inspector/line-comment"
 import { commentInput, commentLabel, diffCommentDetails, type LineRange } from "@/lib/line-comments"
 import { addContext } from "@/state/composer-context"
+import { useCommentTarget } from "@/components/inspector/comment-target"
 
 /**
  * Lines picked in a diff. The diff engine picks them (a press on a line
@@ -28,6 +29,7 @@ export function PickedDiffLines({ path, base, diff, range, onDone }: {
     },
     [base, diff, path, range]
   )
+  const target = useCommentTarget()
   if (!diff || !label) return null
   return (
     <LineCommentField
@@ -35,8 +37,9 @@ export function PickedDiffLines({ path, base, diff, range, onDone }: {
       focus
       onClose={onDone}
       onAdd={(comment) => {
-        for (const detail of diffCommentDetails({ path, base, diff, range, comment })) addContext(commentInput(detail))
-        onDone()
+        // Kept open, words and all, when the composer it's for isn't there to take it.
+        const taken = diffCommentDetails({ path, base, diff, range, comment }).map((detail) => addContext(commentInput(detail), target.conversation))
+        if (taken.every(Boolean)) onDone()
       }}
     />
   )

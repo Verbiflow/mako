@@ -7,7 +7,7 @@ import { contentRef, decodeText, isText, splitLines, type ShownPair, type UndoPl
 import { hostLog } from "../base/host-log.js"
 import type { GitDiff, GitFile } from "../contracts/git-workspace-search.js"
 import type { LiveRequest } from "../contracts/live-conversations.js"
-import { countedChanges, type TurnChangedFile } from "../contracts/turn-changes.js"
+import { countedChanges, turnFileRoot, turnFilesIn, type TurnChangedFile } from "../contracts/turn-changes.js"
 import type { TurnFileHunks, TurnFileWriters, TurnUndone, TurnUndoPreview, TurnUndoResult, TurnUndoScope, WriterRun } from "../contracts/turn-review.js"
 import { treeDiff, treeFiles } from "../git/index.js"
 import { turnFileHunks } from "./turn-hunks.js"
@@ -87,9 +87,7 @@ export class LiveTurnReview {
       if (!turn) throw new Error("This turn has no checkpoints to compare")
       return { root: turn.scope, files: await treeFiles(turn.comparison) }
     }
-    const roots = [...new Set(record.files.map(rootOf))]
-    const root = workspace && roots.includes(workspace) ? workspace : roots[0] ?? workspace ?? ""
-    return { root, files: record.files.filter((file) => rootOf(file) === root).map(gitFile) }
+    return turnFilesIn(record, workspace)
   }
 
   private file(id: string, requestId: string, path: string): TurnChangedFile | undefined {
@@ -132,7 +130,7 @@ export class LiveTurnReview {
     const file = this.file(id, requestId, path)
     const diff = await this.diff(id, requestId, path)
     const writers = file ? await this.writers(id, requestId, path).catch(() => null) : null
-    const from = file?.from ? relative(rootOf(file), file.from) : undefined
+    const from = file?.from ? relative(turnFileRoot(file), file.from) : undefined
     return turnFileHunks(diff, writers, { ...options, ...(from && { from }) })
   }
 
@@ -323,31 +321,11 @@ export class LiveTurnReview {
 export function undoneTurns(requests: readonly LiveRequest[], scope: TurnUndoScope, checkout: string): Set<string> {
   if (scope.kind === "turn") return new Set(requests.some((request) => request.id === scope.requestId) ? [scope.requestId] : [])
   const inside = (root: string) => root === checkout || root.startsWith(`${checkout}/`) || checkout.startsWith(`${root}/`)
-  return new Set(requests.filter((request) => !request.undone && countedChanges(request.changes)?.files.some((file) => file.own !== undefined && inside(rootOf(file)))).map((request) => request.id))
-}
-
-/** The repository a record's file is in: its path less the path inside the journal's root. */
-const rootOf = (file: TurnChangedFile) => file.path.slice(0, file.path.length - file.relative.length - 1)
-
-/**
- * A record's file as Changes lists it, counted as the turn's line counts it:
- * the Thread's own lines. Lines not sure whose aren't in them (a file with
- * only those counts none); the window names them from the record beside it.
- */
-function gitFile(file: TurnChangedFile): GitFile {
-  const own = file.own
-  return {
-    path: file.relative,
-    status: file.kind === "create" ? "added" : file.kind === "delete" ? "deleted" : "modified",
-    staged: false,
-    insertions: own === null ? null : own?.added ?? 0,
-    deletions: own === null ? null : own?.removed ?? 0,
-    binary: own === null || file.maybe === null,
-  }
+  return new Set(requests.filter((request) => !request.undone && countedChanges(request.changes)?.files.some((file) => file.own !== undefined && inside(turnFileRoot(file)))).map((request) => request.id))
 }
 
 /** A text diff of two versions; a rename's before is named by its old path. */
 function textDiff(path: string, file: TurnChangedFile, before: string | null, after: string | null): GitDiff {
-  const was = file.from ? relative(rootOf(file), file.from) : path
+  const was = file.from ? relative(turnFileRoot(file), file.from) : path
   return { path, binary: false, oldFile: before === null ? null : { name: was, contents: before }, newFile: after === null ? null : { name: path, contents: after } }
 }

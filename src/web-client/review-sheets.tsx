@@ -4,17 +4,15 @@ import type { ListedSession } from "@mako/protocol/thread-listing"
 import { listedOwner } from "@mako/host/contracts/listed-conversations"
 import type { TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "@mako/host/contracts/turn-review"
 import { LineCounts } from "@/components/inspector/change-marks"
-import { commentInput } from "@/lib/line-comments"
 import { lineWords } from "@/lib/turn-writers"
 import { cn } from "@/lib/utils"
 import { acp } from "@/state/acp"
-import { addContext } from "@/state/composer-context"
 import { useWebClient } from "./client"
 import { webHarnessLabel } from "./labels"
 import { sendMessage } from "./outbox"
 import { commentDetails, commentWords, fileWords, rangeLabel, splitPath } from "./review-model"
 import type { CommentAsk } from "./review-diff"
-import { addReviewNotes, dropReviewNote, noteLabel, settleReviewNotes, useReviewNotes, withReviewNotes } from "./review-notes"
+import { addReviewNotes, dropReviewNote, noteLabel, sendWithReviewNotes, useReviewNotes } from "./review-notes"
 import { Sheet, SheetScroll } from "./sheet"
 import { addSession } from "./start"
 
@@ -25,7 +23,7 @@ const TURN_BASE = "the start of that turn"
  * A comment on the lines picked: the lines as the diff showed them, and a field for what should change. It goes into
  * the Session's next message as a "comment on lines" chip, the desk's own; nothing is sent from here.
  */
-export function CommentSheet({ ask, conversation, desk, onDone }: { ask: CommentAsk; conversation: string; desk: boolean; onDone: () => void }) {
+export function CommentSheet({ ask, conversation, onDone }: { ask: CommentAsk; conversation: string; onDone: () => void }) {
   const [open, setOpen] = useState(true)
   const [words, setWords] = useState("")
   const details = useMemo(() => commentDetails({ path: ask.path, base: TURN_BASE, view: ask.view, from: ask.from, to: ask.to, comment: "" }), [ask])
@@ -38,9 +36,7 @@ export function CommentSheet({ ask, conversation, desk, onDone }: { ask: Comment
   const close = () => setOpen(false)
   const add = () => {
     const made = commentDetails({ path: ask.path, base: TURN_BASE, view: ask.view, from: ask.from, to: ask.to, comment: words })
-    // On a laptop's desk the composer is the desk's own: the comment is its chip there, as a Mac's diff comment is.
-    if (desk) for (const detail of made) addContext(commentInput(detail))
-    else addReviewNotes(conversation, made)
+    addReviewNotes(conversation, made)
     close()
   }
   return (
@@ -70,7 +66,7 @@ export function CommentSheet({ ask, conversation, desk, onDone }: { ask: Comment
             if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) add()
           }}
         />
-        <p className="text-label text-faint">{desk ? "Goes into your message as a chip, with these lines. Nothing is sent until you send it." : "Goes into your next message to this Session, with these lines. Nothing is sent by itself."}</p>
+        <p className="text-label text-faint">Goes into your next message to this Session, with these lines. Nothing is sent by itself.</p>
         <div className="flex justify-end gap-2">
           <button type="button" className="web-quiet-button" onClick={close}>
             Cancel
@@ -121,25 +117,26 @@ export function FinishSheet({ open, conversation, row, harness, mode, running, o
     if (!notes.length || sending) return
     setSending(true)
     setFailure(undefined)
-    const sent = [...notes]
-    const text = withReviewNotes(words, sent)
+    const count = notes.length
+    const owner = listedOwner(row)
     try {
-      if (where === "here") {
-        const owner = listedOwner(row)
-        const went = await sendMessage({ conversation, ...(owner.kind === "cloud" && { cloudThread: owner.threadId }) }, crypto.randomUUID(), text, [])
-        if (!went) throw new Error("The Session didn't take the message. Try again in a moment.")
-      } else {
-        const owner = listedOwner(row)
+      // The comments leave only once the message carrying them was taken; a refusal keeps every one.
+      await sendWithReviewNotes(conversation, words, async (text) => {
+        if (where === "here") {
+          const went = await sendMessage({ conversation, ...(owner.kind === "cloud" && { cloudThread: owner.threadId }) }, crypto.randomUUID(), text, [])
+          if (!went) throw new Error("The Session didn't take the message. Try again in a moment.")
+          return true
+        }
         await addSession(client.gateway, client.deviceId, owner.kind === "cloud" ? { kind: "cloud", threadId: owner.threadId } : { kind: "mac", deviceId: owner.deviceId }, {
           thread: row.thread,
           folder: row.folder!,
           harness: harness ?? row.harness,
           model: undefined,
           mode,
-          message: { text, attachments: [], title: `Review: ${commentWords(sent.length)}` },
+          message: { text, attachments: [], title: `Review: ${commentWords(count)}` },
         })
-      }
-      settleReviewNotes(conversation, sent)
+        return true
+      })
       setWords("")
       onSent()
     } catch (error) {

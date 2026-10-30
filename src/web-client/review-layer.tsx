@@ -1,17 +1,21 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { activeAcp, useAcp } from "@/state/acp"
 import { openTurnReviewWith } from "@/state/review-scope"
 import { EASE_OUT, EASE_SWIFT, reducedMotion } from "./motion"
-import { closeReview, followReviewHistory, leftReview, openReview, readReviewCode, useReviewCode, useReviewOpen, type ReviewOpen } from "./review-open"
+import { closeReview, deskReviewCode, followReviewHistory, leftReview, openReview, touchReviewCode, useReviewOpen, type ReviewOpen } from "./review-open"
 import type { WebForm } from "./route"
 
 /**
  * Where Changes draws, mounted once by each form: over the Thread on a phone, sliding in from the right as a screen
- * does; over the Thread's pane on a tablet; beside the transcript on a laptop's desk, as the desk's own Changes is.
- * The turn line's Review opens it on that turn (`reviewTurn`), the Thread's menu on every turn.
+ * does; over the Thread's pane on a tablet; beside the transcript on a laptop's desk, where it's the desktop's own
+ * review (`desk-review.tsx`). The turn line's Review opens it on that turn (`reviewTurn`), the Thread's menu on every
+ * turn. It's about the Session on screen: another Session's tab, another Thread or another screen takes it away.
  */
 export function ReviewLayer({ form, place }: { form: WebForm; place: string | undefined }) {
   const open = useReviewOpen((state) => state.open)
-  const code = useReviewCode()
+  const reader = form === "desk" ? deskReviewCode : touchReviewCode
+  const code = reader.useCode()
+  const readReviewCode = reader.read
   useEffect(() => followReviewHistory(), [])
   useEffect(
     () =>
@@ -19,7 +23,7 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
         void readReviewCode()
         openReview({ conversation: turn.conversation, scope: { kind: "turn", requestId: turn.requestId } })
       }),
-    []
+    [readReviewCode]
   )
   // Somewhere else in the app (another Thread from the rail, the list): Changes was the last place's.
   const was = useRef(place)
@@ -27,15 +31,20 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
     if (was.current !== place) leftReview()
     was.current = place
   }, [place])
+  // Another Session of the Thread on screen: its composer isn't the one this review's comments are for.
+  const onScreen = useAcp((state) => activeAcp(state)?.key)
+  useEffect(() => {
+    if (open && onScreen && onScreen !== open.conversation) leftReview()
+  }, [open, onScreen])
   useEffect(() => {
     if (open && !code) void readReviewCode().catch(() => undefined)
-  }, [open, code])
+  }, [open, code, readReviewCode])
   // A Thread on screen: its Changes code is read while nothing else is, so Review opens at once.
   useEffect(() => {
     if (code || !place?.startsWith("thread:")) return
     const idle = window.requestIdleCallback ?? ((then: () => void) => window.setTimeout(then, 1_200))
     idle(() => void readReviewCode().catch(() => undefined))
-  }, [code, place])
+  }, [code, place, readReviewCode])
   const [shown, setShown] = useState<ReviewOpen | null>(open)
   const layer = useRef<HTMLDivElement>(null)
   if (open && shown !== open) setShown(open)
@@ -59,7 +68,7 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
   if (!shown) return null
   return (
     <div ref={layer} className="rv-layer" data-form={form} data-closing={open ? undefined : ""}>
-      {code ? <code.ReviewScreen key={shown.conversation} open={shown} form={form} onClose={closeReview} /> : <div className="rv-screen" />}
+      {!code ? <div className="rv-screen" /> : "DeskReview" in code ? <code.DeskReview key={shown.conversation} open={shown} onClose={closeReview} /> : <code.ReviewScreen key={shown.conversation} open={shown} onClose={closeReview} />}
     </div>
   )
 }

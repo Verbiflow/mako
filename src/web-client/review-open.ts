@@ -16,7 +16,7 @@ export interface ReviewOpen {
   scope: ReviewScope
 }
 
-const reviewOpenStore = createStore<{ open: ReviewOpen | null }>({ open: null })
+export const reviewOpenStore = createStore<{ open: ReviewOpen | null }>({ open: null })
 export const useReviewOpen = createHook(reviewOpenStore)
 
 /**
@@ -67,19 +67,30 @@ export function leftReview(): void {
   if (reviewOpenStore.get().open) reviewOpenStore.set({ open: null })
 }
 
-/** The Changes screen's code, its own chunk: read once, the first time a Thread is open, so a tap finds it here. */
-const codeStore = createStore<{ code: typeof import("./review") | undefined; reading: Promise<void> | undefined }>({ code: undefined, reading: undefined })
-
-export function readReviewCode(): Promise<void> {
-  const { reading } = codeStore.get()
-  if (reading) return reading
-  const read = import("./review").then((code) => codeStore.set({ code }))
-  // Not here (offline before the service worker kept it): asked again next time.
-  read.catch(() => codeStore.set({ reading: undefined }))
-  codeStore.set({ reading: read })
-  return read
+/** One kind of Changes' code, its own chunk: read once, ahead of the first tap where it can be, so a tap finds it here. */
+export interface ReviewCode<T> {
+  read(): Promise<void>
+  useCode(): T | undefined
 }
 
-export function useReviewCode(): typeof import("./review") | undefined {
-  return useSyncExternalStore(codeStore.subscribe, () => codeStore.get().code)
+function lazyCode<T>(load: () => Promise<T>): ReviewCode<T> {
+  const codeStore = createStore<{ code: T | undefined; reading: Promise<void> | undefined }>({ code: undefined, reading: undefined })
+  return {
+    read() {
+      const { reading } = codeStore.get()
+      if (reading) return reading
+      const read = load().then((code) => codeStore.set({ code }))
+      // Not here (offline before the service worker kept it): asked again next time.
+      read.catch(() => codeStore.set({ reading: undefined }))
+      codeStore.set({ reading: read })
+      return read
+    },
+    useCode() {
+      return useSyncExternalStore(codeStore.subscribe, () => codeStore.get().code)
+    },
+  }
 }
+
+/** The touch screen's (a phone's, a tablet's) and a laptop's desk's: the desktop's own review, which a phone never loads. */
+export const touchReviewCode = lazyCode(() => import("./review"))
+export const deskReviewCode = lazyCode(() => import("./desk-review"))

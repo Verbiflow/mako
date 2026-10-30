@@ -33,7 +33,11 @@ const BEFORE = `${lines(40).join("\n")}\n`
 const AFTER = `${lines(40, (line) => (line === 12 ? "const value12 = twelve" : line === 13 ? null : line === 30 ? "const value30 = thirty\nconst value30b = 30.5" : `const value${line} = ${line}`)).join("\n")}\n`
 
 export const added: ContextInput[] = []
-window.addEventListener("mako:add-context", (event) => added.push(event.detail))
+// Stands in for the composer, which takes every chip asked of it here.
+window.addEventListener("mako:add-context", (event) => {
+  added.push(event.detail)
+  event.preventDefault()
+})
 
 const diff = (path: string): GitDiff => ({ path, binary: false, oldFile: { name: path, contents: BEFORE }, newFile: { name: path, contents: AFTER } })
 const status: GitStatus = {

@@ -1,6 +1,9 @@
 import type { FileDiffMetadata } from "@pierre/diffs"
-import type { TurnFileHunks, TurnHunk, TurnWriter, WriterRun } from "@mako/host/contracts/turn-review"
+import type { GitDiff } from "@mako/host/contracts/git-workspace-search"
+import type { TurnFileHunks, TurnFileWriters, TurnHunk, TurnWriter, WriterRun } from "@mako/host/contracts/turn-review"
+import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import type { TurnChangedFile, TurnChanges } from "@mako/host/contracts/turn-changes"
+import { anyUnsure, recordedTurnChanges } from "@/lib/turn-changes"
 import type { CommentDetail } from "@/lib/context-detail"
 import { COMMENT_TEXT_LIMIT } from "@/lib/line-comments"
 
@@ -43,6 +46,18 @@ export function reviewFiles(record: TurnChanges): ReviewFile[] {
     }
     if (file.from) entry.from = file.from.startsWith(`${root}/`) ? file.from.slice(root.length + 1) : file.from
     return entry
+  })
+}
+
+/**
+ * A Session's turns with something to review, in the order it took them: those whose record counts a file, or lines
+ * not sure whose, and those from before the record with both checkpoints saved.
+ */
+export function changedRequests(requests: readonly LiveRequest[]): LiveRequest[] {
+  return requests.filter((request) => {
+    const summary = recordedTurnChanges(request.changes)
+    if (summary) return summary.files > 0 || anyUnsure(summary.unsure)
+    return !request.changes && request.snapshots?.before?.kind === "ready" && request.snapshots.after?.kind === "ready"
   })
 }
 
@@ -348,6 +363,36 @@ export function hunksFromParsed(path: string, parsed: FileDiffMetadata | null, w
   })
   const shared = writers?.some((run) => run.writer !== "turn") ? [...writers] : undefined
   return { kind: "text", path, hunks, oldLines: parsed?.deletionLines.length ?? 0, newLines: parsed?.additionLines.length ?? 0, limited: false, ...(shared && { writers: shared }), body }
+}
+
+/**
+ * A file's stretches as the desk's own review reads a diff (`GitDiff`): a
+ * unified patch of them, which it parses as it does a long file's shortened
+ * patch, so a laptop's browser draws the bounded read a phone makes with
+ * the desktop's Changes.
+ */
+export function hunksDiff(hunks: TurnFileHunks): GitDiff {
+  if (hunks.kind === "binary") return { path: hunks.path, binary: true, oldFile: null, newFile: null, before: hunks.before === null ? null : { bytes: hunks.before }, after: hunks.after === null ? null : { bytes: hunks.after } }
+  if (hunks.kind === "unavailable") return { path: hunks.path, binary: false, oldFile: null, newFile: null, preview: { kind: "unavailable", reason: hunks.reason } }
+  const was = hunks.from ?? hunks.path
+  const lines = [`diff --git a/${was} b/${hunks.path}`]
+  if (hunks.oldLines === 0) lines.push("new file mode 100644")
+  else if (hunks.newLines === 0) lines.push("deleted file mode 100644")
+  // Git marks a rename by its similarity; any figure under 100% is a rename with changes, which a turn's is.
+  if (hunks.from) lines.push("similarity index 50%", `rename from ${hunks.from}`, `rename to ${hunks.path}`)
+  lines.push(hunks.oldLines === 0 ? "--- /dev/null" : `--- a/${was}`, hunks.newLines === 0 ? "+++ /dev/null" : `+++ b/${hunks.path}`)
+  for (const hunk of hunks.hunks) {
+    const old = [...hunk.kinds].filter((kind) => kind !== "+").length
+    const next = [...hunk.kinds].filter((kind) => kind !== "-").length
+    lines.push(`@@ -${hunk.oldStart},${old} +${hunk.newStart},${next} @@`)
+    for (let index = 0; index < hunk.kinds.length; index++) lines.push(`${hunk.kinds[index]}${hunk.lines[index] ?? ""}`)
+  }
+  return { path: hunks.path, binary: false, oldFile: null, newFile: null, preview: { kind: "patch", contents: `${lines.join("\n")}\n`, limited: hunks.limited } }
+}
+
+/** Who wrote each changed line, as the desk's review reads them beside a diff; null when only the turn did. */
+export function hunksWriters(hunks: TurnFileHunks): TurnFileWriters | null {
+  return hunks.kind === "text" && hunks.writers?.length ? { path: hunks.path, runs: hunks.writers, body: hunks.body } : null
 }
 
 /** "1 file", "12 files"; "+1,204 −33" reads with the noun beside it. */

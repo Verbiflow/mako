@@ -31,6 +31,10 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  *   to their account. `ACCESS <the host's choices>`
  * - `choices`: the access choices as this host holds them now, after the account's word. `CHOICES <the host's choices>`
  * - `app-start`, `app-stop`: `api`'s app (with `--app` or `--recipe`) started or stopped, as Run and Stop do. `APP <outcome>`
+ * - `session <conversation>`: that Session as this Mac's host holds it: its access mode and its model.
+ *   `SESSION {"mode": …, "model": …}`
+ * - `heard <words>`: the model named by the newest conversation request the scripted model heard those words in, of
+ *   its last 64; null when none did. `HEARD {"model": …}`
  * - `quit` (or stdin's end): signs the host out, so its device leaves the account, stops it, and removes the root unless `--keep`.
  *
  * No harness runs on anything of the person's: the home is the scratch one, Codex's sign-in an API key the stand-in takes.
@@ -261,8 +265,12 @@ const ANSWERS: Array<{ heard: RegExp; steps: ScriptedReply[] }> = [
   { heard: /Fail this turn/i, steps: [{ fail: { status: 400, message: "The scripted model refused this turn." } }] },
   { heard: /whole suite/i, steps: [{ reasoning: "Run everything once more.", text: "Running the whole suite once more.", call: { id: "call_suite", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 200" } } }, { text: "The whole suite passed." }] },
 ]
+/** The scripted model's newest conversation requests, what each carried and the model it named, for `heard`. */
+const heardRequests: { heard: string; model: string | undefined }[] = []
 const model = await scriptedModel({
-  reply: (heard) => {
+  reply: (heard, request) => {
+    heardRequests.push({ heard, model: request?.model })
+    if (heardRequests.length > 64) heardRequests.shift()
     // A request carries the whole conversation: what the person said last is the script whose words come latest in it,
     // and how far it has gone is how many of its calls the conversation already carries after those words. Nothing is
     // kept between requests, so Threads asked the same thing run their scripts apart.
@@ -343,12 +351,17 @@ const stop = async () => {
   // Its app is a process of its own: stopped here, or it outlives the host.
   if (values.app || values.recipe) await call("mako:thread-app-stop", [api]).catch(() => undefined)
   await call("mako:cloud-sign-out", []).catch(() => undefined)
+  // The root goes once the host has gone: a host still writing its records into it fails the removal.
+  const exited = host.exitCode === null && host.signalCode === null ? new Promise((resolve) => host.once("exit", resolve)) : Promise.resolve()
   host.kill("SIGTERM")
+  await exited
   await release()
   await model.close()
   if (!values.keep) await rm(root, { recursive: true, force: true })
   process.exit(0)
 }
+/** What `session` reads of a live snapshot: the Session's access mode and its model. */
+const SnapshotSchema = z.object({ session: z.object({ currentMode: z.string().nullable(), settings: z.object({ model: z.string().optional() }).loose().optional() }).loose() }).loose()
 /** What `mako:live-start` and `mako:thread-create-session` answer that a start reads: the Thread, and the new Session. */
 const StartedSchema = z.object({ threadId: z.string() }).loose()
 const PlacedSchema = z.object({ session: z.string() }).loose()
@@ -377,6 +390,13 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (line.trim() === "choices") console.log(`CHOICES ${JSON.stringify(await call("mako:access-choices", []))}`)
   else if (line.trim() === "app-start") console.log(`APP ${JSON.stringify(await call("mako:thread-app-start", [api]))}`)
   else if (line.trim() === "app-stop") console.log(`APP ${JSON.stringify(await call("mako:thread-app-stop", [api]))}`)
+  else if (line.startsWith("session ")) {
+    const snapshot = SnapshotSchema.parse(await call("mako:live-snapshot", [line.trim().split(/\s+/)[1]]))
+    console.log(`SESSION ${JSON.stringify({ mode: snapshot.session.currentMode, model: snapshot.session.settings?.model ?? null })}`)
+  } else if (line.startsWith("heard ")) {
+    const words = line.trim().slice("heard ".length)
+    console.log(`HEARD ${JSON.stringify({ model: heardRequests.findLast((request) => request.heard.includes(words))?.model ?? null })}`)
+  }
   else if (line.trim() === "quit") break
 }
 await stop()

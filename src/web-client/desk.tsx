@@ -30,6 +30,7 @@ import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
 import { ReviewLayer } from "./review-layer"
+import { closeReview, deskReviewCode, openReview, reviewOpenStore } from "./review-open"
 import { WebHarnessIcon } from "./harness-icon"
 
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
@@ -127,6 +128,21 @@ function useDeskKeys({ ordered, selected, open, newThread, settings }: { ordered
       { id: "session.stop", title: "Stop the current turn", section: "Session", keys: "mod+escape", when: () => activeLiveAcp(acpStore.get())?.session.status === "running", run: () => void acp.cancel() },
       { id: "thread.next", title: "Next thread", section: "Session", keys: "alt+arrowdown", run: step(1) },
       { id: "thread.previous", title: "Previous thread", section: "Session", keys: "alt+arrowup", run: step(-1) },
+      // The desk's own command for Changes: the open Session's turns, beside its transcript, and away again.
+      {
+        id: "view.changes",
+        title: "Show changed files",
+        section: "View",
+        keywords: "review diff turn",
+        when: () => Boolean(reviewOpenStore.get().open ?? activeLiveAcp(acpStore.get())),
+        run: () => {
+          if (reviewOpenStore.get().open) return closeReview()
+          const live = activeLiveAcp(acpStore.get())
+          if (!live) return
+          void deskReviewCode.read()
+          openReview({ conversation: live.key, scope: { kind: "thread" } })
+        },
+      },
     ])
   }, [])
   // Each Thread by its title: the palette's way to any of them from the keyboard.

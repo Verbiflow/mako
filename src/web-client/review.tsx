@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { z } from "zod"
-import { ChevronLeftIcon, ChevronRightIcon, MessageSquareIcon, Undo2Icon, XIcon } from "lucide-react"
+import { ChevronLeftIcon, ChevronRightIcon, MessageSquareIcon, Undo2Icon } from "lucide-react"
 import { countedChanges } from "@mako/host/contracts/turn-changes"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
 import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
@@ -10,19 +10,22 @@ import { anyUnsure, recordedTurnChanges, turnChangeSummary, type TurnChangeSumma
 import { undoneWords } from "@/lib/turn-undone"
 import { cn } from "@/lib/utils"
 import { useAcp } from "@/state/acp"
+import type { AcpState } from "@/state/acp-state"
 import { turnWords } from "@/state/prompt-delivery"
 import { useAccountList } from "./account-list"
 import { webHarnessLabel } from "./labels"
 import { useSyncing } from "./syncing"
 import { FileCard, type CommentAsk } from "./review-diff"
-import { reviewFiles, fileWords, turnWordsCount, commentWords, type ReviewFile } from "./review-model"
+import { changedRequests, reviewFiles, fileWords, turnWordsCount, commentWords, type ReviewFile } from "./review-model"
 import { openReview, type ReviewOpen, type ReviewScope } from "./review-open"
 import { useReviewNotes } from "./review-notes"
 import { CommentSheet, FinishSheet, UndoSheet } from "./review-sheets"
-import type { WebForm } from "./route"
+import { useSessionDiagnosis } from "./thread-trouble"
+import { useThread } from "./use-thread"
+import type { WebSession } from "./threads"
 
 /*
- * Changes, on a phone, a tablet and a laptop's browser: what a turn changed,
+ * Changes, on a phone and a tablet: what a turn changed,
  * or every turn of the Thread, read from the record each turn keeps
  * (`LiveRequest.changes`), so its counts are the turn line's own. A turn's
  * files are cards, each with its diff in stretches read from the Session's
@@ -53,33 +56,24 @@ interface SessionTurns {
 }
 
 function useTurns(conversation: string): SessionTurns {
-  const requests = useAcp((state) => {
-    const live = state.conversations[conversation]
-    return live?.kind === "live" ? (live.requests ?? NO_REQUESTS) : NO_REQUESTS
-  })
-  const running = useAcp((state) => {
-    const live = state.conversations[conversation]
-    return live?.kind === "live" && (live.session.status === "running" || live.session.status === "starting")
-  })
-  const session = useAcp((state) => {
-    const live = state.conversations[conversation]
-    return live?.kind === "live" ? live.session : undefined
-  })
-  const turns = useMemo(() => {
-    const found: ReviewTurn[] = []
-    for (const request of requests) {
-      const summary = recordedTurnChanges(request.changes)
-      const checkpointed = !request.changes && request.snapshots?.before?.kind === "ready" && request.snapshots.after?.kind === "ready"
-      if (summary && summary.files === 0 && !anyUnsure(summary.unsure)) continue
-      if (!summary && !checkpointed) continue
-      found.push({ request, number: found.length + 1, words: turnWords(requests, request), summary: summary ?? turnChangeSummary([]) })
-    }
-    return found
-  }, [requests])
-  return { turns, running, cwd: session?.cwd, harness: session?.harness, mode: session?.currentMode ?? undefined }
+  // Each a value of its own, so a streamed token, which changes the session's object, redraws none of this.
+  const live = (state: AcpState) => {
+    const found = state.conversations[conversation]
+    return found?.kind === "live" ? found : undefined
+  }
+  const requests = useAcp((state) => live(state)?.requests ?? NO_REQUESTS)
+  const running = useAcp((state) => live(state)?.session.status === "running" || live(state)?.session.status === "starting")
+  const cwd = useAcp((state) => live(state)?.session.cwd)
+  const harness = useAcp((state) => live(state)?.session.harness)
+  const mode = useAcp((state) => live(state)?.session.currentMode ?? undefined)
+  const turns = useMemo(
+    () => changedRequests(requests).map((request, index): ReviewTurn => ({ request, number: index + 1, words: turnWords(requests, request), summary: recordedTurnChanges(request.changes) ?? turnChangeSummary([]) })),
+    [requests]
+  )
+  return { turns, running, cwd, harness, mode }
 }
 
-export function ReviewScreen({ open, form, onClose }: { open: ReviewOpen; form: WebForm; onClose: () => void }) {
+export function ReviewScreen({ open, onClose }: { open: ReviewOpen; onClose: () => void }) {
   const { conversation } = open
   const { turns, running, cwd, harness, mode } = useTurns(conversation)
   const row = useAccountList((state) => state.rows.find((each) => each.conversation === conversation))
@@ -94,7 +88,7 @@ export function ReviewScreen({ open, form, onClose }: { open: ReviewOpen; form: 
   const current = scope.kind === "turn" ? turns.find((turn) => turn.request.id === scope.requestId) : undefined
   // The turn asked for isn't one with changes (yet): the newest that has some.
   const turn = scope.kind === "turn" ? (current ?? turns.at(-1)) : undefined
-  const desk = form === "desk"
+  const onComment = useCallback((ask: CommentAsk) => setAsking((now) => ({ ask, id: (now?.id ?? 0) + 1 })), [])
   const scroller = useRef<HTMLDivElement>(null)
   useEffect(() => {
     scroller.current?.scrollTo({ top: 0 })
@@ -104,8 +98,8 @@ export function ReviewScreen({ open, form, onClose }: { open: ReviewOpen; form: 
   return (
     <div className="rv-screen" data-scope={scope.kind} role="region" aria-label="Changes">
       <header className="rv-bar">
-        <button type="button" aria-label={desk ? "Close changes" : "Back to the Thread"} onClick={onClose} className="web-icon-button">
-          {desk ? <XIcon className="size-4" /> : <ChevronLeftIcon className="size-6" strokeWidth={2} />}
+        <button type="button" aria-label="Back to the Thread" onClick={onClose} className="web-icon-button">
+          <ChevronLeftIcon className="size-6" strokeWidth={2} />
         </button>
         <div className="flex min-w-0 flex-1 flex-col">
           <h1 className="truncate text-ui font-semibold">{title}</h1>
@@ -141,14 +135,14 @@ export function ReviewScreen({ open, form, onClose }: { open: ReviewOpen; form: 
             cwd={cwd}
             syncing={syncing}
             notes={notes.length}
-            onComment={(ask) => setAsking((now) => ({ ask, id: (now?.id ?? 0) + 1 }))}
+            onComment={onComment}
             onUndo={() => setUndoing({ kind: "turn", requestId: turn.request.id })}
           />
         ) : (
           <p className="rv-empty">{running ? "Nothing changed yet. Changes show here once a turn ends." : "No turn of this Session changed a file."}</p>
         )}
       </div>
-      {notes.length && !desk ? (
+      {notes.length ? (
         <div className="rv-finish">
           <button type="button" className="rv-finish-button" data-finish-review="" onClick={() => setFinishing(true)}>
             <MessageSquareIcon aria-hidden className="size-4" />
@@ -157,8 +151,8 @@ export function ReviewScreen({ open, form, onClose }: { open: ReviewOpen; form: 
           </button>
         </div>
       ) : null}
-      {asking ? <CommentSheet key={asking.id} ask={asking.ask} conversation={conversation} desk={desk} onDone={() => setAsking((now) => (now?.id === asking.id ? null : now))} /> : null}
-      {!desk && row ? (
+      {asking ? <CommentSheet key={asking.id} ask={asking.ask} conversation={conversation} onDone={() => setAsking((now) => (now?.id === asking.id ? null : now))} /> : null}
+      {row ? (
         <FinishSheet open={finishing} conversation={conversation} row={row} harness={harness} mode={mode} running={running} onDismiss={() => setFinishing(false)} onSent={() => {
           setFinishing(false)
           onClose()
@@ -180,18 +174,23 @@ function TurnChanges({ conversation, turn, cwd, syncing, notes, onComment, onUnd
   onUndo: () => void
 }) {
   const record = countedChanges(turn.request.changes)
-  const files = useTurnFiles(conversation, turn.request)
+  const read = useTurnFiles(conversation, turn.request)
+  const files = read?.kind === "files" ? read.files : undefined
   const viewed = useViewed(conversation, turn.request.id)
+  const requestId = turn.request.id
+  const onViewed = useCallback((path: string, on: boolean) => setViewed(conversation, requestId, path, on), [conversation, requestId])
   const settled = record ? record.state === "settled" : true
   const through = record?.through ?? 0
   const summary = files && !record ? turnChangeSummary(files.map((file) => ({ insertions: file.added, deletions: file.removed }))) : turn.summary
+  // Every card is counted: a file with only lines not sure whose is one, its lines in the count beside.
+  const cards = (files?.length ?? record?.files.length ?? summary.files) + (record?.more ?? 0)
   const undone = turn.request.undone
   const updating = syncing || !settled
   return (
     <>
       <section className="rv-summary" aria-label="Summary" data-turn-summary="">
         <p className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
-          <span className="font-medium text-foreground">{summary.files ? `${fileWords(summary.files)} changed` : "No changes for sure"}</span>
+          <span className="font-medium text-foreground">{cards ? `${fileWords(cards)} changed` : "No changes for sure"}</span>
           <LineCounts insertions={summary.insertions} deletions={summary.deletions} className="text-ui" />
           {anyUnsure(summary.unsure) ? <UnsureCount unsure={summary.unsure} className="text-label" /> : null}
           {updating ? (
@@ -212,7 +211,7 @@ function TurnChanges({ conversation, turn, cwd, syncing, notes, onComment, onUnd
         ) : null}
         {notes ? null : <p className="text-label text-faint">Tap a line to comment on it; hold one, then tap another, for a range.</p>}
       </section>
-      {files === undefined ? <p className="rv-empty">Reading the turn’s files…</p> : files === null ? <p className="rv-empty">This turn’s changes couldn’t be read. Its Session’s computer may be off.</p> : null}
+      {read === undefined ? <p className="rv-empty">Reading the turn’s files…</p> : read.kind === "failed" ? <ReadFailure conversation={conversation} message={read.message} /> : null}
       {files?.map((file, index) => (
         <FileCard
           key={file.path}
@@ -220,11 +219,12 @@ function TurnChanges({ conversation, turn, cwd, syncing, notes, onComment, onUnd
           file={file}
           conversation={conversation}
           requestId={turn.request.id}
+          journal={record?.journal ?? ""}
           through={through}
           settled={settled}
           cwd={cwd}
           viewed={viewed.has(file.path)}
-          onViewed={(on) => setViewed(conversation, turn.request.id, file.path, on)}
+          onViewed={onViewed}
           onComment={onComment}
         />
       ))}
@@ -233,25 +233,47 @@ function TurnChanges({ conversation, turn, cwd, syncing, notes, onComment, onUnd
   )
 }
 
+type TurnFiles = { kind: "files"; files: ReviewFile[] } | { kind: "failed"; message: string }
+
 /** A turn's files: its record's, at once; a turn from before the record, its checkpoints', read from its owner. */
-function useTurnFiles(conversation: string, request: LiveRequest): ReviewFile[] | null | undefined {
+function useTurnFiles(conversation: string, request: LiveRequest): TurnFiles | undefined {
   const record = countedChanges(request.changes)
-  const listed = useMemo(() => (record ? reviewFiles(record) : undefined), [record])
-  const [read, setRead] = useState<ReviewFile[] | null | undefined>(undefined)
+  const listed = useMemo((): TurnFiles | undefined => (record ? { kind: "files", files: reviewFiles(record) } : undefined), [record])
+  const [read, setRead] = useState<TurnFiles | undefined>(undefined)
   useEffect(() => {
     if (record) return
     let current = true
     void getMako()
       .liveTurnChanges(conversation, request.id)
       .then(
-        (turn) => current && setRead(turn.files.map((file) => ({ path: file.path, absolute: `${turn.root}/${file.path}`, kind: file.status === "added" ? "create" : file.status === "deleted" ? "delete" : "modify", added: file.insertions, removed: file.deletions, unsure: 0 }))),
-        () => current && setRead(null)
+        (turn) => current && setRead({ kind: "files", files: turn.files.map((file) => ({ path: file.path, absolute: `${turn.root}/${file.path}`, kind: file.status === "added" ? "create" : file.status === "deleted" ? "delete" : "modify", added: file.insertions, removed: file.deletions, unsure: 0 })) }),
+        (error: Error) => current && setRead({ kind: "failed", message: error.message })
       )
     return () => {
       current = false
     }
   }, [conversation, request.id, record])
   return listed ?? read
+}
+
+/**
+ * Why a turn's files couldn't be read: the owner's own words, and where the Session's reach diagnosis puts the
+ * trouble, when it has found any, rather than a guess at the computer being off.
+ */
+function ReadFailure({ conversation, message }: { conversation: string; message: string }) {
+  const threadId = useAccountList((state) => state.rows.find((each) => each.conversation === conversation)?.thread ?? "")
+  const session = useThread(threadId)?.sessions.find((each) => each.row.conversation === conversation)
+  return (
+    <div className="rv-empty" role="alert">
+      <p>{`This turn’s changes couldn’t be read: ${message.replace(/\.$/u, "")}.`}</p>
+      {session ? <Diagnosed session={session} /> : null}
+    </div>
+  )
+}
+
+function Diagnosed({ session }: { session: WebSession }) {
+  const diagnosis = useSessionDiagnosis(session)
+  return diagnosis ? <p className="mt-1.5 text-label text-faint">{diagnosis.detail ? `${diagnosis.headline} · ${diagnosis.detail}` : diagnosis.headline}</p> : null
 }
 
 /** Every turn of this Session that changed something, newest first, each opening its own changes. */

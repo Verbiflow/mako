@@ -1,5 +1,5 @@
 import { MessageSquareIcon, XIcon } from "lucide-react"
-import { openReview, readReviewCode } from "./review-open"
+import { openReview, touchReviewCode } from "./review-open"
 import { dropReviewNote, noteLabel, useReviewNotes } from "./review-notes"
 import { commentWords } from "./review-model"
 
@@ -12,7 +12,7 @@ export function ReviewTray({ conversation }: { conversation: string }) {
   if (!notes.length) return null
   return (
     <div className="rv-tray" data-review-tray={notes.length} aria-label={`${commentWords(notes.length)} going with your next message`}>
-      <ul role="list" className="web-scroll flex min-w-0 flex-1 gap-1.5 overflow-x-auto">
+      <ul role="list" className="web-scroll -my-1.5 flex min-w-0 flex-1 gap-1.5 overflow-x-auto py-1.5 pr-2">
         {notes.map((note) => (
           <li key={note.id} className="rv-tray-chip" title={note.detail.comment}>
             <MessageSquareIcon aria-hidden className="size-3.5 shrink-0 text-faint" />
@@ -28,7 +28,7 @@ export function ReviewTray({ conversation }: { conversation: string }) {
         type="button"
         className="web-chip shrink-0"
         onClick={() => {
-          void readReviewCode()
+          void touchReviewCode.read()
           openReview({ conversation, scope: { kind: "thread" } })
         }}
       >

@@ -276,6 +276,20 @@ test("a turn's diff in stretches: a few rows for a line in a long file, numbered
   const rewritten = textHunks(long.repeat(6), long.repeat(6).replaceAll("row", "line"))
   assert.equal(rewritten.limited, true)
   assert.ok(rewritten.hunks.reduce((total, hunk) => total + hunk.kinds.length, 0) <= TURN_HUNK_LIMITS.rows)
+  // A new file is one stretch; the characters bound it too, inside that stretch, and say so.
+  const chars = (hunks: ReturnType<typeof textHunks>) => hunks.hunks.reduce((total, hunk) => total + hunk.lines.reduce((sum, line) => sum + line.length + 1, 0), 0)
+  const wide = textHunks(null, Array.from({ length: 3_000 }, (_, i) => `${i}`.padEnd(218, "x")).join("\n"))
+  assert.equal(wide.hunks.length, 1)
+  assert.equal(wide.limited, true)
+  assert.ok(chars(wide) <= TURN_HUNK_LIMITS.chars, `${chars(wide)} characters`)
+  assert.ok(wide.hunks[0]!.lines.length < 3_000)
+  // A line past the bound is cut at it, and the cut is said.
+  const huge = textHunks("a\n", `a\n${"y".repeat(300 * 1024)}\n`)
+  assert.equal(huge.limited, true)
+  assert.ok(chars(huge) <= TURN_HUNK_LIMITS.chars)
+  assert.equal(huge.hunks[0]!.lines.at(-1)!.length < 300 * 1024, true)
+  // Within the bound nothing is cut, and nothing says it was.
+  assert.equal(textHunks("a\n", "b\n").limited, false)
   // A shortened patch's own @@ lines place its stretches.
   assert.deepEqual(patchHunks("diff --git a/x b/x\n@@ -3,2 +3,3 @@ fn\n a\n-b\n+c\n+d\n"), [{ oldStart: 3, newStart: 3, kinds: " -++", lines: ["a", "b", "c", "d"] }])
 })

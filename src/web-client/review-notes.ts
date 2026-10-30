@@ -90,6 +90,18 @@ export function settleReviewNotes(conversation: string, sent: readonly ReviewNot
   write(conversation, read(conversation).filter((note) => !gone.has(note.id)))
 }
 
+/**
+ * Sends `words` with the comments waiting in the Session's draft, through `send`: those comments leave once `send`
+ * says the message was taken, and stay when it was refused or failed, for the next try. One written while the message
+ * was on its way waits for the next.
+ */
+export async function sendWithReviewNotes(conversation: string, words: string, send: (text: string) => Promise<boolean>): Promise<boolean> {
+  const notes = reviewNotes(conversation)
+  const went = await send(withReviewNotes(words, notes))
+  if (went) settleReviewNotes(conversation, notes)
+  return went
+}
+
 /** A comment as the chip the transcript shows: `app.ts:12–18`. */
 export function noteLabel(note: ReviewNote): string {
   return commentLabel(note.detail)

@@ -6,7 +6,7 @@ import {
   useReview,
   type ReviewComment,
 } from "@/state/review"
-import { store } from "@/state/session"
+import { useCommentTarget } from "@/components/inspector/comment-target"
 import { cn } from "@/lib/utils"
 import { MessageSquarePlusIcon, PencilIcon, Trash2Icon } from "lucide-react"
 
@@ -66,6 +66,7 @@ const SavedComment = memo(function SavedComment({
 }: {
   comment: ReviewComment
 }) {
+  const target = useCommentTarget()
   return (
     <div className="group flex items-start gap-2 py-0.5">
       <span className="mt-[3px] size-1.5 shrink-0 rounded-full bg-caution" />
@@ -76,7 +77,7 @@ const SavedComment = memo(function SavedComment({
         type="button"
         aria-label="Add this note to the message"
         title="Add to message"
-        onClick={() => addReviewToMessage([comment], store.get().meta?.cwd)}
+        onClick={() => addReviewToMessage([comment], target.cwd(), target.conversation)}
         className="pressable shrink-0 rounded p-1 text-faint opacity-0 transition-opacity duration-100 group-hover:opacity-100 focus-visible:opacity-100 hover:text-foreground"
       >
         <MessageSquarePlusIcon className="size-3" />
@@ -199,6 +200,7 @@ function stopPress(button: HTMLButtonElement | null) {
  * one already there.
  */
 export function ReviewBar({ workspace }: { workspace: string }) {
+  const target = useCommentTarget()
   const allComments = useReview((state) => state.comments)
   const comments = useMemo(
     () => allComments.filter((comment) => comment.workspace === workspace),
@@ -228,7 +230,7 @@ export function ReviewBar({ workspace }: { workspace: string }) {
       </button>
       <Action
         tone="solid"
-        onClick={() => addReviewToMessage(comments, store.get().meta?.cwd)}
+        onClick={() => addReviewToMessage(comments, target.cwd(), target.conversation)}
       >
         Add {count} {count === 1 ? "note" : "notes"} to message
       </Action>
