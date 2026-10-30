@@ -276,6 +276,13 @@ export interface Dependencies {
   providerWarmLimit?: number
   /** Test override for `CONVERSATION_MEMORY` and the wait before a sweep. */
   conversationMemory?: ResidencyBudget & { sweepMs: number }
+  /**
+   * Entries of conversation `id` were paged (`paged-entries.ts`), or the
+   * conversation was let go: whatever outside the host's records holds its
+   * entries (the history reader's views) holds the paged ones, or lets them go.
+   */
+  historyPaged?(id: string): void
+  historyReleased?(id: string): void
   /** Test clock for deterministic residency decisions. */
   now?: () => number
 }
@@ -301,6 +308,8 @@ export interface LiveAccess {
   residents(): Iterable<Resident>
   require(id: string): Resident
   load(id: string): Resident | undefined
+  /** `load`, reading a journal from disk a slice at a time (`LiveRecords.loadSliced`). */
+  loadSliced(id: string): Promise<Resident | undefined>
   /** A request as its conversation keeps it, without loading a conversation that isn't (`LiveRecords.request`). */
   request(id: string, requestId: string): LiveRequest | undefined
   /** Keeps a new conversation, its journal already written. */

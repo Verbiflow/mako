@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { ArchiveIcon, ChevronLeftIcon, CloudIcon, CloudUploadIcon, EllipsisIcon, GlobeIcon, LaptopIcon, MoonIcon, PlusIcon, XIcon } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
@@ -22,6 +22,7 @@ import { useThread } from "./use-thread"
 import { archiveThread } from "./archive-thread"
 import { useSyncing } from "./syncing"
 import { useDelayedStatus } from "./delayed-status"
+import { useBranchOpening } from "./replies"
 
 /** The renderer's live conversation: its transcript, approvals and questions, the desktop's own code. Its own chunk. */
 const LiveSession = lazy(() => import("./live-session"))
@@ -40,6 +41,9 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   const [openedOn, setOpenedOn] = useState<string | undefined>(undefined)
   useEffect(() => heading.current?.focus({ preventScroll: true }), [threadId])
   const client = useWebClient()
+  // A branch made from a reply here opens as this Thread's new tab once its owner lists it.
+  const listedSessions = useMemo(() => thread?.sessions.map((each) => ({ conversation: each.row.conversation, session: each.row.session })) ?? [], [thread])
+  useBranchOpening(listedSessions, onSession)
   // A Thread on screen is seen: its notices go from this device and every other (`WebPush.seen`), now and each time the
   // page comes back to the front on it (a notification tapped while it was open lands here without a new route). By its
   // Mako Thread ID, which the notices are kept by, whichever ID the route named it by.

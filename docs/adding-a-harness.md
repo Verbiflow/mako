@@ -91,7 +91,7 @@ Bold is the harness's own, shown in Mako; "Mako's" runs Mako's own; "none here" 
 | Plugins | Packages of commands, skills, agents and hooks the harness loads. | – | plugins, by default | plugins, by default | plugins: Mako gap | plugins, by default | plugins, by default | plugins, by default |
 | Response style | A saved style for how the agent writes its replies. | – | output styles, by default | none here (personality) | none | none | none here (/personas) | none |
 | Web search | The agent searches the web. | – | **WebSearch** | **web_search, web__run** | none here (webSearch) | **websearch** | **web_search** | **web_search** |
-| Image generation | The agent makes or edits images. | – | none | **image generation** | **generateImage** | none | **image_gen, image_edit** | none |
+| Image generation | The agent makes or edits images. | – | none | **image generation** | **generateImage** | **experimental_image_generate** | **image_gen, image_edit** | none |
 | Code mode | The agent calls its tools from a script it writes. | – | none | **exec** | none | **execute** | none | none |
 
 ## 5. Only this harness

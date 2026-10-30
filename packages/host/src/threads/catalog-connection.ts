@@ -2,7 +2,7 @@ import { spawn } from "node:child_process"
 import { setTimeout as delay } from "node:timers/promises"
 import { connectDaemon, onDemandCatalogPaths, type DaemonClient } from "@mako/sessions"
 import { daemonIsForeign } from "./daemon-vintage.js"
-import { ON_DEMAND_CATALOG_NODE_ARGS } from "./daemon-command.js"
+import { ON_DEMAND_CATALOG_ENV, ON_DEMAND_CATALOG_NODE_ARGS } from "./daemon-command.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 
@@ -42,7 +42,7 @@ export async function connectOnDemandCatalog(signal: AbortSignal, { script, iden
   const child = spawn(headlessNodeExecutable(), [...ON_DEMAND_CATALOG_NODE_ARGS, script, "--on-demand"], {
     detached: true,
     stdio: "ignore",
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", ...writer && { MAKO_STORE_WRITER: writer } },
+    env: { ...process.env, ...ON_DEMAND_CATALOG_ENV, ELECTRON_RUN_AS_NODE: "1", ...writer && { MAKO_STORE_WRITER: writer } },
   })
   const startedAt = Date.now()
   hostLog("threads", "shared catalog reader started", { pid: child.pid })

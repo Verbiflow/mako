@@ -182,7 +182,7 @@ export function syncStatusOf(scope: SyncScope, catalog: CatalogSyncStatus | null
     tiers,
     sending: [...(catalog.copies?.sending ?? []), ...(catalog.originals?.sending ?? [])].length,
     stale: catalog.stale,
-    failures: failures.map(({ at, harness, nativeId, message, correlationId }) => ({ at, harness, nativeId, message, ...correlationId && { correlationId } })),
+    failures: failures.map(({ at, harness, nativeId, message, correlationId, since }) => ({ at, harness, nativeId, message, ...correlationId && { correlationId }, ...since !== undefined && { since } })),
     ...lastSuccessAt > 0 && { lastSuccessAt },
     ...backfill && { backfill },
   }

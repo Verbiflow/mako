@@ -7,9 +7,9 @@ import { RETRY_MARKERS, SETUP_NOTICES, STOP_MARKER } from "../stream-merge.js"
 export const OPENCODE_VOCABULARY = defineVocabulary({
   harness: "opencode",
   checked: {
-    version: "2.1.4",
-    on: "2026-10-25",
-    against: "the model request of 2.1.4's native API per agent on an Anthropic and an OpenAI model (scripts/fixtures/native-tools; unchanged since 2.0.27), opencode.db and opencode-next.db through audit:tools as of 2026-10-12, and the permission names Mako launches with",
+    version: "2.2.3",
+    on: "2026-10-30",
+    against: "the model request of 2.2.3's native API per agent on an Anthropic and an OpenAI model (scripts/fixtures/native-tools; 2.2.3 adds experimental_image_generate where a provider has an image model, OpenAI's here, and rewords shell and execute), opencode.db and opencode-next.db through audit:tools as of 2026-10-12, and the permission names Mako launches with",
   },
   mcp: [],
   tools: {
@@ -28,13 +28,15 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
     question: { kind: "question" },
     skill: { kind: "skill" },
     execute: { kind: "code", wraps: { form: "script", key: "code" }, effects: { calls: "result.toolCalls" } },
+    // Generates or edits an image in the background and saves it to `path`; its job's end is a synthetic notice.
+    experimental_image_generate: { kind: "image" },
     search: { kind: "tool-search", unlisted: "2.0.27 defines it for neither model family nor any agent Mako uses; older sessions record it." },
   },
   concepts: {
     checked: {
-      version: "2.1.4",
-      on: "2026-10-25",
-      against: "the 2.1.4 binary's bundled loaders through harness:self-report (every declared name, and every skill and MCP place listed), and @opencode/schema and @opencode/protocol 2.0.27 types as read on 2026-10-12 (opencode.ai/docs still describe 1.x)",
+      version: "2.2.3",
+      on: "2026-10-30",
+      against: "the 2.2.3 binary's bundled loaders through harness:self-report (every declared name, and every skill and MCP place listed), and @opencode/schema and @opencode/protocol 2.0.27 types as read on 2026-10-12 (opencode.ai/docs still describe 1.x)",
     },
     instructions: {
       files: ["AGENTS.md"],

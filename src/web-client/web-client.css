@@ -395,6 +395,10 @@
   .web-sheet-tall {
     height: calc((var(--app-height, 100dvh) - env(safe-area-inset-top)) * 0.86);
   }
+  /* An expandable sheet is the screen's height under its top inset; it opens lowered to half (`Sheet`'s `expandable`). */
+  .web-sheet-full {
+    height: calc(var(--app-height, 100dvh) - env(safe-area-inset-top) - 12px);
+  }
   .web-sheet[data-form="pop"],
   .web-sheet[data-form="dialog"] {
     background: var(--popover);
@@ -701,8 +705,9 @@
  * The desk's own pieces, adjusted for a phone. Outside the layer, so they win over the desk's utilities on the same
  * elements.
  *
- * Reuse, edit, rewind and fork are the desk's: they need its composer and its checkout, so the phone shows a message's
- * time and its copy, and nothing it can't do.
+ * Reuse, edit and rewind are the desk's: they need its composer and its checkout, so the phone shows a message's time
+ * and its copy, and nothing it can't do. A reply's fork is the phone's Branch, under it and under a long press
+ * (`reply.tsx`), where the host can make one.
  */
 .web-live [data-transcript-action],
 .desk-live [data-transcript-action] {
@@ -978,6 +983,191 @@
 }
 .web-unsent-action {
   @apply h-9 px-3 text-label font-medium;
+}
+
+/*
+ * The composer's one send button and its mic (`send-button.tsx`, `composer.tsx`). While the agent works and the field
+ * has words, the button is a pill that says what a tap does; held, it offers both ways over itself.
+ */
+.web-composer-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+.web-composer-mic {
+  @apply size-9;
+}
+.web-composer-mic::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.web-send-pill {
+  @apply w-auto gap-1.5 pr-3.5 pl-3 text-label font-semibold;
+  animation: web-pop 160ms var(--ease-out) both;
+}
+.web-send-choices {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 50;
+  display: flex;
+  width: min(300px, calc(100vw - 24px));
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 16px;
+  transform-origin: 100% 100%;
+  animation: web-choices-in 180ms var(--ease-out) both;
+}
+.web-send-choice {
+  @apply flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left text-foreground;
+  min-height: 52px;
+  transition: background-color 160ms ease;
+}
+.web-send-choice:active,
+.web-send-choice:focus-visible {
+  @apply bg-fill-selected;
+  outline: none;
+}
+@media (hover: hover) {
+  .web-send-choice:hover {
+    @apply bg-fill-hover;
+  }
+}
+/* A queued message being edited in the field: one line over it that says so, with Cancel. */
+.web-composer-editing {
+  @apply col-span-full flex min-w-0 items-center gap-2 pr-0.5 pl-3 text-label text-muted-foreground;
+  min-height: 34px;
+  box-shadow: inset 0 -1px 0 var(--hairline);
+  margin-bottom: 2px;
+}
+/* A Thread's chips give way to the send pill: each keeps its glyph and a few letters, the model more. */
+.web-chip-model {
+  min-width: 5.5rem;
+}
+.web-chip-access {
+  min-width: 4.25rem;
+}
+/* A Thread's card: the field one line tall to start, its model, access, mic and send in the bar under it. */
+.web-composer-field[data-tools]:not(:has(.web-where)) .web-composer-input {
+  min-height: 40px;
+  padding-bottom: 4px;
+}
+
+/*
+ * Dictation while it listens: the stop square, the time, five 3 px bars between 5 and 14 px tall moving with the
+ * microphone, and the words still being heard, the last few dimmed.
+ */
+.web-composer-recording {
+  @apply col-span-full flex min-w-0 items-center gap-1;
+}
+.web-recording {
+  @apply flex h-11 min-w-0 flex-1 items-center gap-2.5 pr-1 pl-0.5;
+  animation: web-rise 180ms var(--ease-out) both;
+}
+.web-recording-stop {
+  @apply relative flex size-9 shrink-0 items-center justify-center rounded-full text-negative;
+  background: color-mix(in oklab, var(--negative) 16%, transparent);
+  transition: transform 160ms var(--ease-out);
+}
+.web-recording-stop::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.web-recording-stop:active {
+  transform: scale(0.94);
+  transition-duration: 40ms;
+}
+.web-recording-time {
+  @apply shrink-0 text-label font-medium text-foreground;
+  font-variant-numeric: tabular-nums;
+  min-width: 2.6em;
+}
+.web-recording-bars {
+  display: flex;
+  height: 14px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+.web-recording-bars > span {
+  width: 3px;
+  border-radius: 1.5px;
+  background: var(--foreground);
+  transition: height 80ms linear;
+}
+.web-recording-words {
+  @apply min-w-0 flex-1 truncate text-ui text-muted-foreground;
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+/*
+ * A run of steps on a phone (`steps.tsx`): one line, a thumb's height, opening the steps in a sheet. The newest step's
+ * words change in place, rising in only when they're new.
+ */
+.web-steps-line {
+  @apply -mx-1.5 flex h-9 max-w-[calc(100%+12px)] min-w-0 items-center gap-1.5 self-start rounded-lg px-1.5 text-ui;
+  transition: background-color 160ms ease;
+}
+.web-steps-line:active {
+  @apply bg-fill-selected;
+  transition-duration: 0ms;
+}
+.web-steps-new {
+  animation: web-rise 200ms var(--ease-out) both;
+}
+.web-step-in {
+  animation: web-rise 220ms var(--ease-out) both;
+}
+.web-steps-sheet {
+  @apply flex-1 px-4 pb-[calc(env(safe-area-inset-bottom)+16px)];
+  mask-image: linear-gradient(to bottom, transparent, #000 12px, #000 calc(100% - 20px), transparent);
+}
+/* An opened step's output stays a part of the sheet: capped, scrolling inside, fading at its edges. */
+.web-steps-sheet pre {
+  max-height: 40vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  mask-image: linear-gradient(to bottom, transparent, #000 10px, #000 calc(100% - 14px), transparent);
+}
+
+/* Under a Thread's access: what every new session of its harness starts with, the account's choice, apart from it. */
+.web-access-new {
+  @apply mx-3 mt-1 mb-[calc(env(safe-area-inset-bottom)+10px)] flex min-h-12 items-center gap-2 rounded-xl bg-fill-hover pr-1.5 pl-3.5;
+}
+
+/* Copy and Branch under the newest reply, a thumb's size; every reply keeps them under a long press. */
+.web-reply-actions {
+  @apply -ml-2 flex items-center gap-1;
+}
+.web-reply-action {
+  @apply flex h-9 items-center gap-1.5 rounded-lg px-2 text-label font-medium text-muted-foreground;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.web-reply-action:active:not(:disabled) {
+  @apply bg-fill-selected text-foreground;
+  transition-duration: 0ms;
+}
+.web-reply-action:disabled {
+  opacity: 0.6;
+}
+/* A long press on a reply is the app's, not the platform's: no callout, no selection starting under the finger. */
+@media (pointer: coarse) {
+  .web-live [data-answer] {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+@keyframes web-choices-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0) scale(0.96);
+  }
 }
 
 @keyframes web-breathe {
