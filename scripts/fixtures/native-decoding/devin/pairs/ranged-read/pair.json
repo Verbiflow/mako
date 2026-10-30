@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Read only lines 10 to 20 of log.md with your file read tool, once, and tell me the last line you were shown. Don't run commands. A read of lines 10 to 20 of a long file, so a harness's own cut can be told from one the model asked for.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#bustling-juniper",
+      "path": ".local/share/devin/cli/sessions.db#casual-knight",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/e0085dee-165a-4e76-96ea-02260e03da3c.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/a77bc2f7-5759-4fca-be16-1aeabce651b2.db",
       "known": [
         {
           "side": "-",

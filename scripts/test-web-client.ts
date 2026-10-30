@@ -22,6 +22,17 @@ import { newDraftKey, noteSending, openingText, readDraft, settleSending, thread
 import { answeredWords, dockStatus, statusWords, workingWords, type DockStatusInput } from "../src/web-client/dock-status"
 import { DELIVERY_WORDS, deliveryOf, type Sending } from "../src/web-client/delivery"
 import { SAY_WAKING_MS, wakeThread, wakingNow, wakingStore } from "../src/web-client/wake"
+import { sendChoiceDetail, sendPresentation, type SendSituation } from "../src/web-client/send-action"
+import { appendHeard, DictationSession, elapsedWords, frameDecibels, meterLevel, splitUnsure, type Recognition } from "../src/web-client/dictation"
+import { freshStep, stepsLine } from "../src/web-client/steps-words"
+import { switchedWords } from "../src/web-client/answered"
+import type { ToolCall } from "../src/extend/slots"
+import { diagnose, diagnosisText, lastSeen, type ReachInput } from "../src/web-client/diagnosis"
+import { forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
+import { listedMove, movesStore, putMove, stepHeard } from "../src/web-client/moves"
+import { loopbackTarget, serversOf, withPath } from "../src/web-client/previews"
+import { connectStep, macConnection } from "../src/web-client/mac-connection"
+import { reachLog, reachStore } from "../src/web-client/reach"
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const STUDIO = uuid(900)
@@ -511,4 +522,290 @@ test("a cloud Thread's machine wakes once for every key and message, and is said
   } finally {
     Reflect.deleteProperty(globalThis, "window")
   }
+})
+
+test("one send button: Send idle, Stop when empty at work, Steer or Queue by the desk's choice, ✓ while editing", () => {
+  const at = (situation: Partial<SendSituation>) => sendPresentation({ running: false, hasContent: true, editingQueued: false, canSteer: false, steerByDefault: true, ...situation })
+  assert.deepEqual(at({}), { kind: "send", label: "Send" })
+  assert.deepEqual(at({ sendLabel: "Start" }), { kind: "send", label: "Start" })
+  assert.equal(at({ hasContent: false }).kind, "send")
+  assert.equal(at({ running: true, hasContent: false, canSteer: true }).kind, "stop")
+  // The desk's preference decides the tap; a long press offers the other, only where the harness can steer.
+  assert.deepEqual(at({ running: true, canSteer: true }), { kind: "steer", label: "Steer", alternate: "queue" })
+  assert.deepEqual(at({ running: true, canSteer: true, steerByDefault: false }), { kind: "queue", label: "Queue", alternate: "steer" })
+  assert.deepEqual(at({ running: true, canSteer: false }), { kind: "queue", label: "Queue" })
+  assert.equal(at({ running: true, editingQueued: true }).kind, "update")
+  assert.equal(at({ running: true, hasContent: false, editingQueued: true }).kind, "update")
+  // Words under an open question answer it: Send, whatever the turn is doing.
+  assert.deepEqual(at({ running: true, canSteer: true, answering: true }), { kind: "send", label: "Send answer" })
+  assert.equal(at({ running: true, hasContent: false, answering: true }).kind, "stop")
+  assert.equal(sendChoiceDetail("queue", "step"), "Runs after this turn")
+  assert.notEqual(sendChoiceDetail("steer", "interrupt"), sendChoiceDetail("steer", "step"))
+})
+
+test("dictation's meter: −60 dB is silence, 0 dB full, the square root between; words append, the last three unsure", () => {
+  assert.equal(meterLevel(undefined), 0)
+  assert.equal(meterLevel(-Infinity), 0)
+  assert.equal(meterLevel(-60), 0)
+  assert.equal(meterLevel(-75), 0)
+  assert.equal(meterLevel(0), 1)
+  assert.equal(meterLevel(6), 1)
+  const quiet = meterLevel(-40)
+  const loud = meterLevel(-10)
+  assert.ok(quiet > 0.05 && quiet < loud && loud < 1)
+  // Square-root scaling: −40 dB (amplitude 0.01) reads near 0.1, not 0.01.
+  assert.ok(Math.abs(quiet - Math.sqrt((0.01 - 0.001) / (1 - 0.001))) < 1e-9)
+  assert.equal(frameDecibels(new Uint8Array(64).fill(128)), -Infinity)
+  assert.ok(Math.abs(frameDecibels(Uint8Array.from({ length: 64 }, (_, index) => (index % 2 ? 192 : 64))) - 20 * Math.log10(0.5)) < 1e-9)
+  assert.deepEqual(splitUnsure("check the retry backoff on a slow runner"), { sure: "check the retry backoff on", unsure: "a slow runner" })
+  assert.deepEqual(splitUnsure("two words"), { sure: "", unsure: "two words" })
+  assert.equal(elapsedWords(7_400), "0:07")
+  assert.equal(elapsedWords(102_000), "1:42")
+  assert.equal(elapsedWords(725_000), "12:05")
+  assert.equal(appendHeard("", " Let's check "), "Let's check")
+  assert.equal(appendHeard("Fix the retry.", "Then the lint"), "Fix the retry. Then the lint")
+  assert.equal(appendHeard("Fix it\n", "then"), "Fix it\nthen")
+  assert.equal(appendHeard("Kept", "  "), "Kept")
+})
+
+test("a run of steps is one line: its count and its newest step, present while it runs, failed when it failed", () => {
+  const call = (id: string, kind: "shell" | "read", target: string, extra: Partial<ToolCall> = {}): ToolCall => ({ id, name: kind, tool: { kind, name: kind, label: kind === "shell" ? "Shell" : "Read", target }, pending: false, ...extra })
+  const three = [call("a", "read", "test/payments.mjs"), call("b", "shell", "npm test"), call("c", "shell", "npm run lint")]
+  assert.deepEqual(stepsLine(three, false), { count: "3 steps", newest: "ran npm run lint", running: false, failed: false })
+  assert.deepEqual(stepsLine([...three.slice(0, 2), call("c", "shell", "npm run lint", { pending: true })], true), { count: "3 steps", newest: "running npm run lint", running: true, failed: false })
+  // A finished record's call that never returned isn't running: only a live run's is.
+  assert.equal(stepsLine([call("c", "shell", "sleep 9", { pending: true })], false).running, false)
+  assert.equal(stepsLine([...three.slice(0, 2), call("c", "shell", "npm run lint", { isError: true })], false).failed, true)
+  assert.equal(stepsLine([call("c", "shell", "npm test", { isCanceled: true })], false).newest, "Ran npm test · stopped")
+  // One step is its own words: a count of one says nothing.
+  assert.deepEqual(stepsLine([call("a", "read", "README.md")], false), { count: "", newest: "Read README.md", running: false, failed: false })
+  assert.equal(freshStep({ startedAt: 10_000 }, 12_000), true)
+  assert.equal(freshStep({ startedAt: 10_000 }, 13_500), false)
+  assert.equal(freshStep({}, 13_500), false)
+})
+
+test("a switch from the composer leaves its line: switched, or not, in so many words", () => {
+  assert.equal(switchedWords({ what: "GPT-5.5", refused: false }), "Switched to GPT-5.5")
+  assert.equal(switchedWords({ what: "Full access", refused: true }), "Not switched to Full access")
+})
+
+test("dictation listens until it's stopped: silence starts it again, and what it was still hearing is kept", () => {
+  const made: FakeRecognizer[] = []
+  class FakeRecognizer extends EventTarget implements Recognition {
+    lang = ""
+    continuous = false
+    interimResults = false
+    onresult: Recognition["onresult"] = null
+    onend: Recognition["onend"] = null
+    onerror: Recognition["onerror"] = null
+    stopped = false
+    constructor() {
+      super()
+      made.push(this)
+    }
+    start() {}
+    stop() {
+      this.stopped = true
+      this.onend?.()
+    }
+    abort() {}
+    say(results: Array<[string, boolean]>) {
+      this.onresult?.({ resultIndex: 0, results: results.map(([transcript, isFinal]) => ({ isFinal, 0: { transcript } })) })
+    }
+  }
+  const settled: string[] = []
+  const hearing: string[] = []
+  let ended: string | undefined | null = null
+  const session = new DictationSession(FakeRecognizer, { settled: (words) => settled.push(words), hearing: (words) => hearing.push(words), levels: () => undefined, ended: (why) => (ended = why) })
+  session.begin()
+  made[0]!.say([["Check the retry", true], ["backoff on a", false]])
+  made[0]!.say([["Check the retry", true], ["backoff on a slow", false]])
+  assert.deepEqual(settled, ["Check the retry"])
+  assert.equal(hearing.at(-1), "backoff on a slow")
+  // The platform ends it on silence: what it was hearing is kept, and it listens again.
+  made[0]!.onend?.()
+  assert.deepEqual(settled, ["Check the retry", "backoff on a slow"])
+  assert.equal(made.length, 2)
+  assert.equal(ended, null)
+  made[1]!.say([["runner", true]])
+  session.end(false)
+  assert.equal(made[1]!.stopped, true)
+  assert.deepEqual(settled, ["Check the retry", "backoff on a slow", "runner"])
+  assert.equal(ended, undefined)
+})
+
+test("dictation that fails keeps what it heard and says why; one that won't listen stops rather than looping", () => {
+  const made: Array<Recognition & { fail(error: string): void }> = []
+  class Failing extends EventTarget implements Recognition {
+    lang = ""
+    continuous = false
+    interimResults = false
+    onresult: Recognition["onresult"] = null
+    onend: Recognition["onend"] = null
+    onerror: Recognition["onerror"] = null
+    constructor() {
+      super()
+      made.push(this)
+    }
+    start() {}
+    stop() {}
+    abort() {}
+    fail(error: string) {
+      this.onerror?.({ error })
+      this.onend?.()
+    }
+  }
+  const settled: string[] = []
+  let ended: string | undefined | null = null
+  const session = new DictationSession(Failing, { settled: (words) => settled.push(words), hearing: () => undefined, levels: () => undefined, ended: (why) => (ended = why) })
+  session.begin()
+  made[0]!.onresult?.({ resultIndex: 0, results: [{ isFinal: false, 0: { transcript: "half a sentence" } }] })
+  made[0]!.fail("network")
+  assert.deepEqual(settled, ["half a sentence"])
+  assert.equal(ended, "Dictation stopped. What it heard is kept.")
+  // Ending again and again with nothing heard: it gives up after a few tries instead of spinning.
+  let quit: string | undefined | null = null
+  const looping = new DictationSession(Failing, { settled: () => undefined, hearing: () => undefined, levels: () => undefined, ended: (why) => (quit = why) })
+  const before = made.length
+  looping.begin()
+  for (let index = 0; index < 8 && quit === null; index++) made.at(-1)!.onend?.()
+  assert.ok(made.length - before <= 5)
+  assert.equal(quit, "Dictation stopped. What it heard is kept.")
+})
+
+const reach = (fields: Partial<ReachInput> = {}): ReachInput => ({ now: Date.parse("2026-10-30T12:00:00Z"), online: true, cloud: "ok", ...fields })
+
+test("what can't be reached is said at the first hop that failed, every hop before it reached and every one after not checked", () => {
+  const studio = { name: "Studio", link: "unknown" as const }
+  assert.equal(diagnose(reach({ mac: studio, harness: { name: "Codex", state: "unknown" } })), undefined, "nothing failed: nothing said, and nothing unknown is painted as off")
+  const asleep = diagnose(reach({ mac: { ...studio, quietSince: "2026-10-30T11:55:00Z" }, harness: { name: "Codex", state: "unknown" } }))
+  assert.equal(asleep?.headline, "Studio is asleep or offline")
+  assert.equal(asleep?.detail, "Last seen 5 minutes ago")
+  assert.deepEqual(asleep?.hops.map((hop) => [hop.label, hop.state]), [["This phone", "ok"], ["Mako Cloud", "ok"], ["Studio", "failed"], ["Codex", "unknown"]])
+  assert.equal(asleep?.causes[0], "It may be asleep, or its lid closed.")
+  const ahead = diagnose(reach({ mac: { ...studio, quietSince: "2026-10-30T12:09:00Z" } }))
+  assert.equal(ahead?.detail, "Last seen a moment ago", "a clock ahead of this one never makes it seen in the future")
+  assert.equal(lastSeen("not a time", reach().now), "a moment ago")
+  const closed = diagnose(reach({ mac: { ...studio, link: "failed" }, failure: { message: "No answer", at: reach().now, correlationId: "c-9", outcome: "owner-unavailable" } }))
+  assert.equal(closed?.headline, "Mako Cloud answers, but Studio's Mako isn't connected")
+  assert.ok(closed && diagnosisText(closed).includes("Correlation ID: c-9"), "its correlation ID goes with the diagnostics")
+  assert.equal(diagnose(reach({ online: false, cloud: "failed", mac: { ...studio, quietSince: "2026-10-30T11:00:00Z" } }))?.headline, "This phone is offline", "the nearest hop that failed is the one said")
+  assert.equal(diagnose(reach({ cloud: "failed", mac: studio }))?.headline, "Mako Cloud isn't answering")
+  const harness = diagnose(reach({ mac: { ...studio, link: "ok" }, harness: { name: "Codex", state: "failed", reason: "Codex is not installed" } }))
+  assert.equal(harness?.headline, "Codex on Studio didn't start")
+  assert.equal(harness?.detail, "Codex is not installed")
+  assert.deepEqual(harness?.hops.map((hop) => hop.state), ["ok", "ok", "ok", "failed"])
+  assert.equal(diagnose(reach({ machine: { state: "unknown" }, harness: { name: "Claude", state: "failed" } }))?.headline, "Claude in the cloud didn't start")
+})
+
+test("what a call met is kept by the place it went to: refused as not connected is not reached, refused by the host itself is reached", () => {
+  const log = reachLog("d-studio")
+  const quiet = console.warn
+  console.warn = () => undefined
+  try {
+    log.warn("operation failed", { op: "live.read", correlationId: "c-1", attempt: 1, outcome: "owner-unavailable", ms: 3 })
+    assert.deepEqual(reachStore.get().places.get("d-studio")?.ok, false)
+    assert.equal(reachStore.get().places.get("d-studio")?.correlationId, "c-1")
+    log.warn("operation failed", { op: "live.start", correlationId: "c-2", attempt: 1, outcome: "failed", ms: 3 })
+    assert.equal(reachStore.get().places.get("d-studio")?.ok, true, "a harness's own refusal came from a Mac that answered")
+    log.warn("a conversation's stream ended", { stream: "x" })
+    assert.equal(reachStore.get().places.get("d-studio")?.ok, true, "other lines say nothing of reach")
+  } finally {
+    console.warn = quiet
+  }
+})
+
+test("a read the network failed is asked once more; a change never is", async () => {
+  const fetched: string[] = []
+  const real = globalThis.fetch
+  // SAFETY: a stand-in that answers the two calls this test makes, as fetch does: a promise of a Response.
+  globalThis.fetch = (async (_url: URL, init: RequestInit) => {
+    fetched.push(init.method ?? "GET")
+    if (fetched.length % 2 === 1) throw new TypeError("Load failed")
+    return new Response(JSON.stringify({ ok: true }), { status: 200, headers: { "content-type": "application/json" } })
+  }) as typeof fetch
+  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: "t", expiresAt: Date.now() + 600_000, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
+  try {
+    assert.deepEqual(await gateway.rest("GET", "/v1/devices"), { ok: true })
+    assert.deepEqual(fetched, ["GET", "GET"])
+    fetched.length = 0
+    await assert.rejects(gateway.rest("PUT", "/v1/sessions/x/waiting/y", { text: "hi" }), /Load failed/)
+    assert.deepEqual(fetched, ["PUT"], "a message may have landed: it isn't sent twice")
+  } finally {
+    globalThis.fetch = real
+    gateway.close()
+  }
+})
+
+test("a move's bar only goes forward: each step its own span, an upload by its bytes, a wait creeping and never reaching the next step", () => {
+  const packingStart = stepFraction("cloud", "packing", 0)!
+  const handing = stepFraction("cloud", "handing-over", 0)!
+  assert.ok(stepFraction("cloud", "asking", 0)! < packingStart)
+  assert.ok(stepFraction("cloud", "packing", 10 * 60_000)! < stepFraction("cloud", "pausing", 0)!, "a wait never reaches the next step, however long")
+  const half = stepFraction("cloud", "packing", 0, { bytes: 5_000_000, of: 10_000_000 })!
+  assert.ok(half > packingStart && half < stepFraction("cloud", "packing", 0, { bytes: 10_000_000, of: 10_000_000 })!, "an upload fills by its bytes")
+  assert.ok(handing > half)
+  assert.equal(stepFraction("cloud", "unsettled", 0), undefined, "an answer waited on keeps the bar where it was")
+  assert.equal(forward(0.5, 0.3), 0.5, "a step back (a bigger upload added) never moves it back")
+  assert.equal(forward(0.5, undefined), 0.5)
+  assert.equal(forward(0.2, 0.3), 0.3)
+  assert.equal(percentWords(0.999, false), "99% done", "never 100 before it ends")
+  assert.equal(percentWords(0.4, true), "100% done")
+  assert.equal(sentWords({ bytes: 3_200_000, of: 14_400_000 }), "3.2 of 14 MB")
+  assert.equal(stepWords("device", "bringing", "Studio", false), "Bringing it to Studio")
+  assert.equal(stepWords("cloud", "packing", "Studio", true), "Sending ahead while it works")
+})
+
+test("a move is followed from its steps, said by the list from its first step, and ends once", () => {
+  const thread = uuid(100)
+  movesStore.set({ moves: new Map() })
+  stepHeard({ conversation: "c1", move: "m1", way: "cloud", step: { kind: "packing" }, thread, mac: { deviceId: STUDIO, name: "Studio" } })
+  assert.equal(movesStore.get().moves.get(thread)?.ours, false, "a move asked on the Mac is followed here too")
+  const began = movesStore.get().moves.get(thread)?.stepAt
+  stepHeard({ conversation: "c1", move: "m1", way: "cloud", step: { kind: "packing", sent: { bytes: 1, of: 4 } }, thread, mac: undefined })
+  assert.equal(movesStore.get().moves.get(thread)?.stepAt, began, "its bytes don't start the step again")
+  assert.deepEqual(movesStore.get().moves.get(thread)?.sent, { bytes: 1, of: 4 })
+  stepHeard({ conversation: "c1", move: "m1", way: "cloud", step: { kind: "pausing" }, thread, mac: undefined })
+  assert.equal(movesStore.get().moves.get(thread)?.handOff, true, "a pause says its turn goes along")
+  stepHeard({ conversation: "c1", move: "m1", way: "cloud", step: { kind: "kept-here", reason: "The cloud is full." }, thread, mac: undefined })
+  assert.deepEqual(movesStore.get().moves.get(thread)?.end, { kind: "failed", reason: "The cloud is full." })
+  stepHeard({ conversation: "c1", move: "m1", way: "cloud", step: { kind: "moved", conversations: ["c1"] }, thread, mac: undefined })
+  assert.equal(movesStore.get().moves.get(thread)?.end?.kind, "failed", "an end is said once")
+  putMove({ thread: uuid(200), conversation: "c2", way: "device", mac: { deviceId: STUDIO, name: "Studio" }, step: "asking", stepAt: 0, handOff: false, ours: true })
+  movesStore.set({ moves: new Map() })
+  const going = foldThreads({ rows: [row(1, { runsOn: { kind: "device", deviceId: STUDIO }, move: { to: "cloud", step: "packing", since: at(1) } })], devices, quiet: new Map(), waiting: new Map(), archived: [] }).threads[0]!
+  assert.equal(going.standing, "moving", "a Thread on its way stands with the ones at work from its first step")
+  assert.equal(listedMove(going)?.way, "cloud")
+  assert.equal(rowDetail(going, false, { move: "cloud" }).text, "Moving to the cloud")
+  const transit = foldThreads({ rows: [row(2, { state: "moving" })], devices, quiet: new Map(), waiting: new Map(), archived: [] }).threads[0]!
+  assert.equal(listedMove(transit)?.way, "device", "a cloud Thread in transit is coming back")
+})
+
+test("a Thread's app as servers: each process with a port, Ready once it runs, Starting… on its way, the address the host names first", () => {
+  const ready = serversOf({ kind: "ready", project: "api", phase: "running", address: { host: "127.0.0.1", port: 5173 }, processes: [{ name: "api", state: "running", port: 8787 }, { name: "web", state: "running", port: 5173 }, { name: "worker", state: "running" }], checks: [] })
+  assert.deepEqual(ready.servers, [{ name: "web", port: 5173, state: "ready" }, { name: "api", port: 8787, state: "ready" }])
+  assert.equal(ready.runnable, false)
+  const starting = serversOf({ kind: "ready", project: "api", phase: "starting", processes: [{ name: "web", state: "starting", port: 5173 }], checks: [] })
+  assert.equal(starting.servers[0]?.state, "starting")
+  const stopped = serversOf({ kind: "ready", project: "api", phase: "stopped", processes: [{ name: "web", state: "stopped", port: 5173 }], checks: [] })
+  assert.deepEqual([stopped.servers[0]?.state, stopped.runnable], ["stopped", true])
+  assert.match(serversOf({ kind: "none", project: "api", root: "/x" }).reason ?? "", /isn't set up yet/)
+  assert.deepEqual(loopbackTarget("http://localhost:5173/login?next=1#a"), { port: 5173, path: "/login?next=1#a" })
+  assert.deepEqual(loopbackTarget("http://127.0.0.1:3000"), { port: 3000, path: "/" })
+  assert.deepEqual(loopbackTarget("http://[::1]:8080/x"), { port: 8080, path: "/x" })
+  assert.deepEqual(loopbackTarget("http://app.localhost:4000/"), { port: 4000, path: "/" })
+  assert.equal(loopbackTarget("https://example.com:5173/"), undefined, "another computer's address opens as itself")
+  assert.equal(loopbackTarget("file:///etc/hosts"), undefined)
+  assert.equal(withPath("https://p-1.example.test/", "/login?next=1"), "https://p-1.example.test/login?next=1")
+  assert.equal(withPath("https://p-1.example.test/", "//evil.test/x"), "https://p-1.example.test/", "a path never leaves the grant's origin")
+})
+
+test("a Mac to connect: none yet, one that joined and isn't heard from, one that's there", () => {
+  const none = macConnection({ devices: new Map(), rows: [], quiet: new Map() }, new Set())
+  assert.equal(connectStep(none), "install")
+  const joined = macConnection({ devices, rows: [], quiet: new Map() }, new Set())
+  assert.deepEqual([joined.mac?.name, connectStep(joined)], ["Studio", "connect"])
+  assert.equal(connectStep(macConnection({ devices, rows: [row(1, { runsOn: { kind: "device", deviceId: STUDIO } })], quiet: new Map() }, new Set())), "done", "it listed what it runs")
+  assert.equal(connectStep(macConnection({ devices, rows: [], quiet: new Map() }, new Set([STUDIO]))), "done", "or answered")
+  assert.equal(connectStep(macConnection({ devices, rows: [row(1, { runsOn: { kind: "device", deviceId: STUDIO } })], quiet: new Map([[STUDIO, at(1)]]) }, new Set())), "connect", "a quiet one isn't there")
 })

@@ -69,8 +69,11 @@ export interface CloudAccount {
    * event says when it changes. Undefined where this Mac shares none.
    */
   signIns?(): Promise<CloudSignInsState | undefined>
-  /** A move's checkpoint or carry, a bundle sent to the cloud Thread once by its hash (`CloudAccounts.sendCheckpoint`). */
-  sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string): Promise<{ sent: boolean }>
+  /**
+   * A move's checkpoint or carry, a bundle sent to the cloud Thread once by its hash (`CloudAccounts.sendCheckpoint`);
+   * `sent` hears how many of its bytes have gone, as they go.
+   */
+  sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string, sent?: (bytes: number) => void): Promise<{ sent: boolean }>
   /**
    * A move this Mac released, handed to the cloud to carry through once it sent what only it has: the cloud arrives
    * it, claims it (or refuses it), and starts it (`CloudAccounts.handOverMove`).
@@ -333,7 +336,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     account: () => cloud.ready(),
     checkPlan: () => cloud.checkPlan(),
     signIns: async () => sync?.current(),
-    sendCheckpoint: (threadId, checkpoint, file) => cloud.sendCheckpoint(threadId, checkpoint, file),
+    sendCheckpoint: (threadId, checkpoint, file, sent) => cloud.sendCheckpoint(threadId, checkpoint, file, sent),
     handOverMove: (threadId, move, request) => cloud.handOverMove(threadId, move, request),
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),
     moveAnswer: (threadId, move, waitMs) => cloud.moveAnswer(threadId, move, waitMs),

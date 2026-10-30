@@ -74,7 +74,11 @@ export type ThreadMoveStep =
    * the move's steps are that conversation's.
    */
   | { kind: "own-branch"; to?: string }
-  | { kind: "packing" }
+  /**
+   * Its checkout and records going ahead while its machine gets ready. `sent`: of the checkout's bytes that have to go,
+   * how many have, said again as they go (a quarter second apart at most).
+   */
+  | { kind: "packing"; sent?: MoveSent }
   | { kind: "pausing" }
   | { kind: "handing-over" }
   | { kind: "resuming" }
@@ -83,6 +87,9 @@ export type ThreadMoveStep =
   /** `continued`: a turn the handoff had paused goes on here. */
   | { kind: "kept-here"; reason: string; continued?: boolean }
   | { kind: "unsettled"; reason: string }
+
+/** How much of a move's checkout has gone to the cloud: `bytes` of `of`, which grows as each repository's is packed. */
+export type MoveSent = { bytes: number; of: number }
 
 /**
  * A move of a Thread whose agents may be working (rule 2 of moves): each running turn is paused, the Thread moves,

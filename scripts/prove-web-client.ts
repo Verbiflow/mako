@@ -23,21 +23,23 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * - `start`: a Codex Session in `api` at "Ask first", whose first turn asks to run the payments tests: the first makes its
  *   Thread, each after is a Session added to it. `STARTED <conversation>`
  * - `begin <access> <first message>`: a Thread of its own in `api` at that access ("full", "ask"), its first turn the
- *   script its words name: "Say hello", "Stream a long answer", "Hold the turn", "Ask me a question", "Fail this turn".
- *   `STARTED <conversation>`
+ *   script its words name: "Say hello", "Stream a long answer", "Hold the turn", "Ask me a question", "Fail this turn",
+ *   "Check the retry fix" (three steps), "Break the last step" (three, the last failing), "Work through the steps" (three,
+ *   the last running 30 seconds). `STARTED <conversation>`
  * - `access <harness> <mode>`: the person chooses that access for the harness here, as the desk's composer does; it goes
  *   to their account. `ACCESS <the host's choices>`
  * - `choices`: the access choices as this host holds them now, after the account's word. `CHOICES <the host's choices>`
+ * - `app-start`, `app-stop`: `api`'s app (with `--app` or `--recipe`) started or stopped, as Run and Stop do. `APP <outcome>`
  * - `quit` (or stdin's end): signs the host out, so its device leaves the account, stops it, and removes the root unless `--keep`.
  *
  * No harness runs on anything of the person's: the home is the scratch one, Codex's sign-in an API key the stand-in takes.
  *
  * With `--app`, `api` has an app of its own: a recipe that serves a small page on the Thread's port, started once the
- * host is ready, for a phone to open through the gateway.
+ * host is ready, for a phone to open through the gateway. With `--recipe`, the same app, left stopped until `app-start`.
  *
- *   npx tsx --tsconfig tsconfig.scripts.json scripts/prove-web-client.ts --root <scratch> --cloud http://127.0.0.1:20021 [--keep] [--app]
+ *   npx tsx --tsconfig tsconfig.scripts.json scripts/prove-web-client.ts --root <scratch> --cloud http://127.0.0.1:20021 [--keep] [--app | --recipe]
  */
-const { values } = parseArgs({ options: { root: { type: "string" }, cloud: { type: "string" }, keep: { type: "boolean", default: false }, app: { type: "boolean", default: false } } })
+const { values } = parseArgs({ options: { root: { type: "string" }, cloud: { type: "string" }, keep: { type: "boolean", default: false }, app: { type: "boolean", default: false }, recipe: { type: "boolean", default: false } } })
 if (!values.root || !values.cloud) throw new Error("--root and --cloud are required")
 const root = values.root
 const home = join(root, "home")
@@ -175,6 +177,34 @@ const ANSWERS: Array<{ heard: RegExp; steps: ScriptedReply[] }> = [
       { text: "Going with that colour." },
     ],
   },
+  // Several steps in a row, for the phone's one-line fold of them: settled, failed at the end, and still running.
+  {
+    heard: /Check the retry fix/i,
+    steps: [
+      { reasoning: "Look at what the suite has first.", text: "Looking at the suite first.", call: { id: "call_list", name: "exec_command", arguments: { cmd: "ls test" } } },
+      { text: "Running it three times.", call: { id: "call_three", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 3" } } },
+      { text: "And once more on its own.", call: { id: "call_once", name: "exec_command", arguments: { cmd: "node test/payments.mjs" } } },
+      { text: "The retry fix holds: 412 tests pass three runs in a row, and once more on their own." },
+    ],
+  },
+  {
+    heard: /Break the last step/i,
+    steps: [
+      { text: "Listing the tests.", call: { id: "call_ls", name: "exec_command", arguments: { cmd: "ls test" } } },
+      { text: "Running the suite.", call: { id: "call_run", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 2" } } },
+      { text: "Checking the lint.", call: { id: "call_lint", name: "exec_command", arguments: { cmd: "node -e \"console.error('lint: 2 problems'); process.exit(1)\"" } } },
+      { text: "The lint failed with two problems; the tests pass." },
+    ],
+  },
+  {
+    heard: /Work through the steps/i,
+    steps: [
+      { text: "Listing the tests.", call: { id: "call_walk_ls", name: "exec_command", arguments: { cmd: "ls test" } } },
+      { text: "Running the suite.", call: { id: "call_walk_run", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 2" } } },
+      { text: "Running the suite for a while.", call: { id: "call_walk_long", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 300", yield_time_ms: 60_000 } } },
+      { text: "Worked through every step." },
+    ],
+  },
   { heard: /Fail this turn/i, steps: [{ fail: { status: 400, message: "The scripted model refused this turn." } }] },
   { heard: /whole suite/i, steps: [{ reasoning: "Run everything once more.", text: "Running the whole suite once more.", call: { id: "call_suite", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 200" } } }, { text: "The whole suite passed." }] },
 ]
@@ -215,7 +245,7 @@ await rollout("billing-service", 3 * 60, Array.from({ length: LONG_TURNS }, (_, 
 const api = join(home, "projects", "api")
 await mkdir(join(api, ".git"), { recursive: true })
 await mkdir(join(api, "test"), { recursive: true })
-if (values.app) {
+if (values.app || values.recipe) {
   await mkdir(join(api, ".mako"), { recursive: true })
   await writeFile(join(api, ".mako", "recipe.json"), JSON.stringify({ processes: { web: { command: "node server.mjs", port: "{port}", values: { PORT: "{port}" } } } }, null, 2))
   await writeFile(join(api, "server.mjs"), APP_SERVER)
@@ -253,7 +283,7 @@ console.log(`READY ${JSON.stringify({ dataRoot, sessions: SESSIONS.length + 1 })
 
 const stop = async () => {
   // Its app is a process of its own: stopped here, or it outlives the host.
-  if (values.app) await call("mako:thread-app-stop", [api]).catch(() => undefined)
+  if (values.app || values.recipe) await call("mako:thread-app-stop", [api]).catch(() => undefined)
   await call("mako:cloud-sign-out", []).catch(() => undefined)
   host.kill("SIGTERM")
   await release()
@@ -287,6 +317,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     const [, harness, mode] = line.trim().split(/\s+/)
     console.log(`ACCESS ${JSON.stringify(await call("mako:access-choose", [harness, mode]))}`)
   } else if (line.trim() === "choices") console.log(`CHOICES ${JSON.stringify(await call("mako:access-choices", []))}`)
+  else if (line.trim() === "app-start") console.log(`APP ${JSON.stringify(await call("mako:thread-app-start", [api]))}`)
+  else if (line.trim() === "app-stop") console.log(`APP ${JSON.stringify(await call("mako:thread-app-stop", [api]))}`)
   else if (line.trim() === "quit") break
 }
 await stop()

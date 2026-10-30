@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.0.40"
+    "version": "1.2.0"
   },
   "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-34871b673e6b93b5848fa35f6b3407dd126188cd9319d64f2a0ff3a6a52a1bb1/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-4756f6078c3aca07bc5d52d614b70cab0ee7321523004e0e9395203c1789982b/store.db",
       "known": []
     }
   ]

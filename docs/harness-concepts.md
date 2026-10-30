@@ -6,12 +6,12 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 
 | Harness | Checked on | Version | Places confirmed by |
 | --- | --- | --- | --- |
-| Claude Code | 2026-10-25 | 2.1.310 | its own listing (MCP) |
-| Codex | 2026-10-25 | 0.164.0 | its own listing (skills) |
-| Cursor | 2026-10-25 | SDK 1.0.40 | its own listing (skills, MCP) |
-| OpenCode | 2026-10-25 | 2.1.4 | its own listing (skills, MCP) |
+| Claude Code | 2026-10-30 | 2.1.314 | its own listing (MCP) |
+| Codex | 2026-10-30 | 0.166.0 | its own listing (skills) |
+| Cursor | 2026-10-30 | SDK 1.2.0 | its own listing (skills, MCP) |
+| OpenCode | 2026-10-30 | 2.2.3 | its own listing (skills, MCP) |
 | Grok | 2026-10-25 | 1.0.70 | its own listing (skills, MCP) |
-| Devin | 2026-10-25 | 3000.11.205 | its own listing (skills, MCP) |
+| Devin | 2026-10-30 | 3000.11.234 | its own listing (skills, MCP) |
 
 ## Instructions
 
@@ -115,7 +115,7 @@ One name in Mako for what the harnesses call differently, from each definition's
 | Plugins | plugins, by default | plugins, by default | plugins: Mako gap | plugins, by default | plugins, by default | plugins, by default |
 | Response style | output styles, by default | none here (personality) | none | none | none here (/personas) | none |
 | Web search | **WebSearch** | **web_search, web__run** | none here (webSearch) | **websearch** | **web_search** | **web_search** |
-| Image generation | none | **image generation** | **generateImage** | none | **image_gen, image_edit** | none |
+| Image generation | none | **image generation** | **generateImage** | **experimental_image_generate** | **image_gen, image_edit** | none |
 | Code mode | none | **exec** | none | **execute** | none | none |
 
 ## Only this harness
@@ -135,12 +135,12 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 
 | Harness | Version | Recorded | Tools | Configurations | Declared, unlisted | Source |
 | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | 2.1.310 | 2026-10-25 | 27 (15 deferred) | 6 | 16 | the tools in the model request of Claude Code as Mako's SDK driver launches it (claudeSdkOptions), once per Mako mode; deferred tools' schemas from a second run with tool search off |
-| Codex | 0.164.0 | 2026-10-25 | 25 (12 called from a script) | 16 | 16 | the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan |
-| Cursor | 1.0.40 | 2026-10-25 | 17 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
-| OpenCode | 2.1.4 | 2026-10-25 | 13 | 4 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model |
+| Claude Code | 2.1.314 | 2026-10-30 | 27 (15 deferred) | 6 | 16 | the tools in the model request of Claude Code as Mako's SDK driver launches it (claudeSdkOptions), once per Mako mode; deferred tools' schemas from a second run with tool search off |
+| Codex | 0.166.0 | 2026-10-30 | 25 (12 called from a script) | 18 | 16 | the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan |
+| Cursor | 1.2.0 | 2026-10-28 | 17 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
+| OpenCode | 2.2.3 | 2026-10-30 | 14 | 4 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model |
 | Grok | 1.0.70 | 2026-10-25 | 26 | 4 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode |
-| Devin | 3000.11.205 | 2026-10-25 | 24 | 4 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode; not smart, which Devin offers only to an account whose settings allow it |
+| Devin | 3000.11.234 | 2026-10-30 | 24 | 4 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode; not smart, which Devin offers only to an account whose settings allow it |
 
 ## Plan, questions and subagents
 

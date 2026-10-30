@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
-import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
+import { ArrowDownIcon, ArrowLeftRightIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
 import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } from "@mako/host/contracts/live-questions"
 import type { LivePermissionRequest, PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { bareCommand, identifyTool } from "@mako/sessions/tool-identity"
 import { PromptQueue } from "@/components/composer/prompt-queue"
+import { editQueuedPrompt } from "@/state/acp-queue"
+import { descriptorFor } from "@/state/descriptors"
+import { usePrefs } from "@/state/prefs"
+import { useThreads } from "@/state/thread-store"
+import type { PendingPrompt } from "@/state/prompt-delivery"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { Ticking } from "@/components/ui/ticking"
 import { GonePermission } from "@/components/viewer/acp-panel"
@@ -13,11 +18,14 @@ import { acpStore } from "@/state/acp-state"
 import { promptDelivery } from "@/state/prompt-delivery"
 import { shallowEqual } from "@/state/store"
 import { record, type AnsweredRecord } from "./answered"
-import { Composer, type Outgoing } from "./composer"
+import { Composer, type EditingQueued, type Outgoing, type Steering } from "./composer"
+import { ThreadChips } from "./thread-chips"
+import { useSwitching } from "./switching"
 import { answeredWords, dockStatus, statusWords, workingWords, type DockStatus } from "./dock-status"
 import { noteAnswered } from "./install"
 import { dropUnsent, keepUnsent, retryUnconfirmed, retryUnsent, sendMessage, useOutbox, type SendTarget } from "./outbox"
 import { useWaking, wakeThread } from "./wake"
+import { askPreview, useAppStanding } from "./previews"
 
 /**
  * The phone's dock: everything between the transcript and the keyboard, one column pinned to the bottom of the screen.
@@ -76,7 +84,12 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
     if (ask?.kind === "question" && attachments.length === 0 && typed.current?.(text)) return true
     return sendMessage(target, id, text, attachments)
   }
-  const placeholder = ask?.kind === "question" ? "Tap an answer above, or type your own" : running ? `Queue a message for ${harness}` : `Message ${harness}`
+  const steering = useSteering()
+  const steerByDefault = usePrefs((prefs) => prefs.steerOnEnter)
+  const harnessId = useAcp((state) => activeLiveAcp(state)?.harness)
+  const switching = useSwitching((state) => state.pending.has(conversation))
+  const editing = useEditingQueued(conversation)
+  const placeholder = ask?.kind === "question" ? "Tap an answer above, or type your own" : running ? (steering.canSteer && steerByDefault ? `Steer ${harness}` : `Queue a message for ${harness}`) : `Message ${harness}`
   return (
     <div className="web-dock shrink-0" data-asking={ask ? ask.kind : undefined}>
       <div aria-hidden className="web-dock-fade" />
@@ -99,7 +112,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         </ul>
       ) : null}
       <div className="mx-auto w-full max-w-content px-3">
-        <PromptQueue />
+        <PromptQueue onEdit={editing.begin} />
       </div>
       <Composer
         key={draftKey}
@@ -113,9 +126,72 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         onUnsent={(message: Outgoing) => keepUnsent({ ...message, conversation })}
         // A question is answered in words: nothing to attach, and the hint gets the room.
         attach={ask?.kind !== "question"}
+        // A question waiting: typed words are its answer, which a send takes; nothing steers past it.
+        steering={ask?.kind === "question" ? undefined : steering}
+        answering={ask?.kind === "question"}
+        editing={editing.current}
+        waiting={switching ? "Switching access…" : undefined}
+        tools={harnessId ? <ThreadChips conversation={conversation} harness={harnessId} /> : undefined}
       />
     </div>
   )
+}
+
+/** Whether the open conversation's harness takes a message into its running turn, and how it lands; and the steer. */
+function useSteering(): Steering {
+  const harness = useAcp((state) => activeLiveAcp(state)?.harness)
+  const lands = useThreads((state) => {
+    const steering = descriptorFor(state, harness)?.capabilities.steering
+    return steering?.state === "implemented" ? steering.lands : null
+  })
+  const working = useAcp((state) => activeLiveAcp(state)?.session.status === "running")
+  return useMemo(() => ({ canSteer: lands !== null && working, lands, steer: (text, attachments) => acp.steer(text, attachments) }), [lands, working])
+}
+
+interface QueuedEditor {
+  /** The queued message whose words are in the field now. */
+  current: EditingQueued | undefined
+  begin: (request: PendingPrompt, body: string) => void
+}
+
+/**
+ * A queued message edited in the composer rather than in its row: held in the queue while its words are in the field,
+ * saved in its place with ✓, or let go again as it was with Cancel.
+ */
+function useEditingQueued(conversation: string): QueuedEditor {
+  const [editing, setEditing] = useState<{ request: PendingPrompt; body: string } | undefined>(undefined)
+  const target = useMemo(() => ({ kind: "live" as const, id: conversation }), [conversation])
+  const begin = useCallback(
+    (request: PendingPrompt, body: string) => {
+      void editQueuedPrompt(target, request, { kind: "pause" }).then(
+        () => setEditing({ request, body }),
+        () => undefined
+      )
+    },
+    [target]
+  )
+  const current = useMemo((): EditingQueued | undefined => {
+    if (!editing) return undefined
+    const { request, body } = editing
+    return {
+      id: request.id,
+      text: body,
+      save: async (text) => {
+        try {
+          await editQueuedPrompt(target, request, { kind: "edit", text: text + request.text.slice(body.length) })
+          setEditing(undefined)
+          return true
+        } catch {
+          return false
+        }
+      },
+      cancel: () => {
+        setEditing(undefined)
+        void editQueuedPrompt(target, request, { kind: "resume" }).catch(() => undefined)
+      },
+    }
+  }, [editing, target])
+  return { current, begin }
 }
 
 function shallowArray<T>(left: readonly T[], right: readonly T[]): boolean {
@@ -341,7 +417,7 @@ function QuestionCard({ ask, conversation, harness, answerTyped }: { ask: Extrac
 
 /** A record of an answer given from the dock, at the end of its turn: one muted line. */
 export function AnsweredLine({ entry }: { entry: AnsweredRecord }) {
-  const Icon = entry.kind === "refused" ? XIcon : entry.kind === "allowed" ? CheckIcon : CornerDownLeftIcon
+  const Icon = entry.kind === "refused" || entry.kind === "not-switched" ? XIcon : entry.kind === "allowed" ? CheckIcon : entry.kind === "switched" ? ArrowLeftRightIcon : CornerDownLeftIcon
   return (
     <p data-answered={entry.id} className="web-answered">
       <Icon aria-hidden className="size-3.5 shrink-0" />
@@ -349,7 +425,7 @@ export function AnsweredLine({ entry }: { entry: AnsweredRecord }) {
       {entry.detail ? (
         <>
           <span aria-hidden>·</span>
-          <span className={cn("min-w-0 truncate", entry.kind !== "answered" && "font-mono")}>{entry.detail}</span>
+          <span className={cn("min-w-0 truncate", (entry.kind === "allowed" || entry.kind === "refused") && "font-mono")}>{entry.detail}</span>
         </>
       ) : null}
     </p>
@@ -396,11 +472,13 @@ function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnec
   const wakingMessage = useOutbox((state) => Boolean(pendingIds) && pendingIds!.split(" ").some((id) => state.sending.get(id) === "waking"))
   const status = dockStatus({ online, unconfirmed: live?.unconfirmed ?? false, canceling: live?.canceling ?? false, waking, wakingMessage, running: live?.running ?? false, since: live?.since, asking })
   const queued = live?.queued ?? 0
-  const shown = status !== undefined || queued > 0
+  // Its app, while it runs or starts: a segment of its own that opens it (`preview.tsx`).
+  const app = useAppStanding(conversation)
+  const shown = status !== undefined || queued > 0 || app !== undefined
   // What it last said, kept while it leaves.
-  const key = `${status?.kind}:${status?.kind === "working" ? status.since : status?.kind === "waking" ? status.message : ""}:${queued}`
-  const [kept, keep] = useState<{ key: string; status: DockStatus | undefined; queued: number }>({ key, status, queued })
-  if (shown && kept.key !== key) keep({ key, status, queued })
+  const key = `${status?.kind}:${status?.kind === "working" ? status.since : status?.kind === "waking" ? status.message : ""}:${queued}:${app}`
+  const [kept, keep] = useState<{ key: string; status: DockStatus | undefined; queued: number; app?: "running" | "starting" }>({ key, status, queued, app })
+  if (shown && kept.key !== key) keep({ key, status, queued, app })
   const retry = () => {
     reconnect()
     void retryUnconfirmed(conversation)
@@ -428,6 +506,12 @@ function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnec
           )
         ) : null}
         {kept.queued > 0 ? <span className="web-capsule-segment web-capsule-queued">{kept.queued} queued</span> : null}
+        {kept.app ? (
+          <button type="button" className="web-capsule-segment web-capsule-app" data-app={kept.app} onClick={() => askPreview(conversation)}>
+            <span aria-hidden className="web-capsule-app-dot" />
+            <span className="web-capsule-app-words">{kept.app === "running" ? "App running · Open" : "App starting…"}</span>
+          </button>
+        ) : null}
       </div>
       <button type="button" aria-label="Jump to newest" tabIndex={away ? 0 : -1} aria-hidden={!away} className="web-jump" data-shown={away || undefined} onClick={jump}>
         <ArrowDownIcon className="size-4" />

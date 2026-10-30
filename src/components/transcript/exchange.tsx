@@ -8,8 +8,11 @@ import { RewindButton, PromptRewindButton } from "./rewind-button"
 import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
-import { ExchangeNoteContext, PromptNoteContext } from "./transcript-notes"
+import { ExchangeNoteContext, MoveDividersContext, PromptNoteContext } from "./transcript-notes"
+import { CompactPresentationContext } from "./compact-presentation"
 import { acp, useAcp, type ForkAnswer } from "@/state/acp"
+import { descriptorFor } from "@/state/descriptors"
+import { threadsStore } from "@/state/thread-store"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { acpStore } from "@/state/acp-state"
 import { PlanSummary } from "./tool-details"
@@ -194,6 +197,7 @@ export const Exchange = memo(function Exchange({
     ) : (
       <WorkSection
         key={section.id}
+        id={`${exchange.id}:${section.id}`}
         messages={section.messages}
         startedAt={index === 0 ? began : undefined}
         live={Boolean(streaming && section === lastSection)}
@@ -340,6 +344,20 @@ function continuedTitle({ reason, sender }: SavedContinuation, provider: string)
   }
 }
 
+/** A line across the transcript where a move to the cloud cut the turn: what came before ran here, the rest there. */
+function MovedDivider({ at }: { at: number | undefined }) {
+  return (
+    <div role="separator" aria-label="Moved to the cloud" data-moved-divider className="my-3 flex items-center gap-3 text-label text-faint">
+      <span className="h-px flex-1 bg-hairline" />
+      <span className="flex shrink-0 items-center gap-1.5">
+        <CloudIcon aria-hidden className="size-3.5" />
+        Moved to the cloud{at ? ` · ${formatTime(at)}` : ""}
+      </span>
+      <span className="h-px flex-1 bg-hairline" />
+    </div>
+  )
+}
+
 /**
  * Where a turn that was cut short went on. The words are Mako's, whether
  * Mako sent them on its own or the person pressed Continue turn, and the
@@ -354,6 +372,8 @@ function TurnWentOn({ continued, message, provider }: { continued: SavedContinua
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
   const diagnosing = usePrefs((prefs) => prefs.showOriginals)
+  const dividers = useContext(MoveDividersContext)
+  if (dividers && !diagnosing && continued.reason === "handed-off") return <MovedDivider at={message.timestamp} />
   if (!diagnosing && continued.reason !== "machine-lost") return null
   const agent = provider ?? harness
   const said = textOf(message.blocks).trim()
@@ -640,6 +660,7 @@ function summarizeWork(
  * settles keeps what it had mounted.
  */
 function WorkSection({
+  id,
   messages,
   startedAt,
   live,
@@ -648,6 +669,8 @@ function WorkSection({
   failed,
   onOpenSteps,
 }: {
+  /** Which run of the transcript it is, for a compact presentation (`CompactPresentationContext`). */
+  id: string
   messages: ChatMessage[]
   startedAt?: number
   live: boolean
@@ -679,6 +702,18 @@ function WorkSection({
     setOpen((value) => {
       if (!value && live) onOpenSteps?.()
       return !value
+    })
+  // On a phone the run is one line that opens its steps; inside a fold's body it is drawn whole, as here.
+  const compact = useContext(CompactPresentationContext)?.steps
+  if (compact && !whole)
+    return compact({
+      id,
+      calls: messages.flatMap((message) => pairTools(message.blocks)),
+      provider: messages.find((message) => message.provider)?.provider,
+      live,
+      interrupted: !live && interrupted,
+      failed: !live && failed,
+      ...(!live && work.duration !== undefined && { worked: work.duration }),
     })
   return (
     <div className="flex flex-col">
@@ -809,6 +844,24 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
   const said = work.tools > 0 ? text : undefined
   const title = duration ? `${verb} ${stop ? "after" : "for"} ${duration}` : stop ? verb : said ? said.charAt(0).toUpperCase() + said.slice(1) : "Show the steps"
   const detail = duration || stop ? said : undefined
+  // On a phone a settled turn's work is one line too, opening everything it hides, the words between steps included.
+  const compact = useContext(CompactPresentationContext)?.steps
+  if (compact)
+    return (
+      <div data-turn-fold="compact" className="flex flex-col">
+        {compact({
+          id: foldKey,
+          calls: fold.messages.flatMap((message) => pairTools(message.blocks)),
+          provider: fold.messages.find((message) => message.provider)?.provider,
+          live: false,
+          interrupted: cut,
+          failed: false,
+          ...(fold.worked !== undefined && { worked: fold.worked }),
+          body: <div className="flex flex-col gap-4 pt-1">{children}</div>,
+        })}
+        {kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
+      </div>
+    )
   return (
     <div data-turn-fold={open ? "open" : "closed"} className="flex flex-col">
       <button
@@ -1113,7 +1166,17 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
   const text = responseText(exchange)
   const { copied, copy } = useCopy(text, undefined, () => completeLiveAnswer(liveId, exchange))
   const last = exchange.response.at(-1)
+  const compact = useContext(CompactPresentationContext)?.reply
+  const fork = useLiveFork(exchange)
   if (!text && !last?.timestamp && !interrupted) return null
+  if (compact)
+    return (
+      <div className="mt-1.5 flex min-h-6 flex-wrap items-center gap-x-2.5 text-label text-muted-foreground">
+        {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
+        {/* The phone's reply offers what it can be used for; its time and model are the desk's details. */}
+        {streaming ? null : compact({ exchange: exchange.id, text, ...(fork && !interrupted && { branch: fork }) })}
+      </div>
+    )
 
   return (
     <div className="mt-1.5 flex min-h-6 items-center gap-2.5 text-label text-muted-foreground">
@@ -1208,6 +1271,22 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
       ) : null}
     </>
   )
+}
+
+/**
+ * A fork after this answer of a live conversation, where its harness can fork and the turn is done: the new Session's
+ * conversation once it's made, or undefined when the host refused it (it says why). The phone's Branch.
+ */
+function useLiveFork(exchange: ExchangeData): (() => Promise<string | undefined>) | undefined {
+  const scope = useConversationScope()
+  const requestId = exchange.prompt?.requestId
+  const live = useAcp((state) => {
+    const current = scopedLiveAcp(state, scope)
+    if (!current || !requestId || current.requests?.find((request) => request.id === requestId)?.status !== "completed") return undefined
+    return descriptorFor(threadsStore.get(), current.harness)?.capabilities.fork.state === "implemented" ? current.key : undefined
+  })
+  if (!live || !requestId) return undefined
+  return () => acp.fork({ kind: "run", requestId }, "parent", scopedLiveAcp(acpStore.get(), scope), false)
 }
 
 /**

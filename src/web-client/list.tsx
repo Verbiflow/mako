@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { ArchiveIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
 import { Avatar } from "@/components/ui/avatar"
 import { useRowFlip } from "@/components/rail/use-row-flip"
 import { MarkStack, StackedMark } from "@/components/ui/mark-stack"
@@ -24,6 +24,12 @@ import { rowDetail, type RowContext } from "./rows"
 import { foldThreads, type WebThread } from "./threads"
 import { webHarnessLabel } from "./labels"
 import { macCount } from "./places"
+import { listedMove, useMoves, type WebMove } from "./moves"
+import { ConnectMac } from "./connect-mac"
+import { macConnection } from "./mac-connection"
+import { macPlace, useReach } from "./reach"
+import { DiagnosisCard } from "./trouble"
+import { checkList, useListDiagnosis, useTryAgain } from "./trouble-state"
 
 /** The list's sections: what needs the person, what's at work, and the rest. */
 function sections(threads: readonly WebThread[]) {
@@ -59,8 +65,9 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
   const now = useTick(threads.some((thread) => thread.standing === "working"))
   // The held row's menu; `serial` starts each one afresh, a rename half-typed in the last one left behind.
   const [menu, setMenu] = useState<{ thread: WebThread; anchor: HTMLElement | null; open: boolean; serial: number } | undefined>(undefined)
+  const moves = useMoves((state) => state.moves)
   const rowProps = (thread: WebThread) => {
-    const context = rowContext(thread, read, now)
+    const context = rowContext(thread, read, now, moves.get(thread.id))
     return {
       thread,
       selected: thread.id === selected,
@@ -116,6 +123,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
       <div ref={scroller} className="web-scroll relative min-h-0 flex-1 overflow-y-auto">
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
+          <ListTrouble />
           {threads.length === 0 && archived.length === 0 ? (
             <EmptyList answered={list.phase === "live" || list.asOf !== undefined} onNew={onNew} />
           ) : (
@@ -204,8 +212,36 @@ function ListPhase({ list }: { list: AccountListState }) {
   )
 }
 
-/** No Threads to list: said only once the account has answered so. Until then (or while it can't), the rows' shapes. */
+/**
+ * The list can't be followed: why (this phone offline, or Mako Cloud not answering), with Try again, said once it has
+ * lasted a moment so a reconnect that's over at once never shows. The rows stay as last heard beneath it.
+ */
+function ListTrouble() {
+  const client = useWebClient()
+  const diagnosis = useListDiagnosis()
+  const { checking, tryAgain } = useTryAgain(() => checkList(client))
+  const shown = useDelayedStatus(diagnosis ? diagnosis.headline : null)
+  if (!diagnosis || !shown) return null
+  return <DiagnosisCard diagnosis={diagnosis} checking={checking} onTryAgain={tryAgain} compact className="web-trouble-list" />
+}
+
+/**
+ * No Threads to list: said only once the account has answered so. Until then (or while it can't), the rows' shapes.
+ * An account with no Mac heard from yet gets the checklist that connects one, following along on its own.
+ */
 function EmptyList({ answered, onNew }: { answered: boolean; onNew: () => void }) {
+  const list = useAccountList((state) => state)
+  const places = useReach((state) => state.places)
+  const needsMac = useMemo(() => !macConnection(list, new Set([...list.devices.keys()].filter((id) => places.get(macPlace(id))?.ok))).connected && !list.rows.some((row) => row.runsOn.kind === "device"), [list, places])
+  // Kept up while it says it's done, a beat, then it gives way.
+  const [connecting, setConnecting] = useState(false)
+  if (answered && needsMac && !connecting) setConnecting(true)
+  if (answered && connecting)
+    return (
+      <div className="web-enter mx-auto flex max-w-[380px] flex-col px-5 pt-10">
+        <ConnectMac onDone={() => setConnecting(false)} />
+      </div>
+    )
   if (!answered)
     return (
       <div className="skeleton-rows flex flex-col gap-1 px-4 pt-5" aria-hidden>
@@ -258,8 +294,10 @@ function threadLabel(thread: WebThread, detail: string, unread: boolean): string
 /** When this browser first saw each Thread at work, for one whose owner doesn't say when its run started. */
 const seenWorking = new Map<string, number>()
 
-/** What a row reads besides its Thread: the clock, when its run started, and whether it finished unread. */
-function rowContext(thread: WebThread, read: ReadState, now: number): RowContext {
+/** What a row reads besides its Thread: the clock, when its run started, whether it finished unread, a move under way. */
+function rowContext(thread: WebThread, read: ReadState, now: number, followed: WebMove | undefined): RowContext {
+  const way = followed && followed.end?.kind !== "failed" ? followed.way : listedMove(thread)?.way
+  if (way) return { move: way }
   if (thread.standing !== "working") {
     seenWorking.delete(thread.id)
     const seen = read.seen[thread.id]
@@ -300,7 +338,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
   const front = useRef<HTMLButtonElement>(null)
   useRowGestures(box, front, swipe, { onTap: onOpen, onHold: () => onHold?.(box.current), onArchive: () => onArchive?.() })
   // A Mac that's off says so on its own rows, dimmed with a moon where its laptop stood, rather than in a line of its own.
-  const Place = detail.place === "cloud" ? CloudIcon : thread.quietSince ? MoonIcon : LaptopIcon
+  const Place = detail.move ? (detail.move === "cloud" ? ArrowUpIcon : ArrowDownIcon) : detail.place === "cloud" ? CloudIcon : thread.quietSince ? MoonIcon : LaptopIcon
   const receding = thread.standing === "working" || thread.standing === "moving"
   const spoken = detail.elapsed ? `${detail.text} for ${detail.elapsed}` : detail.lead ? `${detail.lead}, ${detail.text}` : detail.text
   return (
@@ -321,6 +359,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
         aria-label={threadLabel(thread, spoken, unread)}
         data-thread={thread.id}
         data-standing={thread.standing}
+        data-moving={detail.move}
         data-unread={unread || undefined}
         className={cn("web-row group relative flex w-full items-center text-left", thread.quietSince && "opacity-60")}
       >
@@ -336,7 +375,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
             </span>
           </span>
           <span className="flex min-w-0 items-center gap-1.5 text-label">
-            {detail.place ? <Place aria-hidden className="size-3 shrink-0 text-faint" /> : null}
+            {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
             {detail.tone === "working" ? (
               <Shimmer className="min-w-0 truncate">
                 {detail.text}

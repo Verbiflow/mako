@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Read notes.md, then tell me in one sentence what its second line says, citing the file and that line. An answer that cites a file and a line of it, which Devin 3000.10.23's model marks up for its client to link.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#awake-makemake",
+      "path": ".local/share/devin/cli/sessions.db#crimson-rubidium",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/b6972a5d-29cd-4373-a0ee-3ac3584ad1fb.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/91f05b09-cbf9-433b-b22a-ca9cce2dc735.db",
       "known": [
         {
           "side": "-",

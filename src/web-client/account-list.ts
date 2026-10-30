@@ -15,9 +15,13 @@ export interface WebDevice {
   kind: string
   name: string
   platform: string
+  /** The Mako it runs, as it said when it last signed in; for Diagnostics. */
+  appVersion?: string | null
+  /** When the cloud last took its sign-in (a few minutes coarse): not whether it's connected now. */
+  lastSeenAt?: string
 }
 
-const WebDeviceSchema = z.object({ id: z.string(), kind: z.string(), name: z.string(), platform: z.string() }) satisfies z.ZodType<WebDevice>
+const WebDeviceSchema = z.object({ id: z.string(), kind: z.string(), name: z.string(), platform: z.string(), appVersion: z.string().nullable().optional(), lastSeenAt: z.string().optional() }) satisfies z.ZodType<WebDevice>
 /** The account's devices, as `GET /v1/devices` answers. */
 const DevicesSchema = z.object({ devices: z.array(WebDeviceSchema) })
 
@@ -87,6 +91,8 @@ export class AccountList {
   /** Signed out: nothing is kept from now. */
   #forgotten = false
   #devicesAsked = 0
+  /** Devices rows named before the list did, each asked about once. */
+  readonly #namedAsked = new Set<string>()
 
   constructor(gateway: Gateway, accountId: string) {
     this.#gateway = gateway
@@ -148,6 +154,9 @@ export class AccountList {
     this.#devicesAsked = Date.now()
     const { devices } = DevicesSchema.parse(await this.#gateway.rest("GET", "/v1/devices"))
     accountListStore.set({ devices: new Map(devices.map((device) => [device.id, device])) })
+    // Whether each is quiet is said of every Mac the account has, one just named included.
+    const { phase } = accountListStore.get()
+    if (phase === "live" || phase === "reconnecting") this.#publish(phase)
   }
 
   async #run(): Promise<void> {
@@ -175,11 +184,22 @@ export class AccountList {
           webSync.listHeard(frame.seq)
           if (skipped || lost) break
           const parsed = AccountEventSchema.safeParse(decoded)
+          // A device joining or leaving the account: its name, and whether it's a Mac, are read again at once, so a Mac
+          // signing in for the first time shows up as it does.
+          if (parsed.success && (parsed.data.type === "device-joined" || parsed.data.type === "device-removed")) {
+            void this.refreshDevices().catch((error) => this.#failed({ error }))
+            continue
+          }
           // A kind of event this build doesn't know is passed over, never refused.
           if (!parsed.success || !isAccountListEvent(parsed.data)) continue
           if (parsed.data.type === "sessions-listed") for (const row of parsed.data.sessions) if (row.changedAt) webSync.listChanged(row.changedAt)
           if (!this.#list.heard({ seq: frame.seq, event: parsed.data })) continue
-          if (this.#unnamedDevice() && Date.now() - this.#devicesAsked > 10_000) void this.refreshDevices().catch((error) => this.#failed({ error }))
+          // A device a row names that this list hasn't named yet is asked about once: its name, not "another computer".
+          const unnamed = this.#unnamedDevice()
+          if (unnamed && !this.#namedAsked.has(unnamed)) {
+            this.#namedAsked.add(unnamed)
+            void this.refreshDevices().catch((error) => this.#failed({ error }))
+          }
           this.#publish("live")
         }
         subscription.close()
@@ -197,10 +217,11 @@ export class AccountList {
     }
   }
 
-  #unnamedDevice(): boolean {
+  /** A device a listed row runs on that the list hasn't named, if any. */
+  #unnamedDevice(): string | undefined {
     const { devices } = accountListStore.get()
-    for (const row of this.#list.sessions().values()) if (row.runsOn.kind === "device" && !devices.has(row.runsOn.deviceId)) return true
-    return false
+    for (const row of this.#list.sessions().values()) if (row.runsOn.kind === "device" && !devices.has(row.runsOn.deviceId)) return row.runsOn.deviceId
+    return undefined
   }
 
   #pause(ms: number): Promise<void> {
@@ -229,6 +250,11 @@ export class AccountList {
       if (row.runsOn.kind !== "device") continue
       const since = this.#list.quietSince(row.runsOn.deviceId)
       if (since) quiet.set(row.runsOn.deviceId, since)
+    }
+    // A Mac with nothing listed is quiet or not all the same: New and the diagnosis say so of it.
+    for (const device of accountListStore.get().devices.keys()) {
+      const since = this.#list.quietSince(device)
+      if (since) quiet.set(device, since)
     }
     const next: StorePatch<AccountListState> = {
       phase,
