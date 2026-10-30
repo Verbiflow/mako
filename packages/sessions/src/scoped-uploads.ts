@@ -39,6 +39,11 @@ export const SyncFailureSchema = z.object({
   correlationId: z.string().optional(),
   /** The account refused it as records that went on in two places: tried again only once something new is captured. */
   conflict: z.boolean().optional(),
+  /**
+   * When the Session's pushes began failing this way: `at` moves with each try, this stays until one goes or the
+   * failure's words change, so a failure tried again is said once.
+   */
+  since: z.number().optional(),
 })
 export type SyncFailure = z.infer<typeof SyncFailureSchema>
 
@@ -94,11 +99,20 @@ const FLIGHTS = 2
 /** The first wait after a failed push, doubling to the most. */
 const RETRY_MS = 2_000
 const RETRY_MOST_MS = 5 * 60_000
-/** Failures kept for the status. */
+/**
+ * The most a push the account refused waits: the same records sent again get the same answer, so a refusal is tried
+ * about hourly once it has been tried a dozen times. A refused pack once went again every few seconds for hours.
+ */
+const REFUSED_MOST_MS = 60 * 60_000
+/** Failures kept for the status, one per Session. */
 const FAILURES_KEPT = 5
 
 type Wanted = SyncScope["sessions"][number]
-type Retry = { failures: number; after: number; conflictAt?: number }
+/**
+ * A Session's pushes failing in a row: how many, when the next may go, and the first failure's time and words, which
+ * the next failure keeps when it says the same. `refused`: the account answered and refused what was sent.
+ */
+type Retry = { failures: number; after: number; conflictAt?: number; refused?: boolean; since: number; words: string }
 
 /**
  * One record store kept in step with one remote for a device's scope, the most wanted Session first. What's in the
@@ -108,8 +122,12 @@ type Retry = { failures: number; after: number; conflictAt?: number }
  *
  * At most two pushes go at once and only one of them catching up, so a Session at work goes in the seconds after its
  * capture; catching up is paced to `bytesPerSecond` and waits while the scope is paused. A failed push is tried again
- * later, waiting longer each time, and at once on its next capture; records that went on in two places wait for
- * something new. Idempotent: a push sends only what the remote isn't known to hold, by content-addressed chunks.
+ * later, waiting twice as long after each failure in a row, up to five minutes, or an hour for one the account
+ * refused. The next capture ends the wait after a single failure (a dropped connection), never after a refusal or a
+ * second failure: a Session at work captures every few seconds, and each capture once sent a refused push again.
+ * Records that went on in two places wait for something new. A failure is logged once, when it starts or its words
+ * change, and once more when the Session goes. Idempotent: a push sends only what the remote isn't known to hold, by
+ * content-addressed chunks.
  */
 export class ScopedUploads {
   readonly #store: RecordStore
@@ -166,8 +184,10 @@ export class ScopedUploads {
       else
         for (const [key, capture] of read.heads) {
           this.#heads.set(key, capture)
-          // Something new is captured: a wait after a failure, or after records that went on in two places, ends.
-          this.#retries.delete(key)
+          // Something new is captured: records that went on in two places go again, as does a push that failed once.
+          const retry = this.#retries.get(key)
+          if (retry?.conflictAt !== undefined) delete retry.conflictAt
+          else if (retry && !retry.refused && retry.failures === 1) retry.after = 0
         }
       this.#through = Math.max(this.#through, read.through)
     } catch (error) {
@@ -265,7 +285,9 @@ export class ScopedUploads {
       const at = this.#now()
       await this.#store.notePushed(this.#remote.id, session.harness, session.nativeId, head, at)
       this.#pushed?.set(key, { capture: Math.max(head, this.#pushed.get(key)?.capture ?? 0), at })
+      const streak = this.#retries.get(key)
       this.#retries.delete(key)
+      if (streak) this.#log("info", "pushed after failing", { remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, failures: streak.failures, failingMs: at - streak.since })
       if (report.versions || report.chunks) {
         this.#pushes += 1
         this.#bytes += report.bytes
@@ -273,17 +295,28 @@ export class ScopedUploads {
       }
     } catch (error) {
       if (this.#stopped) return
-      const failure = failureOf(error instanceof Error ? error : new Error(String(error)), session, started)
-      const retry = this.#retries.get(key) ?? { failures: 0, after: 0 }
+      const failed = error instanceof Error ? error : new Error(String(error))
+      const failure = failureOf(failed, session, started)
+      const words = failureWords(failed)
+      const before = this.#retries.get(key)
+      const retry: Retry = before?.words === words ? before : { failures: before?.failures ?? 0, after: 0, since: started, words }
       retry.failures += 1
+      failure.since = retry.since
       if (failure.conflict) retry.conflictAt = started
-      else retry.after = this.#now() + Math.min(RETRY_MOST_MS, RETRY_MS * 2 ** (retry.failures - 1))
+      else {
+        retry.refused = refusal(failed)
+        retry.after = this.#now() + Math.min(retry.refused ? REFUSED_MOST_MS : RETRY_MOST_MS, RETRY_MS * 2 ** (retry.failures - 1))
+      }
       this.#retries.set(key, retry)
       this.#failed += 1
+      // The Session's newest failure stands for the ones before it.
+      const kept = this.#failures.findIndex((each) => keyOf(each) === key)
+      if (kept >= 0) this.#failures.splice(kept, 1)
       this.#failures.unshift(failure)
       this.#failures.splice(FAILURES_KEPT)
-      this.#log("warn", failure.conflict ? "records went on in two places; the account's stand" : "push failed", {
+      if (retry !== before) this.#log("warn", failure.conflict ? "records went on in two places; the account's stand" : "push failed", {
         remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, tier: session.tier, failures: retry.failures, error: failure.message,
+        ...retry.refused && { retryMostMs: REFUSED_MOST_MS },
         ...failure.correlationId && { correlationId: failure.correlationId },
       })
     }
@@ -322,6 +355,20 @@ export function countTiers(scope: SyncScope, forms: { readable(session: Wanted):
 }
 
 export const emptyTier = (): TierCount => ({ sessions: 0, threads: 0, readable: 0, held: 0, whole: 0, inCloud: 0, threadsInCloud: 0 })
+
+/**
+ * Whether the account heard the push and refused what it carried (a pack it won't take, a request too large): sent
+ * again unchanged, it gets the same answer. A lapsed credential, a busy or failing gateway and a dropped connection
+ * aren't refusals.
+ */
+function refusal(error: Error): boolean {
+  return error instanceof GatewayHttpError && (error.status === 400 || error.status === 413 || error.status === 422)
+}
+
+/** A failure's words without what changes with each try (its correlation ID, its tries): the same failure says the same. */
+function failureWords(error: Error): string {
+  return error instanceof GatewayHttpError ? `${error.status} ${error.message} ${error.call?.method ?? ""} ${error.call?.path ?? ""}` : error.message
+}
 
 function failureOf(error: Error, session: Wanted, at: number): SyncFailure {
   const failure: SyncFailure = { at, harness: session.harness, nativeId: session.nativeId, message: describeGatewayFailure(error) }

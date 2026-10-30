@@ -79,7 +79,10 @@ export class SessionUploads {
   #power: { reading: PowerReading; at: number } | undefined
   #status: SyncStatus = { state: "off", reason: "signed-out" }
   #statusText = JSON.stringify(this.#status)
-  /** Failures already logged, by when and what: the catalog keeps the newest few until they're pushed. */
+  /**
+   * Failures already logged, by when they began and what: the catalog keeps each Session's newest until it's pushed,
+   * and one tried again keeps when it began (`since`), so it's logged once rather than at every try.
+   */
   readonly #logged = new Set<string>()
 
   constructor(sources: UploadSources) {
@@ -148,7 +151,7 @@ export class SessionUploads {
   }
 
   #logFailure(form: "copies" | "originals", failure: SyncFailure): void {
-    const key = `${form}\n${failure.at}\n${failure.harness}\n${failure.nativeId}`
+    const key = `${form}\n${failure.since ?? failure.at}\n${failure.harness}\n${failure.nativeId}`
     if (this.#logged.has(key)) return
     this.#logged.add(key)
     if (this.#logged.size > 200) this.#logged.delete(this.#logged.values().next().value ?? key)
