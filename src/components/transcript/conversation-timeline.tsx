@@ -37,6 +37,7 @@ import { loadReleasedLiveTurn } from "@/state/live-history"
 import { loadReleasedThreadTurn } from "@/state/thread-viewing"
 import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
+import { TRANSCRIPT_END_EVENT } from "./transcript-end"
 
 const NEAR_BOTTOM = 96
 const TEXT_BLOCKS = "p,pre,li,td,h1,h2,h3,h4,h5,h6"
@@ -702,6 +703,13 @@ export function ConversationTimeline({
     },
     [rows, windowed, owned]
   )
+  useEffect(() => {
+    const node = viewport.current
+    if (!node) return
+    const toEnd = () => scrollToEnd()
+    node.addEventListener(TRANSCRIPT_END_EVENT, toEnd)
+    return () => node.removeEventListener(TRANSCRIPT_END_EVENT, toEnd)
+  }, [scrollToEnd])
 
   const onScroll = useCallback(() => {
     const node = viewport.current
@@ -971,13 +979,34 @@ export function ConversationTimeline({
   useEffect(() => {
     const node = viewport.current
     if (!node) return
+    let lastHeight = node.scrollHeight
+    let shrinkFrame = 0
     const pin = () => {
+      settleShrink()
       if (!pinned.current) {
         holdReader(node)
         return
       }
       node.scrollTop = node.scrollHeight
       owned(node)
+    }
+    // Safari leaves a scroller that just got shorter (a finished turn folding up) past its new end, blank under the last
+    // message until the next touch, worst while it still glides. Stopping the scroll for a frame makes it take the end.
+    const settleShrink = () => {
+      const height = node.scrollHeight
+      const shrank = height < lastHeight
+      lastHeight = height
+      const end = Math.max(0, height - node.clientHeight)
+      // Safari may already read back the clamped offset while still drawing the old one, so a drop in height near the
+      // end counts though the offset looks right; one far above the end leaves a reader's own glide alone.
+      if (!(shrank && node.scrollTop > end - node.clientHeight) && node.scrollTop <= end) return
+      node.style.overflowY = "hidden"
+      node.scrollTop = Math.min(node.scrollTop, end)
+      cancelAnimationFrame(shrinkFrame)
+      shrinkFrame = requestAnimationFrame(() => {
+        shrinkFrame = 0
+        node.style.overflowY = ""
+      })
     }
     pin()
     // Observers run after layout and before paint. Turns revealed by
@@ -1007,7 +1036,7 @@ export function ConversationTimeline({
       pin()
     })
     structure.observe(node, { childList: true, characterData: true, subtree: true })
-    return () => { structure.disconnect(); grown.disconnect() }
+    return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = "" }
   }, [identity, isEmpty, owned, holdReader])
 
   const endEarlier = useCallback((progressed: boolean) => {
@@ -1349,6 +1378,7 @@ export function ConversationTimeline({
         <span ref={topFade} aria-hidden className="scroll-fade-top" />
         <div
           ref={viewport}
+          data-transcript-viewport=""
           tabIndex={0}
           role="region"
           aria-label="Conversation transcript"

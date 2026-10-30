@@ -1,18 +1,20 @@
-import { lazy, Suspense, useEffect, useState, useSyncExternalStore } from "react"
-import { z } from "zod"
+import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { SquarePenIcon } from "lucide-react"
+import { toast } from "sonner"
+import { landTranscriptsAtEnd } from "@/components/transcript/transcript-end"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
 import { useKeyboardInset } from "./keyboard"
 import { ThreadList } from "./list"
-import { routeHref, useForm, useRoute, type ScreenRoute } from "./route"
+import { followNotices } from "./open-notice"
+import { RETURNED_EVENT, returnedOf } from "./resume"
+import { parseRoute, routeHref, useForm, useRoute, type ScreenRoute } from "./route"
 import { ScreenStack } from "./screens"
 import { startedFromHere } from "./started"
 import type { Started } from "./start"
-
-/** What the service worker says when a notice is tapped: the app's address to go to. */
-const OpenNoticeSchema = z.object({ type: z.literal("mako:open"), url: z.string().min(1) })
+import { tapOnLift } from "./taps"
+import { arrivedUpdated, takeUpdates } from "./update"
 
 /**
  * A chunk of the app the list paints without, read once: its module as soon as it has arrived, and until then nothing.
@@ -131,22 +133,48 @@ export function WebApp() {
   useEffect(() => {
     if (signedOut) location.assign(client.options.signInUrl(location.pathname + location.search))
   }, [signedOut, client])
-  // A tapped notice, with the app already open: the service worker says where to go.
+  // A tapped notice, with the app already open (iOS brings it forward as it was): the service worker says where to go,
+  // by a message and by a note read as the page comes into view. The Thread it names opens over what's there.
+  const navigateRef = useRef(navigate)
   useEffect(() => {
-    const worker = navigator.serviceWorker
-    if (!worker) return
-    const heard = (event: MessageEvent) => {
-      const notice = OpenNoticeSchema.safeParse(event.data).data
-      if (!notice) return
-      history.pushState(null, "", notice.url)
-      dispatchEvent(new PopStateEvent("popstate"))
+    navigateRef.current = navigate
+  }, [navigate])
+  useEffect(
+    () =>
+      followNotices((path) => {
+        const [pathname = "/", search = ""] = path.split(/(?=\?)/)
+        const next = parseRoute(pathname, search, client.options.base)
+        if (next.kind === "new") return
+        navigateRef.current(next)
+        if (next.kind === "thread") requestAnimationFrame(() => landTranscriptsAtEnd())
+      }),
+    [client]
+  )
+  // Back in front after being away, the open conversation lands on its newest message, as it does when it's opened.
+  useEffect(() => {
+    if (desk) return
+    const returned = (event: Event) => {
+      if ((returnedOf(event)?.away ?? 0) > 0) landTranscriptsAtEnd()
     }
-    worker.addEventListener("message", heard)
-    return () => worker.removeEventListener("message", heard)
-  }, [])
+    window.addEventListener(RETURNED_EVENT, returned)
+    return () => window.removeEventListener(RETURNED_EVENT, returned)
+  }, [desk])
+  // Under a finger, taps in an open conversation land as the finger lifts, so its redraws while it works never lose one.
+  useEffect(() => {
+    const root = document.querySelector<HTMLElement>(".web-app")
+    if (desk || !root) return
+    return tapOnLift(root, (element) => element.closest(".web-live") !== null && element.closest(".web-dock") === null)
+  }, [desk])
+  // A newer build is taken at a quiet moment, and said once it's here.
+  useEffect(() => takeUpdates(client.options.build, client.options.base), [client])
+  useEffect(() => void updatedOnArrival(), [])
   // A new Thread is a sheet over what's open, with an address of its own, so Back closes it.
   const under: ScreenRoute = route.kind === "new" ? (route.over ?? { kind: "list" }) : route
-  const open = (next: ScreenRoute) => navigate(next, { replace: wide && under.kind !== "list" })
+  const open = (next: ScreenRoute) => {
+    navigate(next, { replace: wide && under.kind !== "list" })
+    // A Thread opened again lands on its newest message, though its screen was still drawn from the last time.
+    if (next.kind === "thread") requestAnimationFrame(() => landTranscriptsAtEnd())
+  }
   const onStarted = (started: Started, where: string) => {
     startedFromHere(started.threadId, where)
     navigate({ kind: "thread", thread: started.threadId }, { replace: true })
@@ -190,6 +218,7 @@ export function WebApp() {
   const toaster = settled ? (
     <Suspense fallback={null}>
       {desk ? <Toaster position="top-right" offset={{ top: 46, right: 12 }} duration={3000} /> : <Toaster position="top-center" offset={{ top: "calc(env(safe-area-inset-top) + 8px)" }} />}
+      <SayUpdated />
     </Suspense>
   ) : null
   if (desk)
@@ -215,6 +244,21 @@ export function WebApp() {
       {toaster}
     </div>
   )
+}
+
+/** Whether this page is a newer build that just arrived, read once per page (it also puts back the composer's words). */
+let arrival: boolean | undefined
+function updatedOnArrival(): boolean {
+  arrival ??= arrivedUpdated()
+  return arrival
+}
+
+/** Says "Updated" once, beside the toaster it shows in, after an update took a quiet moment to reload. */
+function SayUpdated() {
+  useEffect(() => {
+    if (updatedOnArrival()) toast.success("Updated", { id: "web-updated", description: "Mako is on its newest version." })
+  }, [])
+  return null
 }
 
 /** The pane with nothing open: the fin, and the one thing to do from here besides picking a Thread. */

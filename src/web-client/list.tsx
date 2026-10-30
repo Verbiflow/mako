@@ -11,6 +11,7 @@ import { copyAge, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useAccountList, type AccountListState } from "./account-list"
 import { useWebClient } from "./client"
+import { useDelayedStatus } from "./delayed-status"
 import { InstallCard } from "./install-card"
 import { usePullToRefresh } from "./pull"
 import { PullIndicator } from "./pull-indicator"
@@ -84,7 +85,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
           {threads.length === 0 && archived.length === 0 ? (
-            <EmptyList phase={list.phase} onNew={onNew} />
+            <EmptyList answered={list.phase === "live" || list.asOf !== undefined} onNew={onNew} />
           ) : (
             <>
               {sections(threads).map((section) => (
@@ -145,11 +146,15 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
   )
 }
 
-/** Where the list stands, when it isn't simply live: painted from this browser's last visit, or following again. */
+/**
+ * Where the list stands, when it isn't simply live: painted from this browser's last visit, or following again. Said
+ * only once it has lasted 400 ms, and then for 400 ms at least, so a reconnect that's over in a moment never flickers.
+ */
 function ListPhase({ list }: { list: AccountListState }) {
-  if (list.phase === "live" || list.phase === "signed-out") return null
-  const label =
-    list.phase === "starting" ? "Connecting…" : list.phase === "cached" && list.asOf ? `As of ${copyAge(list.asOf)}` : "Reconnecting…"
+  const label = useDelayedStatus(
+    list.phase === "live" || list.phase === "signed-out" ? null : list.phase === "starting" ? "Connecting…" : list.phase === "cached" && list.asOf ? `As of ${copyAge(list.asOf)}` : "Reconnecting…"
+  )
+  if (!label) return null
   return (
     <span role="status" className="flex items-center gap-1.5 text-label text-faint">
       <Spinner aria-hidden className="size-3" />
@@ -158,8 +163,9 @@ function ListPhase({ list }: { list: AccountListState }) {
   )
 }
 
-function EmptyList({ phase, onNew }: { phase: AccountListState["phase"]; onNew: () => void }) {
-  if (phase === "starting")
+/** No Threads to list: said only once the account has answered so. Until then (or while it can't), the rows' shapes. */
+function EmptyList({ answered, onNew }: { answered: boolean; onNew: () => void }) {
+  if (!answered)
     return (
       <div className="skeleton-rows flex flex-col gap-1 px-4 pt-5" aria-hidden>
         {[0.62, 0.48, 0.7, 0.4].map((width) => (

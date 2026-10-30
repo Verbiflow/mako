@@ -13,6 +13,9 @@ import { shouldOffer } from "../src/web-client/install"
 import { HeldPreviews, type Picked } from "../src/web-client/attachments"
 import { accessInEffect, chooseAccess, orderedModes, readAccessChoices, type Ladder } from "../src/web-client/access"
 import { AccessChoosingSchema, type AccessChoices } from "@mako/protocol/access-choices"
+import { delayedStatusDeadline, stepDelayedStatus, type DelayedStatus } from "../src/web-client/delayed-status"
+import { returnKind } from "../src/web-client/resume"
+import { newerBuild, QUIET_AFTER_MS, quietMoment } from "../src/web-client/update"
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const STUDIO = uuid(900)
@@ -285,4 +288,52 @@ test("a start runs in the access the person chose for its harness, the one their
     globalThis.fetch = fetched
     gateway.close()
   }
+})
+
+test("a status word shows only once it has lasted 400 ms, then stays 400 ms at least: a quick reconnect never flickers", () => {
+  let clock = 1_000
+  const now = () => clock
+  const step = (state: DelayedStatus<string> | null, value: string | null) => stepDelayedStatus(state, "list", value, now)
+  // A drop that's over in 300 ms: nothing is ever said.
+  let state = step(null, "Reconnecting…")
+  assert.equal(state.phase, "pending")
+  clock += 300
+  state = step(state, null)
+  assert.equal(state.phase, "idle", "back before 400 ms: never shown")
+  // A drop that lasts: said at 400 ms, and held 400 ms though it's over at once.
+  state = step(state, "Reconnecting…")
+  clock += 399
+  assert.equal(step(state, "Reconnecting…").phase, "pending")
+  clock += 1
+  state = step(state, "Reconnecting…")
+  assert.deepEqual(state, { phase: "shown", key: "list", value: "Reconnecting…", holdUntil: 2_100 })
+  assert.equal(delayedStatusDeadline(state), 2_100)
+  clock += 50
+  state = step(state, null)
+  assert.equal(state.phase, "shown", "over 50 ms after it showed: it stays its 400 ms")
+  clock = 2_100
+  assert.equal(step(state, null).phase, "idle")
+  // Another word in its place is said at once, held afresh; another subject starts over.
+  assert.deepEqual(step(state, "Connecting…"), { phase: "shown", key: "list", value: "Connecting…", holdUntil: 2_500 })
+  assert.equal(stepDelayedStatus(state, "thread", "Syncing…", now).phase, "pending")
+})
+
+test("coming back after ten seconds away reads everything again; a glance away only checks the connection", () => {
+  assert.equal(returnKind(undefined, 50_000), "probe", "never hidden (a focus, the network back)")
+  assert.equal(returnKind(41_000, 50_000), "probe", "away nine seconds")
+  assert.equal(returnKind(40_000, 50_000), "long", "away ten seconds")
+})
+
+test("a newer build is taken only at a quiet moment: nothing touched for 8 s, no sheet, no keyboard, nothing on its way", () => {
+  const quiet = { sinceInput: QUIET_AFTER_MS, sheetOpen: false, typing: false, busy: false }
+  assert.equal(quietMoment(quiet), true)
+  assert.equal(quietMoment({ ...quiet, sinceInput: QUIET_AFTER_MS - 1 }), false, "touched in the last 8 s")
+  assert.equal(quietMoment({ ...quiet, sheetOpen: true }), false, "a sheet is open")
+  assert.equal(quietMoment({ ...quiet, typing: true }), false, "the composer has the keyboard")
+  assert.equal(quietMoment({ ...quiet, busy: true }), false, "a message is on its way")
+  assert.equal(newerBuild("abc123", "def456"), true)
+  assert.equal(newerBuild("abc123", "abc123"), false)
+  assert.equal(newerBuild("dev", "def456"), false, "a development server never reloads itself")
+  assert.equal(newerBuild(undefined, "def456"), false)
+  assert.equal(newerBuild("abc123", undefined), false, "a host that names no build")
 })
