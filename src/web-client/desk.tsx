@@ -29,6 +29,7 @@ import { listedMove, useMoves } from "./moves"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
+import { ReviewLayer } from "./review-layer"
 import { WebHarnessIcon } from "./harness-icon"
 
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
@@ -61,7 +62,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
 
   return (
     <TooltipProvider delayDuration={350}>
-    <div className="web-desk flex min-h-0 flex-1 flex-col bg-shell">
+    <div className="web-desk flex min-h-0 min-w-0 flex-1 flex-col bg-shell">
       <header className="flex h-[38px] shrink-0 items-center border-b border-hairline bg-shell pr-2">
         <div style={{ width: RAIL_PX }} className="flex h-full shrink-0 items-center gap-1 border-r border-hairline px-2">
           <span className="flex min-w-0 flex-1 items-center gap-2 pl-1 text-ui font-medium text-foreground">
@@ -92,6 +93,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
             <DeskEmpty onNew={newThread} />
           )}
         </main>
+        <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
       </div>
       <CommandPalette />
       <ConfirmHost />

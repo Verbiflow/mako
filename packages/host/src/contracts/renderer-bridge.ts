@@ -1,5 +1,5 @@
 import type { GitRemoteInput, GitRemoteResult, ExternalEditor, FileContents, FileReadPurpose, GitCommitEntry, GitCommitFile, GitDiff, GitFile, GitHubStatus, GitStatus, GitPushInput, PullRequest, SearchOptions, SearchResults, StagedFile, WorkspaceFile } from "./git-workspace-search.js"
-import type { TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
+import type { TurnFileHunks, TurnFileWriters, TurnUndoPreview, TurnUndoResult, TurnUndoScope } from "./turn-review.js"
 import type { AuthoringApplied, AuthoringCatalog, AuthoringChange, AuthoringPlan, AuthoringTarget, AuthoringView } from "./native-authoring.js"
 import type {
   ThreadTarget,
@@ -343,6 +343,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<{ root: string; files: GitFile[] }>("mako:live-turn-changes", id, requestId, workspace),
     liveTurnDiff: (id: string, requestId: string, path: string, options?: { only?: boolean }) =>
       invokeTrustedHost<GitDiff>("mako:live-turn-diff", id, requestId, path, options),
+    liveTurnHunks: (id: string, requestId: string, path: string, options?: { context?: number }) =>
+      invokeTrustedHost<TurnFileHunks>("mako:live-turn-hunks", id, requestId, path, options),
     liveTurnWriters: (id: string, requestId: string, path: string) =>
       invokeTrustedHost<TurnFileWriters | null>("mako:live-turn-writers", id, requestId, path),
     liveTurnUndoPreview: (id: string, scope: TurnUndoScope) =>

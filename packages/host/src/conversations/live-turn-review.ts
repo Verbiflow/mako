@@ -8,8 +8,9 @@ import { hostLog } from "../base/host-log.js"
 import type { GitDiff, GitFile } from "../contracts/git-workspace-search.js"
 import type { LiveRequest } from "../contracts/live-conversations.js"
 import { countedChanges, type TurnChangedFile } from "../contracts/turn-changes.js"
-import type { TurnFileWriters, TurnUndone, TurnUndoPreview, TurnUndoResult, TurnUndoScope, WriterRun } from "../contracts/turn-review.js"
+import type { TurnFileHunks, TurnFileWriters, TurnUndone, TurnUndoPreview, TurnUndoResult, TurnUndoScope, WriterRun } from "../contracts/turn-review.js"
 import { treeDiff, treeFiles } from "../git/index.js"
+import { turnFileHunks } from "./turn-hunks.js"
 import { MovePlanSchema, MoveRefused, resumeMove, rewriteInPlace, type CheckpointComparison, type InPlaceFile, type MovePlan } from "../workspaces/index.js"
 
 /*
@@ -120,6 +121,19 @@ export class LiveTurnReview {
     if (body.diff.binary || body.diff.preview) return null
     const runs = placed.ledger.turnWriters(placed.thread, requestId, file, body.shown)
     return runs ? { path, runs, body: body.body } : null
+  }
+
+  /**
+   * One file's diff as stretches, its writers with it when another writer
+   * shares a change: what another device reads in place of `diff` and
+   * `writers`, bounded however large the file. Read from the same body.
+   */
+  async hunks(id: string, requestId: string, path: string, options: { context?: number } = {}): Promise<TurnFileHunks> {
+    const file = this.file(id, requestId, path)
+    const diff = await this.diff(id, requestId, path)
+    const writers = file ? await this.writers(id, requestId, path).catch(() => null) : null
+    const from = file?.from ? relative(rootOf(file), file.from) : undefined
+    return turnFileHunks(diff, writers, { ...options, ...(from && { from }) })
   }
 
   private placed(id: string) {

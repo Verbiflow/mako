@@ -448,6 +448,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   )
   methods.handle("mako:live-turn-changes", (id: string, requestId: string, workspace?: string) => live.turnChanges(id, requestId, workspace))
   methods.handle("mako:live-turn-diff", (id: string, requestId: string, path: string, options?: { only?: boolean }) => live.turnDiff(id, requestId, path, options))
+  methods.handle("mako:live-turn-hunks", (id: string, requestId: string, path: string, options?: { context?: number }) => live.turnHunks(id, requestId, path, options))
   methods.handle("mako:live-turn-writers", (id: string, requestId: string, path: string) => live.turnWriters(id, requestId, path))
   methods.handle("mako:live-turn-undo-preview", (id: string, scope: TurnUndoScope) => live.turnUndoPreview(id, scope))
   methods.handle("mako:live-turn-undo", (id: string, scope: TurnUndoScope, token: string) => live.turnUndo(id, scope, token))

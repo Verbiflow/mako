@@ -42,6 +42,8 @@ const reads = [
   "mako:git-since-diff",
   "mako:live-turn-changes",
   "mako:live-turn-diff",
+  /** A turn's diff of one file in stretches, for another device; reads what `live-turn-diff` reads. */
+  "mako:live-turn-hunks",
   "mako:live-turn-writers",
   /** What an undo would do, read from the journal; nothing is written. */
   "mako:live-turn-undo-preview",

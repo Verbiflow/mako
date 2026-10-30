@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, CloudIcon, EllipsisIcon, GlobeIcon, LaptopIcon, PlusIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, CloudIcon, EllipsisIcon, FileDiffIcon, GlobeIcon, LaptopIcon, PlusIcon, XIcon } from "lucide-react"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
@@ -31,6 +31,7 @@ import { useBranchOpening } from "./replies"
 import { checkReach, useSessionDiagnosis } from "./thread-trouble"
 import { DiagnosisCard } from "./trouble"
 import { useTryAgain } from "./trouble-state"
+import { openReview } from "./review-open"
 
 /** The renderer's live conversation: its transcript, approvals and questions, the desktop's own code. Its own chunk. */
 const LiveSession = lazy(() => import("./live-session"))
@@ -298,6 +299,12 @@ export function ThreadActions({ thread, session, onArchived, onAdd }: { thread: 
             <MenuItem onSelect={onAdd} className="min-h-11 gap-2.5 px-3 text-ui">
               <PlusIcon className="size-4 text-muted-foreground" />
               Add a Session
+            </MenuItem>
+          ) : null}
+          {!session.quietSince ? (
+            <MenuItem onSelect={() => openReview({ conversation: session.row.conversation, scope: { kind: "thread" } })} className="min-h-11 gap-2.5 px-3 text-ui">
+              <FileDiffIcon className="size-4 text-muted-foreground" />
+              Changes
             </MenuItem>
           ) : null}
           {session.row.folder && !session.quietSince && !moving ? (

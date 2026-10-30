@@ -16,6 +16,7 @@ import type { Started } from "./start"
 import { tapOnLift } from "./taps"
 import { useSeenWhileOpen } from "./read-state"
 import { useThread } from "./use-thread"
+import { ReviewLayer } from "./review-layer"
 import { arrivedUpdated, takeUpdates } from "./update"
 
 /**
@@ -219,6 +220,8 @@ export function WebApp() {
         <Settings onBack={wide ? undefined : back} />
       </Suspense>
     ) : null
+  // Changes belongs to the Thread on screen: anywhere else, it's closed.
+  const reviewPlace = under.kind === "thread" ? `thread:${under.thread}` : under.kind
   const sheet = startOpened && startCode && !wide ? <startCode.StartSheet open={route.kind === "new"} onDismiss={back} onStarted={onStarted} /> : null
   const toaster = settled ? (
     <Suspense fallback={null}>
@@ -238,11 +241,15 @@ export function WebApp() {
       {wide ? (
         <>
           <div className="web-rail flex shrink-0 flex-col border-r border-hairline">{list}</div>
-          <main className="flex min-w-0 flex-1 flex-col">{detail ?? <NothingOpen onNew={() => navigate({ kind: "new", over: under })} />}</main>
+          <main className="relative flex min-w-0 flex-1 flex-col">
+            {detail ?? <NothingOpen onNew={() => navigate({ kind: "new", over: under })} />}
+            <ReviewLayer form={form} place={reviewPlace} />
+          </main>
         </>
       ) : (
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="relative flex min-w-0 flex-1 flex-col">
           <ScreenStack under={list} top={detail} topKey={detail ? routeHref(under, client.options.base).split("?")[0] : undefined} onBack={back} />
+          <ReviewLayer form={form} place={reviewPlace} />
         </main>
       )}
       {sheet}

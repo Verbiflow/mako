@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process"
+import "./lib/scratch-git.mjs"
+import { execFileSync, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { mkdir, readdir, rm, utimes, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
@@ -25,7 +26,7 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * - `begin <access> <first message>`: a Thread of its own in `api` at that access ("full", "ask"), its first turn the
  *   script its words name: "Say hello", "Stream a long answer", "Hold the turn", "Ask me a question", "Fail this turn",
  *   "Check the retry fix" (three steps), "Break the last step" (three, the last failing), "Work through the steps" (three,
- *   the last running 30 seconds). `STARTED <conversation>`
+ *   the last running 30 seconds), "Tidy the retry backoff" (it changes three files). `STARTED <conversation>`
  * - `access <harness> <mode>`: the person chooses that access for the harness here, as the desk's composer does; it goes
  *   to their account. `ACCESS <the host's choices>`
  * - `choices`: the access choices as this host holds them now, after the account's word. `CHOICES <the host's choices>`
@@ -47,6 +48,49 @@ const dataRoot = join(home, "Library", "Application Support", "mako-web-proof", 
 const MINUTE = 60_000
 
 if ((await readdir(root).catch(() => [])).length) throw new Error(`${root} isn't empty: give the proof a folder of its own`)
+
+/** `api`'s retry, which the Changes cases' turns edit. */
+const RETRY = `import { sleep } from "../lib/sleep"
+
+/** The longest any one wait may be, so a retry never outlives the gateway's own timeout. */
+const MAX_DELAY_MS = 5000
+
+/** Charges again after a transient failure, waiting longer each time. */
+export async function retry<T>(charge: () => Promise<T>, attempts = 3, baseDelayMs = 200): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await charge()
+    } catch (error) {
+      lastError = error
+      await sleep(Math.min(MAX_DELAY_MS, baseDelayMs * 2 ** (attempt - 1)))
+    }
+  }
+  throw lastError
+}
+`
+
+/** What "Tidy the retry backoff" runs in `api`: a new file, a changelog line, and the cap in `retry.ts` set anew. */
+const TIDY = [
+  "set -e",
+  // A new Thread's first turn starts as its folder is first tracked: changes in its first seconds would be the folder's as found.
+  "sleep 5",
+  "t=r$RANDOM$RANDOM",
+  "cat > src/payments/backoff-$t.ts <<'TS'",
+  "/** Full jitter: anywhere from nothing up to the exponential ceiling, capped. */",
+  "export function backoff(baseDelayMs: number, attempt: number, random: number, capMs = 5_000): number {",
+  "  const ceiling = Math.min(capMs, baseDelayMs * 2 ** (attempt - 1))",
+  "  return Math.round(random * ceiling)",
+  "}",
+  "",
+  "/** How long the next try waits, said for the log. */",
+  "export function describeWait(ms: number): string {",
+  "  return ms < 1_000 ? `${ms} ms` : `${(ms / 1_000).toFixed(1)} s`",
+  "}",
+  "TS",
+  "printf '%s\\n' \"- Retries back off with full jitter, capped at 5 s ($t).\" >> CHANGELOG.md",
+  "sed -i.bak \"s/^const MAX_DELAY_MS = .*/const MAX_DELAY_MS = $((RANDOM % 9000 + 1000))/\" src/payments/retry.ts && rm src/payments/retry.ts.bak",
+].join("\n")
 
 /** The `api` project's app with `--app`: one page, what a development server answers, with a request counter to show it's live. */
 const APP_SERVER = `import { createServer } from "node:http"
@@ -205,6 +249,15 @@ const ANSWERS: Array<{ heard: RegExp; steps: ScriptedReply[] }> = [
       { text: "Worked through every step." },
     ],
   },
+  // A turn that changes files, for the phone's Changes cases: a file of its own, a line in the changelog, and an edit in
+  // a file every such turn shares. Its names are the shell's own random, so Threads asked this apart change files apart.
+  {
+    heard: /Tidy the retry backoff/i,
+    steps: [
+      { reasoning: "A capped, jittered backoff, with the change noted.", text: "Tidying the retry backoff.", call: { id: "call_tidy", name: "exec_command", arguments: { cmd: TIDY } } },
+      { text: "The retry backoff is capped and jittered now, and the changelog says so." },
+    ],
+  },
   { heard: /Fail this turn/i, steps: [{ fail: { status: 400, message: "The scripted model refused this turn." } }] },
   { heard: /whole suite/i, steps: [{ reasoning: "Run everything once more.", text: "Running the whole suite once more.", call: { id: "call_suite", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 200" } } }, { text: "The whole suite passed." }] },
 ]
@@ -243,14 +296,19 @@ await rollout("billing-service", 3 * 60, Array.from({ length: LONG_TURNS }, (_, 
   answer: index === LONG_TURNS - 1 ? "All 4,000 exports read the new schema now; nothing was dropped." : `Export ${index} reads the new schema.`,
 })))
 const api = join(home, "projects", "api")
-await mkdir(join(api, ".git"), { recursive: true })
 await mkdir(join(api, "test"), { recursive: true })
+await mkdir(join(api, "src", "payments"), { recursive: true })
+await writeFile(join(api, "src", "payments", "retry.ts"), RETRY)
+await writeFile(join(api, "CHANGELOG.md"), "# Changelog\n\n## Unreleased\n\n")
 if (values.app || values.recipe) {
   await mkdir(join(api, ".mako"), { recursive: true })
   await writeFile(join(api, ".mako", "recipe.json"), JSON.stringify({ processes: { web: { command: "node server.mjs", port: "{port}", values: { PORT: "{port}" } } } }, null, 2))
   await writeFile(join(api, "server.mjs"), APP_SERVER)
 }
 await writeFile(join(api, "test", "payments.mjs"), `const runs = Number(process.argv.at(-1)) || 1\nfor (let run = 1; run <= runs; run++) await new Promise((done) => setTimeout(done, 100))\nconsole.log(\`✓ 412 passed (\${runs} runs)\`)\n`)
+// A repository with its first commit, as a real project is: a turn's changes are counted against it.
+for (const args of [["init", "-q", "-b", "main"], ["add", "-A"], ["-c", "user.name=Ana", "-c", "user.email=ana@example.invalid", "commit", "-q", "-m", "The payments service"]])
+  execFileSync("git", args, { cwd: api, stdio: "ignore", env: { ...process.env, HOME: home } })
 
 // The host, screenless, from this checkout's build, on the scratch home.
 const { socket } = runtimeLocation(dataRoot)
