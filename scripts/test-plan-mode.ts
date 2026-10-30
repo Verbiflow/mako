@@ -32,6 +32,7 @@ const { planChoiceStore, pendingPlan, restorePendingPlan, setPendingPlan, takePe
   await import("../src/state/plan-choice.ts")
 const { CODEX_PLAN_OPTION } = await import("@mako/sessions/model-catalog")
 const { prefsStore } = await import("../src/state/prefs.ts")
+const { accessChoicesStore } = await import("../src/state/access-choices.ts")
 const { acpStore } = await import("../src/state/acp-state.ts")
 const { settingsTargetKey } = await import("../src/state/composer-settings.ts")
 const { providerStore, providerProfileKey } = await import("../src/state/providers.ts")
@@ -111,7 +112,7 @@ assert.equal(planChoiceStore.get().launched["conversation-1"], undefined)
 setPendingPlan(target, null)
 
 // Toggling plan writes no saved default: a new session's choice is pending, a thread's is the thread's.
-const before = { settings: prefsStore.get().providerSettings, modes: prefsStore.get().providerModes }
+const before = { settings: prefsStore.get().providerSettings, modes: accessChoicesStore.get().modes }
 const newContext = { ...planContextFor(target), control: chosen.kind === "setting" ? { ...chosen, active: false } : chosen }
 await setPlanMode(newContext, true)
 assert.deepEqual(pendingPlan(target), { kind: "setting", option: "plan" })
@@ -131,7 +132,7 @@ await setPlanMode({
 }, false)
 assert.deepEqual(bridge.at(-1), ["rememberThreadMode", ["/sessions/two.jsonl", "acceptEdits"]], "leaving returns to the level it left")
 assert.deepEqual(prefsStore.get().providerSettings, before.settings)
-assert.deepEqual(prefsStore.get().providerModes, before.modes, "plan mode is the session's, never the harness's default")
+assert.deepEqual(accessChoicesStore.get().modes, before.modes, "plan mode is the session's, never the harness's default")
 
 // Build answers the native approval for this plan, and only for this plan.
 const plan: ProposedPlan = { type: "proposed-plan", id: "tool-2", text: "# Ship it\n\n1. Do it", status: "proposed" }

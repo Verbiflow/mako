@@ -1,7 +1,7 @@
 import { toast } from "sonner"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveSessionMode, ThreadRef } from "@/lib/types"
-import { prefsStore, setPref } from "@/state/prefs"
+import { chooseAccess } from "@/state/access-choices"
 import type { ThreadsState } from "@/state/thread-state"
 
 import { descriptorFor } from "@/state/descriptors"
@@ -59,15 +59,13 @@ export function threadAccessMode(
 }
 
 /**
- * Save the access level the provider's next session starts with. A live
- * session records its own switch here too, so the next session starts where
- * the last one was left.
+ * Save the access level the provider's next session starts with, for the
+ * person's account: every window, the web app and a phone start there too. A
+ * live session records its own switch here too, so the next session starts
+ * where the last one was left.
  */
 export function chooseProviderMode(harness: string, modeId: string): void {
-  setPref("providerModes", {
-    ...prefsStore.get().providerModes,
-    [harness]: modeId,
-  })
+  chooseAccess(harness, modeId)
 }
 
 /**

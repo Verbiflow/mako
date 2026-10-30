@@ -9,6 +9,7 @@ import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 import { sessionStream, streamConversation } from "../dist/socket.js"
 import { AccountEventSchema } from "../dist/account-events.js"
+import { AccessChoicesAnswerSchema, AccessChoosingSchema, applyAccessChoosing, sameAccessChoices } from "../dist/access-choices.js"
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
 import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
 import { ArchivedThreadSchema, ListedSessionSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
@@ -1823,5 +1824,19 @@ describe("what tells the person a Session needs them, the same on every surface"
     assert.equal(ATTENTION_SUMMARY_FROM, 3)
     assert.equal(foldedBody({ subtitle: "Codex finished", body: "Done." }), "Codex finished\nDone.")
     assert.equal(foldedBody({ body: "Done." }), "Done.")
+  })
+
+  test("the person's access choices: one per harness, made or filled, said whole on the stream at a revision", () => {
+    const kept = { claude: { mode: "bypassPermissions", access: "full" } }
+    assert.deepEqual(applyAccessChoosing(kept, { choices: { codex: { mode: "access:full", access: "full" } } }), { ...kept, codex: { mode: "access:full", access: "full" } })
+    assert.deepEqual(applyAccessChoosing(kept, { choices: { claude: { mode: "default" } } }).claude, { mode: "default" }, "a choice replaces the one before")
+    assert.deepEqual(applyAccessChoosing(kept, { choices: { claude: { mode: "default" }, grok: { mode: "access:ask" } }, fill: true }), { ...kept, grok: { mode: "access:ask" } }, "filling takes only where none is made")
+    assert.ok(sameAccessChoices(kept, { claude: { mode: "bypassPermissions", access: "full" } }))
+    assert.ok(!sameAccessChoices(kept, { claude: { mode: "bypassPermissions" } }))
+    assert.throws(() => AccessChoosingSchema.parse({ choices: { Claude: { mode: "x" } } }), "a harness is named by its ID")
+    assert.throws(() => AccessChoosingSchema.parse({ choices: { claude: { mode: "" } } }))
+    assert.throws(() => AccessChoicesAnswerSchema.parse({ choices: Object.fromEntries(Array.from({ length: 33 }, (_, n) => [`h${n}`, { mode: "x" }])), revision: 1 }))
+    const event = { type: "access-chosen", choices: kept, revision: 3 }
+    assert.deepEqual(AccountEventSchema.parse(event), event)
   })
 })

@@ -15,7 +15,8 @@ globalThis.localStorage = {
 }
 
 storage.set("mako.prefs.v1", JSON.stringify({ harnessDefaultsReset: true }))
-const { prefsStore, setPref } = await import("../src/state/prefs.ts")
+const { prefsStore } = await import("../src/state/prefs.ts")
+const { accessChoicesStore } = await import("../src/state/access-choices.ts")
 const { providerStore, providerProfileKey, providers } =
   await import("../src/state/providers.ts")
 const { threadsStore } = await import("../src/state/thread-store.ts")
@@ -223,7 +224,7 @@ providerStore.set({
     },
   },
 })
-setPref("providerModes", { cursor: accessModeId("full") })
+accessChoicesStore.set({ modes: { cursor: accessModeId("full") } })
 const cursorLive = {
   ...observed,
   key: "cursor-live",

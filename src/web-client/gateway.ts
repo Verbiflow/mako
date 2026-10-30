@@ -125,7 +125,7 @@ export class Gateway {
    * sentence with its correlation ID. A token refused as run out is renewed and the request asked once more. The answer
    * is JSON not yet read as anything: each caller parses it with the schema of the route it asked.
    */
-  async rest<Body>(method: "GET" | "POST" | "PUT" | "DELETE", path: string, body?: Body, attempt = 1): Promise<JsonValue | undefined> {
+  async rest<Body>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: Body, attempt = 1): Promise<JsonValue | undefined> {
     const { token } = await this.connection()
     const correlationId = crypto.randomUUID()
     const headers = new Headers({ authorization: `Bearer ${token}`, [CORRELATION_HEADER]: correlationId })

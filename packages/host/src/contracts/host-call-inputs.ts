@@ -4,6 +4,9 @@ import { z } from "zod"
 
 const inputs = {
   "mako:abort": () => z.tuple([]),
+  "mako:access-adopt": () => z.tuple([z.record(z.string(), z.string())]),
+  "mako:access-choices": () => z.tuple([]),
+  "mako:access-choose": () => z.tuple([z.string(), z.string()]),
   "mako:account-capture": () => z.tuple([z.string(), z.string()]),
   "mako:account-keep": () => z.tuple([z.string(), z.string()]),
   "mako:account-login-cancel": () => z.tuple([z.string()]),
@@ -1723,6 +1726,9 @@ export type HostMethodDomain =
 
 const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:abort", "workspaces"],
+  ["mako:access-adopt", "harnesses"],
+  ["mako:access-choices", "harnesses"],
+  ["mako:access-choose", "harnesses"],
   ["mako:account-capture", "harnesses"],
   ["mako:account-keep", "harnesses"],
   ["mako:account-login-cancel", "harnesses"],

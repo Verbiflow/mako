@@ -37,7 +37,7 @@ import { makoViews, type ThreadRef } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
@@ -522,7 +522,37 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     shell.jobs.every("keep this Mac's Sessions in the account", 5_000, () => ticking.tick())
   }
   declareSyncMethods(methods, uploads, syncReadings)
+  // The person's access choice per harness, which a start from any surface reads: their account's, kept here too for
+  // a start without the network, and alone on a Mac that isn't signed in. A cloud machine acts for no person's account.
+  const accessChoices = new AccessChoiceStore({
+    file: join(environment.userRoot, "access-choices.json"),
+    modes: (harness) => providerHost.liveDrivers.get(harness)?.modes,
+    account: async () => {
+      const cloud = late.cloud
+      if (config.machineAgentFd !== undefined || !cloud?.accessChoices || !cloud.chooseAccess) return undefined
+      const id = await cloud.id().catch(() => undefined)
+      if (!id) return undefined
+      const { accessChoices: read, chooseAccess: write } = cloud
+      return {
+        read: async () => {
+          const answer = await read()
+          return answer ? { account: id, ...answer } : undefined
+        },
+        write: async (choices, fill) => {
+          const answer = await write(choices, fill)
+          return answer ? { account: id, ...answer } : undefined
+        },
+      }
+    },
+    announce: (choices) => emit({ type: "access-choices", choices }),
+    log: (message, fields) => hostLog("access", message, fields),
+  })
+  declareAccessChoiceMethods(methods, accessChoices)
   late.cloud = declareCloudAccountMethods(methods, {
+    accessChoices: {
+      heard: (answer) => void late.cloud?.id().then((account) => account && accessChoices.heard({ account, ...answer }), () => undefined),
+      again: () => void accessChoices.sync(),
+    },
     sessions,
     signedFiles: (request) => withHostClient("gateway:files", () => readSignedFile(request, renditions)),
     jobs: shell.jobs,
@@ -546,6 +576,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
             return sync
           },
   })
+  // What this Mac chose while it wasn't heard goes to the account, and the account's choices come back.
+  void accessChoices.sync()
   // A project's carried files (its recipe's `carry`) kept in the account's secret store, with its person's word, for its
   // cloud Threads: brought up to date before one is made or a Thread moves there. Only a person's own Mac sends them.
   const carriedFiles = fixtureDesk || config.machineAgentFd !== undefined
@@ -821,6 +853,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     cloud: cloudConversations,
     capture: async (conversationId, path) => void (await live.capture(conversationId, path)),
     step: (conversationId, move, step) => emit({ type: "thread-return-step", conversationId, move, step }),
+    rememberMode: (harness, nativeId, modeId) => threads.memory?.remember(harness, nativeId, { modeId }),
     outside: join(environment.dataRoot, "cloud", "outside"),
     followed: {
       laid: async (cloudThread, path) => late.cloudFollow?.laid(cloudThread, path),
@@ -1092,6 +1125,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     workspace,
     emit,
+    accessMode: (harness) => accessChoices.mode(harness),
     ...(arrival && {
       arrival,
       departure: {

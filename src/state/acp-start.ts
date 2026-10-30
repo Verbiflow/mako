@@ -1,7 +1,8 @@
 import { MARKER, readMessage } from "@/lib/context/wire"
 import { readLiveSnapshot } from "@/state/live-history"
 import { stagePrompt } from "@/state/acp-pending"
-import { noteFolderUse, prefsStore } from "@/state/prefs"
+import { noteFolderUse } from "@/state/prefs"
+import { chosenAccessModes } from "@/state/access-choices"
 import { projectAcp } from "@/state/live-projection"
 import {
   currentSettingsTarget,
@@ -217,7 +218,7 @@ export async function launch(
     const input: LiveStartOptions = {
       ...options,
       ...withNativePlan(plan, {
-        modeId: options.modeId ?? prefsStore.get().providerModes[starting.harness],
+        modeId: options.modeId ?? chosenAccessModes()[starting.harness],
         tuning: options.tuning ?? (await settingsForSend(starting.settingsTarget)),
       }),
       conversationId: starting.key,

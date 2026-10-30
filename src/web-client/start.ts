@@ -108,10 +108,19 @@ export interface FirstMessage {
   title?: string
 }
 
-function startOptions(conversationId: string, message: FirstMessage, model: string | undefined, extra: Partial<LiveStartOptions> = {}): LiveStartOptions {
+/** What a start runs with besides its message: the model, and the access mode the person chose for the harness. */
+export interface Loadout {
+  harness: string
+  model: string | undefined
+  /** `accessInEffect(…).mode`: named, so the start runs in what the sheet showed, wherever it runs. */
+  mode: string | undefined
+}
+
+function startOptions(conversationId: string, message: FirstMessage, loadout: Loadout, extra: Partial<LiveStartOptions> = {}): LiveStartOptions {
   const options: LiveStartOptions = { conversationId, initialRequest: { id: crypto.randomUUID(), text: message.text, attachments: message.attachments }, ...extra }
   if (message.title) options.title = message.title
-  if (model) options.tuning = { model }
+  if (loadout.model) options.tuning = { model: loadout.model }
+  if (loadout.mode) options.modeId = loadout.mode
   return options
 }
 
@@ -123,12 +132,12 @@ export interface Started {
 }
 
 /**
- * Starts a Thread on a Mac, as its own window does: `mako:live-start` in the folder, with the harness, its model and the
- * first message. Its host lists it to the account as it starts, so every device sees it.
+ * Starts a Thread on a Mac, as its own window does: `mako:live-start` in the folder, with the harness, its model, the
+ * person's access mode and the first message. Its host lists it to the account as it starts, so every device sees it.
  */
-export async function startOnMac(gateway: Gateway, webDeviceId: string, deviceId: string, start: { folder: string; harness: string; model: string | undefined; message: FirstMessage }): Promise<Started> {
+export async function startOnMac(gateway: Gateway, webDeviceId: string, deviceId: string, start: Loadout & { folder: string; message: FirstMessage }): Promise<Started> {
   const conversationId = crypto.randomUUID()
-  const snapshot = await macCall<LiveSnapshot>(gateway, webDeviceId, deviceId, "mako:live-start", [start.harness, start.folder, startOptions(conversationId, start.message, start.model)], { history: true })
+  const snapshot = await macCall<LiveSnapshot>(gateway, webDeviceId, deviceId, "mako:live-start", [start.harness, start.folder, startOptions(conversationId, start.message, start)], { history: true })
   return { conversationId, threadId: snapshot.threadId ?? conversationId }
 }
 
@@ -140,7 +149,7 @@ export type CloudStep = "making" | "preparing" | "starting"
  * repository, its machine's folder read from its boot, then the harness started there with the first message. A
  * machine that couldn't clone the repository fails its boot with why (`folderUnmade`), so nothing starts.
  */
-export async function startInCloud(gateway: Gateway, webDeviceId: string, start: { repository: CloudRepository; harness: string; model: string | undefined; message: FirstMessage }, step: (step: CloudStep) => void): Promise<Started> {
+export async function startInCloud(gateway: Gateway, webDeviceId: string, start: Loadout & { repository: CloudRepository; message: FirstMessage }, step: (step: CloudStep) => void): Promise<Started> {
   step("making")
   const threadId = `t-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`
   await gateway.rest("POST", "/v1/threads", { threadId, home: "cloud", repository: start.repository, harness: start.harness })
@@ -149,7 +158,7 @@ export async function startInCloud(gateway: Gateway, webDeviceId: string, start:
   const cwd = bootFolder(await sendWithRepeats("mako:boot", calls.call("mako:boot", []), { threadId, log: CONSOLE_LOG }))
   step("starting")
   const conversationId = crypto.randomUUID()
-  await sendWithRepeats("mako:live-start", calls.call("mako:live-start", [start.harness, cwd, startOptions(conversationId, start.message, start.model)]), { threadId, conversationId, log: CONSOLE_LOG })
+  await sendWithRepeats("mako:live-start", calls.call("mako:live-start", [start.harness, cwd, startOptions(conversationId, start.message, start)]), { threadId, conversationId, log: CONSOLE_LOG })
   return { threadId, conversationId }
 }
 
@@ -166,12 +175,13 @@ export async function ownerCall<Result>(gateway: Gateway, webDeviceId: string, o
 
 /**
  * Adds a Session to a Thread, as the desk's `+` tab does: an empty Session made in the Thread on its owner
- * (`mako:thread-create-session`), then the harness started in it in the Thread's folder with the first message.
+ * (`mako:thread-create-session`), then the harness started in it in the Thread's folder, in the person's mode for it,
+ * with the first message.
  */
-export async function addSession(gateway: Gateway, webDeviceId: string, owner: Owner, start: { thread: string; folder: string; harness: string; model: string | undefined; message: FirstMessage }): Promise<Started> {
+export async function addSession(gateway: Gateway, webDeviceId: string, owner: Owner, start: Loadout & { thread: string; folder: string; message: FirstMessage }): Promise<Started> {
   const placement = await ownerCall<{ session: string }>(gateway, webDeviceId, owner, "mako:thread-create-session", [crypto.randomUUID(), start.thread])
   const conversationId = crypto.randomUUID()
-  await ownerCall<Json>(gateway, webDeviceId, owner, "mako:live-start", [start.harness, start.folder, startOptions(conversationId, start.message, start.model, { session: placement.session })], { history: true })
+  await ownerCall<Json>(gateway, webDeviceId, owner, "mako:live-start", [start.harness, start.folder, startOptions(conversationId, start.message, start, { session: placement.session })], { history: true })
   return { conversationId, threadId: start.thread }
 }
 

@@ -142,7 +142,9 @@ function setup(name: string, options: { worktree?: boolean } = {}) {
   const released: string[] = []
   const captured: Array<[string, string]> = []
   /** The cloud Thread's conversations, as this Mac follows them: the one that moved, and any begun there. */
-  const there: Array<{ conversationId: string; harness: string; nativeId: string | undefined }> = [{ conversationId: conversation, harness: "codex", nativeId: "n-1" }]
+  // The conversation that moved runs in the mode the person switched it to there.
+  const there: Array<{ conversationId: string; harness: string; nativeId: string | undefined; mode?: string }> = [{ conversationId: conversation, harness: "codex", nativeId: "n-1", mode: "access:full" }]
+  const remembered: Array<[string, string, string]> = []
   /** What the machine knows of each conversation it runs: the native session it started there. */
   const nativeThere = new Map<string, string>([[conversation, "n-1"]])
   let restored: ReceivedRecords["restored"] | undefined
@@ -236,6 +238,7 @@ function setup(name: string, options: { worktree?: boolean } = {}) {
     },
     capture: async (conversationId, path) => void captured.push([conversationId, path]),
     step: (_conversationId, _move, step) => steps.push(step),
+    rememberMode: (harness, nativeId, modeId) => void remembered.push([harness, nativeId, modeId]),
     worktrees: owner,
   })
   const state = () => threads.execution(placed.session)
@@ -286,7 +289,7 @@ function setup(name: string, options: { worktree?: boolean } = {}) {
     step: (step) => archiveSteps.push(step),
   })
   return {
-    returns: make(), fresh: make, archives, archiveSteps, account, there, cloud, conversation, checkout, project, remote, folder, steps, released, captured, state, files, device, cloudThread, threads, thread: placed.thread, session: placed.session, tab, fork, handoff,
+    returns: make(), fresh: make, archives, archiveSteps, account, there, remembered, cloud, conversation, checkout, project, remote, folder, steps, released, captured, state, files, device, cloudThread, threads, thread: placed.thread, session: placed.session, tab, fork, handoff,
     owner, machine, callThread, forward, sentNow,
     setRestored: (next: ReceivedRecords["restored"]) => (restored = next),
     failReceive: (error: Error) => (receiveFails = error),
@@ -319,6 +322,7 @@ try {
     assert.match(s.files()[1] ?? "", /b\.txt/, "with the file the agent left")
     assert.deepEqual(s.released, [s.cloudThread], "no longer answered by the cloud")
     assert.deepEqual(s.captured, [], "the conversation that moved has its journal here already")
+    assert.deepEqual(s.remembered, [["codex", "n-1", "access:full"]], "it goes on here in the mode it ran in there")
     assert.equal(s.cloud.records.get(id)?.phase, "returned", "the cloud ends the machine")
     const depart = s.cloud.calls.find((call) => call.channel === "mako:move-depart")
     assert.deepEqual(depart?.args, [{ move: id, folder: s.checkout, conversations: [s.conversation], device: s.device }], "released on the machine toward this Mac")

@@ -313,6 +313,11 @@ export interface ConversationMethodsDeps {
   /** The folder of the tab in front, where a fresh native run starts. */
   workspace(): Promise<string>
   emit(event: HostEvent): void
+  /**
+   * The mode the person chose for `harness` (`AccessChoiceStore.mode`), which a new session starts in when its start
+   * names none, whoever asked for it: a window, the web app or a phone through this Mac's link.
+   */
+  accessMode?(harness: string): string | undefined
   /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`). */
   arrival?: MoveArrivalDeps
   /** On a cloud machine: what a Thread going back to its device needs (`mako:move-depart`). */
@@ -399,11 +404,13 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     // A conversation already open (a move's, opened as it arrived) answers as it stands: its start reads nothing again.
     const tuning = live.snapshot(options.conversationId) ? options.tuning : await profiles.resolveLaunch(harness, startCwd, options.tuning ?? remembered?.settings)
     trace("profile")
+    // A resume goes on in the mode its session ran in; a new session starts in the person's, unless its start said one.
+    const modeId = options.modeId ?? (options.resume ? undefined : deps.accessMode?.(harness))
     try {
       await live.start(
         harness,
         startCwd,
-        { ...options, worktree: undefined, purpose: undefined, tuning },
+        { ...options, worktree: undefined, purpose: undefined, tuning, ...modeId !== undefined && { modeId } },
         undefined,
         options.purpose ? { kind: options.purpose, project: cwd } : undefined
       )

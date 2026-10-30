@@ -6,7 +6,7 @@ import { RadioGroup } from "radix-ui"
 import { CheckIcon, MoreHorizontalIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
 import { ACCESS_TIERS, accessTierInfo } from "@mako/host/contracts/access"
 import type { LiveSessionMode } from "@/lib/types"
-import { usePrefs } from "@/state/prefs"
+import { useAccessChoices } from "@/state/access-choices"
 import {
   chooseProviderMode,
   chooseThreadMode,
@@ -201,8 +201,8 @@ export function NextSessionModePicker({
   const globalViewing = useThreads((state) => state.opening?.ref ?? state.viewing?.ref)
   const viewing = scope ? scopedRef : globalViewing
   const remembered = threadAccessMode(viewing, modes, harness)
-  const saved = usePrefs((prefs) =>
-    savedProviderMode(prefs.providerModes, modes, harness)
+  const saved = useAccessChoices((choices) =>
+    savedProviderMode(choices.modes, modes, harness)
   )
   if (!modes.length) return null
   const thread = viewing?.harness === harness ? viewing : undefined

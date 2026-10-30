@@ -36,6 +36,7 @@ const { acp } = await import("../src/state/acp")
 const { beginStart, launch } = await import("../src/state/acp-start")
 const { acpStore } = await import("../src/state/acp-state")
 const { prefsStore } = await import("../src/state/prefs")
+const { accessChoicesStore } = await import("../src/state/access-choices")
 const { providerStore, providerProfileKey } =
   await import("../src/state/providers")
 const { pendingMessages } = await import("../src/state/message-outbox")
@@ -130,8 +131,8 @@ try {
         opening: null,
         composerHarness: provider,
       })
+      accessChoicesStore.set({ modes: {} })
       prefsStore.set({
-        providerModes: {},
         providerSettings: {},
         settingsOverrides: {},
       })
@@ -202,7 +203,7 @@ try {
     assert.equal(await launch(empty, {}), true)
     assert.equal(last(provider).dispatched.initialRequest, undefined)
     reset()
-    prefsStore.set({ providerModes: { [provider]: "saved-fixture-mode" } })
+    accessChoicesStore.set({ modes: { [provider]: "saved-fixture-mode" } })
     const configured = beginStart({
       harness: provider,
       cwd: root,
@@ -233,7 +234,7 @@ try {
       false
     )
     reset()
-    prefsStore.set({ providerModes: { [provider]: "saved-fixture-mode" } })
+    accessChoicesStore.set({ modes: { [provider]: "saved-fixture-mode" } })
     const explicit = beginStart({
       harness: provider,
       cwd: root,

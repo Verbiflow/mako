@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon } from "lucide-react"
+import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
 import { modelByIdentity } from "@mako/sessions/settings"
 import { startFailure } from "@mako/host/contracts/cloud-threads"
 import { errorMessage } from "@mako/host/contracts/error-message"
@@ -8,6 +8,8 @@ import { Spinner } from "@/components/ui/spinner"
 import { copyAge, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { titleFromPrompt } from "@/state/acp-start"
+import { accessTierInfo } from "@mako/host/contracts/access"
+import { accessInEffect, chooseAccess, macLadders, orderedModes, readAccessChoices, type AccessChoices, type AccessInEffect, type Ladder } from "./access"
 import { accountProjects, cloudHarnesses, typedRepository } from "./account"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
@@ -32,12 +34,13 @@ export interface AddingTo {
 }
 
 /** The sheet's chips' own sheets: one open at a time, over the composer. */
-type Picking = "place" | "project" | "loadout" | undefined
+type Picking = "place" | "project" | "loadout" | "access" | undefined
 
 /**
- * New: one composer, its keyboard up, and above the field the three things a start needs, each already chosen: where
- * it runs, the project, the harness and model. So the common start is New, a sentence, Send. Each chip opens a sheet of
- * its own. Adding a Session to a Thread is the same sheet with the Thread's place and project fixed.
+ * New: one composer, its keyboard up, and above the field what a start needs, each already chosen: where it runs, the
+ * project, the harness and model, and the access it runs with (the person's choice for that harness, which their
+ * account keeps for every device). So the common start is New, a sentence, Send. Each chip opens a sheet of its own.
+ * Adding a Session to a Thread is the same sheet with the Thread's place and project fixed.
  */
 export function StartSheet({ open, onDismiss, onStarted, adding }: { open: boolean; onDismiss: () => void; onStarted: (started: Started, where: string) => void; adding?: AddingTo }) {
   return (
@@ -69,6 +72,20 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
   const [picking, setPicking] = useState<Picking>(undefined)
   const [status, setStatus] = useState<string | undefined>(undefined)
   const [failure, setFailure] = useState<string | undefined>(undefined)
+  // The person's access choices, as the account keeps them; each harness's ladder, as a Mac of theirs declares it.
+  const [choices, setChoices] = useState<AccessChoices | undefined>(undefined)
+  const [ladders, setLadders] = useState<Record<string, Ladder> | undefined>(undefined)
+
+  useEffect(() => {
+    let current = true
+    readAccessChoices(client.gateway).then(
+      (found) => current && setChoices(found ?? {}),
+      () => current && setChoices({})
+    )
+    return () => {
+      current = false
+    }
+  }, [client])
 
   // What the place offers, asked of it as the place changes: its projects and its harnesses. What else the effect
   // reads (the list's rows, the Macs) is as it stands when the place is asked; the list changing doesn't ask again.
@@ -81,6 +98,11 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
     if (!at || !startable(at)) return
     let current = true
     const mac = at.kind === "mac" ? at : every.find((each): each is Extract<Place, { kind: "mac" }> => each.kind === "mac" && startable(each))
+    if (mac)
+      void macLadders(client.gateway, client.deviceId, mac.deviceId).then(
+        (found) => current && setLadders(found),
+        () => undefined
+      )
     if (at.kind === "mac") void macCatalog(client.gateway, client.deviceId, at.deviceId, into?.folder, (found) => current && setCatalog(found))
     else {
       // The cloud's harnesses, with the models the person's most recent Mac lists for each.
@@ -131,6 +153,7 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
       : ((remembered?.harness === chosenHarness.harness ? modelByIdentity(chosenHarness.models, remembered.model)?.id : undefined) ?? chosenHarness.defaultModel)
     : undefined
   const modelLabel = chosenHarness ? (modelByIdentity(chosenHarness.models, model)?.label ?? (chosenHarness.models.length ? undefined : "Default model")) : undefined
+  const access = harness && choices ? accessInEffect(harness, choices, ladders?.[harness]) : undefined
   const projectName = adding ? adding.folder.split("/").filter(Boolean).at(-1) : (projects?.find((each) => each.id === project)?.name ?? (project ? typedRepository(project)?.url.split("/").slice(-2).join("/") : undefined))
   const ready = place !== undefined && startable(place) && project !== undefined && harness !== undefined && status === undefined
 
@@ -143,14 +166,14 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
       let started: Started
       if (adding) {
         setStatus(`Starting ${webHarnessLabel(harness)} in this Thread…`)
-        started = await addSession(client.gateway, client.deviceId, adding.owner, { thread: adding.thread, folder: adding.folder, harness, model, message })
+        started = await addSession(client.gateway, client.deviceId, adding.owner, { thread: adding.thread, folder: adding.folder, harness, model, mode: access?.mode, message })
       } else if (place.kind === "mac") {
         setStatus(`Starting on ${place.name}…`)
-        started = await startOnMac(client.gateway, client.deviceId, place.deviceId, { folder: project, harness, model, message })
+        started = await startOnMac(client.gateway, client.deviceId, place.deviceId, { folder: project, harness, model, mode: access?.mode, message })
       } else {
         const repository = typedRepository(project)
         if (!repository) throw new Error("That isn't a GitHub repository: owner/repository")
-        started = await startInCloud(client.gateway, client.deviceId, { repository, harness, model, message }, (step) => setStatus(CLOUD_STEPS[step]))
+        started = await startInCloud(client.gateway, client.deviceId, { repository, harness, model, mode: access?.mode, message }, (step) => setStatus(CLOUD_STEPS[step]))
       }
       if (!adding) rememberStart(placeKey(place), { project, harness, model })
       setStatus(undefined)
@@ -164,7 +187,8 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
   }
 
   const chips = (
-    <div className="web-scroll flex gap-1.5 overflow-x-auto px-3 pt-1 pb-2" role="group" aria-label="Where and with what">
+    // Wrapped, never scrolled sideways: the access a start runs with is always in view.
+    <div className="flex flex-wrap gap-1.5 px-3 pt-1 pb-2" role="group" aria-label="Where and with what">
       <Chip label="Where it runs" disabled={Boolean(adding)} onClick={() => setPicking("place")}>
         {place?.kind === "cloud" ? <CloudIcon className="size-3.5" /> : <LaptopIcon className="size-3.5" />}
         <span>{adding ? adding.where : place ? (place.kind === "cloud" ? "Cloud" : place.name) : "Choose"}</span>
@@ -176,6 +200,10 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
       <Chip label="Harness and model" onClick={() => setPicking("loadout")}>
         {preferred ? <WebHarnessIcon harness={preferred.harness} className="size-3.5" /> : null}
         {chosenHarness ? <span>{modelLabel ?? webHarnessLabel(chosenHarness.harness)}</span> : preferred?.pending || !catalog ? <span className="skeleton h-3 w-16 rounded" /> : <span>Choose</span>}
+      </Chip>
+      <Chip label={access ? `Access: ${access.label}` : "Access"} disabled={!harness} onClick={() => setPicking("access")}>
+        {access?.tier === "full" ? <TriangleAlertIcon className="size-3.5 text-caution" /> : <ShieldIcon className="size-3.5" />}
+        {access ? <span>{access.label}</span> : <span className="skeleton h-3 w-14 rounded" />}
       </Chip>
     </div>
   )
@@ -205,6 +233,25 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
         setPickedProject(next)
         setPicking(undefined)
       }} />
+      <AccessSheet
+        open={picking === "access"}
+        onDismiss={() => setPicking(undefined)}
+        harness={harness}
+        ladder={harness ? ladders?.[harness] : undefined}
+        access={access}
+        onPick={async (mode) => {
+          if (!harness) return
+          const before = choices
+          setChoices({ ...choices, [harness]: mode.access ? { mode: mode.id, access: mode.access } : { mode: mode.id } })
+          setPicking(undefined)
+          try {
+            setChoices(await chooseAccess(client.gateway, harness, mode))
+          } catch (error) {
+            setChoices(before)
+            setFailure(`Access wasn't changed: ${errorMessage({ error })}`)
+          }
+        }}
+      />
       <LoadoutSheet open={picking === "loadout"} onDismiss={() => setPicking(undefined)} offered={offered} harness={preferred?.harness} model={model} onPick={(nextHarness, nextModel) => {
         setPicked({ harness: nextHarness, model: nextModel })
         setPicking(undefined)
@@ -345,6 +392,38 @@ function LoadoutSheet({ open, onDismiss, offered, harness, model, onPick }: { op
             <span className="truncate">Its default model</span>
           </Choice>
         ) : null}
+      </SheetScroll>
+    </Sheet>
+  )
+}
+
+/**
+ * The access a new session of the chosen harness runs with, as its ladder lists it: a pick is the person's choice for
+ * that harness on every device, the desk's composer included. Without a Mac to list the ladder, it says what's in
+ * effect and where to change it.
+ */
+function AccessSheet({ open, onDismiss, harness, ladder, access, onPick }: { open: boolean; onDismiss: () => void; harness: string | undefined; ladder: Ladder | undefined; access: AccessInEffect | undefined; onPick: (mode: Ladder["modes"][number]) => void }) {
+  const name = harness ? webHarnessLabel(harness) : "this harness"
+  return (
+    <Sheet open={open} onDismiss={onDismiss} label="Access">
+      <h3 className="px-5 text-title font-semibold">Access</h3>
+      <p className="px-5 pb-2 text-label text-muted-foreground">Every new {name} session starts with it, on any of your devices.</p>
+      <SheetScroll className="flex flex-col px-2 pb-[calc(env(safe-area-inset-bottom)+12px)]">
+        {ladder ? (
+          orderedModes(ladder.modes).map((mode) => (
+            <Choice key={mode.id} chosen={access?.mode === mode.id} onClick={() => onPick(mode)} detail={mode.access && mode.name !== accessTierInfo(mode.access).label ? mode.name : undefined}>
+              {mode.access === "full" ? <TriangleAlertIcon className="size-[18px] shrink-0 text-caution" /> : <ShieldIcon className="size-[18px] shrink-0 text-muted-foreground" />}
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate">{mode.access ? (mode.access === "plan" ? "Read-only" : accessTierInfo(mode.access).label) : mode.name}</span>
+                {mode.access ? <span className="truncate text-label text-faint">{accessTierInfo(mode.access).summary}</span> : null}
+              </span>
+            </Choice>
+          ))
+        ) : (
+          <p className="px-3 py-2 text-ui text-muted-foreground">
+            {access ? `${access.label} now. ` : ""}To change it here, turn on one of your Macs with Mako: it lists what {name} offers.
+          </p>
+        )}
       </SheetScroll>
     </Sheet>
   )

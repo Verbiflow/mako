@@ -4,7 +4,7 @@ import { store as sessionStore } from "@/state/session"
 import { openSessionDraft, threadGroupsStore } from "@/state/thread-groups"
 import { runPlaceStore } from "@/state/run-place"
 import { currentSettingsTarget, settingsForSend } from "@/state/composer-settings"
-import { prefsStore } from "@/state/prefs"
+import { chosenAccessModes } from "@/state/access-choices"
 import { threadsStore } from "@/state/thread-store"
 import type { CloudPrepareLaunch } from "@mako/host/contracts/cloud-threads"
 
@@ -95,7 +95,7 @@ function askCloudPrepare(cwd: string, now: number): void {
 async function composerLaunch(): Promise<CloudPrepareLaunch> {
   const harness = threadsStore.get().composerHarness
   const launch: CloudPrepareLaunch = { harness, tuning: await settingsForSend(currentSettingsTarget(harness)) }
-  const modeId = prefsStore.get().providerModes[harness]
+  const modeId = chosenAccessModes()[harness]
   if (modeId) launch.modeId = modeId
   return launch
 }

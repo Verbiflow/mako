@@ -11,6 +11,8 @@ import { CLOUD_PLACE, defaultPlace, macProjects, orderedHarnesses, placeKey, pla
 import { rubberband, SETTLE, springPath } from "../src/web-client/motion"
 import { shouldOffer } from "../src/web-client/install"
 import { HeldPreviews, type Picked } from "../src/web-client/attachments"
+import { accessInEffect, chooseAccess, orderedModes, readAccessChoices, type Ladder } from "../src/web-client/access"
+import { AccessChoosingSchema, type AccessChoices } from "@mako/protocol/access-choices"
 
 const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`
 const STUDIO = uuid(900)
@@ -241,4 +243,46 @@ test("a chip's picture lasts as long as its attachment: a message that didn't go
   assert.deepEqual([second, third].map(live), [false, true], "a sent one lets go")
   previews.releaseAll()
   assert.equal(live(third), false, "the composer gone, every picture with it")
+})
+
+test("a start runs in the access the person chose for its harness, the one their account keeps for every device", async () => {
+  const claude: Ladder = { defaultMode: "default", modes: [{ id: "default", name: "Default", access: "ask" }, { id: "plan", name: "Plan", access: "plan" }, { id: "bypassPermissions", name: "Bypass permissions", access: "full" }] }
+  const cursor: Ladder = { defaultMode: "full-access", modes: [{ id: "full-access", name: "Full access", access: "full" }] }
+  const choices = { claude: { mode: "bypassPermissions", access: "full" } }
+  // As the desk's chip says it: the tier's name, the harness's own beside it, and the mode a start names.
+  assert.deepEqual(accessInEffect("claude", choices, claude), { mode: "bypassPermissions", tier: "full", label: "Full access", detail: "Bypass permissions" })
+  // No Mac to list the ladder (a phone, the cloud): the choice stands as the account keeps it.
+  assert.deepEqual(accessInEffect("claude", choices, undefined), { mode: "bypassPermissions", tier: "full", label: "Full access" })
+  // A mode the harness no longer offers names nothing, so the harness's own configuration decides, as on the desk.
+  assert.deepEqual(accessInEffect("claude", { claude: { mode: "gone" } }, claude), { label: "Native default" })
+  assert.deepEqual(accessInEffect("codex", choices, undefined), { label: "Native default" })
+  // A one-mode harness runs in its one level; plan reads as what it allows.
+  assert.deepEqual(accessInEffect("cursor", {}, cursor), { tier: "full", label: "Full access" })
+  assert.equal(accessInEffect("claude", { claude: { mode: "plan" } }, claude).label, "Read-only")
+  assert.deepEqual(orderedModes(claude.modes).map((mode) => mode.id), ["plan", "default", "bypassPermissions"])
+
+  // Read and changed in the account: one harness's choice sent, all of them answered.
+  const sent: Array<{ method: string; path: string; body?: unknown }> = []
+  let kept: AccessChoices = { codex: { mode: "access:ask", access: "ask" } }
+  const fetched = globalThis.fetch
+  // SAFETY: the gateway client calls fetch with a URL and an init, and reads only what this answers.
+  globalThis.fetch = (async (input: URL, init: RequestInit) => {
+    const body = init.body ? JSON.parse(String(init.body)) : undefined
+    sent.push({ method: init.method ?? "GET", path: input.pathname, body })
+    if (init.method === "PATCH") kept = { ...kept, ...AccessChoosingSchema.parse(body).choices }
+    return new Response(JSON.stringify({ choices: kept, revision: sent.length }), { status: 200, headers: { "content-type": "application/json" } })
+  }) as typeof fetch
+  const gateway = new Gateway({ origin: "https://example.test", connect: async () => ({ token: "t", expiresAt: Date.now() + 60_000, deviceId: uuid(1), account: { id: uuid(2), name: "Ana", email: "ana@example.test", image: null, entitlements: [] } }) })
+  try {
+    assert.deepEqual(await readAccessChoices(gateway), { codex: { mode: "access:ask", access: "ask" } })
+    assert.deepEqual(await chooseAccess(gateway, "claude", claude.modes[2]!), { codex: { mode: "access:ask", access: "ask" }, claude: { mode: "bypassPermissions", access: "full" } })
+    assert.deepEqual(sent, [{ method: "GET", path: "/v1/access", body: undefined }, { method: "PATCH", path: "/v1/access", body: { choices: { claude: { mode: "bypassPermissions", access: "full" } } } }])
+    // A cloud that doesn't keep them yet: no choices, and a start names no mode.
+    // SAFETY: as above; every request is answered as a gateway without the route answers it.
+    globalThis.fetch = (async () => new Response(JSON.stringify({ title: "Not found" }), { status: 404, headers: { "content-type": "application/problem+json" } })) as typeof fetch
+    assert.equal(await readAccessChoices(gateway), undefined)
+  } finally {
+    globalThis.fetch = fetched
+    gateway.close()
+  }
 })
