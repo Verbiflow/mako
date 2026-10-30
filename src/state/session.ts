@@ -769,7 +769,8 @@ async function loadWorktrees() {
 }
 
 export const actions = {
-  async reconnect() {
+  /** `attempt`: how many tries in a row have failed since the host said it was back. */
+  async reconnect(attempt = 0) {
     const epoch = ++connectionEpoch
     const cwd = store.get().meta?.cwd
     try {
@@ -807,7 +808,11 @@ export const actions = {
       void loadAccessChoices().catch(() => {})
       if (!boot.archives) void threadLifecycle.load()
     } catch (error) {
-      if (epoch === connectionEpoch) hostConnectionStore.set({ kind: "disconnected", message: error instanceof Error ? error.message : "The shared host could not be restored" })
+      if (epoch !== connectionEpoch) return
+      hostConnectionStore.set({ kind: "disconnected", message: error instanceof Error ? error.message : "The shared host could not be restored" })
+      // The host said it is back and nothing will say so again: a boot that failed on the way is tried again, not
+      // left on the banner until the person reloads. A new outage or boot moves the epoch on and ends the retries.
+      setTimeout(() => { if (epoch === connectionEpoch) void actions.reconnect(attempt + 1) }, Math.min(30_000, 1_000 * 2 ** attempt))
     }
   },
   async boot() {

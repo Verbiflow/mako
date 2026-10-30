@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { startWebHost } from "@mako/host/transport/server"
 import { invokeRuntime, probeRuntime, runtimeInfo, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
-import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { HostCallTimeoutError, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
 import { HOST_CALL_UNCONFIRMED_MESSAGE, HOST_RECONNECTING_MESSAGE } from "@mako/host/contracts/host-connection"
 import { encodeRuntimeEvent, runtimeEventLine, splitRuntimeEventLine } from "@mako/host/contracts/runtime-value"
@@ -185,7 +185,8 @@ try {
   }
 }
 
-// Typed delivery uncertainty survives both hops, including an RPC timeout.
+// Typed delivery uncertainty survives both hops, including an RPC timeout: an owner that doesn't answer in time is
+// unavailable to its conversation, as `SharedConversations.route` says.
 {
   const dir = await mkdtemp(join(tmpdir(), "mako-wire-peer-"))
   const peerSocket = join(dir, "peer.sock")
@@ -199,7 +200,7 @@ try {
   const receiver = await startWebHost(receiverSocket, async (channel) => {
     try { await invokeRuntime(peerSocket, a, channel, [], 1, { timeoutMs: 20 }) }
     catch (error) {
-      if (error instanceof RuntimeDisconnectedError) throw new RuntimeDisconnectedError(error.unconfirmed, conversationId)
+      if (error instanceof RuntimeDisconnectedError || error instanceof HostCallTimeoutError) throw new RuntimeDisconnectedError(error.unconfirmed, conversationId)
       throw error
     }
     return undefined

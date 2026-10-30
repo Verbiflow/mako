@@ -8,7 +8,8 @@ import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
 import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
-import { RuntimeDisconnectedError, HOST_OUTAGE_MESSAGE } from "@mako/host/contracts/host-connection"
+import { HostCallTimeoutError, RuntimeDisconnectedError, HOST_OUTAGE_MESSAGE } from "@mako/host/contracts/host-connection"
+import { HostLiveness } from "@mako/host/contracts/host-liveness"
 import { setClientStorageScope } from "../lib/client-storage-scope"
 import { createWebNotificationChannels } from "./web-notifications.ts"
 
@@ -26,24 +27,18 @@ export async function installWebBridge(): Promise<void> {
   }
   const events = new Set<(event: HostEvent) => void>()
   const terminals = new Set<(event: TerminalEvent) => void>()
-  let connected = false
-  let seen = false
   let stopped = false
   let supported: ReadonlySet<string> | null = null
   const clientId = crypto.randomUUID()
-  const waiters = new Set<(connected: boolean) => void>()
-  const settle = (value: boolean) => {
-    for (const waiter of waiters) waiter(value)
-    waiters.clear()
-  }
-  const whenConnected = (timeoutMs: number) =>
-    new Promise<boolean>((resolve) => {
-      if (connected) { resolve(true); return }
-      if (stopped) { resolve(false); return }
-      const deadline = setTimeout(() => { waiters.delete(waiter); resolve(false) }, timeoutMs)
-      const waiter = (value: boolean) => { clearTimeout(deadline); resolve(value) }
-      waiters.add(waiter)
-    })
+  // The same rule as the desktop's windows (`host-liveness.ts`): the event stream says whether the host is there, and
+  // a dropped call raises nothing by itself. The dev proxy forwards only calls and the stream, so the stream's
+  // heartbeat is this page's only proof.
+  const link = new HostLiveness({
+    message: HOST_OUTAGE_MESSAGE,
+    announce: (event) => { for (const listener of events) listener(event) },
+    probe: async () => "unknown",
+  })
+  let stream = link.stream()
   /**
    * What a non-OK proxy reply means. The dev proxy answers 403 itself when it
    * does not trust this page's origin and 502–504 when it could not reach the
@@ -62,7 +57,7 @@ export async function installWebBridge(): Promise<void> {
   // The reply body is the host's JSON answer, typed by the channel's contract
   // in `createMakoBridge`, the same way Electron's `ipcRenderer.invoke` is.
   const post = async (channel: string, args: unknown[], attempt: number, correlationId: string) => {
-    if (!connected) throw new RuntimeDisconnectedError(false)
+    if (!link.connected) throw new RuntimeDisconnectedError(false)
     const headers = new Headers({ "content-type": "application/json", "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1", [CORRELATION_HEADER]: correlationId })
     if (channel === "mako:control-preview") headers.set("accept", PREVIEW_MEDIA_TYPE)
     if (channel === "mako:control-video") headers.set("accept", CONTROL_VIDEO_BATCH_TYPE)
@@ -75,7 +70,10 @@ export async function installWebBridge(): Promise<void> {
         headers,
         body,
       })
-    } catch {
+    } catch (error) {
+      // No answer in five minutes: the host is slow, not gone.
+      if (error instanceof DOMException && error.name === "TimeoutError")
+        throw new HostCallTimeoutError(hostCallReplay(channel) !== "read")
       // The proxy could not reach the socket or the connection reset: the
       // request may have been read before the host left.
       throw new RuntimeDisconnectedError(true)
@@ -114,10 +112,7 @@ export async function installWebBridge(): Promise<void> {
    */
   const invokeHost = (channel: string, args: unknown[]) => {
     const correlationId = crypto.randomUUID()
-    return invokeWithRecovery(
-      channel, (attempt) => post(channel, args, attempt, correlationId),
-      { lost() { /* The independent event stream owns connection status. */ }, whenConnected }
-    )
+    return invokeWithRecovery(channel, (attempt) => post(channel, args, attempt, correlationId), link)
   }
   const response = await fetch("/__mako/events", {
     method: "POST",
@@ -137,17 +132,13 @@ export async function installWebBridge(): Promise<void> {
         try { setClientStorageScope(event.runtime.storageScope) }
         catch (error) {
           stopped = true
-          connected = false
-          settle(false)
+          link.dispose()
           for (const listener of events) listener({ type: "host-disconnected", message: error instanceof Error ? error.message : "The Mako host changed. Reload this page." })
           void reader.cancel().catch(() => {})
           return
         }
       }
-      connected = true
-      settle(true)
-      if (seen) for (const listener of events) listener({ type: "host-reconnected" })
-      seen = true
+      stream.ready()
     } else if (event.channel === "event") {
       for (const listener of events) listener(event.payload)
     } else {
@@ -160,6 +151,8 @@ export async function installWebBridge(): Promise<void> {
   const parts: string[] = []
   let pendingLength = 0
   const consume = (chunk: string) => {
+    // Any bytes, the host's heartbeat included, show the host is there.
+    stream.heard()
     let text = chunk
     let newline = text.indexOf("\n")
     while (newline >= 0) {
@@ -180,7 +173,7 @@ export async function installWebBridge(): Promise<void> {
         throw new Error("Mako host event exceeds the web transport limit")
     }
   }
-  while (!connected) {
+  while (!link.connected) {
     const chunk = await reader.read()
     if (chunk.done)
       throw new Error("Mako host closed before the web desk was ready")
@@ -255,13 +248,12 @@ export async function installWebBridge(): Promise<void> {
     // loop resumes with it; canceling it and permanently stopping loses the tab.
     if (event.persisted) return
     stopped = true
-    settle(false)
+    link.dispose()
     void reader.cancel().catch(() => {})
   })
   window.addEventListener("pageshow", (event) => {
     if (!event.persisted || stopped) return
     // Force a fresh subscription and authoritative hydration after suspension.
-    connected = false
     void reader.cancel().catch(() => {})
   })
   void (async () => {
@@ -273,23 +265,23 @@ export async function installWebBridge(): Promise<void> {
           consume(chunk.value)
         }
       } catch {
-        connected = false
+        // An unreadable stream ends like a closed one.
       } finally {
-        connected = false
         reader.releaseLock()
       }
       if (stopped) return
-      for (const listener of events) listener({ type: "host-disconnected", message: HOST_OUTAGE_MESSAGE })
+      stream.ended()
       for (let attempt = 0; !stopped; attempt++) {
         await new Promise((resolve) => setTimeout(resolve, Math.min(4_000, 500 * (attempt + 1))))
         try {
           const next = await fetch("/__mako/events", { method: "POST", headers: { "x-mako-client": "web", "x-mako-window": clientId, "x-mako-history": "1" } })
           if (!next.ok || !next.body) continue
           reader = next.body.pipeThrough(new TextDecoderStream()).getReader()
+          stream = link.stream()
           parts.length = 0
           pendingLength = 0
           break
-        } catch { connected = false }
+        } catch { /* Not back yet. */ }
       }
     }
   })()
