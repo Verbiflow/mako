@@ -9,13 +9,15 @@ import type { ConversationMemory } from "../contracts/provider-residency.js"
 import { ContentWeights, residencyPlan, type ResidencyPlan } from "../contracts/residency.js"
 import { SessionIdSchema } from "../contracts/thread-identity.js"
 import type { JournalFacts } from "../threads/index.js"
-import { reduceLiveUpdates } from "@mako/sessions/live-content"
+import { isTurnStart, reduceLiveUpdates } from "@mako/sessions/live-content"
+import type { Entry } from "@mako/sessions/entries"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
 import { LiveJournal, journalIds, storedRequest } from "./live-journal.js"
 import { backfillMemory } from "./live-ledger.js"
 import { conversationControl, residentOf, type Dependencies, type Resident } from "./live-runtime.js"
 import { interruptRequests } from "./live-settlement.js"
+import { isPaged, pagedWeight } from "./paged-entries.js"
 
 /**
  * What the host holds of conversations nothing is using; see `ResidencyBudget`.
@@ -32,6 +34,15 @@ export const CONVERSATION_MEMORY = { bytes: 128 * 1024 * 1024, recent: 2, sweepM
  * second, and the host ran out of heap 90 seconds after each start.
  */
 export const BULK_LOADS = 8
+
+/**
+ * What a conversation keeps in memory of its newest finished entries, by
+ * characters of content, besides the turn running: what a window opening it
+ * reads first. Everything before is paged (`paged-entries.ts`).
+ */
+export const WARM_CHARS = 256 * 1024
+/** How long paging a conversation's entries holds the loop before letting other work run. */
+const PAGE_SLICE_MS = 4
 
 /** The name of a load nothing named: work outside a call, a job or a domain load. */
 const UNNAMED_READER = "unnamed work"
@@ -54,6 +65,10 @@ export interface RecordHooks {
   storageFailed(resident: Resident, boundary: FailureBoundary): void
   /** A journal was read in; what it names but doesn't keep is read now (`LiveSources.readBase`). */
   loaded(resident: Resident): void
+  /** Entries of the conversation were paged: whatever still holds them warm (a window's view) may hold the paged ones instead. */
+  paged?(id: string): void
+  /** The conversation was let go: what still holds its entries (a window's view) lets them go too. */
+  released?(id: string): void
   /** A closed journal much of which is free, to compact (`JournalReclaims`). */
   compact(path: string): void
 }
@@ -73,7 +88,15 @@ export class LiveRecords {
   private readonly unloaded = new Map<string, Unloaded>()
   /** Residents `unload` let go, so a continuation still holding one cannot write through it. */
   private readonly released = new WeakSet<Resident>()
-  private readonly weights = new ContentWeights()
+  private readonly weights = new ContentWeights(pagedWeight)
+  /** Paging under way, one conversation at a time; see `pageOut`. */
+  private paging?: Promise<void>
+  /**
+   * Journals let go whose paged entries are still somewhere (a read under
+   * way): held until those are collected and the journal has tidied its file
+   * (`LiveJournal.released`), since nothing else would hear of it.
+   */
+  private readonly releasing = new Map<string, LiveJournal>()
   /** The conversation each binding's driver events belong to; the journal's index doesn't hold it. */
   readonly owners = new Map<string, string>()
   /** Who read conversations in from disk, by the work that was running (`HostWork.current`), this host life. */
@@ -199,6 +222,12 @@ export class LiveRecords {
       return existing
     }
     if (!this.recovered.has(id)) return undefined
+    // A journal let go that hasn't tidied its file yet leaves that to the one opening it now, which writes ahead again.
+    const releasing = this.releasing.get(id)
+    if (releasing) {
+      releasing.keepFile()
+      this.releasing.delete(id)
+    }
     const journal = new LiveJournal(this.dependencies.root, id)
     const started = performance.now()
     const previous = journal.read()
@@ -324,8 +353,24 @@ export class LiveRecords {
     )
   }
 
-  /** Lets go of what the memory budget has no room for; see `ResidencyBudget`. */
+  /**
+   * Pages what each conversation is done with (`pageOut`), then lets go of
+   * what the memory budget still has no room for; see `ResidencyBudget`.
+   * Paging comes first: a conversation's weight is what memory keeps of it
+   * once paged, and weighing an entry before measures its whole content.
+   */
   private sweep(): void {
+    if (this.paging) {
+      this.scheduleSweep()
+      return
+    }
+    this.paging = this.pageAll().finally(() => {
+      this.paging = undefined
+      if (!this.stopped) this.unloadOverBudget()
+    })
+  }
+
+  private unloadOverBudget(): void {
     const plan = this.memoryPlan()
     let freed = 0
     let count = 0
@@ -371,6 +416,66 @@ export class LiveRecords {
     )
   }
 
+  /**
+   * `MAKO_PAGING_CHECK=1`: every entry the journal's rows hold is paged as
+   * soon as a commit wrote it, the turn running included, so a suite run
+   * with it reads every entry back from its row wherever it reads one.
+   */
+  pageAllNow(resident: Resident): void {
+    if (process.env.MAKO_PAGING_CHECK !== "1" || this.released.has(resident) || resident.journalSnapshot !== resident.snapshot) return
+    const { blocks, base } = resident.snapshot
+    // Every field but an entry's type and id is read back, however short.
+    resident.journal.pageBlocks(blocks, 0, blocks.length, Infinity, 0)
+    if (base) resident.journal.pageBase(base.entries, 0, base.entries.length, Infinity, 0)
+    this.hooks.paged?.(resident.snapshot.session.id)
+  }
+
+  /** Pages every conversation in memory, running or not, one after another. */
+  private async pageAll(): Promise<void> {
+    for (const resident of Array.from(this.residents.values())) {
+      if (this.stopped) return
+      try {
+        await this.pageOut(resident)
+      } catch (error) {
+        hostWarn("residency", "a conversation's entries couldn't be paged; memory keeps them", { conversation: resident.snapshot.session.id, error: errorMessage({ error }) })
+      }
+    }
+  }
+
+  /**
+   * Pages what a conversation is done with out of memory (`paged-entries.ts`),
+   * a slice at a time: its blocks and its history's entries, but the turn
+   * running and the newest `WARM_CHARS` of each. A block is paged only while
+   * the journal's rows hold the blocks as memory does, and a history entry
+   * once its row holds it. Running or idle, pinned or not, a conversation
+   * then keeps its last turns and an index of the rest.
+   */
+  private async pageOut(resident: Resident): Promise<void> {
+    const id = resident.snapshot.session.id
+    let paged = 0
+    const current = () => this.residents.get(id) === resident && !this.released.has(resident) && !this.stopped
+    for (const table of ["blocks", "base"] as const) {
+      let at = 0
+      for (;;) {
+        if (!current()) return
+        const { snapshot } = resident
+        // A block is read back from its row: only while the last commit wrote every block as memory has it.
+        if (table === "blocks" && (resident.journalSnapshot !== snapshot || resident.updates.length || resident.storageFault)) break
+        const entries = table === "blocks" ? snapshot.blocks : snapshot.base?.entries
+        if (!entries) break
+        const end = table === "blocks" ? Math.min(warmFrom(entries), runningFrom(resident)) : warmFrom(entries)
+        while (at < end && isPaged(entries[at]!)) at++
+        if (at >= end) break
+        const until = performance.now() + PAGE_SLICE_MS
+        const reached = table === "blocks" ? resident.journal.pageBlocks(entries, at, end, until) : resident.journal.pageBase(entries, at, end, until)
+        paged += reached - at
+        at = reached
+        await new Promise((resolve) => setImmediate(resolve))
+      }
+    }
+    if (paged) this.hooks.paged?.(id)
+  }
+
   /** Lets go of a conversation nothing is using; `load` brings it back as it was. */
   private unload(resident: Resident): boolean {
     try {
@@ -391,7 +496,13 @@ export class LiveRecords {
     })
     this.residents.delete(id)
     this.released.add(resident)
-    resident.journal.close((path) => this.hooks.compact(path))
+    const { journal } = resident
+    journal.close((path) => this.hooks.compact(path))
+    if (journal.pagedCount()) {
+      this.releasing.set(id, journal)
+      void journal.released().finally(() => { if (this.releasing.get(id) === journal) this.releasing.delete(id) })
+    }
+    this.hooks.released?.(id)
     return true
   }
 
@@ -520,6 +631,33 @@ function afterRestart(previous: LiveSnapshot, root: string): LiveSnapshot {
     snapshot.requests = snapshot.requests.map((request) => (request.id === crashed.id && request.interruption ? { ...request, interruption: told } : request))
   }
   return snapshot
+}
+
+/** Where the newest `WARM_CHARS` of `entries` begin, or the first entry paged already after which all are warm. */
+function warmFrom(entries: readonly Entry[]): number {
+  let chars = 0
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!
+    if (isPaged(entry)) return index + 1
+    chars += contentChars(entry)
+    if (chars > WARM_CHARS) return index + 1
+  }
+  return 0
+}
+
+/** About how much an entry's content weighs: its JSON, most of which paging lets go. */
+function contentChars(entry: Entry): number {
+  return JSON.stringify(entry).length
+}
+
+/** Where the turn under way begins, its blocks still changing; the end when none is. */
+function runningFrom({ snapshot }: Resident): number {
+  const running = snapshot.session.status === "running" || snapshot.session.status === "starting" ||
+    snapshot.requests.some((request) => request.status === "dispatching")
+  if (!running) return snapshot.blocks.length
+  let index = snapshot.blocks.length - 1
+  while (index > 0 && !isTurnStart(snapshot.blocks[index])) index--
+  return Math.max(0, index)
 }
 
 function residentWeight(weights: ContentWeights, { snapshot }: Resident): number {

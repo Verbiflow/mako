@@ -787,8 +787,39 @@ added. While the journal keeps no copy its rows stay, written ahead between
 other work (`stageBase`, `writeAhead`), so the next turn names them without
 writing them; the compaction drops them once the journal closes.
 `npm run bench:live-read` fails if reading a huge conversation holds the
-event loop. This is the host's memory, not the window's: a conversation
-whose harness is attached is pinned and kept whole there, whatever it weighs.
+event loop.
+
+The host doesn't hold a conversation's history whole, running or not: its
+finished entries are paged (`packages/host/src/conversations/paged-entries.ts`).
+The journal holds every live block as a row and, while the conversation is
+open, every entry of its history (`base_entries`, kept or written ahead), so
+a paged entry keeps its short fields (type, id, request, status, a call's
+name, a stream's or record's place) and reads its long ones back from its
+row when something reads them. It is still an entry: JSON, spreads, deep
+equality and every reader see what they saw, so nothing that reads history
+needs to know, but a pass that reads all of it at once (a merge) reads it
+back first, a slice at a time (`readBack`). `LiveRecords`' sweep pages each
+conversation in memory but its turn under way and its newest `WARM_CHARS`,
+then weighs what is left; a block only while the journal's rows hold the
+blocks as memory does, a history entry once its row holds it (by identity,
+`LiveJournal.pageBase`). A row is never written over or dropped under a
+paged entry: the journal gives the entry its content back first (`detach`).
+A closed journal's paged entries read through a connection of their own,
+and its rows written ahead stay, and the file isn't compacted, until the last
+is collected (`LiveJournal.released`); a window's views hold the paged copies
+(`LiveHistoryReader.paged`) and go with their conversation. A batch carries a
+changed base only while it's short (`carriesBase`); a long one is the notice
+that the history changed. A journal has one writer, the host holding it: an
+entry paged from a row reads what that row holds now. On 2026-10-30 a running
+conversation of 30,845 blocks and a 157MB history held 422MB here; `npm run
+bench:running-memory` holds one of 150MB to under 72MB while it streams, a
+window reads it back whole, its turn ends and a new host reopens it, and
+fails on a host that keeps it whole. `MAKO_PAGING_CHECK=1` pages every field
+of every entry as soon as a commit writes it, the turn running included; run
+the live, transcript and conversation-control suites with it after changing
+paging or anything that reads history (test-live-conversations' crash fixture
+runs two hosts on one journal at once, which breaks that one-writer rule).
+`scripts/test-paged-entries.ts` (in `test:performance`) covers paging.
 
 Mako never writes a session a harness didn't. A conversation goes on in
 another harness as a new real session of that harness, whose first turn
@@ -2624,8 +2655,9 @@ two hosts) run under `test:thread-store`.
 
 What the host holds of its conversations is `LiveRecords`
 (`packages/host/src/conversations/live-records.ts`): a journal is read in
-when something needs it and let go once the memory budget has no room for it
-and nothing is using it. Everything that lists conversations, every second or
+when something needs it, its finished entries are paged (`paged-entries.ts`,
+above), and it is let go once the memory budget has no room for what is left
+of it and nothing is using it. Everything that lists conversations, every second or
 on every event, reads the listing (`LiveSummary`: the session, its paths and
 native ids, its revision), never a journal: the Sessions report
 (`ownedSessions`), the account's rows, the Thread lifecycle's archive keys

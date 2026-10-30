@@ -12,6 +12,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { mediaFacts } from "@mako/sessions/turn-media"
 import { readOriginal, readStreamOriginal, type EntryOriginal } from "@mako/sessions/record-original"
 import { hostLog } from "../base/host-log.js"
+import { pagedOf, pagedWeight } from "./paged-entries.js"
 
 const PAGE_CHARS = 192 * 1024
 const PAGE_ITEMS = 80
@@ -64,7 +65,7 @@ export class LiveHistoryReader {
   private readonly views = new Map<string, View>()
   private readonly records = new Map<string, RecordValue>()
   private readonly versions = new WeakMap<Entry, string>()
-  private readonly weights = new ContentWeights()
+  private readonly weights = new ContentWeights(pagedWeight)
   private readonly nativePage?: (path: string, before?: number) => Promise<ThreadPage | null>
   private readonly nativeEntry?: (path: string, id: string) => Promise<Entry | null>
   private readonly originals?: Originals
@@ -79,6 +80,31 @@ export class LiveHistoryReader {
     originals?: Originals,
     held?: (id: string) => LiveSnapshot | undefined,
   ) { this.nativePage = nativePage; this.nativeEntry = nativeEntry; this.originals = originals; this.held = held }
+
+  /**
+   * Conversation `id`'s entries were paged (`paged-entries.ts`): its views of
+   * earlier revisions hold the paged entries too, so what they keep alive is
+   * what memory keeps of the conversation, not its whole history again.
+   */
+  paged(id: string): void {
+    const held = this.held?.(id)
+    for (const view of this.views.values()) {
+      if (view.id !== id) continue
+      if (view.snapshot.blocks !== held?.blocks) swapPaged(view.snapshot.blocks)
+      const entries = view.snapshot.base?.entries
+      if (entries && entries !== held?.base?.entries) swapPaged(entries)
+    }
+  }
+
+  /** Conversation `id` was let go: its views go with it, and a window reading one reads the conversation again. */
+  released(id: string): void {
+    for (const [token, view] of Array.from(this.views)) if (view.id === id) this.letGo(token, view, "its conversation was let go")
+  }
+
+  /** The captures this reader holds of conversation `id`, newest last: what its views keep alive, for a diagnostic. */
+  viewsOf(id: string): LiveSnapshot[] {
+    return Array.from(this.views.values()).flatMap((view) => (view.id === id ? [view.snapshot] : []))
+  }
 
   /** Shared response boundary for operations that return a snapshot. */
   present<Result>(value: Result): Result {
@@ -460,4 +486,12 @@ function isPartial(entry: Entry): boolean {
 function largeTool(block: { input?: string; output?: string; details?: unknown; attachments?: unknown }): boolean {
   return (block.input?.length ?? 0) > TOOL_PREVIEW || (block.output?.length ?? 0) > TOOL_PREVIEW ||
     JSON.stringify([block.details, block.attachments]).length > TOOL_PREVIEW
+}
+
+/** Puts each entry's paged copy where `entries` holds the entry warm, so the warm one can go. */
+function swapPaged(entries: Entry[]): void {
+  for (let index = 0; index < entries.length; index++) {
+    const paged = pagedOf(entries[index]!)
+    if (paged) entries[index] = paged
+  }
 }
