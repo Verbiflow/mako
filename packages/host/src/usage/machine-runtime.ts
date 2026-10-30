@@ -53,8 +53,11 @@ export type MachineRuntimeOptions = {
   openWorkspace(path: string): Promise<void>
   /** The project's carried files the agent placed in the checkout, each with the variables it defines; never a value. */
   carriedFiles?(files: readonly CarriedFile[]): void
-  /** The agent couldn't make the Thread's folder: why, said by whatever needs the folder later. */
-  workspaceFailed?(problem: string): void
+  /**
+   * The agent couldn't make the Thread's folder: why, said by whatever needs the folder later (`problem`, with the step
+   * and the path; `reason`, the agent's words alone).
+   */
+  workspaceFailed?(problem: string, reason: string): void
   /** What a start does first in a folder, done ahead: a project base's, before its snapshot. */
   prepareFolder(path: string): Promise<void>
   /** What `harness`'s start runs first, run ahead as the machine boots; undefined for a harness without it. */
@@ -278,7 +281,7 @@ export class MachineRuntime {
       case "workspace-failed": {
         const problem = `the agent's ${message.step} failed${message.path ? ` for ${message.path}` : ""}: ${message.reason}`
         hostWarn("machine", "the Thread's folder wasn't made", { step: message.step, reason: message.reason })
-        return this.#options.workspaceFailed?.(problem)
+        return this.#options.workspaceFailed?.(problem, message.reason)
       }
       case "prepare":
         return void this.#prepare(message.path)

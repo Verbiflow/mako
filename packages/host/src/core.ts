@@ -108,7 +108,7 @@ export interface Core {
   /** On a cloud machine: the folder its agent prepared, where every client's tabs open. */
   openMachineWorkspace(path: string): Promise<void>
   /** On a cloud machine: why its agent couldn't make the Thread's folder, for whatever needs it to say. */
-  machineWorkspaceFailed(problem: string): void
+  machineWorkspaceFailed(problem: string, reason: string): void
   /** On a cloud machine: the project's carried files its agent placed in the checkout, with the variables each defines. */
   machineCarriedFiles(files: readonly CarriedFile[]): void
   /** On a cloud machine: the live video of its previews its Threads' clients watch. */
@@ -205,7 +205,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const late: LateParts = {}
   /** On a cloud machine, the gateway it's linked through; a laptop has none and reaches the account as itself. */
   let machineLink: MachineGatewayLink | null = null
-  /** On a cloud machine: the Thread's folder its agent makes, asked for again by a move that finds it unmade. */
+  /** On a cloud machine: the Thread's folder its agent makes, asked for again by a move or a start that finds it unmade. */
   const machineWorkspace = new MachineWorkspace(() => shell.retryMachineWorkspace?.() ?? false)
   /** On a cloud machine: the account's sign-ins as last installed here; undefined until the agent gave a set. */
   let machineSignIns: readonly CloudSignInInstall[] | undefined
@@ -991,6 +991,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       sourceRoot: config.development ? environment.appRoot : undefined,
       onWorkspaceChanged: (cwd) => workspaceAutomations.watch(cwd),
       elsewhere: async (conversation) => cloudConversations?.folder(conversation),
+      unmadeFolder: () => machineWorkspace.unmade(),
     },
     emit,
     machine,
@@ -1271,7 +1272,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       working: (busy) => machineTracker?.saves.working(busy),
       settle: (why) => machineTracker?.saves.settle(why) ?? Promise.resolve(),
     },
-    machineWorkspaceFailed: (problem) => machineWorkspace.failed(problem),
+    machineWorkspaceFailed: (problem, reason) => machineWorkspace.failed(problem, reason),
     machineCarriedFiles: (files) => {
       machineCarried = files
     },

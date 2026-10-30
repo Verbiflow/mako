@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon } from "lucide-react"
 import { modelByIdentity } from "@mako/sessions/settings"
+import { startFailure } from "@mako/host/contracts/cloud-threads"
 import { errorMessage } from "@mako/host/contracts/error-message"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { Spinner } from "@/components/ui/spinner"
@@ -188,9 +189,7 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
           {status}
         </p>
       ) : failure ? (
-        <p role="alert" className="px-4 pb-1 text-label text-negative">
-          {failure}
-        </p>
+        <StartFailed message={failure} />
       ) : null}
       <Composer autoFocus placeholder="What should it work on?" accessory={chips} sendable={ready} onSend={start} sendLabel="Start" />
       <PlaceSheet open={picking === "place"} onDismiss={() => setPicking(undefined)} all={all} chosen={chosenPlace} onPick={(next) => {
@@ -210,6 +209,24 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
         setPicked({ harness: nextHarness, model: nextModel })
         setPicking(undefined)
       }} />
+    </div>
+  )
+}
+
+/**
+ * Why a start didn't go, in its own words; with the GitHub page that gives Mako's GitHub App access to the repository
+ * beside them when that's what it lacks, as the turn-on card offers it, so the person can fix it and start again.
+ */
+function StartFailed({ message }: { message: string }) {
+  const { said, install } = startFailure(message)
+  return (
+    <div role="alert" className="flex items-start gap-3 px-4 pb-2">
+      <p className="min-w-0 flex-1 text-label text-pretty text-negative">{said}</p>
+      {install ? (
+        <a href={install} target="_blank" rel="noopener noreferrer" className="web-button h-8 shrink-0 px-3 text-label" data-start-fix="give-access">
+          Give access
+        </a>
+      ) : null}
     </div>
   )
 }

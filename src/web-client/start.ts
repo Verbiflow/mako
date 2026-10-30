@@ -137,7 +137,8 @@ export type CloudStep = "making" | "preparing" | "starting"
 
 /**
  * Starts a Thread in the cloud, as a Mac's cloud start does (`CloudConversations.#start`): the Thread made with its
- * repository, its machine's folder read from its boot, then the harness started there with the first message.
+ * repository, its machine's folder read from its boot, then the harness started there with the first message. A
+ * machine that couldn't clone the repository fails its boot with why (`folderUnmade`), so nothing starts.
  */
 export async function startInCloud(gateway: Gateway, webDeviceId: string, start: { repository: CloudRepository; harness: string; model: string | undefined; message: FirstMessage }, step: (step: CloudStep) => void): Promise<Started> {
   step("making")
