@@ -1242,7 +1242,20 @@ at once but stay in the draft under that ID until the host confirms them, and
 the renderer's outbox (`message-outbox.ts`) holds the message under the same ID
 across a reload, so a page that dies mid-send finds it again rather than
 losing it or sending it twice: re-asked under its ID, which the host settles by
-(`LiveConversations.submit`), it lands once. A refused message comes back
+(`LiveConversations.submit`), it lands once. A steer is kept the same way
+(`steerTo`): its action takes the composer's ID, and with no turn left to
+steer, or a steer the host refused before the harness heard it, the words go
+as the next message under that ID; the host takes one ID once, as a steer or
+as a message. A queued message edited in the composer isn't paused: ✓ replaces
+its words only if the host still holds them as they were, as the desk's queue
+edits do. The host admits messages to a conversation in the order they
+arrived (`admitInOrder`), whatever each resolves first. A host that comes back
+after a crash pauses what was still queued, as a quit does, and Resume wakes
+the conversation. `npm run test:send-race` sends from the Mac, a phone and
+another Mac at once, through the protocol's gateway, with lost replies, cut
+links, messages taken twice from the account and restarts, and holds each to
+landing once, one turn at a time, in arrival order, with nothing left queued.
+A refused message comes back
 into the field only if the field is empty, else it's kept under the composer
 with Retry (`outbox.ts`). Under each sent message the phone says where it is,
 in a word (`delivery.ts`): Waking…, Sending…, Not confirmed · Retry, Queued,

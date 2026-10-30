@@ -12,6 +12,7 @@ import type { PendingPrompt } from "@/state/prompt-delivery"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { Ticking } from "@/components/ui/ticking"
 import { GonePermission } from "@/components/viewer/acp-panel"
+import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
@@ -145,7 +146,7 @@ function useSteering(): Steering {
     return steering?.state === "implemented" ? steering.lands : null
   })
   const working = useAcp((state) => activeLiveAcp(state)?.session.status === "running")
-  return useMemo(() => ({ canSteer: lands !== null && working, lands, steer: (text, attachments) => acp.steer(text, attachments) }), [lands, working])
+  return useMemo(() => ({ canSteer: lands !== null && working, lands, steer: (text, attachments, id) => acp.steer(text, attachments, id) }), [lands, working])
 }
 
 interface QueuedEditor {
@@ -155,21 +156,15 @@ interface QueuedEditor {
 }
 
 /**
- * A queued message edited in the composer rather than in its row: held in the queue while its words are in the field,
- * saved in its place with ✓, or let go again as it was with Cancel.
+ * A queued message edited in the composer rather than in its row: its words take the field while it stays in line, and
+ * ✓ puts the new words in its place only if the host still holds it as it was (the edit names the words it replaces),
+ * as the desk's queue edits. Nothing pauses it meanwhile, so a screen left, a reload or a second message picked can't
+ * stall the queue behind it. If it started first, the new words are kept under the composer to send on their own.
  */
 function useEditingQueued(conversation: string): QueuedEditor {
   const [editing, setEditing] = useState<{ request: PendingPrompt; body: string } | undefined>(undefined)
   const target = useMemo(() => ({ kind: "live" as const, id: conversation }), [conversation])
-  const begin = useCallback(
-    (request: PendingPrompt, body: string) => {
-      void editQueuedPrompt(target, request, { kind: "pause" }).then(
-        () => setEditing({ request, body }),
-        () => undefined
-      )
-    },
-    [target]
-  )
+  const begin = useCallback((request: PendingPrompt, body: string) => setEditing({ request, body }), [])
   const current = useMemo((): EditingQueued | undefined => {
     if (!editing) return undefined
     const { request, body } = editing
@@ -177,20 +172,24 @@ function useEditingQueued(conversation: string): QueuedEditor {
       id: request.id,
       text: body,
       save: async (text) => {
+        const words = text + request.text.slice(body.length)
         try {
-          await editQueuedPrompt(target, request, { kind: "edit", text: text + request.text.slice(body.length) })
+          await editQueuedPrompt(target, request, { kind: "edit", text: words })
           setEditing(undefined)
           return true
-        } catch {
-          return false
+        } catch (error) {
+          const still = acpStore.get().conversations[conversation]?.requests?.some((each) => each.id === request.id && (each.status === "queued" || each.status === "held"))
+          // Still in line: the field keeps the words for ✓ again. Gone from it, they're kept to send as a message.
+          if (still) return false
+          toast.error(error instanceof Error ? error.message : String(error))
+          setEditing(undefined)
+          if (words !== request.text) keepUnsent({ id: crypto.randomUUID(), conversation, text: words, attachments: [] })
+          return true
         }
       },
-      cancel: () => {
-        setEditing(undefined)
-        void editQueuedPrompt(target, request, { kind: "resume" }).catch(() => undefined)
-      },
+      cancel: () => setEditing(undefined),
     }
-  }, [editing, target])
+  }, [editing, target, conversation])
   return { current, begin }
 }
 

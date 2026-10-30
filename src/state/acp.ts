@@ -42,7 +42,7 @@ import type {
   RewindPreview,
 } from "@/lib/types"
 import { activeIs, updateLive } from "@/state/acp-live"
-import { sendTo } from "@/state/acp-queue"
+import { sendTo, steerTo } from "@/state/acp-queue"
 import {
   beginStart,
   failStart,
@@ -167,22 +167,15 @@ export const acp = {
     })
   },
 
+  /** Into the running turn, or as the next message once there's none to steer (`steerTo`), under `requestId`. */
   async steer(
     text: string,
-    attachments: PromptAttachment[] = []
+    attachments: PromptAttachment[] = [],
+    requestId?: string
   ): Promise<boolean> {
     const live = activeLiveAcp(acpStore.get())
-    const request = live?.requests?.find(
-      (item) => item.status === "dispatching"
-    )
-    if (!live || !request) return false
-    return performLiveAction(live.key, {
-      kind: "steer",
-      id: crypto.randomUUID(),
-      requestId: request.id,
-      text,
-      attachments,
-    })
+    if (!live) return false
+    return steerTo(live.key, text, attachments, requestId)
   },
 
   async compact(requestId?: string): Promise<boolean> {

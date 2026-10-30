@@ -7,7 +7,8 @@ import { stagePrompt, removePendingPrompt } from "@/state/acp-pending"
 import { liveSettingsTarget, settingsForSend } from "@/state/composer-settings"
 import { noteFolderUse } from "@/state/prefs"
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { PromptAttachment } from "@/lib/types"
+import type { LiveActionInput, PromptAttachment } from "@/lib/types"
+import { readLiveSnapshot } from "@/state/live-history"
 import {
   acpStore,
   updateAcpConversation,
@@ -96,7 +97,9 @@ async function attemptSend(
       snapshot?.requests.some((request) => request.id === requestId) ||
       snapshot?.control?.transfers.some(
         (transfer) => transfer.input.id === requestId
-      )
+      ) ||
+      // Steered into the turn under this ID before it came here as a message (`steerTo`).
+      snapshot?.control?.actions?.some((action) => action.input.id === requestId && action.state.kind !== "not-accepted")
     ) {
       if (snapshot) applyLiveSnapshot(snapshot)
       settleMessage(requestId)
@@ -131,6 +134,58 @@ async function attemptSend(
     }))
     toast.error(error instanceof Error ? error.message : String(error))
     return false
+  }
+}
+
+/** What became of a steer: the turn took it (or may have), the host refused it before the harness heard it, or its answer was lost. */
+type Steered = "steered" | "refused" | "unknown"
+
+/**
+ * A message into the running turn, kept in the outbox under the composer's request ID like any send, which its action
+ * takes: a page that dies mid-steer finds it there again, and never puts its words back once the steer landed. With no
+ * turn to steer (it ended between the tap and now) or a steer the host refused before the harness heard it (another
+ * steer on its way, the turn just ending), the words go as the next message under the same ID. The host takes one ID
+ * once, as a steer or as a message, never both (`LiveConversations.submit`, `LiveActions.submit`).
+ */
+export function steerTo(id: string, text: string, attachments: PromptAttachment[] = [], requestId: string = crypto.randomUUID()): Promise<boolean> {
+  const existing = deliveries.get(requestId)
+  if (existing) return existing
+  const delivery = attemptSteer(id, text, attachments, requestId).finally(() => deliveries.delete(requestId))
+  deliveries.set(requestId, delivery)
+  return delivery
+}
+
+async function attemptSteer(id: string, text: string, attachments: PromptAttachment[], requestId: string): Promise<boolean> {
+  const current = acpStore.get().conversations[id]
+  if (current?.kind !== "live" || !hasBridge()) return false
+  attachments = durableAttachments(attachments)
+  const turn = current.session.status === "running" ? current.requests?.find((request) => request.status === "dispatching") : undefined
+  if (!turn) return attemptSend(id, text, attachments, requestId, current.replyBindingId)
+  saveMessage({ kind: "steer", conversationId: id, requestId, text, attachments })
+  const steered = await steerOnce(id, { kind: "steer", id: requestId, requestId: turn.id, text, attachments })
+  if (steered === "steered") {
+    settleMessage(requestId)
+    return true
+  }
+  // Kept in the outbox: the host is asked again once it's back (`restorePendingMessages`).
+  if (steered === "unknown") return true
+  return attemptSend(id, text, attachments, requestId, current.replyBindingId)
+}
+
+async function steerOnce(id: string, input: Extract<LiveActionInput, { kind: "steer" }>): Promise<Steered> {
+  try {
+    const action = await getMako().liveAction(id, input)
+    if (action.state.kind === "not-accepted") return "refused"
+    if (action.state.kind === "uncertain" || action.state.kind === "failed") toast.error(action.state.reason)
+    return "steered"
+  } catch (error) {
+    const snapshot = await readLiveSnapshot(id).catch(() => null)
+    if (snapshot) applyLiveSnapshot(snapshot)
+    const receipt = snapshot?.control?.actions?.find((action) => action.input.id === input.id)
+    if (receipt) return receipt.state.kind === "not-accepted" ? "refused" : "steered"
+    // It came first as a message of its own: that is where its words went.
+    if (snapshot?.requests.some((request) => request.id === input.id)) return "steered"
+    return error instanceof Error && isHostReconnectingError(error) ? "unknown" : "refused"
   }
 }
 
@@ -220,6 +275,23 @@ async function restoreMessages(): Promise<void> {
     if (command.kind === "start") {
       const { restorePendingStart } = await import("@/state/acp-start")
       await restorePendingStart(command)
+      continue
+    }
+    if (command.kind === "steer") {
+      const { conversationId, requestId, text, attachments } = command
+      if (!await hydrateLive(conversationId, true)) {
+        scheduleOutboxRecovery()
+        continue
+      }
+      const current = acpStore.get().conversations[conversationId]
+      const action = current?.control?.actions?.find((each) => each.input.id === requestId)
+      // Taken, it was settled with the snapshot; still on its way, the host's answer settles it. Refused, it goes as a message.
+      if (action && action.state.kind !== "not-accepted") continue
+      if (current?.requests?.some((request) => request.id === requestId)) {
+        settleMessage(requestId)
+        continue
+      }
+      await steerTo(conversationId, text, attachments, requestId)
       continue
     }
     if (command.kind === "queued") {

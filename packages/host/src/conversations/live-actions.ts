@@ -214,6 +214,9 @@ export class LiveActions {
         throw new Error("This action ID was already used for different input")
       return existing
     }
+    // A steer whose words already came as a message of their own, under the same ID (`LiveConversations.submit`).
+    if (input.kind !== "compact" && resident.snapshot.requests.some((request) => request.id === input.id))
+      throw new Error("This message was already sent after the turn.")
     if (input.kind === "compact" && !resident.driver && this.host.dependencies.driver(this.provider(resident))?.compaction?.kind === "supported") {
       await this.host.reopen(resident)
       if (!resident.driver)

@@ -246,6 +246,7 @@
     "test:grok-modes-live": "npm run build:electron && node scripts/test-grok-modes-live.mjs",
     "test:proposed-plans": "tsx scripts/test-proposed-plans.ts && tsx scripts/test-plan-mode.ts && tsx scripts/test-plan-builds.ts && tsx scripts/test-plan-approvals.ts",
     "test:prompt-delivery": "esbuild scripts/test-prompt-delivery.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --loader:.png=dataurl --outfile=node_modules/.tmp/test-prompt-delivery.mjs && node --max-old-space-size=256 node_modules/.tmp/test-prompt-delivery.mjs",
+    "test:send-race": "tsx scripts/test-send-race.ts && tsx --tsconfig tsconfig.app.json scripts/test-steer-outbox.ts",
     "test:message-queue": "tsx scripts/test-message-queue.ts && tsx scripts/test-send-discovery.ts && tsx scripts/test-claude-discovery.ts && tsx scripts/test-profile-transport.ts && tsx scripts/test-send-recovery.ts && npm run test:prompt-delivery",
     "test:packaged-startup": "node scripts/test-packaged-startup.mjs",
     "test:packaged-lifecycle": "node --max-old-space-size=256 scripts/test-packaged-lifecycle.mjs",
