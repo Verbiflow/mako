@@ -1,43 +1,41 @@
 import { z } from "zod"
+import type { JsonValue } from "../contracts/json.js"
+import { isBoolean, isJsonObject, isString, numberValue } from "../base/json-values.js"
 
-// Parse one level at a time. A recursive JSON schema would clone the entire
-// history before yielding its first frame, defeating bounded serialization.
-const objectLevel = z.record(z.string(), z.unknown())
-const level = z.union([
-  z.string().transform(value => ({ kind: "string" as const, value })),
-  z.union([z.number(), z.boolean(), z.null()]).transform(value => ({ kind: "scalar" as const, value })),
-  z.array(z.unknown()).transform(value => ({ kind: "array" as const, value })),
-  // Keep the original own keys after validation: Zod's reconstructed record
-  // intentionally drops __proto__, but JSON history must retain that data key.
-  z.custom<z.infer<typeof objectLevel>>(value => objectLevel.safeParse(value).success)
-    .transform(value => ({ kind: "object" as const, value })),
-])
+/**
+ * The history a reader serializes: typed internal values (a snapshot, a page,
+ * an entry, an original), JSON-shaped all the way down. Its top is checked to
+ * be a JSON value; what is under it is told apart value by value below, by
+ * what each is, without a schema run on each: one run on every value of a
+ * large conversation's snapshot held the host's loop for a tenth of a second
+ * a read, all of it on the loop.
+ */
+const JsonTop = z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.unknown()), z.record(z.string(), z.unknown())])
+const HistoryJsonSchema = z.custom<JsonValue>((value) => JsonTop.safeParse(value).success)
 
 /** Serialize trusted JSON-shaped history without allocating an entire giant
  * tool result's encoded string. Splitting strings before escaping preserves
- * even surrogate pairs and control characters across frame boundaries. */
-function* pieces<Value>(input: Value): Generator<string> {
-  const parsed = level.parse(input)
-  if (parsed.kind === "string") {
-    const value = parsed.value
+ * even surrogate pairs and control characters across frame boundaries. An
+ * own `__proto__` key is data, and kept. */
+function* pieces(input: JsonValue | undefined): Generator<string> {
+  if (isString(input)) {
     yield '"'
-    for (let start = 0; start < value.length; start += 16 * 1024)
-      yield JSON.stringify(value.slice(start, start + 16 * 1024)).slice(1, -1)
+    for (let start = 0; start < input.length; start += 16 * 1024)
+      yield JSON.stringify(input.slice(start, start + 16 * 1024)).slice(1, -1)
     yield '"'
-  } else if (parsed.kind === "scalar") {
-    yield JSON.stringify(parsed.value)
-  } else if (parsed.kind === "array") {
-    const value = parsed.value
+  } else if (input === null || isBoolean(input) || numberValue(input) !== undefined) {
+    yield JSON.stringify(input)
+  } else if (Array.isArray(input)) {
     yield "["
-    for (let index = 0; index < value.length; index++) {
+    for (let index = 0; index < input.length; index++) {
       if (index) yield ","
-      yield* pieces(value[index] ?? null)
+      yield* pieces(input[index] ?? null)
     }
     yield "]"
-  } else {
+  } else if (isJsonObject(input)) {
     yield "{"
     let comma = false
-    for (const [key, item] of Object.entries(parsed.value)) {
+    for (const [key, item] of Object.entries(input)) {
       if (item === undefined) continue
       if (comma) yield ","
       comma = true
@@ -45,12 +43,12 @@ function* pieces<Value>(input: Value): Generator<string> {
       yield* pieces(item)
     }
     yield "}"
-  }
+  } else throw new Error("History holds a value JSON can't carry")
 }
 
 export function* historyJsonChunks<Value>(value: Value, size: number): Generator<string> {
   let pending = ""
-  for (const piece of pieces(value)) {
+  for (const piece of pieces(HistoryJsonSchema.parse(value))) {
     pending += piece
     while (pending.length >= size) {
       yield pending.slice(0, size)

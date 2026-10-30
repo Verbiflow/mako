@@ -308,6 +308,8 @@ export interface LiveAccess {
   residents(): Iterable<Resident>
   require(id: string): Resident
   load(id: string): Resident | undefined
+  /** `load`, reading a journal from disk a slice at a time (`LiveRecords.loadSliced`). */
+  loadSliced(id: string): Promise<Resident | undefined>
   /** A request as its conversation keeps it, without loading a conversation that isn't (`LiveRecords.request`). */
   request(id: string, requestId: string): LiveRequest | undefined
   /** Keeps a new conversation, its journal already written. */

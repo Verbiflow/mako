@@ -89,6 +89,8 @@ export class LiveRecords {
   /** Residents `unload` let go, so a continuation still holding one cannot write through it. */
   private readonly released = new WeakSet<Resident>()
   private readonly weights = new ContentWeights(pagedWeight)
+  /** Journals being read in a slice at a time (`loadSliced`). */
+  private readonly reading = new Map<string, Promise<Resident | undefined>>()
   /** Paging under way, one conversation at a time; see `pageOut`. */
   private paging?: Promise<void>
   /**
@@ -222,15 +224,61 @@ export class LiveRecords {
       return existing
     }
     if (!this.recovered.has(id)) return undefined
+    const journal = this.openJournal(id)
+    const started = performance.now()
+    return this.readIn(id, journal, journal.read(), started)
+  }
+
+  /**
+   * `load`, a journal on disk read a slice at a time (`LiveJournal.readSliced`)
+   * while the host goes on: what a window opening a conversation, or work that
+   * waits for one anyway, reads it in with. A `load` meanwhile reads it at
+   * once, and stands.
+   */
+  loadSliced(id: string): Promise<Resident | undefined> {
+    if (this.residents.has(id) || !this.recovered.has(id)) return Promise.resolve(this.load(id))
+    const running = this.reading.get(id)
+    if (running) return running
+    const work = this.loadInSlices(id).finally(() => this.reading.delete(id))
+    this.reading.set(id, work)
+    return work
+  }
+
+  private async loadInSlices(id: string): Promise<Resident | undefined> {
+    const journal = this.openJournal(id)
+    const started = performance.now()
+    let previous: LiveSnapshot | null
+    try {
+      previous = await journal.readSliced()
+    } catch (error) {
+      journal.discard()
+      throw error
+    }
+    if (this.stopped) {
+      journal.discard()
+      return undefined
+    }
+    if (this.residents.has(id) || !this.recovered.has(id)) {
+      // Read in at once meanwhile, or gone: the journal open now owns the file.
+      journal.discard()
+      return this.load(id)
+    }
+    return this.readIn(id, journal, previous, started)
+  }
+
+  /** A journal of a conversation on disk, opened to read it in. */
+  private openJournal(id: string): LiveJournal {
     // A journal let go that hasn't tidied its file yet leaves that to the one opening it now, which writes ahead again.
     const releasing = this.releasing.get(id)
     if (releasing) {
       releasing.keepFile()
       this.releasing.delete(id)
     }
-    const journal = new LiveJournal(this.dependencies.root, id)
-    const started = performance.now()
-    const previous = journal.read()
+    return new LiveJournal(this.dependencies.root, id)
+  }
+
+  /** The conversation `journal` read as `previous`, taken on as a resident. */
+  private readIn(id: string, journal: LiveJournal, previous: LiveSnapshot | null, started: number): Resident | undefined {
     if (!previous) {
       journal.close()
       return undefined
