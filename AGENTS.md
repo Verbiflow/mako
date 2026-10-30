@@ -3870,6 +3870,22 @@ ms=… during=…`, `loop-watch.ts`) with the work under way by name (`copy`,
 bench:sync-pipeline` measures write-to-account latency on the real daemon
 (`--daemon <daemon-main.js>` for another build's).
 
+A Session is never out of the account without saying so. A pack the account
+refuses is sent again in sixteen smaller ones, and so on down to the chunks it
+refuses alone (`RecordSync.#isolate`); every other chunk goes, each unit's
+versions go up to the first that names a refused chunk, and the failure names
+it ("The account refused one chunk of this Session (8fd50237a1c4, 40,960
+bytes) and took the rest: …", `RecordChunksRefusedError`), tried again alone
+at a refusal's pace. A capture that fails every retry counts the Session out
+of the cloud and is a failure in the status until one is taken. Every 30
+minutes, and when a link is given, `ScopedUploads` sets the account's list of
+its sessions (`GET …/sessions`) against what the store believes it holds
+(`RecordStore.remoteVersionCounts`); a Session it holds less of is caught up
+from its holdings. Failures a minute old show in the rail ("2 Sessions not
+synced", `SyncRailLine`), opening Settings › Account, which names each
+Session. `test/record-refused-chunks.mjs`, `test/record-reconcile.mjs` and
+`npm run test:sync-status-ui` cover these.
+
 When the sync daemon is not enabled, the host still never reads a store on
 its main thread: `packages/host/src/threads/catalog-worker.ts` runs the catalog on a
 `worker_threads` Worker that serves the daemon's own frame protocol

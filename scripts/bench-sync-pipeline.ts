@@ -102,7 +102,12 @@ class StandIn {
     }
     if (key === "POST /sessions") return { status: 200, body: this.#take(form, RecordBundleSchema.parse(JSON.parse(body.toString()))) }
     if (key === "GET /sessions/holdings") return { status: 200, body: { holdings: this.holdings.get(`${form}\n${url.searchParams.get("nativeId")}`) ?? {}, next: null } }
-    if (key === "GET /sessions") return { status: 200, body: { sessions: [] } }
+    if (key === "GET /sessions") {
+      const sessions = [...this.holdings].filter(([held]) => held.startsWith(`${form}\n`)).map(([held, units]) => ({
+        harness: "codex", nativeId: held.slice(form.length + 1), units: Object.keys(units).length, versions: Object.values(units).reduce((total, head) => total + head + 1, 0), through: 0,
+      }))
+      return { status: 200, body: { sessions } }
+    }
     return { status: 404, body: { title: `No ${key}` } }
   }
 

@@ -1803,6 +1803,25 @@ export class RecordStore {
     })
   }
 
+  /**
+   * How many versions of each session `remote` is known to hold (`remoteHolds`), by `<harness>\n<native id>`: each
+   * unit's held head and those before it. What the remote says it holds is set against this to find what it lost.
+   */
+  remoteVersionCounts(remote: string): Map<string, number> {
+    const rows = z.object({ harness: z.string(), nativeId: z.string(), versions: z.number() }).array()
+      .parse(this.prepared("SELECT s.harness, s.native_id AS nativeId, sum(r.head + 1) AS versions FROM remote_session_units r JOIN sessions s ON s.id = r.session WHERE r.remote = ? GROUP BY r.session").all(remote))
+    return new Map(rows.map((row) => [`${row.harness}\n${row.nativeId}`, row.versions]))
+  }
+
+  /** `remote` no longer holds the session whole as of any capture: its next push goes through to its newest. */
+  forgetPushed(remote: string, harness: string, nativeId: string): Promise<void> {
+    this.writable()
+    return this.serially(async () => {
+      const session = this.sessionId(harness, nativeId, false)
+      if (session !== null) this.prepared("DELETE FROM remote_pushed WHERE remote = ? AND session = ?").run(remote, session)
+    })
+  }
+
   /** How far this store has pulled the session from `remote`: the remote's own number for the last version taken, 0 before any. */
   pulledThrough(remote: string, harness: string, nativeId: string): number {
     const session = this.sessionId(harness, nativeId, false)

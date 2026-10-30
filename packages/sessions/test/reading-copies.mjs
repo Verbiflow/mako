@@ -50,7 +50,15 @@ class MemoryRemote {
     return { bundle: { harness, nativeId, layout: this.layout, marks: {}, units: [...units.values()] }, through: page.at(-1)?.n ?? after, more: false }
   }
   async sessions() {
-    return []
+    const sessions = new Map()
+    for (const [key, versions] of this.units) {
+      const [harness, nativeId] = key.split("\n")
+      const session = sessions.get(`${harness}\n${nativeId}`) ?? { harness, nativeId, units: 0, versions: 0, through: 0 }
+      session.units += 1
+      session.versions += versions.length
+      sessions.set(`${harness}\n${nativeId}`, session)
+    }
+    return [...sessions.values()]
   }
   #keep(chunk) {
     if (this.chunks.has(chunk.hash)) return

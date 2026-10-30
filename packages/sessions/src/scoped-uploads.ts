@@ -1,9 +1,9 @@
 import { GatewayHttpError, describeGatewayFailure } from "@mako/protocol/gateway-http"
-import { CHUNK_HEADER_BYTES, type PackedChunk, type RecordRemote } from "@mako/protocol/records"
+import { CHUNK_HEADER_BYTES, type PackedChunk, type RecordHoldings, type RecordRemote } from "@mako/protocol/records"
 import { z } from "zod"
 import type { RecordStore } from "./record-store.js"
 import { namedWork, type WorkUnderWay } from "./loop-watch.js"
-import { RecordSync, RecordSyncConflictError, describeSync } from "./record-sync.js"
+import { RecordSync, RecordSyncConflictError, describeSync, refusedBy } from "./record-sync.js"
 
 /**
  * How recently a Session's Thread was worked in, which sets when its turn comes: `now` while it works or waits, then
@@ -107,6 +107,13 @@ const RETRY_MOST_MS = 5 * 60_000
 const REFUSED_MOST_MS = 60 * 60_000
 /** Failures kept for the status, one per Session. */
 const FAILURES_KEPT = 5
+/**
+ * How often what the account says it holds is set against what the store believes it holds, and at the first look
+ * after a link is given. One list of the account's sessions, and each one it holds less of than believed is sent again.
+ * Without it, an account that lost records (restored, reset, a push it recorded and dropped) stayed short for good,
+ * the Mac counting the Session in the cloud.
+ */
+const RECONCILE_MS = 30 * 60_000
 
 type Wanted = SyncScope["sessions"][number]
 /**
@@ -149,6 +156,9 @@ export class ScopedUploads {
   #failed = 0
   #stopped = false
   #wake: ReturnType<typeof setTimeout> | undefined
+  /** When what the account holds was last set against what's believed (`#reconcile`); 0 before the first. */
+  #reconciledAt = 0
+  #reconciling: Promise<void> | undefined
   /** Names each push while it runs, for the watch on the process's loop. */
   readonly #work: WorkUnderWay | undefined
 
@@ -199,6 +209,53 @@ export class ScopedUploads {
       return
     }
     this.#pump()
+    if (!this.#reconciling && (this.#reconciledAt === 0 || this.#now() - this.#reconciledAt >= RECONCILE_MS)) this.#reconciling = this.#reconcile().finally(() => (this.#reconciling = undefined))
+  }
+
+  /** Once the comparison with the account under way, if any, has ended and the pushes it started have settled. */
+  async reconciled(): Promise<void> {
+    await this.#reconciling
+    await this.settled()
+  }
+
+  /**
+   * Sets what the account says it holds of each Session in scope against what the store believes it holds, and sends
+   * again what it lacks: its holdings, unit by unit, replace what was believed, so the next push carries only that.
+   */
+  async #reconcile(): Promise<void> {
+    this.#reconciledAt = this.#now()
+    let listed: Map<string, number>
+    try {
+      listed = new Map((await this.#remote.sessions()).map((session) => [keyOf(session), session.versions]))
+    } catch (error) {
+      this.#log("info", "couldn't compare with the account", { remote: this.#remote.id, error: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    const believed = this.#store.remoteVersionCounts(this.#remote.id)
+    let short = 0
+    for (const session of this.#scope.sessions) {
+      const key = keyOf(session)
+      const thought = believed.get(key) ?? 0
+      const holds = listed.get(key) ?? 0
+      if (this.#stopped || thought === 0 || holds >= thought || this.#flights.has(key)) continue
+      try {
+        const holdings: RecordHoldings = {}
+        for (let after = ""; ;) {
+          const page = await this.#remote.holdings(session.harness, session.nativeId, after)
+          Object.assign(holdings, page.holdings)
+          if (page.next === null) break
+          after = page.next
+        }
+        await this.#store.remoteHolds(this.#remote.id, session.harness, session.nativeId, { holdings })
+        await this.#store.forgetPushed(this.#remote.id, session.harness, session.nativeId)
+        this.#pushed?.delete(key)
+        short += 1
+        this.#log("warn", "the account held less of a Session than this Mac believed; what it lacks goes again", { remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, believed: thought, held: holds })
+      } catch (error) {
+        this.#log("info", "couldn't compare a Session with the account", { remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    if (short) this.#pump()
   }
 
   /** Whether the store holds the session at all (captured, or for originals taken by the backfill). */
@@ -308,7 +365,7 @@ export class ScopedUploads {
       failure.since = retry.since
       if (failure.conflict) retry.conflictAt = started
       else {
-        retry.refused = refusal(failed)
+        retry.refused = refusedBy(failed)
         retry.after = this.#now() + Math.min(retry.refused ? REFUSED_MOST_MS : RETRY_MOST_MS, RETRY_MS * 2 ** (retry.failures - 1))
       }
       this.#retries.set(key, retry)
@@ -359,15 +416,6 @@ export function countTiers(scope: SyncScope, forms: { readable(session: Wanted):
 }
 
 export const emptyTier = (): TierCount => ({ sessions: 0, threads: 0, readable: 0, held: 0, whole: 0, inCloud: 0, threadsInCloud: 0 })
-
-/**
- * Whether the account heard the push and refused what it carried (a pack it won't take, a request too large): sent
- * again unchanged, it gets the same answer. A lapsed credential, a busy or failing gateway and a dropped connection
- * aren't refusals.
- */
-function refusal(error: Error): boolean {
-  return error instanceof GatewayHttpError && (error.status === 400 || error.status === 413 || error.status === 422)
-}
 
 /** A failure's words without what changes with each try (its correlation ID, its tries): the same failure says the same. */
 function failureWords(error: Error): string {
