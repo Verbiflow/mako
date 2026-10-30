@@ -22,6 +22,9 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * Lines on stdin drive it; each answers with one line on stdout:
  * - `start`: a Codex Session in `api` at "Ask first", whose first turn asks to run the payments tests: the first makes its
  *   Thread, each after is a Session added to it. `STARTED <conversation>`
+ * - `begin <access> <first message>`: a Thread of its own in `api` at that access ("full", "ask"), its first turn the
+ *   script its words name: "Say hello", "Stream a long answer", "Hold the turn", "Ask me a question", "Fail this turn".
+ *   `STARTED <conversation>`
  * - `access <harness> <mode>`: the person chooses that access for the harness here, as the desk's composer does; it goes
  *   to their account. `ACCESS <the host's choices>`
  * - `choices`: the access choices as this host holds them now, after the account's word. `CHOICES <the host's choices>`
@@ -130,6 +133,13 @@ function turnLines(turn: Turn, at: (n: number) => string): unknown[] {
   ]
 }
 
+/** A long answer, streamed a word at a time: headings, lists, code and prose of different heights, so a transcript grows as a real one does. */
+const LONG_ANSWER = Array.from({ length: 12 }, (_, index) => [
+  `### Part ${index + 1}`,
+  `The retry path in part ${index + 1} waits on the real clock, and a slow runner sees fewer attempts than the test expects. Driving it from a fake timer makes every run take the same path, however busy the machine is.`,
+  index % 3 === 0 ? "```ts\nconst clock = installClock()\nawait retry(charge, { attempts: 3 })\nclock.runAll()\n```" : `- Attempt ${index + 1} runs after its backoff\n- The clock advances by hand\n- The assertion reads the calls`,
+].join("\n\n")).join("\n\n")
+
 /**
  * What the stand-in model says, by the last thing the person said: the live Thread's first turn runs the payments tests
  * (a command "Ask first" asks about), then answers; a message from the phone gets its own answer; "run the whole suite"
@@ -154,6 +164,18 @@ const ANSWERS: Array<{ heard: RegExp; steps: ScriptedReply[] }> = [
       { text: `Here's the icon the build ships:\n\n![The desktop icon](${join(home, "projects", "api", "shots", "icon.png")})` },
     ],
   },
+  // The phone's behaviour cases each start a Thread of their own (`begin`) with one of these.
+  { heard: /Say hello/i, steps: [{ text: "Hello." }] },
+  { heard: /Stream a long answer/i, steps: [{ reasoning: "Write it out at a model's pace.", text: LONG_ANSWER, pace: 8 }] },
+  { heard: /Hold the turn/i, steps: [{ text: "Holding the turn for a while.", call: { id: "call_hold", name: "exec_command", arguments: { cmd: "sleep 25", yield_time_ms: 30_000 } } }, { text: "Held for twenty-five seconds." }] },
+  {
+    heard: /Ask me a question/i,
+    steps: [
+      { text: "One question first.", call: { id: "call_ask", name: "request_user_input", arguments: { questions: [{ id: "colour", header: "Colour", question: "Which colour should the new button be?", options: [{ label: "Blue", description: "The brand's calm colour" }, { label: "Green", description: "Reads as go" }] }] } } },
+      { text: "Going with that colour." },
+    ],
+  },
+  { heard: /Fail this turn/i, steps: [{ fail: { status: 400, message: "The scripted model refused this turn." } }] },
   { heard: /whole suite/i, steps: [{ reasoning: "Run everything once more.", text: "Running the whole suite once more.", call: { id: "call_suite", name: "exec_command", arguments: { cmd: "node test/payments.mjs --repeat 200" } } }, { text: "The whole suite passed." }] },
 ]
 const model = await scriptedModel({
@@ -253,6 +275,13 @@ for await (const line of createInterface({ input: process.stdin })) {
       const placed = PlacedSchema.parse(await call("mako:thread-create-session", [randomUUID(), flaky]))
       await call("mako:live-start", ["codex", api, { ...options, session: placed.session }])
     } else flaky = StartedSchema.parse(await call("mako:live-start", ["codex", api, options])).threadId
+    console.log(`STARTED ${conversationId}`)
+  } else if (line.startsWith("begin ")) {
+    // `begin <access> <first message>`: a Thread of its own in `api`, at that access, its first turn the script its words name.
+    const [, access, ...words] = line.trim().split(/\s+/)
+    const text = words.join(" ")
+    const conversationId = randomUUID()
+    await call("mako:live-start", ["codex", api, { conversationId, modeId: `access:${access}`, title: text, initialRequest: { id: randomUUID(), text, attachments: [] } }])
     console.log(`STARTED ${conversationId}`)
   } else if (line.startsWith("access ")) {
     const [, harness, mode] = line.trim().split(/\s+/)

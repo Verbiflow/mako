@@ -57,7 +57,11 @@ import { Orb } from "@/components/ui/orb/orb"
 const EMPTY_QUEUE: never[] = []
 const NO_RECOVERIES = { onTurns: new Map<string, LiveRequest>(), apart: EMPTY_QUEUE }
 
-export function AcpPanel() {
+/**
+ * `asks`: whether the panel draws the agent's approval and question under the transcript. The phone pins them in its
+ * own dock above its composer instead (`web-client/dock.tsx`), and says so with `false`.
+ */
+export function AcpPanel({ asks = true }: { asks?: boolean } = {}) {
   const scope = useConversationScope()
   const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
   const starting = useAcp((state) => scopedAcp(state, scope)?.kind === "starting")
@@ -87,7 +91,7 @@ export function AcpPanel() {
       <Blocks continued={continued} />
       {scope ? (
         <PaneWaiting />
-      ) : (
+      ) : !asks ? null : (
         <>
           <Permission />
           <SessionQuestion />
@@ -453,7 +457,7 @@ function Permission() {
  * works: Continue turn starts the agent again on this turn, which asks
  * again if it still needs to; Stop puts the request away.
  */
-function GonePermission({ permission }: { permission: LivePermissionRequest }) {
+export function GonePermission({ permission }: { permission: LivePermissionRequest }) {
   useHarnessIdentity()
   const key = useAcp((state) => activeLiveAcp(state)?.key)
   const harness = useAcp((state) => activeLiveAcp(state)?.harness)

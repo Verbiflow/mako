@@ -8,6 +8,7 @@ import { RewindButton, PromptRewindButton } from "./rewind-button"
 import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
+import { ExchangeNoteContext, PromptNoteContext } from "./transcript-notes"
 import { acp, useAcp, type ForkAnswer } from "@/state/acp"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { acpStore } from "@/state/acp-state"
@@ -137,6 +138,7 @@ export const Exchange = memo(function Exchange({
   const standing = turnRequest(exchange)
   const failureRow = useContext(FailedRequestsContext).has(standing ?? "")
   const stopShown = Boolean(interrupted) && !streaming
+  const exchangeNote = useContext(ExchangeNoteContext)
   const notes = useMemo(
     () => notesBesideContinuations(stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system, exchange.response),
     [exchange.system, exchange.response, stopShown]
@@ -267,6 +269,7 @@ export const Exchange = memo(function Exchange({
             {liveTail ? <LiveRow step={NOTHING_RUNNING} answering={lastSection?.kind === "prose"} /> : null}
           </div>
         ) : null}
+        {exchangeNote?.(exchange.id)}
 
         {plan ? (
           <div className="mt-3">
@@ -499,6 +502,7 @@ function Prompt({ message }: { message: ChatMessage }) {
     [sent.items, placed]
   )
   const { copied, copy } = useCopy(reused.text, reused.records)
+  const note = useContext(PromptNoteContext)
   const compose = () =>
     window.dispatchEvent(
       new CustomEvent("mako:compose", {
@@ -545,6 +549,7 @@ function Prompt({ message }: { message: ChatMessage }) {
       </div>
 
       <div className="mt-1 flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-muted-foreground">
+        {note?.(message.requestId)}
         <button type="button" aria-label="Copy question" onClick={() => void copy()} className="pressable flex h-6 items-center gap-1 rounded px-1 hover:bg-fill-hover hover:text-foreground">
           {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
           {copied ? "Copied question" : "Copy question"}

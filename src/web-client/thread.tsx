@@ -3,6 +3,7 @@ import { ArchiveIcon, ChevronLeftIcon, CloudIcon, CloudUploadIcon, EllipsisIcon,
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
+import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { WebHarnessIcon } from "./harness-icon"
 import { copyAge } from "@/lib/format"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
@@ -10,6 +11,7 @@ import { cn } from "@/lib/utils"
 import { useAccountList } from "./account-list"
 import { useWebClient } from "./client"
 import { Composer } from "./composer"
+import { threadDraftKey } from "./drafts"
 import { webHarnessLabel } from "./labels"
 import { StartSheet, type AddingTo } from "./new-thread"
 import { PreviewSheet } from "./preview"
@@ -255,9 +257,10 @@ function SessionTabs({ thread, current, onSession, onAdd }: { thread: WebThread;
  */
 export function QuietSession({ session }: { session: WebSession }) {
   const client = useWebClient()
-  const send = async (text: string): Promise<boolean> => {
+  const send = async (text: string, _attachments: PromptAttachment[], id: string): Promise<boolean> => {
     try {
-      await client.gateway.rest("PUT", `/v1/sessions/${encodeURIComponent(session.row.session)}/waiting/${crypto.randomUUID()}`, { conversation: session.row.conversation, text })
+      // Put under the message's own ID: asked again, it's the same message.
+      await client.gateway.rest("PUT", `/v1/sessions/${encodeURIComponent(session.row.session)}/waiting/${id}`, { conversation: session.row.conversation, text })
       return true
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error))
@@ -292,7 +295,7 @@ export function QuietSession({ session }: { session: WebSession }) {
         ) : null}
       </div>
       <div className="web-dock shrink-0">
-        <Composer attach={false} placeholder={`Message for when ${session.where} is back`} onSend={send} />
+        <Composer attach={false} placeholder={`Message for when ${session.where} is back`} onSend={send} draftKey={threadDraftKey(client.account.id, session.row.conversation)} />
       </div>
     </div>
   )

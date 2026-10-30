@@ -5,11 +5,22 @@ import { cn } from "@/lib/utils"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { ATTACHMENT_BUDGET, encodedBytes, HeldPreviews, kilobytes, readPicked, type Picked } from "./attachments"
 import { useDictation, type Heard } from "./dictation"
+import { noteSending, openingText, readDraft, settleSending, writeDraft } from "./drafts"
 import { SendGlyph } from "./glyphs"
+import { outboxHolds } from "./outbox"
 
 /** Held this long, the mic is push-to-talk: it listens while held and stops on release. A tap toggles it. */
 const HOLD_MS = 300
 const MAX_HEIGHT = 180
+/** A draft is written this long after its last key, and at once when the page goes or the composer closes. */
+const DRAFT_WRITE_MS = 250
+
+/** A message as it left the field, under the ID every try of it carries. */
+export interface Outgoing {
+  id: string
+  text: string
+  attachments: PromptAttachment[]
+}
 
 /**
  * The web's composer, one for every place a message is written: a Thread's, a quiet Mac's, and a new Thread's. One card,
@@ -33,9 +44,13 @@ export function Composer({
   autoFocus = false,
   sendLabel = "Send",
   desk = false,
+  draftKey,
+  onWrite,
+  onUnsent,
 }: {
   placeholder: string
-  onSend: (text: string, attachments: PromptAttachment[]) => Promise<boolean>
+  /** Sends a message under `id`; says whether it went. One that didn't comes back into an empty field, or to `onUnsent`. */
+  onSend: (text: string, attachments: PromptAttachment[], id: string) => Promise<boolean>
   running?: boolean
   onStop?: () => void
   stopping?: boolean
@@ -54,11 +69,25 @@ export function Composer({
    * sending (Shift+Enter a new line), and the desktop's own send button.
    */
   desk?: boolean
+  /** Where its words are kept until they're sent (`drafts.ts`): they outlive the screen, the page and a reload. */
+  draftKey?: string
+  /** A key pressed with words in the field: a cloud Thread's machine starts waking. */
+  onWrite?: () => void
+  /** A message that didn't go while the field held other words by then: kept apart, with Retry, rather than lost. */
+  onUnsent?: (message: Outgoing) => void
 }) {
-  const [text, setText] = useState("")
+  const [text, setText] = useState(() => (draftKey ? openingText(draftKey, outboxHolds) : ""))
   const [picked, setPicked] = useState<Picked[]>([])
   const [reading, setReading] = useState(0)
-  const [sending, setSending] = useState(false)
+  // The words a press took: a second press before the field empties sends nothing.
+  const taken = useRef<string | undefined>(undefined)
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
   const [problem, setProblem] = useState<string | undefined>(undefined)
   const input = useRef<HTMLTextAreaElement>(null)
   const files = useRef<HTMLInputElement>(null)
@@ -75,6 +104,7 @@ export function Composer({
   }, [text])
   // A chip's picture goes with its attachment (removed, or sent), and every one with the composer.
   useEffect(() => () => previews.releaseAll(), [previews])
+  useDraft(draftKey, text)
 
   const heard = useCallback((words: Heard) => {
     const spoken = [words.final, words.interim].filter(Boolean).join(" ")
@@ -85,25 +115,45 @@ export function Composer({
   const over = encodedBytes(picked) > ATTACHMENT_BUDGET
   const empty = !text.trim() && picked.length === 0
   const send = async () => {
-    if (empty || over || sending || disabled || !sendable) return
+    if (empty || over || disabled || !sendable || taken.current === text) return
+    taken.current = text
     if (dictation.listening) dictation.stop()
     const message = text.trim()
     const attachments = picked.map((each) => each.attachment)
     const kept = { text, picked }
-    // The field empties at once: the message is on its way, and the transcript shows it as it arrives.
+    const id = crypto.randomUUID()
+    // The field empties at once, free for the next message: this one is on its way, kept under its ID until it's
+    // confirmed, and the transcript shows it as it goes.
+    if (draftKey) {
+      noteSending(draftKey, id, kept.text)
+      writeDraft(draftKey, "")
+    }
     setText("")
     setPicked([])
-    setSending(true)
-    try {
-      const went = await onSend(message, attachments)
-      if (went) previews.release(kept.picked)
-      else {
-        // What didn't go comes back ahead of anything picked meanwhile, pictures and all.
-        setText((current) => current || kept.text)
-        setPicked((current) => [...kept.picked, ...current])
-      }
-    } finally {
-      setSending(false)
+    const went = await onSend(message, attachments, id).finally(() => {
+      if (draftKey) settleSending(draftKey, id)
+    })
+    if (went) {
+      previews.release(kept.picked)
+      return
+    }
+    // What didn't go comes back into the field if it's still empty, pictures and all; over other words it's kept
+    // apart (`onUnsent`), or after them where nothing keeps it apart.
+    taken.current = undefined
+    if (!alive.current) {
+      // The composer closed meanwhile (another Thread opened): its words go back into its draft, after any kept there.
+      if (draftKey) writeDraft(draftKey, [readDraft(draftKey)?.text ?? "", kept.text].filter((each) => each.trim()).join("\n\n"))
+      return
+    }
+    if (!input.current?.value.trim()) {
+      setText(kept.text)
+      setPicked((current) => [...kept.picked, ...current])
+    } else if (onUnsent) {
+      previews.release(kept.picked)
+      onUnsent({ id, text: message, attachments })
+    } else {
+      setText((current) => `${current}\n\n${kept.text}`)
+      setPicked((current) => [...kept.picked, ...current])
     }
   }
 
@@ -192,7 +242,7 @@ export function Composer({
     </>
   ) : null
   const action = desk ? (
-    <ComposerActionButton action={showStop ? "stop" : "send"} ready={!empty && !over && !sending && !disabled && sendable} stopping={stopping} onSend={() => void send()} onStop={() => onStop?.()} />
+    <ComposerActionButton action={showStop ? "stop" : "send"} ready={!empty && !over && !disabled && sendable} stopping={stopping} onSend={() => void send()} onStop={() => onStop?.()} />
   ) : showStop ? (
     <button type="button" onClick={onStop} disabled={stopping} className="web-send web-stop" aria-label="Stop the turn">
       <SquareIcon className="size-3 fill-current" />
@@ -215,7 +265,7 @@ export function Composer({
       <MicIcon className="size-[18px]" />
     </button>
   ) : (
-    <button type="submit" disabled={empty || over || sending || disabled || !sendable} className="web-send" aria-label={running ? "Queue message" : sendLabel}>
+    <button type="submit" disabled={empty || over || disabled || !sendable} className="web-send" aria-label={running ? "Queue message" : sendLabel}>
       <SendGlyph />
     </button>
   )
@@ -241,7 +291,11 @@ export function Composer({
           <textarea
             ref={input}
             value={text}
-            onChange={(event) => setText(event.target.value)}
+            onChange={(event) => {
+              taken.current = undefined
+              setText(event.target.value)
+              if (event.target.value.trim()) onWrite?.()
+            }}
             rows={1}
             enterKeyHint={desk ? undefined : "send"}
             autoFocus={autoFocus}
@@ -273,4 +327,32 @@ export function Composer({
       </form>
     </div>
   )
+}
+
+/**
+ * Keeps a composer's words under `key` as they're written: a quarter second after the last key, and at once when the
+ * page is hidden or goes (an app switcher, a reload) or the composer closes (another Thread opened).
+ */
+function useDraft(key: string | undefined, text: string): void {
+  const latest = useRef(text)
+  useEffect(() => {
+    latest.current = text
+    if (!key) return
+    const timer = setTimeout(() => writeDraft(key, text), DRAFT_WRITE_MS)
+    return () => clearTimeout(timer)
+  }, [key, text])
+  useEffect(() => {
+    if (!key) return
+    const flush = () => writeDraft(key, latest.current)
+    const hidden = () => {
+      if (document.visibilityState === "hidden") flush()
+    }
+    document.addEventListener("visibilitychange", hidden)
+    window.addEventListener("pagehide", flush)
+    return () => {
+      document.removeEventListener("visibilitychange", hidden)
+      window.removeEventListener("pagehide", flush)
+      flush()
+    }
+  }, [key])
 }
