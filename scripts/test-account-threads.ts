@@ -9,6 +9,7 @@ import { ACTIVITY_REPORT_MS, conversationShown, nativeConversation, ownedSession
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import { SessionUploads, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
+import { followHostLog } from "@mako/host/base/host-log"
 import { SYNC_WINDOW_MS } from "@mako/host/conversations/sync-window"
 import { threadArchiveKey } from "@mako/host/contracts/thread-lifecycle"
 import { parsePower, type PowerReading } from "@mako/host/base/power"
@@ -647,6 +648,18 @@ test("a device's Sessions go up at work first, then each Thread whole, the most 
   const status = uploads.status()
   assert.equal(status.state, "failing")
   assert.deepEqual("failures" in status ? status.failures : [], [failure], "a failure is said with the gateway's correlation ID")
+  // The catalog tries a refused push again, keeping when its failing began: logged once, and again once it fails anew.
+  const logged: string[] = []
+  const stopHearing = followHostLog((line) => line.scope === "sync" && line.level === "warn" && logged.push(String(line.fields?.["correlationId"])))
+  const refused = { ...failure, since: NOW + 1_000, message: "The pack was refused (PUT /chunks answered 400, correlation c-10)", correlationId: "c-10" }
+  for (const [at, correlationId] of [[NOW + 1_000, "c-10"], [NOW + 3_000, "c-11"], [NOW + 7_000, "c-12"]] as const) {
+    catalog = { ...catalog, originals: activity([{ ...refused, at, correlationId }]) }
+    await uploads.tick()
+  }
+  catalog = { ...catalog, originals: activity([{ ...refused, at: NOW + 60_000, since: NOW + 60_000, correlationId: "c-13" }]) }
+  await uploads.tick()
+  stopHearing()
+  assert.deepEqual(logged, ["c-10", "c-13"], "a failure tried again is logged once, when it began")
   catalog = { ...catalog, originals: activity() }
   await uploads.tick()
   assert.equal(uploads.status().state, "synced", "every Session readable and whole in the account")
