@@ -210,6 +210,27 @@ function placeholder(file: GitFile): FileDiffMetadata {
   }
 }
 
+/** A file's lines in the order its unified diff draws them, each on its side: the lines the arrow keys walk. */
+function diffLines(fileDiff: FileDiffMetadata): { lineNumber: number; side: "additions" | "deletions" }[] {
+  const lines: { lineNumber: number; side: "additions" | "deletions" }[] = []
+  for (const hunk of fileDiff.hunks) {
+    let old = hunk.deletionStart
+    let next = hunk.additionStart
+    for (const content of hunk.hunkContent) {
+      if (content.type === "context") {
+        for (let index = 0; index < content.lines; index++) lines.push({ lineNumber: next++, side: "additions" })
+        old += content.lines
+        continue
+      }
+      for (let index = 0; index < content.deletions; index++) lines.push({ lineNumber: old++, side: "deletions" })
+      for (let index = 0; index < content.additions; index++) lines.push({ lineNumber: next++, side: "additions" })
+    }
+  }
+  return lines
+}
+
+const rangeKey = (id: string, range: SelectedLineRange) => `${id}\n${range.start}:${range.side ?? ""}-${range.end}:${range.endSide ?? ""}`
+
 function sameLoaded(left: Loaded, right: Loaded): boolean {
   if (left.kind === "diff" && right.kind === "diff") return left.signature === right.signature && left.limited === right.limited
   if (left.kind === "unavailable" && right.kind === "unavailable") return left.reason === right.reason
@@ -640,13 +661,18 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
   // stream reports every step of a drag, kept here until then.
   const [picked, setPicked] = useState<{ id: string; range: SelectedLineRange } | null>(null)
   const picking = useRef<{ id: string; range: SelectedLineRange } | null>(null)
+  /** The keyboard's lines: a file, and the first and last line of its range as places in `diffLines`. */
+  const cursor = useRef<{ id: string; anchor: number; head: number; key: string } | null>(null)
   const onSelectedLinesChange = useCallback((selection: { id: string; range: SelectedLineRange } | null) => {
     picking.current = selection
+    // Lines picked with the pointer are where the keys go on from.
+    if (cursor.current && (!selection || rangeKey(selection.id, selection.range) !== cursor.current.key)) cursor.current = null
   }, [])
   const onLineSelectionEnd = useCallback(() => setPicked(picking.current), [])
   const stream = useRef<HTMLDivElement>(null)
   const letGo = useCallback(() => {
     setPicked(null)
+    cursor.current = null
     handle.current?.clearSelectedLines()
     // The field held the focus: it goes back to the stream, so J, K and Escape go on working from the keyboard.
     requestAnimationFrame(() => {
@@ -780,13 +806,78 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
     if (target) handle.current?.scrollTo({ type: "item", id: target, align: "start" })
   }, [files])
 
+  /** An open file's lines, as the arrow keys walk them; none while it's folded or unread. */
+  const linesOf = (id: string) => {
+    const file = byPathRef.current.get(id)
+    const entry = entriesRef.current.get(id)
+    return file && entry?.loaded.kind === "diff" && openRef.current(file, entry) ? diffLines(entry.loaded.fileDiff) : []
+  }
+  /** Picks `anchor`..`head` of a file's lines, as a press and Shift-press would, and brings the head into view. */
+  const pickLines = (id: string, anchor: number, head: number) => {
+    const lines = linesOf(id)
+    const first = lines[Math.min(anchor, head)]
+    const last = lines[Math.max(anchor, head)]
+    const at = lines[head]
+    if (!first || !last || !at) return
+    const range: SelectedLineRange = { start: first.lineNumber, side: first.side, end: last.lineNumber, endSide: last.side }
+    cursor.current = { id, anchor, head, key: rangeKey(id, range) }
+    picking.current = { id, range }
+    handle.current?.setSelectedLines({ id, range })
+    handle.current?.scrollTo({ type: "line", id, lineNumber: at.lineNumber, side: at.side, align: "nearest" })
+  }
+  /**
+   * The arrow keys walk the lines, from the first file in view, into the next file at either end; with Shift they
+   * stretch a range within the file. Enter opens the comment field on the lines, as letting go of a press does, and
+   * Escape lets go of them.
+   */
+  const walkLines = (key: string, extend: boolean): boolean => {
+    const at = cursor.current
+    if (key === "Enter") {
+      if (!at) return false
+      setPicked(picking.current)
+      return true
+    }
+    if (key === "Escape") {
+      if (!at) return false
+      letGo()
+      return true
+    }
+    const by = key === "ArrowDown" ? 1 : key === "ArrowUp" ? -1 : 0
+    if (!by) return false
+    const ids = files.map((file) => file.path)
+    if (!at) {
+      const instance = handle.current?.getInstance()
+      const top = scrollTop.current
+      const start = Math.max(0, ids.findIndex((id) => (instance?.getTopForItem(id) ?? 0) >= top - 2))
+      const first = [...ids.slice(start), ...ids.slice(0, start)].find((id) => linesOf(id).length)
+      if (first) pickLines(first, 0, 0)
+      return Boolean(first)
+    }
+    const lines = linesOf(at.id)
+    const head = at.head + by
+    if (head >= 0 && head < lines.length) {
+      pickLines(at.id, extend ? at.anchor : head, head)
+      return true
+    }
+    if (extend) return true
+    // Past a file's end, into the next file that has lines; before its start, onto the last line of the one before.
+    const index = ids.indexOf(at.id)
+    const next = (by > 0 ? ids.slice(index + 1) : ids.slice(0, index).reverse()).find((id) => linesOf(id).length)
+    if (next) pickLines(next, by > 0 ? 0 : linesOf(next).length - 1, by > 0 ? 0 : linesOf(next).length - 1)
+    return true
+  }
+
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.metaKey || event.ctrlKey || event.altKey) return
     if (event.target instanceof HTMLElement && event.target.closest("input, textarea, [contenteditable=true]")) return
     if (event.key === "j" || event.key === "k") {
       event.preventDefault()
       step(event.key === "j" ? 1 : -1)
+      return
     }
+    // A header's own controls keep their keys; the lines' are the stream's.
+    if (event.target instanceof HTMLElement && event.target.closest("button, a, label, [role=menuitem]")) return
+    if (walkLines(event.key, event.shiftKey)) event.preventDefault()
   }
 
   const anyOpen = files.some((file) => isOpen(file, entries.get(file.path)))
@@ -864,7 +955,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
         data-file-count={files.length}
         tabIndex={-1}
         onKeyDown={onKeyDown}
-        aria-label="Every changed file. J and K move between files."
+        aria-label="Every changed file. J and K move between files; the arrow keys between lines, with Shift for a range, Enter to comment on them."
         className="flex min-h-0 flex-1 flex-col outline-none"
       >
         <CodeView<undefined>
