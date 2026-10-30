@@ -13,8 +13,8 @@ import { Composer } from "./composer"
 import { webHarnessLabel } from "./labels"
 import { StartSheet, type AddingTo } from "./new-thread"
 import { PreviewSheet } from "./preview"
-import { moveToCloud, type Owner } from "./start"
-import { CLOUD_WHERE, openingSession, type WebSession, type WebThread } from "./threads"
+import { moveToCloud } from "./start"
+import { CLOUD_WHERE, openingSession, ownerOf, subtitle, type WebSession, type WebThread } from "./threads"
 import { startingWhere } from "./started"
 import { useThread } from "./use-thread"
 
@@ -101,16 +101,6 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   )
 }
 
-/** Who answers a Session's calls: its Mac, or its cloud Thread's machine. */
-function ownerOf(session: WebSession): Owner {
-  return session.owner.kind === "cloud" ? { kind: "cloud", threadId: session.owner.threadId } : { kind: "mac", deviceId: session.owner.deviceId }
-}
-
-/** The header's one line: the Mac's name, when it isn't the cloud, and the project. Where it runs is the glyph before it. */
-function subtitle(thread: WebThread, session: WebSession): string {
-  return [session.where === CLOUD_WHERE ? undefined : session.where, thread.project].filter(Boolean).join(" · ") || (session.where === CLOUD_WHERE ? "Cloud" : session.where)
-}
-
 function ThreadBar({ onBack, title, subtitle, place, headingRef, actions }: { onBack: (() => void) | undefined; title: string; subtitle: string | undefined; place?: "cloud" | "device"; headingRef: React.Ref<HTMLHeadingElement>; actions?: React.ReactNode }) {
   const Place = place === "cloud" ? CloudIcon : LaptopIcon
   return (
@@ -143,7 +133,7 @@ function ThreadBar({ onBack, title, subtitle, place, headingRef, actions }: { on
  * archive is the cloud's own; another device's Sessions are archived, and moved, by asking that device. Each can be
  * refused, in the owner's words.
  */
-function ThreadActions({ thread, session, onArchived, onPreview, onAdd }: { thread: WebThread; session: WebSession; onArchived: () => void; onPreview: () => void; onAdd: (() => void) | undefined }) {
+export function ThreadActions({ thread, session, onArchived, onPreview, onAdd }: { thread: WebThread; session: WebSession; onArchived: () => void; onPreview: () => void; onAdd: (() => void) | undefined }) {
   const client = useWebClient()
   const [busy, setBusy] = useState<string | undefined>(undefined)
   const cloud = thread.sessions.find((each) => each.row.runsOn.kind === "cloud")?.row.runsOn
@@ -265,7 +255,7 @@ function SessionTabs({ thread, current, onSession, onAdd }: { thread: WebThread;
  * A Session whose Mac is off: nothing runs it and nothing answers for it. A message sent here waits in the account and
  * runs once the Mac is back.
  */
-function QuietSession({ session }: { session: WebSession }) {
+export function QuietSession({ session }: { session: WebSession }) {
   const client = useWebClient()
   const send = async (text: string): Promise<boolean> => {
     try {
@@ -310,7 +300,7 @@ function QuietSession({ session }: { session: WebSession }) {
   )
 }
 
-function ArchivedThread({ thread }: { thread: WebThread }) {
+export function ArchivedThread({ thread }: { thread: WebThread }) {
   return (
     <div className="mx-auto flex max-w-[420px] flex-col items-center px-6 pt-16 text-center">
       <span className="flex size-11 items-center justify-center rounded-2xl bg-raised ring-1 ring-hairline">
@@ -323,7 +313,7 @@ function ArchivedThread({ thread }: { thread: WebThread }) {
   )
 }
 
-function TranscriptLoading() {
+export function TranscriptLoading() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4 px-5 pt-8" aria-busy aria-label="Opening the conversation">
       <span className="skeleton ml-auto h-12 w-3/5 rounded-2xl" />

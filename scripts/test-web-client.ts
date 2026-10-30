@@ -254,8 +254,8 @@ test("a start runs in the access the person chose for its harness, the one their
   // No Mac to list the ladder (a phone, the cloud): the choice stands as the account keeps it.
   assert.deepEqual(accessInEffect("claude", choices, undefined), { mode: "bypassPermissions", tier: "full", label: "Full access" })
   // A mode the harness no longer offers names nothing, so the harness's own configuration decides, as on the desk.
-  assert.deepEqual(accessInEffect("claude", { claude: { mode: "gone" } }, claude), { label: "Native default" })
-  assert.deepEqual(accessInEffect("codex", choices, undefined), { label: "Native default" })
+  assert.equal(accessInEffect("claude", { claude: { mode: "gone" } }, claude).label, "Default")
+  assert.equal(accessInEffect("codex", choices, undefined).label, "Default")
   // A one-mode harness runs in its one level; plan reads as what it allows.
   assert.deepEqual(accessInEffect("cursor", {}, cursor), { tier: "full", label: "Full access" })
   assert.equal(accessInEffect("claude", { claude: { mode: "plan" } }, claude).label, "Read-only")

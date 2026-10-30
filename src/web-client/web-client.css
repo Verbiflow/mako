@@ -210,6 +210,17 @@
   [data-list="rail"] .web-list-foot {
     bottom: 57px;
   }
+  /* The phone's toolbar: New at its right, in thumb's reach, over the Home indicator; the install offer floats above it. */
+  .web-toolbar {
+    @apply grid shrink-0 items-center border-t border-hairline bg-surface/85 px-1.5 backdrop-blur-xl;
+    grid-template-columns: 44px minmax(0, 1fr) 44px;
+    min-height: calc(50px + env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  [data-list="screen"] .web-list-foot {
+    bottom: calc(50px + env(safe-area-inset-bottom));
+    padding-bottom: 12px;
+  }
   .web-list-foot > * {
     pointer-events: auto;
   }
@@ -492,6 +503,35 @@
     animation: web-listening 1.6s ease-in-out infinite;
   }
 
+  /*
+   * The desk's composer, as the desktop draws it: a square tile across the pane's foot under a hairline, the field in
+   * the prose size, and one routing row under it, where, model and access as quiet text with their glyphs.
+   */
+  .web-composer[data-desk] {
+    @apply max-w-none border-t border-hairline bg-surface p-0;
+  }
+  .web-composer[data-desk] .web-composer-field {
+    @apply flex flex-col rounded-none bg-transparent p-0;
+    box-shadow: none;
+  }
+  .web-composer[data-desk] .web-composer-input {
+    @apply min-h-20 px-4 pt-4 pb-2;
+    font-size: var(--text-prose);
+    line-height: 1.6;
+  }
+  .web-composer[data-desk] .web-composer-bar {
+    @apply min-h-11 gap-1 px-3 pb-3;
+  }
+  .web-composer[data-desk] .web-where {
+    @apply w-auto shrink;
+  }
+  .web-composer[data-desk] .web-chip {
+    @apply h-7 rounded-md px-2 text-ui font-normal;
+  }
+  .web-composer[data-desk] .web-composer-add {
+    @apply size-7 rounded-md;
+  }
+
   /* New: the composer, waiting in the middle of the pane. */
   .web-start-pane-body {
     @apply mx-auto flex w-full min-h-0 max-w-[680px] flex-1 flex-col justify-center px-6 pb-[12vh];
@@ -571,7 +611,8 @@
  * Reuse, edit, rewind and fork are the desk's: they need its composer and its checkout, so the phone shows a message's
  * time and its copy, and nothing it can't do.
  */
-.web-live [data-transcript-action] {
+.web-live [data-transcript-action],
+.desk-live [data-transcript-action] {
   display: none;
 }
 /*

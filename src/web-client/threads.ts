@@ -3,6 +3,7 @@ import type { WaitingMessage } from "@mako/protocol/waiting"
 import { CLOUD_FOLDER_WHERE, listedOwner, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
 import type { AccountListState, WebDevice } from "./account-list"
+import type { Owner } from "./start"
 
 /** One Session of a Thread, as the phone lists it: its row, who answers it, and how a window lists it. */
 export interface WebSession {
@@ -146,4 +147,14 @@ export function openingSession(thread: WebThread): WebSession {
   if (waiting) return waiting
   const working = [...thread.sessions].reverse().find((session) => session.row.state === "working" && !session.quietSince)
   return working ?? thread.sessions[0]!
+}
+
+/** Who answers a Session's calls: its Mac, or its cloud Thread's machine. */
+export function ownerOf(session: WebSession): Owner {
+  return session.owner.kind === "cloud" ? { kind: "cloud", threadId: session.owner.threadId } : { kind: "mac", deviceId: session.owner.deviceId }
+}
+
+/** A Session's one line under its title: the Mac's name, when it isn't the cloud, and the project. */
+export function subtitle(thread: WebThread, session: WebSession): string {
+  return [session.where === CLOUD_WHERE ? undefined : session.where, thread.project].filter(Boolean).join(" · ") || (session.where === CLOUD_WHERE ? "Cloud" : session.where)
 }

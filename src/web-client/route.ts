@@ -74,18 +74,35 @@ export function useRoute(base: string): [WebRoute, (route: WebRoute, how?: { rep
 }
 
 /**
- * Whether the viewport is wide enough for the desk's two panes, the list as a rail beside what's open: an iPad either way
- * up, a laptop's window. A phone, turned or not, has one screen at a time.
+ * Which of the web app's three forms this browser gets, by its input as much as its size:
+ * - `desk`: a laptop's or a desktop's browser, a fine pointer that hovers and a window of 768px or more. It is the
+ *   desktop app: its rail, its transcript and composer, its palette and keys.
+ * - `tablet`: an iPad either way up, or any wide screen under a finger: two panes, a finger's targets, nothing on hover.
+ * - `phone`: one screen at a time, New in thumb's reach at the bottom.
  */
-export const WIDE_QUERY = "(min-width: 768px)"
+export type WebForm = "desk" | "tablet" | "phone"
 
-export function useWide(): boolean {
-  const [wide, setWide] = useState(() => matchMedia(WIDE_QUERY).matches)
+export const WIDE_QUERY = "(min-width: 768px)"
+const DESK_QUERY = "(min-width: 768px) and (pointer: fine) and (hover: hover)"
+
+function formNow(): WebForm {
+  return matchMedia(DESK_QUERY).matches ? "desk" : matchMedia(WIDE_QUERY).matches ? "tablet" : "phone"
+}
+
+export function useForm(): WebForm {
+  const [form, setForm] = useState(formNow)
   useEffect(() => {
-    const media = matchMedia(WIDE_QUERY)
-    const changed = () => setWide(media.matches)
-    media.addEventListener("change", changed)
-    return () => media.removeEventListener("change", changed)
+    const queries = [matchMedia(DESK_QUERY), matchMedia(WIDE_QUERY)]
+    const changed = () => setForm(formNow())
+    for (const query of queries) query.addEventListener("change", changed)
+    return () => {
+      for (const query of queries) query.removeEventListener("change", changed)
+    }
   }, [])
-  return wide
+  return form
+}
+
+/** Whether the list and what's open are side by side: the desk's and a tablet's two panes. */
+export function useWide(): boolean {
+  return useForm() !== "phone"
 }

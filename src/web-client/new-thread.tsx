@@ -70,7 +70,7 @@ export function StartPane({ onDismiss, onStarted }: { onDismiss: () => void; onS
   )
 }
 
-function StartForm({ onStarted, adding }: { onStarted: (started: Started, where: string) => void; adding?: AddingTo }) {
+export function StartForm({ onStarted, adding, desk = false }: { onStarted: (started: Started, where: string) => void; adding?: AddingTo; desk?: boolean }) {
   const client = useWebClient()
   const list = useAccountList((state) => state)
   const cloud = client.account.entitlements.includes(CLOUD_ENTITLEMENT)
@@ -251,7 +251,7 @@ function StartForm({ onStarted, adding }: { onStarted: (started: Started, where:
       ) : failure ? (
         <StartFailed message={failure} />
       ) : null}
-      <Composer autoFocus placeholder="What should it work on?" header={where} tools={how} sendable={ready} onSend={start} sendLabel="Start" />
+      <Composer autoFocus placeholder="What should it work on?" header={where} tools={how} sendable={ready} onSend={start} sendLabel="Start" desk={desk} />
       <PlaceSheet anchor={chip} open={picking === "place"} onDismiss={() => setPicking(undefined)} all={all} chosen={chosenPlace} onPick={(next) => {
         if (next !== chosenPlace) {
           setProjects(undefined)

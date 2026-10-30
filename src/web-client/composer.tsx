@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNo
 import { FileIcon, MicIcon, PlusIcon, SquareIcon, XIcon } from "lucide-react"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { cn } from "@/lib/utils"
+import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { ATTACHMENT_BUDGET, encodedBytes, HeldPreviews, kilobytes, readPicked, type Picked } from "./attachments"
 import { useDictation, type Heard } from "./dictation"
 import { SendGlyph } from "./glyphs"
@@ -31,6 +32,7 @@ export function Composer({
   tools,
   autoFocus = false,
   sendLabel = "Send",
+  desk = false,
 }: {
   placeholder: string
   onSend: (text: string, attachments: PromptAttachment[]) => Promise<boolean>
@@ -47,6 +49,11 @@ export function Composer({
   tools?: ReactNode
   autoFocus?: boolean
   sendLabel?: string
+  /**
+   * On a laptop's browser: the desktop composer's tile, square and full width, its field in the prose size, Enter
+   * sending (Shift+Enter a new line), and the desktop's own send button.
+   */
+  desk?: boolean
 }) {
   const [text, setText] = useState("")
   const [picked, setPicked] = useState<Picked[]>([])
@@ -184,7 +191,9 @@ export function Composer({
       />
     </>
   ) : null
-  const action = showStop ? (
+  const action = desk ? (
+    <ComposerActionButton action={showStop ? "stop" : "send"} ready={!empty && !over && !sending && !disabled && sendable} stopping={stopping} onSend={() => void send()} onStop={() => onStop?.()} />
+  ) : showStop ? (
     <button type="button" onClick={onStop} disabled={stopping} className="web-send web-stop" aria-label="Stop the turn">
       <SquareIcon className="size-3 fill-current" />
     </button>
@@ -219,6 +228,7 @@ export function Composer({
       ) : null}
       <form
         className="web-composer"
+        data-desk={desk || undefined}
         onSubmit={(event) => {
           event.preventDefault()
           void send()
@@ -226,22 +236,24 @@ export function Composer({
       >
         <div className={cn("web-composer-field", dictation.listening && "web-listening")} data-tools={tools !== undefined || undefined}>
           {attachments}
-          {header}
+          {desk ? null : header}
           {tools === undefined ? addButton : null}
           <textarea
             ref={input}
             value={text}
             onChange={(event) => setText(event.target.value)}
             rows={1}
-            enterKeyHint="send"
+            enterKeyHint={desk ? undefined : "send"}
             autoFocus={autoFocus}
             disabled={disabled}
             placeholder={dictation.listening ? "Listening…" : placeholder}
             aria-label="Message"
             className="web-composer-input"
             onKeyDown={(event) => {
-              // A hardware keyboard sends with ⌘↩, as on a Mac; ↩ alone is a new line, as phones expect.
-              if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              // A hardware keyboard sends with ⌘↩, as on a Mac; ↩ alone is a new line, as phones expect. On the desk, ↩ sends
+              // and ⇧↩ is the new line, as the desktop's composer does.
+              const sends = desk ? !event.shiftKey && !event.nativeEvent.isComposing : event.metaKey || event.ctrlKey
+              if (event.key === "Enter" && sends) {
                 event.preventDefault()
                 void send()
               }
@@ -250,6 +262,7 @@ export function Composer({
           {tools !== undefined ? (
             <div className="web-composer-bar">
               {addButton}
+              {desk ? header : null}
               <div className="web-composer-tools">{tools}</div>
               {action}
             </div>
