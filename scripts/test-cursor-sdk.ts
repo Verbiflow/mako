@@ -209,6 +209,16 @@ function textOf(updates: LiveUpdate[]): Map<string, string> {
     ...streamed.message(assistant("After")),
   ]
   assert.deepEqual([...textOf(split).entries()], [["t-task:text:0", "Before"], ["t-task:text:1", "After"]])
+  // SDK 1.2.0 streams no summary text, only how the summary went: that splits the text as well.
+  const statused = new CursorSdkProjection("t-summary-message")
+  const statusSplit: LiveUpdate[] = [
+    ...statused.message(assistant("Before")),
+    ...statused.message({ ...run, type: "summary", status: "running" }),
+    ...statused.message({ ...run, type: "summary", status: "completed" }),
+    ...statused.message(assistant("After")),
+  ]
+  assert.deepEqual([...textOf(statusSplit).entries()], [["t-summary-message:text:0", "Before"], ["t-summary-message:text:1", "After"]])
+  assert.ok(SdkChildLineSchema.safeParse({ event: "message", turn: "t", message: { ...run, type: "summary", status: "completed", fallback: true } }).success, "a summary message crosses the wire")
   assert.equal(compactionSummary({ ...run, type: "task", text: "  The summary.  " }), "The summary.")
   assert.equal(compactionSummary({ ...run, type: "task", status: "running", text: "Something else" }), undefined, "a task with a status is not a summary")
   assert.equal(compactionSummary({ ...run, type: "task", text: "  " }), undefined)
@@ -740,6 +750,12 @@ console.log("cursor sdk: steer and send outlive the request deadline, cancel doe
     assert.deepEqual(activity, ["compacting", "idle", "idle"])
     assert.deepEqual(await turn([delta("summary-started"), delta("summary-completed")]), ["Context compacted"],
       "a compaction whose summary never came is still marked, at the turn's end")
+    const summarized = (status: "running" | "completed" | "error") => (turn: string): SdkEvent => ({ event: "message", turn, message: { ...run, type: "summary", status } })
+    const archived = (window: string, text: string) => (turn: string): SdkEvent => ({ event: "compaction", turn, window, summary: text })
+    assert.deepEqual(await turn([summarized("running"), summarized("completed"), archived("window-1", "Archived summary.")]), ["Context compacted | Archived summary."],
+      "SDK 1.2.0: its summary messages show the compaction working, and the window its checkpoint archives marks it once")
+    assert.deepEqual(activity.slice(0, 2), ["compacting", "idle"])
+    assert.deepEqual(await turn([summarized("running"), summarized("error")]), [], "a failed summary leaves the conversation as it was: no marker")
     const numbered = (text: string, seq: number) => (turn: string): SdkEvent => ({ event: "message", turn, seq, message: { ...run, type: "task", text } })
     assert.deepEqual(await turn([numbered("Kept the plan.", 4), numbered("Kept the plan.", 4), numbered("Kept the tests.", 5)]),
       ["Context compacted | Kept the plan.", "Context compacted | Kept the tests."], "the child's replay of a message it already sent is drawn once")

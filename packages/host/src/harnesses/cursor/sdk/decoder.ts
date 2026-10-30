@@ -200,6 +200,7 @@ export class CursorDecoder {
       }) })
       if (usage) decoded.push({ kind: "state", patch: { usage } })
     }
+    if (message.type === "summary") decoded.push(...this.summarizing(message.status))
     const summary = compactionSummary(message)
     if (summary) {
       const before = this.meter.context
@@ -214,14 +215,9 @@ export class CursorDecoder {
   private delta(delta: CursorSdkDelta): Decoded<CursorEffect>[] {
     const decoded: Decoded<CursorEffect>[] = this.projection!.delta(delta).map((update) => ({ kind: "update", update }))
     switch (delta.type) {
-      case "summary-started": {
-        decoded.push(...this.releaseCompaction(), { kind: "activity", activity: { kind: "compacting" } })
-        // Cursor says nothing of what the summary leaves until the checkpoint after the next model call.
-        this.itemized = undefined
-        const usage = this.meter.observe({ kind: "compacted" })
-        if (usage) decoded.push({ kind: "state", patch: { usage } })
+      case "summary-started":
+        decoded.push(...this.compacting())
         break
-      }
       case "summary-completed":
         if (this.compaction === "marked") this.compaction = "idle"
         else {
@@ -239,6 +235,26 @@ export class CursorDecoder {
         break
     }
     return decoded
+  }
+
+  /** A summary has begun: shown working, and the meter's reading is gone until the next one. */
+  private compacting(): Decoded<CursorEffect>[] {
+    const decoded: Decoded<CursorEffect>[] = [...this.releaseCompaction(), { kind: "activity", activity: { kind: "compacting" } }]
+    // Cursor says nothing of what the summary leaves until the checkpoint after the next model call.
+    this.itemized = undefined
+    const usage = this.meter.observe({ kind: "compacted" })
+    if (usage) decoded.push({ kind: "state", patch: { usage } })
+    return decoded
+  }
+
+  /**
+   * SDK 1.2.0's word on a summary as it runs, which 1.0.31 to 1.0.40 said
+   * with a `task` message holding its text. 1.2.0 streams no text: the
+   * window the next checkpoint archives marks it (`archived`), so this only
+   * shows it working, and a failed one leaves the conversation as it was.
+   */
+  private summarizing(status: "running" | "completed" | "error"): Decoded<CursorEffect>[] {
+    return status === "running" ? this.compacting() : [{ kind: "activity", activity: null }]
   }
 
   /** A completed compaction whose summary never came is still marked. */

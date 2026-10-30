@@ -1105,14 +1105,14 @@ const cursor: Recorder = {
     kind: "own",
     why: "Cursor's model is behind Cursor's own service, which the scripted model can't stand in for",
     lacks: {
-      codeMode: "Cursor SDK 1.0.40 reports no tool that runs code calling its other tools (native-tools/cursor-1.0.40.json)",
-      ask: "Cursor offers no `askQuestion` to a local SDK run (1.0.31 not even asked for by name, and 1.0.40 lists none), so Mako declares questions unavailable",
+      codeMode: "Cursor SDK 1.2.0 reports no tool that runs code calling its other tools (native-tools/cursor-1.2.0.json)",
+      ask: "Cursor offers no `askQuestion` to a local SDK run (1.0.31 not even asked for by name, and 1.0.40 and 1.2.0 list none), so Mako declares questions unavailable",
     },
   },
   controls: {
     steer: "driven",
-    rewind: { absent: "Cursor SDK 1.0.40 has no rewind; Mako forks by writing the conversation into a new agent" },
-    compact: { absent: "Cursor summarizes on its server when the context fills; it accepts a summarize request from a local run, but SDK 1.0.40 has no way to send one" },
+    rewind: { absent: "Cursor SDK 1.2.0 has no rewind; Mako forks by writing the conversation into a new agent" },
+    compact: { absent: "Cursor summarizes on its server when the context fills; SDK 1.2.0 can ask for one (`Agent.summarize()`), which Mako doesn't send yet" },
     resume: "driven",
     "still-running": { absent: NO_OTHER_CLIENT },
   },
