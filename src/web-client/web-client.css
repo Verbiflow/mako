@@ -794,13 +794,15 @@
 .web-capsule[data-status="reconnecting"] .web-capsule-segment:first-child {
   @apply text-caution;
 }
-.web-capsule-words {
+.web-capsule-words,
+.web-capsule-app-words {
   @apply min-w-0 truncate;
   font-variant-numeric: tabular-nums;
   opacity: 0;
   transition: opacity 100ms var(--ease-swift);
 }
-.web-capsule[data-shown] .web-capsule-words {
+.web-capsule[data-shown] .web-capsule-words,
+.web-capsule[data-shown] .web-capsule-app-words {
   opacity: 1;
   transition: opacity 160ms var(--ease-out) 80ms;
 }
@@ -1169,6 +1171,217 @@
     transform: translate3d(0, 6px, 0) scale(0.96);
   }
 }
+  /*
+   * Why something can't be reached: a card with one headline, the chain of hops each with how it stands (reached, not
+   * reached, not checked), what it may be, Try again and Copy diagnostics. Hue only where it means something: a hop
+   * that failed is in the error ink; one reached is the text's own; one not checked is faint, never painted as off.
+   */
+  .web-trouble {
+    @apply rounded-2xl bg-raised p-4 ring-1 ring-hairline;
+  }
+  .web-trouble-head {
+    @apply flex w-full items-start gap-3 text-left;
+  }
+  .web-trouble-head:disabled {
+    @apply cursor-default opacity-100;
+  }
+  .web-hops {
+    @apply relative mt-4 flex flex-col gap-2.5 text-label;
+  }
+  /* The chain: a hairline through the marks, as a route through its stops. */
+  .web-hops::before {
+    @apply absolute top-2.5 bottom-2.5 left-[9px] w-px bg-hairline;
+    content: "";
+  }
+  .web-hop {
+    @apply relative flex min-h-5 items-center gap-2.5 text-foreground;
+  }
+  .web-hop-mark {
+    @apply flex size-[19px] shrink-0 items-center justify-center rounded-full bg-raised text-muted-foreground ring-1 ring-hairline;
+  }
+  .web-hop[data-state="failed"] {
+    @apply font-medium;
+  }
+  .web-hop[data-state="failed"] .web-hop-mark {
+    @apply bg-negative text-white ring-0;
+  }
+  .web-hop[data-state="failed"] > :last-child {
+    @apply text-negative;
+  }
+  .web-hop[data-state="unknown"] {
+    @apply text-muted-foreground;
+  }
+  .web-hop[data-state="unknown"] .web-hop-mark {
+    @apply text-faint;
+  }
+  .web-causes {
+    @apply mt-4 flex flex-col gap-1.5 border-t border-hairline pt-3.5 text-label text-muted-foreground;
+  }
+  .web-causes > li {
+    @apply relative pl-3.5;
+  }
+  .web-causes > li::before {
+    @apply absolute top-[0.6em] left-0 size-1 rounded-full bg-faint;
+    content: "";
+  }
+  .web-trouble-actions {
+    @apply mt-4 flex flex-wrap items-center gap-1.5;
+  }
+  .web-trouble-actions .web-button {
+    @apply h-10 px-4;
+  }
+  .web-trouble-actions .web-quiet-button {
+    @apply h-10 gap-2 px-3;
+  }
+  .web-trouble-compact {
+    @apply p-3;
+  }
+  .web-trouble-compact .web-trouble-actions {
+    @apply mt-2.5;
+  }
+  .web-trouble-strip {
+    @apply mx-3 mt-2 shrink-0;
+  }
+  .web-trouble-list {
+    @apply mx-3 mt-2 mb-1;
+  }
+
+  /* A Mac to connect: three steps that tick themselves as the Mac signs in and connects. */
+  .web-connect {
+    @apply rounded-2xl bg-raised p-5 ring-1 ring-hairline;
+  }
+  .web-connect-step {
+    @apply relative flex items-start gap-3 pb-4;
+  }
+  .web-connect-step:last-child {
+    @apply pb-0;
+  }
+  .web-connect-step:not(:last-child)::before {
+    @apply absolute top-6 bottom-0 left-[11px] w-px bg-hairline;
+    content: "";
+  }
+  .web-connect-mark {
+    @apply flex size-6 shrink-0 items-center justify-center rounded-full text-label font-medium text-muted-foreground ring-1 ring-hairline;
+    transition:
+      background-color 200ms var(--ease-out),
+      color 200ms var(--ease-out);
+  }
+  .web-connect-step[data-state="current"] .web-connect-mark {
+    @apply text-foreground ring-foreground/40;
+  }
+  .web-connect-mark-done {
+    @apply bg-foreground text-surface ring-0;
+  }
+
+  /* A Thread's servers, a card each, in a row under its bar while its app runs. */
+  .web-servers {
+    @apply flex shrink-0 gap-2 overflow-x-auto px-3 pt-2 pb-1;
+    scrollbar-width: none;
+  }
+  .web-server {
+    @apply flex min-h-14 w-full items-center gap-3 rounded-xl bg-raised px-3.5 py-2.5 ring-1 ring-hairline;
+  }
+  .web-server-compact {
+    @apply min-h-12 w-auto max-w-[260px] min-w-[200px] shrink-0 py-2;
+  }
+  .web-server-mark {
+    @apply flex size-8 shrink-0 items-center justify-center rounded-lg bg-surface text-muted-foreground ring-1 ring-hairline;
+  }
+  .web-server[data-state="ready"] .web-server-mark {
+    @apply text-foreground;
+  }
+
+  /* The app full screen: its bar, the device it's shown as, and the page. */
+  .web-preview {
+    height: calc(var(--app-height, 100dvh) - env(safe-area-inset-top) - 8px);
+  }
+  .web-sheet[data-form="dialog"].web-preview {
+    width: min(1280px, calc(100% - 48px));
+    height: calc(100% - 64px);
+    max-height: none;
+  }
+  .web-preview-bar {
+    @apply flex shrink-0 items-center gap-1 px-2 pb-1.5;
+    touch-action: none;
+  }
+  .web-viewports {
+    @apply mx-3 mb-2 grid shrink-0 grid-cols-3 gap-1 rounded-xl bg-fill-hover p-1;
+  }
+  .web-viewport {
+    @apply h-8 rounded-lg text-label font-medium text-muted-foreground;
+  }
+  .web-viewport-on {
+    @apply bg-surface text-foreground shadow-sm;
+  }
+  .web-preview-page {
+    @apply relative min-h-0 flex-1 overflow-hidden bg-surface;
+    border-top: 1px solid var(--hairline);
+  }
+  .web-preview-said {
+    @apply flex h-full items-center justify-center gap-2.5 px-8 text-center text-ui text-muted-foreground;
+    margin: 0 auto;
+  }
+
+  /* A move in a Thread's place: where to, a thin bar that only moves forward, its step and what that means. */
+  .web-move {
+    @apply flex min-h-0 flex-1 flex-col px-4 pt-[14vh] pb-16;
+  }
+  .web-move-card {
+    @apply mx-auto w-full max-w-[460px] rounded-2xl bg-raised p-5 ring-1 ring-hairline;
+  }
+  .web-move-mark {
+    @apply flex size-10 shrink-0 items-center justify-center rounded-xl bg-surface text-foreground ring-1 ring-hairline;
+  }
+  .web-move:not([data-move-step="done"]):not([data-move-step="failed"]):not([data-move-step="unsettled"]) .web-move-mark > svg {
+    animation: web-move-blink 1.4s ease-in-out infinite;
+  }
+  .web-move-track {
+    @apply relative mt-5 h-1 overflow-hidden rounded-full bg-fill-selected;
+  }
+  .web-move-fill {
+    @apply absolute inset-0 origin-left rounded-full bg-foreground;
+    transition: transform 400ms var(--ease-out);
+  }
+  .web-move-ask {
+    @apply px-5 pt-1 pb-[calc(env(safe-area-inset-bottom)+16px)];
+  }
+  .web-sheet[data-form="dialog"] .web-move-ask,
+  .web-sheet[data-form="pop"] .web-move-ask {
+    @apply pt-3 pb-4;
+  }
+  .web-move-mac {
+    @apply flex min-h-11 items-center gap-2.5 rounded-xl px-3 text-ui;
+  }
+  .web-move-mac:disabled {
+    @apply opacity-60;
+  }
+  .web-move-mac-on {
+    @apply bg-fill-selected font-medium;
+  }
+  /* A row on its way: its arrow blinks where its place stood. */
+  .web-move-blink {
+    animation: web-move-blink 1.4s ease-in-out infinite;
+  }
+  @keyframes web-move-blink {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.3;
+    }
+  }
+
+  /* The capsule's app: a segment that opens it. */
+  .web-capsule-app {
+    @apply text-foreground;
+  }
+  .web-capsule-app-dot {
+    @apply size-1.5 shrink-0 rounded-full bg-positive;
+  }
+  .web-capsule-app[data-app="starting"] .web-capsule-app-dot {
+    @apply bg-faint;
+  }
 
 @keyframes web-breathe {
   0%,
@@ -1218,5 +1431,13 @@
   }
   .web-capsule-dot {
     animation: none;
+  }
+  /* A move's arrow and its bar hold still: the words and the percent say where it is. */
+  .web-move-blink,
+  .web-move-mark > svg {
+    animation: none !important;
+  }
+  .web-move-fill {
+    transition: none;
   }
 }

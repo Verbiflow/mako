@@ -49,7 +49,7 @@ import { ControlResidency, controlLine, openControl, declareControlMethods, cont
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -411,6 +411,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   let windowRows: ThreadRef[] | undefined
   /** The rows by native session, read again with them: where the uploads read each Session. */
   let windowPaths: Map<string, string> | undefined
+  // The Threads moving to the cloud from here, said on their rows from the move's first step.
+  const movesUnderWay = new MovesUnderWay()
   const sessions = new SessionPublisher({
     rows: () => {
       const live = late.conversations?.live
@@ -429,6 +431,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         placement: (id) => store.journalPlacement(id),
         executions: (ids) => store.executionsOf(ids),
         titles: (ids) => store.titlesOf(ids),
+        moving: (thread) => movesUnderWay.of(thread),
         now: Date.now,
       })
     },
@@ -821,7 +824,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       waitingPrompts: (conversationId) => live.waitingPrompts(conversationId),
       carried: (conversationId, requestIds, to) => live.carried(conversationId, requestIds, to),
     },
-    step: (conversationId, move, step) => emit({ type: "thread-move-step", conversationId, move, step }),
+    step: (conversationId, move, step) => {
+      // Every device's list says the move from its first step; its window and a device watching it hear each step.
+      if (movesUnderWay.stepped(threads.store?.journalPlacement(conversationId)?.thread, move, step)) late.sessions?.showsChanged()
+      emit({ type: "thread-move-step", conversationId, move, step })
+    },
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
     ready: { take: (thread, folder, repository) => readinessOnce?.take(thread, folder, repository) ?? Promise.resolve(undefined) },
     carried: async (folder, why) => void (await carriedFiles?.sync(folder, why)),

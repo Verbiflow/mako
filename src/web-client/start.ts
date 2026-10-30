@@ -1,5 +1,5 @@
 import type { Json } from "@mako/protocol"
-import { bootFolder, type CloudRepository, type ThreadMoveOutcome } from "@mako/host/contracts/cloud-threads"
+import { bootFolder, type CloudRepository } from "@mako/host/contracts/cloud-threads"
 import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
 import { harnessOrder as savedOrder } from "@mako/host/contracts/harness-defaults"
 import type { LiveSnapshot, LiveStartOptions } from "@mako/host/contracts/live-conversations"
@@ -12,6 +12,7 @@ import { errorMessage } from "@mako/host/contracts/error-message"
 import { whileBusy } from "./busy"
 import { CONSOLE_LOG, type Gateway } from "./gateway"
 import { WEB_HARNESSES } from "./labels"
+import { answered, macPlace, reachLog, threadPlace } from "./reach"
 
 /**
  * One host call to one of the account's Macs, through its runtime link: the same call its own window makes, answered
@@ -19,9 +20,13 @@ import { WEB_HARNESSES } from "./labels"
  */
 export async function macCall<Result>(gateway: Gateway, webDeviceId: string, deviceId: string, channel: string, args: readonly unknown[], how: { history?: boolean } = {}): Promise<Result> {
   const runtimeId = `d-${deviceId}`
-  const send = gatewayHostCalls(gateway.session, { runtimeId, actor: { kind: "client", client: "web", deviceId: webDeviceId }, history: how.history ?? false, log: CONSOLE_LOG }).call(channel, args)
+  const place = macPlace(deviceId)
+  const log = reachLog(place)
+  const send = gatewayHostCalls(gateway.session, { runtimeId, actor: { kind: "client", client: "web", deviceId: webDeviceId }, history: how.history ?? false, log }).call(channel, args)
+  const value = await sendWithRepeats(channel, send, { runtime: runtimeId, log })
+  answered(place)
   // SAFETY: the Mac's host answers each channel with the value its bridge method declares, as to its own window.
-  return decodeRuntimeValue(await sendWithRepeats(channel, send, { runtime: runtimeId, log: CONSOLE_LOG })) as Result
+  return decodeRuntimeValue(value) as Result
 }
 
 /** One harness as a place offers it: signed in or not, its models and the one it starts on. */
@@ -173,9 +178,13 @@ export type Owner = { kind: "mac"; deviceId: string } | { kind: "cloud"; threadI
 /** One host call to a Thread's owner, whichever it is. */
 export async function ownerCall<Result>(gateway: Gateway, webDeviceId: string, owner: Owner, channel: string, args: readonly unknown[], how: { history?: boolean } = {}): Promise<Result> {
   if (owner.kind === "mac") return macCall<Result>(gateway, webDeviceId, owner.deviceId, channel, args, how)
-  const send = gatewayHostCalls(gateway.session, { threadId: owner.threadId, actor: { kind: "client", client: "web", deviceId: webDeviceId }, history: how.history ?? false, log: CONSOLE_LOG }).call(channel, args)
+  const place = threadPlace(owner.threadId)
+  const log = reachLog(place)
+  const send = gatewayHostCalls(gateway.session, { threadId: owner.threadId, actor: { kind: "client", client: "web", deviceId: webDeviceId }, history: how.history ?? false, log }).call(channel, args)
+  const value = await sendWithRepeats(channel, send, { threadId: owner.threadId, log })
+  answered(place)
   // SAFETY: the machine's host answers each channel with the value its bridge method declares.
-  return decodeRuntimeValue(await sendWithRepeats(channel, send, { threadId: owner.threadId, log: CONSOLE_LOG })) as Result
+  return decodeRuntimeValue(value) as Result
 }
 
 /**
@@ -194,14 +203,6 @@ export function addSession(gateway: Gateway, webDeviceId: string, owner: Owner, 
   )
 }
 
-/**
- * Moves a Thread from its Mac to the cloud, as the desk's own move: asked of that Mac (`mako:thread-move`), which packs
- * it, hands it over and says how it went. A turn at work carries on in the cloud.
- */
-export function moveToCloud(gateway: Gateway, webDeviceId: string, deviceId: string, conversationId: string): Promise<ThreadMoveOutcome> {
-  return whileBusy(macCall<ThreadMoveOutcome>(gateway, webDeviceId, deviceId, "mako:thread-move", [conversationId, crypto.randomUUID(), { why: "asked" }]))
-}
-
 /** What the gateway answers for a preview: the address that opens it, on an origin of its own, and until when. */
 const PreviewSchema = z.object({ url: z.string().url(), expiresAt: z.number() })
 
@@ -211,8 +212,8 @@ const PreviewSchema = z.object({ url: z.string().url(), expiresAt: z.number() })
  * names an unguessable grant the gateway keeps for this person, Thread and port, so it needs no cookie (an iPhone
  * keeps none for a page inside another), opens in a browser just as well, and ends when it's unused for an hour.
  */
-export async function previewAddress(gateway: Gateway, owner: Owner, port: number): Promise<string> {
+export async function previewAddress(gateway: Gateway, owner: Owner, port: number): Promise<{ url: string; expiresAt: number }> {
   const target = owner.kind === "cloud" ? { threadId: owner.threadId } : { deviceId: owner.deviceId }
-  return PreviewSchema.parse(await gateway.rest("POST", "/v1/previews", { ...target, port })).url
+  return PreviewSchema.parse(await gateway.rest("POST", "/v1/previews", { ...target, port }))
 }
 

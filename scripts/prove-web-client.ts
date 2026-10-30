@@ -29,16 +29,17 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * - `access <harness> <mode>`: the person chooses that access for the harness here, as the desk's composer does; it goes
  *   to their account. `ACCESS <the host's choices>`
  * - `choices`: the access choices as this host holds them now, after the account's word. `CHOICES <the host's choices>`
+ * - `app-start`, `app-stop`: `api`'s app (with `--app` or `--recipe`) started or stopped, as Run and Stop do. `APP <outcome>`
  * - `quit` (or stdin's end): signs the host out, so its device leaves the account, stops it, and removes the root unless `--keep`.
  *
  * No harness runs on anything of the person's: the home is the scratch one, Codex's sign-in an API key the stand-in takes.
  *
  * With `--app`, `api` has an app of its own: a recipe that serves a small page on the Thread's port, started once the
- * host is ready, for a phone to open through the gateway.
+ * host is ready, for a phone to open through the gateway. With `--recipe`, the same app, left stopped until `app-start`.
  *
- *   npx tsx --tsconfig tsconfig.scripts.json scripts/prove-web-client.ts --root <scratch> --cloud http://127.0.0.1:20021 [--keep] [--app]
+ *   npx tsx --tsconfig tsconfig.scripts.json scripts/prove-web-client.ts --root <scratch> --cloud http://127.0.0.1:20021 [--keep] [--app | --recipe]
  */
-const { values } = parseArgs({ options: { root: { type: "string" }, cloud: { type: "string" }, keep: { type: "boolean", default: false }, app: { type: "boolean", default: false } } })
+const { values } = parseArgs({ options: { root: { type: "string" }, cloud: { type: "string" }, keep: { type: "boolean", default: false }, app: { type: "boolean", default: false }, recipe: { type: "boolean", default: false } } })
 if (!values.root || !values.cloud) throw new Error("--root and --cloud are required")
 const root = values.root
 const home = join(root, "home")
@@ -244,7 +245,7 @@ await rollout("billing-service", 3 * 60, Array.from({ length: LONG_TURNS }, (_, 
 const api = join(home, "projects", "api")
 await mkdir(join(api, ".git"), { recursive: true })
 await mkdir(join(api, "test"), { recursive: true })
-if (values.app) {
+if (values.app || values.recipe) {
   await mkdir(join(api, ".mako"), { recursive: true })
   await writeFile(join(api, ".mako", "recipe.json"), JSON.stringify({ processes: { web: { command: "node server.mjs", port: "{port}", values: { PORT: "{port}" } } } }, null, 2))
   await writeFile(join(api, "server.mjs"), APP_SERVER)
@@ -282,7 +283,7 @@ console.log(`READY ${JSON.stringify({ dataRoot, sessions: SESSIONS.length + 1 })
 
 const stop = async () => {
   // Its app is a process of its own: stopped here, or it outlives the host.
-  if (values.app) await call("mako:thread-app-stop", [api]).catch(() => undefined)
+  if (values.app || values.recipe) await call("mako:thread-app-stop", [api]).catch(() => undefined)
   await call("mako:cloud-sign-out", []).catch(() => undefined)
   host.kill("SIGTERM")
   await release()
@@ -316,6 +317,8 @@ for await (const line of createInterface({ input: process.stdin })) {
     const [, harness, mode] = line.trim().split(/\s+/)
     console.log(`ACCESS ${JSON.stringify(await call("mako:access-choose", [harness, mode]))}`)
   } else if (line.trim() === "choices") console.log(`CHOICES ${JSON.stringify(await call("mako:access-choices", []))}`)
+  else if (line.trim() === "app-start") console.log(`APP ${JSON.stringify(await call("mako:thread-app-start", [api]))}`)
+  else if (line.trim() === "app-stop") console.log(`APP ${JSON.stringify(await call("mako:thread-app-stop", [api]))}`)
   else if (line.trim() === "quit") break
 }
 await stop()

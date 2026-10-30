@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / (resumed) / Without reading anything, which day did notes.md name? Answer with just the day. A turn with a tool, the harness's process closed and the session resumed in a new one, then a turn that leans on the first. What the harness replays while it opens is history.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#atlantic-writing",
+      "path": ".local/share/devin/cli/sessions.db#aware-kileskus",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/14af10e8-d095-42d1-a11b-5ca0fc4956fc.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/442585c7-0983-4e52-86aa-7e61384e58b2.db",
       "known": [
         {
           "side": "-",
