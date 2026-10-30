@@ -1,4 +1,4 @@
-import type { GatewayCallTrace } from "@mako/protocol/gateway-http"
+import { GatewayHttpError, type GatewayCallTrace } from "@mako/protocol/gateway-http"
 import { CHUNK_HEADER_BYTES, RECORD_ASK_HASHES, RECORD_PACK_BYTES, RECORD_PUSH_WITH_BYTES, RecordConflictError, recordChunks, type PackedChunk, type RecordBundle, type RecordHoldings, type RecordPushAnswer, type RecordRemote, type RecordUnit } from "@mako/protocol/records"
 import { z } from "zod"
 import { KeptRestoreSchema } from "./kept-restore.js"
@@ -17,6 +17,29 @@ export type { RecordRemote } from "@mako/protocol/records"
  * chunks this store lacks. A push the remote refuses for a gap means what was known of it is wrong (it was reset, or
  * another store pushed for it): its own holdings replace what's known, and the push goes again, once.
  */
+
+/**
+ * Chunks the remote refused one by one, though it took every other chunk of the push: what their versions name, and
+ * all of their units after them, wait; everything else went. A refusal, as its first pack's was, so it's tried again
+ * by a refusal's pace, and it names the chunks, so whoever reads it knows which.
+ */
+export class RecordChunksRefusedError extends GatewayHttpError {
+  constructor(
+    readonly harness: string,
+    readonly nativeId: string,
+    readonly chunks: ReadonlyArray<{ hash: string; size: number }>,
+    refusal: GatewayHttpError
+  ) {
+    const [first] = chunks
+    const named = first ? `${first.hash.slice(0, 12)}, ${first.size.toLocaleString("en-US")} bytes${chunks.length > 1 ? `, and ${chunks.length - 1} more` : ""}` : ""
+    super(refusal.status, `The account refused ${chunks.length === 1 ? "one chunk" : `${chunks.length} chunks`} of this Session (${named}) and took the rest: ${refusal.message}`, refusal.call)
+  }
+}
+
+/** Whether the remote heard a call and refused what it carried: sent again unchanged, it gets the same answer. */
+export function refusedBy(error: Error): error is GatewayHttpError {
+  return error instanceof GatewayHttpError && (error.status === 400 || error.status === 413 || error.status === 422)
+}
 
 /** Records that went on in two places: the remote's stand, and this side's aren't sent or taken. */
 export class RecordSyncConflictError extends Error {
@@ -132,6 +155,12 @@ const PUSH_VERSIONS = 10_000
 const PUSH_HASHES = 65_536
 /** Packs going up at once. */
 const UPLOADS = 4
+/**
+ * A pack the remote refuses is sent again as this many smaller ones, and each of those it refuses the same way, down
+ * to the chunks it refuses alone: about three rounds for a pack of 4,000 chunks. One refused chunk once kept a
+ * Session's 202,198 others from the account for a day and a half.
+ */
+const REFUSED_SPLIT = 16
 
 export class RecordSync {
   readonly #store: RecordStore
@@ -139,6 +168,8 @@ export class RecordSync {
   readonly #turns = new Map<string, Promise<unknown>>()
   readonly #describesStore: ((harness: string, key: string) => boolean) | undefined
   readonly #uploads: number
+  /** Chunks the remote refused alone, by hash: tried alone first at each push, in case it takes them now. */
+  readonly #refused = new Map<string, { size: number; refusal: GatewayHttpError }>()
 
   /**
    * `describesStore`: whether a unit of a harness's records describes its store rather than any session (a database's
@@ -165,6 +196,8 @@ export class RecordSync {
   async #push(harness: string, nativeId: string, retry: boolean): Promise<SyncReport> {
     const started = performance.now()
     const report: SyncReport = { versions: 0, held: 0, chunks: 0, bytes: 0, requests: 0, ms: 0 }
+    // Units held back by a chunk the remote refused: their versions from that chunk's on wait, the rest go.
+    const heldBack = new Set<string>()
     let cursor: number | undefined
     for (;;) {
       // A batch at a time, so a long session is never held whole: the remote's mirror moves with each part pushed.
@@ -172,8 +205,12 @@ export class RecordSync {
       if (cursor !== undefined) batch.cursor = cursor
       const page = this.#store.exportFor(this.#remote.id, harness, nativeId, batch)
       if (!page?.bundle.units.length) break
-      for (const part of splitBundle(page.bundle)) {
-        const answer = await this.#pushPart(part, report)
+      let moved = false
+      for (const whole of splitBundle(page.bundle)) {
+        const part = withoutUnits(whole, heldBack)
+        if (!part) continue
+        const { answer, sent } = await this.#pushPart(part, report, heldBack)
+        if (!answer || !sent) continue
         if (!answer.ok) {
           if (answer.conflict === "gap" && retry) {
             await this.#store.remoteHolds(this.#remote.id, harness, nativeId, { holdings: await this.#holdings(harness, nativeId, report) })
@@ -182,32 +219,49 @@ export class RecordSync {
           }
           throw new RecordSyncConflictError(harness, nativeId, answer.key, answer.seq, answer.message)
         }
+        moved = true
         report.versions += answer.versions
         report.held += answer.held
-        await this.#store.remoteHolds(this.#remote.id, harness, nativeId, part)
+        await this.#store.remoteHolds(this.#remote.id, harness, nativeId, sent)
       }
-      if (page.cursor === null) break
+      // A batch whose every version waits on a refused chunk, and whose cursor stands, would come back the same.
+      if (page.cursor === null || (!moved && page.cursor === (cursor ?? 0))) break
       cursor = page.cursor
+    }
+    if (heldBack.size) {
+      const refused = [...this.#refused].map(([hash, { size, refusal }]) => ({ hash, size, refusal }))
+      const [first] = refused
+      if (first) throw new RecordChunksRefusedError(harness, nativeId, refused.map(({ hash, size }) => ({ hash, size })), first.refusal)
     }
     return { ...report, ms: performance.now() - started }
   }
 
-  /** One part up: with its chunks in one request when they're a turn's worth, else the chunks the remote lacks first. */
-  async #pushPart(part: RecordBundle, report: SyncReport): Promise<RecordPushAnswer> {
+  /**
+   * One part up: with its chunks in one request when they're a turn's worth, else the chunks the remote lacks first.
+   * What went (`sent`) is the part but for the versions that name a chunk the remote refused, and their units' after
+   * them, whose keys join `heldBack`; nothing went when every version waits.
+   */
+  async #pushPart(part: RecordBundle, report: SyncReport, heldBack: Set<string>): Promise<{ answer?: RecordPushAnswer; sent?: RecordBundle }> {
     const hashes = recordChunks(part.units.flatMap((unit) => unit.versions))
-    const small = await this.#small(hashes)
+    const small = hashes.some((hash) => this.#refused.has(hash)) ? undefined : await this.#small(hashes)
     if (small) {
-      const sent = await timed(report, "push", (trace) => this.#remote.pushWith(part, small.chunks, trace))
-      report.requests += 1
-      report.chunks += small.chunks.length
-      report.bytes += small.bytes
-      if ("ok" in sent) return sent
-      const resent = await this.#upload(sent.missing, report)
-      report.chunks += resent.chunks
-      report.bytes += resent.bytes
-      report.requests += resent.requests
+      const sent = await timed(report, "push", (trace) => this.#remote.pushWith(part, small.chunks, trace)).catch((error: Error) => {
+        // A chunk it refuses, carried with the bundle: found below, a pack at a time.
+        if (refusedBy(error)) return undefined
+        throw error
+      })
+      if (sent) {
+        report.requests += 1
+        report.chunks += small.chunks.length
+        report.bytes += small.bytes
+        if ("ok" in sent) return { answer: sent, sent: part }
+        const resent = await this.#upload(sent.missing, report)
+        report.chunks += resent.chunks
+        report.bytes += resent.bytes
+        report.requests += resent.requests
+      }
     }
-    return this.#pushAsking(part, hashes, report)
+    return this.#pushAsking(part, hashes, report, heldBack)
   }
 
   /** The chunks named, read, if they come to no more than one push carries; undefined past that. */
@@ -224,8 +278,11 @@ export class RecordSync {
     return { chunks, bytes }
   }
 
-  /** A push too big to carry its chunks: which the remote lacks, those in packs, then the bundle. */
-  async #pushAsking(part: RecordBundle, hashes: string[], report: SyncReport): Promise<RecordPushAnswer> {
+  /**
+   * A push too big to carry its chunks: which the remote lacks, those in packs, then the bundle, but for the versions
+   * that wait on a chunk it refused.
+   */
+  async #pushAsking(part: RecordBundle, hashes: string[], report: SyncReport, heldBack: Set<string>): Promise<{ answer?: RecordPushAnswer; sent?: RecordBundle }> {
     const lacking: string[] = []
     for (let at = 0; at < hashes.length; at += RECORD_ASK_HASHES) {
       lacking.push(...(await timed(report, "missing", (trace) => this.#remote.missing(hashes.slice(at, at + RECORD_ASK_HASHES), trace))))
@@ -234,8 +291,12 @@ export class RecordSync {
     const sent = await this.#upload(lacking, report)
     report.chunks += sent.chunks
     report.bytes += sent.bytes
-    report.requests += sent.requests + 1
-    return timed(report, "push", (trace) => this.#remote.push(part, trace))
+    report.requests += sent.requests
+    const refused = new Set(lacking.filter((hash) => this.#refused.has(hash)))
+    const going = refused.size ? holdingBack(part, refused, heldBack) : part
+    if (!going) return {}
+    report.requests += 1
+    return { answer: await timed(report, "push", (trace) => this.#remote.push(going, trace)), sent: going }
   }
 
   async #holdings(harness: string, nativeId: string, report: SyncReport): Promise<RecordHoldings> {
@@ -250,23 +311,45 @@ export class RecordSync {
     }
   }
 
-  /** The chunks named, read from this store and sent in packs, a few at once; the first failure stops it and is thrown. */
+  /**
+   * The chunks named, read from this store and sent in packs, a few at once; the first failure stops it and is thrown.
+   * A pack the remote refuses is sent again in smaller ones until what it refuses is single chunks, which wait
+   * (`#refused`) while every other chunk goes. One it refused before goes alone first, in case it takes it now.
+   */
   async #upload(hashes: string[], report: SyncReport): Promise<{ chunks: number; bytes: number; requests: number }> {
     const sent = { chunks: 0, bytes: 0, requests: 0 }
+    for (const hash of hashes) {
+      const before = this.#refused.get(hash)
+      if (!before) continue
+      const stored = await this.#store.readChunk(hash)
+      if (!stored) throw new Error(`The chunk ${hash} this store's versions name isn't in it`)
+      const error = await timed(report, "upload", (trace) => this.#put([packed(hash, stored)], trace))
+      if (error && !refusedBy(error)) throw error
+      if (error) this.#refused.set(hash, { size: before.size, refusal: error })
+      else {
+        this.#refused.delete(hash)
+        sent.chunks += 1
+        sent.bytes += stored.body.length
+        sent.requests += 1
+      }
+    }
     const flights = new Set<Promise<void>>()
     let failed: Error | undefined
     const send = (chunks: PackedChunk[]) => {
-      const flight: Promise<void> = timed(report, "upload", (trace) => this.#put(chunks, trace)).then((error) => {
-        flights.delete(flight)
-        if (error) failed ??= error
-        else sent.requests += 1
-      })
+      const flight: Promise<void> = timed(report, "upload", (trace) => this.#put(chunks, trace))
+        .then((error) => (error && refusedBy(error) ? this.#isolate(chunks, report) : error))
+        .then((error) => {
+          flights.delete(flight)
+          if (error) failed ??= error
+          else sent.requests += 1
+        })
       flights.add(flight)
     }
     let pack: PackedChunk[] = []
     let packBytes = 0
     for (const hash of hashes) {
       if (failed) break
+      if (this.#refused.has(hash)) continue
       const stored = await this.#store.readChunk(hash)
       if (!stored) throw new Error(`The chunk ${hash} this store's versions name isn't in it`)
       const chunk = packed(hash, stored)
@@ -285,6 +368,27 @@ export class RecordSync {
     await Promise.all(flights)
     if (failed) throw failed
     return sent
+  }
+
+  /**
+   * The chunks of a pack the remote refused, sent again in `REFUSED_SPLIT` smaller packs, and each of those it refuses
+   * likewise, down to the chunks it refuses alone, which are kept in `#refused`. What went wrong otherwise, or nothing.
+   */
+  async #isolate(chunks: PackedChunk[], report: SyncReport): Promise<Error | undefined> {
+    const size = Math.max(1, Math.ceil(chunks.length / REFUSED_SPLIT))
+    for (let at = 0; at < chunks.length; at += size) {
+      const group = chunks.slice(at, at + size)
+      const error = await timed(report, "upload", (trace) => this.#put(group, trace))
+      if (!error) continue
+      if (!refusedBy(error)) return error
+      const [only] = group
+      if (group.length === 1 && only) this.#refused.set(only.hash, { size: only.size, refusal: error })
+      else {
+        const deeper = await this.#isolate(group, report)
+        if (deeper) return deeper
+      }
+    }
+    return undefined
   }
 
   /** One pack up; what went wrong, rather than a rejection, so a pack in flight never goes unheard. */
@@ -374,6 +478,31 @@ export class RecordSync {
 
 function packed(hash: string, stored: StoredChunk): PackedChunk {
   return { hash, codec: stored.codec, size: stored.size, body: new Uint8Array(stored.body.buffer, stored.body.byteOffset, stored.body.byteLength) }
+}
+
+/** The bundle without the units named, or undefined when none is left. */
+function withoutUnits(bundle: RecordBundle, held: ReadonlySet<string>): RecordBundle | undefined {
+  if (!held.size) return bundle
+  const units = bundle.units.filter((unit) => !held.has(unit.key))
+  return units.length ? { ...bundle, units } : undefined
+}
+
+/**
+ * The bundle up to each unit's first version naming a `refused` chunk: a unit's versions go in order, so none after
+ * that one can go either, and the unit joins `heldBack` for the rest of the push. Undefined when nothing is left.
+ */
+function holdingBack(bundle: RecordBundle, refused: ReadonlySet<string>, heldBack: Set<string>): RecordBundle | undefined {
+  const units: RecordUnit[] = []
+  for (const unit of bundle.units) {
+    const waits = unit.versions.findIndex((version) => recordChunks([version]).some((hash) => refused.has(hash)))
+    if (waits < 0) {
+      units.push(unit)
+      continue
+    }
+    heldBack.add(unit.key)
+    if (waits > 0) units.push({ ...unit, versions: unit.versions.slice(0, waits) })
+  }
+  return units.length ? { ...bundle, units } : undefined
 }
 
 /** A bundle in parts no larger than one push: whole units where they fit, a long unit's versions split in order. */
