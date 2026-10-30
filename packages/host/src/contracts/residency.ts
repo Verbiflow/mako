@@ -74,7 +74,8 @@ export interface LiveContent {
   configOptions?: readonly ModelOption[]
 }
 
-type Measured = Entry | LiveRequest | ConversationControl | readonly ModelOption[]
+/** What `ContentWeights` measures: each kept once by whoever holds it. */
+export type Measured = Entry | LiveRequest | ConversationControl | readonly ModelOption[]
 
 /**
  * About how many bytes content keeps alive: twice its JSON length, a
@@ -85,6 +86,16 @@ type Measured = Entry | LiveRequest | ConversationControl | readonly ModelOption
  */
 export class ContentWeights {
   readonly #measured = new WeakMap<Measured, number>()
+  /**
+   * What an entry weighs when its JSON doesn't say: the host's paged entries
+   * (`paged-entries.ts`), whose content is read from their journal's row only
+   * when asked, so measuring one by its JSON would read it back.
+   */
+  readonly #held?: (value: Measured) => number | undefined
+
+  constructor(held?: (value: Measured) => number | undefined) {
+    this.#held = held
+  }
 
   /**
    * A capture cache supplies `shared` to count immutable payload once across
@@ -111,6 +122,8 @@ export class ContentWeights {
   }
 
   #measure(value: Measured): number {
+    const held = this.#held?.(value)
+    if (held !== undefined) return held
     let bytes = this.#measured.get(value)
     if (bytes === undefined) {
       bytes = JSON.stringify(value).length * 2

@@ -23,7 +23,11 @@ import { stripSkillAppendix } from "@/lib/skill-references"
 
 const EMPTY: PendingPrompt[] = []
 
-export function PromptQueue() {
+/**
+ * `onEdit`: where a queued message is edited instead of in its row (the phone's composer, which takes its words and
+ * saves them in place); without it, the row opens its own field.
+ */
+export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body: string) => void } = {}) {
   const liveDelivery = useAcp(
     (state) => {
       const current = activeAcp(state)
@@ -137,6 +141,7 @@ export function PromptQueue() {
             key={request.id}
             target={target}
             request={request}
+            onEdit={onEdit}
             editable={
               native ||
               Boolean(
@@ -195,10 +200,12 @@ function QueueRow({
   target,
   request,
   editable,
+  onEdit,
 }: {
   target: QueueTarget
   request: PendingPrompt
   editable: boolean
+  onEdit: ((request: PendingPrompt, body: string) => void) | undefined
 }) {
   // The body must stay a prefix of the queued text: an edit is spliced onto
   // the appendices that follow it, so the placeholders a referenced
@@ -352,7 +359,7 @@ function QueueRow({
               disabled={!editable || busy || continuation}
               className="pressable grid size-6 place-items-center rounded hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
               ref={editButton}
-              onClick={() => void change("pause")}
+              onClick={() => (onEdit ? onEdit(request, body) : void change("pause"))}
             >
               <PencilIcon className="size-3" />
             </button>

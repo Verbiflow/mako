@@ -787,8 +787,44 @@ added. While the journal keeps no copy its rows stay, written ahead between
 other work (`stageBase`, `writeAhead`), so the next turn names them without
 writing them; the compaction drops them once the journal closes.
 `npm run bench:live-read` fails if reading a huge conversation holds the
-event loop. This is the host's memory, not the window's: a conversation
-whose harness is attached is pinned and kept whole there, whatever it weighs.
+event loop.
+
+The host doesn't hold a conversation's history whole, running or not: its
+finished entries are paged (`packages/host/src/conversations/paged-entries.ts`).
+The journal holds every live block as a row and, while the conversation is
+open, every entry of its history (`base_entries`, kept or written ahead), so
+a paged entry keeps its short fields (type, id, request, status, a call's
+name, a stream's or record's place) and reads its long ones back from its
+row when something reads them. It is still an entry: JSON, spreads, deep
+equality and every reader see what they saw, so nothing that reads history
+needs to know, but a pass that reads all of it at once (a merge) reads it
+back first, a slice at a time (`readBack`). `LiveRecords`' sweep pages each
+conversation in memory but its turn under way and its newest `WARM_CHARS`,
+then weighs what is left; a block only while the journal's rows hold the
+blocks as memory does, a history entry once its row holds it (by identity,
+`LiveJournal.pageBase`). A row is never written over or dropped under a
+paged entry: the journal gives the entry its content back first (`detach`).
+A closed journal's paged entries read through a connection of their own,
+and its rows written ahead stay, and the file isn't compacted, until the last
+is collected (`LiveJournal.released`); a window's views hold the paged copies
+(`LiveHistoryReader.paged`) and go with their conversation. A batch carries a
+changed base only while it's short (`carriesBase`); a long one is the notice
+that the history changed. A journal has one writer, the host holding it: an
+entry paged from a row reads what that row holds now. On 2026-10-30 a running
+conversation of 30,845 blocks and a 157MB history held 422MB here; `npm run
+bench:running-memory` holds one of 150MB to under 72MB while it streams, a
+window reads it back whole, its turn ends and a new host reopens it, and
+fails on a host that keeps it whole, or on any of those (or the sweep's
+measure of a copy) holding the event loop past 50ms. A pass over a whole
+history (a merge, a journal's read, that measure) is written once as `Steps`
+(`packages/host/src/base/slices.ts`) and run `inSlices` wherever the host
+can wait; a turn starts once the history's rows are written ahead
+(`LiveJournal.writtenAhead`), so its first commit writes none of them. `MAKO_PAGING_CHECK=1` pages every field
+of every entry as soon as a commit writes it, the turn running included; run
+the live, transcript and conversation-control suites with it after changing
+paging or anything that reads history (test-live-conversations' crash fixture
+runs two hosts on one journal at once, which breaks that one-writer rule).
+`scripts/test-paged-entries.ts` (in `test:performance`) covers paging.
 
 Mako never writes a session a harness didn't. A conversation goes on in
 another harness as a new real session of that harness, whose first turn
@@ -2624,8 +2660,9 @@ two hosts) run under `test:thread-store`.
 
 What the host holds of its conversations is `LiveRecords`
 (`packages/host/src/conversations/live-records.ts`): a journal is read in
-when something needs it and let go once the memory budget has no room for it
-and nothing is using it. Everything that lists conversations, every second or
+when something needs it, its finished entries are paged (`paged-entries.ts`,
+above), and it is let go once the memory budget has no room for what is left
+of it and nothing is using it. Everything that lists conversations, every second or
 on every event, reads the listing (`LiveSummary`: the session, its paths and
 native ids, its revision), never a journal: the Sessions report
 (`ownedSessions`), the account's rows, the Thread lifecycle's archive keys
@@ -3852,12 +3889,39 @@ builds apart, but the wire still reads an earlier build's sync words: the
 sync window was 30 days before it was 7 (`SYNC_WINDOW_MS`), so a scope naming
 a `month` tier reads as `week`, and the status carries an empty `month` for a
 host that requires one (`syncStatusOnWire`). The daemon answers requests on
-the thread that writes reading copies, so a copy waits for its turn by its size
-whatever its tier (2 s a MiB, `MS_PER_MIB` in `reading-copies.ts`): a 100 MB
-copy, drawn and written in one go, holds its thread 5 to 7 s. Captures of
-Sessions outside the scope (the backfill's) look at nothing, and captures
-during a look are looked at together after it, one look at a time.
-`test/daemon.mjs` and `test/reading-copies.mjs` cover both.
+the thread that writes reading copies, reads exports and captures records, so
+none of those may hold it for long: a copy is written 64 entries at a time as
+the bytes its view keeps (`SessionView.json`), never parsed and drawn again,
+and an export reads its batch in one query (`RecordStore.exportFor`). Before,
+a 146 MB copy held the thread 1.1 to 1.5 s (5 to 7 s on a loaded Mac) and a
+batch of a 342,965-row Cursor chat 1.4 s, and between them they timed out the
+host's 3 s status request 31 times in a day and a half. A copy waits for its
+turn by the work it costs (`MS_PER_MIB`, 100 ms a MiB: 15 s for 146 MB), and a
+Session changed before its turn goes when the turn comes, not at the next look.
+Captures of Sessions outside the scope (the backfill's) look at nothing, and
+captures during a look are looked at together after it, one look at a time.
+The daemon logs each hold of its thread of a second or more (`loop held
+ms=… during=…`, `loop-watch.ts`) with the work under way by name (`copy`,
+`push`, `capture`, `request <op>`). `test/daemon.mjs`,
+`test/reading-copies.mjs` and `test/loop-watch.mjs` cover these, and `npm run
+bench:sync-pipeline` measures write-to-account latency on the real daemon
+(`--daemon <daemon-main.js>` for another build's).
+
+A Session is never out of the account without saying so. A pack the account
+refuses is sent again in sixteen smaller ones, and so on down to the chunks it
+refuses alone (`RecordSync.#isolate`); every other chunk goes, each unit's
+versions go up to the first that names a refused chunk, and the failure names
+it ("The account refused one chunk of this Session (8fd50237a1c4, 40,960
+bytes) and took the rest: …", `RecordChunksRefusedError`), tried again alone
+at a refusal's pace. A capture that fails every retry counts the Session out
+of the cloud and is a failure in the status until one is taken. Every 30
+minutes, and when a link is given, `ScopedUploads` sets the account's list of
+its sessions (`GET …/sessions`) against what the store believes it holds
+(`RecordStore.remoteVersionCounts`); a Session it holds less of is caught up
+from its holdings. Failures a minute old show in the rail ("2 Sessions not
+synced", `SyncRailLine`), opening Settings › Account, which names each
+Session. `test/record-refused-chunks.mjs`, `test/record-reconcile.mjs` and
+`npm run test:sync-status-ui` cover these.
 
 When the sync daemon is not enabled, the host still never reads a store on
 its main thread: `packages/host/src/threads/catalog-worker.ts` runs the catalog on a

@@ -1,39 +1,39 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Say hello. / Say hello again. / /rewind / Without running anything, say done. Two turns failing with a server error, each leaving a marker both sides cite, a rewind to before the second, then a turn that replaces it: the first marker stays, citing the same record, and the second goes.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#nova-burn",
+      "path": ".local/share/devin/cli/sessions.db#shimmering-droplet",
       "known": [
-        {
-          "side": "-",
-          "line": "note: Turn failed",
-          "reason": "Devin 3000.11.205 keeps nothing of a turn its model failed: its store holds the prompt with no reply, error or stop, and its replay sends none. The failure reached its client only live, as `_cognition.ai/agent_stopped` with cause `error` once its retries ran out."
-        },
         {
           "side": "-",
           "line": "note: Retried 2 times — Connection lost",
           "reason": "Mako sums up the retries it watched on the wire (Devin's `_cognition.ai/connection_retry` notices) in one marker; Devin 3000.11.205 keeps none of those notices in its stores and its replay sends none, so only the live drawing has the measure (RETRY_MARKERS, declared stream-only)."
+        },
+        {
+          "side": "-",
+          "line": "note: Turn failed",
+          "reason": "Devin 3000.11.205 keeps nothing of a turn its model failed: its store holds the prompt with no reply, error or stop, and its replay sends none. The failure reached its client only live, as `_cognition.ai/agent_stopped` with cause `error` once its retries ran out."
         }
       ]
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/ea5efe6a-be18-415f-967d-f9394d599710.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/afb3c8fd-e22b-4a42-8e1f-81e4e10d2d6b.db",
       "known": [
-        {
-          "side": "-",
-          "line": "note: Turn failed",
-          "reason": "Devin 3000.11.205 keeps nothing of a turn its model failed: its store holds the prompt with no reply, error or stop, and its replay sends none. The failure reached its client only live, as `_cognition.ai/agent_stopped` with cause `error` once its retries ran out."
-        },
         {
           "side": "-",
           "line": "note: Retried 2 times — Connection lost",
           "reason": "Mako sums up the retries it watched on the wire (Devin's `_cognition.ai/connection_retry` notices) in one marker; Devin 3000.11.205 keeps none of those notices in its stores and its replay sends none, so only the live drawing has the measure (RETRY_MARKERS, declared stream-only)."
+        },
+        {
+          "side": "-",
+          "line": "note: Turn failed",
+          "reason": "Devin 3000.11.205 keeps nothing of a turn its model failed: its store holds the prompt with no reply, error or stop, and its replay sends none. The failure reached its client only live, as `_cognition.ai/agent_stopped` with cause `error` once its retries ran out."
         }
       ]
     }
@@ -42,13 +42,13 @@
     "known": [
       {
         "side": "-",
-        "line": "note: Turn failed",
-        "reason": "Devin 3000.11.205 keeps nothing of a turn its model failed: its store holds the prompt with no reply, error or stop, and its replay sends none. The failure reached its client only live, as `_cognition.ai/agent_stopped` with cause `error` once its retries ran out."
+        "line": "note: Retried 2 times — Connection lost",
+        "reason": "Mako sums up the retries it watched on the wire (Devin's `_cognition.ai/connection_retry` notices) in one marker; Devin 3000.11.205 keeps none of those notices in its stores and its replay sends none, so only the live drawing has the measure (RETRY_MARKERS, declared stream-only)."
       },
       {
         "side": "-",
-        "line": "note: Retried 2 times — Connection lost",
-        "reason": "Mako sums up the retries it watched on the wire (Devin's `_cognition.ai/connection_retry` notices) in one marker; Devin 3000.11.205 keeps none of those notices in its stores and its replay sends none, so only the live drawing has the measure (RETRY_MARKERS, declared stream-only)."
+        "line": "note: Turn failed",
+        "reason": "Devin 3000.11.205 keeps nothing of a turn its model failed: its store holds the prompt with no reply, error or stop, and its replay sends none. The failure reached its client only live, as `_cognition.ai/agent_stopped` with cause `error` once its retries ran out."
       }
     ]
   }

@@ -4,7 +4,7 @@ import { join } from "node:path"
 import type { Entry, RecordRef } from "@mako/sessions/entries"
 import { streamDifferences } from "@mako/sessions/harnesses"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
-import { MAX_STREAM_DIFFERENCES, mergeStream, recordSpan, type StreamMismatch } from "@mako/sessions/stream-merge"
+import { MAX_STREAM_DIFFERENCES, mergeStream, mergeStreamSteps, recordSpan, recordSpanSteps, type StreamMismatch } from "@mako/sessions/stream-merge"
 import { entriesToMessages, locateShown, type ShownEntry } from "@/lib/entry-messages"
 import { foldTools } from "@/lib/tools"
 import { drawing, liveUpdates, PairSchema, storeReader } from "./decode-compare.ts"
@@ -263,4 +263,34 @@ function frames(from: number, to: number): RecordRef {
   assert.deepEqual(merge.entries, record)
   assert.equal(merge.mismatches.length, 1)
   console.log("PASS: two sides that differ past the cap leave the record alone, reported once")
+}
+
+{
+  // A long history merges a slice at a time (`mergeStreamSteps`): the host runs it between other work, as a history of
+  // 150MB merged in one stretch held its loop for a third of a second. It stops along the way, every few hundred items,
+  // and ends with exactly what the merge at once gives.
+  const turns = 2_000
+  const record: Entry[] = []
+  const stream: Entry[] = []
+  for (let turn = 0; turn < turns; turn++) {
+    record.push(user(`Ask ${turn}`, { id: `u${turn}` }), text(`Looking at ${turn}.`), tool(`call-${turn}`, { name: "Bash", status: "completed", output: `out ${turn}` }), text(`Done ${turn}.`))
+    stream.push(user(`Ask ${turn}`, { requestId: `r${turn}` }), text(`Looking at ${turn}.`), tool(`call-${turn}`, { name: "Bash", status: "completed" }), text(`Done ${turn}.`))
+    // Here and there the stream says what the record never kept, or words a reply otherwise.
+    if (turn % 97 === 0) stream.push({ type: "event", label: "Retrying", retries: { count: 1, outcome: "recovered" } })
+    if (turn % 89 === 0) stream[stream.length - 1] = text(`Finished ${turn}.`)
+  }
+  const differences = streamDifferences("claude")
+  const steps = mergeStreamSteps(record, stream, differences)
+  let stops = 0
+  let next = steps.next()
+  for (; !next.done; next = steps.next()) stops++
+  assert.ok(stops >= (record.length + stream.length) / 256, `the merge stops along the way (${stops} stops)`)
+  assert.deepEqual(next.value, mergeStream(record, stream, differences), "merged a slice at a time, it is the same merge")
+  const span = recordSpanSteps(record, stream.slice(0, stream.length / 2), stream.slice(stream.length / 2))
+  let spanStops = 0
+  let spanNext = span.next()
+  for (; !spanNext.done; spanNext = span.next()) spanStops++
+  assert.ok(spanStops > 0)
+  assert.equal(spanNext.value, recordSpan(record, stream.slice(0, stream.length / 2), stream.slice(stream.length / 2)))
+  console.log(`PASS: a long history merges a slice at a time, stopping ${stops} times, into the merge it is at once`)
 }

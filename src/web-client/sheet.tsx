@@ -11,6 +11,8 @@ const stacked = new Set<object>()
 const FLICK = 0.5
 /** A release past this share of the sheet's height dismisses it. */
 const PAST = 1 / 3
+/** An expandable sheet opens showing this share of its full height, and is pulled up to all of it. */
+const MEDIUM = 0.55
 /** A popover keeps this far from its chip and from the window's edges. */
 const GAP_PX = 6
 const EDGE_PX = 12
@@ -47,8 +49,12 @@ function place(panel: HTMLElement, anchor: HTMLElement): void {
  *
  * Wide, the same choices are the desk's: a popover grown from `anchor` (the chip that opened it), or without one a
  * dialog in the middle, each in under 200 ms and gone faster.
+ *
+ * `expandable`: a sheet the full height of the screen that opens at a little over half of it, its top lower down; pulled
+ * up, from its handle or its content, it rises to all of it, and it rests at whichever of the two is nearer, or the one
+ * it was flicked towards. Pulled down from half, it closes as any sheet does.
  */
-export function Sheet({ open, onDismiss, label, children, className, tall, anchor }: { open: boolean; onDismiss: () => void; label: string; children: ReactNode; className?: string; tall?: boolean; anchor?: HTMLElement | null }) {
+export function Sheet({ open, onDismiss, label, children, className, tall, anchor, expandable = false }: { open: boolean; onDismiss: () => void; label: string; children: ReactNode; className?: string; tall?: boolean; anchor?: HTMLElement | null; expandable?: boolean }) {
   const wide = useWide()
   const form: Form = !wide ? "sheet" : anchor ? "pop" : "dialog"
   const [mounted, setMounted] = useState(open)
@@ -90,12 +96,13 @@ export function Sheet({ open, onDismiss, label, children, className, tall, ancho
       // Focus goes into the sheet, so keys never reach what's behind it (a field asks for it first by `autoFocus`).
       if (!sheet.contains(document.activeElement)) sheet.querySelector<HTMLElement>("textarea:not([disabled]), input:not([disabled]), button:not([disabled])")?.focus({ preventScroll: true })
       if (reducedMotion()) {
+        if (expandable) sheet.style.transform = `translate3d(0, ${height * (1 - MEDIUM)}px, 0)`
         sheet.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: "ease-out" })
         shade.style.opacity = "1"
         return
       }
       sheet.style.transform = `translate3d(0, ${height}px, 0)`
-      void springTo(sheet, "y", 0, { spring: SETTLE, also: [{ element: shade, frame: fade }] })
+      void springTo(sheet, "y", expandable ? height * (1 - MEDIUM) : 0, { spring: SETTLE, also: [{ element: shade, frame: fade }] })
       return
     }
     const velocity = release.current
@@ -106,7 +113,7 @@ export function Sheet({ open, onDismiss, label, children, className, tall, ancho
     }
     const from = catchElement(sheet).y
     void springTo(sheet, "y", height, { from, velocity: Math.max(velocity, 0), spring: velocity > FLICK ? THROWN : SETTLE, also: [{ element: shade, frame: (progress) => fade(1 - progress) }] }).then(done)
-  }, [open, mounted, form, anchor])
+  }, [open, mounted, form, anchor, expandable])
 
   // Escape closes the sheet on top, the one opened last; Back (a route the parent pushed) is the parent's.
   const dismiss = useRef(onDismiss)
@@ -138,20 +145,24 @@ export function Sheet({ open, onDismiss, label, children, className, tall, ancho
     let dragging = false
     const velocity = new Velocity()
     const height = () => sheet.getBoundingClientRect().height
+    /** Where an expandable sheet rests at half; 0 for every other sheet, which rests only at its full height. */
+    const medium = () => (expandable ? height() * (1 - MEDIUM) : 0)
     const move = (y: number) => {
       if (!start) return false
       const delta = y - start.y
       if (!dragging) {
         if (Math.abs(delta) < SLOP_PX) return false
-        // Up, or a content that can still scroll up: the content's scroll, not the sheet's drag.
-        if (delta < 0 || (start.scroller && start.scroller.scrollTop > 0)) {
+        // Up from half, an expandable sheet rises; otherwise up, or a content that can still scroll up, is the
+        // content's scroll, not the sheet's drag.
+        const rises = delta < 0 && start.from > 1
+        if ((delta < 0 && !rises) || (delta > 0 && start.scroller && start.scroller.scrollTop > 0)) {
           start = undefined
           return false
         }
         dragging = true
         sheet.dataset["dragging"] = ""
       }
-      const offset = start.from + delta - SLOP_PX
+      const offset = start.from + delta - Math.sign(delta) * SLOP_PX
       sheet.style.transform = `translate3d(0, ${offset < 0 ? rubberband(offset, height()) : offset}px, 0)`
       if (backdrop.current) backdrop.current.style.opacity = String(Math.max(0, 1 - Math.max(offset, 0) / height()))
       velocity.add(offset)
@@ -165,12 +176,15 @@ export function Sheet({ open, onDismiss, label, children, className, tall, ancho
       delete sheet.dataset["dragging"]
       const at = catchElement(sheet).y
       const speed = velocity.get()
-      if (speed > FLICK || (at > height() * PAST && speed > -FLICK)) {
+      const half = medium()
+      // Past half (or flicked down from it), it closes; between full and half, it rests at the nearer, or the flicked.
+      if ((speed > FLICK && at >= half - 1) || (at > half + (height() - half) * PAST && speed > -FLICK)) {
         release.current = speed
         dismiss.current()
         return
       }
-      void springTo(sheet, "y", 0, { velocity: speed, spring: SETTLE, also: backdrop.current ? [{ element: backdrop.current, frame: () => ({ opacity: "1" }) }] : [] })
+      const rest = half === 0 ? 0 : speed < -FLICK ? 0 : speed > FLICK ? half : at < half / 2 ? 0 : half
+      void springTo(sheet, "y", rest, { velocity: speed, spring: SETTLE, also: backdrop.current ? [{ element: backdrop.current, frame: () => ({ opacity: "1" }) }] : [] })
     }
     const begin = (y: number, target: EventTarget | null) => {
       const scroller = target instanceof Element ? target.closest<HTMLElement>("[data-sheet-scroll]") : null
@@ -180,7 +194,11 @@ export function Sheet({ open, onDismiss, label, children, className, tall, ancho
     const grab = sheet.querySelector<HTMLElement>("[data-sheet-grab]")
     const pointerDown = (event: PointerEvent) => {
       if (event.pointerType === "mouse" && event.button !== 0) return
-      grab?.setPointerCapture(event.pointerId)
+      try {
+        grab?.setPointerCapture(event.pointerId)
+      } catch {
+        // A pointer that's already gone: the drag follows its moves on the handle without capturing it.
+      }
       begin(event.clientY, null)
     }
     const pointerMove = (event: PointerEvent) => void move(event.clientY)
@@ -212,13 +230,13 @@ export function Sheet({ open, onDismiss, label, children, className, tall, ancho
       sheet.removeEventListener("touchcancel", end)
     }
     // Held across the parent's renders (a live list re-renders it every few seconds): a drag never loses its finger.
-  }, [open, form])
+  }, [open, form, expandable])
 
   if (!mounted) return null
   return createPortal(
     <div className="web-sheet-layer" data-open={open || undefined} data-form={form}>
       <div ref={backdrop} className="web-sheet-backdrop" style={{ opacity: 0 }} onClick={onDismiss} aria-hidden />
-      <div ref={panel} role="dialog" aria-modal aria-label={label} data-form={form} className={cn("web-sheet", tall && "web-sheet-tall", className)}>
+      <div ref={panel} role="dialog" aria-modal aria-label={label} data-form={form} className={cn("web-sheet", tall && "web-sheet-tall", expandable && form === "sheet" && "web-sheet-full", className)}>
         {form === "sheet" ? (
           <div data-sheet-grab className="web-sheet-grab" aria-hidden>
             <span />

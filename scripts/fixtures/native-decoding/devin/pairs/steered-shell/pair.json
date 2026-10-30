@@ -1,13 +1,13 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#roomy-background",
+      "path": ".local/share/devin/cli/sessions.db#real-alloy",
       "known": [
         {
           "side": "-",
@@ -23,7 +23,7 @@
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/34778635-fca8-4b9b-91dd-5e0029040f47.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/d9dcb08a-dadf-419d-a682-09f6afc89aa9.db",
       "known": [
         {
           "side": "-",

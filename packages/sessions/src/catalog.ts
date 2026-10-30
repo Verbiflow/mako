@@ -67,6 +67,8 @@ import { RecordStore, type RestoreInput } from "./record-store.js"
 import type { RecordRoot } from "./harness-records.js"
 import { ReadingCopies, ReceivedCopies, type CopyPage } from "./reading-copies.js"
 import { ScopedUploads, countTiers, type CatalogSyncStatus, type SyncScope } from "./scoped-uploads.js"
+import type { WorkUnderWay } from "./loop-watch.js"
+import { UploadBudget } from "./upload-budget.js"
 import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { GatewayHttpError } from "@mako/protocol/gateway-http"
@@ -77,6 +79,9 @@ import { FolderWatches, type RootWatch } from "./root-watch.js"
 
 /** How often the originals look for what was captured since, in any process: a Session at work goes this soon after. */
 const ORIGINALS_LOOK_MS = 5_000
+/** Capture failures kept, and said with a sync status's failures at the most. */
+const CAPTURE_FAILURES_KEPT = 200
+const CAPTURE_FAILURES_SAID = 5
 /** Catching up on originals goes at no more than this, beside the copies' own: a week of records never fills the connection. */
 const ORIGINALS_BYTES_PER_SECOND = 1024 * 1024
 
@@ -412,6 +417,8 @@ export class SessionCatalog {
   private syncScope: SyncScope | null = null
   /** The scope's Sessions by `<harness>\n<native id>`, which a capture names. */
   private syncKeys: ReadonlySet<string> = new Set()
+  /** Sessions whose last capture failed every retry, by `<harness>\n<native id>`, until one is taken. */
+  private readonly captureFailures = new Map<string, { at: number; since: number; message: string }>()
   /** Where the record store is kept, which the reading copies keep theirs beside; null for a catalog that writes nothing. */
   private readonly recordsFolder: string | null
   /** Where each session last read back from the record store was restored, which its entries' records name. */
@@ -422,6 +429,13 @@ export class SessionCatalog {
   private readonly runtimeReadings: string | null
   /** How the harnesses' own stores are opened (`ReadBack.stores`): a restore for a harness to resume writes them; a strict host's refuse. */
   private readonly harnessStores: NativeStores | null
+  /** Names captures, pushes and copies while they run (`WorkUnderWay`); undefined outside the sync daemon. */
+  private readonly work: WorkUnderWay | undefined
+  /**
+   * The bytes this catalog's uploads hold at once, its originals' and its copies' together: the one limit on what goes
+   * up in parallel from this process, and what its memory guard sheds (`UploadBudget`).
+   */
+  readonly uploadBudget = new UploadBudget()
   /** Restores running, by path: a second ask shares the first. */
   private readonly restoring = new Map<string, Promise<KeptRestore>>()
 
@@ -476,6 +490,8 @@ export class SessionCatalog {
        * without it they aren't swept.
        */
       attachmentReaders?: () => Promise<AttachmentReaders>
+      /** Names what this catalog does while it does it, for a watch on its process's loop (`watchLoop`). */
+      work?: WorkUnderWay
     } = {}
   ) {
     this.providers = providers
@@ -490,6 +506,7 @@ export class SessionCatalog {
     this.harnessStores = options.readBack?.stores ?? null
     this.runtimeReadings = options.runtimeReadings ?? null
     this.writer = options.writer
+    this.work = options.work
     this.attachments = options.attachmentReaders ? { readers: options.attachmentReaders, views: options.viewsPath, ...options.decodeAside && { aside: options.decodeAside.executable } } : null
     if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome, options.readBack, options.backfill ? options.log ?? null : undefined)
     this.recordsFolder = options.recordsPath && !this.readOnly ? options.recordsPath : null
@@ -537,10 +554,18 @@ export class SessionCatalog {
         },
         rowBytesOf: async (ref) => (await this.ownerOf(ref.path)?.recordBytes?.(ref.path)) ?? null,
         observedInstall: (harness) => (this.runtimeReadings ? observedInstall(this.runtimeReadings, harness) : null),
-        onError: (ref, message) => console.error("Session record capture failed", ref.path, message),
+        ...this.work && { work: this.work },
+        onError: (ref, message) => {
+          console.error("Session record capture failed", ref.path, message)
+          // Said in the sync status while it lasts: the account can't be current with records this Mac can't read.
+          const key = `${ref.harness}\n${ref.nativeId}`
+          this.captureFailures.set(key, { at: Date.now(), since: this.captureFailures.get(key)?.since ?? Date.now(), message })
+          if (this.captureFailures.size > CAPTURE_FAILURES_KEPT) this.captureFailures.delete(this.captureFailures.keys().next().value ?? key)
+        },
         // A capture goes up as it lands: the machine's pushes, and of a Session this device keeps in the account, its
         // originals and its copy. The backfill's captures of older Sessions, thousands of them, look at nothing.
         onCaptured: (ref) => {
+          this.captureFailures.delete(`${ref.harness}\n${ref.nativeId}`)
           this.recordPushes?.captured(ref.harness, ref.nativeId)
           if (!this.syncKeys.has(`${ref.harness}\n${ref.nativeId}`)) return
           this.originals?.uploads.look()
@@ -1707,7 +1732,7 @@ export class SessionCatalog {
     if (!link || !store || this.stopped) return
     const log = (level: "info" | "warn", message: string, fields: Record<string, string | number>) => (level === "warn" ? console.warn : console.info)(`Session originals: ${message}`, JSON.stringify(fields))
     const current = { current: link }
-    const uploads = new ScopedUploads(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => current.current.authorization }), log, { bytesPerSecond: ORIGINALS_BYTES_PER_SECOND })
+    const uploads = new ScopedUploads(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => current.current.authorization }), log, { bytesPerSecond: ORIGINALS_BYTES_PER_SECOND, budget: this.uploadBudget, ...this.work && { work: this.work } })
     const timer = setInterval(() => uploads.look(), ORIGINALS_LOOK_MS)
     timer.unref?.()
     this.originals = { uploads, link: current, timer }
@@ -1731,16 +1756,24 @@ export class SessionCatalog {
     const scope = this.syncScope ?? { sessions: [], paused: false }
     const copies = this.readingCopies
     const originals = this.originals?.uploads
+    // A Session whose records this Mac can't read is not in the cloud however its last push went: the account holds
+    // what was read before, and the Session went on since.
+    const unread = scope.sessions.flatMap((session) => {
+      const failed = this.captureFailures.get(`${session.harness}\n${session.nativeId}`)
+      return failed ? [{ at: failed.at, since: failed.since, harness: session.harness, nativeId: session.nativeId, message: `Mako couldn't read this Session into its records: ${failed.message}` }] : []
+    })
+    const unreadKeys = new Set(unread.map((failure) => `${failure.harness}\n${failure.nativeId}`))
+    const originalsStatus = originals?.status() ?? null
     return {
       paused: scope.paused,
       tiers: countTiers(scope, {
         readable: (session) => copies?.readable(session) ?? false,
         held: (session) => originals?.held(session.harness, session.nativeId) ?? false,
-        whole: (session) => originals?.inCloud(session.harness, session.nativeId) ?? false,
+        whole: (session) => !unreadKeys.has(`${session.harness}\n${session.nativeId}`) && (originals?.inCloud(session.harness, session.nativeId) ?? false),
       }),
       stale: copies ? scope.sessions.filter((session) => !copies.current(session)).length : 0,
       copies: copies?.status() ?? null,
-      originals: originals?.status() ?? null,
+      originals: originalsStatus && { ...originalsStatus, failures: [...unread, ...originalsStatus.failures].sort((left, right) => right.at - left.at).slice(0, CAPTURE_FAILURES_SAID) },
     }
   }
 
@@ -1770,7 +1803,7 @@ export class SessionCatalog {
       view: (path) => this.served(path),
       stamp: (path) => this.stampOf(path),
       translator: () => (this.translator ??= translatorBuild()),
-    }, log)
+    }, log, { budget: this.uploadBudget, ...this.work && { work: this.work } })
     return this.readingCopies
   }
 
