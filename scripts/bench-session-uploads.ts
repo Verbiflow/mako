@@ -138,14 +138,14 @@ try {
       const kept = held.get(path)
       const ref = native.find((each) => each.path === path)
       // Drawn once: the owner's catalog keeps a Session's view and draws only what's new, which this one doesn't.
-      if (kept && ref) return { view: { total: kept.length, translator: "bench", at: (index: number) => kept[index] ?? null }, ref }
+      if (kept && ref) return { view: { total: kept.length, translator: "bench", json: (start: number, end: number) => kept.slice(start, end).map((entry) => Buffer.from(JSON.stringify(entry))) }, ref }
       const began = performance.now()
       const thread = await catalog.open(path, false)
       drawMs += performance.now() - began
       if (!thread) return null
       const entries = held.get(path) ?? thread.entries
       held.set(path, entries)
-      return { view: { total: entries.length, translator: "bench", at: (index: number) => entries[index] ?? null }, ref: thread.ref }
+      return { view: { total: entries.length, translator: "bench", json: (start: number, end: number) => entries.slice(start, end).map((entry) => Buffer.from(JSON.stringify(entry))) }, ref: thread.ref }
     },
     // The records' stamp, and the turn this benchmark adds: what the owner's catalog would read after a write.
     stamp: (path) => `${catalog.stampOf(path)}${turned.has(path) ? ":turned" : ""}`,

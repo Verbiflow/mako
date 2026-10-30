@@ -2,6 +2,7 @@ import { GatewayHttpError, describeGatewayFailure } from "@mako/protocol/gateway
 import { CHUNK_HEADER_BYTES, type PackedChunk, type RecordRemote } from "@mako/protocol/records"
 import { z } from "zod"
 import type { RecordStore } from "./record-store.js"
+import { namedWork, type WorkUnderWay } from "./loop-watch.js"
 import { RecordSync, RecordSyncConflictError, describeSync } from "./record-sync.js"
 
 /**
@@ -148,13 +149,16 @@ export class ScopedUploads {
   #failed = 0
   #stopped = false
   #wake: ReturnType<typeof setTimeout> | undefined
+  /** Names each push while it runs, for the watch on the process's loop. */
+  readonly #work: WorkUnderWay | undefined
 
   constructor(
     store: RecordStore,
     remote: RecordRemote,
     log: (level: "info" | "warn", message: string, fields: Record<string, string | number>) => void,
-    options: { now?: () => number; bytesPerSecond?: number } = {}
+    options: { now?: () => number; bytesPerSecond?: number; work?: WorkUnderWay } = {}
   ) {
+    this.#work = options.work
     this.#store = store
     this.#remote = remote
     this.#log = log
@@ -270,7 +274,7 @@ export class ScopedUploads {
   #start(session: Wanted, key: string): void {
     // The capture this push is sure to carry whole: whatever lands while it runs is behind it, and goes next.
     const head = this.#heads?.get(key) ?? 0
-    const done = this.#push(session, key, head).finally(() => {
+    const done = namedWork(this.#work, `push ${session.harness} ${session.nativeId.slice(0, 8)}`, () => this.#push(session, key, head)).finally(() => {
       this.#flights.delete(key)
       this.#pump()
     })
