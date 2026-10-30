@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.1.4"
+    "version": "2.2.3"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e8d18dd3bffeVbwH0exhFtQ7Lj",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e731d06b7ffe6R4Wj2E3wHG23S",
       "known": []
     }
   ]

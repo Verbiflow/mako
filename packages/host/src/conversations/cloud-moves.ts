@@ -9,7 +9,7 @@ import { RecordHoldingsSchema, describeSync, withFreshLink, type RecordsLink, ty
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { CloudRepositorySchema, type CloudRepository, type MoveCarried, type ThreadHandOff, type ThreadMoveOutcome, type ThreadMoveStep } from "../contracts/cloud-threads.js"
+import { CloudRepositorySchema, type CloudRepository, type MoveCarried, type MoveSent, type ThreadHandOff, type ThreadMoveOutcome, type ThreadMoveStep } from "../contracts/cloud-threads.js"
 import { hostCallInput, toHostOperation } from "../contracts/host-operations.js"
 import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -261,6 +261,45 @@ function carriedOf(plan: Plan): MoveCarried | undefined {
     ? { repositories: manifest.repositories.length, outside: manifest.outside.length, left: manifest.left }
     : { repositories: 1, outside: 0, left: [...manifest.outside.map(({ path }): MoveLeft => ({ path, why: "older-cloud" })), ...manifest.left] }
   return carried.repositories > 1 || carried.outside || carried.left.length ? carried : undefined
+}
+
+/** Said at most this often while a move's checkout goes ahead: often enough for a bar to move, rarely enough for a link. */
+export const SENT_EVERY_MS = 250
+
+/**
+ * How much of a move's checkout has gone, told to `say` as it goes: each file to send adds its bytes to what has to go
+ * (`adding`), and what a file's upload says it sent counts towards it. Said at most every `SENT_EVERY_MS`, and once
+ * more when everything has gone, so the last word is the whole.
+ */
+export class SentProgress {
+  readonly #say: (sent: MoveSent) => void
+  readonly #now: () => number
+  #of = 0
+  #bytes = 0
+  #saidAt = Number.NEGATIVE_INFINITY
+
+  constructor(say: (sent: MoveSent) => void, now: () => number = Date.now) {
+    this.#say = say
+    this.#now = now
+  }
+
+  /** A file of `bytes` to send: what its upload should be told of its bytes as they go. */
+  adding(bytes: number): (sent: number) => void {
+    const before = this.#bytes
+    this.#of += bytes
+    return (sent) => {
+      this.#bytes = before + Math.min(sent, bytes)
+      if (this.#now() - this.#saidAt < SENT_EVERY_MS) return
+      this.#saidAt = this.#now()
+      this.#say({ bytes: this.#bytes, of: this.#of })
+    }
+  }
+
+  /** Everything went: said once more, whole, if any upload said it sent anything (one the cloud had says nothing). */
+  done(): void {
+    if (!this.#bytes) return
+    this.#say({ bytes: this.#of, of: this.#of })
+  }
 }
 
 export class CloudMoves {
@@ -733,17 +772,20 @@ export class CloudMoves {
   async #sendCheckout(plan: Plan): Promise<void> {
     await mkdir(this.#options.folder, { recursive: true })
     const scratch = await mkdtemp(join(this.#options.folder, `${plan.move}-`))
+    // While it goes ahead, how much of it has gone is said with the packing step; after the release, nothing is.
+    const progress = plan.phase === "preparing" ? new SentProgress((sent) => this.#options.step(plan.asked, plan.move, { kind: "packing", sent })) : undefined
     try {
       const account = this.#account()
+      const send = (checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string) => account.sendCheckpoint(plan.cloudThread, checkpoint, file, progress?.adding(checkpoint.bytes))
       const repositories: MoveCarryRepository[] = []
       for (const [at, path] of [plan.folder, ...plan.others.map((other) => other.path)].entries()) {
         const { checkpoint, file } = await captureMoveCheckpoint(this.#options.git, path, await mkdtemp(join(scratch, "checkout-")))
         const other = at === 0 ? undefined : plan.others[at - 1]
         if (other) {
-          if (checkpoint.sha256 !== other.checkpoint?.sha256) await account.sendCheckpoint(plan.cloudThread, checkpoint, file)
+          if (checkpoint.sha256 !== other.checkpoint?.sha256) await send(checkpoint, file)
           other.checkpoint = checkpoint
         } else {
-          if (checkpoint.sha256 !== plan.held) await account.sendCheckpoint(plan.cloudThread, checkpoint, file)
+          if (checkpoint.sha256 !== plan.held) await send(checkpoint, file)
           plan.held = checkpoint.sha256
           plan.checkpoint = checkpoint
         }
@@ -752,7 +794,8 @@ export class CloudMoves {
       const { read, left } = await readOutside(this.#options.outside?.(plan.thread) ?? [], plan.project ?? plan.folder)
       const history = this.#options.history?.(plan.thread)
       const carry = await captureCarry(this.#options.git, { folder: plan.project ?? plan.folder, repositories, outside: read, left, ...history && { history } }, scratch)
-      if (carry.ref.sha256 !== plan.carry?.ref.sha256) await account.sendCheckpoint(plan.cloudThread, carry.ref, carry.file)
+      if (carry.ref.sha256 !== plan.carry?.ref.sha256) await send(carry.ref, carry.file)
+      progress?.done()
       plan.carry = { ref: carry.ref, manifest: carry.carry }
     } finally {
       await rm(scratch, { recursive: true, force: true })

@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.164.0"
+    "version": "0.166.0"
   },
   "about": "In one code cell, run `cat notes.md`, then throw an error saying the release day is unknown, and tell me what happened. A code cell that runs one command and then throws, so the cell's own failure, which no nested call carries, can be told apart from a cell that finished.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T02-53-22-01a1727a-a4cd-7a10-bd2c-cf2a138b1bfe.jsonl",
+      "path": ".codex/sessions/2026/10/30/rollout-2026-10-30T12-57-16-01a18ce2-cdef-7833-900c-9aa523285b75.jsonl",
       "known": []
     }
   ]

@@ -13,9 +13,9 @@ const SETTINGS_ONLY = "3000.10.23 doesn't define it for the capture's account, w
 export const DEVIN_VOCABULARY = defineVocabulary({
   harness: "devin",
   checked: {
-    version: "3000.11.205",
-    on: "2026-10-25",
-    against: "Devin's CLI store and IDE journal through audit:tools as of 2026-10-08, and its 3000.11.205 tool definitions through harness:native-tools (no tool added or removed since 3000.10.23; Ask mode now offers the MCP tools)",
+    version: "3000.11.234",
+    on: "2026-10-30",
+    against: "Devin's CLI store and IDE journal through audit:tools as of 2026-10-08, and its 3000.11.234 tool definitions through harness:native-tools (no tool added or removed since 3000.10.23, and none reworded since 3000.11.205; Ask mode offers the MCP tools)",
   },
   mcp: ["s.t"],
   tools: {
@@ -54,8 +54,8 @@ export const DEVIN_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "3000.11.205",
-      on: "2026-10-25",
+      version: "3000.11.234",
+      on: "2026-10-30",
       against: "the binary through harness:self-report (every declared name, and every skill and MCP place listed), and the docs devin 3000.10.23 ships (extensibility, subagents, permissions, mcp) and devin skills paths as read on 2026-10-06",
     },
     instructions: {

@@ -68,7 +68,9 @@ export function whereOf(row: ListedSession, devices: ReadonlyMap<string, WebDevi
   return devices.get(row.runsOn.deviceId)?.name ?? "another computer"
 }
 
-function standingOf(state: ListedState, quiet: boolean): ThreadStanding {
+function standingOf(state: ListedState, quiet: boolean, moving: boolean): ThreadStanding {
+  // On its way to the cloud from its first step, whatever its turn is doing: the move is what the person waits on.
+  if (moving && !quiet) return "moving"
   // A quiet device's rows stand as it left them, none at work or waiting on the person (`QUIET_STATUS`).
   if (quiet && (state === "working" || state === "waiting")) return "idle"
   return state === "moving" ? "moving" : state
@@ -106,7 +108,7 @@ function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): We
   const places = new Set<string>()
   const projects = new Set<string>()
   for (const session of sessions) {
-    const own = archived ? "idle" : standingOf(session.row.state, session.quietSince !== undefined)
+    const own = archived ? "idle" : standingOf(session.row.state, session.quietSince !== undefined, session.row.move !== undefined)
     if (STANDING_ORDER[own] < STANDING_ORDER[standing]) standing = own
     if (own === "waiting" && (waitingFor === undefined || WAITING_ORDER[session.row.waitingFor ?? "needs-you"] < WAITING_ORDER[waitingFor])) {
       waitingFor = session.row.waitingFor ?? "needs-you"

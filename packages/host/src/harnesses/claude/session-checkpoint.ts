@@ -18,7 +18,7 @@ const BOOKKEEPING = new Set([
   "last-prompt", "cost-state", "custom-title", "ai-title", "summary", "atis-latch", "queue-operation", "tag",
   "agent-name", "agent-color", "agent-setting", "pr-link", "mode", "permission-mode", "isolation-latch", "dev-mods",
   "memory-mode", "worktree-state", "observer-ref", "file-history-snapshot", "file-history-delta", "attribution-snapshot",
-  "bridge-session", "history-suppression", "artifact-comment-monitor", "artifact-autoreact-ledger",
+  "bridge-session", "history-suppression", "artifact-comment-monitor", "artifact-autoreact-ledger", "tools-used",
 ])
 const LEADING_TYPE = /^\{"type":"([^"]+)"/
 

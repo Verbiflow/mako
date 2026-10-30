@@ -18,7 +18,8 @@ export const CLAUDE_HOOK_EVENTS = [
  * The record types Claude Code 2.1.283 writes to a session transcript, from
  * its own loader's table of them. History draws `user`, `assistant`,
  * `system` and `attachment` records and reads the titles; the rest is
- * Claude Code's bookkeeping. `scripts/test-harness-records.ts` holds these
+ * Claude Code's bookkeeping, such as 2.1.314's `tools-used`, the tools the
+ * session has called so far. `scripts/test-harness-records.ts` holds these
  * lists to the Claude Code the SDK bundles, naming what an upgrade adds.
  */
 export const CLAUDE_RECORD_TYPES: readonly string[] = [
@@ -28,33 +29,38 @@ export const CLAUDE_RECORD_TYPES: readonly string[] = [
   "ai-title", "tag", "relocated", "agent-name", "agent-color", "agent-setting",
   "pr-link", "artifact-comment-monitor", "artifact-autoreact-ledger", "bridge-session", "history-suppression", "attribution-snapshot",
   "mode", "permission-mode", "isolation-latch", "dev-mods", "memory-mode", "atis-latch",
-  "worktree-state", "cost-state", "queue-operation", "observer-ref",
+  "worktree-state", "cost-state", "queue-operation", "observer-ref", "tools-used",
 ]
 
 /**
- * The `system` records Claude Code 2.1.278 to 2.1.310 makes; history draws
+ * The `system` records Claude Code 2.1.278 to 2.1.314 makes; history draws
  * compactions, refusals and local commands. 2.1.293's additions are signals
  * for a host's UI and its bridge, and a title the transcript's title
  * records also hold. 2.1.310's are bookkeeping: an ephemeral mark a remote
  * client gets once a turn's events are stored (`checkpoint_done`), the
  * stand-in a rewind keeps for a message it can't return to whole
  * (`rewind_stand_in`), and a stream signal (`turn_began_before_init`).
+ * 2.1.314's are signals for a remote client, never kept: a plugin's
+ * placement (`placed`, written with `persist: false`) and the panes it
+ * placed (`ui_placed`), and the prompts a resumed session still holds
+ * (`inherited_asks_settled`).
  */
 export const CLAUDE_SYSTEM_SUBTYPES: readonly string[] = [
   "agents_killed", "api_error", "api_retry", "away_summary", "background_tasks_changed",
   "bridge_state", "bridge_status", "checkpoint_done", "cloud_session_delta", "cloud_session_status",
   "code_change_published", "commands_changed", "compact_boundary", "control_request_progress", "dev_intent",
   "elicitation_complete", "feedback_draft_queued", "file_attachments_missing", "file_snapshot", "hook_progress",
-  "hook_response", "hook_started", "informational", "init", "instruction_size_warning",
-  "local_command", "memory_recall", "memory_saved", "mirror_error", "model_consent_fallback",
-  "model_fallback", "model_refusal_fallback", "model_refusal_no_fallback", "notification", "peer_message_hold",
-  "per_turn_effort_changed", "permission_check_status", "permission_denied", "permission_retry", "plugin_install",
-  "post_turn_summary", "rewind_stand_in", "scheduled_task_fire", "session_metadata", "session_state_changed",
-  "session_title_changed", "status", "stop_hook_summary", "task_notification", "task_progress",
-  "task_started", "task_summary", "task_updated", "thinking_tokens", "tool_host_result",
-  "turn_began_before_init", "turn_duration", "turn_handoff_available", "turn_preempted", "turn_starting",
-  "ui_focus", "ui_invalidate", "ui_log", "ui_panes", "ui_scroll",
-  "ui_status", "ui_toast", "vcs_state_changed", "worker_shutting_down",
+  "hook_response", "hook_started", "informational", "inherited_asks_settled", "init",
+  "instruction_size_warning", "local_command", "memory_recall", "memory_saved", "mirror_error",
+  "model_consent_fallback", "model_fallback", "model_refusal_fallback", "model_refusal_no_fallback", "notification",
+  "peer_message_hold", "per_turn_effort_changed", "permission_check_status", "permission_denied", "permission_retry",
+  "placed", "plugin_install", "post_turn_summary", "rewind_stand_in", "scheduled_task_fire",
+  "session_metadata", "session_state_changed", "session_title_changed", "status", "stop_hook_summary",
+  "task_notification", "task_progress", "task_started", "task_summary", "task_updated",
+  "thinking_tokens", "tool_host_result", "turn_began_before_init", "turn_duration", "turn_handoff_available",
+  "turn_preempted", "turn_starting", "ui_focus", "ui_invalidate", "ui_log",
+  "ui_panes", "ui_placed", "ui_scroll", "ui_status", "ui_toast",
+  "vcs_state_changed", "worker_shutting_down",
 ]
 
 /**
@@ -113,9 +119,9 @@ const CLAUDE_REFUSALS = [
 export const CLAUDE_VOCABULARY = defineVocabulary({
   harness: "claude",
   checked: {
-    version: "2.1.310",
-    on: "2026-10-25",
-    against: "the model request of the SDK's Claude Code 2.1.310, which Mako runs, in every Mako mode (scripts/fixtures/native-tools; unchanged since 2.1.283), its print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools as of 2026-10-06",
+    version: "2.1.314",
+    on: "2026-10-30",
+    against: "the model request of the SDK's Claude Code 2.1.314, which Mako runs, in every Mako mode (scripts/fixtures/native-tools; the same tools since 2.1.283, AskUserQuestion's, Bash's and DesignSync's descriptions reworded in 2.1.314), its print-run tools (scripts/fixtures/native-vocabulary/claude-init.json), and ~/.claude/projects through audit:tools as of 2026-10-06",
   },
   mcp: [],
   refusals: CLAUDE_REFUSALS,
@@ -167,9 +173,9 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "2.1.310",
-      on: "2026-10-25",
-      against: "SDK 0.3.310 types (HOOK_EVENTS, unchanged since 0.3.283; Settings, AgentDefinition), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings) as read on 2026-10-06, and the build the SDK bundles through harness:self-report",
+      version: "2.1.314",
+      on: "2026-10-30",
+      against: "SDK 0.3.314 types (HOOK_EVENTS, unchanged since 0.3.283; Settings, AgentDefinition), code.claude.com docs (memory, hooks, skills, sub-agents, mcp, settings) as read on 2026-10-06, and the build the SDK bundles through harness:self-report",
     },
     instructions: {
       files: ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude/AGENTS.md"],

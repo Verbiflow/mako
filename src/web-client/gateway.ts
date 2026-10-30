@@ -1,5 +1,6 @@
 import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
+import { answered, CLOUD, unanswered } from "./reach"
 import { clientSessionOverSockets, problemType, subprotocols, type ClientEndpoint, type ClientSessionOverSockets, type ConnectionCredential, type MessageSocket } from "@mako/protocol"
 
 /** Who this browser is signed in as, as the gateway says it with each connection token. */
@@ -59,6 +60,8 @@ type LogFields = Record<string, string | number | boolean | undefined>
 export const CORRELATION_HEADER = "x-mako-correlation-id"
 /** Where this browser keeps the plans of archives it runs (`archive.ts`), by account: read at start to settle one left. */
 export const ARCHIVE_PLANS = "mako:web:archive:"
+/** How long a read that met no answer at all waits before it's asked once more. */
+const READ_RETRY_MS = 300
 /** A token is renewed this long before it runs out, as the host renews its own, or halfway through a shorter one's life. */
 const RENEW_BEFORE_MS = 60_000
 /** Every connection pings this often; one silent for two pings and ten seconds is ended and opened again. */
@@ -134,7 +137,22 @@ export class Gateway {
       headers.set("content-type", "application/json")
       init.body = JSON.stringify(body)
     }
-    const response = await fetch(new URL(path, this.origin), init)
+    let response: Response
+    try {
+      response = await fetch(new URL(path, this.origin), init)
+    } catch (error) {
+      // Nothing came back: the network, not the gateway. A read is asked once more (a phone's first request after a
+      // while idle often meets a connection the radio dropped); a change never is, since it may have landed.
+      if (method === "GET" && attempt === 1) {
+        await new Promise((resolve) => setTimeout(resolve, READ_RETRY_MS))
+        return this.rest(method, path, body, attempt + 1)
+      }
+      unanswered(CLOUD, { outcome: "network", correlationId, message: error instanceof Error ? error.message : String(error) })
+      throw error
+    }
+    // Any answer is Mako Cloud answering; a 5xx of its own is it failing to.
+    if (response.status >= 500) unanswered(CLOUD, { outcome: String(response.status), correlationId, message: `The gateway answered ${response.status}` })
+    else answered(CLOUD)
     if (response.status === 401 && attempt === 1) {
       this.#current = undefined
       return this.rest(method, path, body, 2)

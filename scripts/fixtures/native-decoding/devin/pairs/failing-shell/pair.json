@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Run `grep -q Monday notes.md` in the shell and tell me from its exit code whether notes.md mentions Monday. A shell command that exits non-zero, which the harness may report as completed.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#joyous-nation",
+      "path": ".local/share/devin/cli/sessions.db#plastic-option",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/ac2c0631-ac5d-41d3-b7b0-b8bf941ff1cd.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/0b4190c3-a3fb-4030-b0c9-2710be4041bf.db",
       "known": []
     }
   ],

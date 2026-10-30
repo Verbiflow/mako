@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Without the shell, use your file search tools to find the Markdown files in this project, then search them for the word Friday and tell me which ones mention it. A file search matching in two files of three, one in a subdirectory, then the answer naming them.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#truth-soldier",
+      "path": ".local/share/devin/cli/sessions.db#dawn-drawer",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/1255b817-cd0c-4e89-8c65-1ca54850006c.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/fdca5eff-2030-49ff-85db-e9f13970829b.db",
       "known": [
         {
           "side": "-",

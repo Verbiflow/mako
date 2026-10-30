@@ -1,6 +1,6 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
-import { NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -27,6 +27,21 @@ export const ListedStateSchema = z.enum(["working", "waiting", "idle", "failed",
 export type ListedState = z.infer<typeof ListedStateSchema>
 
 const HarnessSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/)
+
+/**
+ * A Session's Thread on its way between a device and the cloud, as its owner says it while it goes (link version 11 on):
+ * `to`, where it's going; `step`, how far, in the owner's own word for its step (`packing`, `handing-over`, …); `since`,
+ * when that step began, on the owner's clock. Said from the move's first step, while the row's `state` is still what it
+ * was, until its new owner lists it, so every device sees a move from where it starts, not only once it's in transit.
+ */
+export const ListedMoveSchema = z
+  .object({
+    to: z.enum(["cloud", "device"]),
+    step: z.string().regex(/^[a-z][a-z-]{0,31}$/),
+    since: z.iso.datetime(),
+  })
+  .strict()
+export type ListedMove = z.infer<typeof ListedMoveSchema>
 const GenerationSchema = z.number().int().positive()
 
 /** One Session as its owner says it: everything but where it runs, which the cloud knows from who said it. */
@@ -70,6 +85,8 @@ export const ReportedSessionSchema = z
      * knows how long the change took to reach it.
      */
     changedAt: z.iso.datetime().optional(),
+    /** Its Thread on its way between a device and the cloud (`ListedMoveSchema`, link version 11 on). */
+    move: ListedMoveSchema.optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -162,19 +179,20 @@ export const SessionListingsSchema = z.object({
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
 /**
- * The rows a link of `version` takes, each with only the fields that version knows: from link version 10, every one
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 11, every one
  * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= WAITING_FOR_VERSION) return [...rows]
+  if (version >= MOVES_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
-    // Before version 10 a gateway knows no `waitingFor` (it reads `waitingOn`'s words); before 9, no `changedAt`;
-    // before 6, no native IDs either.
-    delete older.waitingFor
+    // Before version 11 a gateway knows no `move` (the row says `moving` once the Thread is in transit); before 10, no
+    // `waitingFor` (it reads `waitingOn`'s words); before 9, no `changedAt`; before 6, no native IDs either.
+    delete older.move
+    if (version < WAITING_FOR_VERSION) delete older.waitingFor
     if (version < NUMBERED_LIVE_VERSION) delete older.changedAt
     if (version < NATIVE_SESSIONS_VERSION) delete older.nativeId
     kept.push(older)
@@ -220,6 +238,8 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.generation === right.generation &&
     left.nativeId === right.nativeId &&
     left.capture?.path === right.capture?.path &&
+    left.move?.to === right.move?.to &&
+    left.move?.step === right.move?.step &&
     sameRunsOn(left.runsOn, right.runsOn)
   )
 }

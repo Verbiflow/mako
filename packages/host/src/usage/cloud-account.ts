@@ -81,13 +81,30 @@ const UPLOAD_BYTES_PER_MS = 100
 /** A call to the cloud: JSON in and out, never redirected, bounded in time. */
 type CloudRequest = { method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"; headers: Record<string, string>; body?: string | Readable; duplex?: "half"; redirect: "error"; signal: AbortSignal }
 
-/** A file's bytes as a request's body, such as a move's checkpoint: read afresh for each attempt, its length given. */
+/**
+ * A file's bytes as a request's body, such as a move's checkpoint: read afresh for each attempt, its length given.
+ * `sent`, told how many bytes have gone into the request so far, as they go.
+ */
 class FileBody {
   readonly file: string
   readonly bytes: number
-  constructor(file: string, bytes: number) {
+  readonly sent: ((bytes: number) => void) | undefined
+  constructor(file: string, bytes: number, sent?: (bytes: number) => void) {
     this.file = file
     this.bytes = bytes
+    this.sent = sent
+  }
+}
+
+/** A file's bytes as they're read into a request, counted to `sent`. */
+async function* countedFile(file: string, sent: (bytes: number) => void): AsyncGenerator<Buffer> {
+  let total = 0
+  for await (const chunk of createReadStream(file)) {
+    // SAFETY: a file stream with no encoding yields Buffers.
+    const bytes = chunk as Buffer
+    total += bytes.length
+    sent(total)
+    yield bytes
   }
 }
 
@@ -575,10 +592,10 @@ export class CloudAccounts {
    * account already has is answered without sending its bytes. The cloud keeps it only if its bytes are the ones its
    * hash names.
    */
-  async sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string): Promise<{ sent: boolean }> {
+  async sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string, sent?: (bytes: number) => void): Promise<{ sent: boolean }> {
     const path = `/v1/threads/${encodeURIComponent(threadId)}/records/checkpoints/${checkpoint.sha256}`
     if ((await this.#call("moves.checkpoint", "HEAD", path, undefined, false, [404])).status === 200) return { sent: false }
-    await this.#call("moves.checkpoint", "PUT", path, new FileBody(file, checkpoint.bytes))
+    await this.#call("moves.checkpoint", "PUT", path, new FileBody(file, checkpoint.bytes, sent))
     return { sent: true }
   }
 
@@ -1112,7 +1129,7 @@ export class CloudAccounts {
       // Bytes, such as a move's checkpoint: streamed with their length, given as long as their size needs.
       init.headers["content-type"] = "application/octet-stream"
       init.headers["content-length"] = String(body.bytes)
-      init.body = createReadStream(body.file)
+      init.body = body.sent ? Readable.from(countedFile(body.file, body.sent)) : createReadStream(body.file)
       init.duplex = "half"
       init.signal = AbortSignal.timeout(REQUEST_MS + Math.ceil(body.bytes / UPLOAD_BYTES_PER_MS))
     } else if (body !== undefined) {

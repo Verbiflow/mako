@@ -1,5 +1,6 @@
 import { attentionLine } from "@mako/host/contracts/notifications"
 import { formatRelative } from "@/lib/format"
+import type { MoveWay } from "./move-progress"
 import { CLOUD_WHERE, type WebThread } from "./threads"
 
 /** What a row says under its title, and in which tone. */
@@ -12,6 +13,8 @@ export interface RowDetail {
   elapsed?: string
   /** A word before the rest, in the row's own ink: "Done", for a run that finished since the Thread was last opened. */
   lead?: "Done"
+  /** On its way between a Mac and the cloud: its mark is a blinking arrow, up or down, where its place stood. */
+  move?: MoveWay
 }
 
 /** What else a row reads besides its Thread: the time now, when its run started, and whether it finished unread. */
@@ -21,6 +24,8 @@ export interface RowContext {
   workingSince?: number
   /** It finished since it was last on screen here (`read-state.ts`). */
   done?: boolean
+  /** It's on its way between a Mac and the cloud, as this browser follows it or the list says (`moves.ts`). */
+  move?: MoveWay
 }
 
 /** A run's length as a row counts it: seconds in its first minute, then minutes, then hours and minutes. */
@@ -45,6 +50,7 @@ export function rowDetail(thread: WebThread, named: boolean, context: RowContext
     const since = context.workingSince
     return since !== undefined && context.now !== undefined ? { text: "Working", tone: "working", elapsed: workingFor(context.now - since) } : { text: "Working", tone: "working" }
   }
+  if (context.move) return { text: context.move === "cloud" ? "Moving to the cloud" : "Coming back from the cloud", tone: "working", move: context.move }
   if (thread.standing === "moving") return { text: "Moving", tone: "working" }
   if (thread.waitingMessages) return { text: thread.waitingMessages === 1 ? "1 message waiting" : `${thread.waitingMessages} messages waiting`, tone: "faint" }
   const cloud = thread.where === CLOUD_WHERE

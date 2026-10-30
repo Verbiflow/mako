@@ -25,6 +25,7 @@ import { answeredWords, dockStatus, statusWords, workingWords, type DockStatus }
 import { noteAnswered } from "./install"
 import { dropUnsent, keepUnsent, retryUnconfirmed, retryUnsent, sendMessage, useOutbox, type SendTarget } from "./outbox"
 import { useWaking, wakeThread } from "./wake"
+import { askPreview, useAppStanding } from "./previews"
 
 /**
  * The phone's dock: everything between the transcript and the keyboard, one column pinned to the bottom of the screen.
@@ -471,11 +472,13 @@ function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnec
   const wakingMessage = useOutbox((state) => Boolean(pendingIds) && pendingIds!.split(" ").some((id) => state.sending.get(id) === "waking"))
   const status = dockStatus({ online, unconfirmed: live?.unconfirmed ?? false, canceling: live?.canceling ?? false, waking, wakingMessage, running: live?.running ?? false, since: live?.since, asking })
   const queued = live?.queued ?? 0
-  const shown = status !== undefined || queued > 0
+  // Its app, while it runs or starts: a segment of its own that opens it (`preview.tsx`).
+  const app = useAppStanding(conversation)
+  const shown = status !== undefined || queued > 0 || app !== undefined
   // What it last said, kept while it leaves.
-  const key = `${status?.kind}:${status?.kind === "working" ? status.since : status?.kind === "waking" ? status.message : ""}:${queued}`
-  const [kept, keep] = useState<{ key: string; status: DockStatus | undefined; queued: number }>({ key, status, queued })
-  if (shown && kept.key !== key) keep({ key, status, queued })
+  const key = `${status?.kind}:${status?.kind === "working" ? status.since : status?.kind === "waking" ? status.message : ""}:${queued}:${app}`
+  const [kept, keep] = useState<{ key: string; status: DockStatus | undefined; queued: number; app?: "running" | "starting" }>({ key, status, queued, app })
+  if (shown && kept.key !== key) keep({ key, status, queued, app })
   const retry = () => {
     reconnect()
     void retryUnconfirmed(conversation)
@@ -503,6 +506,12 @@ function StatusCapsule({ conversation, cloudThread, asking, away, jump, reconnec
           )
         ) : null}
         {kept.queued > 0 ? <span className="web-capsule-segment web-capsule-queued">{kept.queued} queued</span> : null}
+        {kept.app ? (
+          <button type="button" className="web-capsule-segment web-capsule-app" data-app={kept.app} onClick={() => askPreview(conversation)}>
+            <span aria-hidden className="web-capsule-app-dot" />
+            <span className="web-capsule-app-words">{kept.app === "running" ? "App running · Open" : "App starting…"}</span>
+          </button>
+        ) : null}
       </div>
       <button type="button" aria-label="Jump to newest" tabIndex={away ? 0 : -1} aria-hidden={!away} className="web-jump" data-shown={away || undefined} onClick={jump}>
         <ArrowDownIcon className="size-4" />
