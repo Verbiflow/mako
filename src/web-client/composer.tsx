@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
-import { FileIcon, MicIcon, PlusIcon, SquareIcon, XIcon } from "lucide-react"
+import { FileIcon, MicIcon, PencilIcon, PlusIcon, SquareIcon, XIcon } from "lucide-react"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { cn } from "@/lib/utils"
+import type { LiveSteering } from "@/lib/types"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
+import { Ticking } from "@/components/ui/ticking"
+import { usePrefs } from "@/state/prefs"
 import { ATTACHMENT_BUDGET, encodedBytes, HeldPreviews, kilobytes, readPicked, type Picked } from "./attachments"
-import { useDictation, type Heard } from "./dictation"
+import { appendHeard, elapsedWords, splitUnsure, useDictation, type Dictation } from "./dictation"
 import { noteSending, openingText, readDraft, settleSending, writeDraft } from "./drafts"
-import { SendGlyph } from "./glyphs"
 import { outboxHolds } from "./outbox"
+import { sendPresentation } from "./send-action"
+import { SendButton } from "./send-button"
 
 /** Held this long, the mic is push-to-talk: it listens while held and stops on release. A tap toggles it. */
 const HOLD_MS = 300
@@ -22,13 +26,29 @@ export interface Outgoing {
   attachments: PromptAttachment[]
 }
 
+/** Sending into a running turn: whether its harness takes a message mid-turn, how it lands, and how it's sent. */
+export interface Steering {
+  canSteer: boolean
+  lands: LiveSteering | null
+  steer: (text: string, attachments: PromptAttachment[], id: string) => Promise<boolean>
+}
+
+/** A queued message whose words are in the field to change: ✓ saves them in its place in the queue. */
+export interface EditingQueued {
+  id: string
+  text: string
+  save: (text: string) => Promise<boolean>
+  cancel: () => void
+}
+
 /**
  * The web's composer, one for every place a message is written: a Thread's, a quiet Mac's, and a new Thread's. One card,
  * as the desk's composer is one tile: `+` opens the phone's own picker (photos, camera, files); the field grows with its
- * words; the mic dictates while the field is empty, Send sends once it isn't, and Stop stops a turn at work while it's
- * empty. A message to a Thread is one row, `+`, the field and its action; a new Thread's card adds what it starts with,
- * where above the field (`header`) and how in a bar under it with `+` and Send (`tools`), as the desk's composer carries
- * its model and access under its field. `onSend` says whether the message went; one that didn't stays in the field.
+ * words; the mic sits beside the one send button, which changes with the situation (`send-action.ts`): Send, Stop while
+ * the agent works and the field is empty, Queue or Steer while it works and the field has words (held, both), ✓ while a
+ * queued message is being edited. A Thread's card carries its model and access under its field (`tools`), as the desk's
+ * composer does; a new Thread's adds where above the field (`header`). `onSend` says whether the message went; one that
+ * didn't stays in the field.
  */
 export function Composer({
   placeholder,
@@ -47,6 +67,9 @@ export function Composer({
   draftKey,
   onWrite,
   onUnsent,
+  steering,
+  editing,
+  waiting,
 }: {
   placeholder: string
   /** Sends a message under `id`; says whether it went. One that didn't comes back into an empty field, or to `onUnsent`. */
@@ -60,7 +83,7 @@ export function Composer({
   attach?: boolean
   /** Inside the card, above the field: where a new Thread starts. */
   header?: ReactNode
-  /** Inside the card, in a bar under the field with `+` and Send: what a new Thread starts with. */
+  /** Inside the card, in a bar under the field with `+`, the mic and the send button: what it runs with. */
   tools?: ReactNode
   autoFocus?: boolean
   sendLabel?: string
@@ -75,6 +98,11 @@ export function Composer({
   onWrite?: () => void
   /** A message that didn't go while the field held other words by then: kept apart, with Retry, rather than lost. */
   onUnsent?: (message: Outgoing) => void
+  /** While the agent works, a message can go into its turn rather than after it. */
+  steering?: Steering
+  editing?: EditingQueued
+  /** Something a send must go after, on its way now ("Switching access…"): the button turns and waits. */
+  waiting?: string
 }) {
   const [text, setText] = useState(() => (draftKey ? openingText(draftKey, outboxHolds) : ""))
   const [picked, setPicked] = useState<Picked[]>([])
@@ -91,10 +119,9 @@ export function Composer({
   const [problem, setProblem] = useState<string | undefined>(undefined)
   const input = useRef<HTMLTextAreaElement>(null)
   const files = useRef<HTMLInputElement>(null)
-  const before = useRef("")
   const pressedAt = useRef(0)
-  const stopOnRelease = useRef(false)
   const [previews] = useState(() => new HeldPreviews())
+  const steerByDefault = usePrefs((prefs) => prefs.steerOnEnter)
 
   useLayoutEffect(() => {
     const node = input.current
@@ -104,24 +131,52 @@ export function Composer({
   }, [text])
   // A chip's picture goes with its attachment (removed, or sent), and every one with the composer.
   useEffect(() => () => previews.releaseAll(), [previews])
-  useDraft(draftKey, text)
+  useDraft(editing ? undefined : draftKey, text)
 
-  const heard = useCallback((words: Heard) => {
-    const spoken = [words.final, words.interim].filter(Boolean).join(" ")
-    setText(before.current ? `${before.current} ${spoken}`.trimEnd() : spoken)
-  }, [])
-  const dictation = useDictation(heard)
+  // A queued message to edit: its words take the field, and what was being written waits aside until it's done.
+  const [edited, setEdited] = useState<{ id?: string; aside: string }>({ aside: "" })
+  if (editing?.id !== edited.id) {
+    if (editing) {
+      setEdited({ id: editing.id, aside: edited.id === undefined ? text : edited.aside })
+      setText(editing.text)
+    } else {
+      setEdited({ aside: "" })
+      setText(edited.aside)
+    }
+  }
+  const editingId = editing?.id
+  useEffect(() => {
+    if (editingId !== undefined) input.current?.focus({ preventScroll: true })
+  }, [editingId])
+
+  // Settled words are appended to whatever the field holds as they arrive; what's still being heard is only shown.
+  const settled = useCallback((words: string) => setText((current) => appendHeard(current, words)), [])
+  const dictation = useDictation(settled)
 
   const over = encodedBytes(picked) > ATTACHMENT_BUDGET
-  const empty = !text.trim() && picked.length === 0
-  const send = async () => {
-    if (empty || over || disabled || !sendable || taken.current === text) return
-    taken.current = text
-    if (dictation.listening) dictation.stop()
-    const message = text.trim()
+  const hasContent = Boolean(text.trim() || dictation.hearing) || picked.length > 0
+  const presentation = sendPresentation({ running, hasContent, editingQueued: editing !== undefined, canSteer: steering?.canSteer === true, steerByDefault, sendLabel })
+  const ready = hasContent && !over && !disabled && sendable
+
+  const send = async (how?: "queue" | "steer") => {
+    // What's still being heard goes with it, as the person heard it said.
+    const spoken = dictation.listening ? dictation.hearing : ""
+    const full = appendHeard(text, spoken)
+    if ((!full.trim() && picked.length === 0) || over || disabled || !sendable || waiting !== undefined || taken.current === full) return
+    if (dictation.listening) dictation.cancel()
+    if (editing) {
+      if (!full.trim()) return
+      taken.current = full
+      const saved = await editing.save(full.trim())
+      taken.current = undefined
+      return saved
+    }
+    taken.current = full
+    const message = full.trim()
     const attachments = picked.map((each) => each.attachment)
-    const kept = { text, picked }
+    const kept = { text: full, picked }
     const id = crypto.randomUUID()
+    const steer = (how ?? presentation.kind) === "steer" && steering?.canSteer === true
     // The field empties at once, free for the next message: this one is on its way, kept under its ID until it's
     // confirmed, and the transcript shows it as it goes.
     if (draftKey) {
@@ -130,7 +185,7 @@ export function Composer({
     }
     setText("")
     setPicked([])
-    const went = await onSend(message, attachments, id).finally(() => {
+    const went = await (steer ? steering.steer(message, attachments, id) : onSend(message, attachments, id)).finally(() => {
       if (draftKey) settleSending(draftKey, id)
     })
     if (went) {
@@ -180,28 +235,18 @@ export function Composer({
   }
 
   /**
-   * The mic: pressed while quiet, it starts listening at once. Let go within `HOLD_MS`, it listens on until tapped
-   * again (a tap); held longer, it stops on release (push-to-talk). Pressed while listening, it stops on release.
+   * The mic: pressed, it starts listening at once. Let go within `HOLD_MS`, it listens on until stopped (a tap); held
+   * longer, it stops on release (push-to-talk).
    */
   const micDown = () => {
     pressedAt.current = performance.now()
-    stopOnRelease.current = dictation.listening
     if (dictation.listening) return
-    before.current = text.trim()
     dictation.start()
   }
   const micUp = () => {
-    if (stopOnRelease.current || performance.now() - pressedAt.current >= HOLD_MS) dictation.stop()
-    stopOnRelease.current = false
-  }
-  const micKey = () => {
-    if (dictation.listening) return dictation.stop()
-    before.current = text.trim()
-    dictation.start()
+    if (dictation.listening && performance.now() - pressedAt.current >= HOLD_MS) dictation.stop()
   }
 
-  const showStop = running && empty && onStop !== undefined
-  const showMic = empty && !running && dictation.offered
   const budget = encodedBytes(picked)
   const attachments =
     picked.length || reading ? (
@@ -224,7 +269,7 @@ export function Composer({
         ))}
       </ul>
     ) : null
-  const addButton = attach ? (
+  const addButton = attach && !editing ? (
     <>
       <button type="button" aria-label="Add photos or files" className="web-icon-button web-composer-add" disabled={disabled} onClick={() => files.current?.click()}>
         <PlusIcon className="size-5" />
@@ -241,34 +286,38 @@ export function Composer({
       />
     </>
   ) : null
+  const mic =
+    !desk && dictation.offered && !dictation.listening ? (
+      <button
+        type="button"
+        aria-label="Dictate"
+        className="web-icon-button web-composer-mic"
+        disabled={disabled}
+        onPointerDown={micDown}
+        onPointerUp={micUp}
+        onPointerCancel={micUp}
+        onClick={(event) => {
+          // A keyboard's Enter or Space: no pointer pressed it, so it starts.
+          if (event.detail === 0) dictation.start()
+        }}
+      >
+        <MicIcon className="size-[18px]" />
+      </button>
+    ) : null
   const action = desk ? (
-    <ComposerActionButton action={showStop ? "stop" : "send"} ready={!empty && !over && !disabled && sendable} stopping={stopping} onSend={() => void send()} onStop={() => onStop?.()} />
-  ) : showStop ? (
-    <button type="button" onClick={onStop} disabled={stopping} className="web-send web-stop" aria-label="Stop the turn">
-      <SquareIcon className="size-3 fill-current" />
-    </button>
-  ) : showMic || dictation.listening ? (
-    <button
-      type="button"
-      aria-label={dictation.listening ? "Stop dictating" : "Dictate"}
-      aria-pressed={dictation.listening}
-      className={cn("web-send web-mic", dictation.listening && "web-mic-on")}
-      disabled={disabled}
-      onPointerDown={micDown}
-      onPointerUp={micUp}
-      onPointerCancel={micUp}
-      onClick={(event) => {
-        // A keyboard's Enter or Space: no pointer pressed it, so it toggles.
-        if (event.detail === 0) micKey()
-      }}
-    >
-      <MicIcon className="size-[18px]" />
-    </button>
+    <ComposerActionButton action={presentation.kind === "stop" ? "stop" : "send"} ready={ready} stopping={stopping} onSend={() => void send()} onStop={() => onStop?.()} />
   ) : (
-    <button type="submit" disabled={empty || over || disabled || !sendable} className="web-send" aria-label={running ? "Queue message" : sendLabel}>
-      <SendGlyph />
-    </button>
+    <SendButton
+      presentation={onStop || presentation.kind !== "stop" ? presentation : { kind: "send", label: sendLabel }}
+      ready={ready}
+      stopping={stopping}
+      waiting={waiting}
+      lands={steering?.lands ?? null}
+      onSend={(how) => void send(how)}
+      onStop={() => onStop?.()}
+    />
   )
+  const recording = dictation.listening ? <RecordingPill dictation={dictation} /> : null
   return (
     <div className="web-composer-wrap">
       {over || problem || dictation.failure ? (
@@ -284,7 +333,16 @@ export function Composer({
           void send()
         }}
       >
-        <div className={cn("web-composer-field", dictation.listening && "web-listening")} data-tools={tools !== undefined || undefined}>
+        <div className={cn("web-composer-field", dictation.listening && "web-listening")} data-tools={tools !== undefined || undefined} data-editing={editing ? "" : undefined}>
+          {editing ? (
+            <div className="web-composer-editing" role="status">
+              <PencilIcon aria-hidden className="size-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate">Editing a queued message</span>
+              <button type="button" className="web-quiet-button h-8 px-2.5 text-label" onClick={editing.cancel}>
+                Cancel
+              </button>
+            </div>
+          ) : null}
           {attachments}
           {desk ? null : header}
           {tools === undefined ? addButton : null}
@@ -311,20 +369,63 @@ export function Composer({
                 event.preventDefault()
                 void send()
               }
+              if (event.key === "Escape" && editing) {
+                event.preventDefault()
+                editing.cancel()
+              }
             }}
           />
           {tools !== undefined ? (
             <div className="web-composer-bar">
-              {addButton}
-              {desk ? header : null}
-              <div className="web-composer-tools">{tools}</div>
+              {recording ?? (
+                <>
+                  {addButton}
+                  {desk ? header : null}
+                  <div className="web-composer-tools">{tools}</div>
+                  {mic}
+                </>
+              )}
+              {action}
+            </div>
+          ) : recording ? (
+            <div className="web-composer-recording">
+              {recording}
               {action}
             </div>
           ) : (
-            action
+            <span className="web-composer-actions">
+              {mic}
+              {action}
+            </span>
           )}
         </div>
       </form>
+    </div>
+  )
+}
+
+/**
+ * Dictation in the composer's bar while it listens: the stop square, how long it has listened, the microphone's level
+ * in five bars, and the words still being heard, the last few dimmed while the recognizer may still change them.
+ */
+function RecordingPill({ dictation }: { dictation: Dictation }) {
+  const since = dictation.since ?? 0
+  const { sure, unsure } = splitUnsure(dictation.hearing)
+  return (
+    <div className="web-recording" role="group" aria-label="Dictating">
+      <button type="button" aria-label="Stop dictating" className="web-recording-stop" onClick={dictation.stop}>
+        <SquareIcon aria-hidden className="size-3 fill-current" />
+      </button>
+      <Ticking words={(now) => elapsedWords(now - since)} className="web-recording-time" />
+      <span aria-hidden className="web-recording-bars">
+        {dictation.levels.map((level, index) => (
+          <span key={index} style={{ height: `${5 + Math.round(level * 9)}px` }} />
+        ))}
+      </span>
+      <span className="web-recording-words" aria-live="polite">
+        {sure ? <span>{sure} </span> : null}
+        {unsure ? <span className="text-faint">{unsure}</span> : dictation.hearing ? null : <span className="text-faint">Listening</span>}
+      </span>
     </div>
   )
 }

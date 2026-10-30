@@ -12,6 +12,7 @@ import type { PushStanding, QuietHours } from "./push"
 import { install, onIos, useInstallWay } from "./install"
 import { IosInstallSheet } from "./install-card"
 import { useTheme, type WebTheme } from "./theme"
+import { setPref, usePrefs } from "@/state/prefs"
 
 const DEFAULT_QUIET: QuietHours = { start: "22:00", end: "07:00" }
 
@@ -40,12 +41,30 @@ export function Settings({ onBack }: { onBack: (() => void) | undefined }) {
             </div>
           </Group>
           <Notifications />
+          <Conversation />
           <Appearance />
           <ThisBrowser />
           <Diagnostics />
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * What Send does while an agent works: steer it, or queue the message for after the turn. The desk's own choice
+ * (Settings › Conversation, "Enter steers a running turn"), the same preference, read by this browser's composers.
+ */
+function Conversation() {
+  const steer = usePrefs((prefs) => prefs.steerOnEnter)
+  return (
+    <Group title="Conversation" footer={steer ? "Hold Send to queue a message for after the turn instead. Agents that can't take a message mid-turn always queue." : "Hold Send to steer the running turn instead, where its agent can take a message mid-turn."}>
+      <Row
+        label="Send steers a working agent"
+        detail={steer ? "Your message goes into the turn it's running" : "Your message waits for the turn to end"}
+        end={<Switch on={steer} label="Send steers a working agent" onChange={(on) => setPref("steerOnEnter", on)} />}
+      />
+    </Group>
   )
 }
 

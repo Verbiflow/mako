@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { AcpPanel } from "@/components/viewer/acp-panel"
 import { Composer as DeskComposer } from "@/components/composer/composer"
 import { TranscriptEndContext, type TranscriptEnd } from "@/components/transcript/transcript-end"
 import { ExchangeNoteContext, PromptNoteContext } from "@/components/transcript/transcript-notes"
+import { CompactPresentationContext, type CompactPresentation } from "@/components/transcript/compact-presentation"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useWebClient } from "./client"
 import { useAnswered } from "./answered"
@@ -12,6 +13,10 @@ import { webHarnessLabel } from "./labels"
 import { DELIVERY_WORDS, deliveryOf } from "./delivery"
 import { resumeOutbox, retryUnconfirmed, useOutbox } from "./outbox"
 import type { WebSession } from "./threads"
+import { PhoneReply, ReplySheet } from "./reply"
+import { useReplyHold } from "./replies"
+import { useWide } from "./route"
+import { PhoneSteps } from "./steps"
 
 const NO_RECORDS: never[] = []
 
@@ -56,6 +61,11 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
   const harness = webHarnessLabel(session.row.harness)
   const cloudThread = session.owner.kind === "cloud" ? session.owner.threadId : undefined
   const target = useMemo(() => ({ conversation, ...(cloudThread && { cloudThread }) }), [conversation, cloudThread])
+  // Under a finger: replies offer Copy and Branch; on a phone's width a run of steps is one line that opens them.
+  const wide = useWide()
+  const compact = useMemo<CompactPresentation>(() => ({ reply: (reply) => <PhoneReply reply={reply} />, ...(!wide && { steps: (run) => <PhoneSteps key={run.id} run={run} /> }) }), [wide])
+  const live = useRef<HTMLDivElement>(null)
+  const hold = useReplyHold(live)
   if (desk)
     return (
       <PromptNoteContext value={note}>
@@ -69,7 +79,8 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
     <PromptNoteContext value={note}>
       <ExchangeNoteContext value={exchangeNote}>
         <TranscriptEndContext value={end}>
-          <div className="web-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
+          <CompactPresentationContext value={compact}>
+          <div ref={live} className="web-live flex min-h-0 flex-1 flex-col" data-conversation={conversation}>
             {active ? <AcpPanel asks={false} /> : <div className="flex-1" />}
             <WebDock
               conversation={conversation}
@@ -80,7 +91,9 @@ export default function LiveSession({ session, desk = false }: { session: WebSes
               jump={() => jump.to?.()}
               reconnect={() => client.gateway.wake()}
             />
+            <ReplySheet reply={hold.reply} onDismiss={hold.close} />
           </div>
+          </CompactPresentationContext>
         </TranscriptEndContext>
       </ExchangeNoteContext>
     </PromptNoteContext>
