@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Run `echo hi > ../outside.txt` in the shell and tell me whether it worked. A command that writes outside the project, which a sandboxed harness refuses. Codex 0.159.3 sends no item for a command its sandbox refused; its rollout keeps the call.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#locrian-ticket",
+      "path": ".local/share/devin/cli/sessions.db#jealous-myrtle",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/bd54f25d-f988-4070-9f96-30af19979100.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/7f8638d9-75a6-4e5f-a41a-1fc044514480.db",
       "known": []
     }
   ],

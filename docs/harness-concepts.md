@@ -11,7 +11,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 | Cursor | 2026-10-06 | SDK 1.0.31 | its own listing (skills, MCP) |
 | OpenCode | 2026-10-30 | 2.2.3 | its own listing (skills, MCP) |
 | Grok | 2026-10-06 | 1.0.46 | its own listing (skills, MCP) |
-| Devin | 2026-10-06 | 3000.10.23 | its own listing (skills, MCP) |
+| Devin | 2026-10-30 | 3000.11.234 | its own listing (skills, MCP) |
 
 ## Instructions
 
@@ -140,7 +140,7 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 | Cursor | 1.0.31 | 2026-10-06 | 16 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
 | OpenCode | 2.2.3 | 2026-10-30 | 14 | 4 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model |
 | Grok | 1.0.46 | 2026-10-08 | 26 | 4 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode |
-| Devin | 3000.10.23 | 2026-10-08 | 24 | 4 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode; not smart, which Devin offers only to an account whose settings allow it |
+| Devin | 3000.11.234 | 2026-10-30 | 24 | 4 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode; not smart, which Devin offers only to an account whose settings allow it |
 
 ## Plan, questions and subagents
 

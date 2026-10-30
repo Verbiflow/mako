@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#saber-target",
+      "path": ".local/share/devin/cli/sessions.db#marked-ease",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/54150396-e6cc-4d1a-ab0a-5e77a42c31a6.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/c105a766-e066-43f5-8c7d-04368fb396a4.db",
       "known": []
     }
   ],

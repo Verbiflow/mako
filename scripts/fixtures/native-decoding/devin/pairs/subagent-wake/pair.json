@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Run exactly one subagent in the background (do not wait for it) whose whole task is to reply with a marker, then end your turn at once. A subagent left running in the background reports after the turn that started it; the harness runs a turn of its own on the report, or takes it into the turn still running.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#flax-script",
+      "path": ".local/share/devin/cli/sessions.db#scratched-leech",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/02df3c82-095d-416b-9685-9d9accacdf0f.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/bd32b182-8c97-4f95-b83d-45b770273dc4.db",
       "known": [
         {
           "side": "-",
