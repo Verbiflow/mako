@@ -1232,10 +1232,14 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         }
       },
       "imageGeneration": {
+        "native": {
+          "name": "experimental_image_generate",
+          "where": "its `experimental_image_generate` tool"
+        },
         "mako": {
-          "state": "absent",
-          "by": "harness",
-          "reason": "OpenCode has no image generation tool."
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
         }
       },
       "codeMode": {

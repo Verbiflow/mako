@@ -91,7 +91,7 @@ Bold is the harness's own, shown in Mako; "Mako's" runs Mako's own; "none here" 
 | Plugins | Packages of commands, skills, agents and hooks the harness loads. | – | plugins, by default | plugins, by default | plugins: Mako gap | plugins, by default | plugins, by default | plugins, by default |
 | Response style | A saved style for how the agent writes its replies. | – | output styles, by default | none here (personality) | none | none | none here (/personas) | none |
 | Web search | The agent searches the web. | – | **WebSearch** | **web_search, web__run** | none here (webSearch) | **websearch** | **web_search** | **web_search** |
-| Image generation | The agent makes or edits images. | – | none | **image generation** | **generateImage** | none | **image_gen, image_edit** | none |
+| Image generation | The agent makes or edits images. | – | none | **image generation** | **generateImage** | **experimental_image_generate** | **image_gen, image_edit** | none |
 | Code mode | The agent calls its tools from a script it writes. | – | none | **exec** | none | **execute** | none | none |
 
 ## 5. Only this harness
@@ -131,6 +131,6 @@ List what no other harness has in the definition's `unique`: its name, what carr
 - Claude Code, versions: tested 2.1.310, no oldest proven, bundled @anthropic-ai/claude-agent-sdk
 - Codex, versions: tested 0.164.0, oldest 0.142.0
 - Cursor, versions: tested 1.0.40, no oldest proven, bundled @cursor/sdk
-- OpenCode, versions: tested 2.1.4, oldest 2.0.0
+- OpenCode, versions: tested 2.2.3, oldest 2.0.0
 - Grok, versions: tested 1.0.70, oldest 0.2.97
 - Devin, versions: tested 3000.11.205, no oldest proven

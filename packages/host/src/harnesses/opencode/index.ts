@@ -58,7 +58,7 @@ export const installOpenCode: ProviderModule = (host, context) => {
       plugins: { native: native("plugins", "`plugin` in its config; `.opencode/plugins` and `~/.config/opencode/plugins`"), mako: byDefault("OpenCode loads its configured plugins in sessions Mako starts.") },
       responseStyle: { mako: harnessLacks("OpenCode shapes replies through each agent's prompt, not a style.") },
       webSearch: { mako: TOOL_ROWS },
-      imageGeneration: { mako: harnessLacks("OpenCode has no image generation tool.") },
+      imageGeneration: { mako: TOOL_ROWS },
       codeMode: { mako: TOOL_ROWS },
     },
     unique: [],
