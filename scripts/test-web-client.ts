@@ -530,6 +530,9 @@ test("one send button: Send idle, Stop when empty at work, Steer or Queue by the
   assert.deepEqual(at({ running: true, canSteer: false }), { kind: "queue", label: "Queue" })
   assert.equal(at({ running: true, editingQueued: true }).kind, "update")
   assert.equal(at({ running: true, hasContent: false, editingQueued: true }).kind, "update")
+  // Words under an open question answer it: Send, whatever the turn is doing.
+  assert.deepEqual(at({ running: true, canSteer: true, answering: true }), { kind: "send", label: "Send answer" })
+  assert.equal(at({ running: true, hasContent: false, answering: true }).kind, "stop")
   assert.equal(sendChoiceDetail("queue", "step"), "Runs after this turn")
   assert.notEqual(sendChoiceDetail("steer", "interrupt"), sendChoiceDetail("steer", "step"))
 })

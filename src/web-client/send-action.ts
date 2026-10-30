@@ -30,12 +30,15 @@ export interface SendSituation {
   steerByDefault: boolean
   /** What the button says when idle: a new Thread's starts it. */
   sendLabel?: string
+  /** The agent asks a question the field's words answer: they go as its answer, not as a message to queue or steer. */
+  answering?: boolean
 }
 
 const LABELS = { queue: "Queue", steer: "Steer", stop: "Stop", update: "Save queued message" } as const
 
 export function sendPresentation(situation: SendSituation): SendPresentation {
   if (situation.editingQueued) return { kind: "update", label: LABELS.update }
+  if (situation.answering && situation.hasContent) return { kind: "send", label: "Send answer" }
   const enter = composerEnterAction({ canSteer: situation.canSteer, steerOnEnter: situation.steerByDefault })
   const kind = composerActionKind({ running: situation.running, hasContent: situation.hasContent, steer: enter === "steer" })
   if (kind === "send" || kind === "resume") return { kind: "send", label: situation.sendLabel ?? "Send" }

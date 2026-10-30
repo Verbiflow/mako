@@ -125,7 +125,9 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
         onUnsent={(message: Outgoing) => keepUnsent({ ...message, conversation })}
         // A question is answered in words: nothing to attach, and the hint gets the room.
         attach={ask?.kind !== "question"}
-        steering={steering}
+        // A question waiting: typed words are its answer, which a send takes; nothing steers past it.
+        steering={ask?.kind === "question" ? undefined : steering}
+        answering={ask?.kind === "question"}
         editing={editing.current}
         waiting={switching ? "Switching access…" : undefined}
         tools={harnessId ? <ThreadChips conversation={conversation} harness={harnessId} /> : undefined}

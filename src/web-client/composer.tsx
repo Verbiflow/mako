@@ -70,6 +70,7 @@ export function Composer({
   steering,
   editing,
   waiting,
+  answering = false,
 }: {
   placeholder: string
   /** Sends a message under `id`; says whether it went. One that didn't comes back into an empty field, or to `onUnsent`. */
@@ -103,6 +104,8 @@ export function Composer({
   editing?: EditingQueued
   /** Something a send must go after, on its way now ("Switching access…"): the button turns and waits. */
   waiting?: string
+  /** The agent's question is open above: the field's words answer it. */
+  answering?: boolean
 }) {
   const [text, setText] = useState(() => (draftKey ? openingText(draftKey, outboxHolds) : ""))
   const [picked, setPicked] = useState<Picked[]>([])
@@ -155,7 +158,7 @@ export function Composer({
 
   const over = encodedBytes(picked) > ATTACHMENT_BUDGET
   const hasContent = Boolean(text.trim() || dictation.hearing) || picked.length > 0
-  const presentation = sendPresentation({ running, hasContent, editingQueued: editing !== undefined, canSteer: steering?.canSteer === true, steerByDefault, sendLabel })
+  const presentation = sendPresentation({ running, hasContent, editingQueued: editing !== undefined, canSteer: steering?.canSteer === true, steerByDefault, sendLabel, answering })
   const ready = hasContent && !over && !disabled && sendable
 
   const send = async (how?: "queue" | "steer") => {
