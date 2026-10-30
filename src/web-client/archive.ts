@@ -7,6 +7,7 @@ import { ReturnReleaseRequestSchema, ReturnStateSchema, type ReturnBeginRequest,
 import type { ClientSession } from "@mako/protocol"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import { z } from "zod"
+import { whileBusy } from "./busy"
 import { ARCHIVE_PLANS, CONSOLE_LOG, GatewayError } from "./gateway"
 
 /**
@@ -50,7 +51,7 @@ export function archiveCloudThread(gateway: ArchiveGateway, deviceId: string, th
     if (each.thread === threadId) step(each.kind)
   })
   if (heard) steps.add(heard)
-  return archiver.archive(threadId, options.op ?? crypto.randomUUID(), options.anyway ?? false, () => listedArchiveInputs(rows, threadId)).finally(() => {
+  return whileBusy(archiver.archive(threadId, options.op ?? crypto.randomUUID(), options.anyway ?? false, () => listedArchiveInputs(rows, threadId))).finally(() => {
     if (heard) steps.delete(heard)
   })
 }

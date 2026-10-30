@@ -5,6 +5,7 @@ import { reportAttention } from "./attention"
 import type { WebConversations } from "./conversations"
 import { ARCHIVE_PLANS, Gateway, type WebAccount, type WebConnection } from "./gateway"
 import { WebPush } from "./push"
+import { RETURNED_EVENT, watchReturns, type Returned, type ReturnKind } from "./resume"
 
 /** What the page that hosts the client gives it: where the gateway is, and this browser's sign-in. */
 export interface WebClientOptions {
@@ -35,6 +36,8 @@ export class WebClient {
   readonly deviceId: string
   readonly list: AccountList
   #conversations: Promise<WebConversations> | undefined
+  /** The conversations once read: what a return wakes, and what hiding lets go of. */
+  #loaded: WebConversations | undefined
   readonly push: WebPush
   readonly #stops: Array<() => void> = []
 
@@ -68,27 +71,18 @@ export class WebClient {
     )
     client.list.start()
     client.#stops.push(reportAttention(gateway))
-    const woke = () => {
-      if (document.visibilityState !== "visible") return
-      gateway.wake()
-      client.list.wake()
-    }
-    // Whatever the list heard since it was last kept is kept as the page goes or is put away (a phone's app switcher
-    // hides a page without ending it), for the next visit to paint.
-    const leaving = () => client.list.save()
-    const hidden = () => {
-      if (document.visibilityState === "hidden") leaving()
-    }
-    document.addEventListener("visibilitychange", hidden)
-    document.addEventListener("visibilitychange", woke)
-    window.addEventListener("online", woke)
-    window.addEventListener("pagehide", leaving)
-    client.#stops.push(() => {
-      document.removeEventListener("visibilitychange", woke)
-      window.removeEventListener("online", woke)
-      window.removeEventListener("pagehide", leaving)
-      document.removeEventListener("visibilitychange", hidden)
-    })
+    client.#stops.push(
+      watchReturns({
+        // Whatever the list heard since it was last kept is kept as the page goes or is put away (a phone's app switcher
+        // hides a page without ending it), for the next visit to paint; transcripts off screen are let go, so iOS is
+        // less likely to end the page to free memory and bring it back black.
+        hidden: () => {
+          client.list.save()
+          client.#loaded?.releaseHidden()
+        },
+        returned: (kind, away) => client.#returned(kind, away),
+      })
+    )
     void client.push.renew().catch((error) => console.warn("[mako] this browser's notifications weren't renewed", error))
     // An archive this browser left under way (the page closed mid-way) is settled, so its Thread isn't left fenced. Its
     // code is read only when there's a plan of one to read.
@@ -106,9 +100,27 @@ export class WebClient {
     this.#conversations ??= import("./conversations").then(({ WebConversations }) => {
       const conversations = new WebConversations({ gateway: this.gateway, deviceId: this.deviceId, row: (conversation) => this.list.byConversation(conversation) })
       window.mako = conversations.bridge
+      this.#loaded = conversations
       return conversations
     })
     return this.#conversations
+  }
+
+  /**
+   * Back in front. Every socket is asked whether it's alive, and one that stays silent for three seconds (or was already
+   * quiet past its heartbeat, as a frozen page's is) is ended and opened again, while the list's next follow starts
+   * now rather than after its backoff. Away ten seconds or more, what's shown is stale: the list and the open
+   * conversation are read again over HTTP at once, which answers even while a dead socket is being replaced.
+   */
+  #returned(kind: ReturnKind, away: number): void {
+    this.gateway.wake()
+    this.list.wake()
+    this.#loaded?.wake()
+    if (kind === "long") {
+      void this.list.refresh().catch(() => undefined)
+      this.#loaded?.resync()
+    }
+    window.dispatchEvent(new CustomEvent<Returned>(RETURNED_EVENT, { detail: { kind, away } }))
   }
 
   /** Ends this browser's sign-in everywhere, and forgets what it kept to paint the next visit. */

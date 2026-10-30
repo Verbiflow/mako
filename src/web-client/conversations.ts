@@ -9,11 +9,14 @@ import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { listedOwner, type ListedOwner } from "@mako/host/contracts/listed-conversations"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import { z } from "zod"
-import { applyLiveBatch, hydrateLive, listLive } from "@/state/live-recovery"
+import { applyLiveBatch, hydrateLive, listLive, unloadLive } from "@/state/live-recovery"
+import { watchLiveResidency } from "@/state/live-residency"
 import { acp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
 import { threadsStore } from "@/state/thread-store"
 import { CONSOLE_LOG, type Gateway } from "./gateway"
+import { whileBusy } from "./busy"
+import { syncingStore } from "./syncing"
 import { webSync } from "./sync-readings"
 import type { WebSession } from "./threads"
 import { harnessDescriptors } from "@/dev/harness-descriptors"
@@ -28,6 +31,12 @@ const SIGNED_FILES = "mako-file://asset/"
 const FilesGrantSchema = z.object({ url: z.string().url() })
 /** An address for an owner's files is asked again after this: it ends an hour after its last use. */
 const FILES_KEPT_MS = 30 * 60_000
+/**
+ * The transcripts this browser keeps in memory besides the one on screen: the few read most recently, so going back to
+ * one paints it at once and only catches up, within a bound a phone's page can hold. Hidden, it keeps only what's open.
+ */
+const RECENT_TRANSCRIPTS = { bytes: 32 * 1024 * 1024, recent: 4 }
+
 /** The head of an owner's stream line: which conversation's event it carries, and what kind. */
 const LineHeadSchema = z.object({ channel: z.string().optional(), type: z.string().optional(), conversation: z.string().optional() })
 
@@ -49,6 +58,8 @@ export class WebConversations {
   readonly #files = new Map<string, { at: number; origin: Promise<string> }>()
   /** The owner streams followed, by stream: one follow per stream, however many of its conversations are open. */
   readonly #follows = new Map<string, { subscription?: Subscription; conversations: Set<string>; stopped: boolean }>()
+  /** Follows waiting out a backoff before they follow again: a return cuts the wait short. */
+  readonly #waits = new Set<() => void>()
 
   constructor(options: { gateway: Gateway; deviceId: string; row: (conversation: string) => ListedSession | undefined }) {
     this.#gateway = options.gateway
@@ -102,6 +113,7 @@ export class WebConversations {
       pathForFile: () => null,
       resolveFileUrl: (url) => url,
     })
+    watchLiveResidency(RECENT_TRANSCRIPTS)
   }
 
   /**
@@ -149,7 +161,7 @@ export class WebConversations {
    * owner does. Throws, saying so, while its device is off.
    */
   async archiveOnOwner(conversation: string): Promise<void> {
-    await this.call(conversation, "mako:thread-archive", [{ id: crypto.randomUUID(), target: { kind: "live", id: conversation }, archived: true }])
+    await whileBusy(this.call(conversation, "mako:thread-archive", [{ id: crypto.randomUUID(), target: { kind: "live", id: conversation }, archived: true }]))
   }
 
   /**
@@ -162,7 +174,9 @@ export class WebConversations {
     threadsStore.set({ descriptors: webHarnessDescriptors() })
     listLive([session.summary])
     const stop = this.#follow(session.owner, conversation)
-    acp.activate(conversation)
+    // What this page kept of it paints at once; the read that catches it up says "Syncing…" while it runs.
+    acp.activate(conversation, false)
+    this.#sync(conversation, false)
     return () => {
       stop()
       if (acpStore.get().activeKey === conversation) acp.deactivate()
@@ -238,7 +252,7 @@ export class WebConversations {
         follow.subscription = subscription
         // Followed again where the stream can't be picked up (nothing heard yet, or a gateway that keeps nothing): what
         // went by meanwhile is read as a snapshot.
-        if (!first && !resumes) for (const conversation of follow.conversations) void hydrateLive(conversation, true)
+        if (!first && !resumes) for (const conversation of follow.conversations) this.#sync(conversation, true)
         first = false
         let gap = false
         while (!gap) {
@@ -256,7 +270,7 @@ export class WebConversations {
           if (verdict.kind === "notice" || verdict.kind === "duplicate") continue
           if (verdict.kind === "reread") {
             readings.reread()
-            for (const conversation of follow.conversations) void hydrateLive(conversation, true)
+            for (const conversation of follow.conversations) this.#sync(conversation, true)
             continue
           }
           if (verdict.kind === "gap") {
@@ -277,7 +291,50 @@ export class WebConversations {
         probedAt = undefined
         CONSOLE_LOG.warn("a conversation's stream ended; following it again", { stream: owner.stream, error: error instanceof Error ? error.message : String(error) })
       }
-      await new Promise((resolve) => setTimeout(resolve, followAgainInMs(failures++)))
+      await this.#wait(followAgainInMs(failures++))
+    }
+  }
+
+  /** A backoff before following again, which a return (`wake`) ends at once. */
+  #wait(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer)
+        this.#waits.delete(done)
+        resolve()
+      }
+      const timer = setTimeout(done, ms)
+      this.#waits.add(done)
+    })
+  }
+
+  /**
+   * Reads a conversation again from its owner, saying "Syncing…" while it's the one open: what's on screen stays as
+   * it is meanwhile, never a skeleton. `quiet`: a failure isn't said, as for a read that only catches up.
+   */
+  #sync(conversation: string, quiet: boolean): void {
+    if (acpStore.get().activeKey === conversation) syncingStore.set({ conversation })
+    void hydrateLive(conversation, quiet).finally(() => {
+      if (syncingStore.get().conversation === conversation) syncingStore.set({ conversation: undefined })
+    })
+  }
+
+  /** Back after a while away: the open conversation is read again, as what it shows may be minutes old. */
+  resync(): void {
+    const open = acpStore.get().activeKey
+    if (open && [...this.#follows.values()].some((follow) => follow.conversations.has(open))) this.#sync(open, true)
+  }
+
+  /**
+   * The page went out of view: every transcript but the open one, and any at work or waiting on the person, goes back
+   * to its listing, read again when it's opened. A hidden page that holds less is the last iOS ends for memory.
+   */
+  releaseHidden(): void {
+    const { activeKey, conversations } = acpStore.get()
+    for (const conversation of Object.values(conversations)) {
+      if (conversation.kind !== "live" || !conversation.hydrated || conversation.key === activeKey) continue
+      if (conversation.session.status === "running" || conversation.session.status === "starting" || conversation.permission || conversation.sending || conversation.pendingPrompts?.length) continue
+      unloadLive(conversation.key)
     }
   }
 
@@ -317,9 +374,10 @@ export class WebConversations {
     return event.batch.emittedAt
   }
 
-  /** After a sleep or a network change: every followed stream that went quiet is followed again at once. */
+  /** After a sleep, a return or a network change: every followed stream that went quiet is followed again at once. */
   wake(): void {
     this.#gateway.wake()
+    for (const done of this.#waits) done()
   }
 }
 

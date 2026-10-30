@@ -17,6 +17,8 @@ import { moveToCloud } from "./start"
 import { CLOUD_WHERE, openingSession, ownerOf, subtitle, type WebSession, type WebThread } from "./threads"
 import { startingWhere } from "./started"
 import { useThread } from "./use-thread"
+import { useSyncing } from "./syncing"
+import { useDelayedStatus } from "./delayed-status"
 
 /** The renderer's live conversation: its transcript, approvals and questions, the desktop's own code. Its own chunk. */
 const LiveSession = lazy(() => import("./live-session"))
@@ -25,6 +27,9 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   const thread = useThread(threadId)
   const phase = useAccountList((state) => state.phase)
   const heading = useRef<HTMLHeadingElement>(null)
+  // Read again after a return or a reconnect, or opened from what this page kept: said quietly where its place is.
+  const syncingConversation = useSyncing((state) => state.conversation)
+  const syncing = useDelayedStatus(thread?.sessions.some((each) => each.row.conversation === syncingConversation) ? "Syncing…" : null, threadId)
   const [adding, setAdding] = useState(false)
   const [previewing, setPreviewing] = useState(false)
   // The Session it opened on, when the address names none: kept while the screen is open, so a Session that stops
@@ -68,7 +73,7 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
       <ThreadBar
         onBack={wide ? undefined : onBack}
         title={thread.title}
-        subtitle={subtitle(thread, session)}
+        subtitle={syncing ?? subtitle(thread, session)}
         place={session.row.runsOn.kind === "cloud" ? "cloud" : "device"}
         headingRef={heading}
         actions={thread.archived ? undefined : <ThreadActions thread={thread} session={session} onArchived={onBack} onPreview={() => setPreviewing(true)} onAdd={addingTo && thread.sessions.length === 1 ? () => setAdding(true) : undefined} />}

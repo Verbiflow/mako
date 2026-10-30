@@ -256,7 +256,11 @@ the notice waits, and it goes once they leave if its fact is still true. So
 the Mac's own banner is the one a person at the Mac sees, and the phone is
 told two minutes after they walk away. The web app's service worker shows
 every notice it's sent (a browser takes a push that shows nothing as abuse);
-a tap opens the Thread. The web client is `@mako/web-client`
+a tap opens the Thread. With the app already open, iOS brings its page forward
+exactly as it was, so the worker doesn't navigate it: it posts the address to the
+page and leaves it in Cache Storage (`mako-notice`, `/__mako/notice`), which the
+page reads as it comes into view, and the page opens the Thread itself, once per
+tap (`open-notice.ts`). The web client is `@mako/web-client`
 (`packages/web-client`, its code in `src/web-client`).
 
 ### What stays out

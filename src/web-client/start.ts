@@ -9,6 +9,7 @@ import type { ThreadWorktrees } from "@mako/host/contracts/thread-worktrees"
 import type { SessionModel } from "@mako/sessions/settings"
 import { z } from "zod"
 import { errorMessage } from "@mako/host/contracts/error-message"
+import { whileBusy } from "./busy"
 import { CONSOLE_LOG, type Gateway } from "./gateway"
 import { WEB_HARNESSES } from "./labels"
 
@@ -137,7 +138,7 @@ export interface Started {
  */
 export async function startOnMac(gateway: Gateway, webDeviceId: string, deviceId: string, start: Loadout & { folder: string; message: FirstMessage }): Promise<Started> {
   const conversationId = crypto.randomUUID()
-  const snapshot = await macCall<LiveSnapshot>(gateway, webDeviceId, deviceId, "mako:live-start", [start.harness, start.folder, startOptions(conversationId, start.message, start)], { history: true })
+  const snapshot = await whileBusy(macCall<LiveSnapshot>(gateway, webDeviceId, deviceId, "mako:live-start", [start.harness, start.folder, startOptions(conversationId, start.message, start)], { history: true }))
   return { conversationId, threadId: snapshot.threadId ?? conversationId }
 }
 
@@ -149,7 +150,11 @@ export type CloudStep = "making" | "preparing" | "starting"
  * repository, its machine's folder read from its boot, then the harness started there with the first message. A
  * machine that couldn't clone the repository fails its boot with why (`folderUnmade`), so nothing starts.
  */
-export async function startInCloud(gateway: Gateway, webDeviceId: string, start: Loadout & { repository: CloudRepository; message: FirstMessage }, step: (step: CloudStep) => void): Promise<Started> {
+export function startInCloud(gateway: Gateway, webDeviceId: string, start: Loadout & { repository: CloudRepository; message: FirstMessage }, step: (step: CloudStep) => void): Promise<Started> {
+  return whileBusy(cloudStart(gateway, webDeviceId, start, step))
+}
+
+async function cloudStart(gateway: Gateway, webDeviceId: string, start: Loadout & { repository: CloudRepository; message: FirstMessage }, step: (step: CloudStep) => void): Promise<Started> {
   step("making")
   const threadId = `t-${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`
   await gateway.rest("POST", "/v1/threads", { threadId, home: "cloud", repository: start.repository, harness: start.harness })
@@ -178,11 +183,15 @@ export async function ownerCall<Result>(gateway: Gateway, webDeviceId: string, o
  * (`mako:thread-create-session`), then the harness started in it in the Thread's folder, in the person's mode for it,
  * with the first message.
  */
-export async function addSession(gateway: Gateway, webDeviceId: string, owner: Owner, start: Loadout & { thread: string; folder: string; message: FirstMessage }): Promise<Started> {
-  const placement = await ownerCall<{ session: string }>(gateway, webDeviceId, owner, "mako:thread-create-session", [crypto.randomUUID(), start.thread])
-  const conversationId = crypto.randomUUID()
-  await ownerCall<Json>(gateway, webDeviceId, owner, "mako:live-start", [start.harness, start.folder, startOptions(conversationId, start.message, start, { session: placement.session })], { history: true })
-  return { conversationId, threadId: start.thread }
+export function addSession(gateway: Gateway, webDeviceId: string, owner: Owner, start: Loadout & { thread: string; folder: string; message: FirstMessage }): Promise<Started> {
+  return whileBusy(
+    (async () => {
+      const placement = await ownerCall<{ session: string }>(gateway, webDeviceId, owner, "mako:thread-create-session", [crypto.randomUUID(), start.thread])
+      const conversationId = crypto.randomUUID()
+      await ownerCall<Json>(gateway, webDeviceId, owner, "mako:live-start", [start.harness, start.folder, startOptions(conversationId, start.message, start, { session: placement.session })], { history: true })
+      return { conversationId, threadId: start.thread }
+    })()
+  )
 }
 
 /**
@@ -190,7 +199,7 @@ export async function addSession(gateway: Gateway, webDeviceId: string, owner: O
  * it, hands it over and says how it went. A turn at work carries on in the cloud.
  */
 export function moveToCloud(gateway: Gateway, webDeviceId: string, deviceId: string, conversationId: string): Promise<ThreadMoveOutcome> {
-  return macCall<ThreadMoveOutcome>(gateway, webDeviceId, deviceId, "mako:thread-move", [conversationId, crypto.randomUUID(), { why: "asked" }])
+  return whileBusy(macCall<ThreadMoveOutcome>(gateway, webDeviceId, deviceId, "mako:thread-move", [conversationId, crypto.randomUUID(), { why: "asked" }]))
 }
 
 /** What the gateway answers for a preview: the address that opens it, on an origin of its own, and until when. */
