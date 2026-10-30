@@ -217,11 +217,16 @@ export interface PackTail {
   end: number
 }
 
+/**
+ * Read under the store's write lock, so it reads the newest pack alone: its last entry by the index on `(pack,
+ * offset)`, entries never overlapping. Summing every pack first (`packSpace`) scanned the whole chunk index under the
+ * lock: 19 s on a store of 5.4 million chunks, and up to 61 s on a busy Mac, while every other process's write waited.
+ */
 export function newestTail(db: DatabaseSync, folder: string): PackTail | null {
-  const newest = packSpace(db, folder).at(-1)
+  const newest = packFiles(folder).at(-1)
   if (!newest) return null
-  const end = CountSchema.parse(db.prepare("SELECT coalesce(max(offset + stored), 0) AS n FROM chunks WHERE pack = ?").get(newest.pack)).n
-  return { pack: newest.pack, size: newest.bytes, end }
+  const last = CountSchema.optional().parse(db.prepare("SELECT offset + stored AS n FROM chunks WHERE pack = ? ORDER BY offset DESC LIMIT 1").get(newest.pack))
+  return { pack: newest.pack, size: newest.bytes, end: last?.n ?? 0 }
 }
 
 /**
@@ -245,6 +250,11 @@ export interface PackSpace {
 /** Each pack's size against what the index names in it: the rest is dropped entries awaiting compaction and tails a write cut short left. */
 export function packSpace(db: DatabaseSync, folder: string): PackSpace[] {
   const live = new Map(z.object({ pack: z.number(), live: z.number() }).array().parse(db.prepare(`SELECT pack, sum(stored) + count(*) * ${ENTRY_HEADER_BYTES} AS live FROM chunks GROUP BY pack`).all()).map((row) => [row.pack, row.live]))
+  return packFiles(folder).map((file) => ({ ...file, live: live.get(file.pack) ?? 0 }))
+}
+
+/** The store's packs and their sizes on disk, oldest first. */
+function packFiles(folder: string): Array<{ pack: number; bytes: number }> {
   const packs = join(folder, "packs")
   let names: string[] = []
   try {
@@ -255,8 +265,7 @@ export function packSpace(db: DatabaseSync, folder: string): PackSpace[] {
   return names.flatMap((name) => {
     const match = /^(\d{8})\.pack$/.exec(name)
     if (!match) return []
-    const pack = Number(match[1])
-    return [{ pack, bytes: statSync(join(packs, name)).size, live: live.get(pack) ?? 0 }]
+    return [{ pack: Number(match[1]), bytes: statSync(join(packs, name)).size }]
   }).sort((left, right) => left.pack - right.pack)
 }
 
