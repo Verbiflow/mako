@@ -1004,7 +1004,7 @@ export class LiveConversations {
   }
 
   /** Continues a turn cut short, as Mako, now; see `LiveAutoContinue.continueNow`. */
-  continueTurn(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; actor: Actor }): LiveSnapshot {
+  continueTurn(id: string, input: { requestId: string; reason: InterruptionReason; continues: string; stopped?: readonly string[]; stayed?: boolean; actor: Actor }): LiveSnapshot {
     this.autoContinue.continueNow(id, input)
     return this.records.require(id).snapshot
   }

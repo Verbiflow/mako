@@ -829,6 +829,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       if (movesUnderWay.stepped(threads.store?.journalPlacement(conversationId)?.thread, move, step)) late.sessions?.showsChanged()
       emit({ type: "thread-move-step", conversationId, move, step })
     },
+    // However it ended, a throw included: no list says a move that nothing here runs.
+    ended: (move) => {
+      if (movesUnderWay.ended(move)) late.sessions?.showsChanged()
+    },
     newCloudThread: () => `t-${randomBytes(8).toString("hex")}`,
     ready: { take: (thread, folder, repository) => readinessOnce?.take(thread, folder, repository) ?? Promise.resolve(undefined) },
     carried: async (folder, why) => void (await carriedFiles?.sync(folder, why)),

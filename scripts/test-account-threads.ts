@@ -334,6 +334,13 @@ test("a Thread moving to the cloud says so on every row of it from the move's fi
   assert.equal(ownedSessions(sources).find((row) => row.conversation === "c-1")?.move, undefined)
   assert.equal(moves.stepped(thread, "m-1", { kind: "kept-here", reason: "x" }), false, "and only once")
   assert.equal(moves.stepped(undefined, "m-2", { kind: "packing" }), false, "a conversation the store can't place moves nothing it lists")
+  // A move that stops running here without its last step (it threw after the release) is listed no longer.
+  moves.stepped(thread, "m-4", { kind: "handing-over" })
+  assert.equal(moves.ended("m-5"), false, "another move's end changes nothing")
+  assert.equal(moves.of(thread)?.step, "handing-over")
+  assert.equal(moves.ended("m-4"), true, "its end is news")
+  assert.equal(moves.of(thread), undefined)
+  assert.equal(moves.ended("m-4"), false, "and only once")
   // A Thread long idle is listed while it moves, as one at work is.
   moves.stepped(thread, "m-3", { kind: "packing" })
   const old = { ...sources, summaries: () => [summary("c-1", NOW - SYNC_WINDOW_MS * 3)], lastMoved: () => NOW - SYNC_WINDOW_MS * 3 }

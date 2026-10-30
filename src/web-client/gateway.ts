@@ -128,7 +128,15 @@ export class Gateway {
    * sentence with its correlation ID. A token refused as run out is renewed and the request asked once more. The answer
    * is JSON not yet read as anything: each caller parses it with the schema of the route it asked.
    */
-  async rest<Body>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: Body, attempt = 1): Promise<JsonValue | undefined> {
+  rest<Body>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: Body): Promise<JsonValue | undefined> {
+    return this.#rest(method, path, body, { network: false, renewed: false })
+  }
+
+  /**
+   * One try of a request. Its two second chances are separate: a read the network failed is asked once more, and a
+   * token refused as run out is renewed once, whichever came first.
+   */
+  async #rest<Body>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body: Body | undefined, tried: { network: boolean; renewed: boolean }): Promise<JsonValue | undefined> {
     const { token } = await this.connection()
     const correlationId = crypto.randomUUID()
     const headers = new Headers({ authorization: `Bearer ${token}`, [CORRELATION_HEADER]: correlationId })
@@ -143,9 +151,9 @@ export class Gateway {
     } catch (error) {
       // Nothing came back: the network, not the gateway. A read is asked once more (a phone's first request after a
       // while idle often meets a connection the radio dropped); a change never is, since it may have landed.
-      if (method === "GET" && attempt === 1) {
+      if (method === "GET" && !tried.network) {
         await new Promise((resolve) => setTimeout(resolve, READ_RETRY_MS))
-        return this.rest(method, path, body, attempt + 1)
+        return this.#rest(method, path, body, { ...tried, network: true })
       }
       unanswered(CLOUD, { outcome: "network", correlationId, message: error instanceof Error ? error.message : String(error) })
       throw error
@@ -153,9 +161,9 @@ export class Gateway {
     // Any answer is Mako Cloud answering; a 5xx of its own is it failing to.
     if (response.status >= 500) unanswered(CLOUD, { outcome: String(response.status), correlationId, message: `The gateway answered ${response.status}` })
     else answered(CLOUD)
-    if (response.status === 401 && attempt === 1) {
+    if (response.status === 401 && !tried.renewed) {
       this.#current = undefined
-      return this.rest(method, path, body, 2)
+      return this.#rest(method, path, body, { ...tried, renewed: true })
     }
     if (!response.ok) throw await refusal(response, correlationId)
     if (response.status === 204) return undefined

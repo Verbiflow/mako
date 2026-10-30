@@ -228,13 +228,16 @@ export type CloudMovesOptions = {
      * answers the turn to continue and the work it stopped, or undefined when nothing was at work.
      */
     handOff(conversationId: string): Promise<{ requestId: string; stopped: string[] } | undefined>
-    continueTurn(conversationId: string, input: { requestId: string; reason: "handed-off"; continues: string; stopped?: readonly string[]; actor: Actor }): void
+    /** `stayed`: the move didn't happen, so the turn goes on here, saying so (`continueTurnPrompt`). */
+    continueTurn(conversationId: string, input: { requestId: string; reason: "handed-off"; continues: string; stopped?: readonly string[]; stayed?: true; actor: Actor }): void
     waitingPrompts(conversationId: string): Array<{ id: string; text: string; attachments: PromptAttachment[]; tuning?: SessionSettings; displayText?: string }>
     carried(conversationId: string, requestIds: readonly string[], to: "cloud"): void
   }
   /** The settings and access a native session last ran with, as this Mac remembers them. */
   remembered(harness: string, nativeId: string): { modeId?: string; settings?: SessionSettings } | null | undefined
   step(conversationId: string, move: string, step: ThreadMoveStep): void
+  /** A move stopped running in this host, however it ended: with its last step, or a throw that sent none. */
+  ended?(move: string): void
   newCloudThread(): string
   /**
    * Brings the account's copy of the project's carried files (its recipe's `carry`) up to date, if the person allowed
@@ -329,12 +332,7 @@ export class CloudMoves {
     let work = this.#running.get(move)
     if (!work) {
       this.#milestones.set(move, { released: deferred(), handed: deferred() })
-      work = this.#move(conversationId, MoveIdSchema.parse(move), handOff).finally(() => {
-        this.#running.delete(move)
-        this.#leaving.delete(move)
-        this.#milestones.delete(move)
-        this.#handed.delete(move)
-      })
+      work = this.#move(conversationId, MoveIdSchema.parse(move), handOff).finally(() => this.#ended(move))
       this.#running.set(move, work)
     }
     // Answered short of the whole move: what's left goes on in this host, which outlives a window, and the cloud,
@@ -405,15 +403,19 @@ export class CloudMoves {
       if (!plan || plan.phase === "started" || plan.phase === "kept-here" || this.#running.has(plan.move)) continue
       this.#leaving.set(plan.move, plan.thread)
       this.#milestones.set(plan.move, { released: deferred(), handed: deferred() })
-      const work = this.#resume(plan).finally(() => {
-        this.#running.delete(plan.move)
-        this.#leaving.delete(plan.move)
-        this.#milestones.delete(plan.move)
-        this.#handed.delete(plan.move)
-      })
+      const work = this.#resume(plan).finally(() => this.#ended(plan.move))
       this.#running.set(plan.move, work)
       await work.catch((error: Error) => hostWarn("moves", "a move a stopped host left couldn't be settled yet", { move: plan.move, error: error.message }))
     }
+  }
+
+  /** A move stopped running here: nothing of it is held, and whoever lists it hears so, however it ended. */
+  #ended(move: string): void {
+    this.#running.delete(move)
+    this.#leaving.delete(move)
+    this.#milestones.delete(move)
+    this.#handed.delete(move)
+    this.#options.ended?.(move)
   }
 
   async #move(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined): Promise<ThreadMoveOutcome> {
@@ -866,7 +868,7 @@ export class CloudMoves {
     const paused = plan.handingOff?.paused ?? []
     for (const { conversationId, requestId, stopped } of paused) {
       try {
-        this.#options.live.continueTurn(conversationId, { requestId: namedUuid(`mako move\0${plan.move}\0${requestId}\0continue-here`), reason: "handed-off", continues: requestId, stopped, actor: { kind: "service", name: "handoff" } })
+        this.#options.live.continueTurn(conversationId, { requestId: namedUuid(`mako move\0${plan.move}\0${requestId}\0continue-here`), reason: "handed-off", continues: requestId, stopped, stayed: true, actor: { kind: "service", name: "handoff" } })
       } catch (error) {
         hostWarn("moves", "a turn the handoff paused couldn't continue here", { move: plan.move, conversation: conversationId, error: errorMessage({ error }) })
       }

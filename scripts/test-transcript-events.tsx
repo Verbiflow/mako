@@ -12,6 +12,7 @@ import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { backgroundCommandTurn, CODEX_GOAL, codexGoalTurn, outputTail, subagentTurn } from "@mako/sessions/provider-turn"
 import { Exchange } from "../src/components/transcript/exchange"
 import { TranscriptSourceContext } from "../src/components/transcript/source-context"
+import { MoveDividersContext } from "../src/components/transcript/transcript-notes"
 import { entriesToMessages } from "../src/lib/entry-messages"
 import { createExchangeBuilder } from "../src/components/viewer/exchange-builder"
 import type { ViewedThread } from "../src/state/thread-state"
@@ -439,6 +440,28 @@ assert.match(stoppedWords, /Mako's exit stopped what you had left running in the
 assert.match(continueTurnPrompt("handed-off", "person", ["npm test"]), /The handoff stopped what you had left running in the background: `npm test`\./)
 for (const [reason, words] of [["host-quit", stoppedWords], ["handed-off", continueTurnPrompt("handed-off", "mako", ["npm test"])], ["host-quit", continueTurnPrompt("host-quit", "person", ["npm run dev"])]] as const)
   assert.equal(savedContinuation(words)?.reason, reason, `a continuation naming stopped work reads back: ${words}`)
+
+// A handoff's turn goes on where it ran next: in the cloud, a move, drawn as one where moves are watched (the phone);
+// on the Mac, its move refused, the turn reads as one run, live and saved alike.
+const stayedWords = continueTurnPrompt("handed-off", "mako", ["npm test"], { stayed: true })
+assert.match(stayedWords, /it stayed on this one instead/, "the agent is told it didn't move")
+assert.deepEqual(savedContinuation(stayedWords), { reason: "handed-off", stayed: true, sender: "mako" })
+assert.deepEqual(savedContinuation(continueTurnPrompt("handed-off", "mako")), { reason: "handed-off", sender: "mako" })
+const handedTurn = (words: string) => saved([{ kind: "user", at: at(50), text: "Run the suite" }, say("Running."), { kind: "user", at: at(51), text: words }, say("Done.")])
+const watched = (exchanges: ExchangeData[]) =>
+  renderToStaticMarkup(
+    <MoveDividersContext value>
+      <TranscriptSourceContext value={{ liveId: LIVE }}>
+        {exchanges.map((exchange) => (
+          <Exchange key={exchange.id} exchange={exchange} />
+        ))}
+      </TranscriptSourceContext>
+    </MoveDividersContext>
+  )
+assert.match(watched(handedTurn(continueTurnPrompt("handed-off", "mako"))), /data-moved-divider/, "moved: the line across the turn")
+assert.doesNotMatch(watched(handedTurn(stayedWords)), /data-moved-divider|Moved to the cloud/, "refused, it stayed: no line says it moved")
+assert.match(watched(streamed([{ kind: "user", text: "Run the suite" }, { kind: "user", text: continueTurnPrompt("handed-off", "mako") }])), /data-moved-divider/, "live draws it as saved does")
+assert.doesNotMatch(watched(streamed([{ kind: "user", text: "Run the suite" }, { kind: "user", text: stayedWords }])), /data-moved-divider/)
 
 // Read back from a store, Mako's goal loop is known by its own words, whole.
 const goalSaved = draw(saved([{ kind: "user", at: at(43), text: goalContinuePrompt("Ship the event lines") }, say("Next step.")]))

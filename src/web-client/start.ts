@@ -1,4 +1,4 @@
-import type { Json } from "@mako/protocol"
+import type { ClientSession, Json } from "@mako/protocol"
 import { bootFolder, type CloudRepository } from "@mako/host/contracts/cloud-threads"
 import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
 import { harnessOrder as savedOrder } from "@mako/host/contracts/harness-defaults"
@@ -14,11 +14,14 @@ import { CONSOLE_LOG, type Gateway } from "./gateway"
 import { WEB_HARNESSES } from "./labels"
 import { answered, macPlace, reachLog, threadPlace } from "./reach"
 
+/** What a host call needs of the gateway: its client session, which every call goes through. */
+export type HostCalling = { readonly session: ClientSession }
+
 /**
  * One host call to one of the account's Macs, through its runtime link: the same call its own window makes, answered
  * by its host as it answers that window (`serveHostThroughGateway`). Said at once, as itself, when the Mac is off.
  */
-export async function macCall<Result>(gateway: Gateway, webDeviceId: string, deviceId: string, channel: string, args: readonly unknown[], how: { history?: boolean } = {}): Promise<Result> {
+export async function macCall<Result>(gateway: HostCalling, webDeviceId: string, deviceId: string, channel: string, args: readonly unknown[], how: { history?: boolean } = {}): Promise<Result> {
   const runtimeId = `d-${deviceId}`
   const place = macPlace(deviceId)
   const log = reachLog(place)
@@ -175,13 +178,19 @@ async function cloudStart(gateway: Gateway, webDeviceId: string, start: Loadout 
 /** Who answers a Thread's calls: one of the account's Macs, or a cloud Thread's machine. */
 export type Owner = { kind: "mac"; deviceId: string } | { kind: "cloud"; threadId: string }
 
-/** One host call to a Thread's owner, whichever it is. */
-export async function ownerCall<Result>(gateway: Gateway, webDeviceId: string, owner: Owner, channel: string, args: readonly unknown[], how: { history?: boolean } = {}): Promise<Result> {
+/**
+ * One host call to a Thread's owner, whichever it is. `passive`: a look this browser keeps taking on its own (an app's
+ * status), never the person acting (`OperationEnvelope.passive`): a cloud Thread's machine asleep isn't woken by it and
+ * answers at once that it sleeps (a disconnect, not applied), nor is it kept running by it. A Mac is neither
+ * woken nor kept awake by a call, so it's asked as any call.
+ */
+export async function ownerCall<Result>(gateway: HostCalling, webDeviceId: string, owner: Owner, channel: string, args: readonly unknown[], how: { history?: boolean; passive?: boolean } = {}): Promise<Result> {
   if (owner.kind === "mac") return macCall<Result>(gateway, webDeviceId, owner.deviceId, channel, args, how)
   const place = threadPlace(owner.threadId)
   const log = reachLog(place)
-  const send = gatewayHostCalls(gateway.session, { threadId: owner.threadId, actor: { kind: "client", client: "web", deviceId: webDeviceId }, history: how.history ?? false, log }).call(channel, args)
-  const value = await sendWithRepeats(channel, send, { threadId: owner.threadId, log })
+  const passive = how.passive === true
+  const send = gatewayHostCalls(gateway.session, { threadId: owner.threadId, actor: { kind: "client", client: "web", deviceId: webDeviceId }, history: how.history ?? false, passive, log }).call(channel, args)
+  const value = await sendWithRepeats(channel, send, { threadId: owner.threadId, passive, log })
   answered(place)
   // SAFETY: the machine's host answers each channel with the value its bridge method declares.
   return decodeRuntimeValue(value) as Result

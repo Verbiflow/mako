@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, LaptopIcon, MoonIcon, SquarePenIcon } from "lucide-react"
+import { shallowEqual } from "@/state/store"
 import { Avatar } from "@/components/ui/avatar"
 import { useRowFlip } from "@/components/rail/use-row-flip"
 import { MarkStack, StackedMark } from "@/components/ui/mark-stack"
@@ -24,7 +25,8 @@ import { rowDetail, type RowContext } from "./rows"
 import { foldThreads, type WebThread } from "./threads"
 import { webHarnessLabel } from "./labels"
 import { macCount } from "./places"
-import { listedMove, useMoves, type WebMove } from "./moves"
+import { followedWays, listedMove, useMoves } from "./moves"
+import type { MoveWay } from "./move-progress"
 import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
@@ -65,9 +67,10 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, wide, starting
   const now = useTick(threads.some((thread) => thread.standing === "working"))
   // The held row's menu; `serial` starts each one afresh, a rename half-typed in the last one left behind.
   const [menu, setMenu] = useState<{ thread: WebThread; anchor: HTMLElement | null; open: boolean; serial: number } | undefined>(undefined)
-  const moves = useMoves((state) => state.moves)
+  // Which way each followed move goes, and only that: a step's bytes re-render no row.
+  const ways = useMoves((state) => followedWays(state.moves), shallowEqual)
   const rowProps = (thread: WebThread) => {
-    const context = rowContext(thread, read, now, moves.get(thread.id))
+    const context = rowContext(thread, read, now, ways[thread.id])
     return {
       thread,
       selected: thread.id === selected,
@@ -232,7 +235,7 @@ function ListTrouble() {
 function EmptyList({ answered, onNew }: { answered: boolean; onNew: () => void }) {
   const list = useAccountList((state) => state)
   const places = useReach((state) => state.places)
-  const needsMac = useMemo(() => !macConnection(list, new Set([...list.devices.keys()].filter((id) => places.get(macPlace(id))?.ok))).connected && !list.rows.some((row) => row.runsOn.kind === "device"), [list, places])
+  const needsMac = useMemo(() => !macConnection(list, new Set([...list.devices.keys()].filter((id) => places.get(macPlace(id))?.ok))).heard && !list.rows.some((row) => row.runsOn.kind === "device"), [list, places])
   // Kept up while it says it's done, a beat, then it gives way.
   const [connecting, setConnecting] = useState(false)
   if (answered && needsMac && !connecting) setConnecting(true)
@@ -288,15 +291,15 @@ export function HarnessMarks({ thread, size }: { thread: WebThread; size?: numbe
 
 function threadLabel(thread: WebThread, detail: string, unread: boolean): string {
   const harnesses = [...new Set(thread.sessions.map((session) => webHarnessLabel(session.row.harness)))].join(", ")
-  return `${shownTitle(thread)}. ${unread ? "Unread. " : ""}${detail}. ${harnesses}.${thread.quietSince ? ` ${thread.where} is off, seen ${copyAge(Date.parse(thread.quietSince))}.` : ""}`
+  return `${shownTitle(thread)}. ${unread ? "Unread. " : ""}${detail}. ${harnesses}.${thread.quietSince ? ` ${thread.where} is asleep or offline, seen ${copyAge(Date.parse(thread.quietSince))}.` : ""}`
 }
 
 /** When this browser first saw each Thread at work, for one whose owner doesn't say when its run started. */
 const seenWorking = new Map<string, number>()
 
 /** What a row reads besides its Thread: the clock, when its run started, whether it finished unread, a move under way. */
-function rowContext(thread: WebThread, read: ReadState, now: number, followed: WebMove | undefined): RowContext {
-  const way = followed && followed.end?.kind !== "failed" ? followed.way : listedMove(thread)?.way
+function rowContext(thread: WebThread, read: ReadState, now: number, followed: MoveWay | undefined): RowContext {
+  const way = followed ?? listedMove(thread)?.way
   if (way) return { move: way }
   if (thread.standing !== "working") {
     seenWorking.delete(thread.id)
