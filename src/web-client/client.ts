@@ -5,6 +5,7 @@ import { reportAttention } from "./attention"
 import type { WebConversations } from "./conversations"
 import { ARCHIVE_PLANS, Gateway, type WebAccount, type WebConnection } from "./gateway"
 import { WebPush } from "./push"
+import { loadReadState } from "./read-state"
 import { RETURNED_EVENT, watchReturns, type Returned, type ReturnKind } from "./resume"
 
 /** What the page that hosts the client gives it: where the gateway is, and this browser's sign-in. */
@@ -47,6 +48,7 @@ export class WebClient {
     this.account = who.account
     this.deviceId = who.deviceId
     this.list = new AccountList(gateway, who.account.id)
+    loadReadState(who.account.id)
     this.push = new WebPush(gateway)
   }
 
