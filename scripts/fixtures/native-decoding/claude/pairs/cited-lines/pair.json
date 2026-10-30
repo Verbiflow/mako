@@ -8,13 +8,7 @@
     {
       "reader": "claude",
       "path": ".claude/projects/-tmp-mako-pair-project/89c5b357-e626-4ab3-8c2b-2c4ab14fa63f.jsonl",
-      "known": [
-        {
-          "side": "+",
-          "line": "note: Unread record: record tools-used — not a kind Mako reads",
-          "reason": ""
-        }
-      ]
+      "known": []
     }
   ]
 }

@@ -10,24 +10,9 @@
       "path": ".claude/projects/-tmp-mako-pair-project/4a3f7b6b-6bb3-4a75-889f-cca946327f61.jsonl",
       "known": [
         {
-          "side": "+",
-          "line": "note: Unread record: record tools-used — not a kind Mako reads",
-          "reason": ""
-        },
-        {
           "side": "-",
           "line": "note: Warning — We're changing auto mode to no longer charge for classifier requests in Claude Code. However, this session isn't eligible because your requests go through 127.…",
           "reason": "Claude Code streams its system/informational notices to its client and keeps none in the transcript. This one names the sandbox's model address (127.0.0.1), so a session on Anthropic's own API never sees it."
-        },
-        {
-          "side": "+",
-          "line": "note: Unread record: record tools-used — not a kind Mako reads",
-          "reason": ""
-        },
-        {
-          "side": "+",
-          "line": "note: Unread record: record tools-used — not a kind Mako reads",
-          "reason": ""
         }
       ]
     }

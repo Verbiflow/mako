@@ -2,7 +2,8 @@ import type { Entry } from "@mako/sessions/entries"
 import { streamDifferences } from "@mako/sessions/harnesses"
 import type { ThreadPage } from "@mako/sessions"
 import type { LiveRequest } from "../contracts/live-conversations.js"
-import { mergeStream, recordSpan, type StreamMerge } from "@mako/sessions/stream-merge"
+import { mergeStreamSteps, recordSpanSteps, type StreamMerge } from "@mako/sessions/stream-merge"
+import { atOnce, type Steps } from "../base/slices.js"
 
 export interface MergedBase {
   base: ThreadPage
@@ -48,13 +49,18 @@ export function cutOffRequests(requests: readonly Pick<LiveRequest, "id" | "stat
  * differences were the parent's, reported when its own turns landed.
  */
 export function mergedBase(base: ThreadPage, blocks: readonly Entry[], covered: number, liveStart: number | undefined, options: MergeOptions = {}): MergedBase {
+  return atOnce(mergedBaseSteps(base, blocks, covered, liveStart, options))
+}
+
+/** `mergedBase` as `Steps`, for a caller that merges a slice at a time (`inSlices`); its inputs mustn't change meanwhile. */
+export function* mergedBaseSteps(base: ThreadPage, blocks: readonly Entry[], covered: number, liveStart: number | undefined, options: MergeOptions = {}): Steps<MergedBase> {
   const { inherited, cutOff } = options
   let entries = base.entries
   let start = liveStart
   let supplied: number | undefined
   if (inherited?.length && liveStart !== undefined && base.start === 0 && !base.hasEarlier) {
     const prefix = Math.min(liveStart, entries.length)
-    const merge = mergeStream(entries.slice(0, prefix), inherited, streamDifferences(base.ref.harness))
+    const merge = yield* mergeStreamSteps(entries.slice(0, prefix), inherited, streamDifferences(base.ref.harness))
     if (!merge.unaligned) {
       supplied = merge.entries.length - prefix
       entries = [...merge.entries, ...entries.slice(prefix)]
@@ -65,7 +71,7 @@ export function mergedBase(base: ThreadPage, blocks: readonly Entry[], covered: 
   if (covered <= 0 || start === undefined || start < base.start)
     return { base: entries === base.entries ? base : { ...base, entries }, ...at }
   const from = Math.min(start - base.start, entries.length)
-  const merge = mergeStream(entries.slice(from), blocks.slice(0, covered), streamDifferences(base.ref.harness), cutOff)
+  const merge = yield* mergeStreamSteps(entries.slice(from), blocks.slice(0, covered), streamDifferences(base.ref.harness), cutOff)
   return {
     base: { ...base, entries: from ? [...entries.slice(0, from), ...merge.entries] : merge.entries },
     merge,
@@ -83,10 +89,15 @@ export function mergedBase(base: ThreadPage, blocks: readonly Entry[], covered: 
  * be aligned, and the record then stands alone.
  */
 export function firstLiveStart(base: ThreadPage | null, record: ThreadPage, blocks: readonly Entry[]): number | undefined {
+  return atOnce(firstLiveStartSteps(base, record, blocks))
+}
+
+/** `firstLiveStart` as `Steps`. */
+export function* firstLiveStartSteps(base: ThreadPage | null, record: ThreadPage, blocks: readonly Entry[]): Steps<number | undefined> {
   if (!base) return 0
   if (base.ref.harness === record.ref.harness && base.ref.nativeId === record.ref.nativeId) return base.start + base.entries.length
   const from = base.start - record.start
   if (from < 0) return undefined
-  const span = recordSpan(record.entries.slice(from), base.entries, blocks)
+  const span = yield* recordSpanSteps(record.entries.slice(from), base.entries, blocks)
   return span === undefined ? undefined : base.start + span
 }

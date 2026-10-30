@@ -84,6 +84,12 @@ export class LiveDispatch {
         .catch((error) => hostWarn("live", "a queued message waits on a history read that failed", { conversation: resident.snapshot.session.id, error: errorMessage({ error }) }))
       return
     }
+    // Nor until the history's rows are written ahead (`LiveJournal.writtenAhead`), so the commit starting the turn writes none of them.
+    const ahead = resident.journal.writtenAhead()
+    if (ahead) {
+      void ahead.then(() => this.drain(resident))
+      return
+    }
     if (actions.blocks(resident)) return
     // Queued work stays queued, not held: cancelling a move starts it again.
     if (!this.access.moves.executes(resident)) return

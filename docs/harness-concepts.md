@@ -6,7 +6,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 
 | Harness | Checked on | Version | Places confirmed by |
 | --- | --- | --- | --- |
-| Claude Code | 2026-10-06 | 2.1.290 | its own listing (MCP) |
+| Claude Code | 2026-10-30 | 2.1.314 | its own listing (MCP) |
 | Codex | 2026-10-06 | 0.159.3 | its own listing (skills) |
 | Cursor | 2026-10-06 | SDK 1.0.31 | its own listing (skills, MCP) |
 | OpenCode | 2026-10-12 | 2.0.27 | its own listing (skills, MCP) |
@@ -135,7 +135,7 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 
 | Harness | Version | Recorded | Tools | Configurations | Declared, unlisted | Source |
 | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | 2.1.283 | 2026-10-06 | 27 (15 deferred) | 6 | 16 | the tools in the model request of Claude Code as Mako's SDK driver launches it (claudeSdkOptions), once per Mako mode; deferred tools' schemas from a second run with tool search off |
+| Claude Code | 2.1.314 | 2026-10-30 | 27 (15 deferred) | 6 | 16 | the tools in the model request of Claude Code as Mako's SDK driver launches it (claudeSdkOptions), once per Mako mode; deferred tools' schemas from a second run with tool search off |
 | Codex | 0.159.3 | 2026-10-06 | 22 (9 called from a script) | 16 | 16 | the tools in the model request of Codex's app-server with Mako's thread config (codexInteractiveConfig, codexCollaborationMode), per listed model, with and without plan |
 | Cursor | 1.0.31 | 2026-10-06 | 16 | 1 | 8 | the tool-call schema in @cursor/sdk (ConversationStepSchema's toolCall message): the arguments Cursor reports each tool with, not its model's definitions |
 | OpenCode | 2.0.27 | 2026-10-12 | 13 | 4 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model |

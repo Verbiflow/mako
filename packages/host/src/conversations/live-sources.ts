@@ -9,16 +9,18 @@ import { currentRecordPath } from "@mako/sessions/record-files"
 import type { BaseSource, BaseSpan, LiveSnapshot } from "../contracts/live-conversations.js"
 import type { LiveSessionState } from "../contracts/providers-acp.js"
 import { capturedThread } from "./live-context.js"
-import { copiedBaseBytes, journalIds, LiveJournal } from "./live-journal.js"
+import { copiedBaseBytesSteps, journalIds, LiveJournal } from "./live-journal.js"
 import { activeBinding, bindingPath, conversationControl, noteCarriedFolders, residentOf, type Dependencies, type LiveAccess, type Resident } from "./live-runtime.js"
 import { captureNativeHistory, withSeed } from "./native-history.js"
 import { baseKeptBecause, baseKeptOnceHeld, baseUnread, samePlace, sourceOfPage, spanIds, spanOf } from "./base-source.js"
-import { cutOffRequests, firstLiveStart, mergedBase } from "./stream-merging.js"
+import { cutOffRequests, firstLiveStartSteps, mergedBaseSteps } from "./stream-merging.js"
 import { sameEntries, samePage, sharedEntries } from "./shared-entries.js"
 import { forkHistory } from "./live-forks.js"
 import { ForkPointSchema } from "../contracts/conversation-control.js"
 import type { Entry } from "@mako/sessions/entries"
 import { retainMismatches } from "../base/stream-mismatches.js"
+import { pagedOf, readBack } from "./paged-entries.js"
+import { inSlices, type Steps } from "../base/slices.js"
 
 /**
  * Waits before reading an unread base again after an error: the catalog
@@ -26,6 +28,9 @@ import { retainMismatches } from "../base/stream-mismatches.js"
  * harness nor the record store has is not retried until the next load.
  */
 const BASE_READ_RETRIES = [500, 2_000, 8_000]
+
+/** How many times a history read from its session is merged again when what it merges with changed while it merged. */
+const MERGE_ATTEMPTS = 3
 
 /** `settleBases` lets the host breathe this long between journals, and checks this often whether work it waits on finished. */
 const SETTLE_PAUSE_MS = 2_000
@@ -40,7 +45,7 @@ export interface SettledBases {
 }
 
 type SourcesAccess = Pick<LiveAccess,
-  "dependencies" | "admission" | "load" | "require" | "resident" | "residents" | "add" | "actor" | "register" |
+  "dependencies" | "admission" | "load" | "loadSliced" | "require" | "resident" | "residents" | "add" | "actor" | "register" |
   "stamp" | "snapshot" | "summaries" | "sameSession" | "flush" | "pending" | "reconcileQuestions" | "scheduleHibernation" |
   "release" | "hasActiveWork">
 
@@ -244,18 +249,32 @@ export class LiveSources {
         conversation: id, harness: source.harness, ms, entries: page.entries.length,
         translator: page.translator ?? "none", restored: page.ref.archived === true,
       })
-      const snapshot = resident.snapshot
-      const recordStart = recordLiveStart(snapshot)
-      // The record holds a fork's inherited turns as its harness copied them; its parent's history gives them back what the parent's stream said.
-      const inherited = recordStart && isFork(snapshot) ? await this.parentHistory(snapshot) : undefined
-      if (this.access.resident(id) !== resident || resident.snapshot !== snapshot) return
-      const merged = mergedBase(page, snapshot.blocks, snapshot.baseCoveredBlocks ?? 0, recordStart, { inherited, cutOff: cutOffRequests(snapshot.requests) })
-      resident.snapshot = {
-        ...snapshot, base: merged.base, historyFailure: undefined,
-        // Read again, the inherited turns hold what the parent's history gives them now, or nothing when it gives none.
-        ...recordStart !== undefined && snapshot.baseSupplied !== merged.supplied && {
-          baseLiveStart: merged.liveStart ?? recordStart, baseSupplied: merged.supplied ?? (snapshot.baseSupplied === undefined ? undefined : 0),
-        },
+      for (let attempt = 1; ; attempt++) {
+        const snapshot = resident.snapshot
+        const recordStart = recordLiveStart(snapshot)
+        // The record holds a fork's inherited turns as its harness copied them; its parent's history gives them back what the parent's stream said.
+        const inherited = recordStart && isFork(snapshot) ? await this.parentHistory(snapshot) : undefined
+        // The merge reads every block it covers; paged ones are read back first, between other work.
+        const blocks = await readBack(snapshot.blocks.slice(0, snapshot.baseCoveredBlocks ?? 0))
+        // A slice at a time: a history of 150MB merged in one stretch held the loop for a third of a second.
+        const merged = await inSlices(mergedBaseSteps(page, blocks, snapshot.baseCoveredBlocks ?? 0, recordStart, { inherited, cutOff: cutOffRequests(snapshot.requests) }))
+        if (this.access.resident(id) !== resident || resident.snapshot.base || resident.snapshot.baseSource !== source) return
+        // What changed meanwhile (the blocks paged, a turn streaming past them) keeps the merge, unless it changed what was merged.
+        const now = resident.snapshot
+        if (now !== snapshot && !sameMergeInputs(snapshot, now)) {
+          if (attempt < MERGE_ATTEMPTS) continue
+          // Merged when the history is next needed (`readBase`).
+          hostLog("live", "what a conversation's history merges with kept changing while it merged", { conversation: id, attempts: attempt })
+          return
+        }
+        resident.snapshot = {
+          ...now, base: merged.base, historyFailure: undefined,
+          // Read again, the inherited turns hold what the parent's history gives them now, or nothing when it gives none.
+          ...recordStart !== undefined && snapshot.baseSupplied !== merged.supplied && {
+            baseLiveStart: merged.liveStart ?? recordStart, baseSupplied: merged.supplied ?? (snapshot.baseSupplied === undefined ? undefined : 0),
+          },
+        }
+        break
       }
     }
     this.access.flush(resident)
@@ -267,15 +286,15 @@ export class LiveSources {
    * is gone or no longer holds that point; its record then stands alone for
    * the turns it inherited.
    */
-  private async parentHistory(snapshot: LiveSnapshot): Promise<Entry[] | undefined> {
+  private async parentHistory(snapshot: LiveSnapshot): Promise<readonly Entry[] | undefined> {
     const ancestry = snapshot.control?.ancestry
     if (ancestry?.kind !== "fork") return undefined
     const loaded = Boolean(this.access.resident(ancestry.parentId))
-    const parent = this.access.load(ancestry.parentId)
+    const parent = await this.access.loadSliced(ancestry.parentId).catch(() => undefined)
     try {
       if (!parent) throw new Error("its parent's journal can't be opened")
       await this.readBase(parent)
-      return forkHistory(parent.snapshot, ForkPointSchema.parse(JSON.parse(ancestry.point)))
+      return await readBack(forkHistory(parent.snapshot, ForkPointSchema.parse(JSON.parse(ancestry.point))))
     } catch (error) {
       hostLog("live", "a fork's inherited turns read as its record has them", { conversation: snapshot.session.id, parent: ancestry.parentId, error: errorMessage({ error }) })
       return undefined
@@ -348,8 +367,9 @@ export class LiveSources {
     if (!read || read.entries.length < base.total) return keep("its session no longer holds what the history read")
     const entries = read.entries.slice(0, base.total)
     const span: BaseSpan = { entries: base.total, ids: spanIds(entries), heldAt }
-    const rebuilt = mergedBase({ ...read, entries, total: base.total, hasEarlier: false }, snapshot.blocks, snapshot.baseCoveredBlocks ?? 0, recordLiveStart(snapshot), { cutOff: cutOffRequests(snapshot.requests) })
-    return sameTurns(rebuilt.base.entries, base.entries) ? { span } : keep("its session, read again, holds other turns than the history it keeps")
+    const blocks = await readBack(snapshot.blocks.slice(0, snapshot.baseCoveredBlocks ?? 0))
+    const rebuilt = await inSlices(mergedBaseSteps({ ...read, entries, total: base.total, hasEarlier: false }, blocks, snapshot.baseCoveredBlocks ?? 0, recordLiveStart(snapshot), { cutOff: cutOffRequests(snapshot.requests) }))
+    return await inSlices(sameTurns(rebuilt.base.entries, base.entries)) ? { span } : keep("its session, read again, holds other turns than the history it keeps")
   }
 
   /** Where `source`'s session is now, by its identity; its harness may have moved it, as Codex compresses an idle rollout in place. */
@@ -396,19 +416,21 @@ export class LiveSources {
   private async settleNow(pauseMs: number): Promise<SettledBases> {
     const { root } = this.access.dependencies
     const started = performance.now()
-    const copies = journalIds(root).flatMap((id) => {
+    const copies: { id: string; bytes: number; changed: number }[] = []
+    for (const id of journalIds(root)) {
       try {
         const stamp = this.journalStamp(id)
         const settled = this.settledAt.get(id)
-        if (settled?.journal === stamp && (!settled.session || this.sessionStamp(settled.session.source) === settled.session.stamp)) return []
-        const bytes = copiedBaseBytes(root, id)
+        if (settled?.journal === stamp && (!settled.session || this.sessionStamp(settled.session.source) === settled.session.stamp)) continue
+        // Summed a slice at a time: a copy of 150MB measured at once held the loop for 150ms.
+        const bytes = await inSlices(copiedBaseBytesSteps(root, id))
         if (!bytes) this.settledAt.set(id, { journal: stamp })
-        return bytes ? [{ id, bytes, changed: statSync(join(root, `${id}.sqlite`)).mtimeMs }] : []
+        else copies.push({ id, bytes, changed: statSync(join(root, `${id}.sqlite`)).mtimeMs })
       } catch (error) {
         hostWarn("live", "a journal's copy of its history could not be measured", { conversation: id, error: errorMessage({ error }) })
-        return []
       }
-    }).sort((a, b) => b.changed - a.changed)
+    }
+    copies.sort((a, b) => b.changed - a.changed)
     const journals: SettledBases["journals"] = []
     for (const [index, { id, bytes }] of copies.entries()) {
       while (!this.access.admission.closed && this.access.hasActiveWork())
@@ -416,7 +438,7 @@ export class LiveSources {
       if (this.access.admission.closed) break
       const began = performance.now()
       const loaded = Boolean(this.access.resident(id))
-      const resident = this.access.load(id)
+      const resident = await this.access.loadSliced(id).catch(() => undefined)
       if (!resident) {
         journals.push({ id, bytes, ms: Math.round(performance.now() - began), keptBecause: "Mako could not open its journal" })
         this.settledAt.set(id, { journal: this.journalStamp(id) })
@@ -478,7 +500,8 @@ export class LiveSources {
   /** Observe native history independently of whether another client owns execution.
    * A single binding records which retained live blocks its native store covers. */
   async refreshedSnapshot(id: string): Promise<LiveSnapshot | null> {
-    const resident = this.access.load(id)
+    // A window opening a conversation only on disk reads it in a slice at a time; one in memory is read on now.
+    const resident = this.access.resident(id) ? this.access.load(id) : await this.access.loadSliced(id)
     if (!resident) return null
     if (baseUnread(resident.snapshot)) {
       await this.readBase(resident)
@@ -533,18 +556,21 @@ export class LiveSources {
         const seeded = read && binding?.seeded
           ? withSeed(read, capturedThread(before, 0, true).entries, binding.seeded) ?? read
           : read
+        // The merge reads every block the record covers; paged ones are read back first, between other work.
+        const coveredBlocks = seeded ? await readBack(before.blocks.slice(0, covered)) : []
         // Until the base first covers live blocks, it is the history they
         // continue; a base read from another store says nothing of where.
         const first = (before.baseCoveredBlocks ?? 0) === 0
         const recordStart = !seeded || covered === 0 ? undefined
-          : first ? firstLiveStart(base, seeded, before.blocks.slice(0, covered))
+          : first ? await inSlices(firstLiveStartSteps(base, seeded, coveredBlocks))
             : base?.ref.nativeId === seeded.ref.nativeId ? recordLiveStart(before) : undefined
         // A fork's own record holds the turns it inherited; they merge with
         // its parent's history: the copy it began from, then the reading
         // that merge left (`inheritedOf`).
         const inherited = !recordStart || !base || !isFork(before) ? undefined
-          : first ? base.entries : before.baseSupplied !== undefined ? inheritedOf(before) : await this.parentHistory(before)
-        const merged = seeded && mergedBase(seeded, before.blocks, covered, recordStart, { inherited, cutOff: cutOffRequests(before.requests) })
+          : first ? await readBack(base.entries) : before.baseSupplied !== undefined ? await readBack(inheritedOf(before) ?? []) : await this.parentHistory(before)
+        // A slice at a time, as every merge of a whole history (`readBaseNow`); what changed meanwhile is checked below.
+        const merged = seeded && await inSlices(mergedBaseSteps(seeded, coveredBlocks, covered, recordStart, { inherited, cutOff: cutOffRequests(before.requests) }))
         const baseLiveStart = merged?.liveStart ?? recordStart
         // A fork whose parent can't give its inherited turns back has them as its record does: nothing supplied.
         const baseSupplied = merged?.supplied ?? (recordStart && isFork(before) ? 0 : undefined)
@@ -640,24 +666,29 @@ export class LiveSources {
       earlier.total >= base.total &&
       earlier.start < base.start
     ) {
-      resident.snapshot = {
-        ...resident.snapshot,
-        control: {
-          ...conversationControl(resident),
-          bindings: conversationControl(resident).bindings.map((binding) => ({
-            ...binding,
-            includesBase: false,
-          })),
-        },
-        // Its live part may begin in the page before, when the base began after it.
-        base: mergedBase({
-          ...base,
-          entries: [...earlier.entries, ...base.entries],
-          start: earlier.start,
-          hasEarlier: earlier.hasEarlier,
-        }, resident.snapshot.blocks, resident.snapshot.baseCoveredBlocks ?? 0, resident.snapshot.baseLiveStart, { cutOff: cutOffRequests(resident.snapshot.requests) }).base,
+      const before = resident.snapshot
+      // Its live part may begin in the page before, when the base began after it.
+      const merged = await inSlices(mergedBaseSteps({
+        ...base,
+        entries: [...earlier.entries, ...base.entries],
+        start: earlier.start,
+        hasEarlier: earlier.hasEarlier,
+      }, await readBack(before.blocks.slice(0, before.baseCoveredBlocks ?? 0)), before.baseCoveredBlocks ?? 0, before.baseLiveStart, { cutOff: cutOffRequests(before.requests) }))
+      // Another caller may have prepended it meanwhile, or the history changed under the merge.
+      if (resident.snapshot.base === base && (resident.snapshot === before || sameMergeInputs(before, resident.snapshot))) {
+        resident.snapshot = {
+          ...resident.snapshot,
+          control: {
+            ...conversationControl(resident),
+            bindings: conversationControl(resident).bindings.map((binding) => ({
+              ...binding,
+              includesBase: false,
+            })),
+          },
+          base: merged.base,
+        }
+        this.access.flush(resident)
       }
-      this.access.flush(resident)
     }
     return resident.snapshot
   }
@@ -764,6 +795,9 @@ export class LiveSources {
         )
           return
         const control = conversationControl(resident)
+        // Coverage it already has is no change: writing it again would end a refresh under way for nothing.
+        const known = control.bindings.find((binding) => binding.id === bindingId)
+        if (known?.checkpoint === checkpoint && known.coveredBlocks === blocks.length) return
         resident.snapshot = {
           ...resident.snapshot,
           control: {
@@ -835,6 +869,28 @@ function isFork(snapshot: LiveSnapshot): boolean {
   return snapshot.control?.ancestry?.kind === "fork"
 }
 
+/**
+ * Whether `now` merges with a history read from its session as `before` did:
+ * the same blocks covered, each the same entry or its paged copy, the same
+ * live start and the same turns cut off.
+ */
+function sameMergeInputs(before: LiveSnapshot, now: LiveSnapshot): boolean {
+  const covered = before.baseCoveredBlocks ?? 0
+  if ((now.baseCoveredBlocks ?? 0) !== covered || now.baseLiveStart !== before.baseLiveStart || now.baseSupplied !== before.baseSupplied ||
+      now.control?.ancestry !== before.control?.ancestry || now.blocks.length < covered) return false
+  if (now.requests !== before.requests) {
+    const was = cutOffRequests(before.requests)
+    const is = cutOffRequests(now.requests)
+    if (was.size !== is.size || [...was].some((request) => !is.has(request))) return false
+  }
+  for (let index = 0; index < covered; index++) {
+    const was = before.blocks[index]!
+    const is = now.blocks[index]!
+    if (was !== is && pagedOf(was) !== is && pagedOf(is) !== was) return false
+  }
+  return true
+}
+
 /** Where the live blocks begin in the base's record: the live start, less what a fork's inherited turns gained from its parent's history. */
 function recordLiveStart(snapshot: LiveSnapshot): number | undefined {
   return snapshot.baseLiveStart === undefined ? undefined : snapshot.baseLiveStart - (snapshot.baseSupplied ?? 0)
@@ -862,8 +918,13 @@ export function settled(status: LiveSnapshot["session"]["status"]): boolean {
  * same kind, the same words (whitespace aside) and the same calls, whatever
  * ids or bytes each names, which a decoder change may move.
  */
-function sameTurns(left: readonly Entry[], right: readonly Entry[]): boolean {
-  return left.length === right.length && left.every((entry, index) => turnItem(entry) === turnItem(right[index]!))
+function* sameTurns(left: readonly Entry[], right: readonly Entry[]): Steps<boolean> {
+  if (left.length !== right.length) return false
+  for (let index = 0; index < left.length; index++) {
+    if (turnItem(left[index]!) !== turnItem(right[index]!)) return false
+    if (index % 256 === 255) yield
+  }
+  return true
 }
 
 function turnItem(entry: Entry): string {

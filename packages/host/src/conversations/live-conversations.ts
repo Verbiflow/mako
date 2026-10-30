@@ -67,6 +67,7 @@ import { syncMemory } from "./live-ledger.js"
 import { LiveMoves } from "./live-moves.js"
 import { LiveQuestions } from "./live-questions.js"
 import { LiveRecords } from "./live-records.js"
+import { isPaged } from "./paged-entries.js"
 import { LiveRelocations } from "./live-relocations.js"
 import { LiveRestarts } from "./live-restarts.js"
 import { ContextBundles } from "./live-context.js"
@@ -77,6 +78,8 @@ import { LiveTransfers } from "./live-transfers.js"
 
 /** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
 const SETTLE_AFTER_START_MS = 60_000
+/** The most entries a batch carries of a changed base: a window's page (`carriesBase`). */
+const BATCH_BASE_ENTRIES = 512
 const SETTLE_EVERY_MS = 15 * 60_000
 /** How often Mako tries again to write a conversation it couldn't save (`saveAgain`): soon after space comes back. */
 const SAVE_AGAIN_MS = 5_000
@@ -153,6 +156,8 @@ export class LiveConversations {
         this.counts.loaded(resident)
       },
       compact: (path) => { void this.reclaims.reclaim(path) },
+      paged: (id) => this.dependencies.historyPaged?.(id),
+      released: (id) => this.dependencies.historyReleased?.(id),
     })
     this.moves = new LiveMoves({
       dependencies,
@@ -181,6 +186,7 @@ export class LiveConversations {
       residents: () => this.records.values(),
       require: (id) => this.records.require(id),
       load: (id) => this.records.load(id),
+      loadSliced: (id) => this.records.loadSliced(id),
       request: (id, requestId) => this.records.request(id, requestId),
       add: (resident) => this.records.add(resident),
       control: conversationControl,
@@ -753,7 +759,7 @@ export class LiveConversations {
    * what reads the history whole or tells its harness something waits for it.
    */
   async historyReady(id: string): Promise<void> {
-    const resident = this.records.load(id)
+    const resident = this.records.has(id) ? this.records.load(id) : await this.records.loadSliced(id)
     if (resident) await this.sources.readBase(resident)
   }
 
@@ -1310,6 +1316,7 @@ export class LiveConversations {
     resident.journalSnapshot = snapshot
     resident.usedAt = this.dependencies.now?.() ?? Date.now()
     this.records.scheduleSweep()
+    this.records.pageAllNow(resident)
     syncMemory(this.dependencies.memory, previous.session, snapshot.session)
     if (previous.requests !== snapshot.requests) this.dependencies.turns?.(previous, snapshot)
     if (previous.control !== snapshot.control || previous.threadPath !== snapshot.threadPath)
@@ -1332,7 +1339,7 @@ export class LiveConversations {
         spentThrough: previous.spentThrough !== snapshot.spentThrough ? (snapshot.spentThrough ?? null) : undefined,
         control:
           previous.control !== snapshot.control ? snapshot.control : undefined,
-        base: previous.base !== snapshot.base ? snapshot.base : undefined,
+        ...previous.base !== snapshot.base && (carriesBase(snapshot.base) ? { base: snapshot.base } : { historyChanged: true }),
         baseCoveredBlocks: previous.baseCoveredBlocks !== snapshot.baseCoveredBlocks
           ? (snapshot.baseCoveredBlocks ?? 0) : undefined,
         threadPath:
@@ -1444,4 +1451,16 @@ const BATCH_MS = 33
  */
 function activityMoved(before: number | undefined, after: number | undefined): boolean {
   return after !== undefined && (before === undefined || Math.floor(after / 1_000) !== Math.floor(before / 1_000))
+}
+
+/**
+ * Whether a batch carries a changed base whole. A long one goes as the
+ * notice that the history changed, which every reader answers by reading it
+ * again through the history protocol: serialised whole into the event, a
+ * history of 150MB, most of it paged (`paged-entries.ts`), was read back
+ * and written as one string on the loop, and every window but an old one
+ * took that notice instead anyway (`historyChangedNotice`, past 512KB).
+ */
+function carriesBase(base: LiveSnapshot["base"]): boolean {
+  return !base || (base.entries.length <= BATCH_BASE_ENTRIES && !base.entries.some(isPaged))
 }

@@ -11,11 +11,6 @@
       "known": [
         {
           "side": "+",
-          "line": "note: Unread record: record tools-used — not a kind Mako reads",
-          "reason": ""
-        },
-        {
-          "side": "+",
           "line": "note: Interrupted",
           "reason": "The window draws a stopped turn's stop as its footer: live from the host's turn state, which the pair's live drawing doesn't include, and reopened from this marker, which it then hides beside the footer (notesBesideStop, src/lib/exchanges.ts)."
         }

@@ -43,6 +43,8 @@ import { monitorEventLoopDelay } from "node:perf_hooks"
 import { z } from "zod"
 import { dirname, join } from "node:path"
 import type { SessionCatalog } from "./catalog.js"
+import { namedWork, watchLoop, type WorkUnderWay } from "./loop-watch.js"
+import { MemoryGuard } from "./memory-guard.js"
 import {
   LineAssembler,
   parseDaemonEvent,
@@ -88,7 +90,11 @@ export function daemonSocketPath(): string {
  * fresh one take the socket.
  */
 export const PROTOCOL_VERSION = 34
-export const MAX_DAEMON_RSS = 512 * 1024 * 1024
+/**
+ * The resident memory past which a host retires its sync daemon: a daemon whose own guard (`MemoryGuard`, which sheds
+ * its uploads first and retires itself at a lower mark only once they've drained) couldn't bring it down.
+ */
+export const MAX_DAEMON_RSS = 1024 * 1024 * 1024
 export function daemonMemoryUnsafe(rss: number): boolean {
   return rss > MAX_DAEMON_RSS
 }
@@ -255,7 +261,7 @@ export type DaemonLogger = (
   fields?: Record<string, string | number | boolean | undefined>
 ) => void
 
-/** Why a serving catalog retires: its last client left long enough ago, its memory stayed over `MAX_DAEMON_RSS`, or a client asked (a newer build, or a host that saw its memory). */
+/** Why a serving catalog retires: its last client left long enough ago, its memory stayed over its limits with its uploads shed (`MemoryGuard`), or a client asked (a newer build, or a host that saw its memory). */
 export type DaemonRetireReason = "no clients" | "memory" | "asked"
 
 /** Serve one catalog over the socket. Resolves once listening. */
@@ -267,12 +273,13 @@ export interface ServeCatalogOptions {
   /** Lists require complete initial discovery; known-path reads do not. */
   discovery?: Promise<ThreadRef[]>
   /**
-   * Retire when the process RSS stays above `MAX_DAEMON_RSS`. On by default
-   * for the detached daemon; a catalog served from a worker thread inside a
-   * host reads the host's RSS here and must be bounded by the worker's own
-   * heap limit instead.
+   * Keep the process under its memory limits (`MemoryGuard`): shed the catalog's uploads, and retire only if that
+   * fails. On by default for the detached daemon; a catalog served from a worker thread inside a host reads the
+   * host's memory here and must be bounded by the worker's own heap limit instead.
    */
   memoryGuard?: boolean
+  /** What the process does, by name: a request is named to it, and a hold of the loop says what was under way. */
+  work?: WorkUnderWay
 }
 
 interface CatalogService {
@@ -290,6 +297,8 @@ function catalogService(
   const startedAt = Date.now()
   const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 })
   eventLoopDelay.enable()
+  // A hold of this thread is a request answered late, or past the host's timeout: said with what held it.
+  const stopWatch = options.log && options.work ? watchLoop(options.work, (ms, during) => options.log?.("warn", "loop held", { ms, during })) : () => {}
   const clients = new Set<DaemonLink>()
   const follows = new Map<DaemonLink, Map<string, () => void>>()
   const retireListeners = new Set<() => void>()
@@ -326,14 +335,11 @@ function catalogService(
       idleTimer = setTimeout(retire, options.idleMs, "no clients", { idleMs: options.idleMs })
   }
   watchIdle()
-  /** The RSS of each sample over the guard in a row, in MB: what a memory retirement logs. */
-  let highMemorySamples: number[] = []
+  const guard = new MemoryGuard(catalog.uploadBudget, (level, message, fields) => options.log?.(level, message, fields))
   const memoryTimer = setInterval(() => {
-    if (options.memoryGuard === false) return
-    const { rss, heapUsed } = process.memoryUsage()
-    highMemorySamples = daemonMemoryUnsafe(rss) ? [...highMemorySamples, Math.round(rss / 1024 / 1024)] : []
-    if (highMemorySamples.length >= 3)
-      retire("memory", { rssMb: highMemorySamples.join(","), limitMb: MAX_DAEMON_RSS / 1024 / 1024, heapUsedMb: Math.round(heapUsed / 1024 / 1024) })
+    if (options.memoryGuard === false || retiring) return
+    const over = guard.sample()
+    if (over) retire("memory", over)
   }, 5_000)
 
   const attach = (link: DaemonLink): boolean => {
@@ -505,7 +511,7 @@ function catalogService(
     link.onFrame((raw) => {
       const frame = parseDaemonRequest(raw)
       if (frame) {
-        void handle(frame)
+        void namedWork(options.work, `request ${frame.op}`, () => handle(frame))
         return
       }
       // A request this build can't read (another build's, or a malformed one) is said, and answered when it can be:
@@ -533,6 +539,7 @@ function catalogService(
       if (idleTimer) clearTimeout(idleTimer)
       clearInterval(memoryTimer)
       eventLoopDelay.disable()
+      stopWatch()
       stopEvents()
     },
     onRetire: (listener) => void retireListeners.add(listener),

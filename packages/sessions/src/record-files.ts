@@ -18,6 +18,7 @@ import { createReadStream, statSync, type Stats } from "node:fs"
 import { open, type FileHandle } from "node:fs/promises"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { createZstdDecompress } from "node:zlib"
+import { frameHeader } from "./zstd-frames.js"
 import type { RecordRef } from "./entries.js"
 import { encodedRecordPath, plainRecordPath, recordEncoding, type RecordEncoding } from "./record-encoding.js"
 
@@ -58,7 +59,6 @@ function ownFile(sessionPath: string): string {
 const CHUNK = 512 * 1024
 /** The longest zstd frame header: magic, descriptor, window, dictionary id, content size. */
 const FRAME_HEADER_BYTES = 18
-const ZSTD_MAGIC = 0xfd2fb528
 
 /** A stat of a record's file, with its size in plain bytes. */
 export interface RecordStat {
@@ -124,7 +124,8 @@ async function plainSize(path: string): Promise<number> {
   try {
     const header = Buffer.alloc(FRAME_HEADER_BYTES)
     const { bytesRead } = await handle.read(header, 0, FRAME_HEADER_BYTES, 0)
-    const declared = bytesRead >= 6 ? frameContentSize(header.subarray(0, bytesRead)) : undefined
+    const read = frameHeader(header.subarray(0, bytesRead))
+    const declared = read.kind === "sized" ? read.size : undefined
     if (declared !== undefined) return declared
   } finally {
     await handle.close()
@@ -132,23 +133,6 @@ async function plainSize(path: string): Promise<number> {
   let size = 0
   for await (const chunk of decodedChunks(path)) size += chunk.length
   return size
-}
-
-/** The content size a zstd frame header declares; undefined when it declares none. */
-function frameContentSize(header: Buffer): number | undefined {
-  if (header.readUInt32LE(0) !== ZSTD_MAGIC) return undefined
-  const descriptor = header[4]!
-  const sizeFlag = descriptor >> 6
-  const singleSegment = (descriptor >> 5) & 1
-  const dictionaryBytes = [0, 1, 2, 4][descriptor & 3]!
-  const sizeBytes = sizeFlag === 0 ? singleSegment : [1, 2, 4, 8][sizeFlag]!
-  if (!sizeBytes) return undefined
-  const at = 5 + (singleSegment ? 0 : 1) + dictionaryBytes
-  if (header.length < at + sizeBytes) return undefined
-  if (sizeBytes === 1) return header[at]!
-  if (sizeBytes === 2) return header.readUInt16LE(at) + 256
-  if (sizeBytes === 4) return header.readUInt32LE(at)
-  return Number(header.readBigUInt64LE(at))
 }
 
 function decodedChunks(path: string): AsyncIterable<Buffer> {
