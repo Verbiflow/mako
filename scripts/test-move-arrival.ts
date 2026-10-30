@@ -171,15 +171,15 @@ try {
   // Before the device releases it: answered once the folder is cloned and each harness's settings read ahead (a
   // harness that can't read them is left to its open), refused with why when the folder couldn't be made.
   const warmed: string[] = []
-  assert.deepEqual(await readyForMove({ workspaceSettled: async () => ({ path: folder }), warm: async (harness) => void warmed.push(harness) }, { folder, harnesses: ["codex", "cursor", "codex"] }), { folder })
+  assert.deepEqual(await readyForMove({ workspaceSettled: async () => ({ path: folder }), warm: async (harness) => void warmed.push(harness) }, { folder, harnesses: ["codex", "cursor", "codex"] }), { folder, carry: true }, "ready, and taking a move's carry")
   // A session's own settings are what its start resolves: those are read ahead, then any harness named without them.
   const tuned: Array<[string, string | undefined]> = []
   await readyForMove({ workspaceSettled: async () => ({ path: folder }), warm: async (harness, _folder, tuning) => void tuned.push([harness, tuning?.model]) }, { folder, harnesses: ["opencode", "codex"], launches: [{ harness: "opencode", tuning: { model: "opencode/big-pickle" } }] })
   assert.deepEqual(tuned, [["opencode", "opencode/big-pickle"], ["codex", undefined]])
   assert.deepEqual(warmed, ["codex", "cursor"], "each harness once")
-  assert.deepEqual(await readyForMove({ workspaceSettled: async () => ({ path: folder }), warm: async () => { throw new Error("API key is required") } }, { folder, harnesses: ["cursor"] }), { folder }, "not judged ahead")
+  assert.deepEqual(await readyForMove({ workspaceSettled: async () => ({ path: folder }), warm: async () => { throw new Error("API key is required") } }, { folder, harnesses: ["cursor"] }), { folder, carry: true }, "not judged ahead")
   let reading = false
-  assert.deepEqual(await readyForMove({ workspaceSettled: async () => ({ path: folder }), warm: () => { reading = true; return new Promise(() => {}) } }, { folder, harnesses: ["opencode"] }), { folder }, "not waited for: the device sends ahead while it's read")
+  assert.deepEqual(await readyForMove({ workspaceSettled: async () => ({ path: folder }), warm: () => { reading = true; return new Promise(() => {}) } }, { folder, harnesses: ["opencode"] }), { folder, carry: true }, "not waited for: the device sends ahead while it's read")
   assert.ok(reading, "started, all the same")
   await assert.rejects(readyForMove({ workspaceSettled: async () => ({ problem: "the repository isn't reachable from the cloud" }), warm: async () => {} }, { folder }), { message: "The cloud machine couldn't make this Thread's folder: the repository isn't reachable from the cloud" })
   await assert.rejects(readyForMove({ workspaceSettled: async () => ({ path: "/Users/someone/else" }), warm: async () => {} }, { folder }), /not the move's/)

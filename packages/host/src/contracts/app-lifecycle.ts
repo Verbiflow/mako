@@ -1,5 +1,29 @@
 import { z } from "zod"
 
+/** How many uncommitted files a reading or a build names; the rest are counted. */
+export const UNCOMMITTED_LISTED = 200
+
+/** A file with changes Git hasn't committed, as `git status` sees it. */
+export const UncommittedFileSchema = z.object({
+  path: z.string(),
+  change: z.enum(["edited", "added", "deleted", "renamed", "untracked", "conflicted"]),
+  /** A renamed file's earlier path. */
+  from: z.string().optional(),
+})
+export type UncommittedFile = z.infer<typeof UncommittedFileSchema>
+
+/**
+ * A checkout's uncommitted work, tracked changes and untracked files alike:
+ * how many files, and the first `UNCOMMITTED_LISTED` of them by name. A
+ * local build takes the checkout as it is, so this is what it carries beyond
+ * its revision.
+ */
+export const UncommittedChangesSchema = z.object({
+  count: z.number().int().nonnegative(),
+  files: z.array(UncommittedFileSchema),
+})
+export type UncommittedChanges = z.infer<typeof UncommittedChangesSchema>
+
 export const BuildIdentitySchema = z.object({
   id: z.string().regex(/^[a-f0-9]{12,64}$/),
   builtAt: z.iso.datetime(),
@@ -8,6 +32,12 @@ export const BuildIdentitySchema = z.object({
     .regex(/^[a-f0-9]{7,40}$/)
     .nullable(),
   dirty: z.boolean(),
+  /**
+   * The uncommitted files the build took from its checkout, as the updater
+   * read them before building. Absent from a clean build, and from one
+   * packaged by an updater that didn't pass them (`dirty` says only that).
+   */
+  uncommitted: UncommittedChangesSchema.optional(),
 })
 export type BuildIdentity = z.infer<typeof BuildIdentitySchema>
 export const LifecycleWorkSchema = z.object({
@@ -115,6 +145,8 @@ export type UpdateSource =
       changed: number
       /** Files Git doesn't track or ignore; a build copies them too. */
       untracked: number
+      /** Those files by name, from the same reading: what a build of the checkout as it is takes beyond `head`. */
+      uncommitted: UncommittedChanges
       /** Whether this reading fetched the upstream first; a failure says why, and the reading uses what was fetched before. */
       fetch: { kind: "fetched" } | { kind: "skipped" } | { kind: "failed"; reason: string }
       plan: UpdateSourcePlan
@@ -125,13 +157,22 @@ export type UpdateSource =
       readAt: string
     }
 
+/** Packages the source checkout's package-lock.json lists that its node_modules doesn't hold: how many, and the first few by name. */
+export interface MissingDependencies {
+  count: number
+  names: string[]
+}
+
 export type LocalBuildState =
   | { kind: "idle" }
   | {
       kind: "building"
-      phase: "copying" | "compiling" | "checking" | "packaging" | "verifying"
+      /** `installing` runs npm install in the source checkout first, only when its node_modules is behind its package-lock.json. */
+      phase: "installing" | "copying" | "compiling" | "checking" | "packaging" | "verifying"
       /** The commit being built, once the checkout has been read and brought forward. */
       revision?: string
+      /** What the install brings, while `phase` is `installing`. */
+      dependencies?: MissingDependencies
     }
   | {
       kind: "ready"
@@ -141,7 +182,12 @@ export type LocalBuildState =
       /** The branch fast-forwarded before building, and to which commit. */
       forwarded: { branch: string; from: string; to: string } | null
     }
-  | { kind: "error"; message: string }
+  | {
+      kind: "error"
+      message: string
+      /** A command that fixes it, run by hand in a terminal: `cd '<checkout>' && npm install`. */
+      command?: string
+    }
 export interface UpdateInstallation {
   distribution: "development" | "local" | "signed" | "unsigned"
   build: BuildIdentity | null

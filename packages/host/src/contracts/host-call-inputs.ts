@@ -4,6 +4,9 @@ import { z } from "zod"
 
 const inputs = {
   "mako:abort": () => z.tuple([]),
+  "mako:access-adopt": () => z.tuple([z.record(z.string(), z.string())]),
+  "mako:access-choices": () => z.tuple([]),
+  "mako:access-choose": () => z.tuple([z.string(), z.string()]),
   "mako:account-capture": () => z.tuple([z.string(), z.string()]),
   "mako:account-keep": () => z.tuple([z.string(), z.string()]),
   "mako:account-login-cancel": () => z.tuple([z.string()]),
@@ -89,8 +92,8 @@ const inputs = {
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
-  "mako:check-updates": () => z.tuple([]),
   "mako:check-update-source": () => z.tuple([z.boolean()]),
+  "mako:check-updates": () => z.tuple([]),
   "mako:checkout-heads": () => z.tuple([z.array(z.string())]),
   "mako:choose-file-reference": () =>
     z.tuple([
@@ -145,6 +148,9 @@ const inputs = {
   "mako:cloud-sign-ins": () => z.tuple([]),
   "mako:cloud-sign-ins-share": () => z.tuple([z.boolean()]),
   "mako:cloud-sign-out": () => z.tuple([]),
+  "mako:cloud-turn-on": () => z.tuple([]),
+  "mako:cloud-turn-on-check": () => z.tuple([]),
+  "mako:cloud-turn-on-retry-bases": () => z.tuple([]),
   "mako:compact": () => z.tuple([z.string().optional()]),
   "mako:computer-driver": () => z.tuple([]),
   "mako:computer-driver-connections": () => z.tuple([]),
@@ -783,6 +789,8 @@ const inputs = {
         z.object({ path: z.string() }),
       ]),
     ]),
+  "mako:machine-leaving": () =>
+    z.tuple([z.union([z.literal("suspend"), z.literal("shutdown")])]),
   "mako:machine-woke": () =>
     z.tuple([z.union([z.literal("resume"), z.literal("unlock-screen")])]),
   "mako:mcp-discover": () => z.tuple([]),
@@ -830,6 +838,7 @@ const inputs = {
             open: z
               .object({
                 conversationId: z.string(),
+                cwd: z.string().optional(),
                 modeId: z.string().optional(),
                 tuning: z
                   .object({
@@ -886,6 +895,7 @@ const inputs = {
             ),
           })
           .optional(),
+        carry: z.object({ sha256: z.string(), bytes: z.number() }).optional(),
       }),
     ]),
   "mako:move-depart": () =>
@@ -895,12 +905,23 @@ const inputs = {
         folder: z.string(),
         conversations: z.array(z.string()),
         device: z.string(),
+        carry: z.literal(true).optional(),
       }),
     ]),
+  "mako:move-follow": () => z.tuple([z.object({ folder: z.string() })]),
   "mako:move-ready": () =>
     z.tuple([
       z.object({
         folder: z.string(),
+        repositories: z
+          .array(
+            z.object({
+              path: z.string(),
+              url: z.string(),
+              branch: z.string().optional(),
+            })
+          )
+          .optional(),
         harnesses: z.array(z.string()).optional(),
         launches: z
           .array(
@@ -1339,6 +1360,7 @@ const inputs = {
         .optional(),
     ]),
   "mako:select-update-source": () => z.tuple([z.string()]),
+  "mako:session-reader-history": () => z.tuple([]),
   "mako:set-active-tools": () => z.tuple([z.array(z.string())]),
   "mako:set-auto-compaction": () => z.tuple([z.boolean()]),
   "mako:set-badge-count": () => z.tuple([z.number()]),
@@ -1408,6 +1430,7 @@ const inputs = {
       }),
     ]),
   "mako:surface-window": () => z.tuple([]),
+  "mako:sync-readings": () => z.tuple([]),
   "mako:sync-status": () => z.tuple([]),
   "mako:telemetry": () => z.tuple([]),
   "mako:telemetry-choose": () =>
@@ -1703,6 +1726,9 @@ export type HostMethodDomain =
 
 const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:abort", "workspaces"],
+  ["mako:access-adopt", "harnesses"],
+  ["mako:access-choices", "harnesses"],
+  ["mako:access-choose", "harnesses"],
   ["mako:account-capture", "harnesses"],
   ["mako:account-keep", "harnesses"],
   ["mako:account-login-cancel", "harnesses"],
@@ -1731,8 +1757,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:capabilities", "workspaces"],
   ["mako:change-usage", "attribution"],
   ["mako:chat-folders", "threads"],
-  ["mako:check-updates", "application"],
   ["mako:check-update-source", "application"],
+  ["mako:check-updates", "application"],
   ["mako:checkout-heads", "workspaces"],
   ["mako:choose-file-reference", "attribution"],
   ["mako:clear-crashes", "application"],
@@ -1754,6 +1780,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:cloud-sign-ins", "usage"],
   ["mako:cloud-sign-ins-share", "usage"],
   ["mako:cloud-sign-out", "usage"],
+  ["mako:cloud-turn-on", "conversations"],
+  ["mako:cloud-turn-on-check", "conversations"],
+  ["mako:cloud-turn-on-retry-bases", "conversations"],
   ["mako:compact", "workspaces"],
   ["mako:computer-driver", "control"],
   ["mako:computer-driver-connections", "control"],
@@ -1872,6 +1901,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:live-turn-undo-preview", "conversations"],
   ["mako:live-turn-writers", "conversations"],
   ["mako:lost-versions", "attribution"],
+  ["mako:machine-leaving", "application"],
   ["mako:machine-woke", "application"],
   ["mako:mcp-discover", "tools"],
   ["mako:mcp-sync-apply", "tools"],
@@ -1879,6 +1909,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:merge-pull", "git"],
   ["mako:move-arrive", "conversations"],
   ["mako:move-depart", "conversations"],
+  ["mako:move-follow", "conversations"],
   ["mako:move-ready", "conversations"],
   ["mako:move-stage", "conversations"],
   ["mako:move-stay", "conversations"],
@@ -1928,6 +1959,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:save-automations", "workspaces"],
   ["mako:search", "workspaces"],
   ["mako:select-update-source", "application"],
+  ["mako:session-reader-history", "threads"],
   ["mako:set-active-tools", "workspaces"],
   ["mako:set-auto-compaction", "workspaces"],
   ["mako:set-cwd", "workspaces"],
@@ -1944,6 +1976,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:stage-file-path", "workspaces"],
   ["mako:store-formats", "threads"],
   ["mako:stream-original", "threads"],
+  ["mako:sync-readings", "conversations"],
   ["mako:sync-status", "conversations"],
   ["mako:telemetry", "usage"],
   ["mako:telemetry-choose", "usage"],

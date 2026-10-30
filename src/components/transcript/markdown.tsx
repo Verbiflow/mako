@@ -21,6 +21,7 @@ import type { PromptReference, SentProse } from "@/lib/prompt-markdown"
 import { isSkillName } from "@/lib/skill-references"
 import { ProseStreamingContext } from "./prose-layout-context"
 import { fenceSegments, streamingMarkdown } from "@/lib/streaming-markdown"
+import { StreamFrames } from "@/lib/stream-frames"
 import { ChangingLabel } from "@/components/ui/changing-label"
 import { useCopy } from "@/components/ui/use-copy"
 import {
@@ -31,7 +32,6 @@ import {
   memo,
   useEffect,
   useContext,
-  useRef,
   useState,
   type ComponentProps,
   type ReactElement,
@@ -69,15 +69,16 @@ import { ReviewFence } from "./review-card"
  * each piece before its last such fence is parsed once and kept; only the
  * piece being written is parsed again.
  *
- * That piece is rate-limited rather than parsed per token: at most every
- * ~90ms, which caps the cost at a fixed rate regardless of answer length, and
- * the whole answer settles in one parse the moment the message finishes.
- * Nobody reads faster than the refresh, so the throttle is invisible. What it
- * draws stops short of half-built structure (`streamingMarkdown`): a table
- * arrives a row at a time and a fence once its opening line is whole, so
- * neither flashes as a paragraph of pipes or backticks first.
+ * That piece is rate-limited rather than parsed per token: the first token of
+ * a burst paints at once, then at most every 50 ms, longer for a long piece
+ * (`StreamFrames`), which caps the cost at a fixed share of the renderer
+ * regardless of answer length, and the whole answer settles in one parse the
+ * moment the message finishes. Nobody reads faster than the refresh, so the
+ * throttle is invisible. What it draws stops short of half-built structure
+ * (`streamingMarkdown`): a table arrives a row at a time and a fence once its
+ * opening line is whole, so neither flashes as a paragraph of pipes or
+ * backticks first.
  */
-const STREAM_FRAME_MS = 90
 const EMPTY_REFERENCES = new Map<string, PromptReference>()
 const PromptReferencesContext =
   createContext<ReadonlyMap<string, PromptReference>>(EMPTY_REFERENCES)
@@ -253,20 +254,14 @@ const KeptPiece = memo(function KeptPiece({ text, assets }: { text: string; asse
 })
 
 /**
- * Latest value, but no more often than one frame per `STREAM_FRAME_MS`.
- *
- * A pending frame outlives text changes on purpose (cancelling it on each
- * token would turn the throttle into a debounce that never fires under a
- * steady stream), so only unmount clears it — and clearing must empty the
- * ref too. It once did not: StrictMode's simulated remount ran that cleanup
- * and re-ran the scheduling effect, which saw a "pending" timer that had been
- * cleared and never scheduled another, so the first token of every streamed
- * answer stayed on screen until the turn ended ("I", then the tool rows).
+ * Latest value while it streams, painted as `StreamFrames` paces it: the first
+ * change of a burst at once, then at most once a frame. Only unmount (or
+ * StrictMode's simulated one) stops a pending paint, and the effect after it
+ * schedules again.
  */
 function useThrottled(text: string, active: boolean): string {
   const [shown, setShown] = useState(text)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pending = useRef(text)
+  const [frames] = useState(() => new StreamFrames(setShown))
 
   // A settled message renders its exact text with no delay. Adjusting during
   // render rather than in an effect avoids the extra pass a cascading setState
@@ -275,22 +270,13 @@ function useThrottled(text: string, active: boolean): string {
     setShown(text)
   }
 
+  // Settled, a paint still pending would draw a streaming text over it.
   useEffect(() => {
-    pending.current = text
-    if (!active || timer.current !== null) return
-    timer.current = setTimeout(() => {
-      timer.current = null
-      setShown(pending.current)
-    }, STREAM_FRAME_MS)
-  }, [active, text])
+    if (active) frames.next(text)
+    else frames.stop()
+  }, [active, text, frames])
 
-  useEffect(() => {
-    return () => {
-      if (timer.current === null) return
-      clearTimeout(timer.current)
-      timer.current = null
-    }
-  }, [])
+  useEffect(() => () => frames.stop(), [frames])
 
   return shown
 }

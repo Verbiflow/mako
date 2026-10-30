@@ -1,6 +1,9 @@
+import type { MoveLeft } from "@mako/protocol/moves"
 import type { OutdatedRestore } from "./restore-plan.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { z } from "zod"
+import { MOVE_REASON_MAX } from "@mako/protocol/moves"
+import { decodeRuntimeValue, type EncodedValue } from "./runtime-value.js"
 
 /** A public GitHub repository a cloud Thread's machine clones and works in, as the cloud takes it. */
 export const CloudRepositorySchema = z
@@ -65,12 +68,18 @@ export function githubRepositoryUrl(remote: string): string | undefined {
  * again: the Thread runs nowhere until it is.
  */
 export type ThreadMoveStep =
+  /**
+   * A Thread in the main checkout moving onto its own branch first, taking only its own changes; `to`, once there, when
+   * the conversation that goes on is another (its harness couldn't resume in another folder, so it forked): the rest of
+   * the move's steps are that conversation's.
+   */
+  | { kind: "own-branch"; to?: string }
   | { kind: "packing" }
   | { kind: "pausing" }
   | { kind: "handing-over" }
   | { kind: "resuming" }
   /** Every conversation of the Thread that moved, each the cloud's now under its own id; `continued`: a turn the handoff paused goes on there. */
-  | { kind: "moved"; conversations: string[]; continued?: boolean }
+  | { kind: "moved"; conversations: string[]; continued?: boolean; carried?: MoveCarried }
   /** `continued`: a turn the handoff had paused goes on here. */
   | { kind: "kept-here"; reason: string; continued?: boolean }
   | { kind: "unsettled"; reason: string }
@@ -109,7 +118,11 @@ export type HandOffSettings = {
  * for a quit's handoff: this Mac let go of the Thread and its host carries the rest (the last changes sent, the claim,
  * the start), so the window can close; the move's steps say how it ends.
  */
-export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string } | { kind: "released"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
+/**
+ * What `mako:thread-move` came to. `conversation`: the conversation that went, when it isn't the one asked (a Thread in
+ * the main checkout whose harness forked onto its own branch).
+ */
+export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string; conversation?: string } | { kind: "released"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
 
 /**
  * A way back refused before the cloud let go, because the Thread's worktree here has no project to come back into:
@@ -135,7 +148,7 @@ export type ThreadReturnStep =
   /** The checkout and each Session's records are arriving here. */
   | { kind: "bringing" }
   /** Every conversation of the Thread runs here again, under its own id. */
-  | { kind: "back"; conversations: string[] }
+  | { kind: "back"; conversations: string[]; landed?: ReturnLanded }
   /**
    * `outdated`: a harness here is older than the one that wrote its sessions in the cloud; updating it lets it come.
    * `missing`: its project isn't on this Mac; choosing where it is now lets it come.
@@ -143,8 +156,88 @@ export type ThreadReturnStep =
   | { kind: "stayed"; reason: string; outdated?: OutdatedRestore; missing?: ReturnProjectMissing }
   | { kind: "unsettled"; reason: string; waitsOn: ReturnWaitsOn }
 
+/**
+ * What a move took besides its checkout, as the person reads it: how many repositories and outside files went, and
+ * what stayed and why (`MoveLeft`), from the move's carry.
+ */
+export type MoveCarried = { repositories: number; outside: number; left: MoveLeft[] }
+
+/**
+ * How a Thread's work landed here as it came back, where it wasn't simply laid down: `merged`, files the person had
+ * changed in its worktree meanwhile that kept both sides; `conflicts`, files both changed, left with Git's markers;
+ * `mine`, the branch the person's own commits there were kept on; `outside`, its files outside the worktree, put in
+ * place, removed, or `waiting`: the person changed them here since, so theirs stayed and the cloud's copies are kept apart.
+ * `unsent`: files the cloud wrote outside the worktree that never left this Mac, kept apart and never put in place, since
+ * only what this Mac sent forward comes back to its place. `failed`: each one that couldn't be written here, and why.
+ */
+export type ReturnLanded = {
+  merged: string[]
+  conflicts: string[]
+  mine?: string
+  /** `kept`: the folder the cloud's copies of the `waiting` and `unsent` files are kept in, each at its own path beneath it. */
+  outside: { placed: string[]; removed: string[]; waiting: string[]; unsent?: string[]; failed?: Array<{ path: string; why: string }>; kept?: string }
+}
+
 /** What `mako:thread-return` came to: the Thread runs here again, or it stayed in the cloud, and why. */
 export type ThreadReturnOutcome =
-  | { kind: "back" }
+  | { kind: "back"; landed?: ReturnLanded }
   | { kind: "stayed"; reason: string; outdated?: OutdatedRestore; missing?: ReturnProjectMissing }
   | { kind: "unsettled"; reason: string; waitsOn: ReturnWaitsOn }
+
+/** What a start reads of the cloud host's boot: the folder of its tab in front, which is the clone. */
+const BootTabsSchema = z.object({
+  activeTabId: z.string(),
+  tabs: z.array(z.object({ id: z.string(), session: z.object({ meta: z.object({ cwd: z.string() }).loose() }).loose() }).loose()),
+}).loose()
+
+/** The folder a cloud host works in, read from its boot: its tab in front, which is the clone. */
+export function bootFolder(boot: EncodedValue): string {
+  const tabs = BootTabsSchema.parse(decodeRuntimeValue(boot))
+  const cwd = tabs.tabs.find((tab) => tab.id === tabs.activeTabId)?.session.meta.cwd
+  if (!cwd) throw new Error("The cloud machine has no folder to work in")
+  return cwd
+}
+
+/**
+ * Why a cloud Thread's start stopped before its harness: the machine couldn't make the Thread's folder, a clone of its
+ * repository, even asked again. Its boot fails with these words (`mako:boot`), so no client starts a harness outside
+ * the repository; `reason` is the machine agent's, which names what to do when it knows (Mako's GitHub App to install,
+ * with its page).
+ */
+export function folderUnmade(reason: string): string {
+  return `This Thread's repository couldn't be set up in the cloud, so nothing was started. ${sentence(reason)}`
+}
+
+/** The page where a person gives Mako's GitHub App access to a repository, as GitHub names it for any App. */
+const GITHUB_APP_INSTALL = /\s+at\s+(https:\/\/github\.com\/apps\/[A-Za-z0-9-]+\/installations\/new)(?=[.\s]|$)/
+
+/**
+ * A start's failure as its person reads it: the words, and apart from them the GitHub page where they give Mako's
+ * GitHub App access to the repository, when that's what's missing (the same page the cloud's turn-on card offers).
+ */
+export interface StartFailure {
+  said: string
+  install?: string
+}
+
+/** A start's failure read for its person (`StartFailure`). */
+export function startFailure(message: string): StartFailure {
+  const found = GITHUB_APP_INSTALL.exec(message)
+  if (!found?.[1]) return { said: message }
+  return { said: message.replace(found[0], ""), install: found[1] }
+}
+
+/** The agent's words as a sentence: Git's `fatal:` dropped, a capital first, a stop at the end. */
+function sentence(words: string): string {
+  const said = words.trim().replace(/^(?:fatal|error):\s*/i, "") || "No reason was given."
+  return `${said[0]?.toUpperCase() ?? ""}${said.slice(1)}${/[.!?]$/.test(said) ? "" : "."}`
+}
+
+/** A reason the cloud keeps beside a move or a return: within `MOVE_REASON_MAX`, cut with an ellipsis rather than refused. */
+export function clipReason(reason: string): string {
+  const said = reason.trim() || "No reason was given."
+  return said.length <= MOVE_REASON_MAX ? said : `${said.slice(0, MOVE_REASON_MAX - 1)}…`
+}
+
+/** The cloud's word to a cloud Thread's person when their own work is affected (`cloud-machine-notice`). */
+export type { ThreadMachineNotice } from "@mako/protocol/saves"

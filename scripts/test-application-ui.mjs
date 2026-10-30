@@ -262,8 +262,12 @@ async function review() {
     behind: "21 new changes on origin/main",
     current: "You're already on 079f9b31",
     changes: "so Mako won't move it",
+    uncommitted: "Includes 41 uncommitted changes",
     branch: "The checkout is on approval-bar",
     offline: "Couldn't reach origin",
+    installing: "Installing dependencies…",
+    installRefused: "so Mako won't run npm install there for you",
+    installFailed: "npm install didn't finish within 10 minutes",
     building: "Building 079f9b31",
     ready: "Moved main forward from",
     installed: "21 changes in this build",
@@ -273,6 +277,10 @@ async function review() {
     for (const [scene, text] of Object.entries(sourceScenes)) {
       await fixture(`f.sourceScene('${scene}')`)
       await until(`document.querySelector('[data-testid=updates-section]')?.textContent.includes(${JSON.stringify(text)})`)
+      // A failure and the command under it are what the scene is for; keep them on screen.
+      await evaluate("document.querySelector('[data-testid=updates-section] [role=alert]')?.scrollIntoView({ block: 'nearest' }); true")
+      // The files behind the count, opened as a person would to see them.
+      if (scene === "uncommitted") await evaluate("for (const list of document.querySelectorAll('[data-testid=updates-section] [data-testid=uncommitted]')) list.open = true; true")
       await screenshot(`updater-${scene}-${theme}.png`)
     }
   }

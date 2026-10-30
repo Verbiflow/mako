@@ -73,9 +73,12 @@ async function checkWindow() {
   })
   const evaluate = (code) => page.executeJavaScript(code)
   const frames = () => evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))")
+  /** `toast`: the one toast shown, the one holding that text; otherwise none, the fixture desk's own included. */
+  let shownToast
   const settle = async () => {
     // The fixture desk's own toasts, such as its deliberately broken plugin, aren't what's shown here.
-    await evaluate(`(() => { if (!document.getElementById('hide-toasts')) document.head.insertAdjacentHTML('beforeend', '<style id="hide-toasts">[data-sonner-toaster]{display:none!important}</style>'); return true })()`)
+    if (shownToast) await evaluate(`(() => { document.getElementById('hide-toasts')?.remove(); for (const node of document.querySelectorAll('[data-sonner-toast]')) node.style.display = node.innerText.includes(${JSON.stringify(shownToast)}) ? '' : 'none'; return true })()`)
+    else await evaluate(`(() => { if (!document.getElementById('hide-toasts')) document.head.insertAdjacentHTML('beforeend', '<style id="hide-toasts">[data-sonner-toaster]{display:none!important}</style>'); return true })()`)
     await evaluate("document.fonts.ready.then(() => true)")
     await evaluate(`Promise.all(document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {}))).then(() => true)`)
     await frames()
@@ -105,6 +108,13 @@ async function checkWindow() {
     await theme("light")
     await capture(`${name}-light`, around)
     await theme("dark")
+  }
+  /** The toast holding `title`, alone, in both themes. */
+  const toastShot = async (name, title) => {
+    await until(`[...document.querySelectorAll('[data-sonner-toast]')].some((node) => node.innerText.includes(${JSON.stringify(title)}))`, title)
+    shownToast = title
+    await both(name, ['[data-sonner-toast]:not([style*="display: none"])'])
+    shownToast = undefined
   }
   const until = async (code, label = code) => {
     const deadline = Date.now() + 30_000
@@ -136,9 +146,9 @@ async function checkWindow() {
     await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Enter", code: "Enter", windowsVirtualKeyCode: 13 })
   }
   /** A new Thread on its own branch, signed in with the cloud: its first message makes its worktree and starts it there. */
-  const startThread = async (query) => {
+  const startThread = async (query, inWorktree = true) => {
     await window.loadURL(`${base}?mock&cloud=signed-in&invited&making=fast${query}`)
-    await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 264, theme: 'dark', newThreadsInWorktree: true}))`)
+    await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 264, theme: 'dark', newThreadsInWorktree: ${inWorktree}}))`)
     await until(`Boolean(document.querySelector('.composer-input')) && !document.querySelector('.composer-input').readOnly`, "the composer")
     await click(".composer-input")
     await type("Retry the billing webhooks with backoff")
@@ -396,6 +406,33 @@ async function checkWindow() {
     await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-return]')`, "back once asked again")
   }
 
+  // 15. A Thread in the project folder moves in one step: its chip offers it, saying it goes onto its own branch first;
+  // the strip's first step says so; moved, it says what came along (two repositories, files from outside its folder)
+  // and what stayed (a secret). The person changes its worktree here: following stops, and the strip offers to bring
+  // it back to edit here; back, merged, one file in conflict and one outside the worktree the person changed, whose
+  // cloud copy is kept, the toast opening it.
+  await startThread("&move=main&follow=stopped&return=merged", false)
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  await click('[data-run-place="local"]')
+  await until(`document.querySelector('[data-thread-move-offer]') !== null`, "the move offer")
+  assert.equal(await evaluate(`document.querySelector('[data-thread-move-offer]').disabled`), false, "a quiet Thread in the project folder can move")
+  assert.match(await text('[data-thread-move-offer]'), /Move to the cloud[\s\S]*own branch first[\s\S]*project folder keeps yours/)
+  await both("main-checkout-offer", ['[data-thread-move-offer]', '[data-run-place]'])
+  await click('[data-thread-move-offer]')
+  await until(`document.querySelector('[data-thread-move="own-branch"]') !== null`, "onto its own branch")
+  assert.match(await text('[data-thread-move]'), /Moving to the cloud[\s\S]*Onto its own branch/)
+  await both("main-checkout-own-branch", ['[data-thread-move]', '[data-run-place]'])
+  await until(`document.querySelector('[data-run-place="cloud"]') !== null && !document.querySelector('[data-thread-move]')`, "moved")
+  await toastShot("main-checkout-moved", "Moved to the cloud")
+  assert.match(await evaluate(`[...document.querySelectorAll('[data-sonner-toast]')].map((node) => node.innerText).join('\\n')`), /both its repositories and 3 files from outside its folder[\s\S]*One file stayed here: credentials, a secret/)
+  await until(`document.querySelector('[data-thread-follow="stopped"]') !== null`, "following stopped")
+  assert.match(await text('[data-thread-follow]'), /You changed its worktree here[\s\S]*Bring back to edit here/)
+  await both("follow-stopped", ['[data-thread-follow]', '[data-run-place]'])
+  await clickText('[data-thread-follow]', "Bring back to edit here")
+  await until(`document.querySelector('[data-run-place="local"]') !== null && !document.querySelector('[data-thread-return]')`, "back, merged")
+  await toastShot("return-merged", "Back on this Mac")
+  assert.match(await evaluate(`[...document.querySelectorAll('[data-sonner-toast]')].map((node) => node.innerText).join('\\n')`), /Your edits to todo\.md stayed\. retry\.ts has conflict markers: you both changed it\. The agent knows\. You changed state\.json meanwhile, so yours stayed\. billing-sync couldn't be written back: permission denied\.[\s\S]*Open the cloud's copy/)
+
   // 7. Settings: handing off as this Mac sleeps, and what quitting does while agents work.
   await evaluate(`window.dispatchEvent(new CustomEvent("mako:settings", { detail: "account" })), true`)
   await until(`document.querySelector('[data-handoff-settings]') !== null && document.querySelector('[data-handoff-settings] [role="switch"]')?.getAttribute('aria-checked') === 'true'`, "the handoff settings, on by default")
@@ -406,7 +443,7 @@ async function checkWindow() {
   await clickText('[data-handoff-settings]', "Hand off")
   await until(`document.querySelector('[data-handoff-settings] [aria-pressed="true"]')?.innerText.includes('Hand off')`, "quitting hands off")
   await both("handoff-settings-changed", ['[data-handoff-settings]'])
-  console.log("Thread move UI: offered from a worktree Thread's Local chip, three steps above the composer, Cloud once moved; brought back from its Cloud chip in two steps, Local once back; a busy Thread kept here; a Thread at work handed off with its turn paused, and one with only background work; an outdated way back updated and brought back in one choice; a way back whose project isn't here refused before the cloud is asked and brought into the folder the project moved to; an unsettled way back saying who it waits on and settled by asking again; harnesses here older than the cloud's said before the move with the update that settles them, its progress and its failure, a Session the cloud can't resume refused before anything moves, and a way back waiting on Devin.app ready once it's updated; and the handoff settings")
+  console.log("Thread move UI: offered from a worktree Thread's Local chip, three steps above the composer, Cloud once moved; brought back from its Cloud chip in two steps, Local once back; a busy Thread kept here; a Thread at work handed off with its turn paused, and one with only background work; an outdated way back updated and brought back in one choice; a way back whose project isn't here refused before the cloud is asked and brought into the folder the project moved to; an unsettled way back saying who it waits on and settled by asking again; a Thread in the project folder moved in one step onto its own branch first, saying what came and what stayed, its worktree changed here stopping the follow, and its way back merged, saying what conflicts, what couldn't be written back, and opening the cloud's copy of what the person changed outside it; harnesses here older than the cloud's said before the move with the update that settles them, its progress and its failure, a Session the cloud can't resume refused before anything moves, and a way back waiting on Devin.app ready once it's updated; and the handoff settings")
   clearTimeout(watchdog)
   app.exit(0)
 }

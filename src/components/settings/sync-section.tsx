@@ -13,7 +13,6 @@ const TIER_LABELS = {
   now: "Working now",
   day: "Today",
   week: "This week",
-  month: "Earlier this month",
 } satisfies Record<SyncTierName, string>
 
 type Running = Extract<SyncStatus, { tiers: unknown }>
@@ -26,7 +25,7 @@ const CHIPS = {
 } satisfies Record<Running["state"], { tone: "positive" | "neutral" | "caution" | "negative"; label: string }>
 
 /**
- * What of this Mac is in the cloud: every Thread worked in within the last 30 days, whole, the newest first. Each
+ * What of this Mac is in the cloud: every Thread worked in within the last 7 days, whole, the newest first. Each
  * tier counts its Threads in the cloud (every Session readable on another device and its records there to continue
  * from), what's catching up, when the last one went, and what didn't, in the cloud's words with its correlation ID.
  */
@@ -39,9 +38,9 @@ export function SyncSection() {
       <ListCard>
         <ListCardRow className="flex items-start justify-between gap-6">
           <div className="min-w-0">
-            <div className="text-ui font-medium">Your last 30 days, in the cloud</div>
+            <div className="text-ui font-medium">Your last 7 days, in the cloud</div>
             <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
-              Every Thread you worked in during the last 30 days goes up whole: the one you're working in within seconds of each turn, then today's, this week's and the rest. Your other devices can read each one, and continue it, even while this Mac is off.
+              Every Thread you worked in during the last 7 days goes up whole, the newest first: the one you're working in within seconds of each turn, then today's, then the rest of the week. Your other devices can read each one, and continue it, even while this Mac is off.
             </p>
           </div>
           <StateChip status={status} />
@@ -53,7 +52,7 @@ export function SyncSection() {
             ))}
             {status.tiers.every((tier) => tier.sessions === 0) ? (
               <ListCardRow>
-                <p className="text-label text-faint">No Threads in the last 30 days yet.</p>
+                <p className="text-label text-faint">No Threads in the last 7 days yet.</p>
               </ListCardRow>
             ) : null}
             <ListCardRow>
@@ -135,10 +134,9 @@ function footer(status: Running): string {
 }
 
 function Failures({ status }: { status: Running }) {
-  const names = useThreads((state) => state.descriptors)
+  const name = useSessionName()
   const [first] = status.failures
   if (!first) return null
-  const name = (harness: string) => names.find((entry) => entry.provider === harness)?.displayName ?? harness
   const details = status.failures
     .map((failure) => [new Date(failure.at).toISOString(), failure.harness, failure.nativeId, failure.correlationId ?? "-", failure.message].join("\t"))
     .join("\n")
@@ -146,17 +144,63 @@ function Failures({ status }: { status: Running }) {
     <div role="alert" className="flex items-start justify-between gap-4 rounded-lg bg-negative/8 px-3 py-2 ring-1 ring-negative/20 ring-inset" data-sync-failures>
       <div className="min-w-0 text-ui leading-relaxed text-negative">
         {status.failures.length === 1
-          ? `A ${name(first.harness)} session didn't go up ${ago(first.at)}. Mako tries again on its own.`
-          : `${status.failures.length} Sessions didn't go up, the last ${ago(first.at)}. Mako tries again on its own.`}
-        <p className="mt-0.5 truncate text-label opacity-80" title={first.message}>
-          {first.message}
-        </p>
+          ? `${name(first)} hasn't gone up since ${ago(first.since ?? first.at)}. Mako tries again on its own.`
+          : `${status.failures.length} Sessions haven't gone up, the first since ${ago(Math.min(...status.failures.map((failure) => failure.since ?? failure.at)))}. Mako tries again on its own.`}
+        {status.failures.map((failure) => (
+          <p key={`${failure.harness}:${failure.nativeId}`} className="mt-0.5 truncate text-label opacity-80" title={failure.message} data-sync-failure={failure.nativeId}>
+            {status.failures.length === 1 ? failure.message : `${name(failure)}: ${failure.message}`}
+          </p>
+        ))}
       </div>
       <Action tone="outline" size="xs" className="shrink-0" onClick={() => copy(details)}>
         <CopyIcon />
         Copy details
       </Action>
     </div>
+  )
+}
+
+/** A Session as the person knows it: its Thread's title where the rail lists it, else its harness's session. */
+function useSessionName(): (failure: { harness: string; nativeId: string }) => string {
+  const descriptors = useThreads((state) => state.descriptors)
+  const threads = useThreads((state) => state.threads)
+  return (failure) => {
+    const title = threads.find((thread) => thread.harness === failure.harness && thread.nativeId === failure.nativeId)?.title
+    const harness = descriptors.find((entry) => entry.provider === failure.harness)?.displayName ?? failure.harness
+    return title ? `“${title}”` : `A ${harness} session`
+  }
+}
+
+/** Failures this old are said in the rail too: a push that fails once and goes on its next try isn't worth a line. */
+const RAIL_AFTER_MS = 60_000
+/** How often the rail reads the status: the host keeps it, so a read costs nothing but the call. */
+const RAIL_READ_EVERY_MS = 10_000
+
+/**
+ * Above the rail's footer while Sessions haven't gone up for a minute or more: how many, and why the first didn't,
+ * opening Settings › Account, where each is named with the account's words. Nothing at all while sync is well.
+ */
+export function SyncRailLine() {
+  const status = useSyncStatus((state) => state.status)
+  const readAt = useSyncStatus((state) => state.readAt ?? 0)
+  useEffect(() => syncStatus.watch(RAIL_READ_EVERY_MS), [])
+  if (!status || !("tiers" in status) || status.state !== "failing") return null
+  const stuck = status.failures.filter((failure) => readAt - (failure.since ?? failure.at) >= RAIL_AFTER_MS)
+  const [first] = stuck
+  if (!first) return null
+  return (
+    <button
+      type="button"
+      data-sync-rail={stuck.length}
+      onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "account" }))}
+      className="pressable flex w-full items-center gap-2.5 border-t border-hairline px-3 py-2.5 text-left hover:bg-fill-hover"
+    >
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-label font-medium text-negative">{count(stuck.length, "Session")} not synced</span>
+        <span className="truncate text-label text-faint" title={first.message}>{first.message}</span>
+      </span>
+      <span className="shrink-0 text-label text-muted-foreground">Why</span>
+    </button>
   )
 }
 

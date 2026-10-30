@@ -124,8 +124,6 @@ async function captureEvents() {
     "turn-cursor-saved-failed": { shows: "Found 1 error", hides: 'Background command "' },
     "turn-opencode-saved-agent": { shows: "slowest is", hides: 'Subagent "' },
     "turn-cursor-saved-plan": { shows: "Do NOT edit the plan file", hides: undefined },
-    "mako-continued": { shows: "Mako sent this on its own", hides: undefined },
-    "continued-saved-person": { shows: "The person asked you to pick it up", hides: undefined },
     "setup-sign-in": { shows: "todoist", hides: undefined },
     "setup-group": { shows: "model_reasoning_summary_format", hides: undefined },
     "marker-compaction": { shows: "fixing variant matching", hides: undefined },
@@ -157,6 +155,29 @@ async function captureEvents() {
     })
   }
 
+  // With Diagnostics' originals on, the seam of a continued turn says why and who, and its words open under it.
+  let diagnosed = null
+  if (cases.includes("continued-live-mako")) {
+    await evaluate(`import("/src/state/prefs.ts").then(({ setPref }) => { setPref("showOriginals", true); return true })`)
+    await evaluate(`document.querySelector('[data-event-case="continued-live-mako"] [data-turn-fold] > button').click(); true`)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    await evaluate(`document.querySelector('[data-event-case="continued-live-mako"] [data-turn-continued] button[data-event-line]')?.click(); true`)
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    for (const theme of ["dark", "light"]) {
+      await evaluate(`document.documentElement.classList.toggle("light", ${theme === "light"}); true`)
+      const rect = await evaluate(`(() => {
+        const node = document.querySelector('[data-event-case="continued-live-mako"]')
+        node.scrollIntoView({ block: "start" })
+        const box = node.getBoundingClientRect()
+        return { x: Math.floor(box.x), y: Math.floor(box.y), width: Math.ceil(box.width), height: Math.min(Math.ceil(box.height), innerHeight - Math.floor(box.y)) }
+      })()`)
+      await frames()
+      await writeFile(join(evidence, `${prefix}continued-live-mako-diagnostics-${theme}.png`), (await page.capturePage(rect)).toPNG())
+    }
+    diagnosed = await evaluate(`document.querySelector('[data-event-case="continued-live-mako"]').innerText`)
+    await evaluate(`import("/src/state/prefs.ts").then(({ setPref }) => { setPref("showOriginals", false); return true })`)
+  }
+
   // What a reader would object to, measured rather than eyeballed.
   const report = await evaluate(`(() => {
     const lines = [...document.querySelectorAll('[data-event-line]')]
@@ -164,6 +185,8 @@ async function captureEvents() {
       lines: lines.length,
       wrapped: lines.filter(line => line.getBoundingClientRect().height > 30).map(line => line.textContent),
       boilerplate: [...document.querySelectorAll('[data-event-case]')].map(node => node.textContent).filter(text => /continued on its own/i.test(text)),
+      // A turn that was continued reads as one: nothing where the continuation was sent, and never its words.
+      continuations: [...document.querySelectorAll('[data-event-case^="continued-"]')].filter(node => node.querySelector('[data-turn-continued]') || /Continue where you left off|continued the turn/.test(node.textContent)).map(node => node.dataset.eventCase),
       // A provider's turn or Mako's line where a prompt would stand, without its moment.
       untimed: [...document.querySelectorAll('[data-provider-turn], [data-turn-continued], [data-goal-step], [data-turn-moved]')]
         .filter(node => !node.querySelector('time'))
@@ -175,6 +198,8 @@ async function captureEvents() {
     assert.ok(report.lines > 0, "event lines carry data-event-line")
     assert.deepEqual(report.wrapped, [], "every event is one line")
     assert.deepEqual(report.boilerplate, [], "no event says it continued on its own")
+    assert.deepEqual(report.continuations, [], "a continued turn says nothing of its continuation")
+    assert.match(diagnosed ?? "", /Mako restarted Claude Code and continued the turn[^]*Continue where you left off/, "with originals on, the seam says why and who, with the words")
     assert.ok(opened.length >= 4 && opened.every((line) => line.expanded === "true"), "a line with more to read opens")
     assert.deepEqual(opened.filter((line) => !line.shows).map((line) => line.name), [], "each opened line shows what it holds")
     assert.deepEqual(opened.filter((line) => line.repeats).map((line) => line.name), [], "no opened line repeats the provider's sentence")

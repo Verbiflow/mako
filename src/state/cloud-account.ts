@@ -153,7 +153,7 @@ function placeWords(from: { city: string | null; country: string | null } | null
 
 type AccountEvent = Extract<HostEvent, { type: "cloud-account-event" }>["event"]
 
-const KIND_WORDS = { desktop: "A Mac", cli: "A terminal", runtime: "A machine" } as const
+const KIND_WORDS = { desktop: "A Mac", cli: "A terminal", runtime: "A machine", browser: "A browser" } as const
 
 /**
  * Something happened to the account's devices, heard as it happened or when this Mac connected again: a device that

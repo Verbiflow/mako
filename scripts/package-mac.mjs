@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url"
 import { build, Platform, Arch } from "electron-builder"
 import { extractFile } from "@electron/asar"
 import { auditPackage } from "./audit-package.mjs"
+import { readManifest, sourceIdentity } from "./lib/control-media-sources.mjs"
 import { assertPackagedImports } from "./test-packaged-imports.mjs"
 import { assertCursorSdkPatched } from "./patch-cursor-sdk.mjs"
 import { localMacConfig, resolveLocalIdentity, verifyLocalSignature } from "./mac-local-signing.mjs"
@@ -112,18 +113,20 @@ try {
   // The sleep watch, which holds the Mac's sleep while agents at work are handed to the cloud, ships beside it.
   execFileSync(process.execPath, [join(project, "scripts/build-sleep-watch.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
   const mediaRoot = join(project, "vendor/control-media/darwin-arm64")
-  const mediaRecipe = JSON.parse(await readFile(join(project, "vendor/control-media/sources.json"), "utf8"))
+  const mediaRecipe = await readManifest(project)
+  // The archives' identities, not the URLs they were fetched from: a mirror added or removed builds the same bytes.
+  const mediaSources = (manifest) => JSON.stringify(manifest?.sources.map(sourceIdentity))
   const readProvenance = () => readFile(join(mediaRoot, "provenance.json"), "utf8").then((text) => JSON.parse(text), () => null)
   let mediaProvenance = await readProvenance()
   // The encoder is built here from the recipe's pinned sources, each checked by its hash, and never committed: a
   // checkout whose recipe moved since its last build (or that never built one) builds it now, rather than refusing.
-  if (mediaProvenance?.recipe !== mediaRecipe.recipe || JSON.stringify(mediaProvenance?.sources) !== JSON.stringify(mediaRecipe.sources)) {
+  if (mediaProvenance?.recipe !== mediaRecipe.recipe || mediaSources(mediaProvenance) !== mediaSources(mediaRecipe)) {
     console.log(`[control-media] the recording encoder is built for recipe ${mediaProvenance?.recipe ?? "none"}, the checkout's is ${mediaRecipe.recipe}: building it`)
     execFileSync(process.execPath, [join(project, "scripts/build-control-media.mjs")], { cwd: project, stdio: "inherit" })
     mediaProvenance = await readProvenance()
   }
   assert.equal(mediaProvenance.recipe, mediaRecipe.recipe, "Recording encoder recipe changed; rebuild with npm run prepare:control-media")
-  assert.deepEqual(mediaProvenance.sources, mediaRecipe.sources, "Recording encoder sources changed; rebuild with npm run prepare:control-media")
+  assert.equal(mediaSources(mediaProvenance), mediaSources(mediaRecipe), "Recording encoder sources changed; rebuild with npm run prepare:control-media")
   for (const name of ["ffmpeg", "ffprobe"]) {
     assert.equal(await digest(join(mediaRoot, name)), mediaProvenance.binaries[name], `Unreviewed recording binary: ${name}`)
   }
@@ -148,10 +151,13 @@ try {
   const pkg = JSON.parse(await readFile(join(stage, "package.json"), "utf8"))
   const revision = process.env.MAKO_BUILD_REVISION ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: project, encoding: "utf8" }).trim()
   assert.match(revision, /^[a-f0-9]{40}$/)
-  const dirty = process.env.MAKO_BUILD_DIRTY === undefined
-    ? Boolean(execFileSync("git", ["status", "--porcelain"], { cwd: project, encoding: "utf8" }).trim())
-    : process.env.MAKO_BUILD_DIRTY === "1"
-  const makoBuild = { id: createHash("sha256").update(JSON.stringify(before)).digest("hex").slice(0, 16), builtAt: new Date().toISOString(), revision, dirty }
+  // The uncommitted files the build takes, as the updater named them before building, so the installed app names
+  // the same ones; packaged directly, the checkout's own, read now. The project's packages were just compiled.
+  const { buildUncommitted, readUncommitted } = await import("@mako/host/application/local-update-source")
+  const { Git } = await import("@mako/git")
+  const git = new Git()
+  const taken = await buildUncommitted(process.env, () => readUncommitted(git, project)).finally(() => git.close())
+  const makoBuild = { id: createHash("sha256").update(JSON.stringify(before)).digest("hex").slice(0, 16), builtAt: new Date().toISOString(), revision, ...taken }
   // The Mako cloud a release signs in to and reports to; a build packaged without one offers neither. A local build
   // signs in to production's unless MAKO_CLOUD_URL names another.
   const cloudUrl = process.env.MAKO_CLOUD_URL || (localIdentity ? PRODUCTION_CLOUD : undefined)

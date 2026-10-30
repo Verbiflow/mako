@@ -50,6 +50,8 @@ jobs:
       - run: npm ci
       - run: npm run build:control-runtime
       - run: npm run test:protocol
+      # A window's connection banner follows its host's event stream, never one call's failure or slowness.
+      - run: npx tsx scripts/test-host-liveness.ts
       - run: npm run test:machine-runtime
       - run: npx tsx scripts/test-cloud-sign-ins.ts
       - run: npm run test:cloud-conversations
@@ -80,6 +82,8 @@ jobs:
       - run: npm run test:prompt-delivery
       - run: npm run test:live-prompt-delivery
       - run: npm run test:tuning
+      # Who is told what, and in which words: the attention centre's policy, and the kinds and wording every surface shares.
+      - run: npm run test:notifications
       # What a local update builds from: its checkout against origin, fetched, and how Settings › Updates says it.
       - run: npm run test:update-source
       # The attribution journal and workspace snapshots: per-turn changes, undo, Git operations, and the guard that keeps

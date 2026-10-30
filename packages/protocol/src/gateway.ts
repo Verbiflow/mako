@@ -58,6 +58,14 @@ export interface GatewayUnderTest {
 
 type Waiter<T> = { resolve(item: T): void; reject(error: Error): void }
 
+/** `Inbox.next` waited as long as it was told to and nothing came; the inbox is still open. */
+export class NothingArrivedError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`nothing arrived within ${timeoutMs} ms`)
+    this.name = "NothingArrivedError"
+  }
+}
+
 /** Frames waiting to be read, in arrival order. Closing it lets what's queued be read, then ends. */
 export class Inbox<T> {
   private readonly items: T[] = []
@@ -100,7 +108,7 @@ export class Inbox<T> {
       if (timeoutMs !== undefined)
         timer = setTimeout(() => {
           this.waiters.splice(this.waiters.indexOf(waiter), 1)
-          reject(new Error(`nothing arrived within ${timeoutMs} ms`))
+          reject(new NothingArrivedError(timeoutMs))
         }, timeoutMs)
       this.waiters.push(waiter)
     })

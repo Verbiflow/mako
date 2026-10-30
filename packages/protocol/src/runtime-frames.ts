@@ -14,6 +14,7 @@ import {
   ThreadIdSchema,
 } from "./ids.js"
 import { MediaStreamIdSchema } from "./media.js"
+import { PortRequestSchema } from "./ports.js"
 import { SessionsReportSchema } from "./thread-listing.js"
 import type { Payload } from "./payload.js"
 import { VersionRangeSchema } from "./version.js"
@@ -95,9 +96,18 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("sessions"), report: SessionsReportSchema }).strict(),
   /**
    * One live update of a conversation someone watches (version 5 on, `sessionStream`), its event after the envelope as
-   * the runtime encoded it. Not kept and not acknowledged: a watcher that misses one asks for a snapshot.
+   * the runtime encoded it. Not acknowledged. From version 9 it carries the runtime's own number for it (`n`, rising
+   * across all its conversations), so a runtime that sends it again on a new link (`watch`'s `after` says what's
+   * missing) has it relayed once; and a trace for the hops to log (`correlationId`), on the few that carry one.
    */
-  z.object({ type: z.literal("live"), conversation: z.string().min(1).max(128) }).strict(),
+  z
+    .object({
+      type: z.literal("live"),
+      conversation: z.string().min(1).max(128),
+      n: SeqSchema.optional(),
+      correlationId: CorrelationIdSchema.optional(),
+    })
+    .strict(),
   /** The runtime ended a stream it served (version 3 on, `media.ts`); its viewer hears why. */
   z
     .object({
@@ -106,7 +116,16 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
       problem: ProblemSchema.optional(),
     })
     .strict(),
+  /**
+   * The runtime is going away on purpose, said before it goes (version 8 on): its Mac is going to sleep, Mako is
+   * quitting, or the device is signing out. The gateway takes the link as down at once, and the device as quiet,
+   * rather than waiting for it to miss its heartbeats; the runtime connects again when it's back.
+   */
+  z.object({ type: z.literal("going-quiet"), reason: z.enum(["sleep", "quit", "sign-out"]) }).strict(),
 ])
+
+/** Why a runtime says it's going quiet (`going-quiet`). */
+export type GoingQuietReason = Extract<RuntimeFrameEnvelope, { type: "going-quiet" }>["reason"]
 
 /** A busy runtime says so at least this often; a gateway takes three missed as idle. */
 export const ACTIVITY_HEARTBEAT_MS = 60_000
@@ -202,11 +221,27 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
   /** The stream's viewer stopped watching or left: send nothing more on it. */
   z.object({ type: z.literal("media-unwatch"), stream: MediaStreamIdSchema }).strict(),
   /**
+   * A request to an app this runtime serves on one of its ports (version 7 on, `ports.ts`), answered on `stream` as
+   * media: its head, then its body. `media-ack` and `media-unwatch` pace and stop it as they do a watch.
+   */
+  PortRequestSchema.extend({ type: z.literal("port-open"), stream: MediaStreamIdSchema }).strict(),
+  /**
    * The conversations of this runtime someone watches now, the whole set, replacing the last (version 5 on): send their
    * live updates and no others'. A new link starts with none watched; this is said on enrolment when some are, and on
    * each change, so any one frame is the truth for its link.
    */
-  z.object({ type: z.literal("watch"), conversations: z.array(z.string().min(1).max(128)).max(1_000) }).strict(),
+  z
+    .object({
+      type: z.literal("watch"),
+      conversations: z.array(z.string().min(1).max(128)).max(1_000),
+      /**
+       * By conversation, the runtime's number (`live`'s `n`) of the last update the gateway relayed of it (version 9
+       * on): on a new link the runtime sends what came after, which went into the old link's last moments or wasn't
+       * sent while it was down. A conversation not named here sends nothing old.
+       */
+      after: z.record(z.string().min(1).max(128), SeqSchema).optional(),
+    })
+    .strict(),
 ])
 
 export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>

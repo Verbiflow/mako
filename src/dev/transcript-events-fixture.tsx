@@ -112,6 +112,15 @@ const turn = (cause: ProviderTurnCause, minute = 30): LiveUpdate => ({ kind: "pr
 const marker = (event: TranscriptEvent): LiveUpdate => ({ kind: "event", ...event })
 const go: LiveUpdate = { kind: "user", text: "Run the suite and fix what fails" }
 const reply = (id: string, text: string): LiveUpdate => ({ kind: "text", id, text })
+/** A turn cut short after a command and a word, then continued with `continuation`, which ran the command again and answered. */
+const continuedTurn = (continuation: string): LiveUpdate[] => [
+  { kind: "user", requestId: "cut", text: "Run the suite and fix what fails", at: at(30) },
+  { kind: "tool", id: "test", name: "Bash", title: "Bash", status: "completed", input: '{"command":"npm test","description":"Run the tests"}', output: "Tests  2 failed | 512 passed (514)", at: at(31) },
+  { kind: "text", id: "a1", text: "Two footer tests fail. Fixing the stop label first." },
+  { kind: "user", requestId: "go-on", text: continuation, at: at(34) },
+  { kind: "tool", id: "retest", name: "Bash", title: "Bash", status: "completed", input: '{"command":"npm test","description":"Run the tests"}', output: "Tests  514 passed (514)", at: at(35) },
+  { kind: "text", id: "a2", text: "Both footer tests pass now: the stop label reads the recorded reason." },
+]
 const prompted = (id: string, text: string, minute: number): ExchangeData => ({
   id,
   prompt: { id, role: "user", requestId: id, timestamp: at(minute), blocks: [{ type: "text", text }] },
@@ -334,44 +343,38 @@ const CASES: EventCase[] = [
     title: "OpenCode, live: its own notice, no structure",
     exchanges: live([turn({ reason: "The server restarted while you were working. Pick up where you left off." }, 50), reply("t1", "Resuming the migration.")], "opencode"),
   },
-  // Mako's own lines where a prompt would be.
+  // A turn Mako or the person continued after it was cut short: one turn, with no line where the continuation was sent.
   {
-    id: "mako-continued",
-    title: "Mako, live: continued after the connection dropped",
-    exchanges: [prompted("continued", continueTurnPrompt("connection-lost", "mako"), 40)],
-    mako: { continued: { kind: "continued", reason: "connection-lost", sender: "mako" } },
+    id: "continued-live-mako",
+    title: "Claude Code, live: stopped mid-turn, Mako restarted it and the turn went on",
+    exchanges: live(continuedTurn(continueTurnPrompt("provider-exited", "mako"))),
   },
   {
-    id: "mako-restarted",
-    title: "Mako, live: restarted the provider and continued",
-    exchanges: [prompted("restarted", continueTurnPrompt("provider-exited", "mako"), 41)],
-    mako: { restarted: { kind: "continued", reason: "provider-exited", sender: "mako" } },
+    id: "continued-live-person",
+    title: "Claude Code, live: Mako quit mid-turn and the person pressed Continue turn",
+    exchanges: live(continuedTurn(continueTurnPrompt("host-quit", "person"))),
   },
   {
-    id: "mako-signed-in",
-    title: "Mako, live: continued after the provider signed in again",
-    exchanges: [prompted("signed-in", continueTurnPrompt("signed-out", "mako"), 41)],
-    mako: { "signed-in": { kind: "continued", reason: "signed-out", sender: "mako" } },
-  },
-  {
-    id: "continued-by-person",
-    title: "You, live: pressed Continue turn after Mako quit (known by its words)",
-    exchanges: [prompted("by-person", continueTurnPrompt("host-quit", "person"), 41)],
-  },
-  {
-    id: "continued-saved-mako",
-    title: "Mako, saved: its own continuation, read back from the store",
-    exchanges: saved([ask(continueTurnPrompt("provider-exited", "mako"), 41), say("Picking up where the turn stopped.", 42)], "cursor"),
-  },
-  {
-    id: "continued-saved-person",
-    title: "You, saved: Continue turn after the connection dropped, read back from the store",
-    exchanges: saved([ask(continueTurnPrompt("connection-lost", "person"), 41), say("Picking up where the turn stopped.", 42)], "cursor"),
+    id: "continued-saved",
+    title: "Cursor, saved: a continuation read back from the store, with no request to say whose",
+    exchanges: saved([
+      ask("Run the suite and fix what fails", 30),
+      { type: "tool", id: "test", at: at(31), name: "Bash", input: '{"command":"npm test"}', output: "Tests  2 failed | 512 passed (514)" },
+      say("Two footer tests fail. Fixing the stop label first.", 32),
+      ask(continueTurnPrompt("connection-lost", "mako"), 34),
+      { type: "tool", id: "retest", at: at(35), name: "Bash", input: '{"command":"npm test"}', output: "Tests  514 passed (514)" },
+      say("Both footer tests pass now: the stop label reads the recorded reason.", 36),
+    ], "cursor"),
   },
   {
     id: "continued-saved-unknown",
-    title: "Saved before the words named a sender: who continued is not claimed",
-    exchanges: saved([ask(continueTurnPrompt("connection-lost", "mako").replace(/ Mako sent this on its own;.*$/, ""), 41), say("Picking up where the turn stopped.", 42)], "cursor"),
+    title: "Saved before the words named a sender: still one turn",
+    exchanges: saved([
+      ask("Run the suite and fix what fails", 30),
+      say("Two footer tests fail. Fixing the stop label first.", 32),
+      ask(continueTurnPrompt("connection-lost", "mako").replace(/ Mako sent this on its own;.*$/, ""), 34),
+      say("Both footer tests pass now: the stop label reads the recorded reason.", 36),
+    ], "cursor"),
   },
   {
     id: "mako-moved",

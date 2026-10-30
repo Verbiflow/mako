@@ -3,8 +3,8 @@ import {
   excerpt,
   notificationHeadline,
   plainText,
-  summaryNotification,
 } from "../src/lib/notification-text.ts"
+import { asks, attentionSummary } from "@mako/host/contracts/notifications"
 import {
   BURST_SETTLE_MS,
   BURST_SUMMARY_FROM,
@@ -25,10 +25,11 @@ import {
   type NotificationItem,
   type NotificationSubject,
 } from "../src/state/notifications.ts"
-import { lastReplyText, syncThreadStatus } from "../src/state/acp-live.ts"
+import { lastReplyText, noteListedOutcome, syncThreadStatus } from "../src/state/acp-live.ts"
 import type { LiveAcpConversation } from "../src/state/acp-state.ts"
 import { prefsStore, setPref } from "../src/state/prefs.ts"
 import { applyThreadActivity, threadsStore } from "../src/state/threads.ts"
+import { harnessDescriptors } from "../src/dev/harness-descriptors.ts"
 import {
   DELIVERY_GRACE_MS,
   badgeLabel,
@@ -56,21 +57,21 @@ const cut = excerpt(long)
 assert.ok(cut.length <= 201 && cut.endsWith("…") && !cut.includes("  "))
 assert.equal(excerpt(""), "")
 assert.deepEqual(
-  summaryNotification([
-    { kind: "ready", title: "a" },
-    { kind: "ready", title: "b" },
-    { kind: "ready", title: "c" },
-    { kind: "ready", title: "d" },
-    { kind: "ready", title: "e" },
+  attentionSummary([
+    { kind: "finished", title: "a" },
+    { kind: "finished", title: "b" },
+    { kind: "finished", title: "c" },
+    { kind: "finished", title: "d" },
+    { kind: "finished", title: "e" },
   ]),
-  { title: "5 answers ready", body: "a, b, c, d and 1 more" }
+  { title: "5 Threads finished", body: "a, b, c, d and 1 more" }
 )
 assert.equal(
-  summaryNotification([
-    { kind: "ask", title: "a" },
-    { kind: "ready", title: "b" },
+  attentionSummary([
+    { kind: "approval", title: "a" },
+    { kind: "finished", title: "b" },
   ]).title,
-  "2 threads need you"
+  "2 Threads need you"
 )
 
 /* ------------------------------------------------------------------ */
@@ -79,27 +80,27 @@ assert.equal(
 
 const allOn = { notifyDesktop: true, notifyReady: true, notifyAsk: true, notifyFailed: true }
 assert.deepEqual(
-  decideDelivery({ kind: "ready", visible: true, focused: true, quiet: false, prefs: allOn }),
+  decideDelivery({ kind: "finished", visible: true, focused: true, quiet: false, prefs: allOn }),
   { seen: true, channels: ["cue"] },
   "watching the thread: seen, one cue"
 )
 assert.deepEqual(
-  decideDelivery({ kind: "ready", visible: false, focused: true, quiet: false, prefs: allOn }),
+  decideDelivery({ kind: "finished", visible: false, focused: true, quiet: false, prefs: allOn }),
   { seen: false, channels: ["toast", "cue"] },
   "another thread on screen: a toast, never a banner"
 )
 assert.deepEqual(
-  decideDelivery({ kind: "ready", visible: true, focused: false, quiet: false, prefs: allOn }),
+  decideDelivery({ kind: "finished", visible: true, focused: false, quiet: false, prefs: allOn }),
   { seen: false, channels: ["desktop"] },
   "the thread is on screen but the window is not in front: a banner"
 )
 assert.deepEqual(
-  decideDelivery({ kind: "ask", visible: false, focused: false, quiet: false, prefs: allOn }),
+  decideDelivery({ kind: "approval", visible: false, focused: false, quiet: false, prefs: allOn }),
   { seen: false, channels: ["desktop"] }
 )
 assert.deepEqual(
   decideDelivery({
-    kind: "ready",
+    kind: "finished",
     visible: false,
     focused: false,
     quiet: false,
@@ -114,13 +115,13 @@ assert.deepEqual(
   "a failure is never toasted here; the run's own error toast already spoke"
 )
 assert.deepEqual(
-  decideDelivery({ kind: "ready", visible: false, focused: false, quiet: true, prefs: allOn }),
+  decideDelivery({ kind: "finished", visible: false, focused: false, quiet: true, prefs: allOn }),
   { seen: false, channels: [] },
   "a hydration replay is recorded, never announced"
 )
 assert.deepEqual(
   decideDelivery({
-    kind: "ask",
+    kind: "approval",
     visible: false,
     focused: false,
     quiet: false,
@@ -234,6 +235,9 @@ function reset() {
   notificationsStore.set({ items: [], permission: "default", focused: true })
 }
 
+// Agents are named as the rail names them: from the harness definitions the host lists.
+threadsStore.set({ descriptors: harnessDescriptors.map((descriptor) => ({ ...descriptor, live: true })) })
+
 {
   reset()
   const fake = fakeEnvironment()
@@ -242,18 +246,18 @@ function reset() {
 
   // Watching the thread: seen at once, one cue, no badge.
   fake.visible.add("thread:/a")
-  noteOutcome({ kind: "ready", subject: subjectFor("/a"), marker: "t1", detail: "**Done.**\n\nMore" })
+  noteOutcome({ kind: "finished", subject: subjectFor("/a"), marker: "t1", detail: "**Done.**\n\nMore" })
   assert.equal(fake.log.cues, 1)
   assert.equal(unseenSubjects(notificationsStore.get().items).length, 0)
   assert.equal(notificationsStore.get().items[0]?.body, "Done.")
   assert.deepEqual(fake.log.badges, [0])
 
   // Same fact twice is one item.
-  noteOutcome({ kind: "ready", subject: subjectFor("/a"), marker: "t1" })
+  noteOutcome({ kind: "finished", subject: subjectFor("/a"), marker: "t1" })
   assert.equal(notificationsStore.get().items.length, 1)
 
   // Another thread while Mako is in front: a toast, and the badge counts it.
-  noteOutcome({ kind: "ready", subject: subjectFor("/b", "Rail ranks"), marker: "t1" })
+  noteOutcome({ kind: "finished", subject: subjectFor("/b", "Rail ranks"), marker: "t1" })
   assert.equal(fake.log.toasts.length, 1)
   assert.equal(fake.log.cues, 2)
   assert.deepEqual(fake.log.badges, [0, 1])
@@ -261,15 +265,15 @@ function reset() {
 
   // Away from the window: a banner, after the burst settles.
   fake.setFocused(false)
-  noteOutcome({ kind: "ask", subject: subjectFor("/c", "Migrate schema"), marker: "perm-1", detail: "Run npm test?" })
+  noteOutcome({ kind: "approval", subject: subjectFor("/c", "Migrate schema"), marker: "perm-1", detail: "Run npm test?" })
   assert.equal(fake.log.desktop.length, 0, "banners wait for the burst window")
   await fake.advance(BURST_SETTLE_MS)
   assert.equal(fake.log.desktop.length, 1)
   assert.deepEqual(fake.log.desktop[0], {
-    id: "thread:/c:ask:perm-1",
+    id: "thread:/c:approval:perm-1",
     subject: "thread:/c",
     title: "Migrate schema",
-    subtitle: "Claude Code needs you · mako",
+    subtitle: "Claude Code needs your approval · mako",
     body: "Run npm test?",
   })
   assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["thread:/c", "thread:/b"], "the ask joins the unseen answer")
@@ -278,11 +282,11 @@ function reset() {
 
   // A burst of many becomes one banner naming them.
   for (let index = 0; index < BURST_SUMMARY_FROM; index += 1)
-    noteOutcome({ kind: "ready", subject: subjectFor(`/burst-${index}`, `Burst ${index}`), marker: "t1" })
+    noteOutcome({ kind: "finished", subject: subjectFor(`/burst-${index}`, `Burst ${index}`), marker: "t1" })
   await fake.advance(BURST_SETTLE_MS)
   assert.equal(fake.log.desktop.length, 2)
   assert.equal(fake.log.desktop[1]?.subject, SUMMARY_SUBJECT)
-  assert.equal(fake.log.desktop[1]?.title, `${BURST_SUMMARY_FROM} answers ready`)
+  assert.equal(fake.log.desktop[1]?.title, `${BURST_SUMMARY_FROM} Threads finished`, "in the words the account's notices use")
   assert.equal(unseenSubjects(notificationsStore.get().items).length, 2 + BURST_SUMMARY_FROM)
 
   // Coming back to the thread with the ask on screen clears it, and its banner.
@@ -301,14 +305,14 @@ function reset() {
 
   // Opening from the list marks it seen and jumps.
   const next = unseenItems(notificationsStore.get().items)[0]!
-  assert.equal(next.kind, "ready")
+  assert.equal(next.kind, "finished")
   markAllSeen()
   assert.equal(unseenSubjects(notificationsStore.get().items).length, 0)
   assert.equal(fake.log.badges.at(-1), 0)
   assert.ok(fake.log.dismissedDesktop.includes(SUMMARY_SUBJECT))
 
   // The badge preference turns the count off without losing the items.
-  noteOutcome({ kind: "ready", subject: subjectFor("/d"), marker: "t1" })
+  noteOutcome({ kind: "finished", subject: subjectFor("/d"), marker: "t1" })
   await fake.advance(BURST_SETTLE_MS)
   assert.equal(fake.log.badges.at(-1), 1)
   setPref("badgeCount", false)
@@ -319,18 +323,18 @@ function reset() {
   // A banner the platform refuses falls back to a toast.
   fake.setDeliver(false)
   const toastsBefore = fake.log.toasts.length
-  noteOutcome({ kind: "ready", subject: subjectFor("/e"), marker: "t1" })
+  noteOutcome({ kind: "finished", subject: subjectFor("/e"), marker: "t1" })
   await fake.advance(BURST_SETTLE_MS)
   assert.equal(fake.log.toasts.length, toastsBefore + 1)
   fake.setDeliver(true)
 
   // A retired kind leaves the thread's other items alone.
-  noteOutcome({ kind: "ask", subject: subjectFor("/f"), marker: "perm-9" })
-  noteOutcome({ kind: "ready", subject: subjectFor("/f"), marker: "t9" })
+  noteOutcome({ kind: "approval", subject: subjectFor("/f"), marker: "perm-9" })
+  noteOutcome({ kind: "finished", subject: subjectFor("/f"), marker: "t9" })
   const dismissedBefore = fake.log.dismissedDesktop.length
-  retireSubject("thread:/f", "ask")
+  retireSubject("thread:/f", "asks")
   const remaining = notificationsStore.get().items.filter((item) => item.subject.id === "thread:/f")
-  assert.deepEqual(remaining.map((item) => item.kind), ["ready"])
+  assert.deepEqual(remaining.map((item) => item.kind), ["finished"])
   assert.equal(fake.log.dismissedDesktop.length, dismissedBefore, "a partial retire keeps the banner")
 
   flushNotificationBursts()
@@ -400,7 +404,7 @@ assert.equal(
   )
   const ready = notificationsStore.get().items
   assert.equal(ready.length, 1)
-  assert.equal(ready[0]?.kind, "ready")
+  assert.equal(ready[0]?.kind, "finished")
   assert.equal(ready[0]?.subject.id, "thread:/sessions/live-1.jsonl")
   assert.equal(ready[0]?.subject.agent, "Claude Code")
   assert.equal(ready[0]?.body, "All green.")
@@ -426,13 +430,13 @@ assert.equal(
   })
   syncThreadStatus(asking, "running")
   syncThreadStatus(asking, "running")
-  const asks = notificationsStore.get().items.filter((item) => item.kind === "ask")
-  assert.equal(asks.length, 1)
-  assert.equal(asks[0]?.body, "Run npm test")
+  const asked = notificationsStore.get().items.filter((item) => asks(item.kind))
+  assert.equal(asked.length, 1)
+  assert.equal(asked[0]?.body, "Approve: Run npm test", "worded as every surface words it")
 
   // Answering it retires the ask without touching anything else.
   syncThreadStatus(liveConversation({ revision: 11, session: { ...liveConversation().session, status: "running" } }), "running")
-  assert.equal(notificationsStore.get().items.some((item) => item.kind === "ask" && !item.seen), false)
+  assert.equal(notificationsStore.get().items.some((item) => asks(item.kind) && !item.seen), false)
 
   // Hydration replays record without announcing.
   const before = fake.log.desktop.length
@@ -451,7 +455,7 @@ assert.equal(
   await fake.advance(BURST_SETTLE_MS)
   assert.equal(fake.log.desktop.length, before, "no banner for a replay")
   const replayed = notificationsStore.get().items.find((item) => item.subject.id === "live:live-2")
-  assert.equal(replayed?.kind, "ask")
+  assert.equal(replayed?.kind, "approval")
   assert.equal(replayed?.seen, false, "but it still counts")
 
   // A failure while away is a banner.
@@ -495,6 +499,47 @@ assert.equal(
   assert.equal(threadsStore.get().attention["/sessions/live-3.jsonl"], undefined, "no failed mark either")
   assert.equal(threadsStore.get().working["/sessions/live-3.jsonl"]?.kind, "working", "the row stays a working one")
 
+  // A question asked as a permission (Claude Code's) is a question, in the words the phone's notice uses.
+  syncThreadStatus(
+    liveConversation({
+      key: "live-4",
+      threadPath: "/sessions/live-4.jsonl",
+      revision: 15,
+      session: { ...liveConversation().session, id: "live-4", status: "running" },
+      permission: { id: "perm-4", sessionId: "live-4", title: "AskUserQuestion", options: [], questions: [{ id: "q1", header: "Branch", question: "Which branch?", isSecret: false, allowOther: true, options: [] }] },
+    }),
+    "running"
+  )
+  await fake.advance(BURST_SETTLE_MS)
+  assert.equal(fake.log.desktop.at(-1)?.subtitle, "Claude Code has a question · mako")
+  assert.equal(fake.log.desktop.at(-1)?.body, "A question: Which branch?")
+
+  flushNotificationBursts()
+  uninstall()
+}
+
+{
+  // Another device's Session, listed here unopened: the host reads its change by the account's rule, and this Mac
+  // tells the person what their phone would, under the same key; answered anywhere, the ask goes.
+  reset()
+  const fake = fakeEnvironment()
+  fake.setFocused(false)
+  const uninstall = installNotificationEnvironment(fake.env)
+  const listed = (overrides: Partial<LiveAcpConversation>) => liveConversation({ key: "remote-1", threadPath: undefined, elsewhere: "Studio", ...overrides })
+  const idle = listed({})
+  const waiting = listed({ session: { ...idle.session, id: "remote-1", status: "running" }, waitingOn: "Approve: npm test" })
+  noteListedOutcome(idle, waiting, { kind: "approval", key: "1:waiting:a:approval:Approve: npm test" })
+  noteListedOutcome(idle, waiting, { kind: "approval", key: "1:waiting:a:approval:Approve: npm test" })
+  await fake.advance(BURST_SETTLE_MS)
+  assert.equal(fake.log.desktop.length, 1, "one banner for one fact, however often it's listed")
+  assert.deepEqual([fake.log.desktop[0]?.subtitle, fake.log.desktop[0]?.body], ["Claude Code needs your approval · mako", "Approve: npm test"])
+  const working = listed({ session: { ...idle.session, id: "remote-1", status: "running" } })
+  noteListedOutcome(waiting, working, undefined)
+  assert.equal(notificationsStore.get().items.some((item) => asks(item.kind) && !item.seen), false, "answered on another device: the ask goes here too")
+  assert.ok(fake.log.dismissedDesktop.includes("live:remote-1"), "and its banner with it")
+  noteListedOutcome(working, idle, { kind: "finished", key: "1:idle:b::" })
+  await fake.advance(BURST_SETTLE_MS)
+  assert.deepEqual([fake.log.desktop.at(-1)?.subtitle, fake.log.desktop.at(-1)?.body], ["Claude Code finished · mako", "Finished its turn"])
   flushNotificationBursts()
   uninstall()
 }
@@ -521,25 +566,25 @@ assert.equal(
     detail: "Allow Bash(npm test)?",
   })
   applyThreadActivity("/ext/a.jsonl", { provider: "claude", since: 20, status: "needs-input", detail: "Allow Bash(npm test)?" })
-  const asks = notificationsStore.get().items.filter((item) => item.kind === "ask")
-  assert.equal(asks.length, 1, "one ask per registry transition")
-  assert.equal(asks[0]?.subject.title, "Terminal run")
-  assert.equal(asks[0]?.subject.agent, "Claude Code")
-  assert.equal(asks[0]?.body, "Allow Bash(npm test)?")
+  const asked = notificationsStore.get().items.filter((item) => asks(item.kind))
+  assert.equal(asked.length, 1, "one ask per registry transition")
+  assert.equal(asked[0]?.subject.title, "Terminal run")
+  assert.equal(asked[0]?.subject.agent, "Claude Code")
+  assert.equal(asked[0]?.body, "Allow Bash(npm test)?")
   applyThreadActivity("/ext/a.jsonl", { provider: "claude", since: 30, status: "active" })
   assert.equal(
-    notificationsStore.get().items.some((item) => item.kind === "ask" && !item.seen),
+    notificationsStore.get().items.some((item) => asks(item.kind) && !item.seen),
     false,
     "answering in the terminal retires the ask"
   )
   applyThreadActivity("/ext/a.jsonl", { provider: "claude", since: 40, status: "open" })
-  const ready = notificationsStore.get().items.filter((item) => item.kind === "ready")
+  const ready = notificationsStore.get().items.filter((item) => item.kind === "finished")
   assert.equal(ready.length, 1, "working then open is a finished turn")
-  assert.equal(ready[0]?.body, "Answer ready to read.")
+  assert.equal(ready[0]?.body, "Finished its turn")
   applyThreadActivity("/ext/a.jsonl", { provider: "claude", since: 50, status: "active" })
   applyThreadActivity("/ext/a.jsonl", null)
   assert.equal(
-    notificationsStore.get().items.filter((item) => item.kind === "ready").length,
+    notificationsStore.get().items.filter((item) => item.kind === "finished").length,
     0,
     "a process that vanished mid-turn is not an answer, and the new turn retired the old one"
   )
@@ -712,11 +757,11 @@ assert.equal(parseAuthorizationReadout('{"authorization":"weird","alert":"enable
 /* A Thread with several Sessions                                       */
 /* ------------------------------------------------------------------ */
 
-assert.equal(notificationHeadline("ready", "Codex", ["Claude Code"]), "Codex finished · Claude Code still working")
+assert.equal(notificationHeadline("finished", "Codex", ["Claude Code"]), "Codex finished · Claude Code still working")
 assert.equal(notificationHeadline("failed", "Codex", ["Codex"]), "Codex failed · another Codex session still working")
-assert.equal(notificationHeadline("ready", "Codex", ["Claude Code", "Claude Code"]), "Codex finished · 2 Claude Code sessions still working")
-assert.equal(notificationHeadline("ask", "Codex", ["Claude Code", "Grok", "Devin"]), "Codex needs you · Claude Code, Grok and Devin still working")
-assert.equal(notificationHeadline("ready", "Codex", []), "Codex finished")
+assert.equal(notificationHeadline("finished", "Codex", ["Claude Code", "Claude Code"]), "Codex finished · 2 Claude Code sessions still working")
+assert.equal(notificationHeadline("approval", "Codex", ["Claude Code", "Grok", "Devin"]), "Codex needs your approval · Claude Code, Grok and Devin still working")
+assert.equal(notificationHeadline("finished", "Codex", []), "Codex finished")
 {
   reset()
   const fake = fakeEnvironment()
@@ -725,19 +770,19 @@ assert.equal(notificationHeadline("ready", "Codex", []), "Codex finished")
     target.kind === "thread" && working.has(target.path) ? { thread: "t1", working: working.get(target.path) ?? [] } : undefined
   const uninstall = installNotificationEnvironment(fake.env)
   fake.setFocused(false)
-  noteOutcome({ kind: "ready", subject: { ...subjectFor("/codex", "Fold"), agent: "Codex" }, marker: "t1" })
+  noteOutcome({ kind: "finished", subject: { ...subjectFor("/codex", "Fold"), agent: "Codex" }, marker: "t1" })
   await fake.advance(BURST_SETTLE_MS)
   const first = notificationsStore.get().items[0]
   assert.equal(first?.thread, "t1")
   assert.deepEqual(first?.alongside, ["Claude Code"], "the item names the Session still working")
   assert.equal(fake.log.desktop.at(-1)?.subtitle, "Codex finished · Claude Code still working · mako")
-  noteOutcome({ kind: "ready", subject: subjectFor("/claude", "Fold"), marker: "t1" })
+  noteOutcome({ kind: "finished", subject: subjectFor("/claude", "Fold"), marker: "t1" })
   await fake.advance(BURST_SETTLE_MS)
   assert.equal(notificationsStore.get().items[0]?.alongside, undefined, "the last Session to finish has nothing beside it")
   assert.equal(fake.log.desktop.at(-1)?.subtitle, "Claude Code finished · mako")
   assert.equal(unseenItems(notificationsStore.get().items).length, 2, "each Session's answer opens on its own")
   assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["mako-thread:t1"], "two Sessions of one Thread count once")
-  noteOutcome({ kind: "ready", subject: subjectFor("/solo"), marker: "t1" })
+  noteOutcome({ kind: "finished", subject: subjectFor("/solo"), marker: "t1" })
   assert.deepEqual(unseenSubjects(notificationsStore.get().items), ["thread:/solo", "mako-thread:t1"])
   markAllSeen()
   uninstall()

@@ -85,6 +85,8 @@ export const DecodedEntrySchema = z.discriminatedUnion("kind", [
     cause: TurnCauseSchema.optional(),
     /** A usage limit refusing work (`TranscriptEvent.limit`), said once for all it stopped. */
     limit: UsageLimitSchema.optional(),
+    /** A usage limit said to be near (`TranscriptEvent.nearLimit`), said once a window. */
+    nearLimit: UsageLimitSchema.optional(),
     /** A provider's retries, as Mako measured them (`TranscriptEvent.retries`). */
     retries: RetriesSchema.optional(),
     /**

@@ -98,8 +98,17 @@ class MemoryRemote {
     const through = page.at(-1)?.n ?? after
     return { bundle: { harness, nativeId, layout: this.layout, marks: this.marks, units: [...units.values()] }, through, more: mine.some((entry) => entry.n > through) }
   }
+  /** Each session it holds, with its versions: what a device's uploads set against what they believe it holds. */
   async sessions() {
-    return []
+    const sessions = new Map()
+    for (const [key, unit] of this.units) {
+      const [harness, nativeId] = key.split("\n")
+      const session = sessions.get(`${harness}\n${nativeId}`) ?? { harness, nativeId, units: 0, versions: 0, through: 0 }
+      session.units += 1
+      session.versions += unit.versions.length
+      sessions.set(`${harness}\n${nativeId}`, session)
+    }
+    return [...sessions.values()]
   }
 }
 
@@ -269,7 +278,7 @@ try {
     const session = (nativeId, tier, busy = false) => ({ harness: "synthetic", nativeId, path: own(nativeId), thread: `t-${nativeId}`, busy, tier })
     const inCloud = (uploads, ...names) => names.map((name) => uploads.inCloud("synthetic", name))
     const uploads = new ScopedUploads(store, scoped, () => {})
-    uploads.scope({ sessions: [session("s4", "week"), session("s3", "month")], paused: true })
+    uploads.scope({ sessions: [session("s4", "week"), session("s3", "week")], paused: true })
     await uploads.settled()
     assert.deepEqual(order, [], "waiting: nothing caught up")
     assert.deepEqual([inCloud(uploads, "s3", "s4"), uploads.held("synthetic", "s3"), uploads.status().paused], [[false, false], true, true])
@@ -325,6 +334,94 @@ try {
     await again.settled()
     assert.deepEqual([order.at(-1), again.status().failures.length, ...inCloud(again, "s3")], ["s3", 0, true], "pushed on its next capture; the failure is no longer said")
     again.stop()
+    store.close()
+  }
+
+  // A push the account refuses (a pack it won't take) waits twice as long after each try, up to an hour, whatever is
+  // captured meanwhile, and is logged once. A Session at work captures every few seconds, and each capture once sent
+  // the refused push again: 720 tries an hour. A push that failed for want of an answer goes again on the next capture
+  // once, and after a second failure in a row waits too.
+  {
+    const home = join(root, "refused")
+    const own = (name) => join(home, "sessions", `${name}.jsonl`)
+    await mkdir(join(home, "sessions"), { recursive: true })
+    const store = new RecordStore(join(root, "refused-store"), stores)
+    const capture = async (name, n) => {
+      await appendFile(own(name), line(n, 1))
+      await store.capture({ harness: "synthetic", nativeId: name, home, records: { roots: [{ name: "synthetic", path: home }], files: [own(name)], databases: [] } })
+    }
+    // Lines of their own: a chunk the account refuses is refused in whichever Session names it.
+    for (const [name, n] of [["s6", 0], ["s7", 1_000]]) await capture(name, n)
+    const remote = new MemoryRemote("gateway/d-refusing")
+    const tries = { s6: 0, s7: 0 }
+    let refusedBytes = 0
+    let unanswered = 0
+    // s6's first chunk is one the account refuses wherever it's carried, as the gateway refused a chunk of exactly
+    // 40,960 bytes: with its bundle, in a pack, and alone. Each try sends it alone first, which counts the try.
+    const poisoned = new Set()
+    remote.pushWith = async (bundle, pack) => {
+      if (bundle.nativeId === "s7") {
+        tries.s7 += 1
+        if (unanswered-- > 0) throw new GatewayHttpError(503, "Something went wrong", { method: "POST", path: "/sessions/with-chunks", tries: 4, correlationId: `c-${tries.s7}` })
+        return MemoryRemote.prototype.pushWith.call(remote, bundle, pack)
+      }
+      if (!poisoned.size) for (const chunk of pack) poisoned.add(chunk.hash)
+      refusedBytes += pack.reduce((total, chunk) => total + chunk.body.length, 0)
+      throw new GatewayHttpError(400, "The pack was refused", { method: "POST", path: "/sessions/with-chunks", tries: 1, correlationId: `c-${tries.s6}` })
+    }
+    remote.putChunks = async (pack) => {
+      if (!pack.some((chunk) => poisoned.has(chunk.hash))) return MemoryRemote.prototype.putChunks.call(remote, pack)
+      if (pack.length === 1) tries.s6 += 1
+      refusedBytes += pack.reduce((total, chunk) => total + chunk.body.length, 0)
+      throw new GatewayHttpError(400, "The pack was refused", { method: "PUT", path: "/chunks", tries: 1, correlationId: `c-${tries.s6}` })
+    }
+    let now = 1_800_000_000_000
+    const lines = []
+    const uploads = new ScopedUploads(store, remote, (level, message, fields) => lines.push({ level, message, ...fields }), { now: () => now })
+    const atWork = (name) => ({ harness: "synthetic", nativeId: name, path: own(name), thread: `t-${name}`, busy: true, tier: "now" })
+    uploads.scope({ sessions: [atWork("s6")], paused: false })
+    await uploads.settled()
+    // An hour of a Session at work: a capture every 5 s, each looked at as the catalog looks.
+    const hour = async () => {
+      for (let second = 5; second <= 3_600; second += 5) {
+        now += 5_000
+        await capture("s6", second)
+        uploads.look()
+        await uploads.settled()
+      }
+    }
+    await hour()
+    assert.ok(tries.s6 <= 12, `a refused push tried ${tries.s6} times in its first hour, sending ${refusedBytes} bytes`)
+    const first = tries.s6
+    await hour()
+    assert.ok(tries.s6 - first <= 1, `then about hourly: ${tries.s6 - first} tries in the next hour`)
+    const failed = lines.filter((entry) => entry.message === "push failed" && entry.nativeId === "s6")
+    assert.equal(failed.length, 1, `logged once, not at each of its ${tries.s6} tries`)
+    assert.equal(failed[0].retryMostMs, 60 * 60_000)
+    const [kept, ...others] = uploads.status().failures
+    assert.deepEqual([kept.nativeId, kept.since, others.length], ["s6", 1_800_000_000_000, 0], "one failure kept for the Session, saying when it began")
+    assert.ok(kept.at > kept.since && kept.correlationId === `c-${tries.s6}`, "its newest try, with the correlation the gateway logged it under")
+
+    // Unanswered twice in a row: the first capture after the first failure goes at once, the next waits out its 4 s.
+    unanswered = 2
+    uploads.scope({ sessions: [atWork("s6"), atWork("s7")], paused: false })
+    await uploads.settled()
+    assert.equal(tries.s7, 1)
+    await capture("s7", 1)
+    uploads.look()
+    await uploads.settled()
+    assert.equal(tries.s7, 2, "after one failure, the next capture goes at once")
+    now += 1_000
+    await capture("s7", 2)
+    uploads.look()
+    await uploads.settled()
+    assert.equal(tries.s7, 2, "after two in a row, a capture waits out the 4 s")
+    now += 4_000
+    uploads.look()
+    await uploads.settled()
+    assert.deepEqual([tries.s7, uploads.inCloud("synthetic", "s7")], [3, true], "then it goes")
+    assert.deepEqual(lines.filter((entry) => entry.nativeId === "s7").map((entry) => [entry.message, entry.failures]), [["push failed", 1], ["pushed after failing", 2]])
+    uploads.stop()
     store.close()
   }
 

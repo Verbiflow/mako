@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import { Git } from "@mako/git"
-import type { ActivityMark, Attribution, ReportedEffect } from "@mako/protocol"
+import type { ActivityMark, Attribution, ReportedEffect, TrackerFileSystem } from "@mako/protocol"
 import { FakeClock, FakeEventSource, FakeFileSystem } from "@mako/protocol/attribution-conformance"
 import type { ChildSource } from "@mako/sessions"
 import type { Entry } from "@mako/sessions/entries"
@@ -31,7 +31,16 @@ import { LaptopTracker } from "@mako/host/attribution/tracker"
 const runner = new Git()
 
 /** A scratch project folder holding one repository, and a tracker over it on a scripted clock. */
-async function world(files: Record<string, string>, options: { submodule?: boolean; uncertain?: (sessions: ReadonlySet<string>) => void; outsider?: (path: string, root: string) => string | undefined } = {}) {
+async function world(
+  files: Record<string, string>,
+  options: {
+    submodule?: boolean
+    uncertain?: (sessions: ReadonlySet<string>) => void
+    outsider?: (path: string, root: string) => string | undefined
+    fs?: TrackerFileSystem
+    log?: (message: string, facts: Readonly<Record<string, string | number | boolean>>) => void
+  } = {},
+) {
   const project = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-regression-")))
   const repo = join(project, "repo")
   mkdirSync(repo)
@@ -59,7 +68,10 @@ async function world(files: Record<string, string>, options: { submodule?: boole
   const clock = new FakeClock(Date.now())
   const events = new FakeEventSource()
   const storage = mkdtempSync(join(tmpdir(), "mako-attribution-regression-journal-"))
-  const tracker = await LaptopTracker.open({ fs: nodeFileSystem(), events, clock, storage, device: "regression" }, { repository: async (path) => gitRepository(runner, path), uncertain: options.uncertain, outsider: options.outsider })
+  const tracker = await LaptopTracker.open(
+    { fs: options.fs ?? nodeFileSystem(), events, clock, storage, device: "regression" },
+    { repository: async (path) => gitRepository(runner, path), uncertain: options.uncertain, outsider: options.outsider, log: options.log },
+  )
   await tracker.track({ id: "repo", path: repo, kind: "workspace" })
   const view: JournalView = { store: tracker.store, roots: () => tracker.rootStates().values(), author: (seq) => tracker.authorOf(seq) }
   const write = (path: string, text: string) => {
@@ -102,6 +114,23 @@ test("a command run at a repository's root names none of its files by its folder
   assert.equal(w.last().author.certainty, "ambiguous")
   // A move of T1 takes nothing it didn't write.
   assert.deepEqual(partition(w.view, w.project, "T1").files, [])
+  await w.tracker.close()
+})
+
+test("a commit made while the watch lost events moves the base once the loss is heard", async () => {
+  // A busy fseventsd delivers nothing for a while; meanwhile the person
+  // commits. The rescan that follows sees no file differ from its stat, so
+  // only a HEAD check finds the commit.
+  const w = await world({ "src/a.ts": "export const a = 1\n" })
+  w.write("src/a.ts", "export const a = 2\n")
+  await w.tracker.settled()
+  w.events.drop()
+  execFileSync("git", ["commit", "-q", "-am", "while deaf"], { cwd: w.repo })
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: w.repo, encoding: "utf8" }).trim()
+  w.events.restore()
+  await w.tracker.settled()
+  assert.equal(w.tracker.rootStates().get("repo")?.root.head, head)
+  assert.equal(w.tracker.rootStates().get("repo")?.files.size, 0, "nothing is uncommitted")
   await w.tracker.close()
 })
 
@@ -622,6 +651,55 @@ test("an ignored file is kept only when a Thread's own write named it, never a t
   assert.equal(author && certainty(author), "exact:T1")
   const moved = partition(w.view, w.project, "T1").files.map((file) => file.path)
   assert.deepEqual(moved, ["scratch/probe.mts"], "a move of T1 takes it")
+  await w.tracker.close()
+})
+
+test("what Git ignores is never read, by a rescan after lost events or by the live watch, until Git stops ignoring it", async () => {
+  // `ref/` holds reference clones Git ignores; an overloaded fseventsd keeps losing events.
+  const files = nodeFileSystem()
+  const read: string[] = []
+  const fs: TrackerFileSystem = { ...files, stat: (path) => (read.push(path), files.stat(path)) }
+  const w = await world({ ".gitignore": "ref/\n", "src/a.ts": "export const a = 1\n" }, { fs })
+  for (let index = 0; index < 200; index++) {
+    mkdirSync(join(w.repo, `ref/clone-${index % 4}/src`), { recursive: true })
+    writeFileSync(join(w.repo, `ref/clone-${index % 4}/src/f${index}.ts`), "x\n")
+  }
+  const inRef = () => read.filter((path) => path.includes("/ref/"))
+  w.events.drop()
+  w.write("src/a.ts", "export const a = 2\n")
+  w.events.restore()
+  await w.tracker.settled()
+  assert.equal(w.last().path, "src/a.ts", "the rescan finds the change the watch missed")
+  assert.deepEqual(inRef(), [], "the rescan never looks inside the ignored folder")
+  w.write("ref/clone-0/src/new.ts", "y\n")
+  await w.tracker.settled()
+  assert.deepEqual(inRef(), [], "nor does a write there the watch heard")
+  // Once `.gitignore` no longer names it, a file there is a file like any other.
+  w.write(".gitignore", "")
+  w.write("ref/clone-0/src/new.ts", "z\n")
+  await w.tracker.settled()
+  assert.ok(w.tracker.changes(0).some((entry) => entry.path === "ref/clone-0/src/new.ts"), "a file Git stopped ignoring is journaled")
+  await w.tracker.close()
+})
+
+test("losses heard while a rescan waits are its own, and while they keep coming each next rescan waits longer", async () => {
+  const rescans: number[] = []
+  const w = await world({ "src/a.ts": "export const a = 1\n" }, { log: (message) => message === "rescan" && rescans.push(Date.now()) })
+  for (let index = 0; index < 10; index++) w.events.restore()
+  await w.tracker.settled()
+  assert.equal(rescans.length, 1, "ten losses heard at once cost one rescan")
+  // Another loss right after: the next rescan keeps its spacing instead of starting at once.
+  w.events.restore()
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal(rescans.length, 1, "a loss right after a rescan waits")
+  for (let index = 0; index < 10; index++) w.events.restore()
+  await w.tracker.settled()
+  assert.equal(rescans.length, 2, "the losses it waited through are its own")
+  // After a quiet while a loss is rescanned at once.
+  w.clock.advance(10 * 60_000)
+  w.events.restore()
+  await new Promise((resolve) => setTimeout(resolve, 200))
+  assert.equal(rescans.length, 3)
   await w.tracker.close()
 })
 

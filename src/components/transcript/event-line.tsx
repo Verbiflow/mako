@@ -148,8 +148,9 @@ export function EventLine({
           />
         ) : null}
       </span>
-      {/* The sentence keeps its width up to most of the line; what it happened to gives way first. */}
-      <span data-event-title className={cn("min-w-0 max-w-[80%] shrink-0 truncate", tone ?? "text-muted-foreground")}>{words.title}</span>
+      {/* The sentence keeps its width up to most of the line; what it happened to gives way first. A line set where a
+          prompt stands is as wide as its words, so a share of it would always cut them: there the column bounds it. */}
+      <span data-event-title className={cn("min-w-0 truncate", !end && "max-w-[80%] shrink-0", tone ?? "text-muted-foreground")}>{words.title}</span>
       {words.detail ? <span className="min-w-0 truncate text-faint">{words.detail}</span> : null}
       {words.aside ? <span className="shrink-0 text-faint tabular">{words.aside}</span> : null}
       {trailing}

@@ -1,17 +1,17 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.0.40"
+    "version": "1.2.0"
   },
   "about": "Start one subagent to read notes.md and docs/plan.md and report which day the release ships and when the branch freezes. Don't read the files yourself; answer with what it reports. A subagent that reads two files and reports back, whose own calls are its progress while it runs, then the answer from its report.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-f147c7d7fdad75735d93bce12172fa2a2f1a06be0e52112a11d132ccdda8f6a4/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-9bef9fe7e34347127d4021fecceb5fbd08f0284264d46191ba617ed3771dd35f/store.db",
       "known": [],
       "children": [
         {
-          "nativeId": "9cba6b1a-ff46-4388-8518-fb3e289fd1c9",
+          "nativeId": "7da6b902-749c-417c-81f5-02b6e80acf1a",
           "state": "missing",
           "reason": "The SDK keeps no store for a subagent; its only record is the plain transcript Cursor writes under ~/.cursor/projects, which the recorder doesn't keep with the pair."
         }

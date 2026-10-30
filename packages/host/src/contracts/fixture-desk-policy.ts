@@ -18,6 +18,10 @@ const fixtureReads = [
   "mako:capabilities",
   /** Answers from memory: a fixture desk uploads nothing, so it's always off. */
   "mako:sync-status",
+  /** Answers from memory: a fixture desk follows nothing. */
+  "mako:sync-readings",
+  /** Answers from memory: a fixture desk turns no cloud on. */
+  "mako:cloud-turn-on",
   "mako:lifecycle-state",
   "mako:installation-state",
   "mako:update-state",
@@ -54,11 +58,15 @@ const fixtureReads = [
   "mako:terminal-list",
   "mako:utility-model-settings",
   "mako:harness-order-saved",
+  /** Read from the profile's own file; a fixture desk signs in only to a cloud on loopback. */
+  "mako:access-choices",
   "mako:default-commit-prompt",
   /** Says telemetry is off on a fixture desk; answers from memory. */
   "mako:telemetry",
   /** The desktop's notice of a wake the host's own clock also gives it; writes and starts nothing. */
   "mako:machine-woke",
+  /** The desktop's notice of a sleep or a shutdown: the cloud runtime says it's going quiet; writes and starts nothing. */
+  "mako:machine-leaving",
 ] as const
 
 export const fixtureDeskHostCalls: ReadonlySet<string> = new Set<string>(fixtureReads)

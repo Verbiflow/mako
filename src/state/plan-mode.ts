@@ -32,7 +32,7 @@ import {
 } from "@/state/plan-choice"
 import { buildOnce, recordPlanBuild, usePlanBuilds, type PlanBuildTarget } from "@/state/plan-builds"
 import { shallowEqual } from "@/state/store"
-import { prefsStore, usePrefs } from "@/state/prefs"
+import { chosenAccessModes, useAccessChoices } from "@/state/access-choices"
 import {
   chooseThreadMode,
   providerAccessModes,
@@ -197,7 +197,7 @@ export function planContextFor(target: ComposerTarget, conversation = settingsCo
     conversation: live,
     providerModes,
     threadMode: target.kind === "thread" ? threadAccessMode(threadRef(state, target.path), providerModes, target.harness) : null,
-    saved: savedProviderMode(prefsStore.get().providerModes, providerModes, target.harness),
+    saved: savedProviderMode(chosenAccessModes(), providerModes, target.harness),
     defaulted: providerDefaultMode(state, providerModes, target.harness),
     pending: choices.pending[settingsTargetKey(target)],
     launched: live ? choices.launched[live.key] : undefined,
@@ -223,7 +223,7 @@ export function usePlanContext(view: ComposerSettingsView): PlanContext {
     target.kind === "thread" ? threadAccessMode(threadRef(state, target.path), providerModes, harness) : null
   )
   const defaulted = useThreads((state) => providerDefaultMode(state, providerModes, harness))
-  const saved = usePrefs((prefs) => savedProviderMode(prefs.providerModes, providerModes, harness))
+  const saved = useAccessChoices((choices) => savedProviderMode(choices.modes, providerModes, harness))
   const pending = usePlanChoice((state) => state.pending[settingsTargetKey(target)])
   const launched = usePlanChoice((state) => (key ? state.launched[key] : undefined))
   return planContext({

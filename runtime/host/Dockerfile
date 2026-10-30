@@ -23,11 +23,13 @@ RUN test "$(dpkg --print-architecture)" = amd64 || { echo "Mako's Linux host ima
 # FFmpeg as the Mac app bundles it (vendor/control-media): static, with x264
 # and only what recordings and live video use, a few megabytes where Debian's
 # package and its libraries are hundreds. Its sources and licenses go with it.
+# The context carries the source archives, each checked by its hash, so the
+# build has no network: nothing it compiles comes from anywhere else.
 FROM node AS media
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential nasm pkg-config xz-utils zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY media/ /build/
-RUN node /build/scripts/build-control-media.mjs
+RUN --network=none node /build/scripts/build-control-media.mjs
 
 FROM node AS host
 # Chromium, the machine's own browser, which the host starts headless when an

@@ -15,6 +15,7 @@ import { compareVersions } from "./runtime-version.js"
 export const MAKO_PINS = [
   { package: "@cursor/sdk", version: "1.0.31", since: "2026-09-13T22:35:45-07:00", commit: "c5fe8133" },
   { package: "@cursor/sdk", version: "1.0.40", since: "2026-10-25T08:36:53Z", commit: "eedbf8ae" },
+  { package: "@cursor/sdk", version: "1.2.0", since: "2026-10-28T12:58:19Z", commit: "1568bf4c" },
 ] as const satisfies readonly MakoPin[]
 
 export interface MakoPin {

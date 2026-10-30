@@ -1,0 +1,1222 @@
+/*
+ * The web app's own pieces, on the desk's tokens: bars, rows, sheets, the composer and their motion at a phone's size.
+ * Everything else (the transcript, approvals, questions, the queue) is the desk's own CSS. Touch targets are 44px;
+ * every bar keeps clear of the notch and the home indicator (`env(safe-area-inset-*)`).
+ *
+ * Motion is the desk's: `--ease-out` arriving, `--ease-swift` leaving, on transform and opacity. A press answers on
+ * touch-down, at once, and lets go in 160 ms. Under reduced motion nothing slides or scales.
+ */
+@layer components {
+  .web-app {
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+    position: fixed;
+    inset: var(--app-top, 0px) 0 auto 0;
+    height: var(--app-height, 100dvh);
+    -webkit-tap-highlight-color: transparent;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  /*
+   * The desk's three sizes, each a step larger under a finger: a phone is read at arm's length, and iOS zooms into a
+   * field under 16px. Still three sizes, and the desk's own scale everywhere a pointer is.
+   */
+  @media (pointer: coarse) {
+    .web-app {
+      --text-label: 13px;
+      --text-label--line-height: 18px;
+      --text-ui: 16px;
+      --text-ui--line-height: 22px;
+      --text-title: 17px;
+      --text-title--line-height: 22px;
+    }
+  }
+
+  /* One return from the background (`resume.ts`): every layer drawn afresh, for iOS's black screen. */
+  .web-repaint body {
+    opacity: 0.999;
+  }
+
+  /* Press: on touch-down, at once; let go, back in 160 ms. */
+  .web-icon-button,
+  .web-button,
+  .web-quiet-button,
+  .web-send,
+  .web-chip,
+  .web-tab,
+  .web-account,
+  .web-attachment-remove {
+    transition:
+      transform 160ms var(--ease-out),
+      background-color 160ms ease,
+      color 160ms ease,
+      opacity 160ms ease;
+  }
+  .web-icon-button:active:not(:disabled),
+  .web-send:active:not(:disabled),
+  .web-attachment-remove:active {
+    transform: scale(0.94);
+    transition-duration: 40ms;
+  }
+  .web-button:active:not(:disabled),
+  .web-quiet-button:active:not(:disabled),
+  .web-chip:active:not(:disabled),
+  .web-tab:active:not(:disabled),
+  .web-account:active {
+    transform: scale(0.97);
+    transition-duration: 40ms;
+  }
+  /* Focus from a keyboard: the desk's ring, a tint of the text, never the accent. */
+  .web-app :is(button, a, [role="tab"], [role="switch"], [role="radio"]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  .web-row:focus-visible,
+  .web-choice:focus-visible {
+    outline-offset: -2px;
+  }
+
+  .web-bar {
+    min-height: calc(52px + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+  }
+  .web-bar-thread {
+    @apply border-b border-hairline bg-surface/85 backdrop-blur-xl;
+  }
+
+  .web-scroll {
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .web-scroll::-webkit-scrollbar {
+    display: none;
+  }
+  /* A row that scrolls sideways says so: its last chip fades out at the edge rather than being cut. */
+  .web-fade-x {
+    mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+  }
+
+  .web-icon-button {
+    @apply relative flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground;
+  }
+  .web-icon-button:disabled {
+    @apply opacity-40;
+  }
+  @media (hover: hover) {
+    .web-icon-button:hover:not(:disabled) {
+      @apply bg-fill-hover text-foreground;
+    }
+  }
+  /* Under a pointer, the desk's size: a 36px square with soft corners, not a thumb's circle. */
+  @media (pointer: fine) {
+    .web-icon-button:not(.web-composer-add) {
+      @apply size-9 rounded-lg;
+    }
+  }
+
+  /* The desk's rail, at a width the desk's own would take. */
+  .web-rail {
+    width: clamp(272px, 30vw, 340px);
+  }
+
+  /*
+   * The list. A phone's: rows edge to edge, parted by hairlines under their words. The rail's: rows inset and rounded on
+   * the shell, the open one raised, as the desk's rail draws them.
+   */
+  .web-section {
+    @apply pt-3;
+  }
+  .web-section + .web-section {
+    @apply pt-5;
+  }
+  .web-section-label {
+    @apply px-4 pb-1 text-label font-medium text-faint;
+  }
+  .web-row {
+    @apply gap-3 py-2.5 pr-4 pl-4;
+    min-height: 60px;
+    transition: background-color 220ms ease;
+  }
+  .web-row-mark {
+    @apply flex w-7 shrink-0 items-center justify-center;
+  }
+  /* A row lights on touch-down and fades back after: the press is seen even on a quick tap. */
+  .web-row:active {
+    @apply bg-fill-selected;
+    transition-duration: 0ms;
+  }
+  @media (hover: hover) {
+    .web-row:hover {
+      @apply bg-fill-hover;
+    }
+  }
+  [data-list="screen"] li + li .web-row::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 56px;
+    border-top: 1px solid var(--hairline);
+  }
+  /*
+   * A row over its swipe action: the row slides left over Archive, ink on the page's ground, drawn only while it shows.
+   * Held, the row sinks a little before its menu rises; a full swipe arms Archive, which grows as the finger crosses.
+   */
+  .web-swipe {
+    position: relative;
+    overflow: hidden;
+    touch-action: pan-y;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    transition: scale 160ms var(--ease-out);
+  }
+  .web-swipe[data-held] {
+    scale: 0.98;
+    transition: scale 380ms var(--ease-out) 120ms;
+  }
+  .web-swipe[data-swiping] > .web-row {
+    @apply bg-surface;
+  }
+  [data-list="rail"] .web-swipe {
+    @apply rounded-lg;
+  }
+  [data-list="rail"] .web-swipe[data-swiping] > .web-row {
+    @apply bg-shell;
+  }
+  .web-swipe-actions {
+    @apply absolute inset-0 flex justify-end bg-foreground text-background;
+    visibility: hidden;
+  }
+  .web-swipe[data-swiping] .web-swipe-actions {
+    visibility: visible;
+  }
+  .web-swipe-archive {
+    @apply flex h-full w-[88px] flex-col items-center justify-center gap-1 text-label font-medium;
+  }
+  .web-swipe-archive > svg {
+    transition: scale 180ms var(--ease-out);
+  }
+  .web-swipe[data-armed] .web-swipe-archive > svg {
+    scale: 1.18;
+  }
+  /* "Done" and a hand's "unread": a dot in the row's ink beside its time, never the accent. */
+  .web-row[data-unread] [data-unread-mark] {
+    animation: web-unread-in 220ms var(--ease-out);
+  }
+  @keyframes web-unread-in {
+    from {
+      opacity: 0;
+      scale: 0.4;
+    }
+  }
+
+  [data-list="rail"] .web-rows {
+    @apply flex flex-col gap-px px-2;
+  }
+  [data-list="rail"] .web-section-label {
+    @apply px-4;
+  }
+  [data-list="rail"] .web-row {
+    @apply gap-2.5 rounded-lg py-2 pr-2.5 pl-2;
+    min-height: 0;
+  }
+  [data-list="rail"] .web-row[aria-current="page"] {
+    @apply bg-raised;
+  }
+  [data-list="rail"] .web-row-mark {
+    @apply w-6;
+  }
+  .web-account {
+    @apply flex h-10 w-full items-center gap-2.5 rounded-lg px-2 text-ui text-muted-foreground;
+  }
+  .web-account[aria-current="page"] {
+    @apply bg-raised text-foreground;
+  }
+  @media (hover: hover) {
+    .web-account:hover {
+      @apply bg-fill-hover text-foreground;
+    }
+  }
+
+  .web-button {
+    @apply inline-flex h-11 items-center justify-center gap-2 rounded-xl bg-primary px-5 text-ui font-medium text-primary-foreground;
+  }
+  .web-button:disabled {
+    @apply opacity-40;
+  }
+  .web-button-negative {
+    @apply bg-negative text-white;
+  }
+  .web-quiet-button {
+    @apply inline-flex h-11 items-center justify-center rounded-xl px-4 text-ui text-muted-foreground;
+  }
+  .web-quiet-button:active {
+    @apply bg-fill-selected;
+  }
+  @media (hover: hover) {
+    .web-quiet-button:hover:not(:disabled) {
+      @apply bg-fill-hover;
+    }
+  }
+
+  /* The list's foot: the install offer, when it shows, across the bottom above the Home indicator. */
+  .web-list-foot {
+    @apply pointer-events-none absolute inset-x-0 bottom-0 flex flex-col items-end gap-3;
+    padding: 0 calc(env(safe-area-inset-right) + 12px) calc(env(safe-area-inset-bottom) + 12px) calc(env(safe-area-inset-left) + 12px);
+  }
+  [data-list="rail"] .web-list-foot {
+    bottom: 57px;
+  }
+  /* On a phone, New and the offer keep 16px off the corner, above the Home indicator. */
+  [data-list="screen"] .web-list-foot {
+    padding: 0 calc(env(safe-area-inset-right) + 16px) calc(env(safe-area-inset-bottom) + 16px) calc(env(safe-area-inset-left) + 16px);
+  }
+  /*
+   * New on a phone: a 50px disc at the bottom right, in thumb's reach. It floats, so it alone of the list wears a
+   * shadow, the desk's floating one (a hairline ring and a short, soft drop), on the popover's surface with the
+   * glass's rim of light along its top, the way iOS draws a floating control. It steps aside down and out while the
+   * list is scrolled down, and back on the way up, on the desk's two curves, from wherever it is; it isn't there while
+   * a sheet is.
+   */
+  .web-fab {
+    @apply relative flex size-[50px] shrink-0 items-center justify-center rounded-full bg-popover text-foreground;
+    box-shadow:
+      var(--elevation-floating),
+      inset 0 1px 0 0 var(--glass-rim);
+    transition:
+      transform 220ms var(--ease-out),
+      opacity 180ms var(--ease-out),
+      scale 120ms var(--ease-out);
+  }
+  /* Dark, the popover's surface is a hair off the list's: the raised one reads as a control without turning to ink. */
+  :root:not(.light) .web-fab {
+    @apply bg-raised;
+  }
+  .web-fab:active {
+    scale: 0.92;
+    transition-duration: 220ms, 180ms, 40ms;
+  }
+  .web-fab[data-away] {
+    transform: translate3d(0, calc(100% + env(safe-area-inset-bottom) + 24px), 0);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      transform 180ms var(--ease-swift),
+      opacity 140ms var(--ease-swift),
+      scale 120ms var(--ease-out);
+  }
+  .web-app:has(.web-sheet-layer[data-open]) .web-fab {
+    opacity: 0;
+    pointer-events: none;
+  }
+  /* With the offer under it, New sits a gap above the card rather than off the corner. */
+  .web-list-foot:has(.web-install) .web-fab[data-away] {
+    transform: translate3d(0, 12px, 0);
+  }
+  .web-list-foot > * {
+    pointer-events: auto;
+  }
+  .web-install {
+    @apply self-stretch bg-raised ring-1 ring-hairline;
+    box-shadow: var(--elevation-floating);
+    animation: web-rise 240ms var(--ease-out) both;
+  }
+  .web-step {
+    @apply flex size-6 shrink-0 items-center justify-center rounded-full bg-fill-selected text-label font-semibold text-foreground;
+  }
+
+  .web-field {
+    @apply w-full rounded-xl bg-raised px-3.5 text-ui text-foreground ring-1 ring-hairline outline-none placeholder:text-faint;
+    min-height: 44px;
+    /* 16px or more, or iOS zooms the page into a field it focuses. */
+    font-size: max(16px, var(--text-ui));
+  }
+  .web-field:focus {
+    @apply ring-ring;
+  }
+
+  /* What arrives without a gesture (a pane's empty state, New's pane) rises a little into place. */
+  .web-enter {
+    animation: web-rise 220ms var(--ease-out) both;
+  }
+
+  /* Screens: the list under, what's open sliding over it from the right. */
+  .web-screen {
+    @apply absolute inset-0 flex min-h-0 flex-col;
+  }
+  .web-screen-top {
+    @apply bg-surface;
+    box-shadow:
+      -1px 0 0 var(--hairline),
+      -16px 0 40px -12px rgb(0 0 0 / 0.35);
+  }
+  .web-screen-shade {
+    @apply pointer-events-none absolute inset-0;
+    background: rgb(0 0 0 / 0.28);
+    opacity: 0;
+  }
+  :root.light .web-screen-shade {
+    background: rgb(0 0 0 / 0.1);
+  }
+
+  /* Sheets from the bottom on a phone; wide, the desk's popovers and dialogs. */
+  .web-sheet-layer {
+    @apply fixed inset-x-0 top-0 z-50;
+    height: var(--app-height, 100dvh);
+  }
+  .web-sheet-backdrop {
+    @apply absolute inset-0;
+    background: rgb(0 0 0 / 0.45);
+  }
+  :root.light .web-sheet-backdrop {
+    background: rgb(0 0 0 / 0.22);
+  }
+  .web-sheet-layer[data-form="pop"] .web-sheet-backdrop {
+    background: transparent;
+  }
+  .web-sheet-layer[data-form="dialog"] .web-sheet-backdrop {
+    background: rgb(0 0 0 / 0.32);
+  }
+  :root.light .web-sheet-layer[data-form="dialog"] .web-sheet-backdrop {
+    background: rgb(0 0 0 / 0.14);
+  }
+  .web-sheet {
+    @apply absolute inset-x-0 flex flex-col bg-popover text-popover-foreground;
+    bottom: 0;
+    max-height: calc(var(--app-height, 100dvh) - env(safe-area-inset-top) - 12px);
+    border-radius: 20px 20px 0 0;
+    box-shadow:
+      0 -0.5px 0 var(--glass-rim),
+      0 -16px 48px -16px rgb(0 0 0 / 0.45);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .web-sheet-tall {
+    height: calc((var(--app-height, 100dvh) - env(safe-area-inset-top)) * 0.86);
+  }
+  /* An expandable sheet is the screen's height under its top inset; it opens lowered to half (`Sheet`'s `expandable`). */
+  .web-sheet-full {
+    height: calc(var(--app-height, 100dvh) - env(safe-area-inset-top) - 12px);
+  }
+  .web-sheet[data-form="pop"],
+  .web-sheet[data-form="dialog"] {
+    background: var(--popover);
+    border-radius: 12px;
+    box-shadow: var(--elevation-overlay);
+    padding: 6px 0;
+  }
+  .web-sheet[data-form="pop"] {
+    position: fixed;
+    right: auto;
+    width: 360px;
+    height: auto;
+  }
+  .web-sheet[data-form="dialog"] {
+    inset: 0;
+    margin: auto;
+    width: min(480px, calc(100% - 48px));
+    height: fit-content;
+    max-height: min(640px, calc(100% - 96px));
+  }
+  .web-sheet-grab {
+    @apply flex h-6 shrink-0 cursor-grab items-center justify-center;
+    touch-action: none;
+  }
+  .web-sheet-grab > span {
+    @apply h-[5px] w-9 rounded-full bg-foreground/20;
+  }
+  .web-sheet[data-dragging] .web-sheet-grab {
+    @apply cursor-grabbing;
+  }
+  .web-sheet-title {
+    @apply px-5 pb-2 text-title font-semibold;
+  }
+  .web-sheet-note {
+    @apply px-5 pb-2 text-label text-muted-foreground;
+  }
+  .web-sheet[data-form="pop"] .web-sheet-title {
+    @apply px-3.5 pt-1.5 pb-1 text-label font-medium text-faint;
+  }
+  .web-sheet[data-form="pop"] .web-sheet-note {
+    @apply px-3.5;
+  }
+  .web-sheet[data-form="pop"] [data-sheet-scroll] {
+    @apply px-1.5 pb-0;
+  }
+  .web-sheet[data-form="pop"] .web-choice {
+    @apply min-h-9 rounded-md px-2 text-ui;
+  }
+  .web-sheet[data-form="dialog"] .web-sheet-title {
+    @apply pt-3;
+  }
+
+  /*
+   * A start's choices, as the desk's composer shows them: quiet, a glyph and a value, filled only under a finger or the
+   * pointer. In a picker, a harness's tab is the same chip, lit when it's the one shown.
+   */
+  .web-chip {
+    @apply relative inline-flex h-8 min-w-0 shrink-0 items-center gap-1 rounded-lg px-2 text-label font-medium text-muted-foreground;
+  }
+  @media (pointer: coarse) {
+    .web-chip {
+      @apply h-9;
+    }
+  }
+  .web-chip-shrinks {
+    flex-shrink: 1;
+  }
+  .web-chip:disabled {
+    @apply text-faint;
+  }
+  .web-chip:active:not(:disabled) {
+    @apply bg-fill-selected;
+  }
+  @media (hover: hover) {
+    .web-chip:hover:not(:disabled) {
+      @apply bg-fill-hover text-foreground;
+    }
+  }
+  .web-chip-tab {
+    @apply h-9 px-3;
+  }
+  .web-chip-tab[aria-selected="true"] {
+    @apply bg-fill-selected text-foreground;
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .web-choice {
+    @apply flex min-h-12 w-full items-center gap-3 rounded-xl px-3 text-left text-ui;
+    transition: background-color 220ms ease;
+  }
+  .web-choice:active:not(:disabled) {
+    @apply bg-fill-selected;
+    transition-duration: 0ms;
+  }
+  @media (hover: hover) {
+    .web-choice:hover:not(:disabled) {
+      @apply bg-fill-hover;
+    }
+  }
+  .web-choice:disabled {
+    @apply opacity-45;
+  }
+
+  .web-tab {
+    @apply flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-label font-medium text-muted-foreground;
+  }
+  .web-tab-on {
+    @apply bg-fill-selected text-foreground;
+  }
+  .web-tab-add {
+    @apply w-8 justify-center px-0;
+  }
+
+  .web-live {
+    /* The renderer's conversation reads its column; on a phone it is the screen's width less a margin. */
+    --container-content: 760px;
+  }
+  .web-dock {
+    @apply bg-surface;
+    /* The home indicator's room, not taken twice while the keyboard covers it. */
+    padding-bottom: max(0px, calc(env(safe-area-inset-bottom) - var(--keyboard, 0px)));
+  }
+
+  /*
+   * The composer: one card, as the desk's composer is one tile. A message is one row in it, `+`, the field and its
+   * action; a start adds where above the field and a bar under it, `+`, what it starts with, and Start.
+   */
+  .web-composer {
+    @apply mx-auto flex w-full max-w-content px-2 pt-1.5 pb-2;
+  }
+  .web-composer-field {
+    @apply grid min-w-0 flex-1 items-end rounded-[22px] bg-raised p-1;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    box-shadow: inset 0 0 0 1px var(--hairline);
+    transition: box-shadow 160ms ease;
+  }
+  .web-composer-field:focus-within {
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .web-composer-field > .web-attachments,
+  .web-composer-field > .web-where {
+    grid-column: 1 / -1;
+  }
+  .web-composer-field > .web-composer-input {
+    grid-column: 2;
+  }
+  .web-composer-field[data-tools] {
+    @apply flex flex-col items-stretch rounded-[20px] p-1.5;
+  }
+  .web-composer-add {
+    @apply size-9 text-muted-foreground;
+  }
+  .web-composer-input {
+    @apply min-w-0 resize-none bg-transparent px-2 py-[7px] text-foreground caret-ember outline-none placeholder:text-faint;
+    font-size: max(16px, var(--text-ui));
+    line-height: 22px;
+    max-height: 180px;
+  }
+  .web-composer-field:not(:has(.web-composer-add)) > .web-composer-input {
+    @apply pl-3;
+  }
+  .web-composer-field[data-tools] .web-composer-input {
+    @apply px-2.5 pt-1.5 pb-2;
+    min-height: 72px;
+  }
+  .web-where {
+    @apply flex min-w-0 items-center gap-0.5;
+  }
+  .web-where > .web-chip {
+    flex-shrink: 1;
+  }
+  .web-composer-bar {
+    @apply flex min-w-0 items-center gap-1;
+  }
+  .web-composer-tools {
+    @apply flex min-w-0 flex-1 items-center gap-0.5;
+  }
+  .web-send {
+    @apply relative flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground text-surface;
+  }
+  /* 36px drawn, 44px under a finger. */
+  .web-send::after,
+  .web-composer-add::after,
+  .web-chip::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+  }
+  .web-send:disabled {
+    @apply bg-fill-selected text-faint;
+  }
+  .web-stop {
+    @apply bg-foreground text-surface;
+  }
+  .web-mic {
+    @apply bg-transparent text-muted-foreground;
+  }
+  .web-mic-on {
+    @apply bg-negative text-white;
+    animation: web-listening 1.6s ease-in-out infinite;
+  }
+
+  /*
+   * The desk's composer, as the desktop draws it: a square tile across the pane's foot under a hairline, the field in
+   * the prose size, and one routing row under it, where, model and access as quiet text with their glyphs.
+   */
+  .web-composer[data-desk] {
+    @apply max-w-none border-t border-hairline bg-surface p-0;
+  }
+  .web-composer[data-desk] .web-composer-field {
+    @apply flex flex-col rounded-none bg-transparent p-0;
+    box-shadow: none;
+  }
+  .web-composer[data-desk] .web-composer-input {
+    @apply min-h-20 px-4 pt-4 pb-2;
+    font-size: var(--text-prose);
+    line-height: 1.6;
+  }
+  .web-composer[data-desk] .web-composer-bar {
+    @apply min-h-11 gap-1 px-3 pb-3;
+  }
+  .web-composer[data-desk] .web-where {
+    @apply w-auto shrink;
+  }
+  .web-composer[data-desk] .web-chip {
+    @apply h-7 rounded-md px-2 text-ui font-normal;
+  }
+  .web-composer[data-desk] .web-composer-add {
+    @apply size-7 rounded-md;
+  }
+
+  /* New: the composer, waiting in the middle of the pane. */
+  .web-start-pane-body {
+    @apply mx-auto flex w-full min-h-0 max-w-[680px] flex-1 flex-col justify-center px-6 pb-[12vh];
+  }
+  .web-start-pane .web-composer {
+    @apply px-0;
+  }
+  .web-start-line {
+    @apply mx-auto w-full max-w-content px-4 pb-1.5;
+  }
+  .web-start-sheet .web-start-form {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+
+  .web-attachments {
+    @apply px-1 pt-1 pb-1.5;
+  }
+  .web-attachment {
+    @apply relative size-16 shrink-0 overflow-hidden rounded-xl bg-surface ring-1 ring-hairline;
+    animation: web-pop 200ms var(--ease-out) both;
+  }
+  .web-attachment-remove {
+    @apply absolute top-1 right-1 flex size-5 items-center justify-center rounded-full bg-black/65 text-white;
+  }
+
+  .web-switch {
+    @apply relative h-[30px] w-[50px] shrink-0 rounded-full bg-fill-selected ring-1 ring-hairline;
+    transition: background-color 160ms var(--ease-out);
+  }
+  .web-switch > span {
+    @apply absolute top-[3px] left-[3px] size-6 rounded-full bg-foreground/80 shadow-sm;
+    transition: transform 200ms var(--ease-out), background-color 160ms ease;
+  }
+  .web-switch-on {
+    @apply bg-positive;
+  }
+  .web-switch-on > span {
+    @apply bg-white;
+    transform: translateX(20px);
+  }
+  .web-switch:disabled {
+    @apply opacity-40;
+  }
+
+  .web-waiting {
+    animation: web-rise 240ms var(--ease-out) both;
+  }
+}
+
+@keyframes web-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+}
+@keyframes web-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+}
+/* The mic while it listens: a ring that breathes, slow enough to read as listening, not as an alarm. */
+@keyframes web-listening {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--negative) 45%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 7px color-mix(in oklab, var(--negative) 0%, transparent);
+  }
+}
+
+/*
+ * The desk's own pieces, adjusted for a phone. Outside the layer, so they win over the desk's utilities on the same
+ * elements.
+ *
+ * Reuse, edit and rewind are the desk's: they need its composer and its checkout, so the phone shows a message's time
+ * and its copy, and nothing it can't do. A reply's fork is the phone's Branch, under it and under a long press
+ * (`reply.tsx`), where the host can make one.
+ */
+.web-live [data-transcript-action],
+.desk-live [data-transcript-action] {
+  display: none;
+}
+/*
+ * The dock (`dock.tsx`): what the agent asks pinned above the composer, a capsule floating over the transcript's end,
+ * and a fade where the transcript runs under it. The dock takes its own room in the column; only the capsule floats,
+ * and the transcript keeps room for it at its end while it shows.
+ */
+.web-dock {
+  position: relative;
+}
+.web-dock-fade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 28px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, color-mix(in oklab, var(--surface) 0%, transparent), var(--surface));
+}
+/* Room at the transcript's end for the capsule, kept whether it shows or not: taken and given back, it would move the
+   transcript under the reader each time a turn starts and ends. */
+.web-live .scroll-fade-scroller {
+  padding-bottom: 24px;
+}
+.web-float {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.web-float:not(:has(.web-capsule[data-shown])) .web-capsule {
+  position: absolute;
+}
+.web-capsule,
+.web-jump {
+  /* Opaque enough that its words read over a transcript's in light and dark; the blur says it floats. */
+  background: color-mix(in oklab, var(--popover) 86%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+  backdrop-filter: blur(20px) saturate(1.8);
+  box-shadow:
+    var(--elevation-floating),
+    inset 0 0 0 0.5px var(--hairline),
+    inset 0 0.5px 0 0 var(--glass-rim);
+}
+.web-capsule {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  max-width: calc(100% - 64px);
+  border-radius: 999px;
+  visibility: hidden;
+  opacity: 0;
+  transform: translate3d(0, 6px, 0) scale(0.96);
+  transition:
+    opacity 120ms var(--ease-swift),
+    transform 120ms var(--ease-swift),
+    visibility 0s linear 120ms;
+}
+.web-capsule[data-shown] {
+  pointer-events: auto;
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 180ms var(--ease-out),
+    transform 180ms var(--ease-out);
+}
+.web-capsule-segment {
+  @apply flex h-full min-w-0 items-center gap-1.5 px-3 text-label font-medium text-muted-foreground;
+}
+.web-capsule-segment + .web-capsule-segment {
+  box-shadow: inset 1px 0 0 var(--hairline);
+}
+.web-capsule[data-status="offline"] .web-capsule-segment:first-child,
+.web-capsule[data-status="reconnecting"] .web-capsule-segment:first-child {
+  @apply text-caution;
+}
+.web-capsule-words {
+  @apply min-w-0 truncate;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+  transition: opacity 100ms var(--ease-swift);
+}
+.web-capsule[data-shown] .web-capsule-words {
+  opacity: 1;
+  transition: opacity 160ms var(--ease-out) 80ms;
+}
+/* The working dot: the one ember on the screen while a turn runs. */
+.web-capsule-dot {
+  @apply size-1.5 shrink-0 rounded-full bg-ember;
+  animation: web-breathe 1.6s ease-in-out infinite;
+}
+.web-capsule-queued {
+  @apply shrink-0;
+}
+.web-jump {
+  @apply flex size-[34px] shrink-0 items-center justify-center rounded-full text-foreground;
+  visibility: hidden;
+  opacity: 0;
+  transform: translate3d(-14px, 0, 0) scale(0.9);
+  transition:
+    opacity 120ms var(--ease-swift),
+    transform 120ms var(--ease-swift),
+    visibility 0s linear 120ms;
+}
+.web-jump[data-shown] {
+  pointer-events: auto;
+  visibility: visible;
+  opacity: 1;
+  transform: none;
+  transition:
+    opacity 180ms var(--ease-out),
+    transform 240ms var(--ease-out);
+}
+.web-jump:active {
+  transform: scale(0.94);
+  transition-duration: 40ms;
+}
+
+/* What the agent asks: a card that rises from the composer, at most 60% of the screen, scrolling inside. */
+.web-ask {
+  display: flex;
+  flex-direction: column;
+  margin: 0 auto 8px;
+  width: calc(100% - 16px);
+  max-width: calc(var(--container-content) - 16px);
+  max-height: calc(var(--app-height, 100dvh) * 0.6);
+  overflow: hidden;
+  border-radius: 18px;
+  background: var(--raised);
+  box-shadow:
+    0 0 0 1px var(--hairline),
+    var(--elevation-floating);
+  animation: web-rise 220ms var(--ease-out) both;
+}
+.web-ask-body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 12px;
+  transition: opacity 160ms var(--ease-out);
+}
+/* An answer on its way: the card dims and takes no second tap. */
+.web-ask-body[data-busy] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+.web-ask-asker {
+  @apply -mb-1.5 text-label text-muted-foreground;
+}
+.web-ask-scroll:empty {
+  display: none;
+}
+.web-ask-title {
+  @apply flex items-start gap-2 text-ui font-medium text-foreground;
+}
+.web-ask-title > svg {
+  margin-top: 3px;
+}
+.web-ask-scroll {
+  display: flex;
+  min-height: 0;
+  flex: 0 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.web-ask-scroll > * {
+  flex-shrink: 0;
+}
+.web-ask-hint {
+  @apply text-label text-muted-foreground;
+}
+.web-ask-question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.web-ask-legend {
+  @apply mb-0.5 text-ui font-medium text-foreground;
+}
+.web-ask-options {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.web-ask-option {
+  @apply flex w-full items-center justify-center gap-2 rounded-xl bg-fill-hover px-3.5 py-2.5 text-ui text-foreground;
+  min-height: 44px;
+  transition:
+    transform 160ms var(--ease-out),
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+.web-ask-option:active:not(:disabled) {
+  transform: scale(0.98);
+  transition-duration: 40ms;
+}
+/* Only the answer that lets it go on is lit; the others are quiet fills, so the card reads as one choice. */
+.web-ask-option[data-primary] {
+  @apply bg-foreground text-background;
+}
+.web-ask-option[data-refuse] {
+  @apply text-negative;
+}
+.web-ask-option[data-chosen] {
+  box-shadow: inset 0 0 0 1.5px var(--foreground);
+}
+.web-ask-choice {
+  @apply justify-start text-left;
+}
+.web-ask-choice[data-selected] {
+  @apply bg-fill-selected;
+  box-shadow: inset 0 0 0 1.5px var(--foreground);
+}
+.web-ask-input {
+  @apply h-11 w-full rounded-xl bg-surface px-3 text-ui text-foreground outline-none placeholder:text-faint;
+  font-size: max(16px, var(--text-ui));
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.web-ask-typed {
+  @apply flex items-start gap-2 rounded-xl bg-fill-selected px-3.5 py-2.5 text-ui text-foreground;
+}
+.web-ask-typed > svg {
+  margin-top: 4px;
+}
+.web-ask-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.web-ask-dismiss {
+  @apply rounded-xl px-3.5 text-ui text-muted-foreground;
+  min-height: 44px;
+}
+.web-ask-send {
+  @apply flex-1 rounded-xl bg-foreground px-3.5 text-ui font-medium text-background;
+  min-height: 44px;
+  transition: opacity 160ms ease;
+}
+.web-ask-send:disabled {
+  @apply bg-fill-hover text-muted-foreground;
+}
+.web-ask [data-permission-gone] {
+  border: 0;
+  background: transparent;
+  padding: 14px;
+}
+/* An answer given from the dock, at the end of its turn: one muted line, as the transcript's own notes are. */
+.web-answered {
+  @apply mt-3 flex min-w-0 items-center gap-1.5 text-label text-muted-foreground;
+}
+
+/* A message the host refused while the field held other words, with Retry. */
+.web-unsent {
+  @apply flex items-center gap-2 rounded-2xl bg-raised py-1 pr-1 pl-3.5;
+  box-shadow: inset 0 0 0 1px var(--hairline);
+}
+.web-unsent-action {
+  @apply h-9 px-3 text-label font-medium;
+}
+
+/*
+ * The composer's one send button and its mic (`send-button.tsx`, `composer.tsx`). While the agent works and the field
+ * has words, the button is a pill that says what a tap does; held, it offers both ways over itself.
+ */
+.web-composer-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+.web-composer-mic {
+  @apply size-9;
+}
+.web-composer-mic::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.web-send-pill {
+  @apply w-auto gap-1.5 pr-3.5 pl-3 text-label font-semibold;
+  animation: web-pop 160ms var(--ease-out) both;
+}
+.web-send-choices {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 50;
+  display: flex;
+  width: min(300px, calc(100vw - 24px));
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 16px;
+  transform-origin: 100% 100%;
+  animation: web-choices-in 180ms var(--ease-out) both;
+}
+.web-send-choice {
+  @apply flex w-full items-start gap-3 rounded-xl px-3 py-2.5 text-left text-foreground;
+  min-height: 52px;
+  transition: background-color 160ms ease;
+}
+.web-send-choice:active,
+.web-send-choice:focus-visible {
+  @apply bg-fill-selected;
+  outline: none;
+}
+@media (hover: hover) {
+  .web-send-choice:hover {
+    @apply bg-fill-hover;
+  }
+}
+/* A queued message being edited in the field: one line over it that says so, with Cancel. */
+.web-composer-editing {
+  @apply col-span-full flex min-w-0 items-center gap-2 pr-0.5 pl-3 text-label text-muted-foreground;
+  min-height: 34px;
+  box-shadow: inset 0 -1px 0 var(--hairline);
+  margin-bottom: 2px;
+}
+/* A Thread's chips give way to the send pill: each keeps its glyph and a few letters, the model more. */
+.web-chip-model {
+  min-width: 5.5rem;
+}
+.web-chip-access {
+  min-width: 4.25rem;
+}
+/* A Thread's card: the field one line tall to start, its model, access, mic and send in the bar under it. */
+.web-composer-field[data-tools]:not(:has(.web-where)) .web-composer-input {
+  min-height: 40px;
+  padding-bottom: 4px;
+}
+
+/*
+ * Dictation while it listens: the stop square, the time, five 3 px bars between 5 and 14 px tall moving with the
+ * microphone, and the words still being heard, the last few dimmed.
+ */
+.web-composer-recording {
+  @apply col-span-full flex min-w-0 items-center gap-1;
+}
+.web-recording {
+  @apply flex h-11 min-w-0 flex-1 items-center gap-2.5 pr-1 pl-0.5;
+  animation: web-rise 180ms var(--ease-out) both;
+}
+.web-recording-stop {
+  @apply relative flex size-9 shrink-0 items-center justify-center rounded-full text-negative;
+  background: color-mix(in oklab, var(--negative) 16%, transparent);
+  transition: transform 160ms var(--ease-out);
+}
+.web-recording-stop::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+.web-recording-stop:active {
+  transform: scale(0.94);
+  transition-duration: 40ms;
+}
+.web-recording-time {
+  @apply shrink-0 text-label font-medium text-foreground;
+  font-variant-numeric: tabular-nums;
+  min-width: 2.6em;
+}
+.web-recording-bars {
+  display: flex;
+  height: 14px;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+.web-recording-bars > span {
+  width: 3px;
+  border-radius: 1.5px;
+  background: var(--foreground);
+  transition: height 80ms linear;
+}
+.web-recording-words {
+  @apply min-w-0 flex-1 truncate text-ui text-muted-foreground;
+  direction: rtl;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+
+/*
+ * A run of steps on a phone (`steps.tsx`): one line, a thumb's height, opening the steps in a sheet. The newest step's
+ * words change in place, rising in only when they're new.
+ */
+.web-steps-line {
+  @apply -mx-1.5 flex h-9 max-w-[calc(100%+12px)] min-w-0 items-center gap-1.5 self-start rounded-lg px-1.5 text-ui;
+  transition: background-color 160ms ease;
+}
+.web-steps-line:active {
+  @apply bg-fill-selected;
+  transition-duration: 0ms;
+}
+.web-steps-new {
+  animation: web-rise 200ms var(--ease-out) both;
+}
+.web-step-in {
+  animation: web-rise 220ms var(--ease-out) both;
+}
+.web-steps-sheet {
+  @apply flex-1 px-4 pb-[calc(env(safe-area-inset-bottom)+16px)];
+  mask-image: linear-gradient(to bottom, transparent, #000 12px, #000 calc(100% - 20px), transparent);
+}
+/* An opened step's output stays a part of the sheet: capped, scrolling inside, fading at its edges. */
+.web-steps-sheet pre {
+  max-height: 40vh;
+  overflow: auto;
+  overscroll-behavior: contain;
+  mask-image: linear-gradient(to bottom, transparent, #000 10px, #000 calc(100% - 14px), transparent);
+}
+
+/* Under a Thread's access: what every new session of its harness starts with, the account's choice, apart from it. */
+.web-access-new {
+  @apply mx-3 mt-1 mb-[calc(env(safe-area-inset-bottom)+10px)] flex min-h-12 items-center gap-2 rounded-xl bg-fill-hover pr-1.5 pl-3.5;
+}
+
+/* Copy and Branch under the newest reply, a thumb's size; every reply keeps them under a long press. */
+.web-reply-actions {
+  @apply -ml-2 flex items-center gap-1;
+}
+.web-reply-action {
+  @apply flex h-9 items-center gap-1.5 rounded-lg px-2 text-label font-medium text-muted-foreground;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+.web-reply-action:active:not(:disabled) {
+  @apply bg-fill-selected text-foreground;
+  transition-duration: 0ms;
+}
+.web-reply-action:disabled {
+  opacity: 0.6;
+}
+/* A long press on a reply is the app's, not the platform's: no callout, no selection starting under the finger. */
+@media (pointer: coarse) {
+  .web-live [data-answer] {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+@keyframes web-choices-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 6px, 0) scale(0.96);
+  }
+}
+
+@keyframes web-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .web-app * {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+  .web-icon-button:active,
+  .web-button:active,
+  .web-quiet-button:active,
+  .web-send:active,
+  .web-chip:active,
+  .web-tab:active,
+  .web-account:active,
+  .web-fab:active,
+  .web-fab[data-away],
+  .web-ask-option:active,
+  .web-jump:active,
+  .web-capsule,
+  .web-jump {
+    transform: none !important;
+  }
+  .web-swipe[data-held],
+  .web-swipe[data-armed] .web-swipe-archive > svg {
+    scale: none !important;
+  }
+  /* Pressed, New dims instead of shrinking. */
+  .web-fab:active {
+    scale: none !important;
+    opacity: 0.7;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The capsule and the way back fade only; the working dot holds still. */
+  .web-capsule,
+  .web-jump {
+    transition-property: opacity, visibility !important;
+  }
+  .web-capsule-dot {
+    animation: none;
+  }
+}

@@ -7,8 +7,8 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import { Git } from "@mako/git"
-import { decodeOperation } from "@mako/protocol"
-import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest } from "@mako/protocol/moves"
+import { decodeOperation, ThreadFileHistorySchema } from "@mako/protocol"
+import { MoveCarrySchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest } from "@mako/protocol/moves"
 import { fromHostOperation } from "@mako/host/contracts/host-operations"
 import { CloudMoves, cloudRuntimeOf, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import type { TakenReady } from "@mako/host/conversations/cloud-readiness"
@@ -66,6 +66,8 @@ class Gateway {
   /** Each move handed over, and the cloud carrying it through: its operations run in order, the arrival first. */
   readonly handOvers = new Map<string, Promise<void>>()
   unreachable = 0
+  /** What the machine answers when it's ready: one that takes a carry says so (`{ folder, carry: true }`). */
+  readyAnswer: { folder: string; carry: true } | undefined
   answered(move: string, answer: MoveAnswer): MoveAnswer {
     const first = this.answers.get(move) ?? answer
     this.answers.set(move, first)
@@ -81,7 +83,8 @@ class Gateway {
 
 type Setup = { moves: CloudMoves; fresh(): CloudMoves; gateway: Gateway; threads: ThreadStore; steps: ThreadMoveStep[]; conversation: string; thread: string; session: string; checkout: string; busy: { reasons: string[]; late: string[] }; folder: string; started: string[]; work: Work }
 
-function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMovesOptions["harnesses"]; ready?: TakenReady } = {}): Setup {
+/** `make`: the move's options as a case changes them, from the setup's own. */
+function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMovesOptions["harnesses"]; ready?: TakenReady; make?: (base: CloudMovesOptions) => CloudMovesOptions } = {}): Setup {
   const folder = join(root, name)
   const remote = join(folder, "remote.git")
   const checkout = join(folder, "Users", "ada", "worktrees", "fix")
@@ -175,7 +178,7 @@ function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMov
     wake: () => undefined,
     stop: () => undefined,
   }
-  const make = () => new CloudMoves({
+  const make = () => new CloudMoves((options.make ?? ((base) => base))({
     folder: join(folder, "moves"),
     git,
     account: () => account,
@@ -193,7 +196,7 @@ function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMov
       reclaim: (input) => threads.reclaim(input),
     },
     snapshot: (id) => (id === conversation ? { session: { harness: "codex", nativeId: "n-1", nativePath: "/codex/n-1.jsonl", cwd: checkout, currentMode: "access:auto" } } : null),
-    checkout: () => (options.worktree === false ? undefined : { path: checkout, worktrees: [{}] }),
+    checkout: () => (options.worktree === false ? undefined : { path: checkout, worktrees: [{ path: checkout }] }),
     repositoryOf: async () => repository,
     sendRecords: async (_link, paths) => {
       gateway.sentRecords.push(paths)
@@ -209,6 +212,7 @@ function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMov
           if (gateway.ready) throw gateway.ready
           // Asked while the Thread still runs here: nothing has been released yet.
           gateway.readyWhile.push(threads.execution(threads.journalPlacement(conversation)!.session)?.state ?? "none")
+          if (gateway.readyAnswer) return encodeRuntimeValue(gateway.readyAnswer)
         }
         return encodeRuntimeValue({ ok: true })
       },
@@ -238,15 +242,18 @@ function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMov
     newCloudThread: () => `t-${name.padEnd(16, "0").slice(0, 16).replace(/[^0-9a-f]/g, "a")}`,
     ...options.harnesses && { harnesses: options.harnesses },
     ...options.ready && { ready: { take: async () => options.ready } },
-  })
+  }))
   return { moves: make(), fresh: make, gateway, threads, steps, conversation, thread: placed.thread, session: placed.session, checkout, busy, folder, started, work }
 }
 
 const move = (): MoveId => MoveIdSchema.parse(randomUUID())
 const ArgsSchema = z.array(z.unknown())
 const state = (s: Setup) => s.threads.execution(s.threads.journalPlacement(s.conversation)!.session)
-const PlanSchema = z.object({ phase: z.string(), checkpoint: z.object({ sha256: z.string() }).loose().optional() }).loose()
+const PlanSchema = z.object({ phase: z.string(), checkpoint: z.object({ sha256: z.string() }).loose().optional(), carry: z.object({ ref: z.object({ sha256: z.string() }) }).loose().optional() }).loose()
 const plan = (s: Setup, id: string) => PlanSchema.parse(JSON.parse(readFileSync(join(s.folder, "moves", `${id}.json`), "utf8")))
+/** A move's arrival as it names its carry, if it does. */
+const CarryArrivalSchema = z.object({ carry: z.object({ sha256: z.string() }).loose().optional() }).loose()
+const CarryPlanSchema = z.object({ carry: z.object({ ref: z.object({ sha256: z.string() }).loose(), manifest: MoveCarrySchema }).optional() }).loose()
 
 try {
   // The whole way: ahead, released, arrived with what was sent after, claimed, confirmed, resumed under its own id.
@@ -297,15 +304,17 @@ try {
     ready.checkpoint = (await captureMoveCheckpoint(git, s.checkout, scratch)).checkpoint.sha256
     const id = move()
     assert.deepEqual(await s.moves.move(s.conversation, id), { kind: "moved", cloudThread: "t-ready0000000000" }, "moved to the cloud Thread kept ready")
-    assert.deepEqual(s.gateway.asked, [], "the checkpoint readiness sent isn't asked about, ahead or after the release")
+    assert.deepEqual(s.gateway.asked, [plan(s, id).carry?.ref.sha256], "the checkpoint readiness sent isn't asked about, ahead or after the release; the carry goes once")
     assert.equal(plan(s, id).checkpoint?.sha256, ready.checkpoint, "and it's the checkpoint the machine arrives with")
     const earlier: TakenReady = { cloudThread: "t-ready0000000001" }
     const changed = setup("ready-changed", { ready: earlier })
     earlier.checkpoint = (await captureMoveCheckpoint(git, changed.checkout, scratch)).checkpoint.sha256
     writeFileSync(join(changed.checkout, "a.txt"), "changed since readiness sent it\n")
-    assert.equal((await changed.moves.move(changed.conversation, move())).kind, "moved")
-    assert.equal(changed.gateway.asked.length, 1, "a checkout that changed since goes once")
-    assert.notEqual(changed.gateway.asked[0], earlier.checkpoint)
+    const changedMove = move()
+    assert.equal((await changed.moves.move(changed.conversation, changedMove)).kind, "moved")
+    const checkouts = changed.gateway.asked.filter((sha256) => sha256 !== plan(changed, changedMove).carry?.ref.sha256)
+    assert.equal(checkouts.length, 1, "a checkout that changed since goes once")
+    assert.notEqual(checkouts[0], earlier.checkpoint)
     rmSync(scratch, { recursive: true, force: true })
   }
 
@@ -565,6 +574,126 @@ try {
     assert.equal(state(s)?.state, "here")
     assert.ok(!s.gateway.calls.some((call) => call.channel === "mako:live-continue-turn"), "nothing continued in the cloud")
   }
+  // A Thread in the main checkout goes onto its own branch first, in one move: weighed first (busy, nothing moves onto a
+  // branch), then onto its branch, then to the cloud from its worktree. When its harness forks there, the fork goes.
+  {
+    let onBranch = false
+    const branched: string[] = []
+    const s = setup("own-branch", { make: (base) => ({ ...base, checkout: (id) => (onBranch ? base.checkout(id) : undefined), ownBranch: async (id) => (branched.push(id), (onBranch = true), id) }) })
+    s.busy.reasons.push("its turn is running")
+    assert.equal((await s.moves.move(s.conversation, move())).kind, "kept-here")
+    assert.deepEqual(branched, [], "a move that can't go moves nothing onto a branch")
+    s.busy.reasons.splice(0)
+    s.steps.splice(0)
+    assert.equal((await s.moves.move(s.conversation, move())).kind, "moved")
+    assert.deepEqual(branched, [s.conversation])
+    assert.deepEqual(s.steps.map((step) => step.kind), ["own-branch", "packing", "handing-over", "resuming", "moved"])
+    assert.equal(s.gateway.made[0]?.folder, s.checkout, "the cloud Thread is made at its worktree")
+    // When its harness couldn't go on in the worktree and forked there instead, the fork goes, and the conversation it
+    // left archived in the main checkout stays here as it is: no tab shows it, so it holds nothing up.
+    let forked = false
+    const fork = randomUUID()
+    const f: Setup = setup("own-branch-fork", { make: (base) => ({
+      ...base,
+      checkout: (id) => (forked && id === fork ? base.checkout(id) : undefined),
+      snapshot: (id) => {
+        const shown = base.snapshot(f.conversation)
+        if (!shown) return null
+        if (id === fork) return { session: { ...shown.session, nativeId: "n-2", nativePath: "/codex/n-2.jsonl" } }
+        return id === f.conversation ? { session: { ...shown.session, cwd: join(f.folder, "Users", "ada", "project") } } : null
+      },
+      archived: (id) => forked && id === f.conversation,
+      ownBranch: async (id) => {
+        f.threads.registerJournal({ conversationId: fork, createdAt: clock++, harness: "codex", bindings: [{ provider: "codex", nativeId: "n-2", path: "/codex/n-2.jsonl" }], ancestry: { parentId: id, placement: "parent-thread" } }, f.threads.person())
+        forked = true
+        return fork
+      },
+    }) })
+    const outcome = await f.moves.move(f.conversation, move())
+    assert.deepEqual(outcome, { kind: "moved", cloudThread: f.gateway.made[0]?.threadId, conversation: fork }, JSON.stringify(outcome))
+    assert.deepEqual(f.steps.find((step) => step.kind === "own-branch" && step.to), { kind: "own-branch", to: fork }, "the step names the fork")
+    const opened = f.gateway.calls.filter((call) => call.channel === "mako:live-start").map((call) => z.object({ conversationId: z.string() }).loose().parse(call.args[2]).conversationId)
+    assert.deepEqual(opened, [fork], "only the fork opens in the cloud; the archived conversation stays here")
+    // A fork whose harness has no session for it yet (it starts with its first turn) stays on its branch here, saying so.
+    let fresh = false
+    const unstarted = randomUUID()
+    const g: Setup = setup("own-branch-fork-unstarted", { make: (base) => ({
+      ...base,
+      checkout: (id) => (fresh && id === unstarted ? base.checkout(id) : undefined),
+      snapshot: (id) => (id === unstarted ? { session: { harness: "codex", cwd: g.checkout, currentMode: null } } : base.snapshot(id)),
+      archived: (id) => fresh && id === g.conversation,
+      ownBranch: async () => ((fresh = true), unstarted),
+    }) })
+    const kept = await g.moves.move(g.conversation, move())
+    assert.match(JSON.stringify(kept), /"kind":"kept-here".*on its own branch now, as a conversation forked from this one/)
+    assert.equal(g.gateway.made.length, 0, "no cloud Thread is made for a fork with nothing to carry")
+    // Without a way onto its own branch, it says what to do, as before.
+    const plain = setup("main-checkout-plain", { worktree: false })
+    assert.match(JSON.stringify(await plain.moves.move(plain.conversation, move())), /from its own worktree/)
+  }
+
+  // What it carries besides its checkout, to a machine that says it takes one: its outside files and file history, in
+  // one carry the arrival names; a secret stays, said. To a machine from before carries, nothing of it, and said so.
+  {
+    const tmp = mkdtempSync("/tmp/mako-cloud-moves-")
+    writeFileSync(join(tmp, "notes.md"), "written outside its folder\n")
+    const outside: CloudMovesOptions["outside"] = () => [{ path: join(tmp, "notes.md"), access: "write" }, { path: join(tmp, "credentials"), access: "write", secret: true }]
+    const history: CloudMovesOptions["history"] = (thread) => ThreadFileHistorySchema.parse({ format: 1, thread, from: randomUUID(), parts: [], choices: [] })
+    const s = setup("carried", { make: (base) => ({ ...base, outside, history }) })
+    s.gateway.readyAnswer = { folder: s.checkout, carry: true }
+    const id = move()
+    assert.equal((await s.moves.move(s.conversation, id)).kind, "moved")
+    const carry = CarryPlanSchema.parse(plan(s, id)).carry
+    const arrival = CarryArrivalSchema.parse(ArgsSchema.parse(s.gateway.calls.find((call) => call.channel === "mako:move-arrive")?.args)[0])
+    assert.equal(arrival.carry?.sha256, carry?.ref.sha256, "the arrival names the carry")
+    assert.deepEqual(carry?.manifest.outside.map((entry) => entry.path), [join(tmp, "notes.md")])
+    assert.equal(carry?.manifest.history, true)
+    assert.deepEqual(s.steps.at(-1), { kind: "moved", conversations: [s.conversation], carried: { repositories: 1, outside: 1, left: [{ path: join(tmp, "credentials"), why: "secret" }] } })
+    const older = setup("carried-older", { make: (base) => ({ ...base, outside, history }) })
+    assert.equal((await older.moves.move(older.conversation, move())).kind, "moved")
+    const olderArrival = CarryArrivalSchema.parse(ArgsSchema.parse(older.gateway.calls.find((call) => call.channel === "mako:move-arrive")?.args)[0])
+    assert.equal(olderArrival.carry, undefined, "a machine from before carries is sent none")
+    assert.deepEqual(older.steps.at(-1), { kind: "moved", conversations: [older.conversation], carried: { repositories: 1, outside: 0, left: [{ path: join(tmp, "notes.md"), why: "older-cloud" }, { path: join(tmp, "credentials"), why: "secret" }] } })
+    rmSync(tmp, { recursive: true, force: true })
+  }
+
+  // A project of several repositories: the cloud Thread is made at the first repository's worktree, the machine clones
+  // the others as it gets ready, every repository goes by its own checkpoint named in the carry, and each session opens
+  // in its own folder, the project's worktree.
+  {
+    let project = ""
+    let api = ""
+    const s = setup("several", {
+      make: (base) => ({
+        ...base,
+        checkout: () => ({ path: project, worktrees: [{ path: api }, { path: join(project, "fix") }] }),
+        snapshot: (id) => {
+          const shot = base.snapshot(id)
+          return shot && { session: { ...shot.session, cwd: project } }
+        },
+      }),
+    })
+    project = join(s.checkout, "..")
+    api = join(project, "fix-api")
+    sh(root, "clone", "--quiet", join(s.folder, "remote.git"), api)
+    sh(api, "checkout", "--quiet", "-b", "mako/fix")
+    writeFileSync(join(api, "api.txt"), "the api's change\n")
+    s.gateway.readyAnswer = { folder: s.checkout, carry: true }
+    const id = move()
+    assert.equal((await s.moves.move(s.conversation, id)).kind, "moved")
+    assert.equal(s.gateway.made[0]?.folder, s.checkout, "made at the first repository's worktree")
+    const ready = z.object({ repositories: z.array(z.object({ path: z.string(), url: z.string() })).optional() }).loose().parse(ArgsSchema.parse(s.gateway.calls.find((call) => call.channel === "mako:move-ready")?.args)[0])
+    assert.deepEqual(ready.repositories, [{ path: api, url: "https://github.com/octocat/Hello-World" }], "the machine clones the other as it gets ready")
+    const carry = CarryPlanSchema.parse(plan(s, id)).carry
+    assert.deepEqual(carry?.manifest.repositories.map((repository) => repository.path), [s.checkout, api])
+    assert.equal(carry?.manifest.folder, project)
+    const arrival = z.object({ sessions: z.array(z.object({ open: z.object({ cwd: z.string().optional() }).loose().optional() }).loose()) }).loose().parse(ArgsSchema.parse(s.gateway.calls.find((call) => call.channel === "mako:move-arrive")?.args)[0])
+    assert.equal(arrival.sessions[0]?.open?.cwd, project, "each session opens in its own folder")
+    const start = ArgsSchema.parse(s.gateway.calls.find((call) => call.channel === "mako:live-start")?.args)
+    assert.equal(start[1], project)
+    assert.ok(carry?.manifest.repositories.every((repository) => s.gateway.checkpoints.has(repository.checkpoint.sha256)), "every repository's checkpoint was sent")
+  }
+
   console.log("PASS: a Thread moves to the cloud natively with one owner throughout: ahead, released only when quiet, arrived with what was sent after, claimed, resumed under its own id; busy, a failed arrival, a lost claim, an unheard answer and a stopped host each settle with one owner; a Thread at work is handed off by pausing its turn and continuing it, and what waited, in the cloud, or continuing it here when it can't go")
 } finally {
   git.close()

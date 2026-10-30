@@ -1,7 +1,8 @@
 import { MARKER, readMessage } from "@/lib/context/wire"
 import { readLiveSnapshot } from "@/state/live-history"
 import { stagePrompt } from "@/state/acp-pending"
-import { noteFolderUse, prefsStore } from "@/state/prefs"
+import { noteFolderUse } from "@/state/prefs"
+import { chosenAccessModes } from "@/state/access-choices"
 import { projectAcp } from "@/state/live-projection"
 import {
   currentSettingsTarget,
@@ -14,7 +15,7 @@ import type { Entry } from "@mako/sessions/entries"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import type { WorktreeStep } from "@mako/host/contracts/thread-worktrees"
-import type { CloudStartStep } from "@mako/host/contracts/cloud-threads"
+import { startFailure, type CloudStartStep } from "@mako/host/contracts/cloud-threads"
 import type { LiveStartOptions, LiveSnapshot, PromptAttachment } from "@/lib/types"
 import {
   acpStore,
@@ -26,6 +27,7 @@ import {
 import { threadsStore } from "@/state/thread-store"
 import { parseThreadReferenceAppendix } from "@/lib/thread-references"
 import { toast } from "sonner"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { draftText, projectDraftKey, rememberDraft } from "@/state/drafts"
 import { restorePendingPlan, takePendingPlan, withNativePlan } from "@/state/plan-choice"
 import { commandId, durableAttachments, pendingMessages, saveMessage, settleMessage, type OutboxCommand } from "@/state/message-outbox"
@@ -216,7 +218,7 @@ export async function launch(
     const input: LiveStartOptions = {
       ...options,
       ...withNativePlan(plan, {
-        modeId: options.modeId ?? prefsStore.get().providerModes[starting.harness],
+        modeId: options.modeId ?? chosenAccessModes()[starting.harness],
         tuning: options.tuning ?? (await settingsForSend(starting.settingsTarget)),
       }),
       conversationId: starting.key,
@@ -238,7 +240,7 @@ export async function launch(
   } catch (error) {
     failStart(starting.key)
     restorePendingPlan(starting.settingsTarget, starting.key)
-    toast.error(error instanceof Error ? error.message : String(error))
+    toastStartFailure(error instanceof Error ? error.message : String(error))
     return false
   }
 }
@@ -347,7 +349,17 @@ async function attemptStart(starting: StartingAcpConversation, input: LiveStartO
     const text = input.initialRequest?.text
     const draft = projectDraftKey(starting.cwd)
     if (text?.trim() && !draftText(draft).trim()) rememberDraft(draft, text)
-    toast.error(error instanceof Error ? error.message : String(error))
+    toastStartFailure(error instanceof Error ? error.message : String(error))
     return false
   }
+}
+
+/**
+ * Why a start didn't go. A cloud Thread whose repository Mako's GitHub App can't read yet offers the GitHub page that
+ * gives it access, as the turn-on card does; the message waits in the composer to send again once it's given.
+ */
+function toastStartFailure(message: string): void {
+  const { said, install } = startFailure(message)
+  if (!install) return void toast.error(said)
+  toast.error(said, { duration: ACTION_TOAST_MS, action: { label: "Give access", onClick: () => void getMako().openUrl(install) } })
 }

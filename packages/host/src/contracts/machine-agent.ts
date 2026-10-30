@@ -17,6 +17,14 @@ import { CLOUD_SIGN_IN_MAX_HARNESSES, CloudSignInSchema, type CloudSignInInstall
 export const MACHINE_AGENT_PROTOCOL = 7
 
 /**
+ * Set by the agent as it starts the host: the folder in memory that holds the machine's GitHub access, an hour-long
+ * token for its Thread's repository that `gh` and Git read for each call (`token`), beside who the Thread's person is
+ * on GitHub (`access.json`: `{ repository, expiresAt, permissions, user: { id, login, name, email } }`). The agent
+ * writes and renews it; the host only reads who the person is.
+ */
+export const MACHINE_GITHUB_ENV = "MAKO_GITHUB_ACCESS"
+
+/**
  * One of the project's carried files the agent placed in the Thread's checkout (its `.env`, a local settings file):
  * its path and the variables it defines, never a value. The host checks a recipe's named secrets against them.
  */
@@ -50,7 +58,8 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("inspect") }).strict(),
   /**
    * The Thread's folder couldn't be made: the step that failed (asking for it, cloning, fetching) and why, so a call that
-   * needs the folder says why it isn't there. An older host ignores it.
+   * needs the folder says why it isn't there, and no start runs outside it (`mako:boot` fails with `reason`, which is
+   * written for the Thread's person). An older host ignores it.
    */
   z.object({ type: z.literal("workspace-failed"), path: z.string().min(1).max(1024).optional(), step: z.string().min(1).max(40), reason: z.string().min(1).max(2_000) }).strict(),
   /**
@@ -115,6 +124,11 @@ export type MachineRuntimeState = {
   carried?: { files: CarriedFile[]; at: string; problem?: string }
   /** The workspace the agent last gave, once the host has opened it or failed to. */
   workspace?: { path: string; status: "opened" | "failed"; at: string; reason?: string }
+  /**
+   * A machine that replaced a lost one restores its Thread's save before its runtime connects: where that stands, and
+   * why its last try failed while it tries again.
+   */
+  restore?: { state: "restoring" | "restored" | "none"; at: string; attempts: number; from?: number; ms?: number; failed?: string }
 }
 
 /** What the host tells the agent. */
@@ -131,8 +145,8 @@ export type HostMessage =
   /** A `prepare` is done, or failed and left to the start. */
   | { type: "prepared"; path: string; ms: number; ok: boolean }
   /**
-   * The Thread's folder wasn't made (`workspace-failed`) and a move asks for it: the agent asks the gateway and clones
-   * again, and says how it went as it did the first time (`workspace`, `workspace-failed`).
+   * The Thread's folder wasn't made (`workspace-failed`) and a move or a start asks for it: the agent asks the gateway
+   * and clones again, and says how it went as it did the first time (`workspace`, `workspace-failed`).
    */
   | { type: "workspace-retry" }
   /**

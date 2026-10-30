@@ -7,8 +7,16 @@ import {
   RefreshCwIcon,
   ShieldCheckIcon,
 } from "lucide-react"
-import type { RevisionChanges, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
-import { shortRevision, updateSourceText, type UpdateSourceText } from "@mako/host/contracts/update-source-text"
+import type { RevisionChanges, UncommittedChanges, UpdateInstallation } from "@mako/host/contracts/app-lifecycle"
+import {
+  builtWith,
+  missingDependenciesText,
+  shortRevision,
+  uncommittedChangeText,
+  uncommittedCount,
+  updateSourceText,
+  type UpdateSourceText,
+} from "@mako/host/contracts/update-source-text"
 import { Action, Chip } from "@/components/ui/kit"
 import { IfCanChooseFolder } from "@/components/ui/machine-gate"
 import { MakoTile } from "@/components/ui/mako-mark"
@@ -18,13 +26,16 @@ import { application, useApplication } from "@/state/application"
 import { runCommand } from "@/extend/commands"
 import { cn } from "@/lib/utils"
 
-const phases = [
-  "copying",
-  "compiling",
-  "checking",
-  "packaging",
-  "verifying",
-] as const
+type BuildPhase = Extract<UpdateInstallation["local"], { kind: "building" }>["phase"]
+/** Each phase's step in the progress row; installing dependencies is part of preparing. */
+const phaseSteps = {
+  installing: 0,
+  copying: 0,
+  compiling: 1,
+  checking: 2,
+  packaging: 3,
+  verifying: 4,
+} satisfies Record<BuildPhase, number>
 const phaseLabels = ["Prepare", "Build", "Check", "Package", "Verify"]
 
 /** The commit subjects a change count stands for, newest first, and how many more there are. */
@@ -43,6 +54,37 @@ function ChangeList({ changes, label }: { changes: RevisionChanges; label: strin
   )
 }
 
+/**
+ * The uncommitted files a build takes from its checkout, or took: how many
+ * on one line, and behind it each file with what happened to it. Shown
+ * before a build, on the build that's ready, and on the installed app.
+ */
+function UncommittedFiles({ uncommitted, label, className }: { uncommitted: UncommittedChanges | undefined; label: string; className?: string }) {
+  if (!uncommitted?.count) return null
+  const more = uncommitted.count - uncommitted.files.length
+  return (
+    <details className={cn("group/uncommitted", className)} data-testid="uncommitted">
+      <summary className="pressable -mx-1 flex w-fit cursor-pointer list-none items-center gap-1 rounded-sm px-1 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground [&::-webkit-details-marker]:hidden">
+        <ChevronRightIcon aria-hidden className="size-3 shrink-0 transition-transform duration-150 ease-(--ease-out) group-open/uncommitted:rotate-90" />
+        Includes {uncommittedCount(uncommitted.count)}
+      </summary>
+      <ul aria-label={label} className="mt-1 flex max-h-60 flex-col gap-1 overflow-y-auto pl-4 text-label">
+        {uncommitted.files.map((file) => (
+          <li key={file.path} className="flex items-baseline gap-3">
+            <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground" title={file.path}>
+              {file.path}
+            </span>
+            <span className="max-w-[45%] shrink-0 truncate text-faint" title={uncommittedChangeText(file)}>
+              {uncommittedChangeText(file)}
+            </span>
+          </li>
+        ))}
+        {more > 0 && <li className="text-faint">and {more} more</li>}
+      </ul>
+    </details>
+  )
+}
+
 /** The card's headline and the sentence under it. */
 interface CardCopy {
   title: string
@@ -56,6 +98,11 @@ interface CardCopy {
 function localCopy(installation: UpdateInstallation, text: UpdateSourceText | null): CardCopy {
   const { local, checkout } = installation
   if (local.kind === "ready") return { title: "Your update is ready", detail: "Verified and ready. Install after agents finish, or choose when to stop them." }
+  if (local.kind === "building" && local.phase === "installing")
+    return {
+      title: "Installing dependencies…",
+      detail: `${local.dependencies ? `${missingDependenciesText(local.dependencies)} ` : ""}Mako is running npm install in the checkout before it builds. Your installed app and agents stay running.`,
+    }
   if (local.kind === "building") {
     const forward = checkout?.kind === "checkout" && checkout.plan.kind === "fast-forward" && checkout.branch
     return {
@@ -95,7 +142,7 @@ export function UpdatesSection() {
     lifecycle?.operation.kind === "stopping"
   const phase =
     installation?.local.kind === "building"
-      ? phases.indexOf(installation.local.phase)
+      ? phaseSteps[installation.local.phase]
       : -1
   const build = installation?.build
   const nextBuild =
@@ -104,10 +151,14 @@ export function UpdatesSection() {
     installation?.local.kind === "error"
       ? installation.local.message
       : error || release.error
+  // What to run by hand when Mako won't or couldn't, apart from the words so it copies whole.
+  const fix = installation?.local.kind === "error" ? installation.local.command : undefined
   const copy = local && installation ? localCopy(installation, text) : null
   const prepared = installation?.local.kind === "ready" ? installation.local : null
   // What Build would bring, listed before it runs; nothing while it builds or once it's ready.
   const coming = !building && !prepared && checkout?.kind === "checkout" && text?.action ? checkout.changes : null
+  // The uncommitted files Build would take as they are, until the build it makes names its own.
+  const taking = !prepared && checkout?.kind === "checkout" && (building || text?.action) ? checkout.uncommitted : undefined
   const buildLabel = building ? "Building…" : ready ? "Build again" : text?.action ?? "Build update"
   const nothingToBuild = Boolean(text && !text.action) || checkout?.kind === "unreadable"
   const label = local
@@ -141,12 +192,13 @@ export function UpdatesSection() {
               {build.revision ? (
                 <>
                   Revision <span className="font-mono text-muted-foreground">{shortRevision(build.revision)}</span>
-                  {build.dirty ? " with local changes" : ""} ·{" "}
+                  {builtWith(build) ? ` ${builtWith(build)}` : ""} ·{" "}
                 </>
               ) : null}
               Build <span className="font-mono">{build.id}</span>
             </p>
           )}
+          {build && <UncommittedFiles uncommitted={build.uncommitted} label="Uncommitted changes in the installed app" className="mt-2" />}
           {installation?.installed && installation.installed.count > 0 && (
             <div className="mt-3 flex flex-col gap-1.5" data-testid="installed-changes">
               <p className="text-label text-faint">
@@ -226,9 +278,9 @@ export function UpdatesSection() {
             </div>
             <p className="border-t border-hairline px-3 py-2 text-label leading-relaxed text-faint">
               Only choose a checkout you trust. Building runs its scripts in a
-              private copy, including your local changes. Mako moves the
-              checkout forward only when it has none, and never switches
-              branches.
+              private copy, with every uncommitted change in it, whoever made
+              it. Mako moves the checkout forward only when it has none, and
+              never switches branches.
             </p>
           </div>
         )}
@@ -237,6 +289,7 @@ export function UpdatesSection() {
             <ChangeList changes={coming} label="Changes Build brings" />
           </div>
         )}
+        <UncommittedFiles uncommitted={taking} label="Uncommitted changes Build takes" className="mx-4 mb-4" />
 
         {building && (
           <ol
@@ -275,8 +328,8 @@ export function UpdatesSection() {
               <ChevronRightIcon className="size-3 text-faint" />
               <span className="font-mono font-medium">
                 {nextBuild.revision ? shortRevision(nextBuild.revision) : nextBuild.id.slice(0, 8)}
-                {nextBuild.dirty ? " with local changes" : ""}
               </span>
+              {builtWith(nextBuild) && <span className="text-muted-foreground">{builtWith(nextBuild)}</span>}
               {prepared?.changes && prepared.changes.count > 0 && (
                 <span className="text-faint">
                   · {prepared.changes.count} {prepared.changes.count === 1 ? "change" : "changes"}
@@ -292,6 +345,7 @@ export function UpdatesSection() {
               </p>
             )}
             {prepared?.changes && <ChangeList changes={prepared.changes} label="Changes in this update" />}
+            <UncommittedFiles uncommitted={nextBuild.uncommitted} label="Uncommitted changes in this update" />
           </div>
         )}
         {published && release.status === "downloading" && (
@@ -308,12 +362,20 @@ export function UpdatesSection() {
           </div>
         )}
         {failed && (
-          <p
+          <div
             role="alert"
-            className="mx-4 mb-4 rounded-lg bg-negative/10 p-3 text-ui leading-relaxed text-negative"
+            className="mx-4 mb-4 flex flex-col gap-2 rounded-lg bg-negative/10 p-3 text-ui leading-relaxed text-negative"
           >
-            {failed}
-          </p>
+            <p>{failed}</p>
+            {fix && (
+              <code
+                className="block rounded-md bg-background/60 px-2.5 py-1.5 font-mono text-label break-all text-foreground select-all"
+                data-testid="update-command"
+              >
+                {fix}
+              </code>
+            )}
+          </div>
         )}
         <div className="flex flex-wrap items-center gap-2 border-t border-hairline px-4 py-3">
           {ready && (

@@ -1,6 +1,7 @@
 import type { Git } from "@mako/git"
 import type { Admission } from "../base/admission.js"
 import type { Foreground } from "../base/foreground.js"
+import type { HostWork } from "../base/event-loop.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { dirname } from "node:path"
 import { hostWarn } from "../base/host-log.js"
@@ -72,6 +73,8 @@ export const STOPPED_FOR = {
 export type StoppedFor = (typeof STOPPED_FOR)[ProviderStop]
 
 export interface Resident {
+  /** The work that read this conversation in from disk (`HostWork.current`), for the memory readout. */
+  loadedBy?: string
   closing?: boolean
   closeOperation?: Promise<void>
   checkpointing?: boolean
@@ -107,6 +110,8 @@ export interface Resident {
   /** See `LiveSnapshot.activityAt`; the next flush publishes it. */
   activityAt?: number
   timer: ReturnType<typeof setTimeout> | null
+  /** When it last flushed (`performance.now()`): the next change waits until a batch's frame has passed since. */
+  flushedAt?: number
   displayPrompt?: string
   /** When anything last loaded or changed it; the memory budget lets the oldest go first. */
   usedAt?: number
@@ -161,6 +166,8 @@ export interface Dependencies {
   unattended?: boolean
   /** Held while a harness starts, so the host's routine work waits for it (`base/foreground.ts`). */
   foreground?: Pick<Foreground, "hold" | "started">
+  /** What the host is doing, named: who reads a conversation in from disk is counted to it (`LiveRecords`). */
+  work?: Pick<HostWork, "current">
   mcpSnapshot?(cwd: string): Promise<McpRegistrySnapshot>
   workspaceSnapshots?: WorkspaceSnapshots
   /** Who changed each of these files (absolute) since `since`, as the attribution journal knows; undefined while it isn't open. */
@@ -233,6 +240,11 @@ export interface Dependencies {
   /** A commit changed the conversation's requests; called on the write path, so it must be cheap and never throw. */
   turns?(previous: LiveSnapshot, next: LiveSnapshot): void
   /**
+   * A new conversation's journal was written and placed in its Thread, before its harness starts: nothing else says so
+   * until its first batch, which waits for the harness. Cheap, and never throws.
+   */
+  opened?(conversationId: string): void
+  /**
    * The per-user ledger of settings, access mode and live holds per native
    * session. Written from every flush that changes what a connected session
    * reports; consulted before a resume so two hosts never open one store.
@@ -264,6 +276,13 @@ export interface Dependencies {
   providerWarmLimit?: number
   /** Test override for `CONVERSATION_MEMORY` and the wait before a sweep. */
   conversationMemory?: ResidencyBudget & { sweepMs: number }
+  /**
+   * Entries of conversation `id` were paged (`paged-entries.ts`), or the
+   * conversation was let go: whatever outside the host's records holds its
+   * entries (the history reader's views) holds the paged ones, or lets them go.
+   */
+  historyPaged?(id: string): void
+  historyReleased?(id: string): void
   /** Test clock for deterministic residency decisions. */
   now?: () => number
 }
@@ -289,6 +308,8 @@ export interface LiveAccess {
   residents(): Iterable<Resident>
   require(id: string): Resident
   load(id: string): Resident | undefined
+  /** `load`, reading a journal from disk a slice at a time (`LiveRecords.loadSliced`). */
+  loadSliced(id: string): Promise<Resident | undefined>
   /** A request as its conversation keeps it, without loading a conversation that isn't (`LiveRecords.request`). */
   request(id: string, requestId: string): LiveRequest | undefined
   /** Keeps a new conversation, its journal already written. */

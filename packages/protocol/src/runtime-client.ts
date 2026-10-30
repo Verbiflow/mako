@@ -8,10 +8,11 @@ import { type ConnectionCredential, renewal } from "./credential.js"
 import type { RuntimeLink } from "./gateway.js"
 import { type MediaHandler, type MediaSender, type MediaStreamId, encodeMediaMessage } from "./media.js"
 import type { Payload } from "./payload.js"
-import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
+import type { PortHandler, PortRequest } from "./ports.js"
+import type { GatewayFrame, GoingQuietReason, RuntimeFrame } from "./runtime-frames.js"
 import { RuntimeThreads, type ThreadClaim } from "./runtime-outbox.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { ACTIVITY_VERSION, MEDIA_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS } from "./version.js"
+import { ACTIVITY_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PORTS_VERSION, PROTOCOL_VERSION, QUIET_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS } from "./version.js"
 
 export class RuntimeRefusedError extends Error {
   readonly problem: Problem
@@ -44,11 +45,15 @@ export type RuntimeOptions = {
   credential?: ConnectionCredential
   /** Serves the live streams clients watch (`media.ts`); without it, every watch ends at once. */
   media?: MediaHandler
+  /** Makes requests to the apps this runtime serves on its ports (`ports.ts`); without it, every request ends at once. */
+  ports?: PortHandler
   /**
    * The conversations another device watches now, the whole set, for this link alone (version 5 on): send their live
-   * updates with `live`, and no others'. A new link starts with none watched.
+   * updates with `live`, and no others'. A new link starts with none watched. From version 9, `after` says by
+   * conversation the runtime's number (`live`'s `n`) of the last update the gateway relayed of it: what came after it
+   * is sent on this link.
    */
-  watch?: (conversations: readonly string[]) => void
+  watch?: (conversations: readonly string[], after?: Readonly<Record<string, number>>) => void
 }
 
 export type ServedRuntime = {
@@ -69,8 +74,16 @@ export type ServedRuntime = {
    * later (false on an older one, or once the link closed). Not kept: the first report on each new link says them all.
    */
   sessions(report: SessionsReport): boolean
-  /** One live update of a watched conversation, as its event's line; false on a gateway older than version 5 or a closed link. */
-  live(conversation: string, event: Payload): boolean
+  /**
+   * One live update of a watched conversation, as its event's line; false on a gateway older than version 5 or a closed
+   * link. On version 9 and later it goes with the runtime's number for it (`n`) and its trace, if any; before, without.
+   */
+  live(conversation: string, event: Payload, numbered?: { n: number; correlationId?: string }): boolean
+  /**
+   * Says the runtime is going away on purpose, before it goes (`going-quiet`, version 8 on): the gateway takes its link
+   * as down at once. False on an older gateway, which finds out from the missed heartbeats, or on a closed link.
+   */
+  goingQuiet(reason: GoingQuietReason): boolean
   /** Settles when the link closes. */
   done: Promise<void>
   /** Why the link ended: the gateway's refusal, or undefined when the connection just closed. */
@@ -155,8 +168,21 @@ export async function serveRuntime(
     if (!link.closed) link.send({ type: "reply", reply })
   }
 
-  /** The streams this link serves, each until its viewer leaves, the runtime ends it, or the link closes. */
-  const streams = new Map<MediaStreamId, MediaSender & { threadId: string }>()
+  /** The streams this link serves, each until its viewer leaves, the runtime ends it, or the link closes: a Thread's media, or a port request's answer. */
+  const streams = new Map<MediaStreamId, MediaSender & ({ kind: "media"; threadId: string } | { kind: "port" })>()
+  const released = (stream: MediaStreamId, sender: { kind: "media" | "port" }) => (sender.kind === "port" ? options.ports?.closed(stream) : options.media?.unwatched(stream))
+  const sending = (stream: MediaStreamId, current: () => MediaSender | undefined): MediaSender => ({
+    send: (data) => {
+      if (current() === undefined || link.closed) return false
+      link.sendMedia(encodeMediaMessage(stream, data))
+      return true
+    },
+    end: (reason) => {
+      if (current() === undefined || link.closed) return
+      streams.delete(stream)
+      endStream(stream, reason)
+    },
+  })
   const endStream = (stream: MediaStreamId, reason?: Problem) => {
     if (!link.closed) link.send(reason ? { type: "media-end", stream, problem: reason } : { type: "media-end", stream })
   }
@@ -167,30 +193,34 @@ export async function serveRuntime(
     if (threads.generation(frame.threadId) === undefined)
       return endStream(frame.stream, problem("fenced", "This runtime doesn't run the Thread", crypto.randomUUID(), "not-applied", { status: 409 }))
     let sender = streams.get(frame.stream)
-    if (sender && sender.threadId !== frame.threadId) {
+    if (sender && (sender.kind !== "media" || sender.threadId !== frame.threadId)) {
       streams.delete(frame.stream)
-      handler.unwatched(frame.stream)
+      released(frame.stream, sender)
       sender = undefined
     }
     if (!sender) {
       const { stream, threadId } = frame
-      const open = () => streams.get(stream) === sender && !link.closed
-      sender = {
-        threadId,
-        send: (data) => {
-          if (!open()) return false
-          link.sendMedia(encodeMediaMessage(stream, data))
-          return true
-        },
-        end: (reason) => {
-          if (!open()) return
-          streams.delete(stream)
-          endStream(stream, reason)
-        },
-      }
-      streams.set(stream, sender)
+      const made: MediaSender & { kind: "media"; threadId: string } = { kind: "media", threadId, ...sending(stream, () => (streams.get(stream) === made ? made : undefined)) }
+      sender = made
+      streams.set(stream, made)
     }
     handler.watch(frame.stream, frame.threadId, frame.request, sender)
+  }
+
+  const opened = (frame: Extract<GatewayFrame, { type: "port-open" }>) => {
+    const handler = options.ports
+    if (!handler || first.version < PORTS_VERSION)
+      return endStream(frame.stream, problem("unsupported-version", "This runtime serves no ports", crypto.randomUUID(), "not-applied", { status: 501 }))
+    const { stream, to, method, path, headers, body } = frame
+    const request: PortRequest = body === undefined ? { to, method, path, headers } : { to, method, path, headers, body }
+    const before = streams.get(stream)
+    if (before) {
+      streams.delete(stream)
+      released(stream, before)
+    }
+    const made: MediaSender & { kind: "port" } = { kind: "port", ...sending(stream, () => (streams.get(stream) === made ? made : undefined)) }
+    streams.set(stream, made)
+    handler.open(stream, request, made)
   }
 
   let ending: Problem | undefined
@@ -202,17 +232,21 @@ export async function serveRuntime(
       else if (frame.type === "operation")
         void answer(frame.operation, frame.generation)
       else if (frame.type === "media-watch") watched(frame)
-      else if (frame.type === "watch") options.watch?.(frame.conversations)
+      else if (frame.type === "port-open") opened(frame)
+      else if (frame.type === "watch") options.watch?.(frame.conversations, frame.after)
       else if (frame.type === "media-ack") {
-        if (streams.has(frame.stream)) options.media?.acked(frame.stream, frame.received)
+        const sender = streams.get(frame.stream)
+        if (sender?.kind === "port") options.ports?.acked(frame.stream, frame.received)
+        else if (sender) options.media?.acked(frame.stream, frame.received)
       } else if (frame.type === "media-unwatch") {
-        if (streams.delete(frame.stream)) options.media?.unwatched(frame.stream)
+        const sender = streams.get(frame.stream)
+        if (sender && streams.delete(frame.stream)) released(frame.stream, sender)
       } else {
         threads.receive(frame)
         // A Thread taken from this runtime takes its streams with it.
         if (frame.type === "fence")
           for (const [stream, sender] of streams)
-            if (sender.threadId === frame.threadId && threads.generation(frame.threadId) === undefined) {
+            if (sender.kind === "media" && sender.threadId === frame.threadId && threads.generation(frame.threadId) === undefined) {
               streams.delete(stream)
               options.media?.unwatched(stream)
             }
@@ -222,9 +256,9 @@ export async function serveRuntime(
     threads.detach(send)
     clearInterval(heartbeat)
     renewing?.stop()
-    const left = [...streams.keys()]
+    const left = [...streams]
     streams.clear()
-    for (const stream of left) options.media?.unwatched(stream)
+    for (const [stream, sender] of left) released(stream, sender)
   })
 
   return {
@@ -239,12 +273,23 @@ export async function serveRuntime(
     },
     sessions: (report) => {
       if (first.version < SESSIONS_VERSION || link.closed) return false
-      link.send({ type: "sessions", report })
+      if (first.version >= NUMBERED_LIVE_VERSION) link.send({ type: "sessions", report })
+      else {
+        // Before version 9 a gateway refuses when a report went and when a row changed.
+        const { reportedAt: _reportedAt, ...older } = report
+        link.send({ type: "sessions", report: { ...older, listed: older.listed.map(({ changedAt: _changedAt, ...row }) => row) } })
+      }
       return true
     },
-    live: (conversation, event) => {
+    live: (conversation, event, numbered) => {
       if (first.version < SESSIONS_VERSION || link.closed) return false
-      link.send({ type: "live", conversation, event })
+      if (numbered && first.version >= NUMBERED_LIVE_VERSION) link.send({ type: "live", conversation, event, n: numbered.n, ...(numbered.correlationId && { correlationId: numbered.correlationId }) })
+      else link.send({ type: "live", conversation, event })
+      return true
+    },
+    goingQuiet: (reason) => {
+      if (first.version < QUIET_VERSION || link.closed) return false
+      link.send({ type: "going-quiet", reason })
       return true
     },
     done,

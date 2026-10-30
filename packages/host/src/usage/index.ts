@@ -7,7 +7,7 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import { classifyProviderFailure, type ProviderFailureKind } from "../contracts/provider-failure.js"
 
 export { declareTelemetryMethods } from "./telemetry-methods.js"
-export { declareCloudAccountMethods, type CloudAccount, type ThreadListHeard } from "./cloud-account-methods.js"
+export { declareCloudAccountMethods, type CloudAccount } from "./cloud-account-methods.js"
 export type { CloudThreadMaking } from "./cloud-account.js"
 export type { MachineRuntime, MachineGatewayLink } from "./machine-runtime.js"
 export { MachineWorkspace, WORKSPACE_RETRY_MS, type MachineWorkspaceOutcome } from "./machine-workspace.js"

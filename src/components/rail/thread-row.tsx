@@ -8,6 +8,7 @@ import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { FoldGlyph } from "@/components/rail/fold-glyph"
+import { MarkStack } from "@/components/ui/mark-stack"
 import {
   FOLD_GLYPHS,
   foldedThreadState,
@@ -308,7 +309,7 @@ export const ThreadRow = memo(function ThreadRow({
             tucked behind, the current one in front. One mark when it has
             only ever been one place — which is most sessions. A Thread with
             several Sessions shows the agent of each, first Session first. */}
-        <span className="flex shrink-0 items-center -space-x-1">
+        <MarkStack>
           {[
             ...(folded ? [] : (ref.lineage ?? []).slice(-1).map((origin, index) => (
               <HarnessIcon
@@ -329,7 +330,7 @@ export const ThreadRow = memo(function ThreadRow({
               )
             }),
           ]}
-        </span>
+        </MarkStack>
         {editing !== null ? (
           <input
             autoFocus

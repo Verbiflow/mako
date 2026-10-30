@@ -1,4 +1,4 @@
-import type { UpdateSource } from "./app-lifecycle.js"
+import type { BuildIdentity, MissingDependencies, UncommittedFile, UpdateSource } from "./app-lifecycle.js"
 
 /**
  * How a source checkout's reading is said, in Settings › Updates and by
@@ -22,6 +22,49 @@ export interface UpdateSourceText {
 export const shortRevision = (revision: string) => revision.slice(0, 8)
 
 const count = (n: number, noun: string, plural = `${noun}s`) => `${n} ${n === 1 ? noun : plural}`
+
+/**
+ * `package-lock.json lists 3 packages the checkout hasn't installed:
+ * @mako/web-client, esbuild and 1 more.` Said while the build installs
+ * them, and when it can't.
+ */
+export function missingDependenciesText({ count: total, names }: MissingDependencies): string {
+  const more = total - names.length
+  const listed = more > 0 ? `${names.join(", ")} and ${more} more` : names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names.join("")
+  return `package-lock.json lists ${total === 1 ? "a package" : `${total} packages`} the checkout hasn't installed: ${listed}.`
+}
+
+/** `41 uncommitted changes`: a build's uncommitted files, counted the same way before it's built and once it's installed. */
+export const uncommittedCount = (n: number) => count(n, "uncommitted change")
+
+/**
+ * The revision a build was made from and what it took beyond it:
+ * `9a7a5c0c with 41 uncommitted changes`. A build from an updater that
+ * didn't name its files says only that it had some.
+ */
+export function buildRevisionText(build: Pick<BuildIdentity, "revision" | "dirty" | "uncommitted">): string {
+  const at = build.revision ? shortRevision(build.revision) : "an unrecorded revision"
+  const taken = builtWith(build)
+  return taken ? `${at} ${taken}` : at
+}
+
+/** `with 41 uncommitted changes`, or null for a build that took none. */
+export function builtWith(build: Pick<BuildIdentity, "dirty" | "uncommitted">): string | null {
+  if (!build.dirty) return null
+  return `with ${build.uncommitted?.count ? uncommittedCount(build.uncommitted.count) : "uncommitted changes"}`
+}
+
+/** What happened to an uncommitted file, in a word or two: `Edited`, `Renamed from src/old.ts`. */
+export function uncommittedChangeText(file: UncommittedFile): string {
+  switch (file.change) {
+    case "edited": return "Edited"
+    case "added": return "Added"
+    case "deleted": return "Deleted"
+    case "renamed": return `Renamed from ${file.from ?? "another path"}`
+    case "untracked": return "Untracked"
+    case "conflicted": return "Conflicted"
+  }
+}
 
 /** `uncommitted changes in 2 files and 1 untracked file`, or null for a clean checkout. */
 function localWork(changed: number, untracked: number): string | null {

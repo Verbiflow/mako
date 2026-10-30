@@ -46,6 +46,8 @@ export interface TrackerRepository {
   inventory(): Promise<{ tracked: string[]; untracked: string[]; changed: string[] }>
   /** Of `paths`, those Git ignores. */
   ignored(paths: readonly string[]): Promise<Set<string>>
+  /** What Git ignores under the root: a folder it ignores whole once, ending in `/`, without what's in it; else single files. A repository without it is walked whole. */
+  ignoredEntries?(): Promise<string[]>
   /** A file's content at a commit; null when it isn't there. */
   read(commit: string, path: string): Promise<Uint8Array | null>
   /** Paths that differ between two commits; every path at `to` when `from` is null. */
@@ -95,6 +97,11 @@ const SLOW_FLUSH_MS = 50
 const DAY_MS = 86_400_000
 /** A command's named paths the journal keeps, for the Thread's working set. */
 const STORED_NAMED = 64
+/** While losses keep coming, each rescan waits at least this long after the last, doubling per loss up to `RESCAN_MAX_MS`. */
+const RESCAN_MIN_MS = 2_000
+const RESCAN_MAX_MS = 60_000
+/** A loss this long after the last rescan is rescanned at once. */
+const RESCAN_QUIET_MS = 5 * 60_000
 
 interface Flush {
   at: number
@@ -128,6 +135,18 @@ interface RootState {
   /** Lost events not yet rescanned. */
   gap?: { id: number; from: number; reason: Gap["reason"] }
   muted: boolean
+  /** What Git ignored when last asked, and how many times a `.gitignore`, Git's exclude file, the index or HEAD had moved by then. */
+  ignored?: GitIgnored & { moves: number }
+  /** Times a `.gitignore`, Git's exclude file, the index or HEAD moved: a listing taken at fewer is stale. */
+  ignoreMoves: number
+  /** The next rescan for lost events: waiting out its spacing, on the queue, running, or wanted again once the running one ends. */
+  rescanTimer?: ReturnType<typeof setTimeout>
+  rescanQueued: boolean
+  rescanning: boolean
+  rescanAgain: boolean
+  /** When the last rescan ended, and the spacing the next one keeps after it. */
+  rescannedAt: number
+  rescanEvery: number
   headTimer?: ReturnType<typeof setTimeout>
   /**
    * When Git's own files (HEAD, the index, a branch) began moving, until the
@@ -144,6 +163,27 @@ interface RootState {
   /** The history position taken last, saved once the next is taken: by then everything before it has been heard. */
   markTaken?: { mark: string; at: number }
   markTimer?: ReturnType<typeof setTimeout>
+}
+
+/** What Git ignores in a root, as `ignoredEntries` lists it: folders it ignores whole, and single files, relative to the root. */
+interface GitIgnored {
+  folders: Set<string>
+  files: Set<string>
+}
+
+/** Whether Git ignores `path`: it's listed, or it's inside a folder Git ignores whole. */
+function ignoredByGit(ignored: GitIgnored, path: string): boolean {
+  if (ignored.files.has(path) || ignored.folders.has(path)) return true
+  for (let at = path.lastIndexOf("/"); at > 0; at = path.lastIndexOf("/", at - 1)) if (ignored.folders.has(path.slice(0, at))) return true
+  return false
+}
+
+/** Whether `glob` may match `path` or something under it: always, for one that starts with a wildcard. */
+function mayReach(glob: string, path: string): boolean {
+  if (globMatch(glob, path)) return true
+  const star = glob.indexOf("*")
+  const literal = star < 0 ? glob : glob.slice(0, star)
+  return literal.startsWith(`${path}/`) || `${path}/`.startsWith(literal)
 }
 
 /** A change whose author may still improve, with the texts its evidence is checked against. */
@@ -332,7 +372,10 @@ export class LaptopTracker implements AttributionTracker {
   }
 
   private state(root: StoredRoot, repo: TrackerRepository | null, stats: Map<string, StatRow>, files: Map<string, FileState>): RootState {
-    const state: RootState = { root, repo, stats, files, tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false, recent: [], headSeq: this.seq }
+    const state: RootState = {
+      root, repo, stats, files, tracked: new Set(), pending: new Map(), adopted: new Set(), firstHeard: 0, chain: Promise.resolve(), muted: false, recent: [], headSeq: this.seq,
+      ignoreMoves: 0, rescanQueued: false, rescanning: false, rescanAgain: false, rescannedAt: -Infinity, rescanEvery: 0,
+    }
     const replaced = this.states.get(root.id)
     if (replaced) this.unlisten(replaced)
     this.states.set(root.id, state)
@@ -345,28 +388,40 @@ export class LaptopTracker implements AttributionTracker {
     const files = new Map(this.store.files().filter((file) => file.root === root.id).map((file) => [file.path, file]))
     const state = this.state(root, repo, this.store.stats(root.id), files)
     for (const path of state.stats.keys()) state.tracked.add(path)
-    await this.listen(state)
     const from = root.seenAt
-    const history = root.mark ? await this.ports.events.since(root.mark, root.path).catch(() => null) : null
     const gap = this.store.openGap(root.id, from, "restart")
     state.gap = { id: gap, from, reason: "restart" }
-    // HEAD first, so what a checkout or pull wrote while no host ran is read as the base it is.
-    if (repo) await this.queue(state, async () => {
-      state.moved = await this.checkHead(state)
-    })
-    try {
-      if (history?.complete) {
-        const paths = history.paths.filter((path) => within(root.path, path) && path !== root.path).map((path) => relative(root.path, path))
-        for (const path of paths) if (!isGitPath(path)) state.pending.set(path, "history")
-        await this.queue(state, async () => {
+    /*
+     * The catch-up is the first task on the root's queue, so nothing the new
+     * watch says is acted on before the history is read: the system reports
+     * a change made just before the watch started up to seconds late, as a
+     * live event, and that change belongs to the gap, not to whatever runs
+     * now. A watch that starts deaf rescans after it.
+     */
+    const listening = this.listen(state)
+    const caughtUp = this.queue(state, async () => {
+      // A root that can't be watched again is let go, from `listening` below.
+      if (!(await listening.then(() => true, () => false))) {
+        this.store.closeGap(gap, this.now())
+        return
+      }
+      const history = root.mark ? await this.ports.events.since(root.mark, root.path).catch(() => null) : null
+      try {
+        // HEAD first, so what a checkout or pull wrote while no host ran is read as the base it is.
+        if (repo) state.moved = await this.headChecked(state)
+        if (history?.complete) {
+          const paths = history.paths.filter((path) => within(root.path, path) && path !== root.path).map((path) => relative(root.path, path))
+          for (const path of paths) if (!isGitPath(path)) state.pending.set(path, "history")
           await this.flush(state)
           this.store.closeGap(gap, this.now())
           state.gap = undefined
-        })
-      } else await this.queue(state, () => this.rescan(state))
-    } finally {
-      state.moved = undefined
-    }
+        } else await this.rescan(state)
+      } finally {
+        state.moved = undefined
+      }
+    })
+    await listening
+    await caughtUp
   }
 
   private async listen(state: RootState): Promise<void> {
@@ -376,7 +431,7 @@ export class LaptopTracker implements AttributionTracker {
       heard: () => {
         if (!state.muted) return
         state.muted = false
-        void this.queue(state, () => this.rescan(state))
+        this.rescanSoon(state)
       },
     })
     state.headWatch = state.repo?.watchHead?.(() => this.headMoved(state))
@@ -388,6 +443,8 @@ export class LaptopTracker implements AttributionTracker {
     clearTimeout(state.timer)
     clearTimeout(state.headTimer)
     clearTimeout(state.markTimer)
+    clearTimeout(state.rescanTimer)
+    state.rescanTimer = undefined
   }
 
   private heard(state: RootState, paths: readonly string[]): void {
@@ -399,8 +456,10 @@ export class LaptopTracker implements AttributionTracker {
       if (!path || path.startsWith("..")) continue
       if (isGitPath(path)) {
         if (GIT_HEAD.test(path)) head = true
+        else if (path === ".git/info/exclude") state.ignoreMoves++
         continue
       }
+      if (path === ".gitignore" || path.endsWith("/.gitignore")) state.ignoreMoves++
       if (!state.pending.has(path)) state.pending.set(path, "event")
     }
     if (head) this.headMoved(state)
@@ -429,11 +488,44 @@ export class LaptopTracker implements AttributionTracker {
       const from = state.root.seenAt
       state.gap = { id: this.store.openGap(state.root.id, from, reason), from, reason }
     }
-    if (reason !== "muted") void this.queue(state, () => this.rescan(state))
+    if (reason !== "muted") this.rescanSoon(state)
+  }
+
+  /**
+   * Rescan for lost events, one at a time: losses heard while one waits are
+   * its own, one heard while it runs gets one more after it. While losses
+   * keep coming (an overloaded fseventsd says so every few seconds) each
+   * next rescan waits twice as long after the last, up to a minute; a loss
+   * after a quiet while is rescanned at once. The gap stays open meanwhile,
+   * so what changed in it is attributed as found in it.
+   */
+  private rescanSoon(state: RootState): void {
+    if (this.closed || this.states.get(state.root.id) !== state) return
+    if (state.rescanning) {
+      state.rescanAgain = true
+      return
+    }
+    if (state.rescanTimer || state.rescanQueued) return
+    const now = this.now()
+    state.rescanEvery = now - state.rescannedAt > RESCAN_QUIET_MS ? 0 : Math.min(RESCAN_MAX_MS, Math.max(RESCAN_MIN_MS, state.rescanEvery * 2))
+    const wait = state.rescannedAt + state.rescanEvery - now
+    if (wait > 0) state.rescanTimer = setTimeout(() => this.rescanNow(state), wait)
+    else this.rescanNow(state)
+  }
+
+  private rescanNow(state: RootState): void {
+    clearTimeout(state.rescanTimer)
+    state.rescanTimer = undefined
+    state.rescanQueued = true
+    void this.queue(state, () => {
+      state.rescanQueued = false
+      return this.rescan(state)
+    })
   }
 
   private headMoved(state: RootState): void {
     if (!state.repo) return
+    state.ignoreMoves++
     state.gitSince ??= this.now()
     clearTimeout(state.timer)
     clearTimeout(state.headTimer)
@@ -488,18 +580,88 @@ export class LaptopTracker implements AttributionTracker {
     return next
   }
 
-  /** Every file under the root, compared against the stat cache: what lost events may have hidden. */
+  /** `checkHead`, its failure logged: the files are read regardless, against the base as it stood. */
+  private headChecked(state: RootState): Promise<Map<string, ContentRef | null> | undefined> {
+    return this.checkHead(state).catch((error: Error) => {
+      this.options.log?.("a change could not be journaled", { root: state.root.path, error: error.message })
+      return undefined
+    })
+  }
+
+  /**
+   * Every file under the root, compared against the stat cache: what lost
+   * events may have hidden. HEAD first, as on a restart: a commit made
+   * meanwhile leaves every file as its stat says, so only the check finds
+   * it. A caller that checked already holds what moved.
+   */
   private async rescan(state: RootState): Promise<void> {
     const started = this.now()
-    const paths = await this.ports.fs.walk(state.root.path, (path) => untrackable(path, false) && !state.tracked.has(path))
-    for (const path of paths) if (!state.pending.has(path)) state.pending.set(path, "rescan")
-    for (const path of state.stats.keys()) if (!state.pending.has(path)) state.pending.set(path, "rescan")
-    await this.flush(state)
-    if (state.gap) {
-      this.store.closeGap(state.gap.id, this.now())
-      state.gap = undefined
+    const checking = Boolean(state.repo) && !state.moved
+    state.rescanning = true
+    if (checking) state.moved = await this.headChecked(state)
+    try {
+      // What Git ignores is never walked: a folder of reference clones or build output holds far more files than the checkout.
+      const ignored = await this.gitIgnored(state, true)
+      const carry = state.root.carry ?? []
+      const skip = (path: string) => (untrackable(path, false) && !state.tracked.has(path)) || Boolean(ignored && ignoredByGit(ignored, path) && !carry.some((glob) => mayReach(glob, path)))
+      const paths = await this.ports.fs.walk(state.root.path, skip)
+      for (const path of paths) if (!state.pending.has(path)) state.pending.set(path, "rescan")
+      for (const path of state.stats.keys()) if (!state.pending.has(path)) state.pending.set(path, "rescan")
+      await this.flush(state)
+      if (state.gap) {
+        this.store.closeGap(state.gap.id, this.now())
+        state.gap = undefined
+      }
+      this.log("rescan", { root: state.root.path, files: paths.length, ms: this.now() - started })
+    } finally {
+      if (checking) state.moved = undefined
+      state.rescanning = false
+      state.rescannedAt = this.now()
+      if (state.rescanAgain) {
+        state.rescanAgain = false
+        this.rescanSoon(state)
+      }
     }
-    this.log("rescan", { root: state.root.path, files: paths.length, ms: this.now() - started })
+  }
+
+  /**
+   * What Git ignores in the root, listed again when a `.gitignore`, Git's
+   * exclude file, the index or HEAD moved since, or when `fresh` asks;
+   * undefined for a folder that isn't a repository, or when Git can't say,
+   * and then every path is read as before.
+   */
+  private async gitIgnored(state: RootState, fresh = false): Promise<GitIgnored | undefined> {
+    const { repo } = state
+    if (!repo?.ignoredEntries) return undefined
+    if (!fresh && state.ignored?.moves === state.ignoreMoves) return state.ignored
+    const moves = state.ignoreMoves
+    try {
+      const folders = new Set<string>()
+      const files = new Set<string>()
+      for (const entry of await repo.ignoredEntries()) {
+        if (entry.endsWith("/")) folders.add(entry.slice(0, -1))
+        else files.add(entry)
+      }
+      state.ignored = { folders, files, moves }
+    } catch (error) {
+      this.log("ignored files could not be listed", { root: state.root.path, error: error instanceof Error ? error.message : String(error) })
+      state.ignored = undefined
+    }
+    return state.ignored
+  }
+
+  /**
+   * Of what the watch heard, paths never read: inside what Git ignores, not
+   * a file the journal keeps, a Thread's own write named, or a folder holding
+   * one (its deletion is theirs), and out of every `carry` glob's reach.
+   */
+  private unreadIn(state: RootState, ignored: GitIgnored): (path: string) => boolean {
+    const carry = state.root.carry ?? []
+    const holding = new Set<string>()
+    for (const known of [...state.stats.keys(), ...state.adopted])
+      if (ignoredByGit(ignored, known)) for (let at = known.lastIndexOf("/"); at > 0; at = known.lastIndexOf("/", at - 1)) holding.add(known.slice(0, at))
+    return (path) =>
+      !state.stats.has(path) && !state.adopted.has(path) && !state.tracked.has(path) && !holding.has(path) && ignoredByGit(ignored, path) && !carry.some((glob) => mayReach(glob, path))
   }
 
   /** The root's content when tracking began: Git's view of a repository, every file's content for a folder. */
@@ -598,13 +760,15 @@ export class LaptopTracker implements AttributionTracker {
     // A folder that went or came stands for every file under it.
     const expanded = new Map<string, ObservedBy>()
     const stats = new Map<string, TrackerFileStat | null>()
+    const ignored = batch.some(([path]) => !state.stats.has(path)) ? await this.gitIgnored(state) : undefined
+    const unread = ignored ? this.unreadIn(state, ignored) : () => false
     await mapLimit(batch, PARALLEL, async ([path, how]) => {
-      // Never stat, let alone walk, what is never tracked.
-      if (untrackable(path, state.tracked.has(path))) return
+      // Never stat, let alone walk, what is never tracked, nor what Git ignores.
+      if (untrackable(path, state.tracked.has(path)) || unread(path)) return
       const stat = await this.ports.fs.stat(join(state.root.path, path))
       if (stat?.kind === "directory") {
-        for (const inner of await this.ports.fs.walk(join(state.root.path, path), (child) => untrackable(`${path}/${child}`, state.tracked.has(`${path}/${child}`))))
-          expanded.set(`${path}/${inner}`, how)
+        const skip = (child: string) => untrackable(`${path}/${child}`, state.tracked.has(`${path}/${child}`)) || unread(`${path}/${child}`)
+        for (const inner of await this.ports.fs.walk(join(state.root.path, path), skip)) expanded.set(`${path}/${inner}`, how)
       } else {
         expanded.set(path, how)
         stats.set(path, stat)
@@ -1423,12 +1587,14 @@ export class LaptopTracker implements AttributionTracker {
         if (state.headTimer || state.gitSince !== undefined) void this.queue(state, () => this.gitMoved(state))
         else if (state.pending.size) void this.queue(state, () => this.flush(state))
         state.headTimer = undefined
+        // A rescan waiting out its spacing runs now.
+        if (state.rescanTimer) this.rescanNow(state)
       }
       await Promise.all(states.map((state) => state.chain))
       await Promise.all(this.scriptReads)
       await this.footprints?.settled()
       await new Promise((resolve) => setImmediate(resolve))
-      if (states.every((state) => !state.pending.size)) return
+      if (states.every((state) => !state.pending.size && !state.rescanTimer)) return
     }
   }
 

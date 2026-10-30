@@ -6,11 +6,12 @@ import { planContinuation, resumeLedger } from "@mako/host/contracts/thread-cont
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import { fixtureUsageSummary } from "./usage-fixture"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
-import type { HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import type { HandOffCandidate, HandOffResult, HandOffSettings, MoveCarried, ThreadHandOff, ThreadMoveStep, ThreadReturnOptions, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { ConversationSettings } from "@mako/host/contracts/turn-continuation"
 import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
+import type { AccessChoices } from "@mako/host/contracts/access-choices"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
@@ -135,6 +136,8 @@ const mockConversationSettings: MockConversationSettings = { value: { continueAf
  * the cloud is asked, the project the worktree was made from gone from this Mac, until the folder it moved to is
  * chosen (the folder chooser answers `MOCK_MOVED_PROJECT`). `?return=unsettled-cloud` and `?return=unsettled-here`: the
  * first way back is left unsettled, waiting on the cloud's answer or on this Mac's own work; asked again, it comes.
+ * `?return=merged`: the person changed its worktree here meanwhile, so it comes back merged, one file in conflict and
+ * one outside the worktree the person changed meanwhile, whose cloud copy is kept for them to compare.
  */
 const mockReturnOutdated = { value: new URLSearchParams(globalThis.location?.search).get("return") ?? "" }
 /** Where the fixture's project moved to, as the person chooses it in the folder chooser. */
@@ -714,6 +717,7 @@ export function installMockBridge() {
   let archiveRevision = 0
   let workspaceMoves: WorkspaceMoves = { requests: [], alwaysAllowed: [] }
   let planBuilds: PlanBuilds = {}
+  let accessChoices: AccessChoices = {}
   let mockTelemetry = { usage: true, errors: true }
   window.mako = {
     boot: async () => boot,
@@ -878,6 +882,16 @@ export function installMockBridge() {
     chooseFileReference: async () => undefined,
     lostVersions: async () => [],
     restoreVersion: async () => { throw new Error("The mock bridge keeps no versions") },
+    accessChoices: async () => accessChoices,
+    chooseAccess: async (harness, mode) => {
+      accessChoices = { ...accessChoices, [harness]: { mode } }
+      emit({ type: "access-choices", choices: accessChoices })
+      return accessChoices
+    },
+    adoptAccessChoices: async (modes) => {
+      accessChoices = { ...Object.fromEntries(Object.entries(modes).map(([harness, mode]) => [harness, { mode }])), ...accessChoices }
+      return accessChoices
+    },
     planBuilds: async () => planBuilds,
     recordPlanBuild: async (planId, build) => {
       planBuilds = { ...planBuilds, [planId]: build }
@@ -2818,22 +2832,31 @@ export function installMockBridge() {
     cloudOfferProjects: async () => "none" as const,
     /**
      * A fixture's move: its steps a moment apart, as a real one takes them; `?move=busy` stays here, as a Thread
-     * with a turn running does.
+     * with a turn running does. `?move=main`: a Thread in the main checkout goes onto its own branch first, and takes
+     * files from outside its folder and two repositories along, a secret staying. `?follow=stopped`: once moved, the
+     * person changes its worktree here and following stops.
      */
     threadMove: async (conversationId: string, move: string, handOff?: ThreadHandOff) => {
       const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
       const step = (next: ThreadMoveStep) => emit({ type: "thread-move-step", conversationId, move, step: next })
-      if (!handOff && new URLSearchParams(globalThis.location?.search).get("move") === "busy") {
+      const scene = new URLSearchParams(globalThis.location?.search)
+      if (!handOff && scene.get("move") === "busy") {
         const reason = "Moves happen between turns: Codex is running a turn."
         step({ kind: "kept-here", reason })
         return { kind: "kept-here" as const, reason }
       }
-      const steps: ThreadMoveStep[] = handOff ? [{ kind: "packing" }, { kind: "pausing" }, { kind: "handing-over" }, { kind: "resuming" }] : [{ kind: "packing" }, { kind: "handing-over" }, { kind: "resuming" }]
+      const main = scene.get("move") === "main"
+      const steps: ThreadMoveStep[] = handOff ? [{ kind: "packing" }, { kind: "pausing" }, { kind: "handing-over" }, { kind: "resuming" }] : [...main ? [{ kind: "own-branch" } as const] : [], { kind: "packing" }, { kind: "handing-over" }, { kind: "resuming" }]
       for (const next of steps) {
         step(next)
         await pause(900)
       }
-      step({ kind: "moved", conversations: [conversationId], ...handOff && { continued: true } })
+      const carried: MoveCarried | undefined = main ? { repositories: 2, outside: 3, left: [{ path: "/Users/you/.aws/credentials", why: "secret" }] } : undefined
+      step({ kind: "moved", conversations: [conversationId], ...handOff && { continued: true }, ...carried && { carried } })
+      if (scene.get("follow") === "stopped") {
+        await pause(600)
+        emit({ type: "thread-follow-stopped", conversations: [conversationId], folders: [MOCK_RETURN_WORKTREE], at: Date.now() })
+      }
       return { kind: "moved" as const, cloudThread: "t-0123456789abcdef" }
     },
     /** What this Mac's harnesses mean against the fixture cloud's, by the `?harnesses=` scene. */
@@ -2896,6 +2919,13 @@ export function installMockBridge() {
         const outdated = { harness: "devin", wrote: { version: "3000.11.205", source: "record" as const }, installed: "3000.10.23", offer: { kind: "owner" as const, owner: "Devin" } }
         step({ kind: "stayed", reason, outdated })
         return { kind: "stayed" as const, reason, outdated }
+      }
+      if (mockReturnOutdated.value === "merged") {
+        // The person changed its worktree and a file outside it while it was away: merged, one conflict, one waiting.
+        mockReturnOutdated.value = ""
+        const landed = { merged: ["src/webhooks/retry.ts", "notes/todo.md"], conflicts: ["src/webhooks/retry.ts"], outside: { placed: ["/tmp/billing-replay.sh"], removed: [], waiting: ["/Users/you/.config/billing/state.json"], failed: [{ path: "/Users/you/bin/billing-sync", why: "permission denied" }], kept: "/Users/you/.mako/cloud/outside/thread-billing" } }
+        step({ kind: "back", conversations: [conversationId], landed })
+        return { kind: "back" as const, landed }
       }
       step({ kind: "back", conversations: [conversationId] })
       return { kind: "back" as const }
@@ -3069,6 +3099,8 @@ export function installMockBridge() {
     crashes: async () => [],
     crashesDir: async () => "/tmp/mako/crashes",
     hostLogPath: async () => "",
+    sessionReaderHistory: async () => ({ since: new Date().toISOString(), lost: 0, events: [], logPath: "" }),
+    syncReadings: async () => ({ at: Date.now(), follows: [], list: { gaps: [], changeMs: { samples: 0 } } }),
     providerResidency: async () => ({
       entries: [],
       active: 0,
@@ -3078,7 +3110,7 @@ export function installMockBridge() {
       disconnected: 0,
       warmLimit: 2,
       idleMs: 10 * 60_000,
-      memory: { loaded: 0, unloaded: 0, bytes: 0, pinnedBytes: 0, budget: 128 * 1024 * 1024 },
+      memory: { loaded: 0, unloaded: 0, bytes: 0, pinnedBytes: 0, budget: 128 * 1024 * 1024, loads: [], held: [] },
     }),
     clearCrashes: async () => {},
     reportCrash: async () => {},

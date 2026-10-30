@@ -5,7 +5,6 @@ import { Socket } from "node:net"
 import { dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import {
-  MAX_EVENT_BYTES,
   Payload,
   RuntimeRefusedError,
   RuntimeThreads,
@@ -20,14 +19,15 @@ import {
   type ServedRuntime,
 } from "@mako/protocol"
 import { z } from "zod"
+import { errorMessage } from "../base/error-message.js"
 import { followHostLog, hostLog, hostWarn, type HostLogLine } from "../base/host-log.js"
 import { cpuBetween, describeCpu, describeThreads, sampleCpu, type CpuSample } from "./process-cpu.js"
 import { HostProfiler } from "./host-profile.js"
 import type { CloudSignIn, CloudSignInInstall } from "../contracts/cloud-sign-ins.js"
 import { AgentMessageSchema, MACHINE_AGENT_PROTOCOL, type AgentMessage, type CarriedFile, type HostMessage, type MachineRuntimeState } from "../contracts/machine-agent.js"
-import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
-import { runtimeEventRouting } from "../contracts/runtime.js"
-import { type HostInvoke, serveHostThroughGateway } from "../transport/index.js"
+import type { RuntimeEvent, RuntimeEventChannel } from "../contracts/runtime-value.js"
+import { gatewayEventLine, type HostInvoke, PortRelay, serveHostThroughGateway } from "../transport/index.js"
+import { appPorts } from "./app-ports.js"
 import { CloudLink, type CloudLinkEnding, type CloudLinkState } from "./cloud-link.js"
 import { ACTIVITY_HEARTBEAT_MS } from "@mako/protocol"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
@@ -40,6 +40,8 @@ type SignIns = Extract<AgentMessage, { type: "sign-ins" }>
 export type MachineRuntimeOptions = {
   /** The agent's end: a socket carrying a JSON message per line each way. */
   agent: NodeJS.ReadWriteStream
+  /** The machine's signed files and nothing else (`readSignedFile`): what a phone's transcript draws its media from (`PortRelay`). */
+  signedFiles?: (request: Request) => Promise<Response>
   invoke: HostInvoke
   version: string
   build: string
@@ -51,8 +53,11 @@ export type MachineRuntimeOptions = {
   openWorkspace(path: string): Promise<void>
   /** The project's carried files the agent placed in the checkout, each with the variables it defines; never a value. */
   carriedFiles?(files: readonly CarriedFile[]): void
-  /** The agent couldn't make the Thread's folder: why, said by whatever needs the folder later. */
-  workspaceFailed?(problem: string): void
+  /**
+   * The agent couldn't make the Thread's folder: why, said by whatever needs the folder later (`problem`, with the step
+   * and the path; `reason`, the agent's words alone).
+   */
+  workspaceFailed?(problem: string, reason: string): void
   /** What a start does first in a folder, done ahead: a project base's, before its snapshot. */
   prepareFolder(path: string): Promise<void>
   /** What `harness`'s start runs first, run ahead as the machine boots; undefined for a harness without it. */
@@ -63,13 +68,21 @@ export type MachineRuntimeOptions = {
   work(): LifecycleWork[]
   /**
    * What tells the account's list of its Sessions, and relays a watched conversation's live updates
-   * (`SessionPublisher`, which composition makes): reported on its link at each tick, and told what's watched there.
+   * (`SessionPublisher`, which composition makes): reported on its link at each tick and whenever the publisher asks
+   * (`reportSessions`), and told what's watched there.
    */
   sessions?: SessionPublishing | undefined
   /** The live streams its Threads' clients watch, such as a preview's video, once the host's core has loaded. */
   media(): MediaHandler | undefined
   /** The gateway the machine works through, as its agent linked it: what keeps its records and recipes in step. Null once silenced. */
   linked?(link: MachineGatewayLink | null): Promise<void>
+  /**
+   * Restores the Thread's save of an earlier generation (`restoreSave`), before this generation's runtime connects;
+   * answers what it restored, or undefined when there was nothing to.
+   */
+  restore?(link: MachineGatewayLink, generation: number): Promise<{ from: number; ms: number } | undefined>
+  /** The machine tracker (`MachineSaves`): told whether anything works, and asked for a save a turn's end waits for. */
+  saves?: { working(busy: boolean): void; settle(why: string): Promise<void> }
   /** Every process's CPU time so far (`/proc`); undefined off Linux. Tests give their own. */
   sampleCpu?: () => Promise<CpuSample | undefined>
   /** Whether to profile the host's own JavaScript while a launch runs (`MAKO_LAUNCH_PROFILE=1`); off unless asked. */
@@ -80,11 +93,13 @@ export type MachineRuntimeOptions = {
 /** What the machine asks of the publisher of its Sessions (`SessionPublisher`). */
 export type SessionPublishing = {
   report(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> } | undefined): void
-  watch(link: RuntimeLink, conversations: readonly string[]): void
+  /** The link is up and served: watched conversations go out on it at once, not from the next report. */
+  linked(current: { link: RuntimeLink; served: Pick<ServedRuntime, "version" | "sessions" | "live"> }): void
+  watch(link: RuntimeLink, conversations: readonly string[], after?: Readonly<Record<string, number>>): void
 }
 
 /** A stream's frames come as often as its acks; they change nothing the agent hears about. */
-const MEDIA_FRAMES: ReadonlySet<GatewayFrame["type"]> = new Set(["media-watch", "media-ack", "media-unwatch"])
+const MEDIA_FRAMES: ReadonlySet<GatewayFrame["type"]> = new Set(["media-watch", "media-ack", "media-unwatch", "port-open"])
 
 /**
  * Host-wide readings about this machine's own harnesses and accounts. No client of a cloud Thread reads them (the
@@ -97,6 +112,8 @@ const MACHINE_ONLY_EVENTS: ReadonlySet<string> = new Set(["account-usage", "harn
 const CARRIED_REFRESH_MS = 20_000
 /** A clock that moved this much more than the timer that read it was asleep: the machine was paused, or copied. */
 const RESUMED_GAP_MS = 3_000
+/** Between tries of a restore that failed: the Thread's object replaces a machine that stays silent much longer. */
+const RESTORE_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
 const TICK_MS = 1_000
 const REPORT_MS = 200
 /** The longest a link waits on the workspace opening: past it, the machine answers from its home instead of not at all. */
@@ -112,8 +129,6 @@ function onTimeline(line: HostLogLine): boolean {
   if (line.scope === "provider-startup") return line.fields?.state !== "started"
   return TIMELINE_SCOPES.has(line.scope)
 }
-
-const LiveBatchIdentity = z.object({ batch: z.object({ id: z.string(), revision: z.number(), epoch: z.string().optional() }) })
 
 /**
  * The host on a cloud machine, served to its Thread's object as the machine's runtime (`m-<16 hex>.g<generation>`).
@@ -157,6 +172,11 @@ export class MachineRuntime {
   #heldLink: Link | undefined
   /** What this machine last told its Thread of its work, on which link and for which Threads, and when. */
   #activity: { served: ServedRuntime; claims: string; busy: boolean; at: number } | undefined
+  /** The save a turn's end waits for before idle is said, and whether it has landed since the work last ran. */
+  #idleSaving: Promise<void> | undefined
+  #idleSaved = false
+  /** The runtime restoring its Thread's save, which connects once that's done. */
+  #restoring: string | undefined
   /** The link the served runtime runs on: what's watched belongs to it. */
   #servedLink: RuntimeLink | undefined
   /** A watch that comes before the core has loaded ends; its viewer asks again when the agent next acts. */
@@ -215,19 +235,17 @@ export class MachineRuntime {
     if (event.type !== undefined && MACHINE_ONLY_EVENTS.has(event.type)) return
     const claims = threads.claims()
     if (!claims.length) return
-    let text = runtimeEventLine(channel, event).slice(0, -1)
-    if (text.length * 3 > MAX_EVENT_BYTES && Buffer.byteLength(text) > MAX_EVENT_BYTES) {
-      const notice = invalidated(event)
-      if (!notice) {
-        this.#state.events.dropped += 1
-        hostWarn("machine", "an event too large for the Thread wasn't sent", { type: runtimeEventRouting(event).type, bytes: Buffer.byteLength(text) })
-        return this.#changed()
-      }
-      this.#state.events.invalidated += 1
-      text = runtimeEventLine(channel, notice).slice(0, -1)
+    const line = gatewayEventLine(channel, event)
+    if (line.fit === "too-large") {
+      this.#state.events.dropped += 1
+      hostWarn("machine", "an event too large for the Thread wasn't sent", { type: line.type, bytes: line.bytes })
+      return this.#changed()
     }
-    const payload = Payload.encoded(text)
-    for (const { threadId } of claims) threads.emit(threadId, payload)
+    if (line.fit === "reread") this.#state.events.invalidated += 1
+    const payload = Payload.encoded(line.text)
+    // A sampled update's trace rides as the event's correlation ID, which the Thread logs and gives each reader.
+    for (const { threadId } of claims) threads.emit(threadId, payload, event.trace)
+    if (event.trace) hostLog("sync", "traced update sent", { trace: event.trace, conversation: event.conversation })
     this.#state.events.emitted += 1
     this.#changed()
   }
@@ -263,7 +281,7 @@ export class MachineRuntime {
       case "workspace-failed": {
         const problem = `the agent's ${message.step} failed${message.path ? ` for ${message.path}` : ""}: ${message.reason}`
         hostWarn("machine", "the Thread's folder wasn't made", { step: message.step, reason: message.reason })
-        return this.#options.workspaceFailed?.(problem)
+        return this.#options.workspaceFailed?.(problem, message.reason)
       }
       case "prepare":
         return void this.#prepare(message.path)
@@ -407,6 +425,13 @@ export class MachineRuntime {
 
   #linkTo(link: Link): void {
     const current = this.#link
+    // Restoring as this runtime: a renewed credential is kept for the link it connects with once it's done.
+    if (current && sameRuntime(current, link) && this.#restoring === link.runtimeId) {
+      if (current.credential === link.credential) return
+      this.#link = link
+      void this.#options.linked?.({ gatewayUrl: link.gatewayUrl, machine: link.machine, credential: link.credential }).catch((error: Error) => hostWarn("machine", "the gateway's link wasn't taken", { error: error.message }))
+      return
+    }
     if (current && sameRuntime(current, link) && this.#cloud) {
       if (current.credential === link.credential) return this.#cloud.wake()
       // The agent renewed the machine's credential: the connection goes on, and its next one, the records and the
@@ -428,11 +453,66 @@ export class MachineRuntime {
       delete this.#state.lastEnrolledAt
       delete this.#state.lastEnding
     }
+    const fresh = current?.runtimeId !== link.runtimeId
     this.#link = link
     delete this.#state.unlinked
     this.#state.runtimeId = link.runtimeId
     this.#state.machine = link.machine
     this.#state.generation = link.generation
+    if (fresh && this.#options.restore && link.generation > 1) {
+      // A new generation restores its Thread's save before it speaks: its records' link first, which the restore reads.
+      // A Thread's first machine (generation 1) has nothing before it to restore, so it asks nothing.
+      this.#setLink("connecting")
+      void this.#restoreThenConnect(link)
+      return
+    }
+    this.#connect(link)
+  }
+
+  /**
+   * The Thread's save of an earlier generation restored, then the link: tried again until it's done, never skipped,
+   * since a machine that spoke for the Thread without it would work on a checkout that isn't the Thread's. The
+   * Thread's object replaces a machine that never connects.
+   */
+  async #restoreThenConnect(link: Link): Promise<void> {
+    const gateway = { gatewayUrl: link.gatewayUrl, machine: link.machine, credential: link.credential }
+    const restore = this.#options.restore
+    if (!restore) return this.#connect(link)
+    this.#restoring = link.runtimeId
+    try {
+      await this.#restoreWith(restore, link, gateway)
+    } finally {
+      if (this.#restoring === link.runtimeId) this.#restoring = undefined
+    }
+    const current = this.#link
+    if (this.#stopped || !current || !sameRuntime(current, link)) return
+    this.#connect(current, true)
+  }
+
+  async #restoreWith(restore: NonNullable<MachineRuntimeOptions["restore"]>, link: Link, gateway: MachineGatewayLink): Promise<void> {
+    await this.#options.linked?.(gateway).catch((error: Error) => hostWarn("machine", "the gateway's link wasn't taken", { error: error.message }))
+    for (let attempt = 1; ; attempt++) {
+      const current = this.#link
+      if (this.#stopped || !current || !sameRuntime(current, link)) return
+      const failed = this.#state.restore?.failed
+      this.#state.restore = { state: "restoring", at: this.#iso(), attempts: attempt }
+      if (failed) this.#state.restore.failed = failed
+      this.#publish()
+      try {
+        const restored = await restore({ ...gateway, credential: current.credential }, link.generation)
+        this.#state.restore = restored ? { state: "restored", at: this.#iso(), attempts: attempt, from: restored.from, ms: restored.ms } : { state: "none", at: this.#iso(), attempts: attempt }
+        break
+      } catch (error) {
+        const failed = errorMessage({ error }).slice(0, 500)
+        this.#state.restore = { state: "restoring", at: this.#iso(), attempts: attempt, failed }
+        hostWarn("machine", "the Thread's save wasn't restored; trying again before this machine speaks", { runtimeId: link.runtimeId, attempt, error: failed })
+        await new Promise((resolve) => setTimeout(resolve, RESTORE_BACKOFF_MS[Math.min(attempt - 1, RESTORE_BACKOFF_MS.length - 1)]).unref())
+      }
+    }
+  }
+
+  /** Connects as `link`'s runtime. `told`: the records' link was given already, by a restore. */
+  #connect(link: Link, told = false): void {
     hostLog("machine", "linking", { runtimeId: link.runtimeId, gateway: new URL(link.gatewayUrl).host })
     const url = new URL(`/v1/runtimes/${encodeURIComponent(link.runtimeId)}/connect`, link.gatewayUrl)
     const threads = this.#threads!
@@ -455,7 +535,7 @@ export class MachineRuntime {
     this.#setLink("connecting")
     cloud.start()
     // Its records and its project's recipe are kept where its Thread's are, under the same credential.
-    void this.#options.linked?.({ gatewayUrl: link.gatewayUrl, machine: link.machine, credential: link.credential }).catch((error: Error) => hostWarn("machine", "the gateway's link wasn't taken", { error: error.message }))
+    if (!told) void this.#options.linked?.({ gatewayUrl: link.gatewayUrl, machine: link.machine, credential: link.credential }).catch((error: Error) => hostWarn("machine", "the gateway's link wasn't taken", { error: error.message }))
   }
 
   #attach(link: Link, threads: RuntimeThreads, socket: WebSocket, end: (ending: CloudLinkEnding) => void) {
@@ -468,11 +548,14 @@ export class MachineRuntime {
         queueMicrotask(() => this.#publish())
       } else if (frame.type !== "operation" && !MEDIA_FRAMES.has(frame.type)) this.#changed()
     }
-    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, onFrame, watch: (conversations) => this.#options.sessions?.watch(runtimeLink, conversations) }).then(
+    // A phone reaches this machine's Threads' apps and signed files through the same link, as it does a Mac's.
+    const ports = new PortRelay({ allowed: () => appPorts(this.#options.invoke), signedFiles: this.#options.signedFiles })
+    serveHostThroughGateway(runtimeLink, { runtimeId: link.runtimeId, build: this.#options.build, threads, invoke: this.#options.invoke, media: this.#media, ports, onFrame, watch: (conversations, after) => this.#options.sessions?.watch(runtimeLink, conversations, after) }).then(
       (served) => {
         if (closed) return served.close()
         this.#served = served
         this.#servedLink = runtimeLink
+        this.#options.sessions?.linked({ link: runtimeLink, served })
         this.#state.enrolls += 1
         this.#state.lastEnrolledAt = this.#iso()
         hostLog("machine", "enrolled", { runtimeId: link.runtimeId, claims: threads.claims().length, enrolls: this.#state.enrolls })
@@ -524,7 +607,19 @@ export class MachineRuntime {
     if (!claims) return
     const working = this.#options.work().filter((item) => item.status !== "waiting")
     const busy = working.length > 0
+    const saves = this.#options.saves
+    saves?.working(busy)
     const last = this.#activity
+    if (busy) this.#idleSaved = false
+    else if (last?.busy && saves && !this.#idleSaved) {
+      // Idle is said once the turn's save has landed: a Thread whose machine says it's idle has a save as new as its
+      // last change, which a planned move to another machine counts on.
+      if (!this.#idleSaving) this.#idleSaving = saves.settle("a turn ended").catch(() => undefined).finally(() => {
+        this.#idleSaving = undefined
+        this.#idleSaved = true
+      })
+      return
+    }
     const due = !last || last.served !== served || last.claims !== claims || last.busy !== busy || (busy && now - last.at >= ACTIVITY_HEARTBEAT_MS)
     if (!due) return
     const work = working.map((item) => `${item.provider || "Mako"} ${item.status}: ${item.title}`)
@@ -533,11 +628,19 @@ export class MachineRuntime {
     this.#activity = { served, claims, busy, at: now }
   }
 
+  /**
+   * Reports the Sessions this machine owns on the link it serves now, as each tick does: what its publisher calls when
+   * a change a list shows can't wait for the tick (`SessionPublisher.showsChanged`).
+   */
+  reportSessions(): void {
+    const served = this.#served
+    this.#options.sessions?.report(served && this.#servedLink ? { link: this.#servedLink, served } : undefined)
+  }
+
   #watchClock(): void {
     const now = this.#now()
     this.#reportActivity(now)
-    const served = this.#served
-    this.#options.sessions?.report(served && this.#servedLink ? { link: this.#servedLink, served } : undefined)
+    this.reportSessions()
     const gapMs = now - this.#lastTick - TICK_MS
     this.#lastTick = now
     if (gapMs < RESUMED_GAP_MS) return
@@ -637,13 +740,6 @@ function endingOf(problem: Problem | undefined): CloudLinkEnding {
 
 function describe(reason: Problem): string {
   return reason.detail ? `${problemType(reason)}: ${reason.detail}` : `${problemType(reason)}: ${reason.title}`
-}
-
-function invalidated(event: RuntimeEvent): RuntimeEvent | null {
-  if (runtimeEventRouting(event).type !== "live-batch") return null
-  const live = LiveBatchIdentity.safeParse(JSON.parse(event.payload))
-  if (!live.success) return null
-  return encodeRuntimeEvent({ type: "live-batch", batch: { ...live.data.batch, updates: [], historyChanged: true } })
 }
 
 /** The numbers reserved for each Thread's events, in one small file written as each block is reserved. */

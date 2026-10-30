@@ -22,7 +22,7 @@ export const CURSOR_VERSIONS: HarnessVersions = {
   bundled: { package: "@cursor/sdk", version: "1.2.0", released: "2026-10-27T23:43:55.066Z", imports: "cursor-agent" },
   feed: { npm: "@cursor/sdk" },
   checked: {
-    on: "2026-10-28",
-    how: "@cursor/sdk 1.0.40 in Mako's lockfile, which the vocabulary, native-tools/cursor-1.0.40.json, the decoder fixtures and cursor-concepts.json name",
+    on: "2026-10-30",
+    how: "@cursor/sdk 1.2.0 in Mako's lockfile, which the vocabulary, native-tools/cursor-1.2.0.json, the decoder fixtures and cursor-concepts.json name",
   },
 }

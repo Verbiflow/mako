@@ -153,7 +153,7 @@ try {
       if (calls.length === 1) await landed
       return stage(link, asked)
     } }
-    assert.deepEqual(await readyForMove(deps, { folder: s.machine }), { folder: s.machine }, "ready at once, not after the pull")
+    assert.deepEqual(await readyForMove(deps, { folder: s.machine }), { folder: s.machine, carry: true }, "ready at once, not after the pull")
     const checkpoint = await s.capture("one, sent ahead\n")
     const staging = stageMove(deps, { move: randomUUID(), folder: s.machine, checkpoint, sessions })
     await new Promise((resolve) => setTimeout(resolve, 50))

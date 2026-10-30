@@ -1,5 +1,5 @@
 import { toast } from "sonner"
-import type { ReturnProjectMissing, ThreadMoveOutcome, ThreadMoveStep, ThreadReturnOptions, ThreadReturnOutcome, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
+import type { MoveCarried, ReturnLanded, ReturnProjectMissing, ThreadMoveOutcome, ThreadMoveStep, ThreadReturnOptions, ThreadReturnOutcome, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
 import type { ThreadHarnessCheck } from "@mako/host/contracts/cloud-harnesses"
 import { providers } from "@/state/providers"
@@ -15,8 +15,11 @@ import { createHook, createStore } from "@/state/store"
  * read again from its machine, its folder there.
  */
 interface CloudMovesState {
-  /** `handOff`: a move that pauses the Thread's running turn and continues it in the cloud (asked so, or seen pausing). */
-  moving: Record<string, { move: string; step: ThreadMoveStep; handOff?: boolean }>
+  /**
+   * `handOff`: a move that pauses the Thread's running turn and continues it in the cloud (asked so, or seen pausing).
+   * `ownBranch`: a Thread in the main checkout that went onto its own branch first, so its steps begin with that one.
+   */
+  moving: Record<string, { move: string; step: ThreadMoveStep; handOff?: boolean; ownBranch?: boolean }>
   /** A Thread coming back from the cloud, by the conversation it was asked from (`thread-return-step`). */
   returning: Record<string, { move: string; step: ThreadReturnStep }>
   /**
@@ -37,6 +40,11 @@ interface CloudMovesState {
   harnesses: Record<string, ThreadHarnessCheck>
   /** Harnesses Mako updates before a move or a way back, by the conversation it was asked from (`updateThen`). */
   updating: Record<string, HarnessUpdating>
+  /**
+   * A Thread in the cloud whose worktree here stopped following it, because the person changed it here
+   * (`thread-follow-stopped`), by each of its conversations: said above the composer, with the way to bring it back.
+   */
+  followStopped: Record<string, { folders: string[]; at: number }>
 }
 
 /**
@@ -45,7 +53,7 @@ interface CloudMovesState {
  */
 export type HarnessUpdating = { after: "move" | "back"; handOff?: boolean; harnesses: string[]; at: number; failed?: { harness: string; reason: string } }
 
-export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, returning: {}, outdated: {}, missing: {}, harnesses: {}, updating: {} })
+export const cloudMovesStore = createStore<CloudMovesState>({ moving: {}, returning: {}, outdated: {}, missing: {}, harnesses: {}, updating: {}, followStopped: {} })
 export const useCloudMoves = createHook(cloudMovesStore)
 
 /** Where a moved conversation's folder is, as the cloud router names a cloud Thread's (`CLOUD_FOLDER_WHERE`). */
@@ -72,11 +80,18 @@ export async function moveToCloud(conversationId: string, handOff = false): Prom
 
 /** A step of a move, from the host. The last word (moved, kept here) is said once, then the strip goes. */
 export function threadMoveStepped(conversationId: string, move: string, step: ThreadMoveStep): void {
+  if (step.kind === "own-branch" && step.to) {
+    // Its harness forked onto its own branch: the move's steps are the fork's from here, as the window follows it there.
+    const to = step.to
+    cloudMovesStore.set((state) => ({ ...state, moving: { ...without(state.moving, conversationId), [to]: { move, step, ownBranch: true } } }))
+    return
+  }
   if (step.kind === "moved" || step.kind === "kept-here") {
     cloudMovesStore.set((state) => ({ ...state, moving: Object.fromEntries(Object.entries(state.moving).filter(([id]) => id !== conversationId)) }))
     if (step.kind === "moved") {
-      if (step.continued) toast.success("Handed off to the cloud", { id: `move:${move}`, description: "Its turn goes on in a cloud machine, at the same folder, where it left off." })
-      else toast.success("Moved to the cloud", { id: `move:${move}`, description: "It goes on in a cloud machine, at the same folder. Its changes show here as it works." })
+      const carried = carriedSentence(step.carried)
+      if (step.continued) toast.success("Handed off to the cloud", { id: `move:${move}`, description: ["Its turn goes on in a cloud machine, at the same folder, where it left off.", carried].filter(Boolean).join(" ") })
+      else toast.success("Moved to the cloud", { id: `move:${move}`, description: ["It goes on in a cloud machine, at the same folder. Its worktree here follows each turn there.", carried].filter(Boolean).join(" ") })
       for (const id of step.conversations) {
         updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: CLOUD_WHERE } : conversation))
         void hydrateLive(id, true)
@@ -86,8 +101,69 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
   }
   cloudMovesStore.set((state) => {
     const handOff = step.kind === "pausing" || state.moving[conversationId]?.handOff
-    return { ...state, moving: { ...state.moving, [conversationId]: { move, step, ...handOff && { handOff: true } } } }
+    const ownBranch = step.kind === "own-branch" || state.moving[conversationId]?.ownBranch
+    return { ...state, moving: { ...state.moving, [conversationId]: { move, step, ...handOff && { handOff: true }, ...ownBranch && { ownBranch: true } } } }
   })
+}
+
+/** Why a path stayed behind, in a few words. */
+const LEFT_WHY = {
+  secret: "a secret",
+  "too-large": "too large to carry yet",
+  elsewhere: "where a cloud machine can't hold it",
+  unreadable: "unreadable",
+  folder: "inside its own folder",
+  "older-cloud": "the cloud's machines don't carry it yet",
+} satisfies Record<MoveCarried["left"][number]["why"], string>
+
+/** What a move took besides its worktree, and what stayed, as a sentence or two; nothing when it was only its worktree. */
+export function carriedSentence(carried: MoveCarried | undefined): string | undefined {
+  if (!carried) return undefined
+  const files = (count: number) => `${count} ${count === 1 ? "file" : "files"}`
+  const went = [
+    carried.repositories > 1 ? (carried.repositories === 2 ? "both its repositories" : `all ${carried.repositories} of its repositories`) : undefined,
+    carried.outside ? `${files(carried.outside)} from outside its folder` : undefined,
+  ].filter(Boolean)
+  const parts = went.length ? [`It took ${went.join(" and ")}.`] : []
+  const first = carried.left[0]
+  if (first) {
+    const name = first.path.split("/").at(-1) ?? first.path
+    parts.push(carried.left.length === 1 ? `One file stayed here: ${name}, ${LEFT_WHY[first.why]}.` : `${files(carried.left.length)} stayed here, such as ${name}, ${LEFT_WHY[first.why]}.`)
+  }
+  return parts.length ? parts.join(" ") : undefined
+}
+
+/** How a way back landed where it wasn't simply laid down, as a sentence or two; nothing when it was. */
+export function landedSentence(landed: ReturnLanded | undefined): string | undefined {
+  if (!landed) return undefined
+  const files = (count: number) => `${count} ${count === 1 ? "file" : "files"}`
+  const name = (path: string) => path.split("/").at(-1) ?? path
+  const parts: string[] = []
+  const conflicts = new Set(landed.conflicts)
+  const clean = landed.merged.filter((path) => !conflicts.has(path))
+  if (clean.length) parts.push(`Your edits to ${clean.length === 1 ? name(clean[0] ?? "") : files(clean.length)} stayed.`)
+  if (conflicts.size) parts.push(conflicts.size === 1 ? `${name(landed.conflicts[0] ?? "")} has conflict markers: you both changed it. The agent knows.` : `${files(conflicts.size)} have conflict markers: you both changed them. The agent knows.`)
+  if (landed.mine) parts.push(`Your commits are on ${landed.mine}.`)
+  // The cloud's copies are kept apart, which the toast's action opens.
+  if (landed.outside.waiting.length) parts.push(`You changed ${landed.outside.waiting.length === 1 ? name(landed.outside.waiting[0] ?? "") : `${files(landed.outside.waiting.length)} outside its worktree`} meanwhile, so yours stayed.`)
+  else if (landed.outside.placed.length) parts.push(`${files(landed.outside.placed.length)} outside its worktree came back to ${landed.outside.placed.length === 1 ? "its place" : "their places"}.`)
+  // Only what this Mac sent comes back to its place: what the agent wrote elsewhere waits apart, beside the person's.
+  const unsent = landed.outside.unsent ?? []
+  if (unsent.length) parts.push(`${unsent.length === 1 ? name(unsent[0] ?? "") : files(unsent.length)}, written outside its worktree in the cloud, ${unsent.length === 1 ? "is" : "are"} kept apart: this Mac never sent ${unsent.length === 1 ? "it" : "them"}.`)
+  const failed = landed.outside.failed ?? []
+  const [first] = failed
+  if (first) parts.push(failed.length === 1 ? `${name(first.path)} couldn't be written back: ${first.why}.` : `${files(failed.length)} outside its worktree couldn't be written back, such as ${name(first.path)}: ${first.why}.`)
+  return parts.length ? parts.join(" ") : undefined
+}
+
+/** The person keeps the Thread in the cloud with their changes here: its notice goes; its Cloud chip still brings it back. */
+export function dismissFollowStopped(conversationId: string): void {
+  cloudMovesStore.set((state) => ({ ...state, followStopped: without(state.followStopped, conversationId) }))
+}
+
+/** A Thread in the cloud whose worktree here stopped following it: the person changed it here. */
+export function followStopped(event: { conversations: string[]; folders: string[]; at: number }): void {
+  cloudMovesStore.set((state) => ({ ...state, followStopped: { ...state.followStopped, ...Object.fromEntries(event.conversations.map((id) => [id, { folders: event.folders, at: event.at }])) } }))
 }
 
 /**
@@ -143,7 +219,17 @@ export function threadReturnStepped(conversationId: string, move: string, step: 
   if (step.kind === "back" || step.kind === "stayed") {
     cloudMovesStore.set((state) => ({ ...state, returning: Object.fromEntries(Object.entries(state.returning).filter(([id]) => id !== conversationId)) }))
     if (step.kind === "back") {
-      toast.success("Back on this Mac", { id: `return:${move}`, description: "It goes on here, with what it did in the cloud in its worktree. The cloud machine is gone." })
+      const landed = landedSentence(step.landed)
+      const conflicted = Boolean(step.landed?.conflicts.length || step.landed?.outside.failed?.length)
+      // Conflicts to resolve, or files that didn't come back, read as a caution, and anything merged stays long enough to read.
+      const say = conflicted ? toast.warning : toast.success
+      // The cloud's copies kept apart (files outside its worktree the person changed meanwhile, or this Mac never sent):
+      // one opens, several show.
+      const waiting = [...step.landed?.outside.waiting ?? [], ...step.landed?.outside.unsent ?? []]
+      const kept = step.landed?.outside.kept
+      const compare = kept && waiting.length ? { label: waiting.length === 1 ? "Open the cloud's copy" : "Show the cloud's copies", onClick: () => void getMako().revealPath(waiting.length === 1 ? `${kept}${waiting[0]}` : kept).catch(() => undefined) } : undefined
+      say("Back on this Mac", { id: `return:${move}`, description: landed ?? "It goes on here, with what it did in the cloud in its worktree. The cloud machine is gone.", ...landed && { duration: 12_000 }, ...compare && { action: compare } })
+      cloudMovesStore.set((state) => ({ ...state, followStopped: Object.fromEntries(Object.entries(state.followStopped).filter(([id]) => !step.conversations.includes(id))) }))
       for (const id of step.conversations) {
         updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: undefined } : conversation))
         void hydrateLive(id, true)

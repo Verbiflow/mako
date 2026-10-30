@@ -1,5 +1,6 @@
 import { noteCarried } from "@mako/sessions/record-carried"
 import type { Foreground } from "../base/foreground.js"
+import type { HostWork } from "../base/event-loop.js"
 import { makoRecords } from "@mako/sessions/record-streams"
 import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
@@ -40,7 +41,7 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { LivePermissionResponse, PromptAttachment } from "../contracts/providers-acp.js"
 import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandOffCandidate, HandOffResult, HandOffSettings, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOptions, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
 import { arriveMove, MoveArrivalInputSchema, MoveReadyInputSchema, MoveStageInputSchema, readyForMove, stageMove, type MoveArrivalDeps, type MoveArrivalWire, type MoveReadyInput, type MoveStageInput } from "./move-arrival.js"
-import { departMove, MoveDepartureInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveStayInput } from "./move-departure.js"
+import { departMove, followMove, MoveDepartureInputSchema, MoveFollowInputSchema, MoveStayInputSchema, stayMove, type MoveDepartureDeps, type MoveDepartureInput, type MoveFollowInput, type MoveStayInput } from "./move-departure.js"
 import type { LiveStartOptions } from "../contracts/live-conversations.js"
 import type { FileReadPurpose } from "../contracts/git-workspace-search.js"
 import type { NativeRequestInput } from "../contracts/native-requests.js"
@@ -51,15 +52,20 @@ import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudHandOffs, workingThreads } from "./cloud-handoffs.js"
-export { ownedSessions, SessionPublisher, SessionReporter, type ReportSources, type SessionLink } from "./session-report.js"
+export { conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ReportSources, type SessionLink } from "./session-report.js"
+export { CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, turnOnOf, type TurnOnReading, type TurnOnSources } from "./cloud-turn-on.js"
 export { SessionUploads, declareSyncMethods, readBackfill, syncStatusOf, uploadScope, type UploadSources } from "./session-uploads.js"
 export { SYNC_WINDOW_MS, syncTier, windowStart } from "./sync-window.js"
 export { CloudReadiness, READY_EVERY_MS } from "./cloud-readiness.js"
 export { SleepHandOff, sleepWatchHelper } from "./sleep-handoff.js"
 export { CloudReturns } from "./cloud-returns.js"
+export { CloudFollow } from "./cloud-follow.js"
+export { CloudWorktrees } from "./cloud-worktrees.js"
 export { CloudArchives } from "./cloud-archives.js"
 export { HarnessCheck } from "./harness-check.js"
 export { installedReading } from "./kept-resume.js"
+export { openMachineTracker, type MachineTracker } from "./machine-tracker.js"
+export type { MoveArrivalDeps } from "./move-arrival.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 
@@ -96,6 +102,8 @@ export interface ConversationsDeps {
   harnesses: Harnesses
   workspaces: Workspaces
   telemetry: HostTelemetry
+  /** A new conversation was written and placed, before its harness starts (`Dependencies.opened`). */
+  opened?(conversationId: string): void
   emit(event: HostEvent): void
   /** What each agent can call: Mako's tools and Local Control. */
   tools: NonNullable<LiveDependencies["tools"]>
@@ -115,6 +123,8 @@ export interface ConversationsDeps {
   admission: Admission
   /** Held while a harness starts, so routine work waits for it. */
   foreground: Foreground
+  /** What the host is doing, named (`base/event-loop.ts`): who reads a conversation in is counted to it. */
+  work: HostWork
   /** Mako's streams of the live transports (`native-stream.ts`), which an entry's original reads; none on a host that keeps none. */
   streams?: string
   /** A cloud machine's host: nobody is at it to sign a harness in. */
@@ -143,7 +153,9 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   const live = new LiveConversations({
     unattended: deps.unattended,
     foreground: deps.foreground,
+    work: deps.work,
     turns: deps.telemetry.turns,
+    opened: deps.opened,
     memory: memory ?? undefined,
     threads: threads.store ?? undefined,
     mcpSnapshot: deps.mcpSnapshot,
@@ -180,6 +192,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     driver: (provider) => host.liveDrivers.get(provider),
     accountRemoving: harnesses.accountRemoval.removing,
     history: catalog.page,
+    historyPaged: (id) => history.paged(id),
+    historyReleased: (id) => history.released(id),
     staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
     holdHistory: catalog.hold,
     historyAsOf: (path, asOf, before) => catalog.page(path, before, undefined, { asOf }),
@@ -301,6 +315,11 @@ export interface ConversationMethodsDeps {
   /** The folder of the tab in front, where a fresh native run starts. */
   workspace(): Promise<string>
   emit(event: HostEvent): void
+  /**
+   * The mode the person chose for `harness` (`AccessChoiceStore.mode`), which a new session starts in when its start
+   * names none, whoever asked for it: a window, the web app or a phone through this Mac's link.
+   */
+  accessMode?(harness: string): string | undefined
   /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`). */
   arrival?: MoveArrivalDeps
   /** On a cloud machine: what a Thread going back to its device needs (`mako:move-depart`). */
@@ -387,11 +406,13 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     // A conversation already open (a move's, opened as it arrived) answers as it stands: its start reads nothing again.
     const tuning = live.snapshot(options.conversationId) ? options.tuning : await profiles.resolveLaunch(harness, startCwd, options.tuning ?? remembered?.settings)
     trace("profile")
+    // A resume goes on in the mode its session ran in; a new session starts in the person's, unless its start said one.
+    const modeId = options.modeId ?? (options.resume ? undefined : deps.accessMode?.(harness))
     try {
       await live.start(
         harness,
         startCwd,
-        { ...options, worktree: undefined, purpose: undefined, tuning },
+        { ...options, worktree: undefined, purpose: undefined, tuning, ...modeId !== undefined && { modeId } },
         undefined,
         options.purpose ? { kind: options.purpose, project: cwd } : undefined
       )
@@ -567,6 +588,12 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const departure = deps.departure
     if (!departure) throw new Error("Only a cloud machine's host sends a Thread back.")
     return departMove(departure, MoveDepartureInputSchema.parse(input))
+  })
+  /** A Thread's checkout on its cloud machine as it stands, for its device's worktree to follow: read, never released. */
+  methods.handle("mako:move-follow", (input: MoveFollowInput) => {
+    const departure = deps.departure
+    if (!departure) throw new Error("Only a cloud machine's host sends a Thread's checkout to follow.")
+    return followMove(departure, MoveFollowInputSchema.parse(input))
   })
   /** A Thread staying on its cloud machine after its departure: the device cancelled the return or gave it back. */
   methods.handle("mako:move-stay", (input: MoveStayInput) => {

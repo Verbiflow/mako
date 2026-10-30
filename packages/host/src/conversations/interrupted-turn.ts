@@ -178,6 +178,8 @@ function cause(reason: Interruption["reason"]): string {
       return "Mako couldn't save the conversation, so it stopped you"
     case "goal-budget":
       return "the goal reached its token budget, so Mako stopped you"
+    case "machine-lost":
+      return "the cloud machine you were working on was lost, and Mako moved this conversation to a new one"
   }
 }
 

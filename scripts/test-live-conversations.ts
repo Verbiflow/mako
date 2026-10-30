@@ -26,6 +26,11 @@ import { projectLive } from "../src/state/live-projection.js"
 import { compactionAvailable } from "@mako/host/contracts/recovery"
 import { continueTurnPrompt, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { namedWork } from "@mako/host/base/event-loop"
+import { BULK_LOADS } from "@mako/host/conversations/live-records"
+import { ownedSessions } from "@mako/host/conversations/session-report"
+import { ThreadArchives } from "@mako/host/threads/archives"
+import { ThreadLifecycle } from "@mako/host/threads/lifecycle"
 import { OlderRequestSchema } from "./fixtures/older-request-schema.ts"
 
 const gitRunner = new Git()
@@ -134,6 +139,66 @@ function fixture(options: { autoContinueDelayMs?: number } = {}) {
       owner.stop()
       rmSync(root, { recursive: true, force: true })
     },
+  }
+}
+
+/**
+ * What the account's list reads of a conversation is said as it changes. A new one is said once it's written, before
+ * its harness starts and its first batch comes (`opened`). A turn's end is said by a batch: the "after" checkpoint it
+ * waits for is over by the last batch it sends, so whatever reads the conversation's work as that batch comes
+ * (`SessionPublisher.own`) reads it at rest, not still finishing with nothing after to say it stopped.
+ */
+async function turnEndBatchSaysItsWorkEnded() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-turn-end-"))
+  const id = randomUUID()
+  const emitters: Array<(event: LiveDriverEvent) => void> = []
+  const session = (bindingId: string, status: LiveSessionState["status"] = "ready"): LiveSessionState => ({
+    id: bindingId, nativeId: "native-turn-end", nativePath: join(root, "native"), harness: "test-provider", cwd: root,
+    status, connection: "connected", modes: [], currentMode: null, configOptions: [],
+  })
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => {
+      if (options.emit) emitters.push(options.emit)
+      return session(options.conversationId)
+    },
+    prompt: async (bindingId, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
+      emitters.at(-1)?.({ type: "live-session", session: session(bindingId, "running") })
+      emitters.at(-1)?.({ type: "live-session", session: session(bindingId) })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: async () => {},
+    setMode: async () => {},
+  }
+  // What the conversation was working on as each of its batches came, and how many had come when it was said opened.
+  const workAtBatch: Array<string | undefined> = []
+  const openedAfter: Array<[string, number]> = []
+  const owner: LiveConversations = new LiveConversations({
+    appPath: root, root: join(root, "journals"), driver: () => driver, history: async () => null,
+    emit: (event) => {
+      if (event.type === "live-batch" && event.batch.id === id) workAtBatch.push(owner.workOf(id)?.status)
+    },
+    opened: (conversation) => void openedAfter.push([conversation, workAtBatch.length]),
+    providerIdleMs: 60_000,
+    workspaceSnapshots: new WorkspaceSnapshots(gitRunner, join(root, "workspace-snapshots")),
+  })
+  try {
+    await owner.start("test-provider", root, { conversationId: id })
+    assert.deepEqual(openedAfter, [[id, 0]], "a new conversation is said once it's written, before its first batch")
+    owner.submit(id, randomUUID(), "a turn")
+    await waitFor(() => owner.snapshot(id)?.requests[0]?.snapshots?.after !== undefined, "the turn's after checkpoint")
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    assert.equal(owner.workOf(id), undefined, "nothing works once the turn is over")
+    assert.equal(workAtBatch.at(-1), undefined, "and its last batch said so, not that it was still finishing")
+    console.log("PASS: a new conversation is said before its harness starts, and a turn's last batch, after its checkpoint, says its work is over")
+  } finally {
+    owner.stop()
+    rmSync(root, { recursive: true, force: true })
   }
 }
 
@@ -676,6 +741,109 @@ async function boundsWarmProviders() {
     )
   } finally {
     owner.stop()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+/**
+ * The Sessions report and the Thread lifecycle read the listing, never a journal: with every conversation out of
+ * memory, a report and an archive check load none. And a reader that does load in bulk is named in the log and in
+ * the memory readout, by the work it ran as.
+ */
+async function bulkLoadsAreNamed() {
+  const root = mkdtempSync(join(tmpdir(), "mako-live-bulk-"))
+  const work = namedWork()
+  const ids = Array.from({ length: BULK_LOADS + 1 }, () => randomUUID())
+  let owner: LiveConversations
+  const driver: ProviderLiveDriver = {
+    ...fixtureCapabilities,
+    resume: fixtureResume(),
+    provider: "test-provider",
+    available: () => true,
+    start: async (_cwd, options) => ({
+      id: options.conversationId,
+      nativeId: options.conversationId,
+      nativePath: join(root, options.conversationId),
+      harness: "test-provider",
+      cwd: root,
+      status: "ready",
+      connection: "connected",
+      modes: [],
+      currentMode: null,
+      configOptions: [],
+    }),
+    prompt: async (prompted, _text, _attachments, _settings, dispatch) => {
+      dispatch.report({ kind: "submitted", source: "transport-call" })
+      const current = owner.snapshot(prompted)?.session
+      assert.ok(current)
+      owner.observe({ type: "live-update", id: prompted, update: { kind: "text", text: "kept" } })
+      owner.observe({ type: "live-session", session: { ...current, status: "running" } })
+      owner.observe({ type: "live-session", session: { ...current, status: "ready" } })
+    },
+    permission: async () => {},
+    cancel: async () => {},
+    close: () => {},
+    setMode: async () => {},
+  }
+  owner = new LiveConversations({
+    appPath: root,
+    root: join(root, "journals"),
+    driver: () => driver,
+    history: async () => null,
+    emit: () => {},
+    work,
+    providerIdleMs: 50,
+    providerWarmLimit: 1,
+    conversationMemory: { bytes: 0, recent: 0, sweepMs: 0 },
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+  })
+  const warned: HostLogLine[] = []
+  const stopHearing = followHostLog((line) => { if (line.scope === "residency" && line.level === "warn") warned.push(line) })
+  try {
+    for (const id of ids) {
+      await owner.start("test-provider", root, { conversationId: id })
+      owner.submit(id, randomUUID(), "seed")
+    }
+    await waitFor(() => owner.residency().memory.unloaded === ids.length, "the idle conversations were not all unloaded")
+
+    // The report, over every conversation of the host, loads none: it's a function of the listing.
+    const archives = new ThreadArchives(join(root, "archives.sqlite"))
+    const lifecycle = new ThreadLifecycle({ live: owner, archives, native: { list: () => [], editQueued: () => [] }, threads: () => [], nativeToken: () => null, abortNative: () => {}, external: () => false })
+    const sources = {
+      summaries: () => owner.summaries(),
+      native: () => [],
+      activity: () => undefined,
+      work: () => [],
+      waitingOn: (id: string) => owner.waitingOn(id),
+      hidden: () => new Set(archives.snapshot().keys),
+      lastMoved: (id: string, revision: number) => owner.lastMoved(id, revision),
+      // SAFETY: test IDs in the Thread store's shapes, which brand plain UUIDs.
+      placement: (id: string) => ({ thread: id, session: id }) as never,
+      executions: () => new Map(),
+      titles: () => new Map(),
+      now: Date.now,
+    }
+    const rows = work.run("tell the account this host's Sessions", () => ownedSessions(sources))
+    assert.equal(rows.length, ids.length, "every conversation is listed")
+    for (const id of ids) assert.equal(work.run("archive check", () => lifecycle.archived({ kind: "live", id })), false)
+    lifecycle.archive({ id: randomUUID(), target: { kind: "live", id: ids[0]! }, archived: true })
+    assert.equal(ownedSessions(sources).length, ids.length - 1, "an archived conversation leaves the list, by its listing's keys")
+    assert.equal(owner.residency().memory.loaded, 0, "neither the report nor the lifecycle read a journal in")
+    assert.equal(warned.length, 0, "and nothing was named for loading in bulk")
+
+    // A reader that does load in bulk is named: once in the log, and in the readout by what it loaded.
+    work.run("a list reading journals", () => { for (const id of ids) owner.snapshot(id) })
+    assert.equal(warned.length, 1, "one line names the reader, however many it loads past the bound")
+    assert.equal(warned[0]?.message, "one reader is loading conversations in bulk")
+    assert.deepEqual([warned[0]?.fields?.by, warned[0]?.fields?.loads], ["a list reading journals", BULK_LOADS])
+    const memory = owner.residency().memory
+    assert.deepEqual(memory.loads, [{ by: "a list reading journals", count: ids.length }])
+    assert.ok(memory.held.length > 0 && memory.held.every((held) => held.by === "a list reading journals"), "each conversation in memory says who read it in")
+    archives.close()
+    console.log("PASS: the report and the lifecycle load no journal; a reader loading in bulk is named")
+  } finally {
+    stopHearing()
+    await owner.stop()
     rmSync(root, { recursive: true, force: true })
   }
 }
@@ -1665,6 +1833,14 @@ async function quietTurnsCarryLastActivity() {
     const snapshot = f.owner.snapshot(f.id)
     assert.equal(snapshot?.activityAt, 12_000, "tool output counts")
     assert.deepEqual(batchActivity(), [2_000, 5_000, 12_000], "batches carry the time only when it moves")
+    // Within the same second it moves again: the host holds it, and batches say it once it's in another second.
+    clock.mock.mockImplementation(() => 12_400)
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool-update", id: "build", outputAppend: "\ncompiled 4 files" } })
+    assert.equal(f.owner.snapshot(f.id)?.activityAt, 12_400)
+    clock.mock.mockImplementation(() => 13_100)
+    f.owner.observe({ type: "live-update", id: f.id, update: { kind: "tool-update", id: "build", outputAppend: "\ncompiled 5 files" } })
+    assert.equal(f.owner.snapshot(f.id)?.activityAt, 13_100)
+    assert.deepEqual(batchActivity(), [2_000, 5_000, 12_000, 13_100], "at most once a second")
 
     const journal = new DatabaseSync(join(f.root, `${f.id}.sqlite`), { readOnly: true })
     try {
@@ -1731,6 +1907,38 @@ async function nativeActivityLastsItsTurn() {
     assert.equal(published().at(-1), null, "and the renderer hears it end")
   } finally {
     clock.mock.restore()
+    f.cleanup()
+  }
+}
+
+/** A stream's first change goes out at once, and the rest one batch a frame (33 ms) at most, whatever the pace of its tokens. */
+async function batchesLeadThenPace() {
+  const f = fixture()
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  try {
+    await f.owner.start("test-provider", "/tmp", { conversationId: f.id })
+    f.started.resolve(f.state)
+    await tick()
+    f.owner.snapshot(f.id)
+    await sleep(50)
+    f.events.length = 0
+    const batches = () => f.events.filter((event) => event.type === "live-batch").length
+    const say = (text: string) => f.owner.observe({ type: "live-update", id: f.id, update: { kind: "text", text } })
+    const started = performance.now()
+    say("The")
+    await sleep(5)
+    assert.equal(batches(), 1, "the first token of a burst isn't held for a frame")
+    for (let word = 0; word < 80; word++) {
+      say(` w${word}`)
+      await sleep(2)
+    }
+    await sleep(50)
+    const elapsed = performance.now() - started
+    const count = batches()
+    assert.ok(count >= 3 && count <= Math.ceil(elapsed / 33) + 2, `${count} batches in ${Math.round(elapsed)} ms`)
+    const text = f.events.flatMap((event) => (event.type === "live-batch" ? event.batch.updates : [])).map((update) => (update.kind === "text" ? update.text : "")).join("")
+    assert.ok(text.startsWith("The w0 w1") && text.endsWith(" w79"), "every word, in order")
+  } finally {
     f.cleanup()
   }
 }
@@ -2152,6 +2360,8 @@ async function providerExitContinued() {
     update: (update: LiveUpdate) => void
     hooks: DriverHooks
     root: string
+    /** The connection a window reads, folded from the batches the host emitted, as the renderer folds them. */
+    heard: () => string | undefined
   }) => Promise<void>) => {
     const root = mkdtempSync(join(tmpdir(), "mako-live-provider-exit-"))
     const id = randomUUID()
@@ -2160,6 +2370,7 @@ async function providerExitContinued() {
     const emitters: Array<(event: LiveDriverEvent) => void> = []
     const bindings: string[] = []
     const hooks: DriverHooks = {}
+    let heard: string | undefined = "connected"
     const session = (bindingId: string, patch: Partial<LiveSessionState> = {}): LiveSessionState => ({
       id: bindingId,
       nativeId: "native-exit",
@@ -2206,7 +2417,9 @@ async function providerExitContinued() {
       root: join(root, "journals"),
       driver: () => driver,
       history: async () => null,
-      emit: () => {},
+      emit: (event) => {
+        if (event.type === "live-batch" && event.batch.sessionChanges?.connection) heard = event.batch.sessionChanges.connection
+      },
       autoContinueDelayMs: 20,
       resumeVerdict: async () => ({ kind: "resumable", record: "moved" }),
     })
@@ -2221,6 +2434,7 @@ async function providerExitContinued() {
         update: (update) => emitters.at(-1)?.({ type: "live-update", id: bindings.at(-1) ?? id, update }),
         hooks,
         root,
+        heard: () => heard,
       })
     } finally {
       owner.stop()
@@ -2231,7 +2445,7 @@ async function providerExitContinued() {
   const dispatched = (owner: LiveConversations, id: string, index: number) =>
     waitFor(() => owner.snapshot(id)?.requests[index]?.status === "dispatching", `request ${index} was not dispatched`)
 
-  await run(true, async ({ owner, id, starts, prompts, end }) => {
+  await run(true, async ({ owner, id, starts, prompts, end, heard }) => {
     const first = randomUUID()
     owner.submit(id, first, "first")
     await dispatched(owner, id, 0)
@@ -2246,6 +2460,10 @@ async function providerExitContinued() {
     assert.deepEqual(requests[1]?.continues, { requestId: first, reason: "provider-exited", auto: true })
     assert.deepEqual(requests[1]?.actor, { kind: "service", name: "auto-continue" })
     assert.match(prompts[1] ?? "", /process stopped/)
+    // The reopened process is what the windows hear of, not the one that exited: a window that kept `disconnected`
+    // took a question the running agent was still waiting on for one nothing could answer.
+    assert.equal(owner.snapshot(id)!.session.connection, "connected")
+    assert.equal(heard(), "connected", "the switch to the new process reached the windows")
     await dispatched(owner, id, 1)
     end(exited)
     await sleep(60)
@@ -2544,6 +2762,7 @@ await autoContinuedTurn()
 await providerExitContinued()
 await restartContinued()
 await coalescedToolBursts()
+await batchesLeadThenPace()
 await quietTurnsCarryLastActivity()
 await nativeActivityLastsItsTurn()
 await failureIsolationAndAssets()
@@ -2565,11 +2784,13 @@ await hibernatesAndWakesExactlyOnce(true)
 await hibernatesAndWakesExactlyOnce("close-during-preparation")
 await hibernatesAndWakesExactlyOnce("changed-store")
 await compactsAfterHibernation()
+await turnEndBatchSaysItsWorkEnded()
 await resumesAfterQuitInFirstTurn()
 await backgroundWorkKeepsProviderResident()
 await boundsWarmProviders()
 await prewarmOverlapsTyping()
 await unloadsHibernatedConversations()
+await bulkLoadsAreNamed()
 await failedCloseKeepsOwnership()
 await heldUntilReset()
 await heldWakeResumes()

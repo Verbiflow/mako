@@ -159,6 +159,7 @@ export const transcriptEventFields = {
   setup: z.boolean().optional(),
   cause: TurnCauseSchema.optional(),
   limit: UsageLimitSchema.optional(),
+  nearLimit: UsageLimitSchema.optional(),
   retries: RetriesSchema.optional(),
 }
 /** A turn the provider started on its own, as `ProviderTurnCause` from `@mako/sessions/provider-turn` says it. */

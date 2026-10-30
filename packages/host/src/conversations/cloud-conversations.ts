@@ -1,15 +1,20 @@
 import { randomBytes, randomUUID } from "node:crypto"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { sessionStream, threadStream, type Actor, type ClientSessionOverSockets, type Subscription } from "@mako/protocol"
+import { LinkClosedError, NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, threadStream, type Actor, type ClientSessionOverSockets, type EventFrame, type Subscription } from "@mako/protocol"
+import { MACHINE_NOTICE_PREFIX, ThreadMachineNoticeSchema } from "@mako/protocol/saves"
 import { ControlActivitySchema } from "@mako/control-runtime/contracts"
 import { z } from "zod"
-import type { ArchivedThread, ListedSession, ListedState } from "@mako/protocol/thread-listing"
+import type { ArchivedThread, ListedSession } from "@mako/protocol/thread-listing"
+import { attentionFact } from "@mako/protocol/attention"
+import { CLOUD_FOLDER_WHERE, listedOwner, listedSummary } from "../contracts/listed-conversations.js"
+import type { FollowRecorder, SyncRecorder } from "../contracts/sync-readings.js"
+import { listedArchiveInputs, type ArchiveInputs } from "../contracts/cloud-archive.js"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
-import { deferredWhenAsleep, hostCallReplay } from "../contracts/host-call-policy.js"
-import { CLOUD_CALL_UNCONFIRMED_MESSAGE, CLOUD_RECONNECTING_MESSAGE, OwnerUnavailableError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
+import { bootFolder, CloudRepositorySchema, githubRepositoryUrl, type CloudPrepareLaunch, type CloudPrepareOutcome, type CloudProjectsOffer, type CloudRepository, type CloudStartStep } from "../contracts/cloud-threads.js"
+import { deferredWhenAsleep } from "../contracts/host-call-policy.js"
+import { OwnerUnavailableError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { ForkInputSchema } from "../contracts/conversation-control.js"
 import { sessionAfter, type LiveBatch, type LiveRequest, type LiveSnapshot, type LiveStartOptions, type LiveSummary } from "../contracts/live-conversations.js"
 import type { PromptAttachment } from "../contracts/providers-acp.js"
@@ -20,12 +25,14 @@ import type { SessionExecution } from "../contracts/thread-execution.js"
 import type { CloudMachineState, ThreadAppView } from "../contracts/thread-app.js"
 import { SessionIdSchema, type Actor as StoreActor, type SessionId, type ThreadPlacement } from "../contracts/thread-identity.js"
 import { gatewayHostCalls, type GatewayHostCallsOptions } from "../transport/index.js"
+import { sendWithRepeats, type GatewayCallLog } from "../contracts/gateway-host-calls.js"
 import type { CloudAccount, CloudThreadMaking } from "../usage/index.js"
 import { CloudControlPreviews } from "./cloud-control-previews.js"
 import { cloudRuntimeOf, namedUuid } from "./cloud-moves.js"
-import { AccountSessions } from "./account-threads.js"
+import { AccountSessions, type AccountListHeard } from "@mako/protocol/account-sessions"
 import { CloudPreviews } from "./cloud-previews.js"
-import { conversationCallId, type ConversationRoutingResult } from "./shared-conversations.js"
+import { conversationCallId } from "../contracts/conversation-calls.js"
+import type { ConversationRoutingResult } from "./shared-conversations.js"
 import { LiveHistoryReader } from "./live-history-reader.js"
 import type { LiveHistoryRead } from "../contracts/live-history.js"
 import type { ThreadPage } from "@mako/sessions"
@@ -42,15 +49,11 @@ const COPY_PAGE = 100
 const COPY_READS = new Set(["mako:live-snapshot", "mako:live-read"])
 /** A message for this Mac's own Session that couldn't be taken yet (the host still starting) is tried again after this. */
 const TAKE_AGAIN_MS = 30_000
-const RETRY_MS = 1_000
-const RETRY_MAX_MS = 30_000
 /** For this long after a wake, a follow tries again this often: the network comes back within a second or two. */
 const WOKEN_MS = 15_000
-const WOKEN_RETRY_MS = 250
 const SAVE_MS = 1_000
-/** How long a call that didn't reach its Thread is repeated before the window hears of it: a wake takes seconds. */
-const CLOUD_REPEAT_MS = 60_000
-const CLOUD_REPEAT_BACKOFF_MS = [250, 500, 1_000, 2_000, 5_000, 10_000] as const
+/** Where a routed call's repeats are said: this module's lines in the host's log. */
+const CALL_LOG: GatewayCallLog = { warn: (message, fields) => hostWarn("cloud-conversations", message, fields), info: (message, fields) => hostLog("cloud-conversations", message, fields) }
 /** A Thread made ahead is taken up only this soon after this Mac last asked: the cloud ends one unused 30 minutes on. */
 const PREPARED_KEPT_MS = 25 * 60_000
 /**
@@ -69,7 +72,16 @@ const READY_ASK_MS = 2_000
 const READY_ASK_FOR_MS = 90_000
 /** Onboarding offers this many of the Mac's most recent projects for project bases. */
 const PROJECTS_OFFERED = 5
-const OfferedSchema = z.object({ accounts: z.array(z.string()) })
+/**
+ * The accounts this Mac offered its recent projects to, and, from builds that keep it, which projects (a folder and its
+ * repository, the newest first), which turning the cloud on follows the bases of. An older build rewrites the file only
+ * on offering another account, and keeps `accounts`.
+ */
+const OfferedSchema = z.object({
+  accounts: z.array(z.string()),
+  projects: z.record(z.string(), z.array(z.object({ folder: z.string(), repository: CloudRepositorySchema }))).optional(),
+})
+type Offered = z.infer<typeof OfferedSchema>
 
 const SummaryIdentitySchema = z.object({ session: z.object({ id: z.string(), status: z.string() }).loose(), revision: z.number(), createdAt: z.number() }).loose()
 /** A cloud host's own `LiveSummary`, checked for the identity and revision this router reads. */
@@ -158,45 +170,6 @@ function keptApp({ kind, project, phase, processes, startedAt, address }: Looked
   return ready.success ? { project, ready: ready.data } : { project }
 }
 
-/** How a list shows a Session's state, as a session's status: `waiting` is a turn at work, with what it waits on said beside. */
-const LISTED_STATUS = { working: "running", waiting: "running", idle: "ready", failed: "failed", moving: "starting" } as const satisfies Record<ListedState, LiveSummary["session"]["status"]>
-/**
- * The same, for a row of a quiet device (`QuietDevice`): nothing there runs or answers for anyone else, so nothing is
- * shown at work or waiting on the person; a message to it waits in the account until the device is back.
- */
-const QUIET_STATUS = { ...LISTED_STATUS, working: "ready", waiting: "ready" } as const satisfies Record<ListedState, LiveSummary["session"]["status"]>
-
-/**
- * What a window lists of a Session it knows only from the account's list: the row, where it runs in words, and nothing
- * that takes its owner. Opening it reads the rest there, as it would any cloud conversation's. A row of a quiet device
- * is listed as that device left it, but not at work.
- */
-function listedSummary(row: ListedSession, where: string, quietSince: string | undefined): LiveSummary {
-  const quiet = quietSince !== undefined
-  const summary: LiveSummary = {
-    session: {
-      id: row.conversation,
-      harness: row.harness,
-      cwd: row.folder ?? "",
-      status: (quiet ? QUIET_STATUS : LISTED_STATUS)[row.state],
-      connection: "hibernated",
-      modes: [],
-      currentMode: null,
-      configOptions: [],
-    },
-    revision: 0,
-    createdAt: Date.parse(row.createdAt),
-    elsewhere: where,
-    threadId: row.thread,
-    sessionId: row.session,
-  }
-  if (row.title) summary.session.title = row.title
-  if (row.threadTitle) summary.threadTitle = row.threadTitle
-  if (row.waitingOn && !quiet) summary.waitingOn = row.waitingOn
-  if (quiet) summary.quietSince = Date.parse(quietSince)
-  return summary
-}
-
 /**
  * A cloud Thread made ahead of a new conversation's first message, while the person writes it with Cloud chosen.
  * Only in memory: one this Mac forgets is the cloud's to end.
@@ -226,11 +199,6 @@ type StartedAhead = { conversationId: string; key: string; cwd: string | undefin
 
 const StoredSchema = z.object({ conversations: z.array(EntrySchema) })
 
-/** What a start reads of the cloud host's boot: the folder of its tab in front, which is the clone. */
-const BootTabsSchema = z.object({
-  activeTabId: z.string(),
-  tabs: z.array(z.object({ id: z.string(), session: z.object({ meta: z.object({ cwd: z.string() }).loose() }).loose() }).loose()),
-}).loose()
 
 const LiveBatchHeadSchema = z.object({ channel: z.string(), type: z.string().optional(), conversation: z.string().optional() })
 const ControlActivityEventSchema = z.object({ type: z.literal("control-activity"), activity: ControlActivitySchema })
@@ -238,6 +206,8 @@ const ControlActivityEventSchema = z.object({ type: z.literal("control-activity"
 export type CloudConversationsOptions = {
   /** The Mako account, once its domain is loaded. */
   account(): CloudAccount | undefined
+  /** Where how this Mac's following of other devices' work goes is kept, for Diagnostics' Sync. */
+  readings?: SyncRecorder
   /** Where the cloud conversations this Mac started are remembered. */
   file: string
   /** Sends an event to this host's windows, as its own conversations' events go. */
@@ -251,6 +221,8 @@ export type CloudConversationsOptions = {
   carried?(folder: string, why: string): Promise<void>
   /** A conversation's folder on its machine may have changed: its agent worked. At most once a `CHANGED_MS`. */
   changed?(conversationId: string): void
+  /** A turn of a conversation on cloud Thread `threadId` ended there: what follows the Thread here reads it (`CloudFollow`). */
+  turnEnded?(conversationId: string, threadId: string): void
   /**
    * This Mac's Thread store, where a conversation begun in a Thread that moved to the cloud (a `+` tab, a fork) is
    * recorded: its Session runs where the Thread does, and the way back brings it here with the rest.
@@ -277,12 +249,20 @@ export type CloudConversationsOptions = {
    * second Mako on this Mac (another profile, a build being tried) reads the same stores and lists the same sessions
    * as its own, under Sessions of its own; listed here too, each would show twice.
    */
-  keepsNative?(harness: string, nativeId: string, folder: string | undefined): boolean
+  keepsNative?(harness: string, nativeId: string, folder: string | undefined): boolean | undefined
   /**
    * The account's archived cloud Threads changed (`ArchivedThread`), as its list and stream say them: what each device
-   * shows as archived, from the account's word alone.
+   * shows as archived, from the account's word alone. Said only from a list read of `account`: a list not read yet,
+   * or forgotten at a sign-out, says nothing of what's archived.
    */
-  archivedChanged?(archived: ReadonlyMap<string, ArchivedThread>): void
+  archivedChanged?(account: string, archived: ReadonlyMap<string, ArchivedThread>): void
+  /**
+   * What turning the cloud on reads of these changed: the projects offered, a cloud Thread made ahead or its machine
+   * ready, a cloud Thread made (`offeredProjects`, `preparedMachine`, `firstCloudThread`).
+   */
+  turnOnChanged?(): void
+  /** How long changes to the sessions this Mac keeps are gathered before they're looked at (`NATIVE_CHANGED_MS`). */
+  nativeChangedMs?: number
 }
 
 /** Copies another device keeps of its Sessions in the account (`ReadingCopies`), by that device, read here (`HostCatalog.copyPage`). */
@@ -294,6 +274,8 @@ export type CloudCopies = {
 /** What a conversation begun in a moved Thread reads and records of this Mac's Thread store. */
 export type AwayThreads = {
   execution(session: SessionId): SessionExecution | undefined
+  /** `execution` for many Sessions in one read (`ThreadStore.executionsOf`). */
+  executionsOf(sessions: Iterable<SessionId>): ReadonlyMap<SessionId, SessionExecution>
   sessionPlacement(session: SessionId): ThreadPlacement | undefined
   journalPlacement(conversationId: string): ThreadPlacement | undefined
   adoptElsewhere(input: { operationId: string; conversationId: string; actor: StoreActor } & ({ session: SessionId } | { forkOf: string; forkSession: SessionId })): ThreadPlacement
@@ -316,8 +298,6 @@ export type ElsewhereFolderRoute = {
 /** An app's view with an address, as `mako:thread-app` answers for a running one. */
 const ReadyAddressSchema = z.object({ kind: z.literal("ready"), address: z.object({ host: z.string(), port: z.number().int() }) }).loose()
 
-/** Where a cloud conversation's folder is, in words. */
-export const CLOUD_FOLDER_WHERE = "a cloud machine"
 /** The host log's line as a cloud Thread's machine changes, as this Mac knows it. */
 const MACHINE_WORDS = {
   asleep: "a cloud Thread's machine is asleep",
@@ -326,17 +306,10 @@ const MACHINE_WORDS = {
 } as const satisfies Record<CloudMachineState, string>
 /** A window following a cloud conversation's folder reads its Git again at most this often while its agent works. */
 const CHANGED_MS = 1_000
+/** The sessions this Mac's stores keep changed: what changed in this long is looked at together, one look at a time. */
+const NATIVE_CHANGED_MS = 250
 
 /** The folder the machine's host works in: its tab in front, which is the clone. */
-function bootFolder(boot: EncodedValue): string {
-  const tabs = BootTabsSchema.parse(decodeRuntimeValue(boot))
-  const cwd = tabs.tabs.find((tab) => tab.id === tabs.activeTabId)?.session.meta.cwd
-  if (!cwd) throw new Error("The cloud machine has no folder to work in")
-  return cwd
-}
-
-/** What archiving a cloud Thread asks its machine to pack: its conversations that started there, at its folder. */
-export type ArchiveInputs = { conversations: string[]; folder: string | undefined }
 
 /** A harness with its settings, as two starts that would begin the same compare. */
 function launchKey(harness: string, modeId: string | undefined, tuning: LiveStartOptions["tuning"]): string {
@@ -376,6 +349,8 @@ export async function folderRepository(git: { output(cwd: string, args: readonly
 export class CloudConversations {
   readonly #options: CloudConversationsOptions
   readonly #entries = new Map<string, Entry>()
+  /** The row each listed conversation was last listed from: what its next row's change is read against (`attentionFact`). */
+  readonly #heardRows = new Map<string, ListedSession>()
   readonly #following = new Map<string, Subscription | undefined>()
   #loading: Promise<void> | undefined
   #session: { deviceId: string; session: ClientSessionOverSockets } | undefined
@@ -395,6 +370,13 @@ export class CloudConversations {
   readonly controlPreviews: CloudControlPreviews
   /** By conversation: a change to tell of, waiting out `CHANGED_MS` from the last told. */
   readonly #changes = new Map<string, NodeJS.Timeout>()
+  /**
+   * By conversation, the requests whose end was heard, the newest few: a request's later changes (what its turn
+   * changed, counted after it) restate its end, which says nothing new.
+   */
+  readonly #ended = new Map<string, Set<string>>()
+  /** Conversations whose turn end was heard from a request since their session last ran: its stopping says it again. */
+  readonly #endHeard = new Set<string>()
   /** Each cloud Thread's ports, served on this Mac. */
   readonly #previews: CloudPreviews
   /**
@@ -412,8 +394,13 @@ export class CloudConversations {
   readonly #askedNames = new Set<string>()
   #unlisten: (() => void) | undefined
   #listing: Promise<void> | undefined
-  /** The archived cloud Threads last told of (`archivedChanged`), by their IDs. */
+  /** The archived cloud Threads last told of (`archivedChanged`), by their account and IDs. */
   #archivedKey: string | undefined
+  /** The account whose list was read last: its archived Threads are the ones told of. */
+  #accountId: string | undefined
+  /** The native sessions whose keeping changed since the last look (`nativeChanged`), by `nativeKey`; "all" for every one. */
+  #nativeChanges: Set<string> | "all" | undefined
+  #nativeLook: ReturnType<typeof setTimeout> | undefined
   /**
    * Threads followed from the stream's head rather than from an event relayed: a listed conversation a window opened,
    * whose history its snapshot reads on the machine. Replaying the Thread from its first event would carry all of it.
@@ -853,6 +840,7 @@ export class CloudConversations {
     this.#closed = true
     clearTimeout(this.#waking)
     clearTimeout(this.#takeAgain)
+    clearTimeout(this.#nativeLook)
     this.#unlisten?.()
     for (const resume of this.#pauses) resume()
     clearTimeout(this.#saving)
@@ -888,6 +876,7 @@ export class CloudConversations {
       prepared = { threadId: newThreadId(), repository, since: Date.now(), askedAt: Date.now(), ready: false, asking: Promise.resolve(), made: false }
       this.#prepared.set(key, prepared)
       hostLog("cloud-conversations", "making a cloud Thread ahead of its first message", { threadId: prepared.threadId, repository: repository.url })
+      this.#options.turnOnChanged?.()
     }
     const asked = prepared
     asked.askedAt = Date.now()
@@ -896,13 +885,18 @@ export class CloudConversations {
     await this.#carried(folder, "a cloud Thread made ahead")
     asked.asking = account.createThread(asked.threadId, repository, making).then(({ ready }) => {
       asked.made = true
+      const was = asked.ready
       asked.ready = ready
+      if (ready !== was) this.#options.turnOnChanged?.()
     })
     try {
       await asked.asking
     } catch (error) {
       // Never made: the next ask starts afresh. Made already, it stays for its next ask or its first message.
-      if (!asked.made && this.#prepared.get(key) === asked) this.#prepared.delete(key)
+      if (!asked.made && this.#prepared.get(key) === asked) {
+        this.#prepared.delete(key)
+        this.#options.turnOnChanged?.()
+      }
       hostWarn("cloud-conversations", "a cloud Thread wasn't made ahead", { threadId: asked.threadId, error: error instanceof Error ? error.message : String(error) })
       return "none"
     }
@@ -924,6 +918,7 @@ export class CloudConversations {
       try {
         prepared.askedAt = Date.now()
         prepared.ready = (await account.createThread(prepared.threadId, prepared.repository, { prepare: true })).ready
+        if (prepared.ready) this.#options.turnOnChanged?.()
       } catch (error) {
         return hostWarn("cloud-conversations", "a cloud Thread made ahead wasn't asked again", { threadId: prepared.threadId, error: error instanceof Error ? error.message : String(error) })
       }
@@ -978,17 +973,68 @@ export class CloudConversations {
     const account = this.#options.account()
     const accountId = await account?.id()
     if (!account || !accountId) return "none"
-    const file = join(dirname(this.#options.file), "projects-offered.json")
-    const offered = OfferedSchema.safeParse(JSON.parse(await readFile(file, "utf8").catch(() => "{}"))).data?.accounts ?? []
-    if (offered.includes(accountId)) return "already"
-    const found = await Promise.all(folders.slice(0, PROJECTS_OFFERED).map((folder) => this.#options.repositoryOf(folder).catch(() => undefined)))
-    const repositories = [...new Map(found.filter((repository) => repository !== undefined).map((repository) => [repositoryKey(repository), repository])).values()]
-    if (repositories.length) await account.askBases(repositories)
+    const offered = await this.#readOffered()
+    const before = offered.accounts.includes(accountId)
+    // Offered by a build that didn't keep which projects: they're noted now, for turning the cloud on, not asked again.
+    if (before && offered.projects?.[accountId]) return "already"
+    const found = await Promise.all(folders.slice(0, PROJECTS_OFFERED).map(async (folder) => {
+      const repository = await this.#options.repositoryOf(folder).catch(() => undefined)
+      return repository && { folder, repository }
+    }))
+    // Each repository once, as its newest folder.
+    const byRepository = new Map<string, { folder: string; repository: CloudRepository }>()
+    for (const project of found) if (project && !byRepository.has(repositoryKey(project.repository))) byRepository.set(repositoryKey(project.repository), project)
+    const projects = [...byRepository.values()]
+    if (projects.length && !before) await account.askBases(projects.map((project) => project.repository))
+    const file = this.#offeredFile()
     await mkdir(dirname(file), { recursive: true })
-    await writeFile(file, `${JSON.stringify({ accounts: [...offered, accountId] })}\n`)
-    hostLog("cloud-conversations", "offered this Mac's recent projects for project bases", { repositories: repositories.length })
-    return repositories.length ? "asked" : "none"
+    const accounts = before ? offered.accounts : [...offered.accounts, accountId]
+    await writeFile(file, `${JSON.stringify({ accounts, projects: { ...offered.projects, [accountId]: projects } } satisfies Offered)}\n`)
+    this.#options.turnOnChanged?.()
+    if (before) return "already"
+    hostLog("cloud-conversations", "offered this Mac's recent projects for project bases", { repositories: projects.length })
+    return projects.length ? "asked" : "none"
   }
+
+  #offeredFile(): string {
+    return join(dirname(this.#options.file), "projects-offered.json")
+  }
+
+  async #readOffered(): Promise<Offered> {
+    const text = await readFile(this.#offeredFile(), "utf8").catch(() => "{}")
+    return OfferedSchema.safeParse(JSON.parse(text)).data ?? { accounts: [] }
+  }
+
+  /**
+   * The recent projects offered to this account for bases, the newest first, for turning the cloud on to follow:
+   * undefined until known, empty when none was on GitHub.
+   */
+  async offeredProjects(accountId: string): Promise<Array<{ folder: string; repository: CloudRepository }> | undefined> {
+    const offered = await this.#readOffered()
+    // Offered by an older build, which didn't keep which: unknown until this window offers again, never "none".
+    return offered.accounts.includes(accountId) ? offered.projects?.[accountId] : undefined
+  }
+
+  /** Asks the cloud again for these repositories' bases: a person's "Try again" after one failed. */
+  async askBasesAgain(repositories: CloudRepository[]): Promise<void> {
+    const account = this.#options.account()
+    if (account && repositories.length) await account.askBases(repositories)
+  }
+
+  /** The first cloud Thread this Mac knows of, started here or listed by the account: when it was made. */
+  firstCloudThread(): number | undefined {
+    let first: number | undefined
+    for (const entry of this.#entries.values()) if (entry.repository && entry.created && (first === undefined || entry.createdAt < first)) first = entry.createdAt
+    return first
+  }
+
+  /** A cloud Thread made ahead for this repository, its machine still coming up or ready for a first message. */
+  preparedMachine(repository: CloudRepository): "warming" | "ready" | undefined {
+    const prepared = this.#prepared.get(repositoryKey(repository))
+    if (!prepared || Date.now() - prepared.askedAt >= PREPARED_KEPT_MS) return undefined
+    return prepared.ready ? "ready" : "warming"
+  }
+
 
   /** The Thread made ahead for a repository, unless this Mac last asked for it too long ago: that one went unused. */
   #fresh(key: string): Prepared | undefined {
@@ -996,6 +1042,7 @@ export class CloudConversations {
     if (!prepared || Date.now() - prepared.askedAt < PREPARED_KEPT_MS) return prepared
     this.#prepared.delete(key)
     clearTimeout(prepared.watching)
+    this.#options.turnOnChanged?.()
     const unused = (this.#unused.get(key) ?? 0) + 1
     this.#unused.set(key, unused)
     hostLog("cloud-conversations", "a cloud Thread made ahead went unused", { threadId: prepared.threadId, unused })
@@ -1009,6 +1056,7 @@ export class CloudConversations {
     if (!prepared) return undefined
     this.#prepared.delete(key)
     clearTimeout(prepared.watching)
+    this.#options.turnOnChanged?.()
     await prepared.asking.catch(() => undefined)
     if (!prepared.made) return undefined
     this.#unused.delete(key)
@@ -1078,6 +1126,8 @@ export class CloudConversations {
       await this.#save()
       hostLog("cloud-conversations", "made a cloud Thread", { threadId: entry.threadId, conversationId: entry.conversationId, harness, repository: repository.url })
     }
+    // Made now, or taken up from one made ahead: this Mac's first cloud Thread may be this one.
+    this.#options.turnOnChanged?.()
     this.#follow(entry)
     const cwd = ahead?.cwd ?? bootFolder(await this.#call(entry, "mako:boot", []))
     if (step !== "starting") this.#step(options.conversationId, "starting", repository)
@@ -1136,6 +1186,8 @@ export class CloudConversations {
   /** No longer answered here, and its Thread no longer followed once none of its conversations is. */
   #forget(entry: Entry): void {
     this.#entries.delete(entry.conversationId)
+    this.#ended.delete(entry.conversationId)
+    this.#endHeard.delete(entry.conversationId)
     if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
   }
 
@@ -1189,14 +1241,9 @@ export class CloudConversations {
    * that never started has nothing to keep), by the account's list and this Mac's own, and the folder they work in there.
    */
   archiveInputs(threadId: string): ArchiveInputs {
-    const conversations = new Set<string>()
-    let folder: string | undefined
-    for (const row of this.#list.sessions().values()) {
-      if (row.runsOn.kind !== "cloud" || row.runsOn.threadId !== threadId) continue
-      folder ??= row.folder
-      // A session its harness keeps that Mako there never opened (`capture`) is no conversation of the machine's.
-      if (row.nativeId && !row.capture) conversations.add(row.conversation)
-    }
+    const listed = listedArchiveInputs(this.#list.sessions().values(), threadId)
+    const conversations = new Set(listed.conversations)
+    let folder = listed.folder
     // This Mac's own, moved or started there: each runs on the machine from its start, though what the machine said of
     // it may not have reached here yet (an archive asked as its move lands).
     for (const entry of this.#entries.values()) {
@@ -1208,9 +1255,13 @@ export class CloudConversations {
   }
 
   /** The cloud conversations of a cloud Thread: their harness and native session, as their machine last said. */
-  threadConversations(threadId: string): Array<{ conversationId: string; harness: string; nativeId: string | undefined }> {
+  /** `mode`: the access mode it runs in there, as its last update said. */
+  threadConversations(threadId: string): Array<{ conversationId: string; harness: string; nativeId: string | undefined; mode?: string }> {
     return [...this.#entries.values()].filter((entry) => entry.threadId === threadId)
-      .map((entry) => ({ conversationId: entry.conversationId, harness: entry.harness, nativeId: entry.summary?.session.nativeId || undefined }))
+      .map((entry) => {
+        const mode = entry.summary?.session.currentMode
+        return { conversationId: entry.conversationId, harness: entry.harness, nativeId: entry.summary?.session.nativeId || undefined, ...mode && { mode } }
+      })
   }
 
   /** An adopted conversation's start on its machine, as the machine answered it: what windows list from now on. */
@@ -1345,11 +1396,9 @@ export class CloudConversations {
   }
 
   /**
-   * One call to the Thread's machine. A call the gateway lost on the way (its machine's link changed under it) or
-   * still holds while the machine wakes is repeated here, under its one id, for as long as `CLOUD_REPEAT_MS`, when a
-   * repeat can't do it twice (a read, or a call the host settles by its id): the gateway answers a repeat with the
-   * first answer. So a send after the machine slept arrives, without the window hearing of the wake. Past that, or
-   * for a call only the person may repeat, the window hears it as a reconnect, in a cloud Thread's words.
+   * One call to the Thread's machine, repeated by `sendWithRepeats` while the gateway lost it or holds it as the
+   * machine wakes: so a send after the machine slept arrives, without the window hearing of the wake. Past that, or for
+   * a call only the person may repeat, the window hears it as a reconnect, in a cloud Thread's words.
    */
   #call(entry: Entry, channel: string, args: readonly unknown[]): Promise<EncodedValue> {
     return this.#callThread(entry.threadId, channel, args, { conversationId: entry.conversationId, runtime: entry.runtime })
@@ -1365,13 +1414,11 @@ export class CloudConversations {
     if (how.passive) calls.passive = true
     if (how.refuseUnstarted) calls.refuseUnstarted = true
     const send = gatewayHostCalls(session, calls).call(channel, args)
-    // A passive look is answered at once, asleep or not; it's never waited out, and never wakes the machine.
-    const repeatable = !how.passive && hostCallReplay(channel) !== "never"
     // A call kept for the machine's next wake (a close) neither wakes it nor, answered by the cloud, says it's awake.
     const wakes = !deferredWhenAsleep.has(channel)
     const ended = wakes && !how.passive ? this.#calling(threadId) : undefined
     try {
-      const value = await this.#sendThread(threadId, channel, send, repeatable, how)
+      const value = await sendWithRepeats(channel, send, { ...how, threadId, log: CALL_LOG })
       if (wakes) this.#heardAwake(threadId)
       return value
     } finally {
@@ -1379,28 +1426,7 @@ export class CloudConversations {
     }
   }
 
-  /** `#callThread`'s tries of one call, repeated while the gateway lost it or holds it as the machine wakes. */
-  async #sendThread(threadId: string, channel: string, send: (attempt: number) => Promise<EncodedValue>, repeatable: boolean, how: { conversationId?: string; runtime?: string | undefined }): Promise<EncodedValue> {
-    const began = performance.now()
-    for (let attempt = 1; ; attempt++) {
-      try {
-        return await send(attempt)
-      } catch (error) {
-        if (!(error instanceof RuntimeDisconnectedError)) throw error
-        // Another device's runtime that isn't connected, said before the call was applied: it's off, and a call doesn't
-        // wake a Mac as it does a cloud Thread's machine. Said at once, as itself, for its copy to answer a read.
-        if (how.runtime && error instanceof OwnerUnavailableError && !error.unconfirmed) throw error
-        const waitMs = CLOUD_REPEAT_BACKOFF_MS[Math.min(attempt - 1, CLOUD_REPEAT_BACKOFF_MS.length - 1)]!
-        if (repeatable && attempt < 8 && performance.now() - began + waitMs < CLOUD_REPEAT_MS) {
-          hostLog("cloud-conversations", "a call didn't reach the Thread yet; repeating it", { threadId, channel, attempt, inMs: waitMs })
-          await new Promise((resolve) => setTimeout(resolve, waitMs))
-          continue
-        }
-        // As a call to another host's conversation: the window settles a lost one by its own ids, never this router.
-        throw new RuntimeDisconnectedError(error.unconfirmed, how.conversationId, error.unconfirmed && !repeatable ? CLOUD_CALL_UNCONFIRMED_MESSAGE : CLOUD_RECONNECTING_MESSAGE)
-      }
-    }
-  }
+
 
 
   #account(): CloudAccount {
@@ -1421,54 +1447,110 @@ export class CloudConversations {
     return this.#session
   }
 
-  /** Relays the Thread's events from the last one relayed, resubscribing with a backoff whenever the stream ends. */
+  /**
+   * Relays the Thread's events from the last one relayed. A stream that ends is followed again at once, then with a
+   * backoff while it keeps failing (`followAgainInMs`). A Thread's stream is its log, gap-free from its first event;
+   * another device's conversation streams only while watched, numbered once its gateway says so (`StreamCursor`), which
+   * keeps the last few: a number skipped is asked for again from there, and one too old to have is read again whole
+   * (`#reread`). While the conversation is at work, a stream silent for `SILENT_WHILE_WORKING_MS` has its connection
+   * asked whether it's alive, so a stalled link is replaced in seconds.
+   */
   #follow(entry: Entry): void {
     if (this.#closed || this.#following.has(entry.threadId)) return
     this.#following.set(entry.threadId, undefined)
     const run = async () => {
-      let wait = RETRY_MS
+      let failures = 0
+      let gapsInRow = 0
       let failing = false
       let wakes = this.#wakes
+      const cursor = new StreamCursor(entry.runtime ? "live" : "log", entry.runtime || this.#fromHead.has(entry.threadId) ? undefined : entry.seq)
+      let readings: FollowRecorder | undefined
+      let probedAt: number | undefined
       // An archived Thread takes nothing and says nothing: it isn't followed.
       while (!this.#closed && this.#entries.get(entry.conversationId) === entry && !this.#list.archived().has(entry.threadId)) {
         try {
           const { session } = await this.#connected()
-          const fromHead = this.#fromHead.has(entry.threadId)
-          // Another device's conversation streams only while watched, and keeps nothing to replay: always from now.
-          const subscription = entry.runtime
-            ? session.subscribe({ stream: entry.threadId, after: 0 })
-            : session.subscribe({ stream: threadStream(entry.threadId), after: fromHead ? Number.MAX_SAFE_INTEGER : entry.seq })
+          const stream = entry.runtime ? entry.threadId : threadStream(entry.threadId)
+          const after = entry.runtime ? cursor.resumeAfter() : (cursor.last ?? (this.#fromHead.has(entry.threadId) ? Number.MAX_SAFE_INTEGER : entry.seq))
+          readings = this.#options.readings?.follow(stream, entry.summary?.session.title)
+          const subscription = session.subscribe({ stream, after })
           this.#following.set(entry.threadId, subscription)
-          for (;;) {
-            const frame = await subscription.next()
-            if (frame.seq <= entry.seq) continue
+          let gap = false
+          while (!gap) {
+            let frame: EventFrame
+            try {
+              frame = await subscription.next(this.#working(entry) ? SILENT_WHILE_WORKING_MS : undefined)
+            } catch (error) {
+              if (!(error instanceof NothingArrivedError)) throw error
+              // At work and silent: the link may have stalled. A ping it doesn't answer ends it, and this follows again.
+              session.probe(stream, PROBE_ANSWER_MS)
+              readings?.probe()
+              probedAt = performance.now()
+              continue
+            }
+            const verdict = cursor.heard({ seq: frame.seq, text: frame.event.text })
+            if (verdict.kind === "notice" || verdict.kind === "duplicate") continue
+            if (verdict.kind === "reread") {
+              readings?.reread()
+              this.#reread(entry)
+              continue
+            }
+            if (verdict.kind === "gap") {
+              readings?.gap()
+              readings?.followedAgain("gap")
+              gap = true
+              continue
+            }
+            // A gateway that doesn't number the stream numbers it by the clock: what came before the last is a repeat.
+            if (!cursor.numbered && frame.seq <= entry.seq) continue
             this.#fromHead.delete(entry.threadId)
             entry.seq = frame.seq
             this.#relay(entry, frame.event.text)
             this.#saveSoon()
-            wait = RETRY_MS
+            failures = 0
+            gapsInRow = 0
             failing = false
           }
+          // A number skipped: asked for again at once from the last one held, which the gateway serves from what it
+          // kept. One gap after another is a stream that keeps failing.
+          if (++gapsInRow <= 3) continue
         } catch (error) {
           if (this.#closed) return
+          // Ended by its probe going unanswered, the link had gone silent; otherwise it closed, or couldn't be followed.
+          readings?.followedAgain(!(error instanceof LinkClosedError) ? "failed" : probedAt !== undefined && performance.now() - probedAt < PROBE_ANSWER_MS * 2 ? "silent" : "closed")
+          probedAt = undefined
           if (!failing) hostWarn("cloud-conversations", "a cloud Thread's events stopped; following again", { threadId: entry.threadId, error: error instanceof Error ? error.message : String(error) })
           failing = true
         }
         const woken = performance.now() - this.#wokeAt < WOKEN_MS
-        if (this.#wakes === wakes) await this.#pause(woken ? WOKEN_RETRY_MS : wait)
+        if (this.#wakes === wakes) await this.#pause(woken ? followAgainInMs(0) : followAgainInMs(failures++))
         if (this.#wakes !== wakes) {
           // Woken: the stream that ended went with the sleep, and the network may be back; no backoff carried over.
           wakes = this.#wakes
-          wait = RETRY_MS
-          continue
+          failures = 0
         }
-        wait = Math.min(wait * 2, RETRY_MAX_MS)
       }
     }
     void run().finally(() => {
       this.#following.delete(entry.threadId)
       this.#fromHead.delete(entry.threadId)
     })
+  }
+
+  /** Whether a followed conversation is at work, so silence on its stream may be a stalled link. */
+  #working(entry: Entry): boolean {
+    return entry.summary?.session.status === "running"
+  }
+
+  /**
+   * What another device's conversation said while this Mac couldn't hear it is gone from what its gateway keeps: every
+   * window reading it reads it again, as for any notice that its history changed.
+   */
+  #reread(entry: Entry): void {
+    const summary = entry.summary
+    const batch = { id: entry.conversationId, revision: (summary?.revision ?? 0) + 1, ...(summary?.epoch !== undefined && { epoch: summary.epoch }), updates: [], historyChanged: true }
+    hostLog("cloud-conversations", "a watched conversation's stream can't be picked up where it was; its windows read it again", { conversation: entry.conversationId })
+    this.#options.emit({ type: "live-batch", conversation: entry.conversationId, payload: JSON.stringify({ type: "live-batch", batch }) })
   }
 
   /** Waits `ms`, or less when the Mac wakes or this closes. */
@@ -1486,6 +1568,9 @@ export class CloudConversations {
   }
 
   #relay(entry: Entry, line: string): void {
+    // The Thread's object's own word on its machine, written into the stream as JSON: every conversation of the Thread
+    // here shows it. Read only when the line says so, so a runtime's batches are never parsed for it.
+    if (line.startsWith(MACHINE_NOTICE_PREFIX)) return this.#machineNotice(entry, line)
     const parts = splitRuntimeEventLine(line)
     if (!parts) return
     const head = LiveBatchHeadSchema.safeParse(JSON.parse(parts.head))
@@ -1504,14 +1589,62 @@ export class CloudConversations {
     // One subscription follows a Thread; a Thread moved from this Mac can carry several of its conversations.
     const target = head.data.type === "live-batch" && head.data.conversation ? this.#entries.get(head.data.conversation) : undefined
     if (!target || target.threadId !== entry.threadId) return
+    const { batch } = z.object({ batch: LiveBatchSchema }).parse(JSON.parse(parts.payload))
+    this.#options.readings?.follow(entry.runtime ? entry.threadId : threadStream(entry.threadId)).heard(batch.emittedAt)
+    if (batch.trace) hostLog("sync", "traced update heard", { trace: batch.trace, conversation: target.conversationId, ...(batch.emittedAt !== undefined && { lagMs: Date.now() - batch.emittedAt }) })
+    const before = target.summary?.session.status
     if (target.summary) {
-      const { batch } = z.object({ batch: LiveBatchSchema }).parse(JSON.parse(parts.payload))
       const summary: LiveSummary = { ...target.summary, session: sessionAfter(target.summary.session, batch), revision: batch.revision }
       if (batch.epoch) summary.epoch = batch.epoch
       target.summary = summaryOf(summary)
     }
+    // A turn ended there: a request of its reached its end in this batch, or the session stopped running with no
+    // request's end heard since it began (a turn the harness began itself). The first holds however the batches fell (a
+    // turn begun and ended in one, or a summary this Mac never had), and the stream replays from where this Mac left it,
+    // so a turn that ended while it slept or lost the link is heard as it catches up. Each end is said once.
+    const after = target.summary?.session.status
+    if (before !== "running" && after === "running") this.#endHeard.delete(target.conversationId)
+    if (this.#endsRequest(target.conversationId, batch)) {
+      this.#endHeard.add(target.conversationId)
+      this.#options.turnEnded?.(target.conversationId, entry.threadId)
+    } else if (before === "running" && after !== "running" && !this.#endHeard.delete(target.conversationId)) this.#options.turnEnded?.(target.conversationId, entry.threadId)
     this.#options.emit({ type: "live-batch", conversation: target.conversationId, payload: parts.payload })
     this.#noteChange(target.conversationId)
+  }
+
+  /**
+   * Whether a relayed batch carries a request of the conversation reaching its end for the first time: a turn ended. A
+   * whole list (one went away, or they reordered) restates requests that ended long ago, which are noted, never said.
+   */
+  #endsRequest(conversationId: string, batch: Pick<LiveBatch, "requests" | "requestChanges">): boolean {
+    const ended = this.#ended.get(conversationId) ?? new Set<string>()
+    this.#ended.set(conversationId, ended)
+    const note = (id: string) => {
+      ended.add(id)
+      for (const oldest of ended) {
+        if (ended.size <= ENDED_KEPT) break
+        ended.delete(oldest)
+      }
+    }
+    for (const request of batch.requests ?? []) if (ENDED_REQUEST.has(request.status)) note(request.id)
+    const fresh = (batch.requestChanges ?? []).filter((request) => ENDED_REQUEST.has(request.status) && !ended.has(request.id))
+    for (const request of fresh) note(request.id)
+    return fresh.length > 0
+  }
+
+  #machineNotice(entry: Entry, line: string): void {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      return
+    }
+    const notice = ThreadMachineNoticeSchema.safeParse(parsed)
+    if (!notice.success) return
+    const conversationIds = [...this.#entries.values()].filter((each) => each.threadId === entry.threadId).map((each) => each.conversationId)
+    if (!conversationIds.length) return
+    hostLog("cloud-conversations", "the cloud's word on a cloud Thread's work", { threadId: entry.threadId, state: notice.data.state, savedAt: notice.data.savedAt ?? -1, reason: notice.data.reason ?? "none" })
+    this.#options.emit(encodeRuntimeEvent({ type: "cloud-machine-notice", conversationIds, notice: notice.data }))
   }
 
   /** Its agent worked: a window on its folder reads it again, once a `CHANGED_MS` at most, after the last batch of a burst. */
@@ -1535,8 +1668,19 @@ export class CloudConversations {
         this.#list.clear()
         this.#reconcile()
         void this.#readList()
-      } else if (this.#list.heard(heard)) {
-        this.#reconcile()
+        return
+      }
+      // The stream skipped a number: the list is read whole again, replacing what's held in one step.
+      if ("gap" in heard) {
+        this.#options.readings?.listGap(heard.gap)
+        return void this.#readList()
+      }
+      this.#options.readings?.listHeard(heard.seq)
+      if (heard.event.type === "sessions-listed") for (const row of heard.event.sessions) if (row.changedAt) this.#options.readings?.listChanged(row.changedAt)
+      const named = this.#named(heard)
+      if (this.#list.heard(heard)) {
+        // Only the rows the change names are looked at again: one Session's state, while hundreds are listed.
+        this.#reconcile(named)
         this.#takeWaiting()
         if (heard.event.type === "messages-waiting") this.#retoldWaiting(heard.event.session)
       } else if (!this.#list.known) void this.#readList()
@@ -1544,16 +1688,41 @@ export class CloudConversations {
     void this.#readList()
   }
 
+  /**
+   * The conversations a change to the list is about, as the list holds them before it and as the change says them (a
+   * Session that moved may be another conversation now); undefined when it may change any row: a device going quiet
+   * or coming back, a Thread archived or taken back.
+   */
+  #named(heard: AccountListHeard): ReadonlySet<string> | undefined {
+    const { event } = heard
+    const named = new Set<string>()
+    const held = (session: string) => {
+      const conversation = this.#list.sessions().get(session)?.conversation
+      if (conversation !== undefined) named.add(conversation)
+    }
+    if (event.type === "sessions-listed") for (const row of event.sessions) {
+      named.add(row.conversation)
+      held(row.session)
+    }
+    else if (event.type === "sessions-unlisted") for (const session of event.sessions) held(session)
+    else if (event.type === "messages-waiting") held(event.session)
+    else return undefined
+    return named
+  }
+
   /** The account's list, read whole: once at start, after a sign-in, and after a wake while it isn't known. */
   #readList(): Promise<void> {
     this.#listing ??= (async () => {
       const account = this.#options.account()
-      if (this.#closed || !account?.sessionListings || !(await account.id())) return
+      const accountId = account?.sessionListings ? await account.id() : undefined
+      if (this.#closed || !account?.sessionListings || !accountId) return
       try {
         this.#device = await account.deviceId()
         const [listings, devices] = await Promise.all([account.sessionListings(), account.devices?.().catch(() => undefined)])
         for (const device of devices?.devices ?? []) this.#deviceNames.set(device.id, device.name)
+        this.#accountId = accountId
         if (this.#list.listed(listings)) this.#reconcile()
+        else this.#archivedNow()
         this.#takeWaiting()
       } catch (error) {
         hostLog("cloud-conversations", "the account's Threads couldn't be listed; listed again when the account or the network changes", { error: error instanceof Error ? error.message : String(error) })
@@ -1568,41 +1737,86 @@ export class CloudConversations {
    * Holds the conversations known from the account's list to it: a Session another device has (in the cloud or on
    * itself) is listed here, changed as the list changes, and gone when it leaves it. This Mac's own Sessions, and the
    * cloud conversations this Mac started or moved, are never touched, and one a window opened goes on from its own
-   * batches, which say more and sooner. Windows hear what changed and list it as they list a conversation at boot:
-   * nothing wakes a machine or reaches a Mac until one opens.
+   * batches, which say more and sooner, but for whether its device is quiet (a quiet device sends no batches) and its
+   * Thread's name (no batch carries it): those are the list's to say of every conversation, followed or not. Windows hear what changed and list it as they list a
+   * conversation at boot: nothing wakes a machine or reaches a Mac until one opens.
+   *
+   * `only` limits it to those conversations, as when the sessions this Mac keeps changed (`nativeChanged`). A row whose
+   * keeping this Mac can't say yet (its catalog isn't read, or is being read again) is left as it is, listed or not:
+   * a list replaces only what it's the word on.
    */
-  #reconcile(): void {
+  #reconcile(only?: ReadonlySet<string>): void {
     this.#archivedNow()
-    const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string; quietSince: string | undefined }>()
+    const picked = (conversation: string) => !only || only.has(conversation)
+    const wanted = new Map<string, { row: ListedSession; threadId: string; runtime?: string; where: string; quietSince: string | undefined; archived?: true }>()
+    const undecided = new Set<string>()
     // An archived cloud Thread's Sessions, as they were listed when it was archived: every device shows them with the
     // archived ones (`archivedChanged`), at rest, and nothing runs them.
     for (const archived of this.#list.archived().values())
-      for (const row of archived.sessions) wanted.set(row.conversation, { row: { ...row, state: "idle" }, threadId: archived.thread, where: CLOUD_FOLDER_WHERE, quietSince: undefined })
-    for (const row of this.#list.sessions().values()) {
-      if (!this.#listable(row)) continue
+      for (const row of archived.sessions) if (picked(row.conversation)) wanted.set(row.conversation, { row: { ...row, state: "idle" }, threadId: archived.thread, where: CLOUD_FOLDER_WHERE, quietSince: undefined, archived: true })
+    const rows = [...this.#list.sessions().values()].filter((row) => picked(row.conversation))
+    const executions = this.#executions(rows)
+    for (const row of rows) {
+      if (!this.#listable(row, executions)) continue
       if (row.runsOn.kind === "device") {
-        if (row.runsOn.deviceId === this.#device || this.#keptHere(row)) continue
-        const runtime = `d-${row.runsOn.deviceId}`
-        const name = this.#deviceNames.get(row.runsOn.deviceId)
-        if (name === undefined) this.#nameDevice(row.runsOn.deviceId)
-        wanted.set(row.conversation, { row, threadId: sessionStream(runtime, row.conversation), runtime, where: name ?? "another computer", quietSince: this.#list.quietSince(row.runsOn.deviceId) })
+        if (row.runsOn.deviceId === this.#device) continue
+        const kept = this.#keptHere(row)
+        if (kept === undefined) {
+          undecided.add(row.conversation)
+          continue
+        }
+        if (kept) continue
+        const owner = listedOwner(row)
+        if (owner.kind !== "device") continue
+        const name = this.#deviceNames.get(owner.deviceId)
+        if (name === undefined) this.#nameDevice(owner.deviceId)
+        wanted.set(row.conversation, { row, threadId: owner.stream, runtime: owner.runtimeId, where: name ?? "another computer", quietSince: this.#list.quietSince(owner.deviceId) })
       } else if (!this.#options.returning?.(row.runsOn.threadId)) wanted.set(row.conversation, { row, threadId: row.runsOn.threadId, where: CLOUD_FOLDER_WHERE, quietSince: undefined })
     }
+    // How many conversations each Thread has here: one that leaves the last of its Thread's stops its following.
+    const perThread = new Map<string, number>()
+    for (const entry of this.#entries.values()) perThread.set(entry.threadId, (perThread.get(entry.threadId) ?? 0) + 1)
     const unlisted: string[] = []
     // Deleting from a Map as it's walked is safe: the walk goes on past what went.
     for (const entry of this.#entries.values()) {
-      if (!entry.listed || wanted.get(entry.conversationId)?.threadId === entry.threadId) continue
+      if (!entry.listed || !picked(entry.conversationId) || undecided.has(entry.conversationId) || wanted.get(entry.conversationId)?.threadId === entry.threadId) continue
       this.#entries.delete(entry.conversationId)
+      this.#heardRows.delete(entry.conversationId)
       this.controlPreviews.forget(entry.conversationId)
       this.#capturing.delete(entry.conversationId)
       unlisted.push(entry.conversationId)
-      if (![...this.#entries.values()].some((other) => other.threadId === entry.threadId)) this.#following.get(entry.threadId)?.close()
+      const left = (perThread.get(entry.threadId) ?? 1) - 1
+      perThread.set(entry.threadId, left)
+      if (left <= 0) this.#following.get(entry.threadId)?.close()
     }
     const listed: LiveSummary[] = []
-    for (const [id, { row, threadId, runtime, where, quietSince }] of wanted) {
+    for (const [id, { row, threadId, runtime, where, quietSince, archived }] of wanted) {
       const known = this.#entries.get(id)
-      if (known && (!known.listed || this.#following.has(known.threadId))) continue
+      if (known && !known.listed) continue
       const summary = listedSummary(row, where, quietSince)
+      // What its change says, by the rule the account's notices use: only of a row heard here before (the first
+      // listing is where things stand, which a window marks without announcing), never of an archive's rows (listed
+      // at rest, not finished) nor of a quiet device's (nothing there runs).
+      const heard = this.#heardRows.get(id)
+      if (!archived) this.#heardRows.set(id, row)
+      const fact = heard && !archived && quietSince === undefined ? attentionFact(heard, row) : undefined
+      if (known && this.#following.has(known.threadId)) {
+        // A window follows it: its batches say the rest, but nothing comes from a device gone quiet, nor says it's back.
+        const held = known.summary
+        if (held?.quietSince !== summary.quietSince) {
+          known.summary = summary
+          listed.push(summary)
+          continue
+        }
+        // Nor do they carry its Thread's name: the list is the one word on it on every device, followed or not.
+        if (!held || held.threadTitle === summary.threadTitle) continue
+        const named: LiveSummary = { ...held }
+        if (summary.threadTitle === undefined) delete named.threadTitle
+        else named.threadTitle = summary.threadTitle
+        known.summary = named
+        listed.push(named)
+        continue
+      }
       if (known?.summary && JSON.stringify(known.summary) === JSON.stringify(summary)) continue
       const entry: Entry = known ?? { conversationId: id, threadId, harness: row.harness, createdAt: summary.createdAt, created: true, seq: 0, listed: true }
       if (runtime) entry.runtime = runtime
@@ -1611,27 +1825,56 @@ export class CloudConversations {
       if (row.nativeId) entry.nativeId = row.nativeId
       entry.summary = summary
       this.#entries.set(id, entry)
-      listed.push(summary)
+      // Said on this listing alone: a later one (a rename) carries no fact, so a window reloaded since never hears it again.
+      listed.push(fact ? { ...summary, attention: { kind: fact.kind, key: fact.key } } : summary)
     }
     // A Session that moved (another device's to the cloud, or back) is listed where it runs now, never unlisted on the way.
-    const gone = unlisted.filter((id) => !listed.some((summary) => summary.session.id === id))
+    const relisted = new Set(listed.map((summary) => summary.session.id))
+    const gone = unlisted.filter((id) => !relisted.has(id))
     if (listed.length) this.#options.emit(encodeRuntimeEvent({ type: "live-listed", summaries: listed }))
     if (gone.length) this.#options.emit(encodeRuntimeEvent({ type: "live-unlisted", ids: gone }))
     if (listed.length || gone.length) hostLog("cloud-conversations", "the account's list changed what's listed here", { listed: listed.length, unlisted: gone.length, moved: unlisted.length - gone.length })
   }
 
-  /** The sessions this Mac's harness stores keep changed: another device's rows that are this Mac's own go, or come back. */
-  nativeChanged(): void {
-    if (this.#list.known && this.#options.keepsNative) this.#reconcile()
+  /**
+   * The sessions this Mac's harness stores keep changed: another device's rows that are this Mac's own go, or come back.
+   * `changed` names the native sessions a write touched; none means any may have (the catalog was read anew, or lost a
+   * row). Changes are gathered for `NATIVE_CHANGED_MS` and looked at together, only the rows they name, one look at a
+   * time: a catalog writes on every turn of every session, and each used to list the account's rows here anew.
+   */
+  nativeChanged(changed?: readonly { harness: string; nativeId: string }[]): void {
+    if (!this.#options.keepsNative || this.#closed) return
+    const held = this.#nativeChanges
+    if (!changed) this.#nativeChanges = "all"
+    else if (held !== "all") {
+      const keys = held ?? new Set<string>()
+      for (const each of changed) keys.add(nativeKey(each.harness, each.nativeId))
+      this.#nativeChanges = keys
+    }
+    if (this.#nativeLook) return
+    this.#nativeLook = setTimeout(() => {
+      this.#nativeLook = undefined
+      const changes = this.#nativeChanges
+      this.#nativeChanges = undefined
+      // A list not read yet has nothing of this Mac's to hide; reading it reconciles it whole.
+      if (!changes || !this.#list.known || this.#closed) return
+      if (changes === "all") return this.#reconcile()
+      const only = new Set<string>()
+      for (const row of this.#list.sessions().values()) if (row.nativeId !== undefined && changes.has(nativeKey(row.harness, row.nativeId))) only.add(row.conversation)
+      if (only.size) this.#reconcile(only)
+    }, this.#options.nativeChangedMs ?? NATIVE_CHANGED_MS)
+    this.#nativeLook.unref?.()
   }
 
   /**
    * Another device's row for a session this Mac's own harness stores keep in the same folder: a second Mako on this Mac
    * reading the same stores, listing what this Mac lists already. One session, one row: this Mac's, read from its own
    * disk. A cloud machine's row is never one: a Session that moved there runs there, whatever copy is left here.
+   * Undefined while this Mac's catalog can't say.
    */
-  #keptHere(row: ListedSession): boolean {
-    return row.nativeId !== undefined && this.#options.keepsNative?.(row.harness, row.nativeId, row.folder) === true
+  #keptHere(row: ListedSession): boolean | undefined {
+    if (row.nativeId === undefined || !this.#options.keepsNative) return false
+    return this.#options.keepsNative(row.harness, row.nativeId, row.folder)
   }
 
   /**
@@ -1649,14 +1892,19 @@ export class CloudConversations {
     }, () => {})
   }
 
-  /** Tells the host of the archived cloud Threads when they changed, and stops following each: it says nothing now. */
+  /**
+   * Tells the host of the archived cloud Threads when they changed, and stops following each: it says nothing now. Only
+   * a list read says: before one is, or after a sign-out forgot it, the host keeps what it was told last.
+   */
   #archivedNow(): void {
+    const account = this.#accountId
+    if (!this.#list.known || !account) return
     const archived = this.#list.archived()
-    const key = [...archived.keys()].sort().join(",")
+    const key = `${account}\n${[...archived.keys()].sort().join(",")}`
     if (key === this.#archivedKey) return
     this.#archivedKey = key
     for (const thread of archived.keys()) this.#following.get(thread)?.close()
-    this.#options.archivedChanged?.(archived)
+    this.#options.archivedChanged?.(account, archived)
   }
 
   /**
@@ -1664,11 +1912,20 @@ export class CloudConversations {
    * moves and returns route it (`adopt`, `release`): the list hears of each a moment later, and a row from before a
    * return would send this Mac's calls to the cloud Thread that gave it back. Listed only where the store has it too.
    */
-  #listable(row: ListedSession): boolean {
-    const session = SessionIdSchema.safeParse(row.session)
-    const execution = session.success ? this.#options.threads?.()?.execution(session.data) : undefined
+  #listable(row: ListedSession, executions: ReadonlyMap<string, SessionExecution>): boolean {
+    const execution = executions.get(row.session)
     if (!execution) return true
     return execution.state === "elsewhere" && execution.owner.kind === "cloud" && row.runsOn.kind === "cloud" && execution.owner.runtime === cloudRuntimeOf(row.runsOn.threadId)
+  }
+
+  /** What this Mac's Thread store says of the rows' Sessions, read once for all of them (`#listable`). */
+  #executions(rows: readonly ListedSession[]): ReadonlyMap<string, SessionExecution> {
+    const store = this.#options.threads?.()
+    if (!store || !rows.length) return new Map()
+    return store.executionsOf(rows.flatMap((row) => {
+      const session = SessionIdSchema.safeParse(row.session)
+      return session.success ? [session.data] : []
+    }))
   }
 
   async #load(): Promise<void> {
@@ -1682,6 +1939,7 @@ export class CloudConversations {
       for (const entry of stored.data?.conversations ?? []) this.#entries.set(entry.conversationId, entry)
     }
     for (const entry of this.#entries.values()) if (entry.created && entry.summary?.session.status !== "closed") this.#follow(entry)
+    this.#options.turnOnChanged?.()
   }
 
   #saveSoon(): void {
@@ -1712,6 +1970,14 @@ export class CloudConversations {
   }
 }
 
+/** The ends a request reaches: its turn is over, whatever it did. */
+const ENDED_REQUEST = new Set<LiveRequest["status"]>(["completed", "failed", "interrupted", "canceled", "uncertain"])
+/** How many of a conversation's ended requests are remembered: far more than a batch restates. */
+const ENDED_KEPT = 64
+
+/** A native session of a harness, as `nativeChanged` names it. */
+const nativeKey = (harness: string, nativeId: string) => `${harness}\n${nativeId}`
+
 /** A snapshot's summary fields, which are all a window needs to list the conversation before it opens it. */
 function summaryOf(snapshot: LiveSummary): LiveSummary {
   const summary: LiveSummary = { session: snapshot.session, revision: snapshot.revision, createdAt: snapshot.createdAt, elsewhere: CLOUD_FOLDER_WHERE }
@@ -1722,6 +1988,7 @@ function summaryOf(snapshot: LiveSummary): LiveSummary {
   if (snapshot.epoch) summary.epoch = snapshot.epoch
   if (snapshot.threadPath) summary.threadPath = snapshot.threadPath
   if (snapshot.nativePaths) summary.nativePaths = snapshot.nativePaths
+  if (snapshot.nativeIds) summary.nativeIds = snapshot.nativeIds
   if (snapshot.hasSessionQuestions) summary.hasSessionQuestions = snapshot.hasSessionQuestions
   return summary
 }

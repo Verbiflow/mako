@@ -1,7 +1,8 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
-import { NATIVE_SESSIONS_VERSION } from "./version.js"
+import { NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
+import { WaitingForSchema } from "./attention.js"
 
 /**
  * An account's Threads as every device lists them: one row per Session, keyed by Mako's own Session and Thread IDs,
@@ -42,6 +43,11 @@ export const ReportedSessionSchema = z
     state: ListedStateSchema,
     /** What a `waiting` Session waits on, in a line: "Approve: npm test", "A question: which branch?". */
     waitingOn: z.string().max(200).optional(),
+    /**
+     * What a `waiting` Session waits on the person for (`attention.ts`): an approval, a question, or anything else. Said
+     * by its owner, so no device reads it from `waitingOn`'s words (link version 10 on).
+     */
+    waitingFor: WaitingForSchema.optional(),
     /** The folder it works in, where it runs: a Thread moved from a device keeps the device's own path. */
     folder: z.string().max(1024).optional(),
     createdAt: z.iso.datetime(),
@@ -59,6 +65,11 @@ export const ReportedSessionSchema = z
      * another device does, by the path its catalog reads it at (`mako:live-capture`), as `conversation` (link version 6 on).
      */
     capture: z.object({ path: z.string().min(1).max(4096) }).strict().optional(),
+    /**
+     * When what a list shows of it last changed, on its owner's clock (link version 9 on): a device that hears the row
+     * knows how long the change took to reach it.
+     */
+    changedAt: z.iso.datetime().optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -93,7 +104,7 @@ export type QuietDevice = z.infer<typeof QuietDeviceSchema>
 
 /** At most this many rows in one frame or event, well under a message's megabyte. */
 export const LISTED_PER_FRAME = 200
-/** An owner lists at most this many Sessions: the last 30 days' and any older one at work. */
+/** An owner lists at most this many Sessions: its sync window's (a week's) and any older one at work. */
 export const LISTED_PER_OWNER = 2_000
 
 /**
@@ -107,6 +118,8 @@ export const SessionsReportSchema = z
     owned: z.array(z.object({ session: z.uuid(), generation: GenerationSchema }).strict()).max(LISTED_PER_OWNER).optional(),
     listed: z.array(ReportedSessionSchema).max(LISTED_PER_FRAME),
     gone: z.array(z.object({ session: z.uuid(), generation: GenerationSchema }).strict()).max(LISTED_PER_OWNER),
+    /** When the owner sent it, on its clock (link version 9 on), for the gateway's log of how long a report took. */
+    reportedAt: z.iso.datetime().optional(),
   })
   .strict()
 export type SessionsReport = z.infer<typeof SessionsReportSchema>
@@ -149,16 +162,21 @@ export const SessionListingsSchema = z.object({
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
 /**
- * The rows a link of `version` takes: from link version 6, every one; before, a gateway knows neither field, so a
- * Session Mako hasn't opened isn't listed there and the rest go without their native IDs.
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 10, every one
+ * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
+ * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= NATIVE_SESSIONS_VERSION) return [...rows]
+  if (version >= WAITING_FOR_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
-    if (row.capture) continue
+    if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
-    delete older.nativeId
+    // Before version 10 a gateway knows no `waitingFor` (it reads `waitingOn`'s words); before 9, no `changedAt`;
+    // before 6, no native IDs either.
+    delete older.waitingFor
+    if (version < NUMBERED_LIVE_VERSION) delete older.changedAt
+    if (version < NATIVE_SESSIONS_VERSION) delete older.nativeId
     kept.push(older)
   }
   return kept
@@ -179,7 +197,11 @@ export function sameRunsOn(left: RunsOn, right: RunsOn): boolean {
   return left.kind === "device" ? right.kind === "device" && left.deviceId === right.deviceId : right.kind === "cloud" && left.threadId === right.threadId
 }
 
-/** Whether two rows would show the same, so a change a list wouldn't show tells nobody. When it was heard isn't compared. */
+/**
+ * Whether two rows would show the same, so a change a list wouldn't show tells nobody. When it was heard isn't compared.
+ * `activityAt` is: an owner says it alone at most once a minute, and with any other change at once, so a row that
+ * differs here moved something a list shows.
+ */
 export function sameListed(left: ListedSession | undefined, right: ListedSession): boolean {
   return (
     left !== undefined &&
@@ -191,6 +213,7 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.title === right.title &&
     left.state === right.state &&
     left.waitingOn === right.waitingOn &&
+    left.waitingFor === right.waitingFor &&
     left.folder === right.folder &&
     left.createdAt === right.createdAt &&
     left.activityAt === right.activityAt &&

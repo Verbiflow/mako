@@ -72,6 +72,27 @@ export function archivedByKeys(keys: readonly string[], hidden: ReadonlySet<stri
   if (!archive?.nativeArchived) return false
   return !keys.some((key) => hidden.has(threadShownKey(key, archive.nativeArchiveStamp)))
 }
+
+/** What of a conversation's listing names it to an archive: its id, and the native sessions and files its bindings read. */
+export interface ArchiveNamed {
+  session: { id: string; harness: string; nativeId?: string | undefined }
+  nativeIds?: readonly { provider: string; nativeId: string }[] | undefined
+  nativePaths?: readonly string[] | undefined
+}
+
+/**
+ * Every key an archive can name a conversation of this host by, from its listing alone: its live key, one for each
+ * native session its bindings ran in and one for each file they read. The one rule for the Thread lifecycle, which
+ * archives and restores by these keys, and for the Sessions report, which drops an archived conversation from the
+ * account's list: both read the listing (`LiveSummary`), so neither reads a journal in to answer.
+ */
+export function liveArchiveKeys(named: ArchiveNamed): string[] {
+  const keys = [threadArchiveKey({ kind: "live", id: named.session.id })]
+  const natives = named.nativeIds ?? (named.session.nativeId ? [{ provider: named.session.harness, nativeId: named.session.nativeId }] : [])
+  for (const { provider, nativeId } of natives) keys.push(threadArchiveKey({ kind: "native", provider, nativeId }))
+  for (const path of named.nativePaths ?? []) keys.push(threadArchiveKey({ kind: "file", path }))
+  return [...new Set(keys)]
+}
 /**
  * Restore markers a Session's current row makes stale: every one once the
  * harness no longer archives it, and those for an earlier archive when it

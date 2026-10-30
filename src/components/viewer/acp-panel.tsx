@@ -10,7 +10,7 @@ import { useLasting } from "@/components/ui/use-lasting"
 import { Shimmer } from "@/components/ui/shimmer"
 import { durationText } from "@mako/sessions/events"
 import { loadEarlierLive } from "@/state/live-recovery"
-import { continueTurn } from "@/state/acp-queue"
+import { continueTurn, turnUnderWay } from "@/state/acp-queue"
 import { skipWorktree } from "@/state/acp-start"
 import { WorktreeOpening } from "@/components/viewer/worktree-opening"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
@@ -29,7 +29,7 @@ import { toast } from "sonner"
 import type { LivePermissionRequest, LiveRequest } from "@/lib/types"
 import { harnessLabel } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { identifyTool } from "@mako/sessions/tool-identity"
+import { bareCommand, identifyTool } from "@mako/sessions/tool-identity"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import {
   CheckCheckIcon,
@@ -57,7 +57,11 @@ import { Orb } from "@/components/ui/orb/orb"
 const EMPTY_QUEUE: never[] = []
 const NO_RECOVERIES = { onTurns: new Map<string, LiveRequest>(), apart: EMPTY_QUEUE }
 
-export function AcpPanel() {
+/**
+ * `asks`: whether the panel draws the agent's approval and question under the transcript. The phone pins them in its
+ * own dock above its composer instead (`web-client/dock.tsx`), and says so with `false`.
+ */
+export function AcpPanel({ asks = true }: { asks?: boolean } = {}) {
   const scope = useConversationScope()
   const session = useAcp((state) => scopedLiveAcp(state, scope)?.session ?? null)
   const starting = useAcp((state) => scopedAcp(state, scope)?.kind === "starting")
@@ -87,7 +91,7 @@ export function AcpPanel() {
       <Blocks continued={continued} />
       {scope ? (
         <PaneWaiting />
-      ) : (
+      ) : !asks ? null : (
         <>
           <Permission />
           <SessionQuestion />
@@ -453,11 +457,16 @@ function Permission() {
  * works: Continue turn starts the agent again on this turn, which asks
  * again if it still needs to; Stop puts the request away.
  */
-function GonePermission({ permission }: { permission: LivePermissionRequest }) {
+export function GonePermission({ permission }: { permission: LivePermissionRequest }) {
   useHarnessIdentity()
   const key = useAcp((state) => activeLiveAcp(state)?.key)
   const harness = useAcp((state) => activeLiveAcp(state)?.harness)
   const canceling = useAcp((state) => activeLiveAcp(state)?.canceling ?? false)
+  // While a turn runs nothing is to be picked up: Continue turn would only queue Mako's words behind it.
+  const underWay = useAcp((state) => {
+    const live = activeLiveAcp(state)
+    return live ? turnUnderWay(live) : false
+  })
   const [continuing, setContinuing] = useState(false)
   const provider = harness ? harnessLabel(harness) : "The agent"
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
@@ -472,7 +481,7 @@ function GonePermission({ permission }: { permission: LivePermissionRequest }) {
         It asked about <span className={cn(!makoTool && !permission.detail && "font-mono")}>{makoTool ?? permission.title}</span>. Nothing can answer it now; continue the turn and it asks again if it still needs to.
       </p>
       <div className="flex flex-wrap gap-1.5 pl-5">
-        <button
+        {underWay ? null : <button
           type="button"
           disabled={!key || continuing}
           onClick={() => {
@@ -484,7 +493,7 @@ function GonePermission({ permission }: { permission: LivePermissionRequest }) {
         >
           <PlayIcon className="size-3 fill-current" strokeWidth={0} />
           {continuing ? "Continuing…" : "Continue turn"}
-        </button>
+        </button>}
         <button
           type="button"
           disabled={canceling}
@@ -505,7 +514,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
-    <div className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
+    <div data-permission={permission.id} className="shrink-0 border-t border-hairline bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         {permission.kind ? (
           <ToolGlyph
@@ -515,7 +524,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
         ) : (
           <ShieldQuestionIcon className="size-3.5 shrink-0 text-caution/90" />
         )}
-        <span className={cn("min-w-0 truncate", !makoTool && !permission.detail && "font-mono")}>{makoTool ?? permission.title}</span>
+        <span className={cn("min-w-0 truncate", !makoTool && !permission.detail && "font-mono")}>{makoTool ?? bareCommand(permission.title)}</span>
       </p>
       {permission.detail ? (
         <p data-request-detail className="max-w-prose pt-0.5 pb-2 text-label text-muted-foreground">{permission.detail}</p>
@@ -532,6 +541,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
             <button
               key={option.optionId}
               type="button"
+              data-permission-option={option.kind ?? "other"}
               onClick={() => acp.answerPermission(option.optionId)}
               className={cn(
                 "pressable flex items-center gap-1.5 rounded-md border px-2 py-1 text-label transition-colors",

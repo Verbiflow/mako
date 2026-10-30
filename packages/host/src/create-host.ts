@@ -140,6 +140,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         refreshMachineCarried: async () => {
           await machine?.refreshCarried()
         },
+        reportMachineSessions: () => machine?.reportSessions(),
         web: () => web,
         closing: () => closing,
         closeSocket,
@@ -197,6 +198,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       const { MachineRuntime, machineAgentChannel } = await (await import("./usage/index.js")).loadMachineRuntime()
       machine = new MachineRuntime({
         agent: machineAgentChannel(config.machineAgentFd),
+        signedFiles: async (request) => (await core.load("a file preview")).signedFile(request),
         profileHost: config.launchProfile === true,
         invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
         version: environment.version,
@@ -205,7 +207,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         installSignIns: async (signIns, secrets) => (await core.load("the machine's sign-ins")).installCloudSignIns(signIns, { home: homedir(), secrets }),
         openWorkspace: async (path) => (await core.load("the machine's workspace")).openMachineWorkspace(path),
         carriedFiles: (files) => void core.load("the machine's carried files").then((loaded) => loaded.machineCarriedFiles(files)),
-        workspaceFailed: (problem) => void core.load("the machine's workspace").then((loaded) => loaded.machineWorkspaceFailed(problem)),
+        workspaceFailed: (problem, reason) => void core.load("the machine's workspace").then((loaded) => loaded.machineWorkspaceFailed(problem, reason)),
         prepareFolder: async (path) => (await core.load("prepare a base's folder")).prepareFolder(path),
         prefetchStart: async (harness) => (await core.load("run a start ahead")).prefetchStart(harness),
         prefetchSignedIn: async (harness) => (await core.load("run a start's sign-in stage ahead")).prefetchSignedIn(harness),
@@ -213,10 +215,17 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
         // The core's publisher, once it's loaded: events reach it through the core's own tap.
         sessions: {
           report: (current) => core.current()?.sessions.report(current),
-          watch: (link, conversations) => core.current()?.sessions.watch(link, conversations),
+          linked: (current) => core.current()?.sessions.linked(current),
+          watch: (link, conversations, after) => core.current()?.sessions.watch(link, conversations, after),
         },
         media: () => core.current()?.media,
         linked: async (link) => (await core.load("the machine's link")).machineLinked(link),
+        restore: async (link, generation) => (await core.load("restore the Thread's save")).restoreMachineSave(link, generation),
+        // Once the core has loaded; before then nothing works, so there's nothing to save.
+        saves: {
+          working: (busy) => core.current()?.machineSaves?.working(busy),
+          settle: async (why) => core.current()?.machineSaves?.settle(why),
+        },
       })
     }
     web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {

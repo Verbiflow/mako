@@ -97,6 +97,7 @@ const reads = [
   "mako:lost-versions",
   "mako:plan-builds",
   "mako:harness-descriptors",
+  "mako:access-choices",
   "mako:thread-continuation-plan",
   "mako:thread-restore-plan",
   /** Weighs a Thread's harnesses against what the cloud says it runs; changes nothing. */
@@ -123,6 +124,12 @@ const reads = [
   "mako:cloud-account",
   /** How this device's Sessions stand in the account, as last read. */
   "mako:sync-status",
+  /** How this device's sync goes, from memory. */
+  "mako:sync-readings",
+  /** Turning the cloud on, read from what owns each step; keeps only when each was first seen done. */
+  "mako:cloud-turn-on",
+  /** Asks the cloud again what the account has: a repeat asks the same. */
+  "mako:cloud-turn-on-check",
   /** May refresh the connection token, which another caller would have refreshed the same way. */
   "mako:cloud-devices",
   "mako:cloud-browser-sessions",
@@ -145,6 +152,7 @@ const reads = [
   "mako:host-log-path",
   "mako:provider-residency",
   "mako:daemon-status",
+  "mako:session-reader-history",
   "mako:daemon-login",
   "mako:utility-model-settings",
   "mako:harness-order-saved",
@@ -207,6 +215,8 @@ const replays = [
   "mako:cloud-prepare",
   /** Offered once per account on this Mac: a repeat finds it offered. */
   "mako:cloud-offer-projects",
+  /** Asking again for the bases that failed: a base asked for twice is one base. */
+  "mako:cloud-turn-on-retry-bases",
   /** A move is settled by its id: a repeat joins the move running, or answers how it went. */
   "mako:thread-move",
   /** A return is settled by its id: a repeat joins the return running, or answers how it went. */
@@ -219,6 +229,8 @@ const replays = [
   "mako:move-arrive",
   /** A Thread's departure for its device: a repeat finds it released, sends the same checkpoint by its hash, and only what's new of the records. */
   "mako:move-depart",
+  /** Following a Thread's checkout on its machine only reads it, sending each checkpoint by its hash. */
+  "mako:move-follow",
   /** A Thread staying on its machine after a departure: a repeat finds it there and changes nothing. */
   "mako:move-stay",
   /** Cancelling a sign-in that has ended cancels nothing. */
@@ -277,6 +289,10 @@ const replays = [
   "mako:restore-version",
   /** `Attribution.chooseFile`: one row a Thread's spelling; the same pick again writes the same row. */
   "mako:choose-file-reference",
+  /** `AccessChoiceStore.choose`: the same choice again changes nothing. */
+  "mako:access-choose",
+  /** `AccessChoiceStore.adopt`: takes only where no choice is made, so a repeat takes nothing. */
+  "mako:access-adopt",
   /** `PlanBuilds.record`: keyed by plan id, and a build no newer than the recorded one changes nothing. */
   "mako:plan-build-record",
   /** `PlanBuilds.claim`: the claim id; a repeat gets the first answer. */

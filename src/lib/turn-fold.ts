@@ -6,7 +6,9 @@ import { eventWords, isBoundary } from "@/lib/transcript-events"
  * What a settled turn folds away: everything it did on the way to its
  * answer, behind one row ("Worked for 3m 12s"), with the answer itself left
  * in view. A steer starts a new stretch, folded on its own ("Continued for
- * 40s"), so the person's words mid-turn stay where they were said.
+ * 40s"), so the person's words mid-turn stay where they were said. A
+ * continuation of a turn cut short doesn't: the turn went on, so its work
+ * is one stretch, timed without the wait before it went on.
  */
 export interface TurnFold {
   /** Which stretch of the turn it folds: 0 before any steer, then one more after each. */
@@ -23,6 +25,11 @@ export interface TurnFold {
   from?: number
   /** When its last message landed, the answer's included. */
   to?: number
+  /**
+   * How long it worked: `from` to `to`, less the time a cut-short turn
+   * waited before it went on (a continuation inside the stretch).
+   */
+  worked?: number
   /** The messages it hides: what its row counts. */
   messages: ChatMessage[]
 }
@@ -36,6 +43,8 @@ export interface TurnFold {
 export function stillDrawn(section: PlacedSection): boolean {
   // What the agent showed the person, or made for them, is part of the answer wherever it stands.
   if (section.kind === "shown" || section.kind === "made") return true
+  // A step the loss of a machine undid changes the person's files; where the turn picked it up again stays said.
+  if (section.kind === "continued") return section.continued.reason === "machine-lost"
   if (section.kind !== "note") return false
   const note = section.message.note
   if (!note) return false
@@ -45,7 +54,28 @@ export function stillDrawn(section: PlacedSection): boolean {
 }
 
 function messagesOf(section: PlacedSection): ChatMessage[] {
-  return section.kind === "work" ? section.messages : section.kind === "shown" || section.kind === "made" ? [] : [section.message]
+  return section.kind === "work" ? section.messages : section.kind === "shown" || section.kind === "made" || section.kind === "continued" ? [] : [section.message]
+}
+
+/** The time `sections` worked from `from`: each part's start to its last message, a continuation starting the next part. */
+function workedFor(sections: readonly PlacedSection[], from: number | undefined): number | undefined {
+  let worked: number | undefined
+  let start = from
+  let last: number | undefined
+  const settle = () => {
+    if (start !== undefined && last !== undefined && last >= start) worked = (worked ?? 0) + last - start
+  }
+  for (const section of sections) {
+    if (section.kind === "continued") {
+      settle()
+      start = section.message.timestamp
+      last = undefined
+      continue
+    }
+    for (const message of messagesOf(section)) if (message.timestamp !== undefined) last = message.timestamp
+  }
+  settle()
+  return worked
 }
 
 /** A section that answers: the agent's words, or what it showed the person or made for them. */
@@ -77,7 +107,8 @@ export function turnFolds(sections: readonly PlacedSection[], began?: number): T
       const kept: number[] = []
       for (let index = start; index < answer; index++) if (stillDrawn(sections[index]!)) kept.push(index)
       const last = sections.slice(start, end).flatMap(messagesOf).findLast((message) => message.timestamp !== undefined)
-      folds.push({ part, start, end: answer, kept, continued, from, to: last?.timestamp, messages: hidden.flatMap(messagesOf) })
+      const worked = workedFor(sections.slice(start, end), from)
+      folds.push({ part, start, end: answer, kept, continued, from, to: last?.timestamp, ...worked !== undefined && { worked }, messages: hidden.flatMap(messagesOf) })
     }
   }
   for (const [index, section] of sections.entries()) {

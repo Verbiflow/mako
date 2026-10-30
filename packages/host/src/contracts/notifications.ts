@@ -1,4 +1,25 @@
 /**
+ * What tells the person a Session needs them, as every surface says it (`@mako/protocol/attention`): the five kinds,
+ * the rule a Session's change is one of them by, and the one wording. The desktop, the web app and the account's Web
+ * Push all read these, so none decides or words a notice on its own.
+ */
+export {
+  ATTENTION_SUMMARY_FROM,
+  ATTENTION_WORDS,
+  asks,
+  attentionHeadline,
+  attentionLine,
+  attentionSummary,
+  foldedBody,
+  needsYouWaiting,
+  noticeTag,
+  requestWaiting,
+  type AttentionKind,
+  type Waiting,
+  type WaitingFor,
+} from "@mako/protocol/attention"
+
+/**
  * Desktop notifications and the app-icon badge.
  *
  * The renderer decides *what* deserves attention (it owns the attention model

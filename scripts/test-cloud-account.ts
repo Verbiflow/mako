@@ -11,7 +11,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises"
 import { createServer, type IncomingMessage } from "node:http"
-import { connect, createServer as createTcpServer, type Socket } from "node:net"
+import { connect, createServer as createTcpServer, Socket } from "node:net"
 import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -25,6 +25,7 @@ import {
   PONG,
   PROTOCOL_VERSION,
   Payload,
+  QUIET_VERSION,
   type RuntimeFrame,
   SUBPROTOCOL,
   decodeClientFrame,
@@ -34,6 +35,8 @@ import {
   offeredCredential,
   problem,
   serveRuntime,
+  PROBE_ANSWER_MS,
+  SILENT_WHILE_WORKING_MS,
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
 import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
@@ -43,6 +46,7 @@ import { declareCloudAccountMethods } from "@mako/host/usage/cloud-account-metho
 import { RequestTraces } from "@mako/host/usage/request-trace"
 import { HostMethods } from "@mako/host/transport/methods"
 import { unwatchedWork } from "@mako/host/base/event-loop"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { CloudSignInSync } from "@mako/host/harnesses/cloud-sign-ins"
 import { HarnessAccounts } from "@mako/host/harnesses/accounts"
 import { AccountRoot } from "@mako/host/harnesses/accounts-common"
@@ -52,7 +56,7 @@ import type { Machine } from "@mako/host/base/machine"
 import type { CloudSignInsState } from "@mako/host/contracts/cloud-sign-ins"
 import type { CloudAccount, CloudAccountState, CloudBrowserSession, CloudDevice } from "@mako/host/contracts/cloud-account"
 import type { DiagnosticEvents } from "@mako/host/contracts/telemetry"
-import { aesSealer, fileSecrets, wrappedKey } from "@mako/host/base/secrets"
+import { aesSealer, fileSecrets, wrappedKey, type Secrets } from "@mako/host/base/secrets"
 import type { SecretEncryption } from "@mako/host/base/secure-storage"
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-cloud-account-"))
@@ -102,6 +106,8 @@ async function fakeCloud() {
   /** The gateway a runtime's link reaches: the protocol's fake, which answers renewals with the same check. */
   const gateway = createFakeGateway({ renew: (value) => (verify(value) ? Math.floor(Date.now() / 1000) + options.tokenSeconds : undefined) })
   const enrolments: Extract<RuntimeFrame, { type: "enroll" }>[] = []
+  /** Why each runtime link said it was going quiet, in order. */
+  const quiets: string[] = []
   const token = (deviceId: string) => {
     const iat = Math.floor(Date.now() / 1000) + options.clockSkewSeconds
     const exp = iat + options.tokenSeconds
@@ -195,6 +201,12 @@ async function fakeCloud() {
       bases.push(...repositories)
       return send(202, JSON.stringify({ bases: repositories.map((repository) => ({ name: "b-0123456789abcdef", repository })) }))
     }
+    if (request.method === "POST" && url.pathname === "/v1/bases/standing") {
+      const { repositories } = z.object({ repositories: z.array(z.object({ url: z.string(), branch: z.string().optional() })) }).parse(await json(request))
+      // A private repository the cloud's GitHub App isn't on, and one whose link would lead anywhere but GitHub.
+      const standing = (url: string) => ({ state: "waiting", message: "could not read Username", reason: "no-access", install: url.endsWith("/shop") ? "https://github.com/apps/mako/installations/new" : "https://elsewhere.example/install" })
+      return send(200, JSON.stringify({ bases: repositories.map((repository) => ({ repository, standing: standing(repository.url) })) }))
+    }
     if (request.method === "POST" && url.pathname === "/v1/threads") {
       const body = await json(request)
       threads.push(body)
@@ -284,6 +296,7 @@ async function fakeCloud() {
         if (text === PING) return ws.send(PONG)
         const frame = decodeRuntimeFrame(text)
         if (frame.type === "enroll") enrolments.push(frame)
+        if (frame.type === "going-quiet") quiets.push(frame.reason)
         if (frame.type === "renew") calls.push("runtime renew")
         link.sendUnchecked(text)
       })
@@ -342,6 +355,10 @@ async function fakeCloud() {
       accountEvents.push(entry)
       for (const ws of following) if (ws.readyState === ws.OPEN) ws.send(eventFrame(entry))
     },
+    /** A number given out and never sent, as an event lost on its way would look to a follower. */
+    skip() {
+      accountEvents.push({ seq: accountEvents.length + 1, at: new Date().toISOString(), text: JSON.stringify({ type: "device-joined-elsewhere" }) })
+    },
     stop: () => {
       server.closeAllConnections()
       server.close()
@@ -363,6 +380,7 @@ async function fakeCloud() {
     account,
     gateway,
     enrolments,
+    quiets,
     /** The account connections; `runtimes` are the devices' runtime links. */
     sockets: () => [...sockets].filter(([, held]) => held.kind === "account").map(([socket]) => socket),
     runtimes: () => [...sockets].filter(([, held]) => held.kind === "runtime").map(([socket]) => socket),
@@ -719,9 +737,15 @@ test("a sign-in the cloud saw used from somewhere else signs this Mac out, sayin
 })
 
 /** Waits for `check` to hold, a few ms at a time, failing with `label` after five seconds. */
-async function waitFor(check: () => boolean, label: string): Promise<void> {
-  for (const deadline = Date.now() + 5_000; !check(); await new Promise((resolve) => setTimeout(resolve, 10)))
+async function waitFor(check: () => boolean | Promise<boolean>, label: string): Promise<void> {
+  for (const deadline = Date.now() + 5_000; !(await check()); await new Promise((resolve) => setTimeout(resolve, 10)))
     if (Date.now() > deadline) throw new Error(`timed out: ${label}`)
+}
+
+/** The last account event the sealed sign-in under `secretName` says this Mac heard. */
+async function heardUpTo(secretName: string): Promise<number | undefined> {
+  const record = await secrets().read("mako-sign-in", secretName)
+  return record ? z.object({ seen: z.number().optional() }).parse(JSON.parse(record.value)).seen : undefined
 }
 
 test("the account's stream says when a device joins, once, and a Mac that was off hears it when it's back", async () => {
@@ -740,7 +764,9 @@ test("the account's stream says when a device joins, once, and a Mac that was of
   cloud.announce({ type: "device-removed", deviceId: self.id, reason: "removed", by: null }, new Date().toISOString())
   await waitFor(() => heard.length === 2, "a removal is said, as this Mac's own")
   assert.deepEqual(heard[1], { seq: 3, type: "device-removed", mine: true }, "an unknown kind is passed over, never refused")
+  // Heard, then kept: closing keeps the last one heard rather than wait for the next write.
   first.accounts.close()
+  await waitFor(async () => (await heardUpTo(secretName)) === 3, "the last event heard kept")
 
   // While this Mac was off a device joined; another joined before this Mac did, which isn't news to it.
   cloud.announce(joined(randomUUID()))
@@ -759,6 +785,56 @@ test("the account's stream says when a device joins, once, and a Mac that was of
   await new Promise((resolve) => setTimeout(resolve, 200))
   assert.deepEqual(seen, [], "a device that joined before this Mac did isn't news to it")
   newMac.accounts.close()
+})
+
+test("a number the account's stream skipped, or one it says was lost, is said as a gap, so what lists the account reads it whole again", async () => {
+  const cloud = await fakeCloud()
+  const gaps: Array<{ after: number; seq: number; why: string }> = []
+  const heard: number[] = []
+  await signedIn(cloud, { secretName: "cloud/account-gaps", onAccountEvent: (event) => heard.push(event.seq), onAccountGap: (gap) => gaps.push(gap) })
+  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 0`), "followed the account's stream")
+  const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+  cloud.announce(joined())
+  await waitFor(() => heard.length === 1, "the first heard")
+  assert.deepEqual(gaps, [], "in order: no gap")
+  cloud.skip()
+  cloud.announce(joined())
+  await waitFor(() => heard.length === 2, "the one after the skipped number heard")
+  assert.deepEqual(gaps, [{ after: 1, seq: 3, why: "skipped" }])
+  cloud.announce({ type: "lost" })
+  await waitFor(() => gaps.length === 2, "a lost one said")
+  assert.deepEqual(gaps[1], { after: 3, seq: 4, why: "lost" })
+})
+
+test("account events are told as they're heard, in order, while the keychain is still writing the last one heard, and it's kept with the newest", async () => {
+  const cloud = await fakeCloud()
+  const secretName = "cloud/account-events-held"
+  const base = secrets()
+  // A keychain that answers late: every write waits until it's let go.
+  let letGo: () => void = () => {}
+  let held = false
+  const late: Secrets = {
+    durable: () => base.durable(),
+    read: (kind, name) => base.read(kind, name),
+    write: async (kind, name, value, options) => {
+      if (held) await new Promise<void>((resolve) => (letGo = resolve))
+      return base.write(kind, name, value, options)
+    },
+    delete: (kind, name) => base.delete(kind, name),
+    list: (kind) => base.list(kind),
+  }
+  const heard: number[] = []
+  const mac = await signedIn(cloud, { secretName, secrets: late, onAccountEvent: (event) => heard.push(event.seq) })
+  await waitFor(() => cloud.subscribes.includes(`account:${cloud.account.id} after 0`), "followed the account's stream")
+  held = true
+  const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+  for (let event = 0; event < 5; event++) cloud.announce(joined())
+  await waitFor(() => heard.length === 5, "every event told, none waiting on the keychain")
+  assert.deepEqual(heard, [1, 2, 3, 4, 5], "in the order the stream said them")
+  held = false
+  mac.accounts.close()
+  letGo()
+  await waitFor(async () => (await heardUpTo(secretName)) === 5, "the newest kept")
 })
 
 test("a sign-out the cloud didn't hear is kept sealed and finished, here or after a restart, never leaving a working credential", async () => {
@@ -837,6 +913,16 @@ test("a move handed over goes as JSON carries its handoff, and its refusal withi
   const { reason } = MoveRefuseRequestSchema.parse(cloud.moves[1]?.body)
   assert.equal(reason.length, MOVE_REASON_MAX)
   assert.ok(reason.startsWith("The arrival failed: ") && reason.endsWith("…"))
+})
+
+test("a base the cloud can't read says where on GitHub to give it access, and only ever a GitHub page", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { secretName: "cloud/bases" })
+  const read = await mac.accounts.baseStandings([{ url: "https://github.com/acme/shop" }, { url: "https://github.com/acme/other" }])
+  assert.deepEqual(read?.map(({ standing }) => (standing.state === "waiting" ? [standing.reason, standing.install] : standing.state)), [
+    ["no-access", "https://github.com/apps/mako/installations/new"],
+    ["no-access", undefined],
+  ])
 })
 
 test("without a keychain the sign-in lasts until Mako quits and nothing is written", async () => {
@@ -992,6 +1078,25 @@ test("the runtime's link comes back by itself and claims its Threads, so the gat
   assert.ok(connected(mac.accounts.account().state), "and no one saw it")
 })
 
+test("a runtime link silent while it sends what another device watches is asked whether it's alive: one that answers is kept, a stalled one is replaced within seconds", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { runtime: laptop })
+  while (cloud.enrolments.length === 0) await sleep(10)
+  await sleep(SILENT_WHILE_WORKING_MS + 100)
+  mac.accounts.liveSent()
+  await sleep(PROBE_ANSWER_MS + 300)
+  assert.equal(cloud.enrolments.length, 1, "it answered: kept")
+  // Stalled: nothing it sends is read, nothing answers, and nothing closes it.
+  const [socket] = cloud.runtimes()
+  // `ws` keeps the TCP socket under it as `_socket`: paused, it reads nothing and answers nothing, and stays open.
+  z.object({ _socket: z.instanceof(Socket) }).loose().parse(socket)._socket.pause()
+  const stalled = Date.now()
+  await sleep(SILENT_WHILE_WORKING_MS + 100)
+  mac.accounts.liveSent()
+  await waitFor(() => cloud.enrolments.length === 2, "replaced by a new link")
+  assert.ok(Date.now() - stalled < SILENT_WHILE_WORKING_MS + PROBE_ANSWER_MS + 1_500, `found in ${Date.now() - stalled} ms`)
+})
+
 test("a device removed while its runtime is connected signs out, and its runtime stops", async () => {
   const cloud = await fakeCloud()
   const mac = await signedIn(cloud, { runtime: laptop })
@@ -1003,6 +1108,53 @@ test("a device removed while its runtime is connected signs out, and its runtime
   assert.equal(state.status === "signed-out" && state.notice?.kind, "removed")
   await sleep(200)
   assert.equal(cloud.runtimes().length, 0)
+})
+
+test("a Mac going to sleep says so on its runtime's link first, which stays closed until the wake; shutting down, quitting and signing out say it too", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud, { runtime: laptop })
+  while (cloud.enrolments.length === 0) await sleep(10)
+  mac.accounts.leaving("sleep")
+  await waitFor(() => cloud.runtimes().length === 0, "the runtime's link closed at once")
+  assert.deepEqual(cloud.quiets, ["sleep"], "said before it closed, so the cloud takes the device as quiet now")
+  // Longer than the first reconnect's backoff: a link the cloud let go isn't opened again while the Mac sleeps.
+  await sleep(1_200)
+  assert.equal(cloud.enrolments.length, 1, "not opened again before the wake")
+  assert.ok(connected(mac.accounts.account().state), "and nothing shown for it")
+  mac.accounts.wake()
+  await waitFor(() => cloud.enrolments.length === 2 && cloud.runtimes().length === 1, "back at the wake")
+
+  mac.accounts.leaving("quit")
+  await waitFor(() => cloud.runtimes().length === 0, "shutting down")
+  mac.accounts.wake()
+  await waitFor(() => cloud.enrolments.length === 3 && cloud.runtimes().length === 1, "back")
+  await sleep(50)
+  await mac.accounts.signOut()
+  await waitFor(() => cloud.quiets.length === 3, "signing out")
+  assert.deepEqual(cloud.quiets, ["sleep", "quit", "sign-out"])
+
+  const other = await signedIn(cloud, { runtime: laptop })
+  await waitFor(() => cloud.runtimes().length === 1, "the other Mac's runtime")
+  await sleep(50)
+  other.accounts.close()
+  await waitFor(() => cloud.quiets.length === 4, "quitting Mako")
+  assert.equal(cloud.quiets.at(-1), "quit")
+})
+
+test("a Mac on a gateway older than the frame closes its runtime's link for the sleep all the same, and says nothing it can't", async () => {
+  const cloud = await fakeCloud()
+  const older: CloudRuntime = {
+    serve: (link, { runtimeId, credential, threads }) =>
+      serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max: QUIET_VERSION - 1 }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
+  }
+  const mac = await signedIn(cloud, { runtime: older })
+  while (cloud.enrolments.length === 0) await sleep(10)
+  await sleep(50)
+  mac.accounts.leaving("sleep")
+  await waitFor(() => cloud.runtimes().length === 0, "closed cleanly, which any gateway hears")
+  assert.deepEqual(cloud.quiets, [], "no frame it doesn't know")
+  mac.accounts.wake()
+  await waitFor(() => cloud.enrolments.length === 2, "back at the wake")
 })
 
 /** Another device's call to `runtimeId` through its session, as that device. */
@@ -1076,6 +1228,7 @@ test("a grant or a revoke while signed in reads the sign-ins again, with nothing
         if (event.type === "cloud-sign-ins") shown.push(event.signIns)
       },
       fixture: false,
+      jobs: new HostJobs(),
       // Sharing is on by default; with no harnesses here, there's nothing of this Mac's to read.
       harnessSignIns: (options) => new CloudSignInSync({ ...options, accounts: new HarnessAccounts(registry, new AccountRoot(join(scratch, "user"))), capabilities: registry }),
     }

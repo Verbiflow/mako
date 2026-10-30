@@ -16,7 +16,9 @@ import {
   requestsDelta,
   sessionDelta,
   sharedSession,
+  traceOf,
   type InterruptionReason,
+  type LiveBatch,
   type LiveDriverEvent,
   type LiveRequest,
   type LiveSnapshot,
@@ -38,6 +40,8 @@ import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
 import { changedEntryStart, deliverLiveUpdates } from "@mako/sessions/live-content"
+import { bareCommand } from "@mako/sessions/tool-identity"
+import { questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { LiveAccounts } from "./live-accounts.js"
 import { LiveActions } from "./live-actions.js"
@@ -63,6 +67,7 @@ import { syncMemory } from "./live-ledger.js"
 import { LiveMoves } from "./live-moves.js"
 import { LiveQuestions } from "./live-questions.js"
 import { LiveRecords } from "./live-records.js"
+import { isPaged } from "./paged-entries.js"
 import { LiveRelocations } from "./live-relocations.js"
 import { LiveRestarts } from "./live-restarts.js"
 import { ContextBundles } from "./live-context.js"
@@ -73,9 +78,24 @@ import { LiveTransfers } from "./live-transfers.js"
 
 /** How long after the host starts it moves journals' copies of their history onto records (`LiveSources.settleBases`). */
 const SETTLE_AFTER_START_MS = 60_000
+/** The most entries a batch carries of a changed base: a window's page (`carriesBase`). */
+const BATCH_BASE_ENTRIES = 512
 const SETTLE_EVERY_MS = 15 * 60_000
 /** How often Mako tries again to write a conversation it couldn't save (`saveAgain`): soon after space comes back. */
 const SAVE_AGAIN_MS = 5_000
+/** What a conversation in memory is working on, as the lifecycle lists it; undefined while it works on nothing. */
+function residentWork(resident: Resident): LifecycleWork | undefined {
+  const { snapshot } = resident
+  const finishing = resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing
+  const requests = snapshot.requests.filter((request) => request.status === "dispatching" || request.status === "queued")
+  const native = snapshot.nativeAgents?.agents.filter(isBusyNativeAgent) ?? []
+  const background = Boolean(snapshot.session.backgroundTasks)
+  if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !background && !requests.length && !native.length && !snapshot.permissions.length))) return undefined
+  const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || background || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
+  return { id: snapshot.session.id, token: `${resident.generation}:${requests.map((request) => request.id).join(":")}:${JSON.stringify(native.map((agent) => [agent.nativeId, agent.nativeRunId ?? agent.observedAt]))}`, title: snapshot.session.title || "Untitled conversation", provider: snapshot.session.harness, cwd: snapshot.session.cwd, status, stoppable: !finishing }
+}
+
+const startingWork = (id: string): LifecycleWork => ({ id, token: id, title: "Starting an agent", provider: "", cwd: "", status: "finishing", stoppable: false })
 
 /** Owns durable conversation intent and observation. Providers still own execution. */
 export class LiveConversations {
@@ -136,6 +156,8 @@ export class LiveConversations {
         this.counts.loaded(resident)
       },
       compact: (path) => { void this.reclaims.reclaim(path) },
+      paged: (id) => this.dependencies.historyPaged?.(id),
+      released: (id) => this.dependencies.historyReleased?.(id),
     })
     this.moves = new LiveMoves({
       dependencies,
@@ -164,6 +186,7 @@ export class LiveConversations {
       residents: () => this.records.values(),
       require: (id) => this.records.require(id),
       load: (id) => this.records.load(id),
+      loadSliced: (id) => this.records.loadSliced(id),
       request: (id, requestId) => this.records.request(id, requestId),
       add: (resident) => this.records.add(resident),
       control: conversationControl,
@@ -306,19 +329,16 @@ export class LiveConversations {
   }
 
   lifecycleWork(): LifecycleWork[] {
-    const work: LifecycleWork[] = [...this.records.values()].flatMap((resident) => {
-      const { snapshot } = resident
-      const finishing = resident.transferring || resident.opening || resident.checkpointing || resident.rewinding || resident.closing
-      const requests = snapshot.requests.filter((request) => request.status === "dispatching" || request.status === "queued")
-      const native = snapshot.nativeAgents?.agents.filter(isBusyNativeAgent) ?? []
-      const background = Boolean(snapshot.session.backgroundTasks)
-      if (!finishing && (!resident.driver || (snapshot.session.status !== "running" && !background && !requests.length && !native.length && !snapshot.permissions.length))) return []
-      const status = finishing ? "finishing" : snapshot.permissions.length || native.some((agent) => agent.state.kind === "waiting") ? "waiting" : snapshot.session.status === "running" || background || native.some((agent) => agent.state.kind === "working") ? "running" : "queued"
-      return [{ id: snapshot.session.id, token: `${resident.generation}:${requests.map((request) => request.id).join(":")}:${JSON.stringify(native.map((agent) => [agent.nativeId, agent.nativeRunId ?? agent.observedAt]))}`, title: snapshot.session.title || "Untitled conversation", provider: snapshot.session.harness, cwd: snapshot.session.cwd, status, stoppable: !finishing }]
-    })
-    for (const id of this.launches.startingIds()) if (!work.some((item) => item.id === id)) work.push({ id, token: id, title: "Starting an agent", provider: "", cwd: "", status: "finishing", stoppable: false })
+    const work: LifecycleWork[] = [...this.records.values()].flatMap((resident) => residentWork(resident) ?? [])
+    for (const id of this.launches.startingIds()) if (!work.some((item) => item.id === id)) work.push(startingWork(id))
     for (const path of this.sources.capturing()) work.push({ id: `capture:${path}`, token: path, title: "Saving a conversation", provider: "", cwd: path, status: "finishing", stoppable: false })
     return work
+  }
+
+  /** One conversation's work, as `lifecycleWork` lists it; undefined while it has none. Reads only memory. */
+  workOf(id: string): LifecycleWork | undefined {
+    const resident = this.records.get(id)
+    return (resident && residentWork(resident)) ?? (this.launches.starting(id) ? startingWork(id) : undefined)
   }
 
   closeForExit(ids?: string[]): Promise<void> {
@@ -366,17 +386,19 @@ export class LiveConversations {
   }
 
   /**
-   * What a conversation waits on, in a line: its first approval, else its latest open question. Memory keeps whatever
+   * What a conversation waits on, as every surface says it (`requestWaiting`): its first request of the person (a
+   * question, even one asked as an approval, or an approval), else its latest open question. Memory keeps whatever
    * waits, so one only on disk waits on nothing, and isn't read back in to find out.
    */
-  waitingOn(id: string): string | undefined {
+  waitingOn(id: string): Waiting | undefined {
     const resident = this.records.has(id) ? this.records.load(id) : undefined
     if (!resident) return undefined
     const permission = resident.snapshot.permissions[0]
-    if (permission) return `Approve: ${permission.title}`
+    // A command as its person would type it: Codex asks about `/bin/zsh -lc '…'`, which says nothing more.
+    if (permission) return requestWaiting(permission, bareCommand)
     const question = latestPendingQuestion(conversationControl(resident), resident.snapshot.requests)
     const asked = question?.native.questions.find((item) => !question.answered?.includes(item.id))
-    return asked ? `A question: ${asked.question}` : undefined
+    return asked ? questionWaiting(asked.question) : undefined
   }
 
   /**
@@ -737,7 +759,7 @@ export class LiveConversations {
    * what reads the history whole or tells its harness something waits for it.
    */
   async historyReady(id: string): Promise<void> {
-    const resident = this.records.load(id)
+    const resident = this.records.has(id) ? this.records.load(id) : await this.records.loadSliced(id)
     if (resident) await this.sources.readBase(resident)
   }
 
@@ -1229,14 +1251,21 @@ export class LiveConversations {
     return this.closing.stop()
   }
 
+  /**
+   * A change goes out in the next batch: at once (the next turn of the event loop) when the conversation hasn't
+   * flushed for a frame, else when the frame since its last flush has passed. So the first token of a burst isn't held,
+   * and a stream goes at most every `BATCH_MS`, in batches every window, watching device and the journal share.
+   */
   private schedule(resident: Resident): void {
-    resident.timer ??= setTimeout(() => {
+    if (resident.timer) return
+    const wait = resident.flushedAt === undefined ? 0 : Math.max(0, resident.flushedAt + BATCH_MS - performance.now())
+    resident.timer = setTimeout(() => {
       try {
         this.flush(resident)
       } catch (error) {
         this.storageFailed(resident, { error })
       }
-    }, 16)
+    }, wait)
   }
 
   /** See `LiveAccess.keep`. */
@@ -1279,6 +1308,7 @@ export class LiveConversations {
       activityAt: resident.activityAt,
     }
     resident.journal.commit(snapshot, previous, previous.blocks === resident.snapshot.blocks ? delivery.grown : undefined)
+    resident.flushedAt = performance.now()
     resident.storageFault = false
     resident.updates = []
     resident.pendingCharacters = 0
@@ -1286,13 +1316,12 @@ export class LiveConversations {
     resident.journalSnapshot = snapshot
     resident.usedAt = this.dependencies.now?.() ?? Date.now()
     this.records.scheduleSweep()
+    this.records.pageAllNow(resident)
     syncMemory(this.dependencies.memory, previous.session, snapshot.session)
     if (previous.requests !== snapshot.requests) this.dependencies.turns?.(previous, snapshot)
     if (previous.control !== snapshot.control || previous.threadPath !== snapshot.threadPath)
       this.threads.register(snapshot, undefined)
-    this.dependencies.emit({
-      type: "live-batch",
-      batch: {
+    const batch: LiveBatch = {
         id: snapshot.session.id,
         revision: snapshot.revision,
         epoch: this.epoch,
@@ -1310,7 +1339,7 @@ export class LiveConversations {
         spentThrough: previous.spentThrough !== snapshot.spentThrough ? (snapshot.spentThrough ?? null) : undefined,
         control:
           previous.control !== snapshot.control ? snapshot.control : undefined,
-        base: previous.base !== snapshot.base ? snapshot.base : undefined,
+        ...previous.base !== snapshot.base && (carriesBase(snapshot.base) ? { base: snapshot.base } : { historyChanged: true }),
         baseCoveredBlocks: previous.baseCoveredBlocks !== snapshot.baseCoveredBlocks
           ? (snapshot.baseCoveredBlocks ?? 0) : undefined,
         threadPath:
@@ -1323,16 +1352,19 @@ export class LiveConversations {
             ? snapshot.permissions
             : undefined,
         ...requestsDelta(previous.requests, snapshot.requests),
-        activityAt:
-          previous.activityAt !== snapshot.activityAt
-            ? snapshot.activityAt
-            : undefined,
+        activityAt: activityMoved(previous.activityAt, snapshot.activityAt) ? snapshot.activityAt : undefined,
         nativeActivity:
           previous.nativeActivity !== snapshot.nativeActivity
             ? (snapshot.nativeActivity ?? null)
             : undefined,
-      },
-    })
+    }
+    // A sampled batch says when it left and carries a trace every hop logs (`traceOf`).
+    const trace = traceOf(batch, () => randomUUID().slice(0, 13))
+    if (trace) {
+      batch.emittedAt = Date.now()
+      batch.trace = trace
+    }
+    this.dependencies.emit({ type: "live-batch", batch })
     this.relocations.changed(resident)
     // A turn that ended, as it ended, failed included: what its record holds is all it will.
     if (previous.session.status === "running" && settled(snapshot.session.status))
@@ -1405,3 +1437,30 @@ export class LiveConversations {
   }
 }
 
+/**
+ * A streaming conversation's batches go at most this often, the first of a burst at once. No screen paints more than
+ * about twenty a second (`StreamFrames`), so each batch on 2026-10-28's 16 ms was mostly sent to be thrown away, on every
+ * hop to every device, and written to the journal.
+ */
+const BATCH_MS = 33
+
+/**
+ * Whether a batch says when the conversation last showed work: when it moved into another second. It moves with every
+ * token, and what reads it waits a minute for quiet (`QUIET_AFTER_MS`), so a second late costs nothing; said each
+ * time, it was in nearly every batch to every device.
+ */
+function activityMoved(before: number | undefined, after: number | undefined): boolean {
+  return after !== undefined && (before === undefined || Math.floor(after / 1_000) !== Math.floor(before / 1_000))
+}
+
+/**
+ * Whether a batch carries a changed base whole. A long one goes as the
+ * notice that the history changed, which every reader answers by reading it
+ * again through the history protocol: serialised whole into the event, a
+ * history of 150MB, most of it paged (`paged-entries.ts`), was read back
+ * and written as one string on the loop, and every window but an old one
+ * took that notice instead anyway (`historyChangedNotice`, past 512KB).
+ */
+function carriesBase(base: LiveSnapshot["base"]): boolean {
+  return !base || (base.entries.length <= BATCH_BASE_ENTRIES && !base.entries.some(isPaged))
+}

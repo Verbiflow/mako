@@ -1,8 +1,8 @@
-import { execFile, spawn } from "node:child_process"
+import { execFile, execFileSync, spawn } from "node:child_process"
 import { createRequire } from "node:module"
 import { createHash, randomUUID } from "node:crypto"
-import { lstat, mkdir, mkdtemp, readdir, readFile, rename, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { lstat, mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { homedir, networkInterfaces, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { promisify } from "node:util"
 import { parseArgs } from "node:util"
@@ -12,6 +12,8 @@ import { invokeRuntime, runtimeInfo } from "@mako/host/transport/connection"
 import { hostCommand, runtimeLocation } from "@mako/host/transport/service"
 import { assertOwnHarnessStores, proofDataRoot } from "./lib/proof-host.ts"
 import { scratchHostHome } from "./scratch-harness-home.ts"
+import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
+import type { JsonObject } from "@mako/host/contracts/json"
 import { holdHostLease } from "@mako/host/base/host-idle"
 
 /**
@@ -123,10 +125,48 @@ const { values } = parseArgs({
      * <cloud Thread>` as each lands, for a second device to watch the account's list say so.
      */
     archive: { type: "string" },
+    /**
+     * Every kind of Thread a move takes, on each harness named (repeat the flag): a Thread in the project's main
+     * checkout, whose agent wrote files outside the project, moved in one step (onto its own branch first, only its own
+     * changes leaving the main checkout); a turn in the cloud reads and changes what it carried; the Mac's worktree
+     * follows that turn; the person then changes the worktree and an outside file here, so following stops; another
+     * turn in the cloud; back, the person's changes merged with the cloud's, the file both changed in conflict, the
+     * outside file the person changed kept and the cloud's waiting beside; and a turn here hears how it landed.
+     */
+    "every-kind": { type: "string", multiple: true },
+    /**
+     * A Thread of this harness in a project folder of two repositories (the run's repository and `--second-repository`),
+     * one worktree each on one branch: moved, a turn in the cloud reads and writes in both, and back, both come home.
+     */
+    several: { type: "string" },
+    "second-repository": { type: "string", default: "https://github.com/octocat/Spoon-Knife" },
+    /**
+     * A private repository (its HTTPS URL), which this Mac clones with the person's Git sign-in and a cloud machine
+     * clones with the GitHub access its gateway gives it for the repository: a Thread of `--private-harness` there is
+     * moved; a turn in the cloud commits, pushes a branch and opens a pull request with the machine's own Git and `gh`
+     * (seen here through this Mac's `gh`); it comes back with its commit; a turn runs here after. The pull request is
+     * closed and its branch deleted as the proof ends. With `--scripted-opencode`, OpenCode's turns are scripted.
+     */
+    private: { type: "string" },
+    "private-harness": { type: "string", default: "claude" },
+    /**
+     * `--every-kind opencode`'s turns answered by the scripted model (`scripts/scripted-model.ts`) rather than a free model,
+     * which a run from one computer soon exhausts ("Free usage limit reached"). OpenCode reaches it through the clone's
+     * own `opencode.json`, committed there before the Thread starts so its worktree and its machine have it too, at an
+     * address of this computer's that a local cloud machine reaches.
+     */
+    "scripted-opencode": { type: "boolean", default: false },
+    /**
+     * `--every-kind`'s Threads start in their own worktree rather than the main checkout: everything else as it is. For
+     * a harness whose session can't go on in another folder from a scratch home, as OpenCode's can't while the person's
+     * own OpenCode service runs on this Mac (its registry is in their home, so the scratch host can't tell it holds
+     * nothing of the run's, and Mako forks the Thread onto its branch instead, which has no native session to move yet).
+     */
+    "every-kind-worktree": { type: "boolean", default: false },
   },
 })
 // With `--handoff` or `--fork-burst` alone, only that runs.
-const HARNESSES = values.harness?.length ? values.harness : values.handoff || values["fork-burst"] || values.entropy || values.carried || values["project-gone"] || values.archive ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
+const HARNESSES = values.harness?.length ? values.harness : values.handoff || values["fork-burst"] || values.entropy || values.carried || values["project-gone"] || values.archive || values["every-kind"]?.length || values.several || values.private ? [] : ["claude", "codex", "cursor", "opencode", "grok", "devin"]
 const dataRoot = proofDataRoot(values["data-root"], "the moves proof")
 if (!values["spawn-host"] && !values["scratch-host"]) throw new Error("the moves proof needs --spawn-host or --scratch-host: a host of its own")
 const { socket } = runtimeLocation(dataRoot)
@@ -146,7 +186,7 @@ if (values["spawn-host"]) {
   const electron = createRequire(import.meta.url)("electron") as string
   // Kept with the data root: its sign-ins and keychain go as the run ends, its sessions stay for the Threads left in the cloud.
   const { env } = scratchHostHome(dataRoot, { keep: true })
-  const command = hostCommand({ executable: electron, args: [process.cwd()], env: { ...env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_CLOUD_URL: values.cloud, MAKO_SCREENLESS: "1" } })
+  const command = hostCommand({ executable: electron, args: [process.cwd()], env: { ...env, ...values.private && privateGit(), MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_CLOUD_URL: values.cloud, MAKO_SCREENLESS: "1" } })
   const host = spawn(command.executable, command.args, { env: command.env, stdio: "ignore" })
   process.once("exit", () => host.kill("SIGTERM"))
   for (const deadline = Date.now() + 60_000; !(await runtimeInfo(socket).catch(() => null)); ) {
@@ -155,6 +195,17 @@ if (values["spawn-host"]) {
   }
   const release = await holdHostLease(runtimeLocation(dataRoot).directory)
   process.once("beforeExit", () => void release())
+}
+
+/**
+ * Git on this Mac reaching a private repository as the person's does, for a host in a scratch home, whose keychain
+ * holds none of the person's: through their own `gh` sign-in (`gh auth git-credential`), read where it is for each
+ * call and never copied. A Thread coming back from the cloud fetches its base from the repository (`--private`).
+ */
+function privateGit() {
+  const gh = execFileSync("/usr/bin/which", ["gh"], { encoding: "utf8" }).trim()
+  const config = process.env.GH_CONFIG_DIR ?? join(homedir(), ".config", "gh")
+  return { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "credential.https://github.com.helper", GIT_CONFIG_VALUE_0: `!GH_CONFIG_DIR='${config}' '${gh}' auth git-credential` }
 }
 
 await assertOwnHarnessStores(call, dataRoot)
@@ -241,12 +292,13 @@ const SnapshotSchema = z.object({
 }).loose()
 type Snapshot = z.infer<typeof SnapshotSchema>
 const OutcomeSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("moved"), cloudThread: z.string() }),
+  z.object({ kind: z.literal("moved"), cloudThread: z.string(), conversation: z.string().optional() }),
   z.object({ kind: z.literal("kept-here"), reason: z.string() }),
   z.object({ kind: z.literal("unsettled"), reason: z.string() }),
 ])
+const LandedSchema = z.object({ merged: z.array(z.string()), conflicts: z.array(z.string()), mine: z.string().optional(), outside: z.object({ placed: z.array(z.string()), removed: z.array(z.string()), waiting: z.array(z.string()), kept: z.string().optional() }) })
 const ReturnOutcomeSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("back") }),
+  z.object({ kind: z.literal("back"), landed: LandedSchema.optional() }),
   z.object({ kind: z.literal("stayed"), reason: z.string(), outdated: z.object({ harness: z.string(), installed: z.string().nullable(), offer: z.object({ kind: z.string() }).loose() }).loose().optional(), missing: z.object({ folder: z.string(), project: z.string().optional() }).optional() }),
   z.object({ kind: z.literal("unsettled"), reason: z.string(), waitsOn: z.string().optional() }),
 ])
@@ -1138,6 +1190,388 @@ async function carriedProof(harness: string, project: string): Promise<Proved> {
   return proved()
 }
 
+/** A proof's steps, and the way each is taken: timed, printed as it finishes, answering whether it passed. */
+type Stepper = { steps: Step[]; timed(step: string, work: () => Promise<string>): Promise<boolean> }
+
+/** A proof's steps, timed and printed under `label` as they finish; each answers whether it passed. */
+function stepper(label: string): Stepper {
+  const steps: Step[] = []
+  return {
+    steps,
+    async timed(step, work) {
+      const started = performance.now()
+      const done: Step = await work().then(
+        (detail) => ({ step, ms: Math.round(performance.now() - started), ok: true, detail }),
+        (error: Error) => ({ step, ms: Math.round(performance.now() - started), ok: false, detail: error.message }),
+      )
+      steps.push(done)
+      console.log(`${label.padEnd(9)} ${step.padEnd(30)} ${done.ok ? "ok  " : "FAIL"} ${String(done.ms).padStart(7)} ms  ${done.detail ?? ""}`)
+      return done.ok
+    },
+  }
+}
+
+/** Waits until `check` answers, a second at a time, up to `ms`; the last error says why it didn't. */
+async function eventually<Value>(ms: number, check: () => Promise<Value | undefined>): Promise<Value> {
+  let last: unknown
+  for (const deadline = Date.now() + ms; Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 1_000))) {
+    try {
+      const value = await check()
+      if (value !== undefined) return value
+    } catch (error) {
+      last = error
+    }
+  }
+  throw last instanceof Error ? last : new Error(`not within ${ms / 1000} s`)
+}
+
+/** Sends a turn and waits for it to complete, answering permissions; answers what it said and its tools showed. */
+async function turn(id: string, text: string, answered: string[]): Promise<string> {
+  const request = randomUUID()
+  const before = (await snapshot(id)).blocks.length
+  await call("mako:live-prompt", [id, request, text, []])
+  const shot = await until(id, (current) => settled(current, request), 300_000, answered)
+  if (shot.requests.find((each) => each.id === request)?.status !== "completed") throw new Error(`the turn ended ${ended(shot, request)}`)
+  return blockText(shot, before)
+}
+
+const MovePlanFileSchema = z.object({
+  phase: z.string(), cloudThread: z.string(), folder: z.string(), project: z.string().optional(), timings: z.record(z.string(), z.number()),
+  carry: z.object({ manifest: z.object({ repositories: z.array(z.object({ path: z.string() }).loose()), outside: z.array(z.object({ path: z.string() }).loose()), left: z.array(z.object({ path: z.string(), why: z.string() })), history: z.boolean() }).loose() }).loose().optional(),
+  takesCarry: z.boolean().optional(),
+}).loose()
+const movePlan = async (move: string) => MovePlanFileSchema.parse(JSON.parse(await readFile(join(dataRoot, "cloud", "moves", `${move}.json`), "utf8")))
+const timingsOf = (timings: Record<string, number>, order: readonly string[]) => order.filter((name) => name in timings).map((name) => `${name} ${(timings[name]! / 1000).toFixed(1)} s`).join(", ")
+
+/**
+ * Every kind of Thread a move takes, on one harness: from the main checkout, with files outside the project, followed
+ * while away, changed here meanwhile, and merged on the way back (`--every-kind`). In a clone of its own.
+ */
+async function everyKindProof(harness: string): Promise<Proved> {
+  const { steps, timed } = stepper(harness)
+  let id: string = randomUUID()
+  const answered: string[] = []
+  const own = join(scratch, `every-kind-${harness}`)
+  await run("git", ["clone", "-q", values.repository, own])
+  const token = randomUUID().slice(0, 8)
+  // Outside the project, where a machine holds files at the same path: a note the Thread wrote and one it only wrote once.
+  const outside = `/tmp/mako-move-outside-${token}`
+  const notes = join(outside, "notes.txt")
+  const other = join(outside, "other.txt")
+  const mode = widestMode(harness)
+  const first = randomUUID()
+  let folder = ""
+  let cloudThread = ""
+  const moveId = randomUUID()
+  const scripted = harness === "opencode" && values["scripted-opencode"] ? await scriptedOpenCode(own) : undefined
+  const inWorktree = values["every-kind-worktree"]
+  if (!(await timed(inWorktree ? "in its own worktree" : "in the main checkout", async () => {
+    const model = scripted?.model ?? (await freeModel(harness, own))
+    await call("mako:live-start", [harness, own, { conversationId: id, ...inWorktree && { worktree: true }, ...mode && { modeId: mode }, ...model && { tuning: { model } }, initialRequest: { id: first, text: `Do these three things, using your file-writing tool where you have one:\n1. Create a file named move-proof.txt in the current folder containing exactly one line: HERE-${token}\n2. Create the file ${notes} (make its folder) containing exactly one line: NOTES-${token}\n3. Create the file ${other} containing exactly one line: OTHER-${token}\nDo not commit anything. Then reply with one short sentence that includes the word WRITTEN.`, attachments: [] } }])
+    const shot = await until(id, (current) => settled(current, first), 300_000, answered)
+    folder = shot.session.cwd ?? ""
+    if (inWorktree ? !/\/worktrees\//.test(folder) : folder !== own) throw new Error(`not in ${inWorktree ? "its own worktree" : "the main checkout"}: ${folder}`)
+    const written = [await readFile(join(folder, "move-proof.txt"), "utf8"), await readFile(notes, "utf8"), await readFile(other, "utf8")].map((each) => each.trim())
+    if (written.join(" ") !== `HERE-${token} NOTES-${token} OTHER-${token}`) throw new Error(`it wrote ${JSON.stringify(written)}; said: ${blockText(shot, 0).replace(/\s+/g, " ").slice(0, 300)}`)
+    return `${folder.replace(scratch, "…").replace(/^.*\/worktrees\//, "…/worktrees/")}, and two files in ${outside}`
+  }))) return { steps, conversation: id }
+
+  if (!(await timed(inWorktree ? "moved" : "moved in one step", async () => {
+    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, moveId]))
+    if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    cloudThread = outcome.cloudThread
+    if (outcome.conversation) id = outcome.conversation
+    const plan = await movePlan(moveId)
+    folder = plan.folder
+    if (!/\/worktrees\//.test(folder)) throw new Error(`moved from ${folder}, not its own worktree`)
+    const status = await git(own, "status", "--porcelain")
+    if (status) throw new Error(`the main checkout kept changes: ${status}`)
+    const carried = plan.carry?.manifest.outside.map((entry) => entry.path).sort() ?? []
+    const expected = [notes, other].sort()
+    if (!plan.takesCarry) throw new Error("the machine didn't take a carry")
+    if (JSON.stringify(carried) !== JSON.stringify(expected)) throw new Error(`it carried ${JSON.stringify(carried)} from outside, not ${JSON.stringify(expected)}; left ${JSON.stringify(plan.carry?.manifest.left)}`)
+    if (!plan.carry?.manifest.history) throw new Error("its file history didn't go")
+    return `${outcome.conversation ? "forked" : "the same conversation"} onto ${folder.replace(/^.*\/worktrees\//, "…/worktrees/")}; outside 2, history; ${timingsOf(plan.timings, ["made", "ahead", "released", "sent", "handed", "claimed", "started"])}`
+  }))) return { steps, conversation: id }
+
+  await timed("a turn in the cloud", async () => {
+    // And what its Git can reach from there: fetching the repository, and pushing to it (a dry run, which sends nothing).
+    const access = `git fetch --dry-run origin >/dev/null 2>&1 && echo FETCH-YES || echo FETCH-NO; git push --dry-run origin HEAD:refs/heads/mako-proof-${token} >/dev/null 2>&1 && echo PUSH-YES || echo PUSH-NO`
+    const said = await turn(id, `Run exactly this shell command: \`uname -s; cat ${notes}; ${access}\` and show its output. Then replace the contents of move-proof.txt in the current folder with exactly one line: CLOUD-${token}, and append the line CLOUD-${token} to ${notes} and to ${other}. Reply with one short sentence that includes the word DONE.`, answered)
+    if (!said.includes("Linux")) throw new Error(`it didn't run on its machine: ${said.replace(/\s+/g, " ").slice(0, 300)}`)
+    if (!said.includes(`NOTES-${token}`)) throw new Error(`the outside file didn't arrive: ${said.replace(/\s+/g, " ").slice(0, 300)}`)
+    // As the command printed them, one under the other (a newline, escaped in the blocks' JSON): the prompt names both
+    // answers, with the push command between them.
+    const [, fetched, pushed] = /FETCH-(YES|NO)(?:\\n|\s)+PUSH-(YES|NO)/.exec(said) ?? []
+    const git = fetched && pushed ? `its Git ${fetched === "YES" ? "fetches" : "can't fetch"} and ${pushed === "YES" ? "pushes" : "can't push"}` : "its Git access unsaid"
+    return `on its machine, the outside file there at its path; ${git}`
+  })
+
+  await timed("the worktree here follows", async () => {
+    const started = performance.now()
+    await eventually(60_000, async () => ((await readFile(join(folder, "move-proof.txt"), "utf8")).trim() === `CLOUD-${token}` ? true : undefined))
+    return `move-proof.txt reads the cloud's turn here, ${((performance.now() - started) / 1000).toFixed(1)} s after it ended`
+  })
+
+  // The person, meanwhile: the worktree and an outside file, here.
+  await writeFile(join(folder, "move-proof.txt"), `PERSON-${token}\n`)
+  await writeFile(join(folder, "person.txt"), `the person's own ${token}\n`)
+  await writeFile(other, `the person's other ${token}\n`)
+  await timed("changed here, following stops", async () => {
+    await turn(id, `Replace the contents of move-proof.txt in the current folder with exactly one line: CLOUD2-${token}. Reply with one short sentence that includes the word DONE.`, answered)
+    const file = join(dataRoot, "cloud", "follow", `${cloudThread}.json`)
+    const edited = await eventually(60_000, async () => z.object({ edited: z.object({ folders: z.array(z.string()) }).optional() }).loose().parse(JSON.parse(await readFile(file, "utf8"))).edited)
+    const here = (await readFile(join(folder, "move-proof.txt"), "utf8")).trim()
+    if (here !== `PERSON-${token}`) throw new Error(`the person's edit was written over: ${here}`)
+    return `stopped for ${edited.folders.map((each) => each.replace(/^.*\/worktrees\//, "…/")).join(", ")}; the person's edit stands`
+  })
+
+  await timed("back, merged", async () => {
+    const back = randomUUID()
+    const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, back]))
+    if (outcome.kind !== "back") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    const landed = outcome.landed
+    if (!landed) throw new Error("it came back saying nothing merged")
+    const merged = [...landed.merged].sort()
+    if (JSON.stringify(merged) !== JSON.stringify(["move-proof.txt", "person.txt"]) || JSON.stringify(landed.conflicts) !== JSON.stringify(["move-proof.txt"])) throw new Error(`landed ${JSON.stringify(landed)}`)
+    const proof = await readFile(join(folder, "move-proof.txt"), "utf8")
+    if (!proof.includes(`PERSON-${token}`) || !proof.includes(`CLOUD2-${token}`) || !proof.includes("<<<<<<< ")) throw new Error(`move-proof.txt reads ${JSON.stringify(proof)}`)
+    if ((await readFile(join(folder, "person.txt"), "utf8")).trim() !== `the person's own ${token}`) throw new Error("the person's new file didn't stay")
+    if (!(await readFile(notes, "utf8")).includes(`CLOUD-${token}`)) throw new Error("the outside file the person didn't change wasn't put in place")
+    if ((await readFile(other, "utf8")).trim() !== `the person's other ${token}`) throw new Error("the outside file the person changed was written over")
+    const waiting = join(dataRoot, "cloud", "outside", (await snapshot(id)).threadId ?? "", other)
+    if (!(await readFile(waiting, "utf8")).includes(`CLOUD-${token}`)) throw new Error(`the cloud's copy doesn't wait at ${waiting}`)
+    if (JSON.stringify(landed.outside.waiting) !== JSON.stringify([other]) || !landed.outside.placed.includes(notes)) throw new Error(`outside landed ${JSON.stringify(landed.outside)}`)
+    if (`${landed.outside.kept ?? ""}${other}` !== waiting) throw new Error(`the window is told the cloud's copy is kept at ${landed.outside.kept ?? "nowhere"}, not where it is (${waiting})`)
+    const plan = ReturnTimingsSchema.parse(JSON.parse(await readFile(join(dataRoot, "cloud", "returns", `${back}.json`), "utf8")))
+    return `conflict in move-proof.txt, person.txt kept, notes placed, other waiting; ${timingsOf(plan.timings, ["packed", "released", "applied", "claimed", "done"])}`
+  })
+
+  await timed("a turn here hears it", async () => {
+    const said = await turn(id, "Without running anything: did Mako tell you anything about files in this worktree that the user changed while you were away? Reply with one line starting with HEARD: naming any files it said hold conflict markers, or HEARD: none.", answered)
+    if (!/HEARD:[^\n]*move-proof\.txt/.test(said)) throw new Error(`it didn't hear: ${said.replace(/\s+/g, " ").slice(0, 300)}`)
+    return "named move-proof.txt"
+  })
+  await rm(outside, { recursive: true, force: true })
+  await scripted?.close()
+  return { steps, conversation: id }
+}
+
+/** An Anthropic Messages request as the scripted model reads it: each message's blocks, one of text when it's a string. */
+const ScriptedBlockSchema = z.object({ type: z.string(), text: z.string().optional() }).loose()
+const ScriptedRequestSchema = z.object({
+  messages: z.array(z.object({ role: z.string(), content: z.union([z.string().transform((text) => [{ type: "text", text }]), z.array(ScriptedBlockSchema)]) }).loose()),
+}).loose()
+
+/**
+ * The every-kind proof's turns as a model would take them, step by step, for OpenCode's tools (`write`, `shell`): each
+ * request carries the turn so far, so the step is the number of tool results since the prompt. A note Mako gave the
+ * agent is read from the request itself, as a model reads it.
+ */
+function everyKindScript(heard: string): ScriptedReply | undefined {
+  const body = ScriptedRequestSchema.safeParse(JSON.parse(heard)).data
+  if (!body) return undefined
+  const blocks = (content: z.infer<typeof ScriptedBlockSchema>[]) => content
+  // Files in the project by the shell, those outside it by `write`, as a model writes them: the footprint names those.
+  // The prompt: the last user message with words of its own, not a tool's result.
+  const at = body.messages.findLastIndex((message) => message.role === "user" && blocks(message.content).some((block) => block.type === "text" && block.text))
+  const prompt = at < 0 ? "" : blocks(body.messages[at]!.content).map((block) => block.text ?? "").join("\n")
+  const done = body.messages.slice(at + 1).flatMap((message) => blocks(message.content)).filter((block) => block.type === "tool_result").length
+  const write = (path: string, content: string) => ({ name: "write", arguments: { path, content } })
+  const shell = (command: string) => ({ name: "shell", arguments: { command } })
+  let calls: Array<{ name: string; arguments: JsonObject }> = []
+  let answer = "DONE"
+  const here = /HERE-(\w+)/.exec(prompt)
+  const cloud = /\bCLOUD-(\w+)/.exec(prompt)
+  const again = /CLOUD2-(\w+)/.exec(prompt)
+  if (here) {
+    const token = here[1]!
+    const [notes = "", other = ""] = [/Create the file (\S+) \(make its folder\)/.exec(prompt)?.[1], /3\. Create the file (\S+) containing/.exec(prompt)?.[1]]
+    calls = [shell(`printf 'HERE-${token}\\n' > move-proof.txt; mkdir -p ${dirname(notes)}`), write(notes, `NOTES-${token}\n`), write(other, `OTHER-${token}\n`)]
+    answer = "WRITTEN"
+  } else if (cloud) {
+    const token = cloud[1]!
+    const command = /exactly this shell command: `([^`]+)`/.exec(prompt)?.[1] ?? "uname -s"
+    const [, notes = "", other = ""] = /append the line CLOUD-\w+ to (\S+) and to (\S+)\. Reply/.exec(prompt) ?? []
+    calls = [shell(command), shell(`printf 'CLOUD-${token}\\n' > move-proof.txt`), write(notes, `NOTES-${token}\nCLOUD-${token}\n`), write(other, `OTHER-${token}\nCLOUD-${token}\n`)]
+  } else if (again) calls = [shell(`printf 'CLOUD2-${again[1]}\\n' > move-proof.txt`)]
+  else if (prompt.includes("HEARD:")) {
+    const conflicts = /You and the user both changed (.+?): (?:it holds|they hold)/.exec(heard)?.[1]
+    answer = `HEARD: ${conflicts ?? "none"}`
+  } else return { text: "There's nothing to do." }
+  const call = calls[done]
+  return call ? { call: { id: `call_${randomUUID().slice(0, 8)}`, ...call } } : { text: answer }
+}
+
+/**
+ * OpenCode answered by the scripted model in the clone at `cwd`: its `opencode.json` points the Anthropic provider at
+ * the model on an address of this computer's network, which this Mac and a local cloud machine both reach, committed so
+ * the Thread's worktree and its machine have it. The model a Thread starts on is the profile's first Anthropic one.
+ */
+async function scriptedOpenCode(cwd: string, reply: (heard: string) => ScriptedReply | undefined = everyKindScript): Promise<{ model: string; close(): Promise<void> }> {
+  const address = Object.values(networkInterfaces()).flat().find((each) => each?.family === "IPv4" && !each.internal)?.address
+  if (!address) throw new Error("this computer has no network address a cloud machine reaches it at")
+  const model = await scriptedModel({ reply, host: address })
+  await writeFile(join(cwd, "opencode.json"), `${JSON.stringify({ provider: { anthropic: { options: { baseURL: `${model.url}/v1`, apiKey: "mako-moves-proof" } } } }, null, 2)}\n`)
+  await git(cwd, "add", "opencode.json")
+  await git(cwd, "-c", "user.name=Mako proof", "-c", "user.email=proof@mako.invalid", "commit", "-q", "-m", "OpenCode answered by the proof's scripted model")
+  const profile = z.object({ models: z.array(z.object({ id: z.string() }).loose()).default([]) }).loose().parse(await call("mako:harness-tuning", ["opencode", cwd]))
+  const anthropic = profile.models.map((each) => each.id).find((id) => id.startsWith("anthropic/"))
+  if (!anthropic) throw new Error(`OpenCode offers no Anthropic model in ${cwd}: ${profile.models.map((each) => each.id).slice(0, 8).join(", ")}`)
+  return { model: anthropic, close: () => model.close() }
+}
+
+/** A project folder of two repositories, one worktree each on one branch, moved and brought back (`--several`). */
+async function severalProof(harness: string): Promise<Proved> {
+  const { steps, timed } = stepper("several")
+  const id = randomUUID()
+  const answered: string[] = []
+  const project = join(scratch, "several")
+  await mkdir(project, { recursive: true })
+  await run("git", ["clone", "-q", values.repository, join(project, "app")])
+  await run("git", ["clone", "-q", values["second-repository"], join(project, "api")])
+  const token = randomUUID().slice(0, 8)
+  const mode = widestMode(harness)
+  const first = randomUUID()
+  let folder = ""
+  const moveId = randomUUID()
+  if (!(await timed("a Thread in both", async () => {
+    const model = await freeModel(harness, project)
+    await call("mako:live-start", [harness, project, { conversationId: id, worktree: true, ...mode && { modeId: mode }, ...model && { tuning: { model } }, initialRequest: { id: first, text: `Create the file app/one.txt containing exactly one line: ONE-${token}, and the file api/two.txt containing exactly one line: TWO-${token}. Do not commit them. Then reply with one short sentence that includes the word WRITTEN.`, attachments: [] } }])
+    const shot = await until(id, (current) => settled(current, first), 300_000, answered)
+    folder = shot.session.cwd ?? ""
+    const written = [await readFile(join(folder, "app", "one.txt"), "utf8"), await readFile(join(folder, "api", "two.txt"), "utf8")].map((each) => each.trim())
+    if (written.join(" ") !== `ONE-${token} TWO-${token}`) throw new Error(`in ${folder} it wrote ${JSON.stringify(written)}`)
+    return folder.replace(/^.*\/worktrees\//, "…/worktrees/")
+  }))) return { steps, conversation: id }
+  if (!(await timed("moved, both repositories", async () => {
+    const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, moveId]))
+    if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    const plan = await movePlan(moveId)
+    const repositories = plan.carry?.manifest.repositories.map((repository) => repository.path.replace(`${folder}/`, "")) ?? []
+    if (plan.project !== folder || JSON.stringify(repositories) !== JSON.stringify(["api", "app"])) throw new Error(`the plan's project is ${plan.project}, its repositories ${JSON.stringify(repositories)}`)
+    return `${repositories.join(" and ")}; ${timingsOf(plan.timings, ["made", "ahead", "released", "sent", "handed", "claimed", "started"])}`
+  }))) return { steps, conversation: id }
+  await timed("a turn in the cloud, in both", async () => {
+    const said = await turn(id, `Run the shell command \`uname -s; pwd; cat app/one.txt api/two.txt\` and show its output. Then create the file api/three.txt containing exactly one line: THREE-${token}. Reply with one short sentence that includes the word DONE.`, answered)
+    if (!said.includes("Linux") || !said.includes(`ONE-${token}`) || !said.includes(`TWO-${token}`)) throw new Error(`said: ${said.replace(/\s+/g, " ").slice(0, 300)}`)
+    return "both repositories there, at the project's folder"
+  })
+  await timed("both follow here", async () => {
+    const started = performance.now()
+    await eventually(60_000, async () => ((await readFile(join(folder, "api", "three.txt"), "utf8").catch(() => "")).trim() === `THREE-${token}` ? true : undefined))
+    return `api/three.txt here ${((performance.now() - started) / 1000).toFixed(1)} s after the turn ended`
+  })
+  await timed("back, both repositories", async () => {
+    const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, randomUUID()]))
+    if (outcome.kind !== "back") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+    const files = [await readFile(join(folder, "app", "one.txt"), "utf8"), await readFile(join(folder, "api", "two.txt"), "utf8"), await readFile(join(folder, "api", "three.txt"), "utf8")].map((each) => each.trim())
+    if (files.join(" ") !== `ONE-${token} TWO-${token} THREE-${token}`) throw new Error(`came back as ${JSON.stringify(files)}`)
+    return "app and api, with what the cloud wrote in api"
+  })
+  return { steps, conversation: id }
+}
+
+/**
+ * A Thread in a private repository, moved to the cloud, where its machine's own GitHub access clones it, and a turn
+ * commits, pushes a branch and opens a pull request; back with its commit (`--private`). The pull request and its
+ * branch are this Mac's `gh`'s to check and to clean up, never the machine's token.
+ */
+async function privateProof(url: string, harness: string): Promise<Proved> {
+  const { steps, timed } = stepper("private")
+  let id: string = randomUUID()
+  const answered: string[] = []
+  const own = join(scratch, "private")
+  await run("git", ["clone", "-q", url, own])
+  const repository = /github\.com\/([^/]+\/[^/]+?)(?:\.git)?$/.exec(url)?.[1]
+  if (!repository) throw new Error(`${url} isn't a GitHub repository`)
+  const token = randomUUID().slice(0, 8)
+  const branch = `mako-private-proof-${token}`
+  const first = randomUUID()
+  const mode = widestMode(harness)
+  const scripted = harness === "opencode" && values["scripted-opencode"] ? await scriptedOpenCode(own, privateScript) : undefined
+  let folder = ""
+  let pull = ""
+  if (!(await timed("a Thread in it", async () => {
+    const model = scripted?.model ?? (await freeModel(harness, own))
+    await call("mako:live-start", [harness, own, { conversationId: id, worktree: true, ...mode && { modeId: mode }, ...model && { tuning: { model } }, initialRequest: { id: first, text: `Create a file named private-proof.txt in the current folder containing exactly one line: HERE-${token}\nDo not commit it. Then reply with one short sentence that includes the word WRITTEN.`, attachments: [] } }])
+    const shot = await until(id, (current) => settled(current, first), 300_000, answered)
+    folder = shot.session.cwd ?? ""
+    if ((await readFile(join(folder, "private-proof.txt"), "utf8")).trim() !== `HERE-${token}`) throw new Error("it didn't write the file")
+    return folder.replace(/^.*\/worktrees\//, "…/worktrees/")
+  }))) return { steps, conversation: id }
+  try {
+    if (!(await timed("moved", async () => {
+      const move = randomUUID()
+      const outcome = OutcomeSchema.parse(await call("mako:thread-move", [id, move]))
+      if (outcome.kind !== "moved") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+      if (outcome.conversation) id = outcome.conversation
+      const plan = await movePlan(move)
+      return `${timingsOf(plan.timings, ["made", "ready", "ahead", "released", "sent", "handed", "claimed", "started"])}`
+    }))) return { steps, conversation: id }
+
+    if (!(await timed("commit, push, pull request", async () => {
+      // The machine's Git and gh, with the access its gateway gave it: who commits, what it pushes, the pull request.
+      const command = `uname -s; git add private-proof.txt && git commit -q -m "Private proof ${token}" && git log -1 --format='AUTHOR %an <%ae>' && git push -q origin HEAD:refs/heads/${branch} && echo PUSHED && gh pr create --head ${branch} --title "Mako private proof ${token}" --body "Opened from a cloud Thread by Mako's moves proof, which closes it." && echo OPENED`
+      const said = await turn(id, `Run exactly this shell command: \`${command}\` and show its output. Reply with one short sentence that includes the word DONE.`, answered)
+      const flat = said.replace(/\\n/g, "\n")
+      if (!flat.includes("Linux")) throw new Error(`it didn't run on its machine: ${flat.replace(/\s+/g, " ").slice(0, 400)}`)
+      if (!flat.includes("PUSHED")) throw new Error(`it didn't push: ${flat.replace(/\s+/g, " ").slice(0, 600)}`)
+      pull = /https:\/\/github\.com\/[^\s"\\]+\/pull\/\d+/.exec(flat)?.[0] ?? ""
+      if (!pull || !flat.includes("OPENED")) throw new Error(`it didn't open a pull request: ${flat.replace(/\s+/g, " ").slice(0, 600)}`)
+      // The command as the tool showed it names the format too: the commit's own line has no `%`.
+      const author = [...flat.matchAll(/AUTHOR ([^\n<%]+<[^>\n%]+>)/g)].at(-1)?.[1]?.trim()
+      // Seen from here, with this Mac's own sign-in.
+      const seen = z.object({ state: z.string(), headRefName: z.string(), title: z.string() }).loose().parse(JSON.parse((await run("gh", ["pr", "view", pull, "--repo", repository, "--json", "state,headRefName,title"])).stdout))
+      if (seen.state !== "OPEN" || seen.headRefName !== branch) throw new Error(`GitHub has it ${seen.state} on ${seen.headRefName}`)
+      const pushed = (await run("git", ["ls-remote", url, `refs/heads/${branch}`], { cwd: own })).stdout.trim()
+      if (!pushed) throw new Error(`${branch} isn't on GitHub`)
+      return `committed as ${author ?? "?"}, pushed ${branch}, opened ${pull.replace(/^https:\/\/github\.com\//, "")}`
+    }))) return { steps, conversation: id }
+
+    if (!(await timed("back, with its commit", async () => {
+      const back = randomUUID()
+      const outcome = ReturnOutcomeSchema.parse(await call("mako:thread-return", [id, back]))
+      if (outcome.kind !== "back") throw new Error(`${outcome.kind}: ${outcome.reason}`)
+      const subject = await git(folder, "log", "-1", "--format=%s")
+      if (subject !== `Private proof ${token}`) throw new Error(`the worktree's last commit reads ${JSON.stringify(subject)}`)
+      const plan = ReturnTimingsSchema.parse(JSON.parse(await readFile(join(dataRoot, "cloud", "returns", `${back}.json`), "utf8")))
+      return `its commit here; ${timingsOf(plan.timings, ["packed", "released", "applied", "claimed", "done"])}`
+    }))) return { steps, conversation: id }
+
+    await timed("a turn here after", async () => {
+      const said = await turn(id, "Without running anything, reply with one short sentence that includes the word HERE.", answered)
+      if (!said.includes("HERE")) throw new Error(`said: ${said.slice(0, 200)}`)
+      return "it runs on this Mac as before"
+    })
+  } finally {
+    // What the proof made on GitHub goes, by this Mac's own sign-in.
+    if (pull) await run("gh", ["pr", "close", pull, "--repo", repository, "--delete-branch"]).catch((error: Error) => console.error(`the proof's pull request ${pull} wasn't closed: ${error.message}`))
+    else await run("git", ["push", "-q", url, `:refs/heads/${branch}`], { cwd: own }).catch(() => undefined)
+    await scripted?.close()
+  }
+  return { steps, conversation: id }
+}
+
+/**
+ * The private proof's turns as a model would take them, for OpenCode's `shell`: the file it's asked to write, then
+ * exactly the command it's given; otherwise a sentence with the word asked for.
+ */
+function privateScript(heard: string): ScriptedReply | undefined {
+  const body = ScriptedRequestSchema.safeParse(JSON.parse(heard)).data
+  if (!body) return undefined
+  const at = body.messages.findLastIndex((message) => message.role === "user" && message.content.some((block) => block.type === "text" && block.text))
+  const prompt = at < 0 ? "" : body.messages[at]!.content.map((block) => block.text ?? "").join("\n")
+  const done = body.messages.slice(at + 1).flatMap((message) => message.content).filter((block) => block.type === "tool_result").length
+  const shell = (command: string) => ({ name: "shell", arguments: { command } })
+  const here = /exactly one line: (HERE-\w+)/.exec(prompt)?.[1]
+  const command = /exactly this shell command: `([^`]+)`/.exec(prompt)?.[1]
+  const calls = here ? [shell(`printf '${here}\\n' > private-proof.txt`)] : command ? [shell(command)] : []
+  const call = calls[done]
+  if (call) return { call: { id: `call_${randomUUID().slice(0, 8)}`, ...call } }
+  return { text: here ? "WRITTEN" : command ? "DONE" : "HERE, on this Mac." }
+}
+
 /**
  * A model a turn handed to a machine with no sign-ins can go on with: for OpenCode, one of its free models
  * (`MAKO_OPENCODE_MODEL` choosing), its default first. Undefined for other harnesses: their own default.
@@ -1170,6 +1604,9 @@ if (values.entropy) report["entropy"] = await entropy(values["tab-harness"] ?? "
 if (values.carried) report["carried"] = await carriedProof(values.carried, project)
 if (values["project-gone"]) report["project gone"] = await projectGoneProof(values["project-gone"])
 if (values.archive) report["archive"] = await archiveProof(values.archive)
+for (const harness of values["every-kind"] ?? []) report[`every kind: ${harness}`] = await everyKindProof(harness)
+if (values.several) report["several repositories"] = await severalProof(values.several)
+if (values.private) report["private repository"] = await privateProof(values.private, values["private-harness"])
 // A host this run started signs out as it ends: its device leaves the account, and its credential leaves the keychain.
 if (values["spawn-host"]) await call("mako:cloud-sign-out", [])
 if (values.report) await writeFile(values.report, `${JSON.stringify(report, null, 2)}\n`)

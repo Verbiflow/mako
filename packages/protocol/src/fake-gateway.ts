@@ -33,7 +33,8 @@ import {
 import { Payload } from "./payload.js"
 import type { GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { MEDIA_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
+import { MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
+import { LINGER_MS, LiveTail } from "./live-tail.js"
 import {
   WireError,
   decodeEventFrame,
@@ -52,7 +53,7 @@ const NIL_ID = "00000000-0000-0000-0000-000000000000"
 
 /** One line per thing the gateway did, for tests and for reading a request's path by its correlation ID. */
 export type GatewayLogLine = {
-  event: "operation" | "enrolled" | "refused" | "disconnected"
+  event: "operation" | "enrolled" | "refused" | "disconnected" | "going-quiet"
   correlationId?: string
   operationId?: string
   op?: string
@@ -73,6 +74,8 @@ export type FakeGatewayOptions = {
   /** When a renewed link's token runs out, in seconds since 1970, or undefined to refuse it. Every token is good for five minutes by default. */
   renew?: (token: string) => number | undefined
   log?: (line: GatewayLogLine) => void
+  /** How long a live stream nobody watches lingers (`LINGER_MS` unless given); 0 lets it go, and tells its runtime, at once. */
+  lingerMs?: number
 }
 
 type Thread = {
@@ -140,19 +143,39 @@ export function createFakeGateway(
   const admissions = new Map<string, number>()
   const activity = new Map<string, { busy: boolean; work: string[]; at: Date }>()
   const reports = new Map<string, SessionsReport[]>()
-  /** By session stream: who watches it, and the next number to give its updates. Relayed, never kept. */
-  const sessionWatchers = new Map<string, Set<Inbox<EventFrame>>>()
-  let liveSeq = 1
+  /**
+   * By session stream: who watches it, and its numbering and last few updates (`LiveTail`), as a gateway keeps them. A
+   * stream nobody watches lingers `LINGER_MS` (`idleSince`), its runtime still sending, so a watcher back from a dropped
+   * link finds what it missed.
+   */
+  const sessionStreams = new Map<string, { watchers: Set<Inbox<EventFrame>>; tail: LiveTail; idleSince?: number }>()
+  /** The highest number any session stream gave: a new stream's numbers start above it, and above the clock. */
+  let liveHead = 0
+  const nowMs = () => now().getTime()
+  const lingerMs = options.lingerMs ?? LINGER_MS
+  /** A stream nobody watched for `LINGER_MS` goes, and its runtime is told; true if any went. */
+  const sweepStreams = () => {
+    const gone: string[] = []
+    for (const [stream, record] of sessionStreams)
+      if (!record.watchers.size && record.idleSince !== undefined && nowMs() - record.idleSince >= lingerMs) {
+        sessionStreams.delete(stream)
+        gone.push(stream)
+      }
+    for (const runtimeId of new Set(gone.flatMap((stream) => streamConversation(stream)?.runtimeId ?? []))) watchFrame(runtimeId)
+  }
   /** Tells a runtime every one of its conversations someone watches now; on a new link, only if any is. */
   const watchFrame = (runtimeId: string, enrolling = false) => {
     const runtime = runtimes.get(runtimeId)
     if (!runtime || (runtime.version ?? 0) < SESSIONS_VERSION) return
-    const conversations = [...sessionWatchers.keys()].flatMap((stream) => {
+    const watched = [...sessionStreams].flatMap(([stream, record]) => {
       const target = streamConversation(stream)
-      return target?.runtimeId === runtimeId ? [target.conversation] : []
+      return target?.runtimeId === runtimeId ? [{ conversation: target.conversation, record }] : []
     })
-    if (enrolling && !conversations.length) return
-    runtime.deliver({ type: "watch", conversations })
+    if (enrolling && !watched.length) return
+    const conversations = watched.map(({ conversation }) => conversation)
+    if ((runtime.version ?? 0) < NUMBERED_LIVE_VERSION) return runtime.deliver({ type: "watch", conversations })
+    const after = Object.fromEntries(watched.flatMap(({ conversation, record }) => (record.tail.runtime === undefined ? [] : [[conversation, record.tail.runtime]])))
+    runtime.deliver({ type: "watch", conversations, ...(Object.keys(after).length && { after }) })
   }
   /** Streams being watched, each by one client, served by the runtime that ran its Thread when it was asked. */
   const watches = new Map<MediaStreamId, { threadId: string; runtime: Connection; inbox: Inbox<MediaDelivery> }>()
@@ -448,10 +471,14 @@ export function createFakeGateway(
       return
     }
     if (frame.type === "live") {
+      sweepStreams()
       const stream = sessionStream(connection.runtimeId, frame.conversation)
-      const at = now().toISOString()
-      for (const reader of sessionWatchers.get(stream) ?? []) reader.push({ v: PROTOCOL_VERSION, stream, seq: liveSeq, at, event: frame.event })
-      liveSeq += 1
+      const record = sessionStreams.get(stream)
+      if (!record) return
+      const kept = record.tail.take(frame.event.text, now(), { ...(frame.n !== undefined && { n: frame.n }), ...(frame.correlationId && { correlationId: frame.correlationId }) })
+      if (!kept) return
+      liveHead = Math.max(liveHead, kept.seq)
+      for (const reader of record.watchers) reader.push({ v: PROTOCOL_VERSION, stream, seq: kept.seq, at: kept.at, ...(kept.correlationId && { correlationId: kept.correlationId }), event: frame.event })
       return
     }
     if (frame.type === "reply") {
@@ -460,6 +487,11 @@ export function createFakeGateway(
       waiting.settle(frame.reply, true)
     }
     if (frame.type === "media-end" && watches.get(frame.stream)?.runtime === connection) endWatch(frame.stream, frame.problem)
+    // Going away on purpose: its link is let go now, as the gateway does, not when its heartbeats stop.
+    if (frame.type === "going-quiet") {
+      log({ event: "going-quiet", runtimeId: connection.runtimeId, correlationId: connection.correlationId })
+      connection.close()
+    }
   }
 
   const forward = (
@@ -647,13 +679,24 @@ export function createFakeGateway(
             : undefined
           for (const frame of target?.log.slice(after) ?? []) reader.push(frame)
           target?.readers.add(reader)
-          // A conversation's live updates: its runtime is told it's watched by the first watcher, and not by the last.
+          // A conversation's live updates: its runtime is told it's watched by the first watcher, and not once the last
+          // has been gone `LINGER_MS`. The watcher hears the stream's head first, then what it missed after `after` from
+          // the tail, or that it must read the conversation again.
           const watched = streamConversation(stream) ? stream : undefined
           if (watched) {
-            const watchers = sessionWatchers.get(watched) ?? new Set()
-            watchers.add(reader)
-            sessionWatchers.set(watched, watchers)
-            if (watchers.size === 1) watchFrame(streamConversation(watched)!.runtimeId)
+            sweepStreams()
+            let record = sessionStreams.get(watched)
+            const fresh = !record
+            if (!record) {
+              record = { watchers: new Set(), tail: new LiveTail(Math.max(liveHead + 1, nowMs())) }
+              liveHead = record.tail.head
+              sessionStreams.set(watched, record)
+            }
+            for (const opening of record.tail.opening(after))
+              reader.push({ v: PROTOCOL_VERSION, stream: watched, seq: opening.seq, at: opening.at ?? now().toISOString(), ...(opening.correlationId && { correlationId: opening.correlationId }), event: Payload.encoded(opening.text) })
+            record.watchers.add(reader)
+            delete record.idleSince
+            if (fresh) watchFrame(streamConversation(watched)!.runtimeId)
           }
           const next = async (timeoutMs?: number) =>
             decodeEventFrame(encodeEventFrame(await reader.next(timeoutMs)))
@@ -662,10 +705,10 @@ export function createFakeGateway(
             close: () => {
               target?.readers.delete(reader)
               reader.close()
-              const watchers = watched ? sessionWatchers.get(watched) : undefined
-              if (watched && watchers?.delete(reader) && !watchers.size) {
-                sessionWatchers.delete(watched)
-                watchFrame(streamConversation(watched)!.runtimeId)
+              const record = watched ? sessionStreams.get(watched) : undefined
+              if (record?.watchers.delete(reader) && !record.watchers.size) {
+                record.idleSince = nowMs()
+                if (lingerMs === 0) sweepStreams()
               }
             },
           }

@@ -8,7 +8,11 @@ import { RewindButton, PromptRewindButton } from "./rewind-button"
 import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
+import { ExchangeNoteContext, PromptNoteContext } from "./transcript-notes"
+import { CompactPresentationContext } from "./compact-presentation"
 import { acp, useAcp, type ForkAnswer } from "@/state/acp"
+import { descriptorFor } from "@/state/descriptors"
+import { threadsStore } from "@/state/thread-store"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
 import { acpStore } from "@/state/acp-state"
 import { PlanSummary } from "./tool-details"
@@ -45,12 +49,17 @@ import { sentDraft } from "@/lib/context/draft"
 import { MARKER } from "@/lib/context/wire"
 import type { SentProse } from "@/lib/prompt-markdown"
 import {
+  exchangeRequests,
+  isContinuation,
+  notesBesideContinuations,
   notesBesideStop,
   responseSections,
   responseText,
+  turnRequest,
   type Exchange as ExchangeData,
   type PlacedSection,
 } from "@/lib/exchanges"
+import type { SavedContinuation } from "@mako/host/contracts/turn-continuation"
 import { EventNotes } from "./event-notes"
 import { EventLine } from "./event-line"
 import { ShowOriginal } from "./show-original"
@@ -113,25 +122,29 @@ export const Exchange = memo(function Exchange({
   streaming?: boolean
   /** True when the turn stopped early; a `TurnStop` also says why and whether it can be continued. */
   interrupted?: boolean | TurnStop
-  /** Mako sent this exchange's prompt itself, so it's drawn as Mako's line. */
+  /** Mako sent this exchange's prompt itself, so it's drawn as Mako's line. A continuation is never a prompt (`toExchanges`). */
   sentByMako?: MakoPrompt
   /** The conversation this exchange's prompt carried to a new session: one quiet line above the person's words. */
   carried?: CarriedHistory
   failed?: boolean
 }) {
   useHarnessIdentity()
-  // A saved conversation keeps no request, and the person's Continue turn
-  // sends Mako's words as an ordinary message: either is known by its words.
+  // A saved conversation keeps no request: Mako's goal steps are known by their words.
   const savedByMako = useMemo(
     () => (sentByMako || !exchange.prompt ? undefined : savedMakoPrompt(textOf(exchange.prompt.blocks))),
     [sentByMako, exchange.prompt]
   )
   const mako = sentByMako ?? savedByMako
-  const failureRow = useContext(FailedRequestsContext).has(exchange.prompt?.requestId ?? "")
+  // `toExchanges` never opens a turn on a continuation; one handed in that way is still never drawn as the person's words.
+  const continuedPrompt = useMemo(() => (exchange.prompt ? isContinuation(exchange.prompt) : undefined), [exchange.prompt])
+  // The request the turn stands on now: its newest continuation's, else its prompt's.
+  const standing = turnRequest(exchange)
+  const failureRow = useContext(FailedRequestsContext).has(standing ?? "")
   const stopShown = Boolean(interrupted) && !streaming
+  const exchangeNote = useContext(ExchangeNoteContext)
   const notes = useMemo(
-    () => (stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system),
-    [exchange.system, exchange.response.length, stopShown]
+    () => notesBesideContinuations(stopShown ? notesBesideStop(exchange.system, exchange.response.length) : exchange.system, exchange.response),
+    [exchange.system, exchange.response, stopShown]
   )
   const answered = useMemo(
     () => responseSections(exchange.response, notes),
@@ -175,6 +188,8 @@ export const Exchange = memo(function Exchange({
         </p>
         <Prompt message={section.message} />
       </div>
+    ) : section.kind === "continued" ? (
+      <TurnWentOn key={section.id} continued={section.continued} message={section.message} provider={provider} />
     ) : section.kind === "prose" ? (
       <Response key={section.id} message={section.message} previewedFiles={section.previewedFiles} showWork />
     ) : section.kind === "shown" || section.kind === "made" ? (
@@ -182,6 +197,7 @@ export const Exchange = memo(function Exchange({
     ) : (
       <WorkSection
         key={section.id}
+        id={`${exchange.id}:${section.id}`}
         messages={section.messages}
         startedAt={index === 0 ? began : undefined}
         live={Boolean(streaming && section === lastSection)}
@@ -209,7 +225,9 @@ export const Exchange = memo(function Exchange({
         stop={fold.part === steers ? interrupted : undefined}
         kept={fold.kept.map((at) => {
           const note = sections[at]!
-          return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline /> : note.kind === "shown" || note.kind === "made" ? <TurnMedia key={note.id} media={note.media} shown={note.kind === "shown"} /> : null
+          return note.kind === "note" ? <SystemNotes key={note.id} messages={[note.message]} refused={exchange.refused} inline />
+            : note.kind === "shown" || note.kind === "made" ? <TurnMedia key={note.id} media={note.media} shown={note.kind === "shown"} />
+              : note.kind === "continued" ? <TurnWentOn key={note.id} continued={note.continued} message={note.message} provider={provider} /> : null
         })}
       >
         {sections.slice(fold.start, fold.end).map((section, offset, hidden) =>
@@ -226,11 +244,11 @@ export const Exchange = memo(function Exchange({
       <HarnessContext value={provider}>
       {/* One gallery per exchange: every picture and video in the prompt, the answer and its work steps a step apart. */}
       <MediaGalleryScope>
-      <AnswerRequestContext.Provider value={exchange.prompt?.requestId}>
+      <AnswerRequestContext.Provider value={standing}>
       <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
         {exchange.prompt ? (
-          mako?.kind === "continued" ? (
-            <Continued continued={mako} provider={provider} said={textOf(exchange.prompt.blocks)} timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
+          continuedPrompt ? (
+            <TurnWentOn continued={continuedPrompt} message={exchange.prompt} provider={provider} />
           ) : mako?.kind === "moved" ? (
             <MovedNote timestamp={exchange.prompt.timestamp} origin={exchange.prompt.origin} />
           ) : mako?.kind === "goal" ? (
@@ -255,6 +273,7 @@ export const Exchange = memo(function Exchange({
             {liveTail ? <LiveRow step={NOTHING_RUNNING} answering={lastSection?.kind === "prose"} /> : null}
           </div>
         ) : null}
+        {exchangeNote?.(exchange.id)}
 
         {plan ? (
           <div className="mt-3">
@@ -266,8 +285,8 @@ export const Exchange = memo(function Exchange({
             <ReviewFindings report={review} />
           </div>
         ) : null}
-        {streaming ? null : <TurnChanges requestId={exchange.prompt?.requestId} />}
-        <ExchangeFailure requestId={exchange.prompt?.requestId} />
+        {streaming ? null : exchangeRequests(exchange).map((requestId) => <TurnChanges key={requestId} requestId={requestId} />)}
+        <ExchangeFailure requestId={standing} />
         {exchange.response.length > 0 || interrupted ? (
           // A turn that ends on its failure row says there why it stopped, and what to do; the footer doesn't repeat it.
           <Footer exchange={exchange} streaming={streaming} interrupted={failureRow ? undefined : interrupted} />
@@ -300,10 +319,8 @@ function AgentByline({ provider, workingSince }: { provider?: string; workingSin
 /* the prompt                                                          */
 /* ------------------------------------------------------------------ */
 
-type ContinuedPrompt = Extract<MakoPrompt, { kind: "continued" }>
-
 /** What a continuation's line says, by who sent it; one read back from before the words named a sender says only what happened. */
-function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): string {
+function continuedTitle({ reason, sender }: SavedContinuation, provider: string): string {
   const who = sender === "mako" ? "Mako continued the turn" : sender === "person" ? "You continued the turn" : "The turn continued"
   switch (reason) {
     case "connection-lost":
@@ -322,32 +339,38 @@ function continuedTitle({ reason, sender }: ContinuedPrompt, provider: string): 
       return sender === "mako" ? "Mako continued the turn it stopped when it couldn't save" : sender === "person" ? "You continued the turn Mako stopped when it couldn't save" : "The turn Mako stopped when it couldn't save continued"
     case "goal-budget":
       return sender === "mako" ? "Mako continued the turn it stopped at the goal's token budget" : sender === "person" ? "You continued the turn Mako stopped at the goal's token budget" : "The turn Mako stopped at the goal's token budget continued"
+    case "machine-lost":
+      return sender === "person" ? "You picked the interrupted step up again" : `The last step was interrupted; ${provider} picked it up again`
   }
 }
 
 /**
- * A continuation of a turn that was cut short. Its words are Mako's,
- * whether Mako sent them on its own or the person pressed Continue turn, so
- * it does not get the user's bubble: one quiet line where the prompt would
- * be, saying what happened and who acted, with the moment. What the agent
- * was told opens under it.
+ * Where a turn that was cut short went on. The words are Mako's, whether
+ * Mako sent them on its own or the person pressed Continue turn, and the
+ * turn reads as one: nothing stands where they were sent. Two exceptions:
+ * a step the loss of a machine undid changed the person's files, so where
+ * it was picked up again is one quiet line; and with Settings › Diagnostics'
+ * originals on, the line says why and who, opens onto the exact words, and
+ * offers their Original.
  */
-function Continued({ continued, provider, said, timestamp, origin }: { continued: ContinuedPrompt; provider?: string; said: string; timestamp?: number; origin?: MessageOrigin }) {
+function TurnWentOn({ continued, message, provider }: { continued: SavedContinuation; message: ChatMessage; provider?: string }) {
   useHarnessIdentity()
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
+  const diagnosing = usePrefs((prefs) => prefs.showOriginals)
+  if (!diagnosing && continued.reason !== "machine-lost") return null
   const agent = provider ?? harness
+  const said = textOf(message.blocks).trim()
   return (
     <EventLine
-      align="end"
-      icon={continued.reason === "provider-exited" ? RefreshCwIcon : continued.reason === "handed-off" ? CloudIcon : PlayIcon}
-      time={timestamp}
+      icon={continued.reason === "provider-exited" || continued.reason === "machine-lost" ? RefreshCwIcon : continued.reason === "handed-off" ? CloudIcon : PlayIcon}
+      time={message.timestamp}
       data-turn-continued={continued.reason}
       data-continued-by={continued.sender ?? "unknown"}
       words={{ title: continuedTitle(continued, agent ? harnessLabel(agent) : "the provider") }}
-      action={<ShowOriginal origins={[origin]} />}
+      action={<ShowOriginal origins={[message.origin]} />}
     >
-      {said.trim() ? <p className="text-faint">{said.trim()}</p> : null}
+      {diagnosing && said ? <p className="text-faint">{said}</p> : null}
     </EventLine>
   )
 }
@@ -483,6 +506,7 @@ function Prompt({ message }: { message: ChatMessage }) {
     [sent.items, placed]
   )
   const { copied, copy } = useCopy(reused.text, reused.records)
+  const note = useContext(PromptNoteContext)
   const compose = () =>
     window.dispatchEvent(
       new CustomEvent("mako:compose", {
@@ -529,6 +553,7 @@ function Prompt({ message }: { message: ChatMessage }) {
       </div>
 
       <div className="mt-1 flex min-h-6 items-center justify-end gap-2 px-0.5 text-label text-muted-foreground">
+        {note?.(message.requestId)}
         <button type="button" aria-label="Copy question" onClick={() => void copy()} className="pressable flex h-6 items-center gap-1 rounded px-1 hover:bg-fill-hover hover:text-foreground">
           {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
           {copied ? "Copied question" : "Copy question"}
@@ -538,6 +563,7 @@ function Prompt({ message }: { message: ChatMessage }) {
         ) : null}
         <button
           type="button"
+          data-transcript-action="reuse"
           title="Put this prompt back in the composer"
           onClick={compose}
           className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
@@ -550,6 +576,7 @@ function Prompt({ message }: { message: ChatMessage }) {
           <>
             <button
               type="button"
+              data-transcript-action="edit"
               title="Rewind to here and re-ask — later turns stay on their own branch"
               onClick={() => void editHere()}
               className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
@@ -559,6 +586,7 @@ function Prompt({ message }: { message: ChatMessage }) {
             </button>
             <button
               type="button"
+              data-transcript-action="fork"
               title="Branch from this point into a new tab — both lines stay open"
               onClick={() => void actions.fork(message.id)}
               className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
@@ -616,6 +644,7 @@ function summarizeWork(
  * settles keeps what it had mounted.
  */
 function WorkSection({
+  id,
   messages,
   startedAt,
   live,
@@ -624,6 +653,8 @@ function WorkSection({
   failed,
   onOpenSteps,
 }: {
+  /** Which run of the transcript it is, for a compact presentation (`CompactPresentationContext`). */
+  id: string
   messages: ChatMessage[]
   startedAt?: number
   live: boolean
@@ -655,6 +686,18 @@ function WorkSection({
     setOpen((value) => {
       if (!value && live) onOpenSteps?.()
       return !value
+    })
+  // On a phone the run is one line that opens its steps; inside a fold's body it is drawn whole, as here.
+  const compact = useContext(CompactPresentationContext)?.steps
+  if (compact && !whole)
+    return compact({
+      id,
+      calls: messages.flatMap((message) => pairTools(message.blocks)),
+      provider: messages.find((message) => message.provider)?.provider,
+      live,
+      interrupted: !live && interrupted,
+      failed: !live && failed,
+      ...(!live && work.duration !== undefined && { worked: work.duration }),
     })
   return (
     <div className="flex flex-col">
@@ -723,20 +766,33 @@ function liveStep(messages: readonly ChatMessage[]): LiveStepData {
 
 /**
  * The calls one step stands for, in the order they began: every call
- * running now, and every call that ran beside them, finished after the
- * first of them began and begun no later than the last. A call that
- * finishes among others keeps its place until the whole step is done;
- * agents started together (`group`) are one step whole. The times are the
- * host's, so a reopened conversation draws the same step as a watched one.
+ * running now, and every call begun together with one of them. Calls begin
+ * together when none returned between their starts, so a call that
+ * finishes among others keeps its place until its step is done, while calls
+ * made one after another are steps of their own: beside a call that never
+ * returns, each later call settles into the summary once it finishes and
+ * stays there. Agents started together (`group`) are one step whole. The
+ * times are the host's, so a reopened conversation draws the same step as a
+ * watched one.
  */
 function stepCalls(calls: readonly ToolCall[], group: readonly ToolCall[] = []): ToolCall[] {
-  const starts = calls.flatMap((call) => (call.pending && call.startedAt !== undefined ? [call.startedAt] : []))
-  const first = Math.min(...starts)
-  const last = Math.max(...starts)
+  const ends = calls.flatMap((call) => (!call.pending && call.endedAt !== undefined ? [call.endedAt] : [])).sort((a, b) => a - b)
+  // A step is named by how many calls had returned when it began: two calls share it when none returned between their starts.
+  const returnedBy = (at: number) => {
+    let low = 0
+    let high = ends.length
+    while (low < high) {
+      const middle = (low + high) >> 1
+      if (ends[middle]! <= at) low = middle + 1
+      else high = middle
+    }
+    return low
+  }
+  const running = new Set(calls.flatMap((call) => (call.pending && call.startedAt !== undefined ? [returnedBy(call.startedAt)] : [])))
   const together = new Set(group.map((call) => call.id))
   return calls.filter((call) =>
     call.pending || together.has(call.id) ||
-    (call.endedAt !== undefined && call.startedAt !== undefined && call.endedAt > first && call.startedAt <= last)
+    (call.endedAt !== undefined && call.startedAt !== undefined && running.has(returnedBy(call.startedAt)))
   )
 }
 
@@ -765,13 +821,31 @@ function TurnFoldRow({ fold, foldKey, stop, kept, children }: { fold: TurnFold; 
   const open = useTurnFolds((state) => state.open.has(foldKey))
   const work = useMemo(() => summarizeWork(fold.messages), [fold.messages])
   const { text } = describeWork(work)
-  const duration = fold.from !== undefined && fold.to !== undefined && fold.to >= fold.from ? formatDuration(fold.to - fold.from) : undefined
+  const duration = fold.worked !== undefined ? formatDuration(fold.worked) : undefined
   const yours = stop === true || (stop !== undefined && stop !== false && endedAsChosen(stop.reason))
   const cut = Boolean(stop) && !yours
   const verb = stop ? (yours ? "Stopped" : "Interrupted") : fold.continued ? "Continued" : "Worked"
   const said = work.tools > 0 ? text : undefined
   const title = duration ? `${verb} ${stop ? "after" : "for"} ${duration}` : stop ? verb : said ? said.charAt(0).toUpperCase() + said.slice(1) : "Show the steps"
   const detail = duration || stop ? said : undefined
+  // On a phone a settled turn's work is one line too, opening everything it hides, the words between steps included.
+  const compact = useContext(CompactPresentationContext)?.steps
+  if (compact)
+    return (
+      <div data-turn-fold="compact" className="flex flex-col">
+        {compact({
+          id: foldKey,
+          calls: fold.messages.flatMap((message) => pairTools(message.blocks)),
+          provider: fold.messages.find((message) => message.provider)?.provider,
+          live: false,
+          interrupted: cut,
+          failed: false,
+          ...(fold.worked !== undefined && { worked: fold.worked }),
+          body: <div className="flex flex-col gap-4 pt-1">{children}</div>,
+        })}
+        {kept.length ? <div className="mt-3 flex flex-col gap-4">{kept}</div> : null}
+      </div>
+    )
   return (
     <div data-turn-fold={open ? "open" : "closed"} className="flex flex-col">
       <button
@@ -1076,7 +1150,17 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
   const text = responseText(exchange)
   const { copied, copy } = useCopy(text, undefined, () => completeLiveAnswer(liveId, exchange))
   const last = exchange.response.at(-1)
+  const compact = useContext(CompactPresentationContext)?.reply
+  const fork = useLiveFork(exchange)
   if (!text && !last?.timestamp && !interrupted) return null
+  if (compact)
+    return (
+      <div className="mt-1.5 flex min-h-6 flex-wrap items-center gap-x-2.5 text-label text-muted-foreground">
+        {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
+        {/* The phone's reply offers what it can be used for; its time and model are the desk's details. */}
+        {streaming ? null : compact({ exchange: exchange.id, text, ...(fork && !interrupted && { branch: fork }) })}
+      </div>
+    )
 
   return (
     <div className="mt-1.5 flex min-h-6 items-center gap-2.5 text-label text-muted-foreground">
@@ -1174,6 +1258,22 @@ function Stopped({ stop }: { stop: true | TurnStop }) {
 }
 
 /**
+ * A fork after this answer of a live conversation, where its harness can fork and the turn is done: the new Session's
+ * conversation once it's made, or undefined when the host refused it (it says why). The phone's Branch.
+ */
+function useLiveFork(exchange: ExchangeData): (() => Promise<string | undefined>) | undefined {
+  const scope = useConversationScope()
+  const requestId = exchange.prompt?.requestId
+  const live = useAcp((state) => {
+    const current = scopedLiveAcp(state, scope)
+    if (!current || !requestId || current.requests?.find((request) => request.id === requestId)?.status !== "completed") return undefined
+    return descriptorFor(threadsStore.get(), current.harness)?.capabilities.fork.state === "implemented" ? current.key : undefined
+  })
+  if (!live || !requestId) return undefined
+  return () => acp.fork({ kind: "run", requestId }, "parent", scopedLiveAcp(acpStore.get(), scope), false)
+}
+
+/**
  * Fork from this answer. The conversation up to and including this turn
  * becomes a new Session — on the same harness or any other — while the
  * original stays open. It joins this Thread as a tab; Option-click puts it
@@ -1218,6 +1318,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
       <>
         <button
           type="button"
+          data-transcript-action="fork"
           title="Fork after this answer into a new tab in this Thread. Option-click forks into a new Thread."
           onClick={(event) => void acp.fork(liveAnswer, event.altKey ? "new" : "parent", scopedLiveAcp(acpStore.get(), scope))}
           className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"
@@ -1231,6 +1332,7 @@ function ForkButton({ exchange }: { exchange: ExchangeData }) {
     return (
       <button
         type="button"
+        data-transcript-action="fork"
         title="Fork from this completed answer into a new tab"
         onClick={() => void actions.fork(nativeEntry, "at")}
         className="pressable flex items-center gap-1 rounded px-1 hover:text-foreground"

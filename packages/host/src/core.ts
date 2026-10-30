@@ -4,7 +4,7 @@ import type { RecordsLink } from "@mako/sessions/record-sync"
 import { encodeRuntimeValue } from "./contracts/runtime-value.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
-import { stat } from "node:fs/promises"
+import { writeFile } from "node:fs/promises"
 import { mediaExecutable } from "@mako/control-runtime/media"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -16,18 +16,19 @@ import { heavy } from "./base/heavy-packages.js"
 import type { HostWork } from "./base/event-loop.js"
 import { Admission } from "./base/admission.js"
 import { readPower } from "./base/power.js"
-import { SessionIdSchema } from "./contracts/thread-identity.js"
+import { SessionIdSchema, type ThreadId } from "./contracts/thread-identity.js"
 import { threadArchiveKey, type ArchiveAnswer, type ArchiveCommand, type CloudArchiveOutcome } from "./contracts/thread-lifecycle.js"
 import type { ArchivedThread } from "@mako/protocol/thread-listing"
 import type { Domain } from "./base/host-domains.js"
 import { hostLog, hostWarn, logsRoot } from "./base/host-log.js"
+import { HeapWatch, readHeap } from "./base/heap-watch.js"
 import { cloudUrl } from "./base/build-identity.js"
 import { NativeUnknown } from "./base/native-unknown.js"
 import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, type Attribution } from "./attribution/index.js"
-import { verifyFilePreview, fileIdentity, MediaRenditions, workspacePreviewPath, fileResponse, localFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, projectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
+import { cloneRepository, MediaRenditions, readSignedFile, readWindowFile, WorkspaceClients, Automations, childBackend, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, threadEnvironmentInstructions, openWorkspaces, openWorkspaceMovers, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -36,7 +37,7 @@ import { makoViews, type ThreadRef } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { declareTelemetryMethods, declareCloudAccountMethods, type CloudAccount, type MachineGatewayLink, MachineWorkspace, declareUsageMethods, HelperRuns, helperRunsRoot, spendWatch } from "./usage/index.js"
-import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
+import { resolveHarnessTuning, nativeHarnesses, createHarnessHost, threadHarnesses, openHarnesses, declareHarnessMethods, liveToolEffects, liveCallBounds, installCloudSignIns, CloudSignInSync, AccessChoiceStore, declareAccessChoiceMethods, type CloudSignInPlace, type PrefetchOutcome } from "./harnesses/index.js"
 import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins.js"
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
@@ -46,7 +47,9 @@ import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import { ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
 import type { MediaHandler } from "@mako/protocol"
-import { openConversations, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudHandOffs, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, ownedSessions, SessionPublisher, SessionUploads, declareSyncMethods, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
+import { workspaceWrites } from "./base/workspace-writes.js"
+import { SyncRecorder } from "./contracts/sync-readings.js"
+import { openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudConversations, CloudFollow, CloudHandOffs, CloudWorktrees, CloudMoves, CloudReadiness, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, workingThreads, conversationShown, ownedSessions, REPORT_WORK, SessionPublisher, SessionUploads, declareSyncMethods, CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type Conversations } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, type ConversationMcp } from "./tools/index.js"
 import { declareGitMethods, hostGit } from "./git/index.js"
 import { declareMediaMethods, registerShowTool, TurnMedia } from "./media/index.js"
@@ -68,6 +71,8 @@ export interface CoreShell {
   retryMachineWorkspace?(): boolean
   /** On a cloud machine: asks its agent to place the project's carried files from the account's store again, and waits. */
   refreshMachineCarried?(): Promise<void>
+  /** On a cloud machine: reports its Sessions on its runtime's link now, as its tick does (`MachineRuntime.reportSessions`). */
+  reportMachineSessions?(): void
   owner: HostOwner
   methods: HostMethods
   jobs: HostJobs
@@ -90,7 +95,10 @@ export interface CoreShell {
 export interface Core {
   route(channel: HostChannel, args: unknown[]): Promise<RoutedCall>
   presentHistory<Result>(value: Result): Result
+  /** What a window on this Mac reads: a signed file, or a path in its open workspace (`readWindowFile`). */
   file(request: Request, client?: string): Promise<Response>
+  /** What the gateway's link reads: only a file whose signed URL this host issued (`readSignedFile`). */
+  signedFile(request: Request): Promise<Response>
   disconnected(client: string): void
   desktop: NonNullable<Parameters<typeof startWebHost>[7]>
   /** On a cloud machine: the sign-ins its agent was given, written where each harness reads them. */
@@ -100,7 +108,7 @@ export interface Core {
   /** On a cloud machine: the folder its agent prepared, where every client's tabs open. */
   openMachineWorkspace(path: string): Promise<void>
   /** On a cloud machine: why its agent couldn't make the Thread's folder, for whatever needs it to say. */
-  machineWorkspaceFailed(problem: string): void
+  machineWorkspaceFailed(problem: string, reason: string): void
   /** On a cloud machine: the project's carried files its agent placed in the checkout, with the variables each defines. */
   machineCarriedFiles(files: readonly CarriedFile[]): void
   /** On a cloud machine: the live video of its previews its Threads' clients watch. */
@@ -110,6 +118,13 @@ export interface Core {
    * Thread's there (`ThreadCatalog.syncRecords`), and its project's recipe with the account's (`RecipeAccounts`).
    */
   machineLinked(link: MachineGatewayLink | null): Promise<void>
+  /**
+   * On a cloud machine made to replace a lost one: its Thread's save of an earlier generation restored, before its
+   * runtime connects (`restoreSave`); undefined when there was nothing to restore.
+   */
+  restoreMachineSave(link: MachineGatewayLink, generation: number): Promise<{ from: number; ms: number } | undefined>
+  /** On a cloud machine: its tracker's saves, told whether anything works and asked for the save a turn's end waits for. */
+  machineSaves: { working(busy: boolean): void; settle(why: string): Promise<void> } | undefined
   /** On a project base's builder: what a start in `path` does first, done before its snapshot. */
   prepareFolder(path: string): Promise<void>
   /** On a cloud machine as it boots: what `harness`'s start runs first, run ahead (`startPrefetch`). */
@@ -146,6 +161,8 @@ interface LateParts {
   cloud?: CloudAccount
   cloudConversations?: CloudConversations
   cloudReturns?: CloudReturns
+  /** The worktrees here of Threads that run in the cloud, following them at each turn's end. */
+  cloudFollow?: CloudFollow
   /** This host's Sessions on the account's list: told again when one is archived here. */
   sessions?: SessionPublisher
   /** The keys of the account's archived cloud Threads' Sessions, told to every window (`ThreadArchives.account`). */
@@ -155,6 +172,10 @@ interface LateParts {
   automations?: Automations
   updates?: Updates
   attribution?: Attribution
+  /** On a cloud machine: its tracker (`openMachineTracker`), made once the conversations are. */
+  machineTracker?: MachineTracker
+  /** Turning the cloud on, as one line: told when what it reads changes. */
+  turnOn?: CloudTurnOnFollower
 }
 
 export async function openCore(shell: CoreShell): Promise<Core> {
@@ -184,7 +205,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const late: LateParts = {}
   /** On a cloud machine, the gateway it's linked through; a laptop has none and reaches the account as itself. */
   let machineLink: MachineGatewayLink | null = null
-  /** On a cloud machine: the Thread's folder its agent makes, asked for again by a move that finds it unmade. */
+  /** On a cloud machine: the Thread's folder its agent makes, asked for again by a move or a start that finds it unmade. */
   const machineWorkspace = new MachineWorkspace(() => shell.retryMachineWorkspace?.() ?? false)
   /** On a cloud machine: the account's sign-ins as last installed here; undefined until the agent gave a set. */
   let machineSignIns: readonly CloudSignInInstall[] | undefined
@@ -229,9 +250,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // Selecting a child repository is not a commit in the parent workspace.
     if (event.type === "git" && !event.git.repositories?.length) late.automations?.noticeHead(event.git.head)
     // Turns, tool calls and background work starting and ending: who was running when a file changed.
-    if (event.type === "live-batch") late.attribution?.live(event.batch)
-    // A Session archived here leaves the account's list on every device: its owner's word is the one that counts.
-    if (event.type === "thread-archives") late.sessions?.changed()
+    if (event.type === "live-batch") {
+      late.attribution?.live(event.batch)
+      // On a cloud machine, the same reading says when to save the Thread.
+      late.machineTracker?.observe(event.batch)
+    }
+    // A conversation another device watches goes to it as it changes (`SessionPublisher`), and its row, a Session
+    // archived here or a Thread renamed here changes what every device lists.
+    late.sessions?.own(event)
+    // The account and the agents' sign-ins say each change here; turning the cloud on reads them again then.
+    if (event.type === "cloud-account" || event.type === "cloud-sign-ins") void late.turnOn?.changed()
     web()?.event(event, client)
   }
   const previews = new ArtifactPreviews(() => providerHost.artifactPreviews.list())
@@ -396,14 +424,28 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         activity: (path) => activity[path],
         work: () => application.lifecycle.snapshot().work,
         waitingOn: (id) => live.waitingOn(id),
-        archived: (id) => late.archivedHere?.(id) ?? false,
+        hidden: () => new Set(threads.archives.snapshot().keys),
         lastMoved: (id, revision) => live.lastMoved(id, revision),
         placement: (id) => store.journalPlacement(id),
-        execution: (session) => store.execution(session),
-        thread: (id) => store.thread(id),
+        executions: (ids) => store.executionsOf(ids),
+        titles: (ids) => store.titlesOf(ids),
         now: Date.now,
       })
     },
+    // What a list shows of one conversation, read as each of its batches comes, by the rule its row is made with: a
+    // batch that moved it is reported at once. It reads only what memory holds.
+    shown: (id) => {
+      const live = late.conversations?.live
+      const session = live?.session(id)
+      if (!live || !session) return undefined
+      return conversationShown({ session, working: live.workOf(id)?.status, waitingOn: (conversation) => live.waitingOn(conversation) })
+    },
+    // A change goes to the account within a fraction of a second, on the link this host serves then, named as the tick's
+    // job is: a Mac's account link, or a cloud machine's runtime link.
+    reportNow: config.machineAgentFd === undefined ? () => late.cloud?.reportSessions?.() : () => shell.reportMachineSessions?.(),
+    // A Mac's runtime link, silent while it sends what another device watches, is asked whether it's alive.
+    sent: config.machineAgentFd === undefined ? () => late.cloud?.liveSent?.() : undefined,
+    work: shell.work,
   })
   catalog.subscribe((event) => {
     if (event.type === "thread-ref") {
@@ -412,8 +454,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       else {
         windowRows = undefined
         windowPaths = undefined
-        late.cloudConversations?.nativeChanged()
       }
+      // Whether this Mac keeps that session may have changed: the account's rows for it are looked at again, those alone.
+      late.cloudConversations?.nativeChanged([event.ref])
     } else if (event.type === "threads" || event.type === "thread-removed") {
       windowRows = undefined
       windowPaths = undefined
@@ -425,7 +468,31 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     sessions.changed()
   })
   late.sessions = sessions
-  shell.jobs.every("tell the account this host's Sessions", 1_000, () => late.cloud?.reportSessions?.())
+  // How this Mac's sync goes, for Diagnostics: what it follows of other devices' work, the account's list, and what it
+  // sends of its own watched conversations.
+  const syncReadings = new SyncRecorder()
+  syncReadings.ownerFrom(() => sessions.readings())
+  // One reporter a link: a cloud machine's link is its machine runtime's, whose tick reports on it. This job, with the
+  // account's link (none there), would make each second's report look like a new link's and work the list out again.
+  if (config.machineAgentFd === undefined) shell.jobs.every(REPORT_WORK, 1_000, () => late.cloud?.reportSessions?.())
+  // The heap, watched so a host filling up says who with while it still can: an out-of-memory report has no
+  // JavaScript stack. The line names what memory holds and who read it in; the whole readout goes beside the log.
+  const heap = new HeapWatch(readHeap, (change, level, reading) => {
+    const memory = late.conversations?.live.residency().memory
+    const mb = (bytes: number | undefined) => Math.round((bytes ?? 0) / 1_048_576)
+    const fields = {
+      level, usedMB: mb(reading.used), limitMB: mb(reading.limit), rssMB: mb(reading.rss),
+      conversations: memory?.loaded ?? 0, conversationMB: mb(memory?.bytes), pinnedMB: mb(memory?.pinnedBytes),
+      loads: (memory?.loads ?? []).slice(0, 5).map((load) => `${load.by}=${load.count}`).join(", "),
+      held: (memory?.held ?? []).slice(0, 5).map((held) => `${held.conversation.slice(0, 8)}:${mb(held.bytes)}MB${held.by ? ` by ${held.by}` : ""}`).join(", "),
+    }
+    if (change === "easing") return hostLog("memory", "the heap eased", fields)
+    hostWarn("memory", "the heap is under pressure", fields)
+    const readout = { at: new Date().toISOString(), change, level, heap: reading, memory, jobs: shell.jobs.list() }
+    void writeFile(join(logsRoot(environment.dataRoot), "memory-pressure.json"), JSON.stringify(readout, null, 2)).catch((error: Error) =>
+      hostWarn("memory", "the memory readout couldn't be written", { error: error.message }))
+  })
+  shell.jobs.every("watch the heap", 10_000, () => void heap.tick(), { runsWhileHeld: true })
   // This Mac's Sessions in the sync window, kept in step in the account, the ones at work first: as Mako draws each, so
   // another device reads one with this Mac off, and as its harness wrote it, so it continues anywhere. A cloud machine
   // keeps its Thread's records instead; a fixture desk sends nothing.
@@ -449,13 +516,46 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       status: () => catalog.syncStatus(),
       backfill: () => readBackfill(records),
       now: Date.now,
+      statusChanged: () => void late.turnOn?.changed(),
     })
     const ticking = uploads
     shell.jobs.every("keep this Mac's Sessions in the account", 5_000, () => ticking.tick())
   }
-  declareSyncMethods(methods, uploads)
+  declareSyncMethods(methods, uploads, syncReadings)
+  // The person's access choice per harness, which a start from any surface reads: their account's, kept here too for
+  // a start without the network, and alone on a Mac that isn't signed in. A cloud machine acts for no person's account.
+  const accessChoices = new AccessChoiceStore({
+    file: join(environment.userRoot, "access-choices.json"),
+    modes: (harness) => providerHost.liveDrivers.get(harness)?.modes,
+    account: async () => {
+      const cloud = late.cloud
+      if (config.machineAgentFd !== undefined || !cloud?.accessChoices || !cloud.chooseAccess) return undefined
+      const id = await cloud.id().catch(() => undefined)
+      if (!id) return undefined
+      const { accessChoices: read, chooseAccess: write } = cloud
+      return {
+        read: async () => {
+          const answer = await read()
+          return answer ? { account: id, ...answer } : undefined
+        },
+        write: async (choices, fill) => {
+          const answer = await write(choices, fill)
+          return answer ? { account: id, ...answer } : undefined
+        },
+      }
+    },
+    announce: (choices) => emit({ type: "access-choices", choices }),
+    log: (message, fields) => hostLog("access", message, fields),
+  })
+  declareAccessChoiceMethods(methods, accessChoices)
   late.cloud = declareCloudAccountMethods(methods, {
+    accessChoices: {
+      heard: (answer) => void late.cloud?.id().then((account) => account && accessChoices.heard({ account, ...answer }), () => undefined),
+      again: () => void accessChoices.sync(),
+    },
     sessions,
+    signedFiles: (request) => withHostClient("gateway:files", () => readSignedFile(request, renditions)),
+    jobs: shell.jobs,
     environment,
     secrets: fixtureDesk ? detachedSecrets() : secrets,
     machine,
@@ -476,6 +576,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
             return sync
           },
   })
+  // What this Mac chose while it wasn't heard goes to the account, and the account's choices come back.
+  void accessChoices.sync()
   // A project's carried files (its recipe's `carry`) kept in the account's secret store, with its person's word, for its
   // cloud Threads: brought up to date before one is made or a Thread moves there. Only a person's own Mac sends them.
   const carriedFiles = fixtureDesk || config.machineAgentFd !== undefined
@@ -490,16 +592,18 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           return { id, store: cloud.carriedFiles }
         },
         repositoryOf: async (folder) => (await folderRepository(git, folder)).url,
-        recipe: (checkout) => projectRecipe(git, checkout, workspaces.recipes),
+        recipe: (checkout) => readProjectRecipe(git, checkout, workspaces.recipes),
       })
   declareCarriedFilesMethods(methods, carriedFiles)
   /** The account's archived cloud Threads, as its list said them last: what every window shows as archived of them. */
-  let accountArchived: ReadonlyMap<string, ArchivedThread> = new Map()
+  /** The account's archived cloud Threads, as its list last said them; undefined until a list is read this run. */
+  let accountArchived: { account: string; archived: ReadonlyMap<string, ArchivedThread> } | undefined
   // A cloud machine runs its conversations itself; only a person's own Mac starts them on one.
   const cloudConversations = fixtureDesk || config.machineAgentFd !== undefined
     ? undefined
     : new CloudConversations({
         account: () => late.cloud,
+        readings: syncReadings,
         file: join(environment.dataRoot, "cloud", "conversations.json"),
         emit: (event) => {
           if (!shell.closing()) web()?.conversationEvent(event)
@@ -510,6 +614,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         changed: (conversationId) => {
           for (const tab of workspaceClients.everyTab()) tab.elsewhereChanged(conversationId)
         },
+        turnEnded: (_conversationId, threadId) => late.cloudFollow?.turnEnded(threadId),
         threads: () => threads.store ?? undefined,
         returning: (cloudThread) => late.cloudReturns?.returning(cloudThread),
         keepsNative: (harness, nativeId, folder) => catalog.keepsNative(harness, nativeId, folder),
@@ -543,25 +648,61 @@ export async function openCore(shell: CoreShell): Promise<Core> {
             return cloud ? catalog.copyEntry(await cloud.deviceRecords(device), harness, nativeId, id) : null
           },
         },
-        archivedChanged: (archived) => {
-          accountArchived = archived
+        archivedChanged: (account, archived) => {
+          accountArchived = { account, archived }
           late.archivedKeys?.()
         },
+        turnOnChanged: () => void late.turnOn?.changed(),
       })
+  // The keys those Threads' Sessions are archived by here. Until the account's list is read this run, and while the
+  // catalog can't yet say which of its rows are theirs, the ones kept from before stand (`ThreadArchives.account`).
   late.archivedKeys = () => {
+    if (!accountArchived) return
     const keys = new Set<string>()
     const sessionIds = new Set<string>()
-    for (const archived of accountArchived.values())
+    for (const archived of accountArchived.archived.values())
       for (const row of archived.sessions) {
         keys.add(threadArchiveKey({ kind: "live", id: row.conversation }))
         if (row.nativeId) keys.add(threadArchiveKey({ kind: "native", provider: row.harness, nativeId: row.nativeId }))
         sessionIds.add(row.session)
       }
+    if (sessionIds.size && !catalog.ready()) return
     if (sessionIds.size) for (const ref of catalog.list()) if (ref.sessionId && sessionIds.has(ref.sessionId)) keys.add(threadArchiveKey({ kind: "file", path: ref.path }))
-    const snapshot = threads.archives.account(keys)
+    const snapshot = threads.archives.account(accountArchived.account, keys)
     if (snapshot) emit({ type: "thread-archives", snapshot })
   }
   late.cloudConversations = cloudConversations
+  // Turning the cloud on, as one line every window shows: read again as what owns each step says it changed (above),
+  // never by asking them on a timer. Only a base being made and a machine made ahead say nothing as they change: the
+  // slow tick looks at those, while one is under way and a window is there to see it.
+  const turnOnUnderWay = shell.jobs.demand("turning the cloud on waits on the cloud")
+  const turnOn = cloudConversations && uploads && new CloudTurnOnFollower({
+    file: join(environment.dataRoot, "cloud", "turn-on.json"),
+    emit: (state) => {
+      if (!shell.closing()) emit({ type: "cloud-turn-on", turnOn: state })
+    },
+    watching: () => shell.subscribed.on,
+    underWay: (on) => turnOnUnderWay.set(on),
+    sources: {
+      account: async () => late.cloud?.account?.(),
+      signIns: async () => late.cloud?.signIns?.(),
+      sync: async () => uploads.status(),
+      projects: (accountId) => cloudConversations.offeredProjects(accountId),
+      standings: async (repositories) => (await late.cloud?.baseStandings?.(repositories)) ?? null,
+      askBases: (repositories) => cloudConversations.askBasesAgain(repositories),
+      checkPlan: async () => void (await late.cloud?.checkPlan?.()),
+      firstThread: () => cloudConversations.firstCloudThread(),
+      machine: (repository) => cloudConversations.preparedMachine(repository),
+      now: Date.now,
+    },
+  })
+  declareTurnOnMethods(methods, turnOn)
+  if (turnOn) {
+    const following = turnOn
+    late.turnOn = following
+    shell.jobs.every("look again at the cloud turning on", TURN_ON_POLL_MS, () => following.poll(), { needs: [turnOnUnderWay] })
+    void following.changed()
+  }
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
   const residency = new ControlResidency({
     sessions: control.sessions,
@@ -572,6 +713,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   const opened = await openConversations({
     streams,
+    // A new conversation is on the account's list before its harness has started.
+    opened: () => late.sessions?.showsChanged(),
     // A cloud machine's harnesses run on the account's sign-ins: nobody is there to sign one in.
     unattended: config.machineAgentFd !== undefined,
     environment,
@@ -582,6 +725,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     telemetry,
     emit,
     foreground: shell.foreground,
+    work: shell.work,
     mcpSnapshot: (cwd) => tools.mcp.discover(cwd),
     tools: (bindingId, conversationId) => residency.tools(bindingId, conversationId),
     controlInstructions: (bindingId, conversationId) => {
@@ -591,7 +735,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       // A harness without instructions of its own hears how media reaches the person here (`makoInstructions`).
       const harness = late.conversations?.live.session(conversationId)?.harness
       const media = harness && !harnesses.host.liveDrivers.get(harness)?.makoInstructions ? SHOW_MEDIA_LINE : undefined
-      return [session && controlLine(session), launched && threadEnvironmentInstructions(launched), media, ...(workspaces.worktrees?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
+      return [session && controlLine(session), launched && threadEnvironmentInstructions(launched), media, ...(workspaces.worktrees?.notices(conversationId) ?? []), ...(late.cloudReturns?.notices(conversationId) ?? [])].filter((line) => line !== undefined)
     },
     revokeTools: (bindingId, conversationId) => residency.revoke(bindingId, conversationId),
     rewindWriters: (paths, since) => late.attribution?.rewindWriters(paths, since),
@@ -653,6 +797,20 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     moves: live.moves,
     snapshot: (id) => live.snapshot(id),
     checkout: (id) => workspaces.worktrees?.threadCheckout(id),
+    // A Thread in the main checkout goes onto its own branch first, as the person's "Move to its own branch" does, its
+    // companions following; its agent isn't told, since nothing starts a turn on the way to the cloud.
+    ownBranch: async (id) => {
+      const movers = late.movers
+      const worktreeMoves = movers?.worktreeMoves
+      if (!movers || !worktreeMoves) throw new Error("Worktrees need the Thread store, which didn't open.")
+      const { moved, following } = await movers.moves.moveNow(id, () => worktreeMoves.carry(id, { lead: true, tell: false }))
+      await following
+      return moved.session.id
+    },
+    // What it carries besides its checkout: the paths outside it the journal ties to it, and its file history.
+    outside: (thread) => late.attribution?.changes(thread).outside.filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? [],
+    history: (thread) => late.attribution?.threadHistory(thread),
+    archived: (conversationId) => late.archivedHere?.(conversationId) ?? false,
     repositoryOf: (cwd) => folderRepository(git, cwd),
     sendRecords: (link, paths) => catalog.sendRecords(link, paths),
     cloud: cloudConversations,
@@ -670,6 +828,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     harnesses: harnessCheck,
   })
   void cloudMoves?.settle().catch((error: Error) => hostWarn("moves", "moves a stopped host left couldn't be settled", { error: error.message }))
+  // The one owner of each cloud Thread's worktree here: the way back and the follow both write it through this.
+  const cloudWorktrees = new CloudWorktrees()
   // And brings them back (`mako:thread-return`): a machine sends them (`mako:move-depart`).
   const cloudReturns = cloudConversations && new CloudReturns({
     folder: join(environment.dataRoot, "cloud", "returns"),
@@ -693,8 +853,36 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     cloud: cloudConversations,
     capture: async (conversationId, path) => void (await live.capture(conversationId, path)),
     step: (conversationId, move, step) => emit({ type: "thread-return-step", conversationId, move, step }),
+    rememberMode: (harness, nativeId, modeId) => threads.memory?.remember(harness, nativeId, { modeId }),
+    outside: join(environment.dataRoot, "cloud", "outside"),
+    followed: {
+      laid: async (cloudThread, path) => late.cloudFollow?.laid(cloudThread, path),
+      forget: async (cloudThread) => late.cloudFollow?.forget(cloudThread),
+    },
+    carryHistory: async (history) => {
+      const attribution = late.attribution
+      if (!attribution) return false
+      await attribution.carryThreadHistory(history)
+      return true
+    },
+    worktrees: cloudWorktrees,
   })
   late.cloudReturns = cloudReturns
+  // The worktree here of a Thread in the cloud follows it at each turn's end, until the person changes it here.
+  late.cloudFollow = cloudConversations && new CloudFollow({
+    folder: join(environment.dataRoot, "cloud", "follow"),
+    moves: join(environment.dataRoot, "cloud", "moves"),
+    git,
+    readCheckpoint: async (cloudThread, sha256, file) => {
+      const account = late.cloud
+      if (!account) throw new Error("This Mac signed out of Mako Cloud.")
+      await account.readCheckpoint(cloudThread, sha256, file)
+    },
+    callThread: (cloudThread, channel, args) => cloudConversations.callThread(cloudThread, channel, args),
+    returning: (cloudThread) => late.cloudReturns?.returning(cloudThread) !== undefined,
+    worktrees: cloudWorktrees,
+    stopped: (cloudThread, state) => emit({ type: "thread-follow-stopped", conversations: cloudConversations.threadConversations(cloudThread).map((each) => each.conversationId), folders: state.edited?.folders ?? [], at: state.edited?.at ?? Date.now() }),
+  })
   // And archives them, from here, whichever device they came from: the cloud ends them and keeps what they ran.
   const cloudArchives = cloudConversations && new CloudArchives({
     folder: join(environment.dataRoot, "cloud", "archives"),
@@ -836,6 +1024,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       sourceRoot: config.development ? environment.appRoot : undefined,
       onWorkspaceChanged: (cwd) => workspaceAutomations.watch(cwd),
       elsewhere: async (conversation) => cloudConversations?.folder(conversation),
+      unmadeFolder: () => machineWorkspace.unmade(),
     },
     emit,
     machine,
@@ -854,6 +1043,76 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     worker: new URL("./usage-worker.js", import.meta.url),
     strictStores: fixtureDesk,
   })
+  /** On a cloud machine: what a Thread arriving from a device needs (`mako:move-arrive`), and a lost machine's restore. */
+  const arrival: MoveArrivalDeps | undefined = config.machineAgentFd === undefined ? undefined : {
+    git,
+    records: () => machineRecords(machineLink),
+    workspace: () => workspaceClients.homePath(),
+    workspaceProblem: () => machineWorkspace.problem,
+    workspaceSettled: () => machineWorkspace.settled(),
+    receive: (link, sessions, installed) => catalog.receiveRecords(link, sessions, installed),
+    stage: (link, sessions) => catalog.stageRecords(link, sessions),
+    installed: (harness) => installedReading(harnesses.updates.restoreRuntime(harness)),
+    open: async (session) => {
+      // Settled as every start's are: the harness's catalog fills what the device's settings leave out.
+      const tuning = await harnesses.profiles.resolveLaunch(session.harness, session.folder, session.tuning)
+      await live.start(session.harness, session.folder, {
+        conversationId: session.conversationId, resume: session.nativeId, threadPath: session.path,
+        ...session.modeId !== undefined && { modeId: session.modeId },
+        ...tuning !== undefined && { tuning },
+      })
+      await live.opened(session.conversationId)
+    },
+    take: (handoff) => {
+      const store = threads.store
+      if (!store) throw new Error("This machine's Thread store isn't open.")
+      store.takeArrival({ operationId: namedUuid(`mako move\0${handoff.move}\0arrive`), handoff, actor: store.person() })
+    },
+    // The launch settings a session's start resolves (a harness's model catalog, which OpenCode reads by starting a
+    // whole server): read now, in the folder, with the session's own settings, so the hand-over's start finds them.
+    warm: async (harness, folder, tuning) => {
+      await harnesses.profiles.resolveLaunch(harness, folder, tuning)
+    },
+    signedIn: (harness) => machineSignIns?.some((install) => install.harness === harness && install.status === "installed"),
+    refreshCarried: async () => shell.refreshMachineCarried?.(),
+    label: (harness) => opened.harnessLabel(harness),
+    scratch: join(environment.dataRoot, "moves"),
+    ahead: new Map(),
+    carryHistory: async (history) => {
+      const attribution = late.attribution
+      if (!attribution) return false
+      await attribution.carryThreadHistory(history)
+      return true
+    },
+    clone: (repository) => cloneRepository(git, repository),
+  }
+  /** The Thread's files outside its folder that this machine's journal ties to it, with strong evidence: what a carry takes. */
+  const threadOutside = (thread: ThreadId) => late.attribution?.changes(thread).outside.filter((entry) => entry.evidence === "strong").map(({ path, access, secret }) => ({ path, access, secret })) ?? []
+  const threadHistory = (thread: ThreadId) => late.attribution?.threadHistory(thread)
+  /** On a cloud machine: its tracker, which saves the Thread as it changes and restores a lost machine's save. */
+  const machineTracker = arrival && openMachineTracker({
+    git,
+    dataRoot: environment.dataRoot,
+    jobs: shell.jobs,
+    gateway: () => machineLink ?? undefined,
+    records: (gateway) => machineRecords(gateway)!,
+    workspace: () => workspaceClients.homePath(),
+    live: {
+      summaries: () => live.summaries(),
+      activeRequest: (id) => live.activeRequest(id),
+      continueTurn: (conversationId, input) => void live.continueTurn(conversationId, input),
+    },
+    remembered: (harness, nativeId) => threads.memory?.recall(harness, nativeId),
+    store: () => threads.store ?? undefined,
+    sendRecords: (link, paths) => catalog.sendRecords(link, paths),
+    arrival,
+    carry: { git, scratch: join(environment.dataRoot, "moves"), outside: threadOutside, history: threadHistory },
+  })
+  // Mako's own writes to the checkout (a person's edit through Files, a Git action): saved as a tool call's are.
+  late.machineTracker = machineTracker
+  const unwatchSaves = machineTracker && workspaceWrites.subscribe((write) => {
+    if (write.paths.length) machineTracker?.saves.changed("Mako wrote files")
+  })
   declareConversationMethods(methods, {
     conversations: opened,
     profiles: harnesses.profiles,
@@ -866,42 +1125,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
     workspace,
     emit,
-    ...(config.machineAgentFd !== undefined && {
-      arrival: {
-        git,
-        records: () => machineRecords(machineLink),
-        workspace: () => workspaceClients.homePath(),
-        workspaceProblem: () => machineWorkspace.problem,
-        workspaceSettled: () => machineWorkspace.settled(),
-        receive: (link, sessions, installed) => catalog.receiveRecords(link, sessions, installed),
-        stage: (link, sessions) => catalog.stageRecords(link, sessions),
-        installed: (harness) => installedReading(harnesses.updates.restoreRuntime(harness)),
-        open: async (session) => {
-          // Settled as every start's are: the harness's catalog fills what the device's settings leave out.
-          const tuning = await harnesses.profiles.resolveLaunch(session.harness, session.folder, session.tuning)
-          await live.start(session.harness, session.folder, {
-            conversationId: session.conversationId, resume: session.nativeId, threadPath: session.path,
-            ...session.modeId !== undefined && { modeId: session.modeId },
-            ...tuning !== undefined && { tuning },
-          })
-          await live.opened(session.conversationId)
-        },
-        take: (handoff) => {
-          const store = threads.store
-          if (!store) throw new Error("This machine's Thread store isn't open.")
-          store.takeArrival({ operationId: namedUuid(`mako move\0${handoff.move}\0arrive`), handoff, actor: store.person() })
-        },
-        // The launch settings a session's start resolves (a harness's model catalog, which OpenCode reads by starting a
-        // whole server): read now, in the folder, with the session's own settings, so the hand-over's start finds them.
-        warm: async (harness, folder, tuning) => {
-          await harnesses.profiles.resolveLaunch(harness, folder, tuning)
-        },
-        signedIn: (harness) => machineSignIns?.some((install) => install.harness === harness && install.status === "installed"),
-        refreshCarried: async () => shell.refreshMachineCarried?.(),
-        label: (harness) => opened.harnessLabel(harness),
-        scratch: join(environment.dataRoot, "moves"),
-        ahead: new Map(),
-      },
+    accessMode: (harness) => accessChoices.mode(harness),
+    ...(arrival && {
+      arrival,
       departure: {
         git,
         records: () => machineRecords(machineLink),
@@ -916,6 +1142,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         },
         send: (link, paths) => catalog.sendRecords(link, paths),
         scratch: join(environment.dataRoot, "moves"),
+        outside: threadOutside,
+        history: threadHistory,
       },
     }),
   })
@@ -926,6 +1154,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     admission,
     updates: appUpdates,
     wake,
+    leaving: (source) => {
+      hostLog("host", "leaving", { source })
+      late.cloud?.leaving?.(source === "suspend" ? "sleep" : "quit")
+    },
     jobs: shell.jobs,
     subscribed: shell.subscribed,
     emit,
@@ -1020,7 +1252,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       return cloud?.handled ? cloud : opened.route(channel, args)
     },
     presentHistory: (value) => opened.history.present(value),
-    file: (request, client = "web") => withHostClient(client, () => readFilePreview(request, withHost, renditions)),
+    file: (request, client = "web") => withHostClient(client, () => readWindowFile(request, withHost, renditions)),
+    signedFile: (request) => withHostClient("gateway:files", () => readSignedFile(request, renditions)),
     disconnected: (client) => {
       shell.terminals.current()?.release(client)
       void workspaceClients.release(client)
@@ -1068,7 +1301,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       machineLink = link
       await catalog.syncRecords(machineRecords(link) ?? null)
     },
-    machineWorkspaceFailed: (problem) => machineWorkspace.failed(problem),
+    restoreMachineSave: async (link, generation) => machineTracker?.restore(link, generation),
+    machineSaves: machineTracker && {
+      working: (busy) => machineTracker?.saves.working(busy),
+      settle: (why) => machineTracker?.saves.settle(why) ?? Promise.resolve(),
+    },
+    machineWorkspaceFailed: (problem, reason) => machineWorkspace.failed(problem, reason),
     machineCarriedFiles: (files) => {
       machineCarried = files
     },
@@ -1084,12 +1322,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {
       jobs.stop()
+      machineTracker?.saves.stop()
+      unwatchSaves?.()
       unfollowEffects?.()
       unfollowBounds?.()
       await late.attribution?.close().catch((error: Error) => hostWarn("attribution", "the journal did not close cleanly", { error: error.message }))
       const callsDrained = methods.close()
       // The native launcher closes its own admission before anything it uses goes.
-      const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop()])
+      const providersDrained = Promise.all([runs.stop(), harnesses.profiles.stop(), providerHost.discovery.stop()])
       void providersDrained.catch(() => {})
       git.close()
       application.dispose()
@@ -1113,7 +1353,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       workspaces.close()
       turnMedia.close()
       void workspaceClients.dispose()
-      // Children that exited while stopping have left the registry by now.
+      // What an owner left running ends with the host rather than outliving it; children that exited while stopping
+      // have left the registry by now.
+      await children.end()
       for (const stop of unfollow) stop()
       await Promise.all([unknown.flush(), mismatches.flush()])
       hostLog("lifecycle", "stopped")
@@ -1126,33 +1368,6 @@ function machineRecords(link: MachineGatewayLink | null): RecordsLink | undefine
   if (!link) return undefined
   const records = new URL(`/v1/machines/${encodeURIComponent(link.machine)}/records`, link.gatewayUrl).toString()
   return { id: records, base: records, authorization: `Bearer ${link.credential}` }
-}
-
-async function readFilePreview(request: Request, withHost: <T>(run: (host: AgentHost) => T | Promise<T>) => Promise<T>, renditions: MediaRenditions): Promise<Response> {
-  if (request.method !== "GET") return new Response("Method not allowed", { status: 405 })
-  const grant = await verifyFilePreview(request.url)
-  if (grant.kind === "refused") return new Response(`Refused: ${grant.reason}`, { status: 403 })
-  if (grant.kind === "file") {
-    // `?rendition=poster|thumbnail` asks for a smaller picture of the signed file; a thumbnail that can't be made is the file itself.
-    const kind = new URL(request.url).searchParams.get("rendition")
-    if (grant.entry && (kind === "poster" || kind === "thumbnail")) {
-      const info = await stat(grant.path)
-      const made = await renditions.rendition(grant.path, fileIdentity(info), kind)
-      if (made) return fileResponse(await localFile(made, request.signal), made, request, { cacheable: true })
-      if (kind === "poster") return new Response("No poster", { status: 404 })
-    }
-    return fileResponse(await localFile(grant.path, request.signal), grant.path, request, { cacheable: true, crossOrigin: !grant.entry })
-  }
-  const path = workspacePreviewPath(request.url)
-  if (!path) return new Response("Not found", { status: 404 })
-  try {
-    return await withHost(async (host) => {
-      const absolute = await host.resolvePath(path)
-      return fileResponse(await localFile(absolute, request.signal), absolute, request)
-    })
-  } catch {
-    return new Response("Not found", { status: 404 })
-  }
 }
 
 /**

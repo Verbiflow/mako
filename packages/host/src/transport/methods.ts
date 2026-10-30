@@ -52,26 +52,21 @@ export class HostMethods implements MethodTable {
     // Built at the call's first use rather than when the host starts.
     let schema: HostCallInput<Channel> | undefined
     // Each answer is delivered inside the call's work, so the event-loop monitor names a slow encode with its call.
-    const call = <Answer>(args: unknown[], local: (value: Awaited<Result>) => Answer, encoded: (value: EncodedValue) => Answer) => this.lifetime.run(async () => {
-      const done = this.options.work.begin(channel)
-      try {
-        this.refuseOutsideFixture(channel)
-        // SAFETY: the schema is selected by this exact Channel and parses every argument; TypeScript loses that key/output correlation when indexing the heterogeneous table.
-        const parsed = (schema ??= hostCallSchema(channel)).parse(args) as HostArguments<Channel>
-        // A refused call is returned to the renderer. Recording it as a crash
-        // filled the local store with expected validation errors and hid the
-        // failures that actually killed a process.
-        this.options.breadcrumb(channel)
-        // An answer already encoded, the owner's or another call's, had its history paged by whoever encoded it.
-        const owner = await this.options.route(channel, parsed)
-        if (owner.handled) return encoded(owner.value)
-        const value = await listener(...parsed)
-        if (value instanceof EncodedAnswer) return encoded(value.value)
-        return local(hostHistoryPaging() ? this.options.presentHistory(value) : value)
-      } finally {
-        done()
-      }
-    })
+    const call = <Answer>(args: unknown[], local: (value: Awaited<Result>) => Answer, encoded: (value: EncodedValue) => Answer) => this.lifetime.run(() => this.options.work.run(channel, async () => {
+      this.refuseOutsideFixture(channel)
+      // SAFETY: the schema is selected by this exact Channel and parses every argument; TypeScript loses that key/output correlation when indexing the heterogeneous table.
+      const parsed = (schema ??= hostCallSchema(channel)).parse(args) as HostArguments<Channel>
+      // A refused call is returned to the renderer. Recording it as a crash
+      // filled the local store with expected validation errors and hid the
+      // failures that actually killed a process.
+      this.options.breadcrumb(channel)
+      // An answer already encoded, the owner's or another call's, had its history paged by whoever encoded it.
+      const owner = await this.options.route(channel, parsed)
+      if (owner.handled) return encoded(owner.value)
+      const value = await listener(...parsed)
+      if (value instanceof EncodedAnswer) return encoded(value.value)
+      return local(hostHistoryPaging() ? this.options.presentHistory(value) : value)
+    }))
     this.calls.set(channel, (args) => call(args, encodeRuntimeValue, (value) => value))
     if (channel === "mako:control-preview") {
       const preview = ControlPreviewSchema.nullable()

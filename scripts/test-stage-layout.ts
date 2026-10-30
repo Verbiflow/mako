@@ -229,7 +229,10 @@ assert.match(
 )
 assert.match(threadViewerSource, /Loading the conversation…/)
 assert.doesNotMatch(threadViewerSource, /Opening \{opening/)
-assert.match(threadViewingSource, /Showing saved messages/)
+// A refresh that fails keeps the saved messages on screen under one quiet
+// line with Retry; no toast says it (the UI check drives both).
+assert.match(threadViewerSource, /data-refresh-failed[^]*Couldn't refresh[^]*Retry/)
+assert.doesNotMatch(threadViewingSource, /Could not refresh this conversation|Showing saved messages/)
 assert.equal(composerActionKind({ running: false, hasContent: false }), "send")
 assert.equal(composerActionKind({ running: false, hasContent: true }), "send")
 assert.equal(composerActionKind({ running: true, hasContent: false }), "stop")
@@ -1643,7 +1646,7 @@ console.log(
     "a turn that ended while the renderer was disconnected still marks its row"
   )
   const { items } = notificationsStore.get()
-  const replay = items.find((item) => item.subject.target.kind === "thread" && item.subject.target.path === ref.path && item.kind === "ready")
+  const replay = items.find((item) => item.subject.target.kind === "thread" && item.subject.target.path === ref.path && item.kind === "finished")
   assert.ok(replay, "the reconnect replay reaches the badge")
 
   // Putting the thread away is a dismissal: the row's mark stands down and

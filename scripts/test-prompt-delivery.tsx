@@ -4,12 +4,13 @@ import { applyLiveSnapshot, applyLiveBatch } from "../src/state/live-recovery"
 import { acpStore, activeLiveAcp } from "../src/state/acp-state"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
-import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops } from "../src/state/prompt-delivery"
-import { autoContinueCandidate } from "@mako/host/contracts/turn-continuation"
+import { autoContinuePending, continueTurnPrompt, promptDelivery, recoverableRequests, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
+import { autoContinueCandidate, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { classifyProviderFailure } from "@mako/host/contracts/provider-failure"
 import { PromptQueue } from "../src/components/composer/prompt-queue"
 import { projectLive } from "../src/state/live-projection"
 import type { LiveSnapshot, LiveRequest } from "../src/lib/types"
+import type { Entry } from "@mako/sessions/entries"
 
 const id = "11111111-1111-4111-8111-111111111111"
 const request: LiveRequest = {
@@ -182,8 +183,9 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   // A handoff names the background work it stopped, and a saved conversation still knows the words as Mako's.
   const stoppedWork = continueTurnPrompt("handed-off", "mako", ["npm run dev", `node -e "${"x".repeat(300)}"`, ...Array.from({ length: 8 }, (_, index) => `task ${index}`)])
   assert.match(stoppedWork, /stopped your work to hand this conversation.*stopped what you had left running in the background: `npm run dev`; `node -e "x+…`; .*; and 2 more\. Start again whatever of it you still need\. Mako sent this on its own/)
-  assert.deepEqual(savedMakoPrompt(stoppedWork), { kind: "continued", reason: "handed-off", sender: "mako" })
-  assert.equal(savedMakoPrompt(stoppedWork.replace("Start again", "Do not start")), undefined, "words of anyone else's between Mako's aren't Mako's")
+  assert.deepEqual(savedContinuation(stoppedWork), { reason: "handed-off", sender: "mako" })
+  assert.equal(savedContinuation(stoppedWork.replace("Start again", "Do not start")), undefined, "words of anyone else's between Mako's aren't Mako's")
+  assert.equal(savedMakoPrompt(stoppedWork), undefined, "a continuation opens no turn of its own: it goes on in the one it continues")
   assert.ok(!recoverableRequests({ requests: [dropped], blocks: [{ type: "user" as const, requestId: dropped.id, text: "", attachments: [] }] }).length, "a dropped turn on screen is the footer's, not the panel's")
   // While the host has scheduled its own continuation, the footer offers
   // nothing and the thread is still a working one; once Mako's continuation
@@ -200,9 +202,17 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
     text: continueTurnPrompt("connection-lost", "mako"),
     continues: { requestId: dropped.id, reason: "connection-lost", auto: true },
   }
-  assert.deepEqual([...makoPrompts([quit, dropped, continuation])], [[continuation.id, { kind: "continued", reason: "connection-lost", sender: "mako" }]])
+  assert.equal(makoPrompts([quit, dropped, continuation]).size, 0, "Mako's continuation opens no turn of its own; the transcript knows it by its words")
   const manual: LiveRequest = { ...continuation, id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", text: continueTurnPrompt("connection-lost", "person"), continues: { requestId: dropped.id, reason: "connection-lost", auto: false } }
-  assert.equal(makoPrompts([manual]).size, 0, "the person's Continue turn has no request of Mako's; the transcript knows it by its words")
+  assert.equal(makoPrompts([manual]).size, 0, "nor does the person's Continue turn")
+  // Lists that name a request by its words name a continuation by the turn it continued: its words are Mako's.
+  const asked: LiveRequest = { ...dropped, displayText: "Run the  suite\nand fix what fails" }
+  assert.equal(turnWords([quit, asked, continuation], continuation), "Run the suite and fix what fails", "Mako's names the turn it continues")
+  const bare: LiveRequest = { ...manual, continues: undefined }
+  assert.equal(turnWords([quit, asked, { ...request, status: "canceled" }, bare], bare), "Run the suite and fix what fails", "the person's, with no link, the newest turn before it")
+  assert.equal(turnWords([asked, continuation, { ...manual, continues: undefined }], { ...manual, continues: undefined }), "Run the suite and fix what fails", "a continuation of a continuation, the turn they both go on")
+  assert.equal(turnWords([manual], manual), "", "with no turn before it, no words of the person's to name it by")
+  assert.equal(turnWords([quit, asked], asked), "Run the suite and fix what fails", "anything else, its own words")
   const moved: LiveRequest = { ...request, id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", actor: { kind: "service", name: "workspace" } }
   assert.deepEqual([...makoPrompts([moved])], [[moved.id, { kind: "moved" }]], "the note after an agent's move is Mako's")
   assert.deepEqual(turnStops([dropped, continuation], true).get(dropped.id), { reason: "connection-lost", continuable: false, automatic: false })
@@ -277,6 +287,24 @@ const unconfirmed: LiveRequest = { ...request, id: "88888888-8888-4888-8888-8888
   ], base: null, requests: [running, next] })
   assert.ok(!projected.messages.some((message) => message.id === `acp-request-${running.id}`),
     "a steer after an unloaded prompt does not redraw that prompt")
+}
+
+// A continuation goes on in the turn it continues, and the projection's tail keeps that turn whole as it streams.
+{
+  const none: LiveRequest[] = []
+  const turn = (blocks: Entry[]) => ({ session: { status: "running" as const, harness: "claude" }, blocks, base: null, requests: none })
+  const asked: Entry[] = [
+    { type: "user", requestId: "q", text: "First question" }, { type: "text", id: "q1", text: "First answer." },
+    { type: "user", requestId: "cut", text: "Run the suite" }, { type: "text", id: "c1", text: "Two fail." },
+  ]
+  const continued: Entry[] = [...asked, { type: "user", requestId: "go-on", text: continueTurnPrompt("provider-exited", "mako") }]
+  const answered: Entry[] = [...continued, { type: "text", id: "g1", text: "Both pass." }]
+  let view = projectLive(turn(asked))
+  view = projectLive(turn(continued), view)
+  view = projectLive(turn(answered), view)
+  const turnsOf = (exchanges: typeof view.exchanges) => exchanges.map((exchange) => [exchange.id, exchange.response.length])
+  assert.deepEqual(turnsOf(view.exchanges), [["acp-request-q", 1], ["acp-request-cut", 3]], "streamed: the earlier turn stays, and the continued one is one turn")
+  assert.deepEqual(turnsOf(view.exchanges), turnsOf(projectLive(turn(answered)).exchanges), "the same as projecting it whole")
 }
 
 console.log(
@@ -362,6 +390,20 @@ assert.equal(
 )
 assert.equal(cachedDiscovery.mock.callCount(), 0)
 cachedDiscovery.mock.restore()
+// Continue turn while a turn runs has nothing to pick up: Mako's words never queue behind it as the person's.
+{
+  const { continueTurn } = await import("../src/state/acp-queue")
+  const prompted = mock.method(bridge, "livePrompt")
+  applyLiveSnapshot({ ...snapshot, revision: 900, session: { ...snapshot.session, status: "running" } })
+  const before = current().pendingPrompts?.length ?? 0
+  assert.equal(await continueTurn(id, "provider-exited"), false, "nothing is sent while the turn runs")
+  assert.equal(prompted.mock.callCount(), 0)
+  assert.equal(current().pendingPrompts?.length ?? 0, before, "and nothing waits to be sent")
+  applyLiveSnapshot({ ...snapshot, revision: 901, session: { ...snapshot.session, status: "ready" }, requests: [{ ...request, id: "44444444-4444-4444-8444-444444444444", status: "queued" }] })
+  assert.equal(await continueTurn(id, "provider-exited"), false, "nor while a message waits to go")
+  assert.equal(prompted.mock.callCount(), 0)
+  prompted.mock.restore()
+}
 stopEvents()
 Reflect.deleteProperty(globalThis, "window")
 console.log(

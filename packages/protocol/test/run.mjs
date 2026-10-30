@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import { runGatewayConformance, runMediaConformance } from "../dist/conformance.js"
-import { CORRELATION_HEADER, GatewayHttpError, gatewayCalls } from "../dist/gateway-http.js"
+import { CORRELATION_HEADER, GatewayHttpError, RETRY_AFTER_MOST_MS, gatewayCalls, retryAfterMs } from "../dist/gateway-http.js"
 import { recordsOverHttp } from "../dist/records-http.js"
 import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, MoveClaimRequestSchema, ReturnStateSchema, ReturnBeginRequestSchema } from "../dist/moves.js"
 import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
@@ -9,7 +9,9 @@ import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 import { sessionStream, streamConversation } from "../dist/socket.js"
 import { AccountEventSchema } from "../dist/account-events.js"
+import { AccessChoicesAnswerSchema, AccessChoosingSchema, applyAccessChoosing, sameAccessChoices } from "../dist/access-choices.js"
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
+import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
 import { ArchivedThreadSchema, ListedSessionSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import {
@@ -26,6 +28,11 @@ import {
   gatewayOverSockets,
   LINK_VERSION,
   MEDIA_MESSAGE_LIMIT,
+  PORT_BODY_LIMIT,
+  PORTS_VERSION,
+  QUIET_VERSION,
+  decodePortHead,
+  encodePortHead,
   MediaTooLargeError,
   decodeMediaMessage,
   mediaStreamOf,
@@ -62,6 +69,14 @@ import {
   Inbox,
   RuntimeThreads,
   threadStream,
+  LiveTail,
+  LINGER_MS,
+  NUMBERED_LIVE_VERSION,
+  WAITING_FOR_VERSION,
+  StreamCursor,
+  followAgainInMs,
+  readStreamNotice,
+  streamNoticeText,
 } from "../dist/index.js"
 
 const operation = {
@@ -81,7 +96,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 6)
+    assert.equal(SUPPORTED_VERSIONS.max, 10)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -474,8 +489,9 @@ describe("a runtime served through serveRuntime", () => {
     await gateway.close()
   })
 
-  test("a conversation's live updates go to whoever watches it: the runtime is told on the first watcher and the last, and again on a new link", async () => {
-    const gateway = createFakeGateway()
+  test("a conversation's live updates go to whoever watches it: the runtime is told on the first watcher, again on a new link, and once the last has been gone a while", async () => {
+    let clock = Date.parse("2026-10-29T12:00:00.000Z")
+    const gateway = createFakeGateway({ now: () => new Date(clock) })
     const watching = []
     const serve = async () => serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", handle: async (operation) => answer(operation, null), watch: (conversations) => watching.push([...conversations]) })
     let runtime = await serve()
@@ -486,7 +502,8 @@ describe("a runtime served through serveRuntime", () => {
     const second = watcher.subscribe({ stream, after: 0 })
     await new Promise((resolve) => setImmediate(resolve))
     assert.deepEqual(watching, [["c-1"]], "a new link watches nothing until the first watcher")
-    assert.equal(runtime.live("c-1", Payload.of({ n: 1 })), true)
+    for (const reader of [first, second]) assert.equal(readStreamNotice((await reader.next(1_000)).event.text)?.streamNotice, "head", "each watcher hears the stream's head first")
+    assert.equal(runtime.live("c-1", Payload.of({ n: 1 }), { n: 1 }), true)
     assert.deepEqual([(await first.next(1_000)).event.decode(), (await second.next(1_000)).event.decode()], [{ n: 1 }, { n: 1 }])
     runtime.close()
     runtime = await serve()
@@ -495,8 +512,83 @@ describe("a runtime served through serveRuntime", () => {
     first.close()
     second.close()
     await new Promise((resolve) => setImmediate(resolve))
-    assert.deepEqual(watching.at(-1), [], "and the last watcher leaving")
+    assert.deepEqual(watching.at(-1), ["c-1"], "a stream the last watcher left lingers, so one back from a dropped link misses nothing")
+    clock += LINGER_MS
+    runtime.live("c-1", Payload.of({ n: 2 }), { n: 2 })
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.deepEqual(watching.at(-1), [], "and goes once nobody has watched it for a while")
     runtime.close()
+    await gateway.close()
+  })
+
+  test("a live stream's tail serves a watcher back from a dropped link, and says to read again past what it keeps; a cursor tells each frame apart", () => {
+    const tail = new LiveTail(1_000, { frames: 3 })
+    const at = new Date()
+    for (const n of [1, 2, 3, 4]) tail.take(`u${n}`, at, { n })
+    assert.equal(tail.take("u4 again", at, { n: 4 }), undefined, "a runtime's resend is relayed once")
+    assert.equal(tail.head, 1_004)
+    assert.deepEqual(tail.since(1_002)?.map((frame) => frame.text), ["u3", "u4"])
+    assert.deepEqual(tail.since(1_004), [])
+    assert.equal(tail.since(1_000), undefined, "past what it keeps")
+    assert.equal(tail.since(999), undefined, "from before the stream began")
+    assert.equal(readStreamNotice(tail.opening(1)[0].text)?.streamNotice, "reread")
+    const cursor = new StreamCursor("live")
+    assert.equal(cursor.resumeAfter(), 0)
+    assert.deepEqual(cursor.heard({ seq: 1, text: "an update from a gateway that numbers by the clock" }), { kind: "apply" })
+    assert.deepEqual(cursor.heard({ seq: 1_004, text: streamNoticeText({ streamNotice: "head", head: 1_004 }) }), { kind: "notice" })
+    assert.equal(cursor.resumeAfter(), 1_004)
+    assert.deepEqual(cursor.heard({ seq: 1_005, text: "u5" }), { kind: "apply" })
+    assert.deepEqual(cursor.heard({ seq: 1_005, text: "u5" }), { kind: "duplicate" })
+    assert.deepEqual(cursor.heard({ seq: 1_007, text: "u7" }), { kind: "gap", after: 1_005 })
+    assert.deepEqual(cursor.heard({ seq: 1_008, text: "u8, still on its way" }), { kind: "duplicate" }, "dropped until what was asked for begins")
+    assert.deepEqual(cursor.heard({ seq: 1_008, text: streamNoticeText({ streamNotice: "head", head: 1_008 }) }), { kind: "notice" })
+    assert.deepEqual(cursor.heard({ seq: 1_006, text: "u6" }), { kind: "apply" })
+    assert.deepEqual(cursor.heard({ seq: 1_009, text: streamNoticeText({ streamNotice: "reread", head: 1_009 }) }), { kind: "reread" })
+    assert.equal(cursor.last, 1_009)
+    const log = new StreamCursor("log", 10)
+    assert.deepEqual(log.heard({ seq: 12, text: "{}" }), { kind: "gap", after: 10 })
+    assert.deepEqual(log.heard({ seq: 11, text: "{}" }), { kind: "apply" })
+    assert.equal(followAgainInMs(0, () => 0.5), 50)
+    assert.equal(followAgainInMs(1), 250)
+  })
+
+  test("a live update goes with its runtime's number and trace, and a report with when it went, only on a link that knows them; older links get them without", async () => {
+    const gateway = createFakeGateway()
+    const sent = []
+    const tap = (link) => ({ ...link, send: (frame) => { sent.push(frame); link.send(frame) } })
+    const newer = await serveRuntime(tap(await gateway.connectRuntime()), { runtimeId: "d-new", build: "test", handle: async (operation) => answer(operation, null) })
+    const older = await serveRuntime(tap(await gateway.connectRuntime()), { runtimeId: "d-old", build: "test", versions: { min: 1, max: NUMBERED_LIVE_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
+    const report = { listed: [], gone: [], reportedAt: "2026-10-29T12:00:00.000Z" }
+    for (const runtime of [newer, older]) {
+      runtime.live("c-1", Payload.of({}), { n: 3, correlationId: "st-1" })
+      runtime.sessions(report)
+    }
+    const of = (type) => sent.filter((frame) => frame.type === type)
+    assert.deepEqual(of("live").map(({ n, correlationId }) => [n, correlationId]), [[3, "st-1"], [undefined, undefined]])
+    assert.deepEqual(of("sessions").map((frame) => frame.report.reportedAt), ["2026-10-29T12:00:00.000Z", undefined])
+    const row = { session: crypto.randomUUID(), thread: crypto.randomUUID(), conversation: "c-1", harness: "codex", state: "idle", createdAt: report.reportedAt, activityAt: report.reportedAt, generation: 1, changedAt: report.reportedAt }
+    assert.equal(rowsForLink([row], NUMBERED_LIVE_VERSION)[0].changedAt, report.reportedAt)
+    assert.equal(rowsForLink([row], NUMBERED_LIVE_VERSION - 1)[0].changedAt, undefined)
+    newer.close()
+    older.close()
+    await gateway.close()
+  })
+
+  test("a runtime going quiet on purpose says so on a link that knows the frame, and its link is let go at once; an older link never hears it", async () => {
+    const lines = []
+    const gateway = createFakeGateway({ log: (line) => lines.push(line) })
+    const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-mac", build: "test", handle: async (operation) => answer(operation, null) })
+    assert.equal(runtime.version, LINK_VERSION)
+    assert.equal(runtime.goingQuiet("sleep"), true)
+    await runtime.done
+    assert.deepEqual(lines.filter((line) => line.event === "going-quiet" || line.event === "disconnected").map((line) => line.event), ["going-quiet", "disconnected"])
+    assert.equal(runtime.goingQuiet("quit"), false, "a closed link says nothing")
+    const older = await serveRuntime(await gateway.connectRuntime(), { runtimeId: "d-old", build: "test", versions: { min: 1, max: QUIET_VERSION - 1 }, handle: async (operation) => answer(operation, null) })
+    assert.equal(older.goingQuiet("sleep"), false, "a gateway on version 7 never sees the frame; it finds out from the heartbeats")
+    assert.equal(lines.filter((line) => line.event === "going-quiet").length, 1)
+    assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "going-quiet", reason: "sign-out" })), { type: "going-quiet", reason: "sign-out" })
+    assert.throws(() => decodeRuntimeFrame(JSON.stringify({ type: "going-quiet", reason: "bored" })), WireError)
+    older.close()
     await gateway.close()
   })
 
@@ -1162,6 +1254,64 @@ describe("a runtime's media", () => {
   })
 })
 
+describe("a runtime's port requests", () => {
+  /** A runtime on a link the test plays the gateway's side of, agreed at `version`, with a port handler that records. */
+  async function served(version, options = {}) {
+    const link = { ...scriptedLink(), media: [] }
+    link.sendMedia = (message) => link.media.push(decodeMediaMessage(message))
+    const calls = []
+    const senders = new Map()
+    const ports = {
+      open: (stream, request, sender) => {
+        calls.push(["open", stream, request])
+        senders.set(stream, sender)
+      },
+      acked: (stream, received) => calls.push(["acked", stream, received]),
+      closed: (stream) => calls.push(["closed", stream]),
+    }
+    link.push({ ...enrolled, version })
+    const runtime = await serveRuntime(link, { runtimeId: "d-laptop", build: "test", handle: async (operation) => answer(operation, null), ports: options.noPorts ? undefined : ports })
+    return { link, runtime, calls, senders }
+  }
+  const request = { to: { kind: "port", port: 3000 }, method: "GET", path: "/assets/app.js?v=2", headers: [["accept", "*/*"]] }
+
+  test("a request reaches the handler, its answer goes back on its stream, paced by the gateway and stopped by it", async () => {
+    const { link, runtime, calls, senders } = await served(PORTS_VERSION)
+    link.push(decodeGatewayFrame(encodeGatewayFrame({ type: "port-open", stream: "port-req-1", ...request })))
+    while (!calls.length) await settle()
+    assert.deepEqual(calls, [["open", "port-req-1", request]])
+    const sender = senders.get("port-req-1")
+    assert.equal(sender.send(encodePortHead({ status: 200, headers: [["content-type", "text/javascript"]] })), true)
+    assert.equal(sender.send(Uint8Array.of(1, 2, 3)), true)
+    assert.deepEqual(decodePortHead(link.media[0].data), { status: 200, headers: [["content-type", "text/javascript"]] })
+    assert.deepEqual([link.media[1].stream, [...link.media[1].data]], ["port-req-1", [1, 2, 3]])
+    link.push({ type: "media-ack", stream: "port-req-1", received: 3 })
+    link.push({ type: "media-unwatch", stream: "port-req-1" })
+    while (calls.length < 3) await settle()
+    assert.deepEqual(calls.slice(1), [["acked", "port-req-1", 3], ["closed", "port-req-1"]])
+    assert.equal(sender.send(Uint8Array.of(4)), false, "nothing more once the gateway stopped it")
+    runtime.close()
+    await runtime.done
+  })
+
+  test("a runtime with no handler, or on a link before ports, ends the request at once; a body crosses in its frame", async () => {
+    for (const [version, options] of [[PORTS_VERSION, { noPorts: true }], [PORTS_VERSION - 1, {}]]) {
+      const { link, runtime, calls } = await served(version, options)
+      link.push({ type: "port-open", stream: "port-req-1", ...request })
+      while (!link.sent.some((frame) => frame.type === "media-end")) await settle()
+      assert.equal(problemType(link.sent.find((frame) => frame.type === "media-end").problem), "unsupported-version")
+      assert.deepEqual(calls, [])
+      runtime.close()
+      await runtime.done
+    }
+    const posted = { ...request, method: "POST", body: Buffer.from("{}").toString("base64") }
+    assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame({ type: "port-open", stream: "port-req-2", ...posted })), { type: "port-open", stream: "port-req-2", ...posted })
+    assert.throws(() => GatewayFrameEnvelopeSchema.parse({ type: "port-open", stream: "port-req-3", ...request, body: "x".repeat(PORT_BODY_LIMIT * 2) }))
+    const files = { to: { kind: "files" }, method: "GET", path: "/file/asset/abc/def/shot.png", headers: [["range", "bytes=0-"]] }
+    assert.deepEqual(decodeGatewayFrame(encodeGatewayFrame({ type: "port-open", stream: "port-req-4", ...files })), { type: "port-open", stream: "port-req-4", ...files })
+  })
+})
+
 describe("client frames", () => {
   test("a call carries its input after the envelope, unread, and decodes to the same operation", () => {
     const input = Payload.encoded('{"text": "hi",\n "n": 1.50}')
@@ -1418,6 +1568,29 @@ describe("a call to a gateway over HTTP", () => {
     assert.match(trace.failures[1], /^503 after \d+ ms$/)
   })
 
+  test("a busy gateway's Retry-After is waited out before the call goes again, never past the most", async () => {
+    const answers = [
+      () => new Response(JSON.stringify({ title: "Busy: try again in a few seconds" }), { status: 429, headers: { "retry-after": "0.3" } }),
+      () => new Response("{}", { status: 503, headers: { "retry-after": "nonsense" } }),
+      () => new Response(JSON.stringify({ missing: [] }), { status: 200 }),
+    ]
+    const at = []
+    const fetch = async () => {
+      at.push(performance.now())
+      return answers.shift()()
+    }
+    const trace = { tries: 0, failures: [] }
+    const remote = recordsOverHttp({ id: "t", base: "https://gw/v1/devices/d/originals", authorization: () => "Bearer t", fetch, backoff: [1, 1] })
+    assert.deepEqual(await remote.missing(["a".repeat(64)], trace), [])
+    assert.equal(trace.tries, 3)
+    assert.ok(at[1] - at[0] >= 290, `waited ${Math.round(at[1] - at[0])} ms of the 300 the gateway asked`)
+    assert.ok(at[2] - at[1] < 250, "one it can't read is the client's own backoff")
+    assert.equal(retryAfterMs("2"), 2_000)
+    assert.equal(retryAfterMs(new Date(Date.now() + 5_000).toUTCString()) > 3_000, true)
+    assert.equal(retryAfterMs("3600"), RETRY_AFTER_MOST_MS)
+    assert.equal(retryAfterMs(null), 0)
+  })
+
   test("a refusal names the call's own correlation ID when the gateway's answer names none", async () => {
     let sent
     const fetch = async (_url, init) => {
@@ -1532,6 +1705,12 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.throws(() => ReportedSessionSchema.parse({ ...terminal, capture: { path: "" } }))
     assert.deepEqual(rowsForLink([session, terminal], 5), [session], "a link older than 6 hears neither")
     assert.deepEqual(rowsForLink([session, terminal], 6), [session, terminal])
+    const asking = { ...session, waitingFor: "approval" }
+    assert.deepEqual(ReportedSessionSchema.parse(asking), asking)
+    assert.throws(() => ReportedSessionSchema.parse({ ...session, waitingFor: "a nudge" }), "what a Session waits on is one of three")
+    assert.equal(rowsForLink([asking], WAITING_FOR_VERSION)[0].waitingFor, "approval")
+    assert.equal(rowsForLink([asking], WAITING_FOR_VERSION - 1)[0].waitingFor, undefined, "a gateway before 10 refuses it, so it goes without")
+    assert.equal(rowsForLink([asking], WAITING_FOR_VERSION - 1)[0].waitingOn, "Approve: npm test", "and reads the words it always did")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, state: "thinking" }), "a state is one of five")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, title: "x".repeat(201) }), "a title is a row's, not a message's")
     assert.throws(() => SessionsReportSchema.parse({ listed: Array.from({ length: 201 }, () => session), gone: [] }), "at most 200 rows a report")
@@ -1591,5 +1770,96 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.equal(SessionListingsSchema.parse({ sessions: [], seq: 4 }).archived, undefined, "a gateway from before archiving says none")
     assert.deepEqual(AccountEventSchema.parse({ type: "thread-archived", thread: archived }), { type: "thread-archived", thread: archived })
     assert.deepEqual(AccountEventSchema.parse({ type: "thread-unarchived", thread: cloud.threadId }), { type: "thread-unarchived", thread: cloud.threadId })
+  })
+})
+
+describe("what tells the person a Session needs them, the same on every surface", () => {
+  const at = "2026-10-28T18:00:00.000Z"
+  const row = (state, fields = {}) => ({ state, generation: 1, activityAt: at, ...fields })
+
+  test("five kinds; three of them ask the person, and are withdrawn once answered", () => {
+    assert.deepEqual(AttentionKindSchema.options, ["needs-you", "question", "approval", "failed", "finished"])
+    assert.deepEqual(AttentionKindSchema.options.filter(asks), ["needs-you", "question", "approval"])
+  })
+
+  test("a row's change says one fact, by one rule, under one key", () => {
+    assert.equal(attentionFact(row("working"), row("waiting", { waitingFor: "approval", waitingOn: "Approve: npm test" }))?.kind, "approval")
+    assert.equal(attentionFact(row("working"), row("waiting", { waitingFor: "question", waitingOn: "A question: which branch?" }))?.kind, "question")
+    assert.equal(attentionFact(row("working"), row("waiting", { waitingFor: "needs-you" }))?.kind, "needs-you")
+    assert.equal(attentionFact(row("working"), row("failed"))?.kind, "failed")
+    assert.equal(attentionFact(row("working"), row("idle"))?.kind, "finished")
+    assert.equal(attentionFact(row("waiting", { waitingFor: "approval", waitingOn: "Approve: a" }), row("idle"))?.kind, "finished", "an approval refused that ends the turn")
+    assert.equal(attentionFact(row("waiting", { waitingFor: "approval", waitingOn: "Approve: a" }), row("waiting", { waitingFor: "approval", waitingOn: "Approve: b" }))?.kind, "approval", "a second approval in one turn is a new fact")
+    assert.equal(attentionFact(row("waiting", { waitingFor: "approval", waitingOn: "Approve: a" }), row("waiting", { waitingFor: "approval", waitingOn: "Approve: a", activityAt: "2026-10-28T18:01:00.000Z" })), undefined, "the same ask moving on the clock is no new fact")
+    assert.equal(attentionFact(undefined, row("idle")), undefined, "a Session first heard at rest says nothing")
+    assert.equal(attentionFact(row("idle"), row("idle")), undefined)
+    assert.equal(attentionFact(row("failed"), row("failed")), undefined)
+    assert.equal(attentionFact(row("working"), row("moving")), undefined, "a move isn't the person's to hear")
+    const waiting = row("waiting", { waitingFor: "approval", waitingOn: "Approve: npm test" })
+    const asked = attentionFact(row("working"), waiting)
+    assert.deepEqual(asked, { kind: "approval", key: attentionKey(waiting), generation: 1, waitingOn: "Approve: npm test" })
+    assert.equal(factStands(asked, waiting), true)
+    assert.equal(factStands(asked, { ...waiting, activityAt: "2026-10-28T18:02:00.000Z" }), true, "still waiting on the same thing")
+    assert.equal(factStands(asked, row("working")), false, "answered: the notice goes from every device")
+    assert.equal(factStands(asked, row("waiting", { waitingFor: "approval", waitingOn: "Approve: rm" })), false, "a new ask is its own notice")
+    assert.equal(factStands(asked, { ...waiting, generation: 2 }), false, "another owner's word")
+    assert.equal(factStands(asked, undefined), false, "a Session off the list says nothing")
+    const done = attentionFact(row("working"), row("idle"))
+    assert.equal(factStands(done, row("idle", { activityAt: "2026-10-28T18:03:00.000Z" })), true)
+    assert.equal(factStands(done, row("working")), false, "the person replied: what it said is retired, as on the desktop")
+  })
+
+  test("a push says a notice, or takes notices back; anything else is not ours", () => {
+    const base = "/app/"
+    const notice = { type: "notice", kind: "approval", title: "Webhooks", body: "Approve: npm test", tag: noticeTag("t1"), url: "/app/t/t1", at: 1 }
+    assert.deepEqual(readNotice(JSON.stringify(notice), base), notice)
+    const { type: _type, ...older } = notice
+    assert.deepEqual(readNotice(JSON.stringify(older), base), notice, "a payload from before `type` is a notice")
+    assert.deepEqual(readNotice(JSON.stringify({ type: "withdraw", tags: [noticeTag("t1")], at: 2 }), base), { type: "withdraw", tags: ["thread:t1"], at: 2 })
+    assert.equal(readNotice(JSON.stringify({ ...notice, url: "https://elsewhere.example/" }), base), undefined, "a tap only opens the app")
+    assert.equal(readNotice(JSON.stringify({ ...notice, kind: "nudge" }), base), undefined)
+    assert.equal(readNotice("{", base), undefined)
+    assert.equal(readNotice(undefined, base), undefined)
+  })
+
+  test("an owner from before waitingFor is read from its words, once, here", () => {
+    assert.equal(rowWaitingFor({ waitingOn: "Approve: npm test" }), "approval")
+    assert.equal(rowWaitingFor({ waitingOn: "A question: which branch?" }), "question")
+    assert.equal(rowWaitingFor({ waitingOn: "Input needed" }), "needs-you")
+    assert.equal(rowWaitingFor({ waitingOn: "Approve: x", waitingFor: "question" }), "question", "the owner's word wins")
+  })
+
+  test("what a request says: a question is a question, even inside an approval; anything else is an approval", () => {
+    assert.deepEqual(requestWaiting({ title: "Bash", questions: [{ question: "Which branch?" }] }), { for: "question", line: "A question: Which branch?" })
+    assert.deepEqual(requestWaiting({ title: "/bin/zsh -lc 'npm test'" }, () => "npm test"), { for: "approval", line: "Approve: npm test" })
+    assert.deepEqual(questionWaiting("Ship it?"), { for: "question", line: "A question: Ship it?" })
+    assert.deepEqual(needsYouWaiting(undefined), { for: "needs-you", line: "Waiting for you" })
+    assert.equal(requestWaiting({ title: "x".repeat(400) }).line.length, 200, "a line is a line")
+  })
+
+  test("one wording: the headline, the line, a summary, and a body for a platform with no subtitle", () => {
+    assert.equal(attentionHeadline("approval", "Codex"), "Codex needs your approval")
+    assert.equal(attentionHeadline("finished"), "Finished")
+    assert.equal(attentionLine("failed"), ATTENTION_WORDS.failed.line)
+    assert.equal(attentionLine("finished", "  Done.  "), "Done.")
+    assert.deepEqual(attentionSummary([{ kind: "finished", title: "A" }, { kind: "finished", title: "B" }, { kind: "finished", title: "C" }]), { title: "3 Threads finished", body: "A, B, C" })
+    assert.deepEqual(attentionSummary(["A", "B", "C", "D", "E"].map((title, index) => ({ kind: index ? "finished" : "question", title }))), { title: "5 Threads need you", body: "A, B, C, D and 1 more" })
+    assert.equal(ATTENTION_SUMMARY_FROM, 3)
+    assert.equal(foldedBody({ subtitle: "Codex finished", body: "Done." }), "Codex finished\nDone.")
+    assert.equal(foldedBody({ body: "Done." }), "Done.")
+  })
+
+  test("the person's access choices: one per harness, made or filled, said whole on the stream at a revision", () => {
+    const kept = { claude: { mode: "bypassPermissions", access: "full" } }
+    assert.deepEqual(applyAccessChoosing(kept, { choices: { codex: { mode: "access:full", access: "full" } } }), { ...kept, codex: { mode: "access:full", access: "full" } })
+    assert.deepEqual(applyAccessChoosing(kept, { choices: { claude: { mode: "default" } } }).claude, { mode: "default" }, "a choice replaces the one before")
+    assert.deepEqual(applyAccessChoosing(kept, { choices: { claude: { mode: "default" }, grok: { mode: "access:ask" } }, fill: true }), { ...kept, grok: { mode: "access:ask" } }, "filling takes only where none is made")
+    assert.ok(sameAccessChoices(kept, { claude: { mode: "bypassPermissions", access: "full" } }))
+    assert.ok(!sameAccessChoices(kept, { claude: { mode: "bypassPermissions" } }))
+    assert.throws(() => AccessChoosingSchema.parse({ choices: { Claude: { mode: "x" } } }), "a harness is named by its ID")
+    assert.throws(() => AccessChoosingSchema.parse({ choices: { claude: { mode: "" } } }))
+    assert.throws(() => AccessChoicesAnswerSchema.parse({ choices: Object.fromEntries(Array.from({ length: 33 }, (_, n) => [`h${n}`, { mode: "x" }])), revision: 1 }))
+    const event = { type: "access-chosen", choices: kept, revision: 3 }
+    assert.deepEqual(AccountEventSchema.parse(event), event)
   })
 })

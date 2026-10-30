@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { toHtml } from "hast-util-to-html"
 import { fenceSegments, streamingMarkdown } from "../src/lib/streaming-markdown"
 import { parseProse } from "../src/lib/parsed-markdown"
+import { STREAM_FRAME_MAX_MS, STREAM_FRAME_MS, StreamFrames, streamFrameMs, type StreamClock } from "../src/lib/stream-frames"
 
 // What a streaming answer draws: whole structure, never half of one.
 {
@@ -92,4 +93,65 @@ import { parseProse } from "../src/lib/parsed-markdown"
   }
 }
 
-console.log("PASS: streaming markdown draws whole structure and cuts its parse only at closed fences")
+// How a streaming answer repaints: the first token of a burst at once, then at most once a frame, the latest text each
+// time; a pending paint survives later tokens; and a stop (StrictMode's simulated remount) leaves nothing that looks
+// pending, so the next token paints.
+{
+  let now = 0
+  const timers: Array<{ at: number; run: () => void; cleared: boolean }> = []
+  const clock: StreamClock = {
+    now: () => now,
+    schedule: (run, ms) => {
+      const timer = { at: now + ms, run, cleared: false }
+      timers.push(timer)
+      return () => void (timer.cleared = true)
+    },
+  }
+  /** Moves the clock to `to`, running each timer due by then, in order. */
+  const advance = (to: number) => {
+    for (;;) {
+      const due = timers.filter((timer) => !timer.cleared && timer.at <= to).sort((left, right) => left.at - right.at)[0]
+      if (!due) break
+      now = due.at
+      due.cleared = true
+      due.run()
+    }
+    now = to
+  }
+  const painted: Array<[number, string]> = []
+  const frames = new StreamFrames((text) => painted.push([now, text]), clock)
+  frames.next("I")
+  advance(0)
+  assert.deepEqual(painted, [[0, "I"]], "the first token paints at once, not a frame later")
+  // A steady stream, a token every 20 ms: a paint every frame, each the latest text.
+  let text = "I"
+  for (let at = 20; at <= 200; at += 20) {
+    advance(at)
+    text += ` t${at}`
+    frames.next(text)
+  }
+  advance(400)
+  assert.deepEqual(painted.map(([at]) => at), [0, 50, 100, 150, 200, 250], "at most once a frame under a steady stream")
+  assert.equal(painted.at(-1)?.[1], text, "and the last paint is the latest text")
+  // A pause, then the next burst: its first token paints at once again.
+  frames.next(`${text} after a tool call`)
+  advance(400)
+  assert.deepEqual(painted.at(-1), [400, `${text} after a tool call`])
+  // StrictMode's remount: the cleanup stops a pending paint, the effect runs again, and that paint comes.
+  frames.next(`${text} more`)
+  frames.stop()
+  frames.next(`${text} more`)
+  advance(500)
+  assert.deepEqual(painted.at(-1), [450, `${text} more`], "a stop leaves nothing that looks pending")
+  frames.next("settled")
+  frames.stop()
+  advance(1_000)
+  assert.notEqual(painted.at(-1)?.[1], "settled", "a stopped paint never comes")
+  // A long piece is parsed again on every paint: it paints less often, never less than every STREAM_FRAME_MAX_MS.
+  assert.equal(streamFrameMs(500), STREAM_FRAME_MS)
+  assert.equal(streamFrameMs(9_000), STREAM_FRAME_MS)
+  assert.ok(streamFrameMs(16_000) > 80 && streamFrameMs(16_000) <= STREAM_FRAME_MAX_MS)
+  assert.equal(streamFrameMs(1_000_000), STREAM_FRAME_MAX_MS)
+}
+
+console.log("PASS: streaming markdown draws whole structure and cuts its parse only at closed fences, and repaints the first token of a burst at once, then once a frame")

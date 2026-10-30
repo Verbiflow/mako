@@ -1,7 +1,15 @@
+import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { renderToStaticMarkup } from "react-dom/server"
-import type { BuildIdentity, RevisionChanges, UpdateInstallation, UpdateSource } from "../packages/host/src/contracts/app-lifecycle"
-import { updateSourceText } from "../packages/host/src/contracts/update-source-text"
+import { Git } from "@mako/git"
+import { buildUncommitted, readUncommitted } from "../packages/host/src/application/local-update-source"
+import { buildMetadataAt } from "../packages/host/src/base/build-identity"
+import type { BuildIdentity, RevisionChanges, UncommittedChanges, UpdateInstallation, UpdateSource } from "../packages/host/src/contracts/app-lifecycle"
+import { buildRevisionText, missingDependenciesText, updateSourceText } from "../packages/host/src/contracts/update-source-text"
 import { UpdatesSection } from "../src/components/settings/updates-section"
 import { applicationStore } from "../src/state/application"
 import { updatesStore } from "../src/state/updates"
@@ -32,6 +40,7 @@ const reading = (overrides: Partial<Checkout> = {}): Checkout => ({
   behind: 21,
   changed: 0,
   untracked: 0,
+  uncommitted: { count: 0, files: [] },
   fetch: { kind: "fetched" },
   plan: { kind: "fast-forward" },
   target: UPSTREAM,
@@ -103,6 +112,26 @@ assert.match(dirty, /21 new changes on origin\/main/)
 assert.match(dirty, /main has uncommitted changes in 3 files and 1 untracked file, so Mako won't move it\. Commit or discard them to take the update, or build 9a7a5c0c as it is\./)
 assert.deepEqual(buttons(dirty), ["Change…", "Build 9a7a5c0c as it is", "Check again"])
 
+// Every uncommitted file Build takes is named before it runs: a count on the card, the files behind it.
+const SHARED: UncommittedChanges = {
+  count: 41,
+  files: [
+    { path: "packages/host/src/conversations/live-runtime.ts", change: "edited" },
+    { path: "src/components/settings/sync-status.tsx", change: "renamed", from: "src/components/settings/sync-section.tsx" },
+    { path: "packages/host/src/base/heap-watch.ts", change: "untracked" },
+  ],
+}
+const taking = draw({ checkout: reading({ head: UPSTREAM, behind: 0, changed: 39, untracked: 2, uncommitted: SHARED, plan: { kind: "as-is", why: "level", installed: false } }) })
+assert.match(taking, /<summary[^>]*>.*Includes 41 uncommitted changes<\/summary>/)
+assert.match(taking, /aria-label="Uncommitted changes Build takes"/)
+assert.match(taking, /packages\/host\/src\/conversations\/live-runtime\.ts<\/span><span[^>]*>Edited</)
+assert.match(taking, />src\/components\/settings\/sync-status\.tsx<\/span><span[^>]*>Renamed from src\/components\/settings\/sync-section\.tsx</)
+assert.match(taking, />packages\/host\/src\/base\/heap-watch\.ts<\/span><span[^>]*>Untracked</)
+assert.match(taking, /and 38 more/)
+assert.doesNotMatch(draw({ checkout: reading() }), /data-testid="uncommitted"/, "a clean checkout says nothing of them")
+// Already installed, nothing to build: nothing taken either.
+assert.doesNotMatch(draw({ checkout: reading({ head: UPSTREAM, behind: 0, uncommitted: SHARED, plan: { kind: "as-is", why: "level", installed: true } }) }), /Uncommitted changes Build takes/)
+
 // Another branch: named, never switched.
 const branch = draw({ checkout: reading({ head: LOCAL, branch: "approval-bar", ahead: 2, plan: { kind: "as-is", why: "branch", installed: false }, target: LOCAL }) })
 assert.match(branch, /The checkout is on approval-bar/)
@@ -138,15 +167,87 @@ const building = draw({ checkout: reading({ head: UPSTREAM, behind: 0, plan: { k
 assert.match(building, /Building 079f9b31/)
 assert.deepEqual(buttons(building), ["Change…", "Building…"])
 
+// The fast-forward changed package-lock.json: the build installs what it lists first, and says so, on the Prepare step.
+const installing = draw({
+  checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "as-is", why: "level", installed: false } }),
+  local: { kind: "building", phase: "installing", revision: UPSTREAM, dependencies: { count: 4, names: ["@mako/web-client", "esbuild", "vite"] } },
+})
+assert.match(installing, /data-testid="update-title"[^>]*>Installing dependencies…</)
+assert.match(installing, /package-lock\.json lists 4 packages the checkout hasn't installed: @mako\/web-client, esbuild, vite and 1 more\. Mako is running npm install in the checkout before it builds\. Your installed app and agents stay running\./)
+assert.match(installing, /<li aria-current="step"[^>]*><div[^>]*><\/div><span[^>]*>Prepare<\/span><\/li>/, "installing is part of Prepare")
+assert.deepEqual(buttons(installing), ["Change…", "Building…"])
+// Once it's installed, the build names its revision again.
+assert.match(draw({ local: { kind: "building", phase: "copying", revision: UPSTREAM } }), /Building 079f9b31/)
+// Refused: the checkout's own edits to package-lock.json, and what to run.
+const refusal = "The update couldn't install dependencies: package-lock.json lists a package the checkout hasn't installed: @mako/web-client. The checkout has uncommitted changes to package-lock.json, so Mako won't run npm install there for you. Commit or discard them, or run npm install yourself, then build again. Your installed app and agents were not changed."
+const command = "cd '/Users/developer/Projects/mako' && npm install"
+const refused = draw({ checkout: reading({ head: UPSTREAM, behind: 0, changed: 1, plan: { kind: "as-is", why: "level", installed: false } }), local: { kind: "error", message: refusal, command } })
+assert.ok(decode(refused).includes(`<p>${refusal}</p>`), "the refusal is said whole")
+assert.ok(decode(refused).includes(`data-testid="update-command">${command}</code>`), "and the command to run by hand stands apart, to copy whole")
+assert.doesNotMatch(draw({ local: { kind: "error", message: "The update failed during packaging: x" } }), /update-command/, "a failure with no command to run shows none")
+assert.deepEqual(buttons(refused), ["Change…", "Build 079f9b31 with local changes", "Check again"], "and Build is there to try again once it's resolved")
+assert.equal(missingDependenciesText({ count: 1, names: ["dep"] }), "package-lock.json lists a package the checkout hasn't installed: dep.")
+assert.equal(missingDependenciesText({ count: 2, names: ["a", "b"] }), "package-lock.json lists 2 packages the checkout hasn't installed: a and b.")
+assert.equal(missingDependenciesText({ count: 3, names: ["a", "b", "c"] }), "package-lock.json lists 3 packages the checkout hasn't installed: a, b and c.")
+
 // Ready: both revisions, the fast-forward, and what changed.
 const ready = draw({ local: { kind: "ready", build: { ...build, id: "c41e7d2f9a0b3e65", revision: UPSTREAM }, changes: CHANGES, forwarded: { branch: "main", from: INSTALLED, to: UPSTREAM } } })
 assert.match(ready, /data-testid="update-transition"[^>]*><span[^>]*>9a7a5c0c<\/span>.*079f9b31.*· 21 changes.*Signature verified/)
 assert.match(ready, /Moved main forward from <span[^>]*>9a7a5c0c<\/span> to <span[^>]*>079f9b31<\/span>\./)
 
+// A build with uncommitted files says so on the way in, and lists the ones it took, read from the build itself.
+const readyDirty = draw({ local: { kind: "ready", build: { ...build, id: "c41e7d2f9a0b3e65", revision: UPSTREAM, dirty: true, uncommitted: SHARED }, changes: CHANGES, forwarded: null } })
+assert.match(readyDirty, /data-testid="update-transition"[^>]*>.*079f9b31<\/span><span[^>]*>with 41 uncommitted changes<\/span>/)
+assert.match(readyDirty, /aria-label="Uncommitted changes in this update"/)
+assert.doesNotMatch(readyDirty, /Uncommitted changes Build takes/, "once built, the build's own list replaces the reading's")
+
 // Installed from Settings: what this build brought, under its revision.
 const installed = draw({ build: { ...build, id: "c41e7d2f9a0b3e65", revision: UPSTREAM }, installed: CHANGES, checkout: reading({ head: UPSTREAM, behind: 0, plan: { kind: "current" }, changes: { from: UPSTREAM, count: 0, titles: [] } }) })
 assert.match(installed, /Updated from <span[^>]*>9a7a5c0c<\/span> · 21 changes in this build/)
 assert.match(installed, /aria-label="Changes in this build"/)
+
+// The installed app's own metadata, end to end: Settings reads a checkout's uncommitted files as it takes its copy,
+// hands them to packaging, package-mac.mjs stamps them into the bundle's makoBuild, and the installed app's host reads
+// its bundle and Settings lists them under the installed revision.
+const scratch = await mkdtemp(join(tmpdir(), "mako-updates-metadata-"))
+const git = new Git()
+try {
+  const repo = join(scratch, "checkout")
+  const gitIn = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "F", GIT_AUTHOR_EMAIL: "f@example.invalid", GIT_COMMITTER_NAME: "F", GIT_COMMITTER_EMAIL: "f@example.invalid" } })
+  execFileSync("git", ["init", "-q", "-b", "main", repo])
+  await writeFile(join(repo, "app.ts"), "one\n")
+  await writeFile(join(repo, "old name.ts"), "two\n")
+  gitIn("add", ".")
+  gitIn("commit", "-qm", "First")
+  await writeFile(join(repo, "app.ts"), "someone's edit\n")
+  gitIn("mv", "old name.ts", "new name.ts")
+  await writeFile(join(repo, "draft.md"), "not added\n")
+  const uncommitted = await readUncommitted(git, repo)
+  // As LocalUpdates passes it to the packaging step, and package-mac.mjs stamps it.
+  const taken = await buildUncommitted({ MAKO_BUILD_UNCOMMITTED: JSON.stringify(uncommitted), MAKO_BUILD_DIRTY: "1" }, async () => assert.fail("read again"))
+  const app = join(scratch, "app")
+  execFileSync("mkdir", ["-p", app])
+  await writeFile(join(app, "package.json"), JSON.stringify({ name: "mako", makoBuild: { ...build, ...taken } }))
+  const stamped = buildMetadataAt(app).makoBuild
+  assert.deepEqual(stamped?.uncommitted, { count: 3, files: [{ path: "app.ts", change: "edited" }, { path: "new name.ts", change: "renamed", from: "old name.ts" }, { path: "draft.md", change: "untracked" }] })
+  const installedDirty = decode(draw({ build: stamped }))
+  assert.match(installedDirty, /Revision <span[^>]*>9a7a5c0c<\/span> with 3 uncommitted changes · Build/)
+  assert.match(installedDirty, /aria-label="Uncommitted changes in the installed app"/)
+  assert.match(installedDirty, />app\.ts<\/span><span[^>]*>Edited</)
+  assert.match(installedDirty, />new name\.ts<\/span><span[^>]*>Renamed from old name\.ts</)
+  assert.match(installedDirty, />draft\.md<\/span><span[^>]*>Untracked</)
+  assert.equal(buildRevisionText(stamped!), "9a7a5c0c with 3 uncommitted changes", "the CLI says it in the same words")
+  // A build stamped before the list, or by an updater that passed only that it was dirty, says only that.
+  const unnamed = draw({ build: { ...build, dirty: true } })
+  assert.match(unnamed, /Revision <span[^>]*>9a7a5c0c<\/span> with uncommitted changes · Build/)
+  assert.doesNotMatch(unnamed, /data-testid="uncommitted"/)
+  const clean = draw({ build })
+  assert.doesNotMatch(clean, /data-testid="uncommitted"/, "a clean build lists none")
+  assert.match(clean, /Revision <span[^>]*>9a7a5c0c<\/span> · Build/, "and says none")
+} finally {
+  git.close()
+  await rm(scratch, { recursive: true, force: true })
+}
 
 // The CLI reads the same words.
 const text = updateSourceText(reading())
@@ -155,4 +256,4 @@ assert.equal(updateSourceText(reading({ behind: 1, changes: { from: INSTALLED, c
 assert.equal(updateSourceText(reading({ upstream: null, behind: 0, plan: { kind: "as-is", why: "no-upstream", installed: false }, target: INSTALLED })).action, "Build main 9a7a5c0c")
 assert.equal(updateSourceText(reading({ branch: null, plan: { kind: "as-is", why: "detached", installed: false }, target: INSTALLED })).title, "The checkout isn't on a branch")
 
-console.log("Updates section: says what Build will take before it runs (fast-forward, already installed, local changes, another branch, diverged, offline, unreadable), names the revision it builds, and shows both revisions and the changes once built and once installed")
+console.log("Updates section: says what Build will take before it runs (fast-forward, already installed, local changes, another branch, diverged, offline, unreadable), names every uncommitted file it takes, names the revision it builds, says when it installs dependencies first and why it won't, and shows both revisions, the changes and the uncommitted files once built and once installed, read from the build's own metadata")

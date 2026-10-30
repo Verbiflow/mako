@@ -4,7 +4,7 @@ import { store as sessionStore } from "@/state/session"
 import { openSessionDraft, threadGroupsStore } from "@/state/thread-groups"
 import { runPlaceStore } from "@/state/run-place"
 import { currentSettingsTarget, settingsForSend } from "@/state/composer-settings"
-import { prefsStore } from "@/state/prefs"
+import { chosenAccessModes } from "@/state/access-choices"
 import { threadsStore } from "@/state/thread-store"
 import type { CloudPrepareLaunch } from "@mako/host/contracts/cloud-threads"
 
@@ -58,10 +58,31 @@ export function noteComposing(text: string, now = Date.now()): void {
  * would use. Choosing Cloud makes nothing; writing does. The draft itself never leaves this Mac before it's sent.
  */
 function prepareCloud(cwd: string, text: string, now: number): void {
+  if (text.trim().length < CLOUD_PREPARE_FROM_CHARS) {
+    composingSince.set(cwd, composingSince.get(cwd) ?? now)
+    return
+  }
+  askCloudPrepare(cwd, now)
+}
+
+/**
+ * A cloud Thread in `cwd` made ahead now, not after the first words: when starting one is the person's whole intent
+ * (turning the cloud on's Start, pressed). Asked as the composer asks, and the draft that follows is timed from here.
+ */
+export function prepareCloudNow(cwd: string, now = Date.now()): void {
+  askCloudPrepare(cwd, now)
+}
+
+/**
+ * The one way a window asks for a cloud Thread made ahead in `cwd`: at most every half minute, with how long the new
+ * Thread's draft has been written. "Later" (a few made ahead in a row went unused, so the host waits for more writing)
+ * lets it ask again shortly, as the person goes on; a failed ask may be asked again at once.
+ */
+function askCloudPrepare(cwd: string, now: number): void {
   const began = composingSince.get(cwd) ?? now
   composingSince.set(cwd, began)
   const key = `cloud\0${cwd}`
-  if (text.trim().length < CLOUD_PREPARE_FROM_CHARS || !due(key, now)) return
+  if (!due(key, now)) return
   void composerLaunch().then((launch) => getMako().cloudPrepare(cwd, now - began, launch)).then(
     (outcome) => {
       if (outcome === "later") signalled.set(key, now - PREWARM_EVERY_MS + CLOUD_LATER_MS)
@@ -74,7 +95,7 @@ function prepareCloud(cwd: string, text: string, now: number): void {
 async function composerLaunch(): Promise<CloudPrepareLaunch> {
   const harness = threadsStore.get().composerHarness
   const launch: CloudPrepareLaunch = { harness, tuning: await settingsForSend(currentSettingsTarget(harness)) }
-  const modeId = prefsStore.get().providerModes[harness]
+  const modeId = chosenAccessModes()[harness]
   if (modeId) launch.modeId = modeId
   return launch
 }

@@ -127,14 +127,14 @@ function noteExternalOutcome(
   if (activity?.status === "needs-input") {
     if (previous?.status !== "needs-input")
       noteOutcome({
-        kind: "ask",
+        kind: "needs-you",
         subject,
         marker: `external:${activity.since}`,
         detail: activity.detail,
       })
     return
   }
-  if (previous?.status === "needs-input") retireSubject(subject.id, "ask")
+  if (previous?.status === "needs-input") retireSubject(subject.id, "asks")
   if (activity?.status === "active") {
     if (previous?.status !== "active") retireSubject(subject.id)
     return
@@ -146,7 +146,7 @@ function noteExternalOutcome(
     previous.evidence !== "writes" &&
     activity?.status === "open"
   )
-    noteOutcome({ kind: "ready", subject, marker: `external:${previous.since}` })
+    noteOutcome({ kind: "finished", subject, marker: `external:${previous.since}` })
 }
 
 export function applyThreadActivity(

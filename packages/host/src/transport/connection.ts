@@ -3,7 +3,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { LineAssembler } from "@mako/sessions/daemon-wire"
 import { CORRELATION_HEADER, RuntimeEventHeadSchema, RuntimeFailureSchema, RuntimeInfoSchema, RuntimeReadySchema, encodeRuntimeCall, runtimeFailureError, type RuntimeFailure, type RuntimePacket, type RuntimeValue } from "../contracts/runtime.js"
 import { decodeRuntimeValue, runtimeSuccessValue, splitRuntimeEventLine, type EncodedValue } from "../contracts/runtime-value.js"
-import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
+import { HostCallTimeoutError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import type { z } from "zod"
 import { hostCallReplay } from "../contracts/host-call-policy.js"
 import { requestRuntimePreview, requestRuntimeVideo } from "./preview.js"
@@ -38,6 +38,15 @@ function disconnection(error: Error): RuntimeDisconnectedError | null {
   if (code && DROPPED.has(code)) return new RuntimeDisconnectedError(true)
   return null
 }
+
+/**
+ * Every request to the host opens its own connection (`agent: false`). Node's default agent keeps a finished
+ * request's connection for the next one, and the host closes a kept connection that sat idle for five seconds by its
+ * own clock. When the host's event loop was held past that, it woke, closed the connection and reset the call that had
+ * just been written to it: a call the host never read, reported as the host leaving. A connection on the local socket
+ * costs next to nothing; a reset now always means the host dropped the call.
+ */
+const OWN_CONNECTION = { agent: false } as const
 
 interface RuntimeRequest<Reply> {
   socket: string
@@ -77,6 +86,7 @@ export async function runtimeRequest<Reply>({
     let receivedReply = false
     const req = request(
       {
+        ...OWN_CONNECTION,
         socketPath: socket,
         path,
         method: call === undefined ? "GET" : "POST",
@@ -85,6 +95,8 @@ export async function runtimeRequest<Reply>({
       (response) => {
         receivedReply = true
         const invalidReply = (error: Error) => {
+          // The reply stalled past the deadline: slow, not gone.
+          if (error instanceof HostCallTimeoutError) { reject(error); return }
           // A rejected history/read response says nothing about host liveness
           // or action delivery. Keep the real reason (including size limits).
           if (call && hostCallReplay(call.channel) === "read")
@@ -121,16 +133,18 @@ export async function runtimeRequest<Reply>({
         }, invalidReply)
       }
     )
+    // Nothing crossed the connection for `timeoutMs`: the host has the call and hasn't answered. That is a slow
+    // call, not a dropped one; whether the host is still there is the event stream's to say.
     req.setTimeout(timeoutMs, () =>
       req.destroy(
         path === "/rpc"
-          ? new RuntimeDisconnectedError(true)
+          ? new HostCallTimeoutError(call === undefined || hostCallReplay(call.channel) !== "read")
           : new Error("Mako host request timed out")
       )
     )
     req.on("error", (error) =>
       reject(
-        path === "/rpc" && receivedReply
+        path === "/rpc" && receivedReply && !(error instanceof HostCallTimeoutError)
           ? new RuntimeDisconnectedError(true)
           : error
       )
@@ -271,7 +285,8 @@ function readRuntimePacket(line: string): RuntimePacket {
   return { ...RuntimeEventHeadSchema.parse(JSON.parse(event.head)), payload: event.payload }
 }
 
-export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: () => void, options: { observer?: boolean; history?: boolean; eventLimit?: number } = {}) {
+/** `heard`: called for every chunk the stream carries, the host's 15-second heartbeat too. */
+export function subscribeRuntime(socket: string, client: string, receive: (packet: RuntimePacket) => void, disconnected: () => void, options: { observer?: boolean; history?: boolean; eventLimit?: number; heard?: () => void } = {}) {
   let closed = false
   let ended = false
   const end = () => { if (!ended && !closed) { ended = true; disconnected() } }
@@ -279,10 +294,12 @@ export function subscribeRuntime(socket: string, client: string, receive: (packe
   if (options.observer) headers.set("x-mako-observer", "1")
   if (options.history) headers.set("x-mako-history", "1")
   if (options.eventLimit) headers.set("x-mako-event-limit", String(options.eventLimit))
-  const req = request({ socketPath: socket, path: "/events", method: "POST", headers: Object.fromEntries(headers) }, (response) => {
+  const req = request({ ...OWN_CONNECTION, socketPath: socket, path: "/events", method: "POST", headers: Object.fromEntries(headers) }, (response) => {
     const lines = new LineAssembler(32 * 1024 * 1024)
     if (response.statusCode !== 200) { response.destroy(); end(); return }
     response.on("data", (chunk: Buffer) => {
+      // Any bytes, the host's heartbeat included: the host is there and answering.
+      options.heard?.()
       const complete = lines.push(chunk)
       if (!complete) { response.destroy(); end(); return }
       for (const line of complete) {
@@ -303,7 +320,7 @@ export function subscribeRuntime(socket: string, client: string, receive: (packe
 export function runtimeFile(socket: string, input: Request): Promise<Response> {
   const url = new URL(input.url)
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath: socket, path: `/file/${url.hostname}${url.pathname}${url.search}`, headers: input.headers.has("range") ? { range: input.headers.get("range") ?? "" } : {} }, (response) => {
+    const req = request({ ...OWN_CONNECTION, socketPath: socket, path: `/file/${url.hostname}${url.pathname}${url.search}`, headers: input.headers.has("range") ? { range: input.headers.get("range") ?? "" } : {} }, (response) => {
       const headers = new Headers()
       for (const [key, value] of Object.entries(response.headers)) {
         if (value !== undefined) headers.set(key, Array.isArray(value) ? value.join(", ") : value)

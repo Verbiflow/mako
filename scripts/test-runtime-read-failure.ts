@@ -31,7 +31,7 @@ try {
   for (const peer of [undefined, "peer-id"]) {
     await assert.rejects(invokeWithRecovery("mako:live-snapshot", async () => {
       throw new RuntimeDisconnectedError(true, peer)
-    }, { lost() {}, async whenConnected() { return false } }), (error) =>
+    }, { async dropped() { return false } }), (error) =>
       error instanceof RuntimeDisconnectedError && !error.unconfirmed && error.conversationId === peer)
   }
   console.log("PASS: oversized/malformed read diagnosis, healthy subsequent read, uncertain mutation preserved, no false read-delivery claim")

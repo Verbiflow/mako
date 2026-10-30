@@ -22,8 +22,10 @@ import {
 } from "@/components/transcript/turn-navigator"
 import {
   LEAD_EXCHANGE_ID,
+  continuedFrom,
   isInterruptedNote,
   renamedExchanges,
+  turnRequest,
   type Exchange as ExchangeData,
 } from "@/lib/exchanges"
 import type { CarriedHistory, MakoPrompt, TurnStop } from "@/state/prompt-delivery"
@@ -35,6 +37,7 @@ import { loadReleasedLiveTurn } from "@/state/live-history"
 import { loadReleasedThreadTurn } from "@/state/thread-viewing"
 import { toast } from "sonner"
 import { TranscriptPaneContext } from "@/state/conversation-scope"
+import { TRANSCRIPT_END_EVENT, TranscriptEndContext } from "./transcript-end"
 
 const NEAR_BOTTOM = 96
 const TEXT_BLOCKS = "p,pre,li,td,h1,h2,h3,h4,h5,h6"
@@ -479,6 +482,10 @@ export function ConversationTimeline({
   /** The latest proximity check, for callers that outlive one render. */
   const wake = useRef<() => void>(() => {})
   const [showJump, setShowJump] = useState(false)
+  const transcriptEnd = useContext(TranscriptEndContext)
+  /** With `transcriptEnd` provided: room after the column that keeps a followed end from moving back (`pin`). */
+  const steadyEnd = useRef<HTMLDivElement>(null)
+  const highWater = useRef(0)
   const [activeTurn, setActiveTurn] = useState<string | null>(null)
   /**
    * Each turn's React key, for the turns that came back under another id. A
@@ -700,6 +707,19 @@ export function ConversationTimeline({
     },
     [rows, windowed, owned]
   )
+  useEffect(() => {
+    const node = viewport.current
+    if (!node) return
+    const toEnd = () => scrollToEnd()
+    node.addEventListener(TRANSCRIPT_END_EVENT, toEnd)
+    return () => node.removeEventListener(TRANSCRIPT_END_EVENT, toEnd)
+  }, [scrollToEnd])
+  useEffect(() => transcriptEnd?.away(showJump), [transcriptEnd, showJump])
+  useEffect(() => {
+    if (!transcriptEnd) return
+    transcriptEnd.bind(() => scrollToEnd("smooth"))
+    return () => transcriptEnd.bind(null)
+  }, [transcriptEnd, scrollToEnd])
 
   const onScroll = useCallback(() => {
     const node = viewport.current
@@ -969,13 +989,49 @@ export function ConversationTimeline({
   useEffect(() => {
     const node = viewport.current
     if (!node) return
+    let lastHeight = node.scrollHeight
+    let shrinkFrame = 0
     const pin = () => {
+      const column = node.firstElementChild
+      const spacer = steadyEnd.current
+      if (spacer && column instanceof HTMLElement) {
+        if (pinned.current) {
+          // A transcript followed at its end never moves back under the reader: a column that got shorter (a sending
+          // row giving way to its turn's own) keeps its height as room at the end, which what it writes next fills.
+          const natural = column.offsetHeight
+          highWater.current = Math.max(highWater.current, natural)
+          spacer.style.height = `${highWater.current - natural}px`
+        } else {
+          // Away from the end, the room kept there goes: nothing the reader sees moves.
+          highWater.current = column.offsetHeight
+          spacer.style.height = "0px"
+        }
+      }
+      settleShrink()
       if (!pinned.current) {
         holdReader(node)
         return
       }
       node.scrollTop = node.scrollHeight
       owned(node)
+    }
+    // Safari leaves a scroller that just got shorter (a finished turn folding up) past its new end, blank under the last
+    // message until the next touch, worst while it still glides. Stopping the scroll for a frame makes it take the end.
+    const settleShrink = () => {
+      const height = node.scrollHeight
+      const shrank = height < lastHeight
+      lastHeight = height
+      const end = Math.max(0, height - node.clientHeight)
+      // Safari may already read back the clamped offset while still drawing the old one, so a drop in height near the
+      // end counts though the offset looks right; one far above the end leaves a reader's own glide alone.
+      if (!(shrank && node.scrollTop > end - node.clientHeight) && node.scrollTop <= end) return
+      node.style.overflowY = "hidden"
+      node.scrollTop = Math.min(node.scrollTop, end)
+      cancelAnimationFrame(shrinkFrame)
+      shrinkFrame = requestAnimationFrame(() => {
+        shrinkFrame = 0
+        node.style.overflowY = ""
+      })
     }
     pin()
     // Observers run after layout and before paint. Turns revealed by
@@ -1005,7 +1061,7 @@ export function ConversationTimeline({
       pin()
     })
     structure.observe(node, { childList: true, characterData: true, subtree: true })
-    return () => { structure.disconnect(); grown.disconnect() }
+    return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = "" }
   }, [identity, isEmpty, owned, holdReader])
 
   const endEarlier = useCallback((progressed: boolean) => {
@@ -1326,8 +1382,9 @@ export function ConversationTimeline({
       key={keys.get(exchange.id) ?? exchange.id}
       exchange={exchange}
       streaming={exchange.id === streamingId}
+      // How the turn stands is its newest part's: a stop it went on from is over.
       interrupted={
-        interruptedRequests?.get(exchange.prompt?.requestId ?? "") ??
+        interruptedRequests?.get(turnRequest(exchange) ?? "") ??
         (exchange.id === interruptedId || exchangeInterrupted(exchange))
       }
       sentByMako={makoPrompts?.get(exchange.prompt?.requestId ?? "")}
@@ -1346,6 +1403,7 @@ export function ConversationTimeline({
         <span ref={topFade} aria-hidden className="scroll-fade-top" />
         <div
           ref={viewport}
+          data-transcript-viewport=""
           tabIndex={0}
           role="region"
           aria-label="Conversation transcript"
@@ -1454,6 +1512,7 @@ export function ConversationTimeline({
               {footer}
             </div>
           )}
+          {transcriptEnd && !isEmpty ? <div ref={steadyEnd} aria-hidden data-steady-end /> : null}
         </div>
         {showNavigator ? (
           <TurnNavigator
@@ -1463,7 +1522,7 @@ export function ConversationTimeline({
             paneRef={pane}
           />
         ) : null}
-        <button
+        {transcriptEnd ? null : <button
           type="button"
           onClick={() => scrollToEnd("smooth")}
           aria-hidden={!showJump}
@@ -1482,12 +1541,13 @@ export function ConversationTimeline({
         >
           <ArrowDownIcon className="size-3" />
           Jump to latest
-        </button>
+        </button>}
       </div>
     </TranscriptSourceContext>
   )
 }
 
 function exchangeInterrupted(exchange: ExchangeData): boolean {
-  return exchange.system.some((note) => isInterruptedNote(note.message))
+  const from = continuedFrom(exchange)
+  return exchange.system.some((note) => note.after >= from && isInterruptedNote(note.message))
 }

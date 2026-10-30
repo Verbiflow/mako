@@ -6,11 +6,12 @@ import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
+import { ACCESS_CHOICES_PATH, AccessChoicesAnswerSchema, type AccessChoices as AccountAccessChoices, type AccessChoicesAnswer } from "@mako/protocol/access-choices"
 import { CORRELATION_HEADER } from "@mako/protocol/gateway-http"
 import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thread-listing"
 import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
 import type { SessionPublishing } from "./machine-runtime.js"
-import { MOVE_ANSWER_WAIT_MS, MOVE_REASON_MAX, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
+import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveHandOverStateSchema, ReturnReleaseRequestSchema, ReturnStateSchema, type MoveAnswer, type MoveCheckpoint, type MoveHandOverRequest, type MoveHandOverState, type ReturnDeparture, type ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
@@ -23,6 +24,7 @@ import {
   clientSessionOverSockets,
   type RuntimeLink,
   RuntimeRefusedError,
+  type GoingQuietReason,
   type ServedRuntime,
   WireError,
   decodeGatewayClientFrame,
@@ -31,6 +33,8 @@ import {
   renewal,
   runtimeLinkOverSocket,
   subprotocols,
+  PROBE_ANSWER_MS,
+  SILENT_WHILE_WORKING_MS,
 } from "@mako/protocol"
 import {
   CloudBrowserSessionSchema,
@@ -56,7 +60,8 @@ import {
   type CloudSignInHarness,
   type CloudSignInListing,
 } from "../contracts/cloud-sign-ins.js"
-import type { CloudRepository } from "../contracts/cloud-threads.js"
+import { clipReason, CloudRepositorySchema, type CloudRepository } from "../contracts/cloud-threads.js"
+import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import { CloudCarriedFileSchema, type CloudCarriedFile } from "../contracts/cloud-carried-files.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import type { CloudRoute, DiagnosticEvents } from "../contracts/telemetry.js"
@@ -74,7 +79,7 @@ const REQUEST_MS = 15_000
 /** The slowest upload a move waits for before giving up: 100 KB a second. */
 const UPLOAD_BYTES_PER_MS = 100
 /** A call to the cloud: JSON in and out, never redirected, bounded in time. */
-type CloudRequest = { method: "GET" | "HEAD" | "POST" | "PUT" | "DELETE"; headers: Record<string, string>; body?: string | Readable; duplex?: "half"; redirect: "error"; signal: AbortSignal }
+type CloudRequest = { method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"; headers: Record<string, string>; body?: string | Readable; duplex?: "half"; redirect: "error"; signal: AbortSignal }
 
 /** A file's bytes as a request's body, such as a move's checkpoint: read afresh for each attempt, its length given. */
 class FileBody {
@@ -100,6 +105,8 @@ const REUSED: CloudSignedOutNotice = {
 }
 
 const ConnectionSchema = z.object({ token: z.string().min(1), expiresAt: z.number() })
+/** A number a stream's object may have given out but never kept, which it says in its place (`{"type":"lost"}`). */
+const LostEventSchema = z.object({ type: z.literal("lost") }).loose()
 const EnrollmentSchema = z.object({
   device: CloudDeviceSchema,
   credential: z.string().regex(/^mako_dc_[\w-]{43}$/),
@@ -109,6 +116,18 @@ const EnrollmentSchema = z.object({
 /** `credential`: a successor to this Mac's credential, once it's due to rotate; the old one works until it's used. */
 const RefreshSchema = EnrollmentSchema.omit({ credential: true }).extend({ credential: z.string().regex(/^mako_dc_[\w-]{43}$/).optional() })
 const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z.string() })
+/** Where on GitHub its person gives the cloud access to a repository: a GitHub page, or nothing. */
+const InstallSchema = z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional().catch(undefined)
+/** Read leniently: a state this build doesn't know reads as the cloud not saying. */
+const BaseStandingSchema = z.union([
+  z.object({ state: z.literal("ready"), madeAt: z.string() }),
+  z.object({ state: z.literal("making"), since: z.string() }),
+  z.object({ state: z.literal("waiting"), message: z.string().optional(), retryAt: z.string().optional(), reason: z.literal("no-access").optional().catch(undefined), install: InstallSchema }),
+  z.object({ state: z.literal("failed"), message: z.string(), reason: z.literal("no-access").optional().catch(undefined), install: InstallSchema }),
+  z.object({ state: z.literal("none") }),
+  z.object({ state: z.literal("unknown") }),
+]).catch({ state: "unknown" as const })
+const BaseStandingsSchema = z.object({ bases: z.array(z.object({ repository: CloudRepositorySchema, standing: BaseStandingSchema })) })
 /** What the account says of a Session's waiting messages after a change to one. */
 const WaitingAnswerSchema = z.object({ messages: z.array(WaitingMessageSchema) })
 const BrowserSessionsSchema = z.object({ sessions: z.array(CloudBrowserSessionSchema) })
@@ -156,6 +175,12 @@ const UnfinishedSignOutSchema = z.object({ version: z.literal(1), cloud: z.strin
 type UnfinishedSignOut = z.infer<typeof UnfinishedSignOutSchema>
 /** An unfinished sign-out is asked again this often while it lasts, and at every start and wake. */
 const SIGN_OUT_RETRY_MS = 60_000
+/**
+ * The last account event heard is kept at most this long after it's heard, with every other heard meanwhile: a
+ * keychain write for each event held each one back from delivery. The stream is said again after the kept one, and an
+ * event heard twice changes nothing, so a restart within it only hears a few again.
+ */
+const SEEN_SAVE_MS = 2_000
 
 /** The record a host's sign-in is kept under; each data root signs in as its own device. */
 export function cloudSignInName(dataRoot: string): string {
@@ -176,7 +201,7 @@ export type RuntimeClaim = { threadId: string; generation: number }
 
 /** How this Mac serves the host to the cloud as a runtime: the host's own dispatcher, behind the protocol. */
 export type CloudRuntime = {
-  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: (conversations: readonly string[]) => void }): Promise<ServedRuntime>
+  serve(link: RuntimeLink, options: { runtimeId: string; credential: ConnectionCredential; threads: RuntimeClaim[]; watch?: (conversations: readonly string[], after?: Readonly<Record<string, number>>) => void }): Promise<ServedRuntime>
 }
 
 /** How a cloud Thread is made: ahead of its first message (`prepare`), and the harness that message is for. */
@@ -215,6 +240,11 @@ export type CloudAccountOptions = {
    * after it happened. `mine`: about this Mac. A device that joined before this Mac did isn't news to it.
    */
   onAccountEvent?: (heard: { seq: number; at: string; event: AccountEvent; mine: boolean }) => void
+  /**
+   * The account's stream skipped a number, or said one was lost: what the missing event said is unknown, so what lists
+   * the account reads it whole again rather than hold a list that may be wrong.
+   */
+  onAccountGap?: (gap: { after: number; seq: number; why: "skipped" | "lost" }) => void
 }
 
 export class CloudAccountError extends Error {
@@ -255,6 +285,11 @@ export class CloudAccounts {
   readonly #unavailable: string | undefined
   #state: CloudAccountState = { status: "signed-out" }
   #stored: Stored | undefined
+  /** The last event of the account's stream this device heard: kept with `#stored` when it's next written. */
+  #seen: number | undefined
+  #seenSave: NodeJS.Timeout | undefined
+  /** Every write of the sign-in to the keychain, one after another, so a later one never lands under an earlier one. */
+  #writes: Promise<unknown> = Promise.resolve()
   /** A sign-out the cloud hasn't heard of, held in memory when there's no keychain to keep it in. */
   #unfinished: UnfinishedSignOut | undefined
   #finishing: NodeJS.Timeout | undefined
@@ -415,6 +450,14 @@ export class CloudAccounts {
     await this.#call("messages.taken", "POST", `/v1/sessions/${encodeURIComponent(session)}/waiting/${encodeURIComponent(id)}/taken`, {})
   }
 
+  /**
+   * A watched conversation's update went out on the runtime link: one silent a while is asked whether it's alive, so a
+   * stalled link the watchers wait on is replaced in seconds.
+   */
+  liveSent(): void {
+    this.#runtimeLink?.probeIfSilent(SILENT_WHILE_WORKING_MS, PROBE_ANSWER_MS)
+  }
+
   /** Tells the account's list what changed of this Mac's Sessions, on the runtime link it serves now (none while signed out). */
   reportSessions(): void {
     this.#options.sessions?.report(this.#served)
@@ -427,6 +470,18 @@ export class CloudAccounts {
   async cloudHarnesses(): Promise<CloudHarnesses | null> {
     const response = await this.#call("cloud.harnesses", "GET", "/v1/cloud/harnesses", undefined, false, [404])
     return response.status === 404 ? null : CloudHarnessesSchema.parse(await response.json())
+  }
+
+  /** The person's access choice per harness, as the account keeps them; null from a cloud that doesn't keep them yet. */
+  async accessChoices(): Promise<AccessChoicesAnswer | null> {
+    const response = await this.#call("access.read", "GET", ACCESS_CHOICES_PATH, undefined, false, [404])
+    return response.status === 404 ? null : AccessChoicesAnswerSchema.parse(await response.json())
+  }
+
+  /** Makes `choices` the account's, or with `fill` only where it has none yet; all of them after, or null as above. */
+  async chooseAccess(choices: AccountAccessChoices, fill: boolean): Promise<AccessChoicesAnswer | null> {
+    const response = await this.#call("access.choose", "PATCH", ACCESS_CHOICES_PATH, { choices, ...fill && { fill } }, false, [404])
+    return response.status === 404 ? null : AccessChoicesAnswerSchema.parse(await response.json())
   }
 
   async devices(): Promise<{ devices: CloudDevice[]; current: string }> {
@@ -516,10 +571,11 @@ export class CloudAccounts {
   }
 
   /**
-   * A move's checkpoint, sent to the cloud Thread's records once: one the account already has is answered without
-   * sending its bytes. The cloud keeps it only if its bytes are the ones its hash names.
+   * A move's checkpoint (or its carry, a bundle kept the same way), sent to the cloud Thread's records once: one the
+   * account already has is answered without sending its bytes. The cloud keeps it only if its bytes are the ones its
+   * hash names.
    */
-  async sendCheckpoint(threadId: string, checkpoint: MoveCheckpoint, file: string): Promise<{ sent: boolean }> {
+  async sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string): Promise<{ sent: boolean }> {
     const path = `/v1/threads/${encodeURIComponent(threadId)}/records/checkpoints/${checkpoint.sha256}`
     if ((await this.#call("moves.checkpoint", "HEAD", path, undefined, false, [404])).status === 200) return { sent: false }
     await this.#call("moves.checkpoint", "PUT", path, new FileBody(file, checkpoint.bytes))
@@ -642,6 +698,37 @@ export class CloudAccounts {
     await this.#call("bases.ask", "POST", "/v1/bases", { repositories })
   }
 
+  /**
+   * Says whether the person is at this Mac (`cloud-attention.ts`): a notice for them waits in the account while they
+   * are. A gateway from before notices doesn't know the route, and is left alone.
+   */
+  async attend(attending: boolean): Promise<void> {
+    await this.#call("attention.put", "PUT", "/v1/attention", { attending }, false, [404])
+  }
+
+  /**
+   * How the cloud stands each of these repositories' bases, read without asking for them again: one it hasn't heard of
+   * reads `unknown`. Null from a cloud older than saying it.
+   */
+  async baseStandings(repositories: CloudRepository[]): Promise<Array<{ repository: CloudRepository; standing: BaseStanding }> | null> {
+    if (!repositories.length) return []
+    const response = await this.#call("bases.standing", "POST", "/v1/bases/standing", { repositories }, false, [404])
+    if (response.status === 404) return null
+    return BaseStandingsSchema.parse(await response.json()).bases
+  }
+
+  /**
+   * Asks the cloud again what the account has, now rather than at the next connection token: an invite, or later a
+   * payment, reaches this Mac at once when the person asks. The answer comes as the account's state changes.
+   */
+  async checkPlan(): Promise<CloudAccount> {
+    await this.#ready
+    if (this.#state.status !== "signed-in") return this.account()
+    this.#token = undefined
+    await this.#connectionToken()
+    return this.account()
+  }
+
   /** This Mac's device in the account, while it's signed in. */
   async deviceId(): Promise<string | undefined> {
     await this.#ready
@@ -689,6 +776,8 @@ export class CloudAccounts {
     const stored = this.#stored
     let unfinished: UnfinishedSignOut | undefined
     if (stored) {
+      // Said first, so the account's other devices stop waiting on this one at once, whether or not the removal lands.
+      this.#goingQuiet("sign-out")
       try {
         await this.#call("devices.remove", "DELETE", `/v1/devices/${encodeURIComponent(stored.device.id)}`, undefined, false, [401, 404])
       } catch (error) {
@@ -778,8 +867,25 @@ export class CloudAccounts {
     for (const session of this.#sessions) session.wake()
   }
 
+  /**
+   * This Mac is going to sleep, or shutting down: its runtime says so to the cloud while it still can, so the account's
+   * other devices take it as quiet at once (`going-quiet`), and its link stays closed until the wake. A gateway too old
+   * for the frame sees the link close cleanly, and the device goes quiet after the usual wait.
+   */
+  leaving(why: "sleep" | "quit"): void {
+    if (this.#state.status !== "signed-in" || this.#closed) return
+    this.#goingQuiet(why)
+    this.#runtimeLink?.quiet()
+  }
+
   close(): void {
+    this.#goingQuiet("quit")
     this.#closed = true
+    if (this.#seenSave) {
+      clearTimeout(this.#seenSave)
+      this.#seenSave = undefined
+      this.#saveSeen()
+    }
     if (this.#finishing) clearTimeout(this.#finishing)
     if (this.#signIn) this.#endSignIn()
     this.#disconnect()
@@ -800,6 +906,7 @@ export class CloudAccounts {
     if (!response.ok) throw new CloudAccountError(await problemOf(response, "Mako couldn't finish signing in. Try again."))
     const enrollment = EnrollmentSchema.parse(await response.json())
     const stored: Stored = { version: 1, cloud: cloud.origin, credential: enrollment.credential, device: enrollment.device, account: enrollment.account }
+    this.#seen = undefined
     const saved = await this.#save(stored)
     const kept = this.#options.fixture ? "fixture" : saved ? "keychain" : "memory"
     this.#stored = stored
@@ -831,6 +938,7 @@ export class CloudAccounts {
     })
     if (!stored || this.#closed) return
     this.#stored = stored
+    this.#seen = stored.seen
     this.#set({ status: "signed-in", account: stored.account, device: stored.device, connection: "connecting", kept: "keychain" })
     this.#connect()
   }
@@ -849,18 +957,49 @@ export class CloudAccounts {
     return stored.cloud === this.#cloud?.origin ? stored : undefined
   }
 
-  /** False when the keychain is unavailable: the credential then lives in memory, until Mako quits. */
-  async #save(stored: Stored): Promise<boolean> {
+  /**
+   * False when the keychain is unavailable: the credential then lives in memory, until Mako quits. Written after any
+   * write before it, with the last account event heard.
+   */
+  #save(stored: Stored): Promise<boolean> {
     const { secrets, secretName } = this.#options
-    if (!(await secrets.durable())) return false
-    await secrets.write("mako-sign-in", secretName, JSON.stringify(stored))
-    return true
+    const write = this.#writes.then(async () => {
+      if (!(await secrets.durable())) return false
+      const seen = this.#seen
+      await secrets.write("mako-sign-in", secretName, JSON.stringify(seen === undefined ? stored : { ...stored, seen }))
+      return true
+    })
+    this.#writes = write.catch(() => undefined)
+    return write
+  }
+
+  /** Keeps the last account event heard soon, with every other heard meanwhile (`SEEN_SAVE_MS`). */
+  #rememberSeen(): void {
+    if (this.#seenSave) return
+    this.#seenSave = setTimeout(() => {
+      this.#seenSave = undefined
+      // A token refresh in flight may be keeping a new credential: this waits for it, rather than write the old one after.
+      if (this.#tokenRequest) return this.#rememberSeen()
+      this.#saveSeen()
+    }, SEEN_SAVE_MS)
+    this.#seenSave.unref?.()
+  }
+
+  #saveSeen(): void {
+    const stored = this.#stored
+    if (!stored || this.#seen === undefined) return
+    void this.#save(stored).catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
   }
 
   async #forget(notice?: CloudSignedOutNotice): Promise<void> {
     this.#stored = undefined
+    this.#seen = undefined
+    clearTimeout(this.#seenSave)
+    this.#seenSave = undefined
     this.#token = undefined
     this.#disconnect()
+    // A write already begun lands first, so the sign-in it writes is removed after it, never brought back.
+    await this.#writes
     await this.#options.secrets.delete("mako-sign-in", this.#options.secretName)
     this.#set(notice ? { status: "signed-out", notice } : { status: "signed-out" })
   }
@@ -1078,7 +1217,7 @@ export class CloudAccounts {
     })
     const following = this.#stored
     if (following && socket.readyState === WebSocket.OPEN)
-      socket.send(encodeClientFrame({ type: "subscribe", stream: accountStream(following.account.id), after: following.seen ?? 0 }))
+      socket.send(encodeClientFrame({ type: "subscribe", stream: accountStream(following.account.id), after: this.#seen ?? 0 }))
     socket.addEventListener("message", (event) => {
       const text = TextSchema.safeParse(event.data)
       if (!text.success) return
@@ -1091,21 +1230,29 @@ export class CloudAccounts {
       }
       if (frame.type === "renewed") renewing.renewed()
       else if (frame.type === "closing") end(endingOf(frame.problem))
-      else if (frame.type === "event") void this.#heard(frame.event)
+      else if (frame.type === "event") this.#heard(frame.event)
     })
     return { close: () => renewing.stop() }
   }
 
-  /** One event of the account's stream: told once, in order, and remembered as heard. */
-  async #heard(frame: EventFrame): Promise<void> {
+  /**
+   * One event of the account's stream: told once, in order, as it's heard, with nothing awaited before it, so the next
+   * can't overtake it; then remembered as heard, soon (`SEEN_SAVE_MS`).
+   */
+  #heard(frame: EventFrame): void {
     const stored = this.#stored
-    if (!stored || frame.stream !== accountStream(stored.account.id) || frame.seq <= (stored.seen ?? 0)) return
-    const heard = { ...stored, seen: frame.seq }
-    this.#stored = heard
-    await this.#save(heard).catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
-    const parsed = AccountEventSchema.safeParse(frame.event.decode())
-    // A kind of event this build doesn't know is passed over, never refused.
-    if (!parsed.success) return
+    if (!stored || frame.stream !== accountStream(stored.account.id) || frame.seq <= (this.#seen ?? 0)) return
+    const before = this.#seen
+    this.#seen = frame.seq
+    this.#rememberSeen()
+    if (before !== undefined && frame.seq > before + 1) this.#options.onAccountGap?.({ after: before, seq: frame.seq, why: "skipped" })
+    const decoded = frame.event.decode()
+    const parsed = AccountEventSchema.safeParse(decoded)
+    // A kind of event this build doesn't know is passed over, never refused; one the gateway lost is a gap.
+    if (!parsed.success) {
+      if (LostEventSchema.safeParse(decoded).success) this.#options.onAccountGap?.({ after: frame.seq - 1, seq: frame.seq, why: "lost" })
+      return
+    }
     const event = parsed.data
     const mine = event.type === "device-joined" ? event.device.id === stored.device.id : event.type === "device-removed" ? event.deviceId === stored.device.id : false
     if (event.type === "device-joined" && Date.parse(frame.at) < Date.parse(stored.device.createdAt)) return
@@ -1119,11 +1266,12 @@ export class CloudAccounts {
     let served: ServedRuntime | undefined
     let closed = false
     if (runtime)
-      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations) => this.#options.sessions?.watch(link, conversations) }).then(
+      runtime.serve(link, { runtimeId, credential: this.#credential(), threads: this.#claims, watch: (conversations, after) => this.#options.sessions?.watch(link, conversations, after) }).then(
         (started) => {
           served = started
           if (closed) return started.close()
           this.#served = { link, served: started }
+          this.#options.sessions?.linked(this.#served)
           this.#options.log?.("cloud runtime enrolled", { runtimeId, claims: this.#claims.length })
           void started.ended.then((problem) => {
             this.#claims = started.claims()
@@ -1141,6 +1289,13 @@ export class CloudAccounts {
         link.close()
       },
     }
+  }
+
+  /** Tells the cloud this runtime is going away on purpose, on a link that knows the frame. */
+  #goingQuiet(reason: GoingQuietReason): void {
+    const served = this.#served?.served
+    if (!served || this.#closed) return
+    if (served.goingQuiet(reason)) this.#options.log?.("cloud runtime going quiet", { reason })
   }
 
   /** One state for both links, the account's leading: a runtime still connecting doesn't make this Mac look offline. */
@@ -1242,10 +1397,4 @@ function messageOf(error: Error | undefined, fallback: string): string {
 
 function sameJson(a: CloudPerson | CloudDevice, b: CloudPerson | CloudDevice): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
-}
-
-/** A reason the cloud keeps beside a move: within `MOVE_REASON_MAX`, cut with an ellipsis rather than refused. */
-export function clipReason(reason: string): string {
-  const said = reason.trim() || "No reason was given."
-  return said.length <= MOVE_REASON_MAX ? said : `${said.slice(0, MOVE_REASON_MAX - 1)}…`
 }

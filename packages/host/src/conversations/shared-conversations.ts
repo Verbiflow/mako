@@ -10,8 +10,9 @@ import { ensureRuntime, invokeRuntime, invokeRuntimeEncoded, probeRuntime, runti
 import { decodeRuntimeValue, encodeRuntimeEvent, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import { runtimeEventRouting } from "../contracts/runtime.js"
 import { hostReplacementPending } from "../application/index.js"
-import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
+import { HostCallTimeoutError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { hostHistoryPaging } from "../base/host-client.js"
+import { conversationCallId } from "../contracts/conversation-calls.js"
 
 const snapshotIdentity = z.object({
   session: z.object({ id: z.string(), harness: z.string(), nativeId: z.string().optional(), status: z.string(), connection: z.string().optional() }),
@@ -21,33 +22,6 @@ const snapshotIdentity = z.object({
   }).optional(),
 })
 const shutdownRequest = z.object({ type: z.literal("app-shutdown"), requestId: z.string() })
-const liveTarget = z.object({ kind: z.literal("live"), id: z.string() })
-const moveHoldTarget = z.object({ conversation: z.string().optional() })
-
-// Only conversation operations cross hosts. Workspace state, app lifecycle,
-// provider discovery and new conversations stay on the receiving host.
-const conversationCalls = new Set([
-  "mako:live-read",
-  "mako:live-continue", "mako:live-snapshot", "mako:live-state", "mako:live-prompt", "mako:live-permission",
-  "mako:live-mode", "mako:live-cancel", "mako:live-stop-agent", "mako:live-goal", "mako:live-side-question", "mako:live-review", "mako:live-close", "mako:live-prewarm", "mako:live-edit-queued",
-  "mako:live-clear-queue", "mako:live-hold-until", "mako:live-sign-in-readiness", "mako:live-sign-in-resume", "mako:live-earlier", "mako:live-bind", "mako:read-live-file",
-  "mako:live-merge-fork",
-  "mako:live-rewind-preview", "mako:live-rewind", "mako:live-turn-changes", "mako:live-turn-diff", "mako:live-turn-writers", "mako:live-turn-undo-preview", "mako:live-turn-undo", "mako:live-action", "mako:live-steer-queued",
-  "mako:live-action-acknowledge", "mako:live-fork", "mako:live-transfer",
-])
-
-/** The conversation a call is aimed at, when it's one that goes to the host running it. */
-export function conversationCallId(channel: string, args: unknown[]): string | undefined {
-  if (conversationCalls.has(channel)) return z.string().parse(args[0])
-  if (channel === "mako:thread-controls" || channel === "mako:thread-stop") {
-    const target = liveTarget.safeParse(args[0])
-    return target.success ? target.data.id : undefined
-  }
-  // The host running the Session on screen is the one whose move it would be.
-  if (channel === "mako:workspace-move-hold") return moveHoldTarget.safeParse(args[0]).data?.conversation
-  return undefined
-}
-
 type WireValue = z.infer<ReturnType<typeof z.json>>
 type SharedSnapshot = LiveSnapshot | WireValue
 /** A routed call's value comes as its owner encoded it, and goes on to the caller unread. */
@@ -210,7 +184,8 @@ export class SharedConversations {
     return { handled: true, value }
 
     } catch (error) {
-      if (error instanceof RuntimeDisconnectedError)
+      // An owner that didn't answer in time is unavailable to this conversation alone, as one that dropped the call.
+      if (error instanceof RuntimeDisconnectedError || error instanceof HostCallTimeoutError)
         throw new RuntimeDisconnectedError(error.unconfirmed, id)
       throw error
     }

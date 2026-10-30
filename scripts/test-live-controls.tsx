@@ -10,6 +10,7 @@ import { attachmentReference } from "../src/lib/attachment-references"
 import { writeDraft } from "../src/lib/context/draft"
 import { RetainedRequests } from "../src/components/viewer/acp-panel"
 import { continueTurnPrompt, makoPrompts, recoverableRequests, recoveriesByPlace, turnStops } from "../src/state/prompt-delivery"
+import { toExchanges, turnRequest } from "../src/lib/exchanges"
 import { FailedRequestsContext } from "../src/components/transcript/failed-requests"
 import { FailureRow } from "../src/components/transcript/failure-row"
 import { requestRecovery } from "../src/state/request-recovery"
@@ -622,28 +623,30 @@ const continuingMarkup = renderToStaticMarkup(
 assert.match(continuingMarkup, /The connection to Claude Code dropped/)
 assert.match(continuingMarkup, /data-turn-continuing[^>]*>[^]*?continuing automatically/)
 assert.doesNotMatch(continuingMarkup, /Continue turn/, "a scheduled continuation is not also offered")
-// Mako's own continuation is drawn as Mako's line where the prompt would be,
-// not as the user's bubble; the words it sent are not shown as theirs.
-const continuation = (sender: "mako" | "person") => ({ id: "continued", text: continueTurnPrompt("connection-lost", sender), attachments: [], status: "completed" as const, continues: { requestId: "stopped", reason: "connection-lost" as const, auto: sender === "mako" } })
-const continuedExchange = (sender: "mako" | "person") => ({ ...stoppedExchange, id: "continued", prompt: { ...stoppedExchange.prompt, id: "continued", requestId: "continued", timestamp: 1_700_000_000_000, blocks: [{ type: "text" as const, text: continuation(sender).text }] } })
-const continuedMarkup = renderToStaticMarkup(
-  <TranscriptSourceContext value={{ liveId: conversation.key }}>
-    <Exchange sentByMako={makoPrompts([continuation("mako")]).get("continued")} exchange={continuedExchange("mako")} />
-  </TranscriptSourceContext>
-)
-assert.match(continuedMarkup, /data-turn-continued="connection-lost"/)
-assert.match(continuedMarkup, /Mako continued the turn after the connection to Claude Code dropped/)
-assert.doesNotMatch(continuedMarkup, /Continue where you left off/, "the continuation prompt is not shown as the user's words")
-assert.doesNotMatch(continuedMarkup, /Copy question/)
-// The person's Continue turn sends Mako's words, not theirs: a quiet line saying they continued it.
-const manualMarkup = renderToStaticMarkup(
-  <TranscriptSourceContext value={{ liveId: conversation.key }}>
-    <Exchange sentByMako={makoPrompts([continuation("person")]).get("continued")} exchange={continuedExchange("person")} />
-  </TranscriptSourceContext>
-)
-assert.match(manualMarkup, /data-continued-by="person"/)
-assert.match(manualMarkup, /You continued the turn after the connection to Claude Code dropped/)
-assert.doesNotMatch(manualMarkup, /Copy question/)
+// Once a stopped turn is continued, by Mako or by the person's Continue turn, it goes on as one turn: the stop it went
+// on from leaves no footer, there is nothing where the continuation was sent, and its words are never the person's.
+for (const sender of ["mako", "person"] as const) {
+  const stopped: LiveRequest = { id: "stopped", text: "Keep this original question", attachments: [], status: "interrupted", interruption: { reason: "connection-lost", at: 1 } }
+  const continuation: LiveRequest = { id: "continued", text: continueTurnPrompt("connection-lost", sender), attachments: [], status: "completed", ...sender === "mako" && { continues: { requestId: "stopped", reason: "connection-lost" as const, auto: true } } }
+  const [turn, ...others] = toExchanges([
+    stoppedExchange.prompt,
+    { id: "cut-answer", role: "assistant", blocks: [{ type: "text", text: "Fixing the footer." }] },
+    { id: "continued", role: "user", requestId: "continued", timestamp: 1_700_000_000_000, blocks: [{ type: "text", text: continuation.text }] },
+    { id: "went-on", role: "assistant", blocks: [{ type: "text", text: "The footer is fixed." }] },
+  ])
+  assert.equal(others.length, 0, `${sender}: one turn`)
+  const stops = turnStops([stopped, continuation], false)
+  const markup = renderToStaticMarkup(
+    <TranscriptSourceContext value={{ liveId: conversation.key }}>
+      <Exchange exchange={turn!} interrupted={stops.get(turnRequest(turn!) ?? "")} sentByMako={makoPrompts([stopped, continuation]).get(turn!.prompt?.requestId ?? "")} />
+    </TranscriptSourceContext>
+  )
+  assert.match(markup, /Keep this original question/)
+  assert.match(markup, /The footer is fixed/)
+  assert.doesNotMatch(markup, /data-turn-stopped|dropped|Continue turn/, `${sender}: the stop it went on from is over`)
+  assert.doesNotMatch(markup, /data-turn-continued|continued the turn|Continue where you left off/, `${sender}: nothing where the continuation was sent`)
+  assert.equal(markup.match(/aria-label="Copy question"/g)?.length, 1, `${sender}: one prompt, the person's`)
+}
 // Anything else the person typed stays their prompt.
 const typedMarkup = renderToStaticMarkup(
   <TranscriptSourceContext value={{ liveId: conversation.key }}>

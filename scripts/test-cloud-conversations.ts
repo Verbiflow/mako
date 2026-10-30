@@ -1,9 +1,10 @@
 import "./lib/scratch-git.mjs"
+import { attentionKey } from "@mako/protocol/attention"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { existsSync, readFileSync } from "node:fs"
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { createServer, connect, type AddressInfo, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -12,7 +13,9 @@ import { WebSocketServer } from "ws"
 import {
   PING,
   PONG,
+  PROBE_ANSWER_MS,
   PROTOCOL_VERSION,
+  SILENT_WHILE_WORKING_MS,
   Payload,
   RuntimeThreads,
   problem,
@@ -23,22 +26,26 @@ import {
   type ClientSessionOverSockets,
   type Subscription,
 } from "@mako/protocol"
-import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { createFakeGateway, type FakeGatewayOptions } from "@mako/protocol/fake-gateway"
 import { Git } from "@mako/git"
 import { CloudConversations, folderRepository, type CloudConversationsOptions, type CloudCopies } from "@mako/host/conversations/cloud-conversations"
+import { SyncRecorder } from "@mako/host/contracts/sync-readings"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import { cloudRuntimeOf, namedUuid } from "@mako/host/conversations/cloud-moves"
 import { MoveIdSchema, type RuntimeId } from "@mako/host/contracts/thread-execution"
 import { SessionIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { ThreadStore } from "@mako/host/threads/store"
 import type { CloudPrepareLaunch, CloudRepository } from "@mako/host/contracts/cloud-threads"
-import { githubRepositoryUrl } from "@mako/host/contracts/cloud-threads"
+import { folderUnmade, githubRepositoryUrl, startFailure } from "@mako/host/contracts/cloud-threads"
 import { decodeRuntimeEvent, decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ThreadAppView } from "@mako/host/contracts/thread-app"
+import type { LiveBatch, LiveSummary } from "@mako/host/contracts/live-conversations"
+import { TURN_CHANGES_VERSION } from "@mako/host/contracts/turn-changes"
 import { followHostLog } from "@mako/host/base/host-log"
 import { serveHostThroughGateway } from "@mako/host/transport/gateway"
-import type { CloudAccount, ThreadListHeard } from "@mako/host/usage/cloud-account-methods"
+import type { CloudAccount } from "@mako/host/usage/cloud-account-methods"
+import type { AccountListHeard } from "@mako/protocol/account-sessions"
 import type { ListedSession, ListedState, SessionListings } from "@mako/protocol/thread-listing"
 import { z } from "zod"
 
@@ -88,9 +95,15 @@ interface MachineApp {
   view: ThreadAppView
 }
 
+/** The machine agent's words when it couldn't clone the Thread's repository: its boot fails with them, as a machine's host does. */
+interface MachineFolder {
+  unmade?: string
+}
+
 /** A cloud machine's host behind the fake gateway: what it was asked, and its Thread's event outbox. */
-async function cloudMachine(reach: Reach = {}) {
-  const gateway = createFakeGateway()
+/** A stream nobody watches goes at once here unless a test says otherwise, as the runtime's watch set is checked as it changes. */
+async function cloudMachine(reach: Reach = {}, gatewayOptions: FakeGatewayOptions = { lingerMs: 0 }) {
+  const gateway = createFakeGateway(gatewayOptions)
   const runtimeId = "m-0123456789abcdef.g1"
   const threads = new RuntimeThreads()
   const calls: Array<{ channel: string; args: unknown[] }> = []
@@ -99,13 +112,17 @@ async function cloudMachine(reach: Reach = {}) {
   /** Set to make the machine's store file the next forks into this Session, as one was seen to (its parent's). */
   const filing: ForkFiling = { into: undefined, older: false }
   const app: MachineApp = { view: { kind: "ready", project: "Hello-World", phase: "running", address: { host: "t.thread.localhost", port: 20000 }, processes: [], checks: [] } }
+  const folder: MachineFolder = {}
   const host: Parameters<typeof serveHostThroughGateway>[1] = {
     runtimeId,
     build: "test",
     threads,
     invoke: async (channel, args) => {
       calls.push({ channel, args })
-      if (channel === "mako:boot") return JSON.stringify({ activeTabId: "tab-1", tabs: [{ id: "tab-1", session: { meta: { cwd: CLONE } } }] })
+      if (channel === "mako:boot") {
+        if (folder.unmade) throw new Error(folderUnmade(folder.unmade))
+        return JSON.stringify({ activeTabId: "tab-1", tabs: [{ id: "tab-1", session: { meta: { cwd: CLONE } } }] })
+      }
       if (channel === "mako:thread-app") return JSON.stringify(app.view)
       if (channel === "mako:live-start") {
         const [harness, cwd, options] = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string(), session: z.string().optional() }).loose()]).parse(args)
@@ -165,12 +182,12 @@ async function cloudMachine(reach: Reach = {}) {
     stop: () => {},
   }
   /** One of the machine host's live batches, on its Thread's stream as the machine sends it. */
-  const batch = (threadId: string, conversation: string, revision: number, status: string) => {
+  const batch = (threadId: string, conversation: string, revision: number, status: string, more: Pick<LiveBatch, "requests" | "requestChanges"> = {}) => {
     // SAFETY: a batch as the machine's live driver sends it, filled only as far as the router and summary read it.
-    const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status } } } as never)
+    const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status }, ...more } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, asked, machineState, bases, batch, network, served, wake, app, forkSessions, filing, gateway }
+  return { account, calls, created, asked, machineState, bases, batch, network, served, wake, app, forkSessions, filing, gateway, folder }
 }
 
 /**
@@ -242,6 +259,13 @@ async function sleepyNetwork(gateway: ReturnType<typeof createFakeGateway>, devi
     sleep: () => {
       for (const pair of pairs) pair.asleep = true
     },
+    /** Every open connection reset, as a network change drops them: connections opened after it pass. */
+    cut: () => {
+      for (const pair of pairs) {
+        pair.near.resetAndDestroy()
+        pair.far.destroy()
+      }
+    },
     open: () => [...pairs].filter((pair) => !pair.asleep).length,
   }
 }
@@ -254,24 +278,28 @@ function sessionOf(client: ClientSession): ClientSessionOverSockets {
     watch: (request) => client.watch(request),
     close: () => {},
     wake: () => {},
+    probe: () => {},
   }
 }
 
 /** The router, the conversations' events it relays, and apart from them, what it tells windows of each start. */
-function conversations(account: CloudAccount, file: string, copies?: CloudCopies, asleepMs?: number) {
+function conversations(account: CloudAccount, file: string, copies?: CloudCopies, asleepMs?: number, readings?: SyncRecorder) {
   const events: RuntimeEvent[] = []
   /** The archived cloud Threads each time the host was told of them, by their IDs. */
   const archived: string[][] = []
   const starts: RuntimeEvent[] = []
   /** Each conversation a window on its folder was told changed, in order. */
   const changed: string[] = []
-  const options: CloudConversationsOptions = { account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id) }
+  /** Each turn end heard, as `<conversation> <Thread>`. */
+  const ended: string[] = []
+  const options: CloudConversationsOptions = { account: () => account, file, emit: (event) => (event.type === "cloud-start-step" ? starts : events).push(event), repositoryOf: async () => REPOSITORY, changed: (id) => changed.push(id), turnEnded: (conversation, thread) => ended.push(`${conversation} ${thread}`) }
   if (copies) options.copies = copies
   if (asleepMs) options.asleepMs = asleepMs
-  options.archivedChanged = (threads) => archived.push([...threads.keys()])
+  if (readings) options.readings = readings
+  options.archivedChanged = (_account, threads) => archived.push([...threads.keys()])
   const router = new CloudConversations(options)
   after(() => router.dispose())
-  return { router, events, starts, changed, archived }
+  return { router, events, starts, changed, archived, ended }
 }
 
 async function until(what: string, check: () => boolean, ms = 3_000) {
@@ -281,6 +309,66 @@ async function until(what: string, check: () => boolean, ms = 3_000) {
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
 }
+
+test("another device's conversation followed here picks up where it was: a dropped link resumes from what the gateway kept, each batch once, and windows read it again only past that; a stall while it works is found in seconds", async () => {
+  // A gateway whose streams linger, as the cloud's do, reached over sockets this test can cut or stall.
+  const machine = await cloudMachine({ sockets: { heartbeatMs: 25_000 } }, {})
+  const studio = "4d2b8c1e-7a3f-4e5d-9b6c-0a1f2e3d4c5b"
+  const conversation = randomUUID()
+  const watched: string[][] = []
+  const studioRuntime = await serveHostThroughGateway(await machine.gateway.connectRuntime(), { runtimeId: `d-${studio}`, build: "test", invoke: async (channel) => JSON.stringify({ channel }), watch: (conversations) => watched.push([...conversations]) })
+  after(() => studioRuntime.close())
+  const row: ListedSession = { session: randomUUIDFor(conversation), thread: "6f1c9a52-0d4e-4b8e-9a51-3f2c7d1e8b40", conversation, harness: "claude", title: "Retry the webhooks", state: "working", folder: CLONE, createdAt: "2026-10-24T20:00:00.000Z", activityAt: "2026-10-24T20:00:00.000Z", generation: 1, runsOn: { kind: "device", deviceId: studio }, listedAt: "2026-10-24T20:00:01.000Z" }
+  machine.account.sessionListings = async () => ({ sessions: [row], seq: 1 })
+  machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: (await machine.account.deviceId())! })
+  machine.account.onThreadListings = () => () => {}
+  const readings = new SyncRecorder()
+  const { router, events } = conversations(machine.account, join(scratch, "resumed", "conversations.json"), undefined, undefined, readings)
+  await router.start()
+  await until("the Studio's conversation listed", () => router.summaries().some((summary) => summary.session.id === conversation))
+  assert.ok((await router.route("mako:live-snapshot", [conversation])).handled)
+  await until("the Studio told it's watched", () => watched.at(-1)?.includes(conversation) === true)
+  let n = 0
+  // SAFETY: a batch as the Studio's live driver sends it, filled only as far as the router and summary read it.
+  const send = (revision: number) => studioRuntime.live(conversation, Payload.encoded(runtimeEventLine("event", encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status: "running" } } } as never)).slice(0, -1)), { n: ++n })
+  const relayed = () => events.filter((event) => event.conversation === conversation).map((event) => z.object({ batch: z.object({ revision: z.number(), historyChanged: z.boolean().optional() }).loose() }).parse(JSON.parse(event.payload)).batch)
+  const revisions = () => relayed().filter((batch) => !batch.historyChanged).map((batch) => batch.revision)
+  const rereads = () => relayed().filter((batch) => batch.historyChanged).length
+  for (const revision of [2, 3, 4]) send(revision)
+  await until("its batches relayed", () => revisions().length === 3)
+
+  // The link drops; two batches go by meanwhile. Followed again at once, from what the gateway kept: each once, none read again.
+  machine.network!.cut()
+  send(5)
+  send(6)
+  const cut = performance.now()
+  await until("what went by while the link was down", () => revisions().includes(6), 1_000)
+  assert.ok(performance.now() - cut < 1_000, "current within a second")
+  assert.deepEqual(revisions(), [2, 3, 4, 5, 6], "every batch, once, in order")
+  assert.equal(rereads(), 0, "no window reads it again")
+
+  // Down while more went by than the gateway keeps: windows read it again, once.
+  machine.network!.cut()
+  for (let revision = 7; revision < 7 + 600; revision++) send(revision)
+  await until("windows told to read it again", () => rereads() === 1, 2_000)
+  send(700)
+  await until("live again after", () => revisions().includes(700))
+
+  // Stalled while it works: nothing moves on the link and nothing closes it. Silent for a few seconds, its connection
+  // is asked whether it's alive, and replaced: the next batch arrives on the new one.
+  machine.network!.sleep()
+  const stalled = performance.now()
+  send(701)
+  await until("the stalled link replaced, and the batch from during the stall heard", () => revisions().includes(701), 6_000)
+  assert.ok(performance.now() - stalled < 5_500, `a stall found within ${SILENT_WHILE_WORKING_MS + PROBE_ANSWER_MS} ms and a bit: ${Math.round(performance.now() - stalled)} ms`)
+  assert.equal(rereads(), 1, "picked up from what the gateway kept")
+  // Diagnostics' readings of it: what went by, what was read again, and why it was followed again each time.
+  const reading = readings.readings().follows.find((follow) => follow.stream.endsWith(conversation))
+  assert.ok(reading)
+  assert.equal(reading.rereads, 1)
+  assert.ok(reading.probes >= 1, "a probe while it was silent")
+  assert.deepEqual([...new Set(reading.reconnects.map((reconnect) => reconnect.why))].sort(), ["closed", "silent"], "a dropped link and a silent one, told apart")
+})
 
 test("a cloud start makes the Thread once, starts on the machine in its clone, and relays the conversation's events", async () => {
   const machine = await cloudMachine()
@@ -315,6 +403,65 @@ test("a cloud start makes the Thread once, starts on the machine in its clone, a
   assert.ok(machine.calls.some((call) => call.channel === "mako:live-prompt" && call.args[0] === conversationId))
   assert.equal((await router.route("mako:live-prompt", ["not-a-cloud-one", "r-3", "x", [], undefined])).handled, false)
   assert.equal((await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID() }])).handled, false, "a start without cloud is this Mac's")
+})
+
+test("a machine that couldn't clone the Thread's repository starts nothing: the start fails with the agent's words, and the page that gives Mako's GitHub App access, ahead or at the send", async () => {
+  const install = "https://github.com/apps/mako/installations/new"
+  const reason = `Mako can't read octocat/Hello-World on GitHub yet: give Mako's GitHub App access to it for octocat at ${install}.`
+  const machine = await cloudMachine()
+  machine.folder.unmade = reason
+  const { router } = conversations(machine.account, join(scratch, "unmade", "conversations.json"))
+  assert.equal(await prepare(router, 0, { harness: "claude" }), "ready")
+  await until("the boot asked ahead", () => machine.calls.some((call) => call.channel === "mako:boot"))
+  const options = { conversationId: randomUUID(), cloud: { repository: REPOSITORY }, initialRequest: { id: "r-1", text: "hi", attachments: [] } }
+  const failed = await router.route("mako:live-start", ["claude", "/Users/me/project", options]).then(() => assert.fail("the start went on"), (error: Error) => error.message)
+  assert.equal(machine.calls.some((call) => call.channel === "mako:live-start"), false, "no harness started, ahead or at the send, outside the repository")
+  assert.match(failed, /repository couldn't be set up in the cloud, so nothing was started/)
+  const read = startFailure(failed)
+  assert.equal(read.install, install, "the window offers the page that gives access")
+  assert.match(read.said, /give Mako's GitHub App access to it for octocat\.$/, "and says the rest in words, the page apart")
+
+  // A clone that failed for something else says Git's words, with nothing to press.
+  machine.folder.unmade = "fatal: unable to access 'https://github.com/octocat/Hello-World/': Could not resolve host: github.com"
+  const again = await router.route("mako:live-start", ["claude", "/Users/me/project", { ...options, conversationId: randomUUID() }]).then(() => assert.fail("the start went on"), (error: Error) => error.message)
+  assert.deepEqual(startFailure(again), { said: again })
+  assert.match(again, /nothing was started\. Unable to access .*Could not resolve host: github\.com\.$/)
+
+  // Given access since, its next start goes into the clone.
+  delete machine.folder.unmade
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { ...options, conversationId: randomUUID() }])
+  assert.equal(machine.calls.find((call) => call.channel === "mako:live-start")?.args[1], CLONE)
+})
+
+test("a cloud turn's end is heard once however its batches fell: the session stopping, a request ending in a batch of its own, never a list restated", async () => {
+  const machine = await cloudMachine()
+  const { router, events, ended } = conversations(machine.account, join(scratch, "turn-ends", "conversations.json"))
+  const conversationId = randomUUID()
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId, cloud: { repository: REPOSITORY }, initialRequest: { id: "r-1", text: "hi", attachments: [] } }])
+  const [threadId] = machine.created
+  const heard = `${conversationId} ${threadId}`
+  machine.batch(threadId!, conversationId, 2, "running")
+  machine.batch(threadId!, conversationId, 3, "ready")
+  await until("both batches relayed", () => events.length === 2)
+  assert.deepEqual(ended, [heard], "the session stopped running: its turn ended")
+  // A turn begun and ended between two batches this Mac heard: only its request says so.
+  machine.batch(threadId!, conversationId, 4, "ready", { requestChanges: [{ id: "r-2", text: "again", attachments: [], status: "completed" }] })
+  await until("the request's end relayed", () => events.length === 3)
+  assert.deepEqual(ended, [heard, heard], "a request that ended is a turn that ended")
+  machine.batch(threadId!, conversationId, 5, "ready", { requestChanges: [{ id: "r-3", text: "more", attachments: [], status: "dispatching" }] })
+  machine.batch(threadId!, conversationId, 6, "ready", { requests: [{ id: "r-2", text: "again", attachments: [], status: "completed" }] })
+  await until("both relayed", () => events.length === 5)
+  assert.deepEqual(ended, [heard, heard], "a request still at work, or a list restating one that ended long ago, ends nothing")
+  // A turn as most fall: running, its request ended, then the session stops: one end, not two.
+  machine.batch(threadId!, conversationId, 7, "running")
+  machine.batch(threadId!, conversationId, 8, "running", { requestChanges: [{ id: "r-3", text: "more", attachments: [], status: "completed" }] })
+  machine.batch(threadId!, conversationId, 9, "ready")
+  await until("the turn relayed", () => events.length === 8)
+  assert.deepEqual(ended, [heard, heard, heard], "the session stopping after its request's end says nothing more")
+  // Its request changed again after its end (what its turn changed, counted then): the same end, not another.
+  machine.batch(threadId!, conversationId, 10, "ready", { requestChanges: [{ id: "r-3", text: "more", attachments: [], status: "completed", changes: { version: TURN_CHANGES_VERSION, state: "pending" } }] })
+  await until("the change relayed", () => events.length === 9)
+  assert.deepEqual(ended, [heard, heard, heard], "a request already ended, changed again, ends nothing")
 })
 
 /** The steps a new cloud conversation's window was told, in order. */
@@ -469,6 +616,18 @@ test("onboarding offers this Mac's recent projects for project bases once per ac
   assert.deepEqual(machine.bases, [REPOSITORY, { url: "https://github.com/octocat/Spoon-Knife" }], "each repository once, newest first; a folder off GitHub is left out")
   assert.equal(await offer(["/Users/me/mako"]), "already", "once per account on this Mac")
   assert.equal(machine.bases.length, 2)
+  const accountId = await machine.account.id()
+  assert.ok(accountId)
+  assert.deepEqual(await router.offeredProjects(accountId), [
+    { folder: "/Users/me/mako", repository: REPOSITORY },
+    { folder: "/Users/me/spoon", repository: { url: "https://github.com/octocat/Spoon-Knife" } },
+  ], "which projects were offered, for turning the cloud on to follow")
+  // Offered by a build that didn't keep which: they're noted at the next offer, without asking again.
+  await writeFile(join(scratch, "onboarding", "projects-offered.json"), `${JSON.stringify({ accounts: [accountId] })}\n`)
+  assert.equal(await router.offeredProjects(accountId), undefined, "not known yet, rather than none")
+  assert.equal(await offer(["/Users/me/spoon"]), "already")
+  assert.deepEqual(await router.offeredProjects(accountId), [{ folder: "/Users/me/spoon", repository: { url: "https://github.com/octocat/Spoon-Knife" } }])
+  assert.equal(machine.bases.length, 2, "nothing asked again")
 })
 
 test("a Mac that isn't signed in makes nothing ahead", async () => {
@@ -942,7 +1101,7 @@ test("every Session the account lists is listed here, unopened and waking nothin
   const inCloud = (state: ListedState, extra: Partial<ListedSession> = {}) => row(cloudConversation, { kind: "cloud", threadId: theirs }, state, extra)
   const onStudio = (state: ListedState, extra: Partial<ListedSession> = {}) => row(studioConversation, { kind: "device", deviceId: studio }, state, extra)
   const mine = row(randomUUID(), { kind: "device", deviceId: myDevice! }, "working")
-  const listeners = new Set<(heard: ThreadListHeard | "account-changed") => void>()
+  const listeners = new Set<(heard: AccountListHeard | "account-changed") => void>()
   let answer: SessionListings = { sessions: [inCloud("working"), onStudio("waiting", { waitingOn: "Approve: npm test" }), mine], seq: 5 }
   let reads = 0
   machine.account.sessionListings = async () => (reads++, answer)
@@ -951,7 +1110,7 @@ test("every Session the account lists is listed here, unopened and waking nothin
     listeners.add(listener)
     return () => listeners.delete(listener)
   }
-  const say = (heard: ThreadListHeard | "account-changed") => {
+  const say = (heard: AccountListHeard | "account-changed") => {
     for (const listener of listeners) listener(heard)
   }
   const file = join(scratch, "listed", "conversations.json")
@@ -973,12 +1132,17 @@ test("every Session the account lists is listed here, unopened and waking nothin
   assert.equal(shown(studioConversation)?.sessionId, onStudio("idle").session, "filed under its own Session")
   const told = (type: string) => events.filter((event) => event.type === type).map((event) => JSON.parse(event.payload))
   assert.equal(told("live-listed").length, 1, "windows list them as they list one at boot")
+  assert.equal(told("live-listed")[0].summaries.some((summary: LiveSummary) => summary.attention), false, "the first listing is where things stand: nothing is announced")
+  assert.equal(shown(studioConversation)?.waitingFor, "approval", "what it waits for, read once by the account's rule")
   assert.deepEqual([machine.calls.length, studioCalls.length], [0, 0], "listing them called nothing anywhere")
 
   say({ seq: 5, event: { type: "sessions-listed", sessions: [inCloud("idle")] } })
   assert.equal(shown(cloudConversation)?.session.status, "running", "a change from before the list read changes nothing")
   say({ seq: 6, event: { type: "sessions-listed", sessions: [onStudio("idle", { title: "Retry the webhooks with backoff" })] } })
   assert.deepEqual([shown(studioConversation)?.session.status, shown(studioConversation)?.waitingOn, shown(studioConversation)?.session.title], ["ready", undefined, "Retry the webhooks with backoff"])
+  const finished = told("live-listed").at(-1).summaries.find((summary: LiveSummary) => summary.session.id === studioConversation)
+  assert.deepEqual(finished?.attention, { kind: "finished", key: attentionKey(onStudio("idle")) }, "the Studio's turn ended: what the account would tell the phone, under its key")
+  assert.equal(shown(studioConversation)?.attention, undefined, "said on that listing alone, so a window reloaded since never hears it again")
   const before = told("live-listed").length
   say({ seq: 7, event: { type: "sessions-listed", sessions: [onStudio("idle", { title: "Retry the webhooks with backoff", listedAt: "2026-10-24T21:00:00.000Z" })] } })
   assert.equal(told("live-listed").length, before, "a change a row wouldn't show tells nobody")
@@ -1019,8 +1183,16 @@ test("every Session the account lists is listed here, unopened and waking nothin
   machine.batch(theirs, cloudConversation, 2, "ready")
   await until("its next batch relayed", () => events.some((event) => event.conversation === cloudConversation))
 
+  // The Thread is renamed on the Studio while a window here follows its conversation: the batches never carry the
+  // Thread's name, so the list's word on it reaches the window, the rest of what it shows left as the batches said it.
+  const followedBefore = shown(studioConversation)
+  say({ seq: 9, event: { type: "sessions-listed", sessions: [onStudio("idle", { title: "Retry the webhooks with backoff", threadTitle: "Webhook retries" })] } })
+  assert.equal(shown(studioConversation)?.threadTitle, "Webhook retries", "a followed conversation's Thread is named as the list says")
+  assert.deepEqual(told("live-listed").at(-1)?.summaries.map((summary: { session: { id: string }; threadTitle?: string }) => [summary.session.id, summary.threadTitle]), [[studioConversation, "Webhook retries"]], "and windows are told")
+  assert.deepEqual(shown(studioConversation)?.session, followedBefore?.session, "what its batches said stands")
+
   // The Studio's Session moved to the cloud: it leaves the Studio, and is listed where it runs now.
-  say({ seq: 9, event: { type: "sessions-listed", sessions: [row(studioConversation, { kind: "cloud", threadId: theirs }, "idle", { generation: 3, session: onStudio("idle").session })] } })
+  say({ seq: 10, event: { type: "sessions-listed", sessions: [row(studioConversation, { kind: "cloud", threadId: theirs }, "idle", { generation: 3, session: onStudio("idle").session })] } })
   assert.equal(told("live-unlisted").length, 0, "a move is never told as leaving")
   assert.equal(shown(studioConversation)?.elsewhere, "a cloud machine", "it's listed where it runs now")
   assert.equal(told("live-listed").at(-1)?.summaries[0]?.elsewhere, "a cloud machine")
@@ -1029,13 +1201,13 @@ test("every Session the account lists is listed here, unopened and waking nothin
 
   // Archived by its person on another device: its Sessions leave the list, and it's kept with the archived ones, at rest,
   // still named by its cloud Thread, and the host is told so (what every window shows as archived).
-  say({ seq: 10, event: { type: "sessions-unlisted", sessions: [inCloud("idle").session] } })
-  say({ seq: 11, event: { type: "thread-archived", thread: { thread: theirs, move: randomUUID(), archivedAt: "2026-10-27T10:00:00.000Z", sessions: [inCloud("working")] } } })
+  say({ seq: 11, event: { type: "sessions-unlisted", sessions: [inCloud("idle").session] } })
+  say({ seq: 12, event: { type: "thread-archived", thread: { thread: theirs, move: randomUUID(), archivedAt: "2026-10-27T10:00:00.000Z", sessions: [inCloud("working")] } } })
   await until("the host told it's archived", () => archived.at(-1)?.includes(theirs) === true)
   assert.deepEqual([shown(cloudConversation)?.session.status, shown(cloudConversation)?.elsewhere], ["ready", "a cloud machine"], "with the archived ones, at rest")
   assert.equal(await router.cloudThreadOf({ conversationId: cloudConversation }), theirs, "restoring it finds its cloud Thread")
   assert.equal(router.archiveOf(theirs)?.thread, theirs)
-  say({ seq: 12, event: { type: "thread-unarchived", thread: theirs } })
+  say({ seq: 13, event: { type: "thread-unarchived", thread: theirs } })
   await until("the host told it's back", () => archived.at(-1)?.includes(theirs) === false)
   assert.equal(shown(cloudConversation), undefined, "taken back by its Mac, which lists it as its own")
   assert.equal((await router.route("mako:live-snapshot", [cloudConversation])).handled, false, "no longer answered here")
@@ -1078,6 +1250,7 @@ test("a second Mako on this Mac, which lists this Mac's own sessions as its own,
   const router = new CloudConversations({
     account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-listed-here-")), "conversations.json"), emit: (event) => events.push(event), repositoryOf: async () => REPOSITORY,
     keepsNative: (harness, nativeId, at) => kept.has(`${harness}\n${nativeId}\n${at}`),
+    nativeChangedMs: 0,
   })
   after(() => router.dispose())
   await router.start()
@@ -1094,8 +1267,186 @@ test("a second Mako on this Mac, which lists this Mac's own sessions as its own,
   // The session leaves this Mac's stores (its harness deleted it here): the other profile's row is listed.
   kept.delete(`cursor\n4c1d\n${folder}`)
   router.nativeChanged()
-  assert.equal(shown(opened.conversation)?.elsewhere, "Ana's MacBook Pro (2)")
+  await until("looked at again", () => shown(opened.conversation)?.elsewhere === "Ana's MacBook Pro (2)")
   assert.equal(shown(terminal.conversation), undefined)
+})
+
+test("the account's rows for sessions this Mac may keep wait for its catalog, a lost catalog takes none away, and a burst of its writes is one look at the rows they name", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const profile = "2d7c5e10-4f3a-4b6e-9c8d-1a2b3c4d5e6f"
+  const folder = "/Users/ana/api"
+  const row = (runsOn: ListedSession["runsOn"], extra: Partial<ListedSession> = {}): ListedSession => ({
+    session: randomUUID(), thread: randomUUID(), conversation: randomUUID(), harness: "claude", title: "Retry the webhooks", state: "idle", folder,
+    createdAt: "2026-10-27T07:20:00.000Z", activityAt: "2026-10-27T07:20:00.000Z", generation: 1, runsOn, listedAt: "2026-10-27T07:20:01.000Z", ...extra,
+  })
+  // The other profile's rows: one for a session this Mac's stores keep, one for a session they don't; and a cloud row.
+  const terminal = row({ kind: "device", deviceId: profile }, { nativeId: "0b7e" })
+  const theirs = row({ kind: "device", deviceId: profile }, { nativeId: "9f2a" })
+  const inCloud = row({ kind: "cloud", threadId: "t-00000000000000ad" })
+  machine.account.sessionListings = async () => ({ sessions: [terminal, theirs, inCloud], seq: 1 })
+  machine.account.devices = async () => ({ devices: [{ id: profile, name: "Ana's MacBook Pro (2)" }], current: myDevice! })
+  machine.account.onThreadListings = () => () => {}
+  // This Mac's catalog, not read yet: it can't say what the stores keep.
+  let ready = false
+  const kept = new Set([`claude\n0b7e\n${folder}`])
+  let asked = 0
+  const events: RuntimeEvent[] = []
+  const router = new CloudConversations({
+    account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-keeps-")), "conversations.json"), emit: (event) => events.push(event), repositoryOf: async () => REPOSITORY,
+    keepsNative: (harness, nativeId, at) => {
+      asked += 1
+      return ready ? kept.has(`${harness}\n${nativeId}\n${at}`) : undefined
+    },
+    nativeChangedMs: 20,
+  })
+  after(() => router.dispose())
+  await router.start()
+  const shown = (each: ListedSession) => router.summaries().find((summary) => summary.session.id === each.conversation)
+  await until("the list read", () => shown(inCloud) !== undefined)
+  assert.equal(shown(terminal), undefined, "a row this Mac may keep isn't listed while its catalog can't say")
+  assert.equal(shown(theirs), undefined, "nor one it may not: it isn't listed and then taken away")
+
+  ready = true
+  router.nativeChanged()
+  await until("the catalog read, the rows looked at", () => shown(theirs) !== undefined)
+  assert.equal(shown(terminal), undefined, "the session this Mac keeps is listed once, as this Mac's")
+
+  // A session at work writes over and over: a hundred writes are one look, at the rows that name its session alone.
+  const listedBefore = events.filter((event) => event.type === "live-listed").length
+  asked = 0
+  for (let write = 0; write < 100; write++) router.nativeChanged([{ harness: "codex", nativeId: "a-session-no-row-names" }])
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.equal(asked, 0, "no row names it: nothing is looked at")
+  kept.delete(`claude\n0b7e\n${folder}`)
+  for (let write = 0; write < 100; write++) router.nativeChanged([{ harness: "claude", nativeId: "0b7e" }])
+  await until("the session left this Mac's stores: the other profile's row is listed", () => shown(terminal) !== undefined)
+  assert.equal(asked, 1, "one look, at the one row that names it")
+  assert.equal(events.filter((event) => event.type === "live-listed").length, listedBefore + 1)
+
+  // The catalog's reader is lost and read again: until it's back, the rows stay as they are.
+  ready = false
+  router.nativeChanged()
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.ok(shown(terminal) && shown(theirs), "a catalog being read again says nothing of what the stores keep")
+  assert.equal(events.filter((event) => event.type === "live-unlisted").length, 0, "nothing unlisted")
+})
+
+test("an account event is looked at for the rows it names alone: one Session's change among many asks of that row only, a Session that left goes, and a device going quiet looks at every row", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const studio = "8e4b1f20-6a7c-4d9e-b0f1-2c3d4e5f6a7b"
+  const row = (n: number, extra: Partial<ListedSession> = {}): ListedSession => ({
+    session: randomUUID(), thread: randomUUID(), conversation: randomUUID(), harness: "claude", title: `Session ${n}`, state: "idle", folder: "/Users/ana/api", nativeId: `n-${n}`,
+    createdAt: "2026-10-27T07:20:00.000Z", activityAt: "2026-10-27T07:20:00.000Z", generation: 1, runsOn: { kind: "device", deviceId: studio }, listedAt: "2026-10-27T07:20:01.000Z", ...extra,
+  })
+  const rows = Array.from({ length: 20 }, (_, n) => row(n))
+  machine.account.sessionListings = async () => ({ sessions: rows, seq: 1 })
+  machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
+  let say: ((heard: AccountListHeard | "account-changed") => void) | undefined
+  machine.account.onThreadListings = (listener) => {
+    say = listener
+    return () => {}
+  }
+  // Each row of another device is asked whether this Mac keeps its session: what a look at a row costs.
+  let asked = 0
+  const router = new CloudConversations({
+    account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-named-")), "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY,
+    keepsNative: () => (asked++, false),
+    nativeChangedMs: 0,
+  })
+  after(() => router.dispose())
+  await router.start()
+  const shown = (each: ListedSession) => router.summaries().find((summary) => summary.session.id === each.conversation)
+  await until("the list read and listed here", () => rows.every((each) => shown(each) !== undefined))
+  asked = 0
+  say?.({ seq: 2, event: { type: "sessions-listed", sessions: [{ ...rows[3]!, state: "working" }] } })
+  assert.equal(shown(rows[3]!)?.session.status, "running", "the change is listed at once")
+  assert.equal(asked, 1, "one row named, one row looked at")
+  say?.({ seq: 3, event: { type: "sessions-unlisted", sessions: [rows[5]!.session] } })
+  assert.equal(shown(rows[5]!), undefined, "a Session that left the list goes")
+  assert.equal(asked, 1, "and nothing else is looked at for it")
+  say?.({ seq: 4, event: { type: "device-quiet", deviceId: studio, since: "2026-10-27T07:25:00.000Z" } })
+  assert.equal(asked, 1 + rows.length - 1, "a device going quiet may change any of its rows: every one is looked at")
+  assert.equal(shown(rows[3]!)?.session.status, "ready", "and none of a quiet device's is at work")
+})
+
+test("a quiet device's conversation a window has open stops working there too, and says it's back when it is", async () => {
+  const machine = await cloudMachine()
+  const myDevice = await machine.account.deviceId()
+  const studio = "6a1f0c3e-2b4d-4e8f-9a7c-5d3e1b0f2c4a"
+  const listed: ListedSession = {
+    session: randomUUID(), thread: randomUUID(), conversation: randomUUID(), harness: "claude", title: "Retry the webhooks", state: "working", folder: "/Users/ana/api",
+    createdAt: "2026-10-27T07:20:00.000Z", activityAt: "2026-10-27T07:20:00.000Z", generation: 1, runsOn: { kind: "device", deviceId: studio }, listedAt: "2026-10-27T07:20:01.000Z",
+  }
+  machine.account.sessionListings = async () => ({ sessions: [listed], seq: 1 })
+  machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
+  const listeners = new Set<(heard: AccountListHeard | "account-changed") => void>()
+  machine.account.onThreadListings = (listener) => {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  }
+  const say = (heard: AccountListHeard) => {
+    for (const listener of listeners) listener(heard)
+  }
+  const studioRuntime = await serveHostThroughGateway(await machine.gateway.connectRuntime(), {
+    runtimeId: `d-${studio}`,
+    build: "test",
+    invoke: async () => JSON.stringify({ session: { id: listed.conversation } }),
+  })
+  after(() => studioRuntime.close())
+  const events: RuntimeEvent[] = []
+  const router = new CloudConversations({ account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-quiet-open-")), "conversations.json"), emit: (event) => events.push(event), repositoryOf: async () => REPOSITORY })
+  after(() => router.dispose())
+  await router.start()
+  await until("listed", () => router.summaries().some((summary) => summary.session.id === listed.conversation))
+  // A window opens it: from now its batches come here from its stream, and the list's rows for it aren't listed again.
+  assert.ok((await router.route("mako:live-state", [listed.conversation])).handled)
+  const told = () => events.flatMap((event) => event.type === "live-listed" ? decodeRuntimeEvent<Extract<HostEvent, { type: "live-listed" }>>(event.payload).summaries : [])
+    .filter((summary) => summary.session.id === listed.conversation)
+  const before = told().length
+  // The Studio goes quiet mid-turn: it sends nothing more, so nothing but the list can say its turn isn't going on.
+  const since = "2026-10-27T08:00:00.000Z"
+  say({ seq: 2, event: { type: "device-quiet", deviceId: studio, since } })
+  assert.equal(told().length, before + 1, "the window is told")
+  assert.deepEqual([told().at(-1)?.session.status, told().at(-1)?.quietSince], ["ready", Date.parse(since)], "not at work, and since when it's been quiet")
+  say({ seq: 3, event: { type: "device-quiet", deviceId: studio, since: null } })
+  assert.equal(told().length, before + 2, "and told it's back, so it reads it there again")
+  assert.equal(told().at(-1)?.quietSince, undefined)
+  // Anything else the list says of it is the window's own batches' to say.
+  say({ seq: 4, event: { type: "sessions-listed", sessions: [{ ...listed, state: "idle", listedAt: "2026-10-27T08:01:00.000Z" }] } })
+  assert.equal(told().length, before + 2)
+})
+
+test("the account's archived cloud Threads are said only from a list it answered, never as none at a sign-out or before the list is read", async () => {
+  const machine = await cloudMachine()
+  const archivedThread = { thread: "t-00000000000000ae", move: randomUUID(), archivedAt: "2026-10-27T09:00:00.000Z", sessions: [] }
+  let listings: SessionListings = { sessions: [], seq: 1, archived: [archivedThread] }
+  machine.account.sessionListings = async () => listings
+  machine.account.devices = async () => ({ devices: [], current: (await machine.account.deviceId())! })
+  let tell: ((heard: AccountListHeard | "account-changed") => void) | undefined
+  machine.account.onThreadListings = (listener) => ((tell = listener), () => {})
+  const heard: [string, string[]][] = []
+  const router = new CloudConversations({
+    account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-archived-")), "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY,
+    archivedChanged: (account, archived) => heard.push([account, [...archived.keys()]]),
+  })
+  after(() => router.dispose())
+  await router.start()
+  const account = await machine.account.id()
+  await until("the list read", () => heard.length > 0)
+  assert.deepEqual(heard, [[account, [archivedThread.thread]]])
+  // Signed out, or another account: the list is forgotten, but that says nothing of what's archived.
+  listings = { sessions: [], seq: 1 }
+  let answer: () => void = () => {}
+  const answered = new Promise<void>((resolve) => (answer = resolve))
+  machine.account.sessionListings = async () => (await answered, listings)
+  tell?.("account-changed")
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.deepEqual(heard, [[account, [archivedThread.thread]]], "the archived Threads stand until a list says otherwise")
+  answer()
+  await until("the new list read", () => heard.length > 1)
+  assert.deepEqual(heard.at(-1), [account, []], "a list read says it, even when it's the same as before but for what's archived")
 })
 
 test("a quiet device's rows are listed as it left them, but none at work or waiting on the person; heard from again, each says its state again", async () => {
@@ -1113,12 +1464,12 @@ test("a quiet device's rows are listed as it left them, but none at work or wait
   const since = "2026-10-27T08:00:00.000Z"
   machine.account.sessionListings = async () => ({ sessions: [working, waiting, failed, inCloud], seq: 3, quiet: [{ deviceId: studio, since }] })
   machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
-  const listeners = new Set<(heard: ThreadListHeard | "account-changed") => void>()
+  const listeners = new Set<(heard: AccountListHeard | "account-changed") => void>()
   machine.account.onThreadListings = (listener) => {
     listeners.add(listener)
     return () => listeners.delete(listener)
   }
-  const say = (heard: ThreadListHeard) => {
+  const say = (heard: AccountListHeard) => {
     for (const listener of listeners) listener(heard)
   }
   const router = new CloudConversations({ account: () => machine.account, file: join(await mkdtemp(join(tmpdir(), "mako-quiet-")), "conversations.json"), emit: () => {}, repositoryOf: async () => REPOSITORY })
@@ -1148,7 +1499,7 @@ test("another Mac's conversation while that Mac is off reads from the copy it ke
   }
   machine.account.sessionListings = async () => ({ sessions: [listed], seq: 1 })
   machine.account.devices = async () => ({ devices: [{ id: studio, name: "Studio" }], current: myDevice! })
-  let tell: ((heard: ThreadListHeard | "account-changed") => void) | undefined
+  let tell: ((heard: AccountListHeard | "account-changed") => void) | undefined
   machine.account.onThreadListings = (listener) => ((tell = listener), () => {})
   // The Studio's copy: 250 entries, written at 21:10.
   const at = Date.parse("2026-10-24T21:10:00.000Z")
@@ -1266,7 +1617,7 @@ async function movingThread(name: string, threadIds: string[]) {
   for (const threadId of threadIds) await machine.account.createThread(threadId, REPOSITORY)
 
   const myDevice = await machine.account.deviceId()
-  let tell: ((heard: ThreadListHeard | "account-changed") => void) | undefined
+  let tell: ((heard: AccountListHeard | "account-changed") => void) | undefined
   let seq = 1
   machine.account.sessionListings = async () => ({ sessions: [], seq })
   machine.account.devices = async () => ({ devices: [], current: myDevice! })
@@ -1420,7 +1771,7 @@ test("a message that waited in the account for this Mac's own Session is taken h
   const message = (session: string, conversation: string, text: string): WaitingMessage => ({ id: randomUUID(), session, conversation, text, from: "3d0f6c2a-8b1e-4f7a-9c5d-2e1b0a9f8d7c", at: "2026-10-25T09:00:00.000Z" })
   const first = message(mine, "c-mine", "Merge it once CI is green")
   const elsewhere = message(moved, "c-moved", "Tag the release")
-  let tell: ((heard: ThreadListHeard | "account-changed") => void) | undefined
+  let tell: ((heard: AccountListHeard | "account-changed") => void) | undefined
   machine.account.sessionListings = async () => ({ sessions: [row(mine, "c-mine"), row(moved, "c-moved")], seq: 1, waiting: [first, elsewhere] })
   machine.account.devices = async () => ({ devices: [], current: myDevice! })
   machine.account.onThreadListings = (listener) => ((tell = listener), () => {})

@@ -520,6 +520,7 @@ export class LiveTransfers {
       }
       // Durability precedes retirement. A failed write leaves the source
       // process, its hold and its grants untouched.
+      const heard = resident.journalSnapshot
       resident.journal.commit(nextSnapshot, resident.journalSnapshot)
       resident.journalSnapshot = nextSnapshot
       const retiring = [...resident.connections].filter(
@@ -569,6 +570,14 @@ export class LiveTransfers {
       resident.connections.set(bindingId, prepared)
       resident.driver = prepared.driver
       resident.snapshot = nextSnapshot
+      // The windows and the rest of the host last heard the snapshot before
+      // the switch: the flush below tells them all of it (the new process's
+      // session, the questions the old one can no longer answer gone, the
+      // request, the binding). Measured from what the journal already holds,
+      // it once said nothing, and a window kept the old process's
+      // `disconnected` while the new one ran, offering Continue turn on a
+      // question the running agent was still waiting on.
+      if (resident.journalSnapshot === nextSnapshot && heard) resident.journalSnapshot = heard
       if (prepared.session.nativeId)
         this.host.dependencies.memory?.remember(
           transfer.input.provider,

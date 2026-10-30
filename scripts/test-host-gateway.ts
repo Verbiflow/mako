@@ -107,7 +107,7 @@ let served: ServedRuntime = await serveHostThroughGateway(await gateway.connectR
 const desktop = actor("desktop-1")
 const remote = gatewayHostCalls(await gateway.connectClient(desktop), { runtimeId: "laptop", actor: desktop, history: true })
 const windowId = randomUUID()
-const steady: RecoveryLink = { lost: () => assert.fail("nothing dropped"), whenConnected: async () => true }
+const steady: RecoveryLink = { dropped: () => assert.fail("nothing dropped") }
 
 /** A call's value as each transport hands it on, the way the desktop's main process forwards it. */
 const overSocket = (channel: string, args: readonly unknown[]) => {
@@ -212,8 +212,8 @@ try {
       behaviours.set(channel, () => new Promise((resolve) => { release = () => resolve("first attempt") }))
       let lost = 0
       const link: RecoveryLink = {
-        lost: () => { lost++ },
-        whenConnected: async () => {
+        dropped: async () => {
+          lost++
           behaviours.set(channel, async () => "second attempt")
           served = await serveHostThroughGateway(await gateway.connectRuntime(), laptop)
           return true
@@ -238,13 +238,14 @@ try {
     assert.ok("error" in commit.outcome && commit.outcome.error instanceof RuntimeDisconnectedError && commit.outcome.error.unconfirmed)
     assert.equal(commit.outcome.error.message, HOST_CALL_UNCONFIRMED_MESSAGE)
     assert.equal(commit.runs, 1, "a commit whose answer was lost is never repeated")
+    assert.equal(commit.lost, 0, "nor does it wait for a runtime to repeat it on")
     const repeats = gatewayLog.filter((line) => line.event === "operation" && line.attempt === 2)
     assert.deepEqual(repeats.map((line) => [line.op, line.outcome, line.answeredBy]), [["host.git-status", "ok", "runtime"], ["host.live-prompt", "ok", "runtime"]])
     for (const repeat of repeats)
       assert.ok(gatewayLog.some((line) => line.operationId === repeat.operationId && line.correlationId === repeat.correlationId && line.attempt === 1), `${repeat.op} is repeated as the same operation`)
 
     served.close()
-    const offline = await rejection(overGateway("mako:git-commit", ["message"], { lost: () => {}, whenConnected: async () => false }))
+    const offline = await rejection(overGateway("mako:git-commit", ["message"], { dropped: async () => false }))
     assert.ok(offline instanceof RuntimeDisconnectedError && !offline.unconfirmed, "a call no runtime received is known not to have run")
     assert.equal(offline.message, HOST_RECONNECTING_MESSAGE)
     served = await serveHostThroughGateway(await gateway.connectRuntime(), laptop)
@@ -258,10 +259,10 @@ try {
     }
     const overDropping = gatewayHostCalls(dropping, { runtimeId: "laptop", actor: desktop })
     drops = 1
-    const unsent = await rejection(invokeWithRecovery("mako:git-commit", overDropping.call("mako:git-commit", ["message"]), { lost: () => {}, whenConnected: async () => assert.fail("a commit is never repeated") }))
+    const unsent = await rejection(invokeWithRecovery("mako:git-commit", overDropping.call("mako:git-commit", ["message"]), { dropped: async () => assert.fail("a commit is never repeated") }))
     assert.ok(unsent instanceof RuntimeDisconnectedError && unsent.unconfirmed, "a commit whose link dropped may have reached the gateway")
     drops = 1
-    assert.deepEqual(decodeRuntimeValue(await invokeWithRecovery("mako:git-status", overDropping.call("mako:git-status", []), { lost: () => {}, whenConnected: async () => true })), { channel: "mako:git-status", args: [] })
+    assert.deepEqual(decodeRuntimeValue(await invokeWithRecovery("mako:git-status", overDropping.call("mako:git-status", []), { dropped: async () => true })), { channel: "mako:git-status", args: [] })
     console.log("Runtime loss: a read and a prompt are repeated as the same operation once the runtime is back; a commit whose runtime or link dropped is reported unconfirmed and never repeated; a call nobody received is known not to have run")
   }
 

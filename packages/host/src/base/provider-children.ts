@@ -11,6 +11,7 @@ import {
   observeProcessIdentity,
   processStartMatches,
 } from "./process-liveness.js"
+import { onWindows } from "./platform.js"
 import { topic } from "./topic.js"
 
 /**
@@ -51,6 +52,8 @@ export class ProviderChildren {
   /** Retire only records proved gone or successfully signalled, never unreadable identities. */
   private readonly retired = new Set<string>()
   private readonly observations = new Map<number, AbortController>()
+  /** Set once the host is stopping (`end`): a process reported from then on is ended as it is recorded. */
+  private ending = false
 
   constructor(
     dataRoot: string,
@@ -152,6 +155,10 @@ export class ProviderChildren {
       record,
     ]
     this.write()
+    if (this.ending) {
+      hostWarn("children", "a provider process started as the host stopped; ending it", { pid: info.pid, kind: info.kind, owner: info.owner })
+      signalChild(info.pid, "SIGTERM")
+    }
     this.observations.get(info.pid)?.abort()
     const controller = new AbortController()
     this.observations.set(info.pid, controller)
@@ -209,6 +216,31 @@ export class ProviderChildren {
     if (!this.records.some((entry) => entry.pid === pid)) return
     this.records = this.records.filter((entry) => entry.pid !== pid)
     this.write()
+  }
+
+  /**
+   * End what this host still runs as it stops. Each owner stops its own processes first; whatever is still recorded
+   * then (a sign-in probe a request started as the host began stopping, once) would outlive the host, writing into
+   * its home after it was gone. Each is a child this host spawned and hasn't seen exit, so its pid can't have been
+   * reused: it and its process group get SIGTERM, then SIGKILL after `graceMs`. Resolves once each has exited, or
+   * with a warning naming those that didn't. A process reported after this is ended as it is recorded.
+   */
+  async end(graceMs = 2_000): Promise<ProviderChildRecord[]> {
+    this.ending = true
+    const left = [...this.records]
+    if (!left.length) return []
+    hostLog("children", "ending provider processes left running at stop", { processes: left.map((entry) => `${entry.kind}:${entry.owner}:${entry.pid}`).join(", ") })
+    const running = () => left.filter((entry) => this.records.some((held) => held.pid === entry.pid))
+    const exited = async (timeoutMs: number) => {
+      for (const deadline = Date.now() + timeoutMs; running().length && Date.now() < deadline; ) await delay(25)
+    }
+    for (const entry of left) signalChild(entry.pid, "SIGTERM")
+    await exited(graceMs)
+    for (const entry of running()) signalChild(entry.pid, "SIGKILL")
+    await exited(1_000)
+    const survivors = running()
+    if (survivors.length) hostWarn("children", "provider processes did not exit at stop", { processes: survivors.map((entry) => `${entry.kind}:${entry.owner}:${entry.pid}`).join(", ") })
+    return left
   }
 
   /**
@@ -290,6 +322,27 @@ export class ProviderChildren {
       // later verified observation instead of silently dropping its owner.
       return "unavailable"
     }
+  }
+}
+
+/**
+ * Signals a child this host spawned, with its process group: a provider spawned in a group of its own leaves its
+ * children (the native binary under a wrapper, a tool's shell) there. A child sharing the host's group has no group of
+ * its own pid, so only it is signalled.
+ */
+function signalChild(pid: number, signal: NodeJS.Signals): void {
+  if (!onWindows()) {
+    try {
+      process.kill(-pid, signal)
+      return
+    } catch {
+      // No group led by this pid: the child shares another's.
+    }
+  }
+  try {
+    process.kill(pid, signal)
+  } catch {
+    // Gone already: its exit is on its way to `untrackPid`.
   }
 }
 

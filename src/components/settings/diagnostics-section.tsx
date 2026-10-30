@@ -5,11 +5,14 @@ import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { diagnostics } from "@/state/diagnostics"
 import { togglePref, usePrefs } from "@/state/prefs"
-import { formatBytes, formatRelative } from "@/lib/format"
+import { copyAge, formatBytes, formatRelative, formatTime } from "@/lib/format"
 import type { CrashReport } from "@mako/host/contracts/crash-report"
 import type { ProviderResidencySnapshot } from "@mako/host/contracts/provider-residency"
+import type { SessionReaderEvent, SessionReaderHistory } from "@mako/host/contracts/session-reader"
 import type { UnreadReport } from "@mako/host/contracts/unread-records"
 import { UnreadRecords } from "@/components/settings/unread-records"
+import { SyncReadout } from "@/components/settings/sync-readout"
+import type { SyncReadings } from "@mako/host/contracts/sync-readings"
 import { StoreFormatLine } from "@/components/shell/store-format-line"
 import { changedStores } from "@/lib/store-formats"
 import { loadStoreFormats, useStoreFormats } from "@/state/store-formats"
@@ -27,21 +30,25 @@ export function DiagnosticsSection() {
   const [crashes, setCrashes] = useState<CrashReport[]>([])
   const [dir, setDir] = useState("")
   const [hostLog, setHostLog] = useState("")
+  const [reader, setReader] = useState<SessionReaderHistory | null>(null)
   const [residency, setResidency] =
     useState<ProviderResidencySnapshot | null>(null)
   const [openId, setOpenId] = useState<string>()
   const [unread, setUnread] = useState<UnreadReport | null>(null)
+  const [sync, setSync] = useState<SyncReadings | null>(null)
   const stores = useStoreFormats((state) => state.stores)
 
   const load = useCallback(() => {
     void diagnostics.list().then(setCrashes).catch(() => setCrashes([]))
     void diagnostics.directory().then(setDir).catch(() => setDir(""))
     void diagnostics.hostLogPath().then(setHostLog).catch(() => setHostLog(""))
+    void diagnostics.sessionReader().then(setReader).catch(() => setReader(null))
     void diagnostics
       .providerResidency()
       .then(setResidency)
       .catch(() => setResidency(null))
     void diagnostics.unreadRecords().then(setUnread).catch(() => setUnread(null))
+    void diagnostics.syncReadings().then(setSync).catch(() => setSync(null))
     // Asked again here, so a store another Mako changed since the window opened is said.
     void loadStoreFormats().catch(() => undefined)
   }, [])
@@ -60,7 +67,7 @@ export function DiagnosticsSection() {
       <ListCard>
         <SettingRow
           title="Show originals"
-          description="Adds Original to each answer and marker in a conversation, showing the records the harness wrote it in"
+          description="Adds Original to each answer and marker in a conversation, showing the records the harness wrote it in, and marks where Mako continued a turn, with what it told the agent"
         >
           <Toggle label="Show originals" on={showOriginals} onChange={() => togglePref("showOriginals")} />
         </SettingRow>
@@ -148,6 +155,10 @@ export function DiagnosticsSection() {
         </div>
       ) : null}
 
+      {reader ? <SessionReaderRow history={reader} /> : null}
+
+      {sync ? <SyncReadout readings={sync} /> : null}
+
       <UnreadRecords report={unread} />
 
       {residency ? (
@@ -172,6 +183,21 @@ export function DiagnosticsSection() {
               or waiting) of a {formatBytes(residency.memory.budget)} budget.{" "}
               {residency.memory.unloaded} more were unloaded and load again when opened.
             </p>
+            {residency.memory.held.length > 0 ? (
+              <p className="mt-1 text-label leading-relaxed text-faint">
+                Largest in memory:{" "}
+                {residency.memory.held
+                  .slice(0, 5)
+                  .map((held) => `${held.title ?? held.conversation.slice(0, 8)} (${formatBytes(held.bytes)}${held.pinned ? ", running or waiting" : ""}${held.by ? `, read in by ${held.by}` : ""})`)
+                  .join(" · ")}
+              </p>
+            ) : null}
+            {residency.memory.loads.length > 0 ? (
+              <p className="mt-1 text-label leading-relaxed text-faint">
+                Read in from disk since the host started:{" "}
+                {residency.memory.loads.map((load) => `${load.by}: ${load.count} ${load.count === 1 ? "conversation" : "conversations"}`).join(" · ")}
+              </p>
+            ) : null}
           </div>
           {residency.entries.length > 0 ? (
             <div className="max-h-56 overflow-auto border-t border-hairline">
@@ -227,6 +253,64 @@ export function DiagnosticsSection() {
           </Action>
         ) : null}
       </div>
+    </div>
+  )
+}
+
+const READER_EVENT = {
+  adopted: "Started",
+  lost: "Stopped",
+  exited: "Exited",
+  retired: "Replaced an older build",
+  unavailable: "Couldn't start",
+} satisfies Record<SessionReaderEvent["event"], string>
+
+const READER_KIND = {
+  process: "background sync",
+  shared: "shared reader",
+  worker: "this app's reader",
+} satisfies Record<SessionReaderEvent["kind"], string>
+
+/**
+ * How often the reader behind the session list stopped since the host
+ * started, the last few times with why, and its own log. A reader restarting
+ * every half minute once looked like nothing but a flickering sidebar.
+ */
+function SessionReaderRow({ history }: { history: SessionReaderHistory }) {
+  const recent = history.events.filter((event) => event.event !== "adopted").slice(0, 5)
+  const since = copyAge(new Date(history.since).getTime())
+  return (
+    <div data-session-reader="" className="mt-2 rounded-lg bg-surface ring-1 ring-hairline">
+      <div className="flex items-center justify-between gap-3 px-3 py-2">
+        <div className="min-w-0">
+          <p className="text-ui">Session sync</p>
+          <p className="text-label text-faint">
+            {history.lost === 0
+              ? `The reader behind the session list hasn't stopped since the host started ${since}.`
+              : `The reader behind the session list stopped ${history.lost === 1 ? "once" : `${history.lost} times`} since the host started ${since}.`}
+          </p>
+        </div>
+        {history.logPath ? (
+          <IfCanReveal>
+            <Action tone="ghost" onClick={() => void desktop.revealPath(history.logPath)}>
+              Show the log
+            </Action>
+          </IfCanReveal>
+        ) : null}
+      </div>
+      {recent.length > 0 ? (
+        <div className="border-t border-hairline">
+          {recent.map((event) => (
+            <div key={`${event.at}-${event.event}-${event.pid ?? ""}`} className="flex items-baseline gap-3 border-b border-hairline px-3 py-1.5 last:border-b-0">
+              <span className="min-w-0 flex-1 truncate text-label" title={event.reason}>
+                {READER_EVENT[event.event]}, {READER_KIND[event.kind]}
+                {event.reason ? <span className="text-faint"> · {event.reason}</span> : null}
+              </span>
+              <span className="tabular shrink-0 text-label text-faint">{formatTime(event.at)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }

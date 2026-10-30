@@ -1,4 +1,6 @@
 import type { PromptDelivery } from "./prompt-delivery.js"
+import { TRACE_PREFIX } from "@mako/protocol/live-tail"
+import type { AttentionKind, WaitingFor } from "@mako/protocol/attention"
 import type {
   NativeAgentObservation,
   NativeAgentRoster,
@@ -107,6 +109,13 @@ export const INTERRUPTION_REASONS = [
    * the person sets it again with more.
    */
   "goal-budget",
+  /**
+   * The cloud machine running the conversation was lost mid-turn (gone, crashed
+   * or stuck), and Mako carried its Thread to a new machine from its last save.
+   * The turn so far stands in the provider's session; what ran after the save
+   * didn't finish. The new machine continues the turn once, on its own.
+   */
+  "machine-lost",
 ] as const
 export type InterruptionReason = (typeof INTERRUPTION_REASONS)[number]
 
@@ -124,9 +133,10 @@ export type SavedReason = (typeof SAVED_REASONS)[number]
  * `reason` and the exact one as `exactReason`, which older builds pass over
  * and newer ones read; a reason added later must say its older reading here.
  * `not-saved` and `goal-budget` read as the person's Stop, which is how every
- * build before them recorded these stops.
+ * build before them recorded these stops; `machine-lost` reads as a handoff,
+ * the nearest a build before it knows: Mako carried the turn to another machine.
  */
-export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
+export const OLDER_READING = { "not-saved": "stopped", "goal-budget": "stopped", "machine-lost": "handed-off" } as const satisfies Record<Exclude<InterruptionReason, SavedReason>, SavedReason>
 
 function isSavedReason(reason: InterruptionReason): reason is SavedReason {
   return SAVED_REASONS.some((saved) => saved === reason)
@@ -330,7 +340,13 @@ export interface LiveRequest {
 export interface LiveSummary {
   /** Saved session questions keep their conversation controls available after process exit. */
   hasSessionQuestions?: boolean
+  /** Every native session file the conversation's bindings read, loaded or not. */
   nativePaths?: string[]
+  /**
+   * Every native session the conversation's bindings ran in, loaded or not: with `nativePaths`, every key a Thread's
+   * archive can name it by (`liveArchiveKeys`), so the listing answers "archived?" without reading the journal in.
+   */
+  nativeIds?: { provider: string; nativeId: string }[]
   session: LiveSessionState
   revision: number
   /**
@@ -353,6 +369,14 @@ export interface LiveSummary {
    * person there: the row asks for them as a local one would.
    */
   waitingOn?: string
+  /** What it waits on the person for, with `waitingOn` (`attention.ts`). */
+  waitingFor?: WaitingFor
+  /**
+   * What the change that listed it again says, when it says something the person is told of (`attentionFact`, the
+   * rule the account's notices use, under the same key): another device's Session finished, failed or started waiting.
+   * Only on the listing that carries the change; never on one a window reads at its start.
+   */
+  attention?: { kind: AttentionKind; key: string }
   /**
    * Listed from a device the account hasn't heard from since then (`QuietDevice`): nothing on it is shown at work or
    * waiting, and a window says when it was last seen.
@@ -482,6 +506,13 @@ export interface LiveSnapshot extends LiveSummary {
 
 export interface LiveBatch {
   activityAt?: number
+  /**
+   * On a sampled batch (`traceOf`): when its host emitted it, by that host's clock, and a trace each hop that carries it
+   * logs (`sync`), so one update can be followed from its owner through the gateway to every device, and each device
+   * reads how long it took to arrive.
+   */
+  emittedAt?: number
+  trace?: string
   /** `null` when the activity ended; absent when it did not change. */
   nativeActivity?: NativeActivity | null
   /** Absolute retained-block coordinates for consumers holding a history window. */
@@ -675,3 +706,15 @@ export type LiveDriverEvent =
   /** The goal the harness is working toward; `null` when it has none. */
   | { type: "live-goal"; id: string; goal: import("./live-goals.js").GoalObservation | null }
   | { type: "live-permission"; request: LivePermissionRequest }
+
+/** One batch in this many of a conversation is traced, besides each that changes its status, approvals or requests. */
+export const TRACE_EVERY = 25
+
+/**
+ * The trace a batch carries, if it's one of the sampled: every `TRACE_EVERY`th, and each one that starts or ends a turn,
+ * asks the person something or answers them, the moments a watcher waits for. Undefined for the rest.
+ */
+export function traceOf(batch: Pick<LiveBatch, "revision" | "sessionChanges" | "permissions" | "requests" | "requestChanges">, random: () => string): string | undefined {
+  const moment = batch.sessionChanges?.status !== undefined || batch.permissions !== undefined || batch.requests !== undefined || batch.requestChanges !== undefined
+  return moment || batch.revision % TRACE_EVERY === 0 ? `${TRACE_PREFIX}${random()}` : undefined
+}

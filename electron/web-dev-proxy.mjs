@@ -108,6 +108,8 @@ export function webHostProxy(socket, { refuse, clients } = {}) {
         const open = () => {
           const upstream = hostRequest(
             {
+              // Its own connection to the host: a kept one the host closed while its event loop was held reset the call, which read as an outage.
+              agent: false,
               socketPath: socket,
               path,
               method: request.method,

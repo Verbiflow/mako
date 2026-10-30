@@ -108,6 +108,14 @@ export const CursorSdkMessageSchema = z.discriminatedUnion("type", [
     text: z.string().optional(),
   }),
   z.object({ ...messageBase, type: z.literal("usage"), usage: CursorSdkTokenUsageSchema }),
+  // SDK 1.2.0 on: how a summary (compaction) went, which the run's `summary-started` and `summary-completed` deltas
+  // also say. Its text is the window the next checkpoint archives; 1.0.40's `task` message carried it too.
+  z.object({
+    ...messageBase,
+    type: z.literal("summary"),
+    status: z.enum(["running", "completed", "error"]),
+    fallback: z.boolean().optional(),
+  }),
 ])
 export type CursorSdkMessage = z.infer<typeof CursorSdkMessageSchema>
 
@@ -447,6 +455,10 @@ export class CursorSdkProjection {
       }
       case "task":
         if (compactionSummary(message) !== undefined) this.closeText()
+        return []
+      // A summary's start or end (SDK 1.2.0 on), which 1.0.40 said with its summary's `task` message: the text before it is done.
+      case "summary":
+        this.closeText()
         return []
       case "user":
       case "system":

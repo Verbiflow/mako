@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { promisify } from "node:util"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { resolveExecutable } from "../base/executable.js"
+import { MACHINE_GITHUB_ENV } from "../contracts/machine-agent.js"
 import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "../contracts/git-workspace-search.js"
 import type { PullRequestListing } from "../contracts/pull-request-search.js"
 import type { WorktreeBranchPull, WorktreePull } from "../contracts/thread-worktrees.js"
@@ -87,6 +88,26 @@ function parseGitHubRepository(value: JsonValue): GitHubRepository | null {
 }
 
 /**
+ * On a cloud machine, who its person is on GitHub, from beside the machine's GitHub access (`MACHINE_GITHUB_ENV`).
+ * That access is a GitHub App's token for the Thread's repository, which can't ask GitHub who it is (`api user` is
+ * for a person's own sign-in), so the person is read from what the machine was given with it. Undefined anywhere
+ * else, or while the machine has no access.
+ */
+async function machineUser(): Promise<GitHubUser | undefined> {
+  const folder = process.env[MACHINE_GITHUB_ENV]
+  if (!folder) return undefined
+  try {
+    const value: JsonValue = JSON.parse(await readFile(join(folder, "access.json"), "utf8"))
+    const user = isJsonObject(value) ? objectValue(value.user) : undefined
+    const login = stringValue(user?.login)
+    const id = stringValue(user?.id)
+    return login ? { login, id: id && /^\d+$/.test(id) ? id : undefined } : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Whether GitHub is usable here, and if not, exactly why.
  *
  * Three different "no"s that want three different answers from the UI —
@@ -103,11 +124,11 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
     return { installed: false, authenticated: false }
   }
 
-  const who = await ghJson(
+  const who = (await machineUser()) ?? (await ghJson(
     cwd,
     ["api", "user", "--jq", "{login: .login, id: .id}"],
     parseGitHubUser
-  )
+  ))
   const login = who?.login
   if (!login) return { installed: true, authenticated: false }
 

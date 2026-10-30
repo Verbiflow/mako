@@ -50,7 +50,7 @@ export function remindAtReset(conversationKey: string, at: number): void {
     const conversation = acpStore.get().conversations[conversationKey]
     if (conversation?.kind !== "live") return
     noteOutcome({
-      kind: "ready",
+      kind: "finished",
       subject: liveSubject(conversation),
       marker: `limit-reset:${at}`,
       detail: `${harnessLabel(conversation.harness)}'s usage limit reset. You can send again.`,

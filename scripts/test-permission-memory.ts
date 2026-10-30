@@ -10,7 +10,7 @@ import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-id
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { acp, acpStore } from "../src/state/acp.ts"
 import { applyLiveSnapshot } from "../src/state/live-recovery.ts"
-import { prefsStore } from "../src/state/prefs.ts"
+import { accessChoicesStore } from "../src/state/access-choices.ts"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const root = await mkdtemp(join(tmpdir(), "mako-mode-memory-"))
@@ -107,9 +107,9 @@ try {
   acpStore.set({ activeKey: id })
   await acp.setMode("ask")
   assert.deepEqual(modeChanges, [[id, "ask"]])
-  assert.equal(prefsStore.get().providerModes.fixture, "ask")
+  assert.equal(accessChoicesStore.get().modes.fixture, "ask")
   assert.equal(
-    prefsStore.get().providerModes.claude,
+    accessChoicesStore.get().modes.claude,
     undefined,
     "Permission policy is remembered per provider, never blindly translated across providers"
   )

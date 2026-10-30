@@ -115,10 +115,10 @@ export default defineConfig([
   {
     // Design-token guards: hue is spent only through the semantic tokens
     // (positive/negative/caution, diff add/remove), never as a raw Tailwind
-    // palette class. provider-icon.tsx draws brand marks, which are logos,
-    // not UI color.
+    // palette class. provider-icon.tsx and harness-mark.tsx draw brand
+    // marks, which are logos, not UI color.
     files: ["src/**/*.{ts,tsx}"],
-    ignores: ["src/components/ui/provider-icon.tsx"],
+    ignores: ["src/components/ui/provider-icon.tsx", "src/components/ui/harness-mark.tsx"],
     rules: {
       "no-restricted-syntax": [
         "error",

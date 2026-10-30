@@ -1208,10 +1208,23 @@ diffs-container {
 .thread-glyph[data-new] {
   animation: review-dot-arrive 220ms var(--ease-out) both;
 }
-/* The next mark sits 4px over this 12px one: centre 2px past the edge, 6px
-   radius, plus a 1.5px gap that shows whatever the row is painted with. */
-.thread-glyph:not(:last-child) {
-  mask-image: radial-gradient(circle at calc(100% + 2px) 50%, transparent 7.5px, #000 8px);
+/*
+ * A Thread's harness marks (`MarkStack`), each `--mark` wide and whole, side by
+ * side a hairline apart. Overlapped, each cut where the next sat over it, a
+ * mark read as some other shape at a glance (OpenCode's square as a bracket
+ * beside Claude's), on the rail and more so on a phone.
+ */
+.mark-stack {
+  --mark: 12px;
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: max(2px, calc(var(--mark) / 8));
+}
+.mark-stack > .thread-glyph > svg,
+.mark-stack > .thread-glyph > span {
+  width: var(--mark);
+  height: var(--mark);
 }
 
 /*

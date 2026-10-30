@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { isHostChannel } from "@mako/host/contracts/host-call-inputs"
-import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { HostCallTimeoutError, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
 import { hostCallReplay, readOnlyHostCalls, replayableHostCalls } from "@mako/host/contracts/host-call-policy"
 import { RuntimeCallSchema } from "@mako/host/contracts/runtime"
@@ -46,7 +46,7 @@ assert.ok(!readOnlyHostCalls.has("mako:live-prompt"))
   }, value, 500)
   assert.deepEqual(result, { accepted: true })
   assert.deepEqual(attempts, [1, 2])
-  assert.deepEqual(calls, ["lost", "wait:500"])
+  assert.deepEqual(calls, ["dropped:500"])
 }
 // The wire carries the attempt only on a repeat, and bounds it.
 assert.equal(RuntimeCallSchema.parse({ channel: "mako:live-prompt", args: [] }).attempt, undefined)
@@ -57,9 +57,8 @@ assert.throws(() => RuntimeCallSchema.parse({ channel: "mako:live-prompt", args:
 function link(reconnectAfterMs: number | null) {
   const calls: string[] = []
   const value: RecoveryLink = {
-    lost: () => { calls.push("lost") },
-    whenConnected: (timeoutMs) => new Promise((resolve) => {
-      calls.push(`wait:${timeoutMs}`)
+    dropped: (timeoutMs) => new Promise((resolve) => {
+      calls.push(`dropped:${timeoutMs}`)
       if (reconnectAfterMs === null) { setTimeout(() => resolve(false), timeoutMs); return }
       setTimeout(() => resolve(true), reconnectAfterMs)
     }),
@@ -78,7 +77,7 @@ function link(reconnectAfterMs: number | null) {
   }, value, 500)
   assert.deepEqual(result, { files: [] })
   assert.equal(attempts, 2)
-  assert.deepEqual(calls, ["lost", "wait:500"])
+  assert.deepEqual(calls, ["dropped:500"])
 }
 
 // A mutation is never repeated; the caller hears that its outcome is unknown.
@@ -92,7 +91,22 @@ function link(reconnectAfterMs: number | null) {
   assert.ok(failure instanceof RuntimeDisconnectedError && failure.unconfirmed)
   assert.equal(failure.message, HOST_CALL_UNCONFIRMED_MESSAGE)
   assert.equal(attempts, 1)
-  assert.deepEqual(calls, ["lost"], "the window still learns the host is gone")
+  assert.deepEqual(calls, [], "nothing waits on the link: whether the host is gone is the event stream's to say")
+}
+
+// A call the host is only slow to answer is no drop: it passes straight through, is never repeated, and asks
+// nothing of the link, so no outage is announced. A slow mutation says its outcome is unknown, not that the host left.
+for (const [channel, unconfirmed] of [["mako:git-status", false], ["mako:live-prompt", true], ["mako:git-commit", true]] as const) {
+  const { value, calls } = link(10)
+  let attempts = 0
+  const failure = await rejection(invokeWithRecovery(channel, async () => {
+    attempts += 1
+    throw new HostCallTimeoutError(unconfirmed)
+  }, value, 500))
+  assert.ok(failure instanceof HostCallTimeoutError && failure.unconfirmed === unconfirmed, `${channel} keeps its timeout`)
+  assert.ok(!isHostReconnectingError(failure), `${channel}: a slow call doesn't read as the host reconnecting`)
+  assert.equal(attempts, 1)
+  assert.deepEqual(calls, [])
 }
 
 // A refused connection never dispatched anything, so the plain wording is used.

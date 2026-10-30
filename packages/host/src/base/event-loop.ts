@@ -1,15 +1,78 @@
+import { AsyncLocalStorage } from "node:async_hooks"
 import { createHistogram, performance } from "node:perf_hooks"
 import type { EventLoop, LoopHold } from "../contracts/runtime.js"
 import { hostWarn } from "./host-log.js"
 
-/** Work the host does, named, so a held event loop can say what was running. */
+/** Work the host does, named, so a held event loop can say what was running, and a load can say who asked. */
 export interface HostWork {
   /** Marks named work begun; the returned function marks it done. */
   begin(label: string): () => void
+  /**
+   * Runs `fn` as named work: begun and ended around it, and `current()` names it inside, through every await, while it
+   * runs, so what the work reads in (a conversation's journal) is counted to it. A call, a job and a domain load run so.
+   */
+  run<Result>(label: string, fn: () => Result): Result
+  /**
+   * The named work this code runs for, while that work is still running: a timer, a socket's listener or a child's
+   * exit that the work set up and that fires after it ended is no longer its, and names the work around it instead,
+   * or none.
+   */
+  current(): string | undefined
 }
 
 /** For a part built without a host around it, such as in a test. */
-export const unwatchedWork: HostWork = { begin: () => () => {} }
+export const unwatchedWork: HostWork = { begin: () => () => {}, run: (_label, fn) => fn(), current: () => undefined }
+
+/** Work named for a test: `run` names it to `current()`, and nothing watches the loop. */
+export function namedWork(): HostWork {
+  const names = new WorkNames()
+  return { begin: () => () => {}, run: (label, fn) => names.run(label, fn, () => {}), current: () => names.current() }
+}
+
+/** One run of named work as the code it started sees it: open until the run ends, inside the run it began in. */
+interface WorkScope {
+  readonly label: string
+  open: boolean
+  readonly outer: WorkScope | undefined
+}
+
+/**
+ * Names work to the code it runs, through every await, only while it runs. The name is carried by
+ * `AsyncLocalStorage`, which also hands it to every timer, socket and child listener the work creates, long after the
+ * work ended (a domain load starts a domain's timers; a call can spawn a process): so what's carried is the run itself,
+ * closed when it ends, and a callback of a run that ended is named by the run around it that's still open, or by none.
+ */
+class WorkNames {
+  readonly #context = new AsyncLocalStorage<WorkScope>()
+
+  run<Result>(label: string, fn: () => Result, done: () => void): Result {
+    const scope: WorkScope = { label, open: true, outer: this.#context.getStore() }
+    const end = () => {
+      scope.open = false
+      done()
+    }
+    return this.#context.run(scope, () => {
+      try {
+        return ended(fn(), end)
+      } catch (error) {
+        end()
+        throw error
+      }
+    })
+  }
+
+  current(): string | undefined {
+    for (let scope = this.#context.getStore(); scope; scope = scope.outer) if (scope.open) return scope.label
+    return undefined
+  }
+}
+
+/** Ends `done` once `result` has: now for a value, once a promise settles either way. */
+function ended<Result>(result: Result, done: () => void): Result {
+  if (result instanceof Promise) void result.then(done, done)
+  else done()
+  return result
+}
 
 export interface EventLoopWatchOptions {
   /** How often the loop is checked while the host works. */
@@ -47,6 +110,8 @@ export class EventLoopWatch implements HostWork {
   private readonly heldMs: number
   private readonly lingerMs: number
   private readonly delay = createHistogram()
+  /** The work the running code runs for, while it's open (`run`). */
+  private readonly names = new WorkNames()
   private readonly open = new Map<number, Span>()
   private readonly recent: Span[] = []
   private readonly holds: LoopHold[] = []
@@ -79,6 +144,14 @@ export class EventLoopWatch implements HostWork {
       this.recent.push(span)
       if (this.recent.length > RECENT_SPANS) this.recent.shift()
     }
+  }
+
+  run<Result>(label: string, fn: () => Result): Result {
+    return this.names.run(label, fn, this.begin(label))
+  }
+
+  current(): string | undefined {
+    return this.names.current()
   }
 
   /** An event went out: the loop stays watched for `lingerMs`. */

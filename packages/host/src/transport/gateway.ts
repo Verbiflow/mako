@@ -1,6 +1,8 @@
-import { serveRuntime, type Actor, type ConnectionCredential, type Operation, type Reply, type RuntimeLink, type RuntimeOptions, type ServedRuntime } from "@mako/protocol"
+import { z } from "zod"
+import { MAX_EVENT_BYTES, serveRuntime, type Actor, type ConnectionCredential, type Operation, type Reply, type RuntimeLink, type RuntimeOptions, type ServedRuntime } from "@mako/protocol"
 import { fromHostOperation, hostFailure, hostOperations, hostSuccess } from "../contracts/host-operations.js"
-import { runtimeFailure, type RuntimeFailure } from "../contracts/runtime.js"
+import { runtimeEventRouting, runtimeFailure, type RuntimeFailure } from "../contracts/runtime.js"
+import { encodeRuntimeEvent, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { HostInvoke } from "./server.js"
 
@@ -24,6 +26,8 @@ export type GatewayHostOptions = {
   media?: RuntimeOptions["media"]
   /** Whether another device watches one of its conversations (`RuntimeOptions.watch`). */
   watch?: RuntimeOptions["watch"]
+  /** Requests to its Threads' apps from the account's other devices (`RuntimeOptions.ports`); without it, each is refused. */
+  ports?: RuntimeOptions["ports"]
 }
 
 /**
@@ -78,5 +82,36 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
   if (options.onFrame) runtime.onFrame = options.onFrame
   if (options.media) runtime.media = options.media
   if (options.watch) runtime.watch = options.watch
+  if (options.ports) runtime.ports = options.ports
   return serveRuntime(link, runtime)
+}
+
+const LiveBatchIdentity = z.object({ batch: z.object({ id: z.string(), revision: z.number(), epoch: z.string().optional() }) })
+
+/**
+ * The notice that a live batch's conversation changed, at its revision, in place of the batch: what a reader that
+ * can't take the batch whole gets, and answers by reading the conversation again. Null for anything but a live batch.
+ */
+export function historyChangedNotice(event: RuntimeEvent): RuntimeEvent | null {
+  if (runtimeEventRouting(event).type !== "live-batch") return null
+  const live = LiveBatchIdentity.safeParse(JSON.parse(event.payload))
+  return live.success ? encodeRuntimeEvent({ type: "live-batch", batch: { ...live.data.batch, updates: [], historyChanged: true } }) : null
+}
+
+/**
+ * An event's line as it goes out through the gateway, which carries nothing over `MAX_EVENT_BYTES`: whole when it fits;
+ * a live batch that doesn't becomes the notice that its conversation's history changed (`reread`), which every reader
+ * answers by reading it again; anything else that doesn't fit doesn't go (`too-large`). A cloud Thread's events and a
+ * watched conversation's live updates both go out through this, so neither closes the link with one too large.
+ */
+export function gatewayEventLine(channel: RuntimeEventChannel, event: RuntimeEvent, maxBytes = MAX_EVENT_BYTES):
+  { fit: "whole" | "reread"; text: string } | { fit: "too-large"; type: string | undefined; bytes: number } {
+  const text = runtimeEventLine(channel, event).slice(0, -1)
+  // A character is at most three bytes: most lines are measured without encoding them.
+  if (text.length * 3 <= maxBytes) return { fit: "whole", text }
+  const bytes = Buffer.byteLength(text)
+  if (bytes <= maxBytes) return { fit: "whole", text }
+  const notice = historyChangedNotice(event)
+  if (!notice) return { fit: "too-large", type: runtimeEventRouting(event).type, bytes }
+  return { fit: "reread", text: runtimeEventLine(channel, notice).slice(0, -1) }
 }

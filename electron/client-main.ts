@@ -12,11 +12,12 @@ import { MachineOfferSchema, UNSTATED_MACHINE_OFFER, type MachineOffer } from "@
 import { AGENT_VIEWS_ENV, type DesktopRole } from "@mako/host/contracts/desktop-channel"
 import { FixtureDeskRefusedError, fixtureDeskRefusal } from "@mako/host/contracts/fixture-desk-policy"
 import { AGENT_VIEWS_CLIENT, clientRoot, ensureRuntime, runtimeDataRoot, runtimeLocation } from "@mako/host/transport/service"
-import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, invokeRuntimeVideo, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
+import { invokeRuntime, invokeRuntimeEncoded, invokeRuntimePreview, invokeRuntimeVideo, probeRuntime, runtimeFile, settleRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { decodeRuntimeValue, encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { runtimeEventRouting } from "@mako/host/contracts/runtime"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { invokeWithRecovery, type RecoveryLink } from "@mako/host/contracts/host-call-recovery"
+import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
+import { HostLiveness, type HostProbe } from "@mako/host/contracts/host-liveness"
 import { HOST_OUTAGE_MESSAGE } from "@mako/host/contracts/host-connection"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
 import { DESK_BACKGROUND, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
@@ -65,7 +66,7 @@ protocol.registerSchemesAsPrivileged(privilegedSchemes())
 const rendererBundle = join(directory, "../dist")
 
 const launch = { dataRoot, executable: process.execPath, args: app.isPackaged ? [] : [app.getAppPath()], cwd: process.cwd(), env: process.env }
-const clients = new Map<number, { id: string; connected: boolean; link: RecoveryLink; dispose(): void }>()
+const clients = new Map<number, { id: string; link: HostLiveness; dispose(): void }>()
 const DISCONNECTED_MESSAGE = HOST_OUTAGE_MESSAGE
 let runtime: Awaited<ReturnType<typeof ensureRuntime>>
 let secretKeys: SecretKeyLink | undefined
@@ -237,6 +238,20 @@ function watchAgentViewsIdle(): void {
     agentViewsIdle = setTimeout(() => leaveAgentViews("no window for a minute"), AGENT_VIEWS_IDLE_MS)
 }
 
+/**
+ * Whether the host this process's windows are attached to still answers: its `/health`, on a connection of its own.
+ * Another host answering at the socket means the attached one has gone.
+ */
+async function askHost(timeoutMs: number): Promise<HostProbe> {
+  const attached = runtime.info.instanceId
+  try {
+    const probe = await probeRuntime(runtime.socket, { timeoutMs })
+    return probe.state === "ready" && probe.info.instanceId === attached ? "alive" : "absent"
+  } catch {
+    return "unknown"
+  }
+}
+
 const devServerUrl = () => process.env.VITE_DEV_SERVER_URL ?? "http://127.0.0.1:5173"
 const isDeskUrl = (url: string) => deskUrlPolicy({ devServerUrl: isDev ? devServerUrl() : null })(url)
 
@@ -285,48 +300,25 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
   window.once("ready-to-show", reveal)
   let subscription: (() => void) | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
-  let seen = false
   let closed = false
-  const waiters = new Set<(connected: boolean) => void>()
-  const settle = (connected: boolean) => {
-    for (const waiter of waiters) waiter(connected)
-    waiters.clear()
-  }
-  let announced = false
-  // Once per outage, whichever notices first: a dropped call or the stream's end.
-  const disconnected = () => {
-    client.connected = false
-    if (announced) return
-    announced = true
-    if (!closed && !window.isDestroyed()) sendEvent(window.webContents, { type: "host-disconnected", message: DISCONNECTED_MESSAGE })
-  }
-  const link: RecoveryLink = {
-    // A call dropped before the event stream noticed: tell the window now, and
-    // let the stream's own close drive the reconnect as it always has.
-    lost: disconnected,
-    whenConnected: (timeoutMs) => new Promise((resolve) => {
-      if (client.connected) { resolve(true); return }
-      if (closed) { resolve(false); return }
-      const deadline = setTimeout(() => { waiters.delete(waiter); resolve(false) }, timeoutMs)
-      const waiter = (connected: boolean) => { clearTimeout(deadline); resolve(connected) }
-      waiters.add(waiter)
-    }),
-  }
-  const client = { id, connected: false, link, dispose() { closed = true; clearTimeout(timer); subscription?.(); settle(false) } }
+  // The window's connection follows its event stream, the proof the host is there; a dropped call only asks (`host-liveness.ts`).
+  const link = new HostLiveness({
+    message: DISCONNECTED_MESSAGE,
+    announce: (event) => { if (!closed && !window.isDestroyed()) sendEvent(window.webContents, event) },
+    probe: (timeoutMs) => askHost(timeoutMs),
+  })
+  const client = { id, link, dispose() { closed = true; clearTimeout(timer); subscription?.(); link.dispose() } }
   const rendererId = window.webContents.id
   clients.set(rendererId, client)
   const connect = () => {
     if (closed || shuttingDown || shutdownAction) return
     subscription?.()
+    const stream = link.stream()
     subscription = subscribeRuntime(runtime.socket, id, (packet) => {
       if (window.isDestroyed()) return
       if (packet.channel === "ready") {
         if (packet.runtime) runtime = { ...runtime, info: packet.runtime }
-        client.connected = true
-        announced = false
-        settle(true)
-        if (seen) sendEvent(window.webContents, { type: "host-reconnected" })
-        seen = true
+        stream.ready()
       } else {
         // Routed by its header; only the two events this process acts on are read.
         const { type } = runtimeEventRouting(packet)
@@ -337,7 +329,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         window.webContents.send(packet.channel === "event" ? "mako:event" : "mako:terminal-event", packet.payload)
       }
     }, () => {
-      disconnected()
+      stream.ended()
       // The agent views app never starts a host; its link ends with this one and it leaves.
       if (closed || window.isDestroyed() || role === "agent-views") return
       const retry = () => {
@@ -345,7 +337,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string } = {
         void ensureRuntime(launch).then(async (next) => { runtime = next; await secretKeys?.attached(); connect() }).catch(() => { if (!closed) timer = setTimeout(retry, 2_000) })
       }
       timer = setTimeout(retry, 500)
-    }, { history: true, observer: Boolean(agentView) })
+    }, { history: true, observer: Boolean(agentView), heard: stream.heard })
   }
   connect()
   window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); watchAgentViewsIdle(); finishClientShutdown() })
@@ -420,6 +412,13 @@ async function start() {
   }
   powerMonitor.on("resume", woke("resume"))
   powerMonitor.on("unlock-screen", woke("unlock-screen"))
+  // Said before the Mac goes, while the network is still up: the cloud takes this Mac as quiet at once, not a minute on.
+  const leaving = (source: "suspend" | "shutdown") => () => {
+    void invokeRuntime(runtime.socket, desktopClient, "mako:machine-leaving", [source]).catch((error) =>
+      hostLog("desktop", "leaving not delivered", { source, reason: error instanceof Error ? error.message : String(error) }))
+  }
+  powerMonitor.on("suspend", leaving("suspend"))
+  powerMonitor.on("shutdown", leaving("shutdown"))
   await serveWindows()
   // What only this process can do for the host: Mako.app's grants, window capture, agents' windows and its own update.
   const pages = deskPageAnswers({ agentView: (previewId) => openWindow({ agentView: previewId }), frame: (frame) => desktopLink?.frame(frame) })

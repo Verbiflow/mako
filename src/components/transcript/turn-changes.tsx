@@ -6,6 +6,7 @@ import { TurnUndoDialog } from "@/components/inspector/turn-undo"
 import { anyUnsure, recordRoots, recordedTurnChanges, turnChangeSummary, turnChangeWords, type TurnChangeSummary } from "@/lib/turn-changes"
 import { undoneWords } from "@/lib/turn-undone"
 import { cn } from "@/lib/utils"
+import { turnWords } from "@/state/prompt-delivery"
 import { acp, useAcp } from "@/state/acp"
 import { acpStore } from "@/state/acp-state"
 import { reviewTurn } from "@/state/review-scope"
@@ -109,7 +110,7 @@ function CheckpointTurnChanges({ conversation, requestId, workspace }: { convers
 function promptOf(conversation: string, requestId: string): string {
   const live = acpStore.get().conversations[conversation]
   const request = live?.kind === "live" ? live.requests?.find((each) => each.id === requestId) : undefined
-  return (request ? (request.displayText ?? request.text) : "").replace(/\s+/g, " ").trim()
+  return live?.kind === "live" && request ? turnWords(live.requests ?? [], request) : ""
 }
 
 function TurnChangesRow({ summary, conversation, requestId, workspace, undoable = false, undone }: { summary: TurnChangeSummary; conversation: string; requestId: string; workspace: string | null; undoable?: boolean; undone?: TurnUndone }) {

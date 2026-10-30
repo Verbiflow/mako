@@ -210,6 +210,7 @@ export class LiveLaunches {
     this.access.bindingOwners.set(id, id)
     this.access.register(snapshot, this.access.actor(actor))
     if (purpose) this.access.markPurpose(id, purpose, options)
+    dependencies.opened?.(id)
     this.launch(resident, driver, provider, cwd, options, modeId, tuning)
     return snapshot.session
   }

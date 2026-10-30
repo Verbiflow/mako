@@ -3,18 +3,47 @@
 How Mako reaches you when an agent needs you, and the plan for reaching you
 somewhere other than the desk.
 
-## What ships today
+## One model on every surface
 
-Three outcomes exist. Every provider's events reduce to them:
+The desktop's banners, in-app cards and marks, the web app's notifications
+(a phone's Home Screen app or a browser tab) and the account's Web Push are
+one model, declared once in `@mako/protocol/attention` and re-exported for
+the renderer by `@mako/host/contracts/notifications`:
 
-| Kind     | Meaning                                       | Source transitions                                                        |
-| -------- | --------------------------------------------- | ------------------------------------------------------------------------- |
-| `ready`  | A turn finished; there is an answer to read.  | Live `running → ready` with no queue and no cancel; native run `done`; a built-in tab that stops streaming. |
-| `ask`    | The agent is blocked on you.                  | A new permission request or question (keyed by its id).                    |
-| `failed` | The run stopped with an error.                | Live `→ failed`; native run `failed`.                                      |
+| Kind        | Meaning                                              | Words (`ATTENTION_WORDS`)                          |
+| ----------- | ---------------------------------------------------- | -------------------------------------------------- |
+| `needs-you` | It waits on you for something else (a terminal's harness waits for input, a sign-in). | "Codex needs you" · "Waiting for you" |
+| `question`  | The agent asked something, even inside an approval. | "Codex has a question" · "A question: …"         |
+| `approval`  | A permission or a plan waits for a yes or no.        | "Codex needs your approval" · "Approve: …"        |
+| `failed`    | The turn ended in an error Mako isn't continuing.    | "Codex failed" · "Its turn failed"                 |
+| `finished`  | The turn ended with an answer.                       | "Codex finished" · "Finished its turn"             |
 
-A question is an `ask` with `questions`, not a fourth kind. Starting, tool
-calls, and attach/detach never notify: the working mark is enough.
+- **One source.** A Session's owner says where it stands in its row of the
+  account's list (`ReportedSession`): `state`, `waitingOn` and, from link
+  version 10, `waitingFor`, the kind of ask, which the host decides once
+  (`requestWaiting`: a permission carrying questions is a question).
+  Nothing reads the kind back out of the words.
+- **One rule and key.** `attentionFact(previous, next)` says what a row's
+  change is, under `attentionKey`; `factStands` says whether it is still
+  true. The account's Web Push and a Mac's host both run it over the same
+  rows: a Mac announces another device's Session (`LiveSummary.attention`)
+  under the key the phone's notice has.
+- **Withdrawn everywhere.** An ask answered on any device, a Session back at
+  work, or a Thread opened on another device takes its notice back: the
+  desktop retires the item and its banner, and the account sends each
+  browser that shows it a withdrawal under the same tag and topic.
+- **Where the person is.** While a Mac is in use or the web app is in front,
+  that device tells them. A finished or failed turn then isn't said again on
+  the phone; an unanswered ask is, once they've left.
+- **Same words.** Banner subtitles, toasts, push bodies, burst summaries
+  ("3 Threads need you", from `ATTENTION_SUMMARY_FROM`) and list lines come
+  from the one table.
+
+The renderer still notices its own conversations' transitions from their
+live batches (below); its kinds, keys for asks and words are the shared ones.
+
+Starting, tool calls, and attach/detach never notify: the working mark is
+enough.
 
 ### Where it lives
 
@@ -213,6 +242,26 @@ one more adapter. Because the outbox already carries hold, receipts, and
 idempotency, a new channel is an adapter plus a preference row. The desk and
 the phone never both ring: the plan picks one recipient, and a receipt from
 either cancels the rest.
+
+**Built 2026-10-28: Web Push to the web app, decided by the account.** The
+first push channel didn't wait for the host's ledger. The account already
+holds one row per Session, written only by its owner (a Mac, or a cloud
+Thread's machine), so the cloud decides from those rows: a Session turning
+`waiting` (an approval or a question), `failed`, or finishing a turn is one
+fact, keyed by its Session, generation, state and time, sent once. A device
+says while its person is at it (`PUT /v1/attention`): a Mac while its
+keyboard or pointer moved in the last two minutes (`CloudAttention`, never a
+host with no screen), the web app while its page is in front. While any is,
+the notice waits, and it goes once they leave if its fact is still true. So
+the Mac's own banner is the one a person at the Mac sees, and the phone is
+told two minutes after they walk away. The web app's service worker shows
+every notice it's sent (a browser takes a push that shows nothing as abuse);
+a tap opens the Thread. With the app already open, iOS brings its page forward
+exactly as it was, so the worker doesn't navigate it: it posts the address to the
+page and leaves it in Cache Storage (`mako-notice`, `/__mako/notice`), which the
+page reads as it comes into view, and the page opens the Thread itself, once per
+tap (`open-notice.ts`). The web client is `@mako/web-client`
+(`packages/web-client`, its code in `src/web-client`).
 
 ### What stays out
 

@@ -3,28 +3,37 @@ import { hostname } from "node:os"
 import { promisify } from "node:util"
 import type { ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
+import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
 import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMaking } from "./cloud-account.js"
-import type { AccountEvent } from "@mako/protocol/account-events"
+import { isAccountListEvent, type AccountListHeard } from "@mako/protocol/account-sessions"
 import type { SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingInput, WaitingMessage } from "@mako/protocol/waiting"
+import type { AccessChoices as AccountAccessChoices, AccessChoicesAnswer } from "@mako/protocol/access-choices"
 import type { SessionPublishing } from "./machine-runtime.js"
 import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState, ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import type { CloudCarriedFile } from "../contracts/cloud-carried-files.js"
+import type { CloudAccount as CloudAccountView } from "../contracts/cloud-account.js"
+import type { BaseStanding } from "../contracts/cloud-turn-on.js"
 import type { CloudKeptSignIn, CloudShareOutcome, CloudSharedChain, CloudSignIn, CloudSignInChain, CloudSignInHarness, CloudSignInListing, CloudSignInsState } from "../contracts/cloud-sign-ins.js"
 import type { DiagnosticEvents } from "../contracts/telemetry.js"
 import type { HostEnvironment } from "../base/host-environment.js"
+import type { HostJobs } from "../base/host-jobs.js"
 import { hostLog } from "../base/host-log.js"
 import type { DomainSecrets } from "../base/host-secrets.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { CloudHarnesses } from "../contracts/cloud-harnesses.js"
 import type { MethodTable } from "../base/methods.js"
-import { type GatewayHostOptions, type HostMethods, serveHostThroughGateway } from "../transport/index.js"
+import { type GatewayHostOptions, type HostMethods, PortRelay, serveHostThroughGateway } from "../transport/index.js"
+import { appPorts } from "./app-ports.js"
 import { presentMachine, type MachineCapability } from "../base/machine.js"
 import { onMac, systemName, systemVersion } from "../base/platform.js"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
+/** The account's stream skipped a number, or said one was lost: the list is read whole again (`onAccountGap`). */
+export type AccountListGap = { gap: { after: number; seq: number; why: "skipped" | "lost" } }
+
 export interface CloudAccount {
   /** A connection token while this Mac is signed in to Mako. */
   token(): Promise<string | undefined>
@@ -49,8 +58,19 @@ export interface CloudAccount {
   createThread(threadId: string, repository: CloudRepository, options?: CloudThreadMaking): Promise<{ ready: boolean; ended?: true }>
   /** Project bases for these repositories, made in the background ahead of their first cloud Thread. */
   askBases(repositories: CloudRepository[]): Promise<void>
-  /** A move's checkpoint, sent to the cloud Thread once (`CloudAccounts.sendCheckpoint`). */
-  sendCheckpoint(threadId: string, checkpoint: MoveCheckpoint, file: string): Promise<{ sent: boolean }>
+  /** How the cloud stands these repositories' bases, without asking for them again; null from a cloud that doesn't say. */
+  baseStandings?(repositories: CloudRepository[]): Promise<Array<{ repository: CloudRepository; standing: BaseStanding }> | null>
+  /** This Mac's account as it stands: who, and whether it has the cloud. */
+  account?(): Promise<CloudAccountView>
+  /** Asks the cloud again what the account has, now: an invite (later a payment) lands at once. */
+  checkPlan?(): Promise<CloudAccountView>
+  /**
+   * Each agent's sign-in as the last check found it (`CloudSignInSync.current`), never checked anew: a `cloud-sign-ins`
+   * event says when it changes. Undefined where this Mac shares none.
+   */
+  signIns?(): Promise<CloudSignInsState | undefined>
+  /** A move's checkpoint or carry, a bundle sent to the cloud Thread once by its hash (`CloudAccounts.sendCheckpoint`). */
+  sendCheckpoint(threadId: string, checkpoint: Pick<MoveCheckpoint, "sha256" | "bytes">, file: string): Promise<{ sent: boolean }>
   /**
    * A move this Mac released, handed to the cloud to carry through once it sent what only it has: the cloud arrives
    * it, claims it (or refuses it), and starts it (`CloudAccounts.handOverMove`).
@@ -81,6 +101,8 @@ export interface CloudAccount {
   sessionListings?(): Promise<SessionListings>
   /** Tells the account's list what changed of this host's Sessions (`SessionPublisher`); called on a tick. */
   reportSessions?(): void
+  /** A watched conversation's update went out: a silent runtime link is probed (`CloudAccount.liveSent`). */
+  liveSent?(): void
   /**
    * A message for a Session whose owner is off, kept by the account until its owner takes it (`waiting.ts`), under its
    * request ID: sent again, it's the same message. The Session's messages waiting, as they stand after it.
@@ -96,6 +118,10 @@ export interface CloudAccount {
   devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
   /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
   cloudHarnesses?(): Promise<CloudHarnesses | null>
+  /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
+  accessChoices?(): Promise<AccessChoicesAnswer | null>
+  /** Makes `choices` the account's (with `fill`, only where it has none); all of them after, or null as above. */
+  chooseAccess?(choices: AccountAccessChoices, fill: boolean): Promise<AccessChoicesAnswer | null>
   /** A project's carried files in the account's secret store, by its repository: listed, put and removed, never read. */
   carriedFiles?: {
     list(repository: string): Promise<CloudCarriedFile[]>
@@ -106,18 +132,14 @@ export interface CloudAccount {
    * Hears each change to the account's list of Sessions, in the stream's order, as it comes, and `account-changed` when
    * this Mac signs in, out or to another account, after which the list is another's; returns how to stop.
    */
-  onThreadListings?(listener: (heard: ThreadListHeard | "account-changed") => void): () => void
+  onThreadListings?(listener: (heard: AccountListHeard | "account-changed" | AccountListGap) => void): () => void
   /** After the machine slept or the host was paused: the sign-in may have lapsed meanwhile. */
   wake(): void
+  /** The Mac is going to sleep or shutting down: its runtime tells the cloud first (`CloudAccounts.leaving`). */
+  leaving?(why: "sleep" | "quit"): void
   stop(): void
 }
 
-/** A change to the account's list of Sessions, as its stream said it. */
-export type ThreadListHeard = { seq: number; event: Extract<AccountEvent, { type: ThreadListEvent }> }
-/** The account's events about its Threads, as against its devices: what the list of them follows. */
-export type ThreadListEvent = "sessions-listed" | "sessions-unlisted" | "messages-waiting" | "device-quiet" | "thread-archived" | "thread-unarchived"
-const THREAD_LIST_EVENTS: ReadonlySet<string> = new Set<ThreadListEvent>(["sessions-listed", "sessions-unlisted", "messages-waiting", "device-quiet", "thread-archived", "thread-unarchived"])
-const isThreadListEvent = (event: AccountEvent): event is Extract<AccountEvent, { type: ThreadListEvent }> => THREAD_LIST_EVENTS.has(event.type)
 
 /** The account's store of shared sign-ins in Mako Cloud, through this Mac's device sign-in. */
 export interface HarnessSignInStore {
@@ -137,6 +159,8 @@ export interface HarnessSignInSharing {
   start(): void
   stop(): void
   check(): Promise<CloudSignInsState>
+  /** The last check as it stands; never checks. */
+  current(): Promise<CloudSignInsState>
   state(): Promise<CloudSignInsState>
   share(sharing: boolean): Promise<CloudSignInsState>
   /** The machine woke: take what the cloud refreshed meanwhile, before anything runs on the old. */
@@ -157,6 +181,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   request,
   harnessSignIns,
   sessions,
+  signedFiles,
+  jobs,
+  accessChoices,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
@@ -169,6 +196,15 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   harnessSignIns?: (options: { dataRoot: string; store: HarnessSignInStore; onChange: (signIns: CloudSignInsState) => void }) => HarnessSignInSharing
   /** What tells the account's list of this Mac's Sessions over its runtime's link (`SessionPublisher`). */
   sessions?: SessionPublishing
+  /** This Mac's signed files and nothing else (`readSignedFile`): what a phone's transcript draws its media from. */
+  signedFiles?: (request: Request) => Promise<Response>
+  /** The host's recurring work: the account's word on whether the person is at this Mac runs there. */
+  jobs: Pick<HostJobs, "every">
+  /**
+   * The person's access choices: what the account's stream says of them (`access-chosen`), and when they should be read
+   * again, as this Mac signs in or to another account, or the stream may have missed an event.
+   */
+  accessChoices?: { heard(answer: AccessChoicesAnswer): void; again(): void }
 }): CloudAccount {
   let status: string | undefined
   /** What the sign-ins depend on in the account: who it is and whether it has the cloud. */
@@ -191,7 +227,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     },
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
-  const threadListeners = new Set<(heard: ThreadListHeard | "account-changed") => void>()
+  const threadListeners = new Set<(heard: AccountListHeard | "account-changed" | AccountListGap) => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
     secrets: secrets.secrets,
@@ -214,6 +250,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       if (standing !== undefined && next !== standing) {
         void sync?.check()
         for (const listener of threadListeners) listener("account-changed")
+        accessChoices?.again()
       }
       standing = next
     },
@@ -222,12 +259,22 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     // to the account's Threads goes to what lists them, which tells windows of the conversations it changes.
     onAccountEvent: (heard) => {
       const { event } = heard
-      if (isThreadListEvent(event)) {
+      if (isAccountListEvent(event)) {
         for (const listener of threadListeners) listener({ seq: heard.seq, event })
+        return
+      }
+      if (event.type === "access-chosen") {
+        accessChoices?.heard({ choices: event.choices, revision: event.revision })
         return
       }
       hostLog("cloud", "account event", { seq: heard.seq, type: event.type, mine: heard.mine })
       emit({ type: "cloud-account-event", seq: heard.seq, at: heard.at, event, mine: heard.mine })
+    },
+    // The stream skipped a number: what lists the account reads it whole again.
+    onAccountGap: (gap) => {
+      hostLog("cloud", "the account's stream skipped; its list is read again", gap)
+      for (const listener of threadListeners) listener({ gap })
+      accessChoices?.again()
     },
     onRequest: request,
     sessions,
@@ -243,10 +290,18 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
           invoke: (channel, args, client, history, correlationId) => methods.invoke(channel, args, client, history, correlationId),
         }
         if (watch) options.watch = watch
+        // A phone opening a Thread's website reaches it through this link, and only the ports this Mac's apps serve on.
+        options.ports = new PortRelay({ allowed: () => appPorts((channel, args, client, history) => methods.invoke(channel, args, client, history)), signedFiles })
         return serveHostThroughGateway(link, options)
       },
     },
   })
+
+  // While its person is at this Mac, the account holds their notices: the Mac's own banner is the one they see.
+  const attention = attendable(machine, onMac())
+    ? new CloudAttention({ idle: macIdleSeconds, say: (attending) => cloud.attend(attending), signedIn: () => status === "signed-in", log: (message, fields) => hostLog("cloud", message, fields) })
+    : undefined
+  attention?.start(jobs)
 
   methods.handle("mako:cloud-account", () => cloud.ready())
   methods.handle("mako:cloud-sign-in", () => cloud.signIn())
@@ -274,6 +329,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     cloudBlocked: () => cloud.signInsBlocked(),
     createThread: (threadId, repository, options) => cloud.createThread(threadId, repository, options),
     askBases: (repositories) => cloud.askBases(repositories),
+    baseStandings: (repositories) => cloud.baseStandings(repositories),
+    account: () => cloud.ready(),
+    checkPlan: () => cloud.checkPlan(),
+    signIns: async () => sync?.current(),
     sendCheckpoint: (threadId, checkpoint, file) => cloud.sendCheckpoint(threadId, checkpoint, file),
     handOverMove: (threadId, move, request) => cloud.handOverMove(threadId, move, request),
     refuseMove: (threadId, move, reason) => cloud.refuseMove(threadId, move, reason),
@@ -295,8 +354,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     unwaitMessage: (session, id) => cloud.unwaitMessage(session, id),
     tookWaiting: (session, id) => cloud.tookWaiting(session, id),
     reportSessions: () => cloud.reportSessions(),
+    liveSent: () => cloud.liveSent(),
     devices: () => cloud.devices(),
     cloudHarnesses: () => cloud.cloudHarnesses(),
+    accessChoices: () => cloud.accessChoices(),
+    chooseAccess: (choices, fill) => cloud.chooseAccess(choices, fill),
     carriedFiles: {
       list: (repository) => cloud.carriedFiles(repository),
       put: (repository, file) => cloud.putCarriedFile(repository, file),
@@ -306,11 +368,14 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       threadListeners.add(listener)
       return () => threadListeners.delete(listener)
     },
+    leaving: (why) => cloud.leaving(why),
     wake: () => {
       cloud.wake()
       sync?.wake()
+      void attention?.look()
     },
     stop: () => {
+      attention?.stop()
       sync?.stop()
       cloud.close()
     },

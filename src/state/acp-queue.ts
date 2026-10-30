@@ -31,15 +31,18 @@ function updateLive(
 const deliveries = new Map<string, Promise<boolean>>()
 const retries = new Map<string, ReturnType<typeof setTimeout>>()
 const retryDelays = new Map<string, number>()
+/** An unconfirmed message is asked again after 1 s, then 2, 4, 8 and every 16 s: under its one id, so never twice. */
+const FIRST_RETRY_MS = 1_000
+const LAST_RETRY_MS = 16_000
 
 function scheduleRecovery(id: string): void {
   if (retries.has(id)) return
-  const delay = retryDelays.get(id) ?? 1_000
+  const delay = retryDelays.get(id) ?? FIRST_RETRY_MS
   retries.set(id, setTimeout(() => {
     retries.delete(id)
     void replayUnconfirmedPrompts([id])
   }, delay))
-  retryDelays.set(id, Math.min(delay * 2, 30_000))
+  retryDelays.set(id, Math.min(delay * 2, LAST_RETRY_MS))
 }
 
 export function sendTo(
@@ -134,14 +137,26 @@ async function attemptSend(
 /**
  * Pick up a turn that was cut short — by Mako's exit or by the provider's
  * own dropped connection. The provider kept the session; a short prompt asks
- * it to go on, through the same send as any other message, so the request
- * queues, steers or resumes exactly as one typed would. It names the
- * background work the cut stopped, as the host recorded it on the turn
- * (`Interruption.stopped`), the same words Mako's own continuation uses.
+ * it to go on, through the same send as any other message, so it resumes
+ * the session exactly as one typed would. It names the background work the
+ * cut stopped, as the host recorded it on the turn (`Interruption.stopped`),
+ * the same words Mako's own continuation uses. Only a turn that has stopped
+ * is picked up: while one runs or a message waits to go, there is nothing to
+ * continue, and the words would only queue behind it as if the person had
+ * typed them, so nothing is sent.
  */
 export function continueTurn(id: string, reason: InterruptionReason = "host-quit"): Promise<boolean> {
-  const cut = acpStore.get().conversations[id]?.requests?.findLast((request) => request.interruption?.reason === reason)
+  const conversation = acpStore.get().conversations[id]
+  if (conversation?.kind === "live" && turnUnderWay(conversation)) return Promise.resolve(false)
+  const cut = conversation?.requests?.findLast((request) => request.interruption?.reason === reason)
   return sendTo(id, continueTurnPrompt(reason, "person", cut?.interruption?.stopped))
+}
+
+/** A turn runs, or a message waits to go: a continuation would queue behind it rather than pick anything up. */
+export function turnUnderWay(conversation: Pick<LiveAcpConversation, "session" | "requests" | "pendingPrompts">): boolean {
+  return conversation.session.status === "running" || conversation.session.status === "starting" ||
+    Boolean(conversation.requests?.some((request) => request.status === "dispatching" || request.status === "queued")) ||
+    Boolean(conversation.pendingPrompts?.length)
 }
 
 /**

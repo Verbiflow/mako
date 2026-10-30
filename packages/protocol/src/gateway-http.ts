@@ -4,7 +4,8 @@ import { z } from "zod"
  * Calls to a gateway's routes over HTTP for a client that may repeat every one: `base` is where they're served,
  * `authorization` the header each call carries, asked for every call so a token that renews is always current. A
  * call that meets a dropped connection or a gateway that's busy or restarting is sent again, a few times, a little
- * later each; one that takes longer than `timeoutMs`, its body included, is given up as a dropped connection. Each
+ * later each, and never sooner than the gateway's Retry-After says (`retryAfterMs`); one that takes longer than
+ * `timeoutMs`, its body included, is given up as a dropped connection. Each
  * try carries the call's correlation ID, and a call's `trace` says how many tries it took and what ended each, so a
  * call that was sent again never passes for one that was slow.
  */
@@ -95,8 +96,23 @@ export function gatewayCalls(options: GatewayHttpOptions): GatewayCall {
       }
       const failed = TryFailure.safeParse(failure).data
       trace.failures.push(`${response ? response.status : (failed?.cause?.code ?? failed?.name ?? "no answer")} after ${Math.round(performance.now() - began)} ms`)
+      const wait = Math.max(backoff[attempt] ?? 0, response ? retryAfterMs(response.headers.get("retry-after")) : 0)
       await response?.body?.cancel()
-      await new Promise((resolve) => setTimeout(resolve, backoff[attempt]))
+      await new Promise((resolve) => setTimeout(resolve, wait))
     }
   }
+}
+
+/** The longest a call waits on a gateway's Retry-After before its next try: a longer one is the caller's to wait out. */
+export const RETRY_AFTER_MOST_MS = 30_000
+
+/**
+ * How long a gateway's Retry-After asks a client to wait, in ms (seconds or an HTTP date; 0 for none or one that can't
+ * be read), at most `RETRY_AFTER_MOST_MS`. A busy gateway says when to come back rather than being asked again at once.
+ */
+export function retryAfterMs(header: string | null, now = Date.now()): number {
+  if (!header) return 0
+  const seconds = Number(header)
+  const ms = Number.isFinite(seconds) ? seconds * 1_000 : Date.parse(header) - now
+  return Number.isFinite(ms) ? Math.min(RETRY_AFTER_MOST_MS, Math.max(0, ms)) : 0
 }

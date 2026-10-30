@@ -10,6 +10,7 @@ import { invokeRuntime, runtimeInfo } from "@mako/host/transport/connection"
 import { hostCommand, runtimeLocation } from "@mako/host/transport/service"
 import { holdHostLease } from "@mako/host/base/host-idle"
 import { SyncStatusSchema, type SyncStatus } from "@mako/host/contracts/sync-status"
+import { SYNC_WINDOW_MS } from "@mako/host/conversations/sync-window"
 
 /**
  * The sync order, end to end, against a cloud of its own: a host of this checkout's build on a scratch home whose
@@ -75,7 +76,7 @@ type Report = {
   sessions: number
   days: number
   cloud: string
-  fixture?: { inWindow: number; day: number; week: number; month: number; older: number }
+  fixture?: { inWindow: number; day: number; week: number; older: number }
   firsts?: Record<string, number>
   synced?: boolean
   turn?: { readableMs: number | undefined; wholeMs: number | undefined }
@@ -103,12 +104,11 @@ for (let index = 0; index < SESSIONS; index++) {
   const lines = index % 20 === 7 ? 12_000 : 20 + ((index * 37) % 380)
   made.push({ ...(await rollout(index, ageHours, lines)), ageHours })
 }
-const windowed = made.filter((each) => each.ageHours <= 30 * 24)
+const windowed = made.filter((each) => each.ageHours <= SYNC_WINDOW_MS / 3_600_000)
 report.fixture = {
   inWindow: windowed.length,
   day: made.filter((each) => each.ageHours <= 24).length,
   week: made.filter((each) => each.ageHours > 24 && each.ageHours <= 7 * 24).length,
-  month: made.filter((each) => each.ageHours > 7 * 24 && each.ageHours <= 30 * 24).length,
   older: made.length - windowed.length,
 }
 console.log("fixture", JSON.stringify(report.fixture))
@@ -212,9 +212,9 @@ function pushedAt(store: "copies" | "originals"): Pushed {
 // The order and pace each form went in, from the stores: each tier's first and last Session in the account, and how
 // many went before one of a newer tier (none, if the order held).
 const signedInAt = Date.now() - (performance.now() - signedIn)
-type Age = "day" | "week" | "month" | "older"
-const tierOf = (ageHours: number): Age => (ageHours <= 24 ? "day" : ageHours <= 7 * 24 ? "week" : ageHours <= 30 * 24 ? "month" : "older")
-const rank = { day: 0, week: 1, month: 2, older: 3 } satisfies Record<Age, number>
+type Age = "day" | "week" | "older"
+const tierOf = (ageHours: number): Age => (ageHours <= 24 ? "day" : ageHours <= SYNC_WINDOW_MS / 3_600_000 ? "week" : "older")
+const rank = { day: 0, week: 1, older: 2 } satisfies Record<Age, number>
 report.order = {}
 for (const form of ["copies", "originals"] as const) {
   const { at, bytes } = pushedAt(form)
@@ -228,7 +228,7 @@ for (const form of ["copies", "originals"] as const) {
     if (rank[arrival.tier] < newest) inversions += 1
     newest = Math.max(newest, rank[arrival.tier])
   }
-  const tiers = Object.fromEntries((["day", "week", "month", "older"] as const).map((tier) => {
+  const tiers = Object.fromEntries((["day", "week", "older"] as const).map((tier) => {
     const times = arrivals.filter((arrival) => arrival.tier === tier).map((arrival) => arrival.s)
     return [tier, times.length ? { sessions: times.length, firstS: Math.round(times[0]! * 10) / 10, lastS: Math.round(times.at(-1)! * 10) / 10 } : { sessions: 0 }]
   }))

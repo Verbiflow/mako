@@ -38,6 +38,8 @@ function requestRuntimeMedia<Value>(
   return new Promise<Value>((resolve, reject) => {
     const req = request(
       {
+        // Its own connection, as every call's (`OWN_CONNECTION`, `connection.ts`): a kept one the host closed while held is no outage.
+        agent: false,
         socketPath: socket,
         path: "/rpc",
         method: "POST",

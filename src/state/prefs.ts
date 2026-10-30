@@ -50,7 +50,7 @@ export interface Prefs {
   modelLoadout: { harness: string; model: string }[]
   showThinking: boolean
   denseTools: boolean
-  /** An Original button on each answer and marker, for reading the bytes a harness wrote: a debugging aid, off by default. */
+  /** An Original button on each answer and marker, for reading the bytes a harness wrote, and where Mako continued a turn: a debugging aid, off by default. */
   showOriginals: boolean
   railMode: RailMode
   railScope: RailScope

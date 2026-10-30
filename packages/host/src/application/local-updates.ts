@@ -12,7 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { basename, dirname, join, relative } from "node:path"
-import { spawn, execFile } from "node:child_process"
+import { execFile } from "node:child_process"
 import { promisify, stripVTControlCharacters } from "node:util"
 import { z } from "zod"
 import { createHash } from "node:crypto"
@@ -26,7 +26,9 @@ import {
 } from "../contracts/app-lifecycle.js"
 import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
 import { unregisterBundle } from "./local-update-installer.js"
-import { bringForward, changesSince, readUpdateSource } from "./local-update-source.js"
+import { BUILD_UNCOMMITTED_VARIABLE, bringForward, changesSince, readUncommitted, readUpdateSource } from "./local-update-source.js"
+import { runProcessGroup } from "./process-group.js"
+import { DependencyInstallError, installDependencies, missingDependencies, uninstalledPackages } from "./local-update-dependencies.js"
 import type { Git } from "@mako/git"
 
 const execute = promisify(execFile)
@@ -162,6 +164,8 @@ export interface LocalUpdateOptions {
    */
   buildSource?: boolean
   statfs?: DiskReader
+  /** How long npm install in the checkout may run; `DEPENDENCY_INSTALL_TIMEOUT_MS` unless a test shortens it. */
+  installTimeoutMs?: number
 }
 
 export class LocalUpdates {
@@ -344,9 +348,11 @@ export class LocalUpdates {
         const phase =
           this.state.kind === "building" ? this.state.phase : "verification"
         const reason = error instanceof Error ? error.message.slice(0, 1500) : "Unexpected build failure"
+        const what = phase === "installing" ? "couldn't install dependencies" : `failed during ${phase}`
         this.state = {
           kind: "error",
-          message: `The update failed during ${phase}: ${reason} Your installed app and agents were not changed.`,
+          message: `The update ${what}: ${reason} Your installed app and agents were not changed.`,
+          ...error instanceof DependencyInstallError && { command: error.command },
         }
       })
       .finally(() => {
@@ -392,17 +398,47 @@ export class LocalUpdates {
     await ensureBuildSpace(this.root, await buildCopyBytes(source), this.options.statfs)
     const forwarded = reading ? await bringForward(this.git, source, reading) : null
     const built = forwarded ? await this.check({ fetch: false, force: true }) : reading
-    if (built?.kind === "checkout") this.state = { kind: "building", phase: "copying", revision: built.head }
+    const revision = built?.kind === "checkout" ? { revision: built.head } : {}
+    this.state = { kind: "building", phase: "copying", ...revision }
     this.changed()
+    const inherited = Object.fromEntries(
+      [
+        "HOME",
+        "PATH",
+        "TMPDIR",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+      ].flatMap((key) =>
+        process.env[key] === undefined ? [] : [[key, process.env[key]]]
+      )
+    )
+    // A lockfile the fast-forward (or a pull) changed: install what it
+    // lists into the checkout first, with the npm and Node the build uses.
+    const missing = await uninstalledPackages(source)
+    if (missing.length) {
+      this.state = { kind: "building", phase: "installing", ...revision, dependencies: missingDependencies(missing) }
+      this.changed()
+      const env = environmentForExecutable(node, inherited)
+      await installDependencies(this.git, source, missing, {
+        run: (args, signal) => runBuild(npm, args, source, env, signal),
+        timeoutMs: this.options.installTimeoutMs,
+      })
+      this.phase("copying")
+    }
     const checkout = join(this.root, "checkout")
     const job = await mkdtemp(join(this.root, "build-"))
     const output = join(job, "output")
     try {
-      const [revision, dirty, fingerprint] = await Promise.all([
+      // The uncommitted files are read as the copy is taken, and the build carries them by name.
+      const [revision, uncommitted, fingerprint] = await Promise.all([
         this.git.text({ cwd: source, args: ["rev-parse", "HEAD"], timeoutMs: 10_000 }),
-        this.git.text({ cwd: source, args: ["status", "--porcelain"], read: true, timeoutMs: 10_000 }).then(Boolean),
+        readUncommitted(this.git, source),
         syncBuildCheckout(source, checkout),
       ])
+      const dirty = uncommitted.count > 0
       const stamp = `${fingerprint}:${revision}:${dirty ? 1 : 0}:${this.identity}`
       // Identical inputs produce an identical candidate: when the prepared
       // output from a successful build is still on disk there is nothing to
@@ -417,25 +453,12 @@ export class LocalUpdates {
         this.changed()
         return
       }
-      const inherited = Object.fromEntries(
-        [
-          "HOME",
-          "PATH",
-          "TMPDIR",
-          "USER",
-          "LOGNAME",
-          "SHELL",
-          "LANG",
-          "LC_ALL",
-        ].flatMap((key) =>
-          process.env[key] === undefined ? [] : [[key, process.env[key]]]
-        )
-      )
       const variables: NodeJS.ProcessEnv = {
         ...inherited,
         MAKO_LOCAL_SIGNING_IDENTITY: this.identity,
         MAKO_BUILD_REVISION: revision,
         MAKO_BUILD_DIRTY: dirty ? "1" : "0",
+        [BUILD_UNCOMMITTED_VARIABLE]: JSON.stringify(uncommitted),
       }
       // The copy has no history; a performance row over budget is measured beside a commit exported from here.
       if (this.options.buildSource !== false) variables.MAKO_BUILD_SOURCE = source
@@ -507,32 +530,6 @@ const syncManifestSchema = z.object({
   deps: z.string().nullable(),
   entries: z.record(z.string(), z.string()),
 })
-
-const lockPackagesSchema = z.object({
-  packages: z.record(z.string(), z.object({
-    optional: z.boolean().optional(),
-    devOptional: z.boolean().optional(),
-    peer: z.boolean().optional(),
-  })).optional(),
-})
-
-/**
- * Packages the source's lockfile requires that its last npm install never
- * put in node_modules: a pull or merge changed package-lock.json without an
- * install after it. Optional and peer entries are left out, since npm skips
- * the ones for other platforms.
- */
-async function uninstalledPackages(source: string): Promise<string[]> {
-  const read = (path: string) => readFile(join(source, path), "utf8")
-    .then((text) => lockPackagesSchema.parse(JSON.parse(text)).packages ?? {})
-    .catch(() => null)
-  const [wanted, installed] = await Promise.all([read("package-lock.json"), read(DEPENDENCIES_SENTINEL)])
-  if (!wanted || !installed) return []
-  return Object.entries(wanted).flatMap(([path, entry]) =>
-    path.startsWith("node_modules/") && !entry.optional && !entry.devOptional && !entry.peer && !(path in installed)
-      ? [path.slice("node_modules/".length)]
-      : [])
-}
 
 const buildSourceFilter = (path: string) => {
   const name = basename(path)
@@ -777,62 +774,30 @@ async function runBuild(
   command: string,
   args: string[],
   cwd: string,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal
 ): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: true,
-    })
-    // Keep a bounded diagnostic tail. Discarding all output made a failed
-    // Settings check report only "exited with 1", hiding the failing test.
-    let stdout = ""
-    let stderr = ""
-    child.stdout.setEncoding("utf8").on("data", (text: string) => { stdout = (stdout + text).slice(-8192) })
-    child.stderr.setEncoding("utf8").on("data", (text: string) => { stderr = (stderr + text).slice(-8192) })
-    let timedOut = false
-    let force: ReturnType<typeof setTimeout> | undefined
-    const kill = (signal: NodeJS.Signals) => {
-      if (!child.pid) return
-      try {
-        process.kill(-child.pid, signal)
-      } catch (error) {
-        if (
-          !(error instanceof Error) ||
-          !("code" in error) ||
-          error.code !== "ESRCH"
-        )
-          reject(error)
-      }
-    }
-    const timer = setTimeout(() => {
-      timedOut = true
-      kill("SIGTERM")
-      force = setTimeout(() => kill("SIGKILL"), 5000)
-    }, 20 * 60_000)
-    child.once("error", (error) => {
-      clearTimeout(timer)
-      clearTimeout(force)
-      reject(error)
-    })
-    child.once("close", (code) => {
-      clearTimeout(timer)
-      clearTimeout(force)
-      // The pipes can drain out of order: a stdout burst must not erase the
-      // final stderr failure, even if the child wrote stderr last.
-      const diagnostic = [stdout.slice(stderr ? -600 : -1200), stderr.slice(stdout ? -600 : -1200)]
-        .map(text => stripVTControlCharacters(text).trim()).filter(Boolean).join("\n")
-      if (code === 0 && !timedOut) resolve()
-      else
-        reject(
-          new Error(
-            timedOut
-              ? "The build step exceeded its time limit."
-              : `${basename(command)} ${args.join(" ")} exited with ${code ?? "a signal"}. ${diagnostic || "The step produced no diagnostic output."}`
-          )
-        )
-    })
+  // Keep a bounded diagnostic tail. Discarding all output made a failed
+  // Settings check report only "exited with 1", hiding the failing test.
+  let stdout = ""
+  let stderr = ""
+  const { code, stopped } = await runProcessGroup(command, args, {
+    cwd,
+    env,
+    stdio: "pipe",
+    signal,
+    timeoutMs: 20 * 60_000,
+    output: (stream, text) => {
+      if (stream === "stdout") stdout = (stdout + text).slice(-8192)
+      else stderr = (stderr + text).slice(-8192)
+    },
   })
+  if (signal?.aborted) throw signal.reason
+  if (code === 0 && !stopped) return
+  if (stopped === "timeout") throw new Error("The build step exceeded its time limit.")
+  // The pipes can drain out of order: a stdout burst must not erase the
+  // final stderr failure, even if the child wrote stderr last.
+  const diagnostic = [stdout.slice(stderr ? -600 : -1200), stderr.slice(stdout ? -600 : -1200)]
+    .map(text => stripVTControlCharacters(text).trim()).filter(Boolean).join("\n")
+  throw new Error(`${basename(command)} ${args.join(" ")} exited with ${code ?? "a signal"}. ${diagnostic || "The step produced no diagnostic output."}`)
 }

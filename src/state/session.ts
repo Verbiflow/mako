@@ -15,6 +15,7 @@ import { refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
+import { applyAccessChoices, loadAccessChoices } from "@/state/access-choices"
 import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
 import { applyCheckoutHeads, refollowCheckouts } from "@/state/checkout-heads"
 import { watchThreadSessions } from "@/state/thread-sessions"
@@ -29,6 +30,7 @@ import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
 import { cloudAccountStore, heardAccountEvent } from "@/state/cloud-account"
 import { offerCloudProjects } from "@/state/cloud-projects"
+import { cloudTurnOn } from "@/state/cloud-turn-on"
 import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
@@ -85,11 +87,12 @@ import {
 } from "@/state/threads"
 import { acp, acpStore, activeAcp, activeLiveAcp } from "@/state/acp"
 import { cloudStepped, worktreeMade, worktreeStepped } from "@/state/acp-start"
-import { threadMoveStepped, threadReturnStepped } from "@/state/cloud-moves"
+import { followStopped, threadMoveStepped, threadReturnStepped } from "@/state/cloud-moves"
+import { machineNoticed } from "@/state/cloud-machines"
 import { cloudArchiveStepped } from "@/state/cloud-archive"
 import { noteOutcome, openSubjectId, retireSubject, subjectId } from "@/state/notifications"
 import { toast } from "sonner"
-import { recoverThreadReader } from "@/state/thread-viewing"
+import { recoverThreadReader, rereadFailedOpening } from "@/state/thread-viewing"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { mcpStore } from "@/state/mcp"
 
@@ -210,7 +213,7 @@ function noteTabTurn(id: string, before: SessionMeta | undefined, cache: TabCach
   }
   if (!tabWorking(before) || tabWorking(after)) return
   noteOutcome({
-    kind: "ready",
+    kind: "finished",
     subject: tabSubject(id, cache),
     marker: `turn:${after.messageCount}:${after.leafId ?? ""}`,
     detail: lastReplyOf(cache.messages),
@@ -259,8 +262,16 @@ function apply(event: HostEvent) {
     threadReturnStepped(event.conversationId, event.move, event.step)
     return
   }
+  if (event.type === "cloud-machine-notice") {
+    machineNoticed(event.conversationIds, event.notice)
+    return
+  }
   if (event.type === "thread-move-step") {
     threadMoveStepped(event.conversationId, event.move, event.step)
+    return
+  }
+  if (event.type === "thread-follow-stopped") {
+    followStopped(event)
     return
   }
   if (event.type === "worktrees-changed") {
@@ -297,6 +308,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "plan-builds") {
     applyPlanBuilds(event.builds)
+    return
+  }
+  if (event.type === "access-choices") {
+    applyAccessChoices(event.choices)
     return
   }
   if (event.type === "workspace-moved") {
@@ -368,6 +383,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "cloud-sign-ins") {
     cloudAccountStore.set({ signIns: event.signIns })
+    return
+  }
+  if (event.type === "cloud-turn-on") {
+    cloudTurnOn.heard(event.turnOn)
     return
   }
   if (event.type === "handoff-settings") {
@@ -715,6 +734,7 @@ function adoptBoot(boot: BootPayload) {
   void loadWorktrees()
   void loadWorkspaceMoves().catch(() => {})
   void loadPlanBuilds().catch(() => {})
+  void loadAccessChoices().catch(() => {})
   followChatFolders()
   refollowCheckouts()
   if (!boot.archives) void threadLifecycle.load()
@@ -749,7 +769,8 @@ async function loadWorktrees() {
 }
 
 export const actions = {
-  async reconnect() {
+  /** `attempt`: how many tries in a row have failed since the host said it was back. */
+  async reconnect(attempt = 0) {
     const epoch = ++connectionEpoch
     const cwd = store.get().meta?.cwd
     try {
@@ -780,11 +801,18 @@ export const actions = {
       void providers.loadAll()
       void providers.loadRuntimeUpdates()
       void threads.load()
+      // A conversation whose read the outage broke is read again, not left on its error.
+      rereadFailedOpening()
       void loadGroups()
       void loadPlanBuilds().catch(() => {})
+      void loadAccessChoices().catch(() => {})
       if (!boot.archives) void threadLifecycle.load()
     } catch (error) {
-      if (epoch === connectionEpoch) hostConnectionStore.set({ kind: "disconnected", message: error instanceof Error ? error.message : "The shared host could not be restored" })
+      if (epoch !== connectionEpoch) return
+      hostConnectionStore.set({ kind: "disconnected", message: error instanceof Error ? error.message : "The shared host could not be restored" })
+      // The host said it is back and nothing will say so again: a boot that failed on the way is tried again, not
+      // left on the banner until the person reloads. A new outage or boot moves the epoch on and ends the retries.
+      setTimeout(() => { if (epoch === connectionEpoch) void actions.reconnect(attempt + 1) }, Math.min(30_000, 1_000 * 2 ** attempt))
     }
   },
   async boot() {

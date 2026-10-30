@@ -4,6 +4,7 @@ import { createConnection } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { MessageChannel, Worker } from "node:worker_threads"
+import { z } from "zod"
 import {
   connectDaemon,
   connectDaemonPort,
@@ -13,6 +14,7 @@ import {
   serveCatalogOnPort,
 } from "../dist/daemon.js"
 import { LineAssembler, parseDaemonRequest } from "../dist/daemon-wire.js"
+import { CatalogSyncStatusSchema, TierCountSchema } from "../dist/scoped-uploads.js"
 
 assert.equal(daemonMemoryUnsafe(MAX_DAEMON_RSS), false)
 assert.equal(daemonMemoryUnsafe(MAX_DAEMON_RSS + 1), true)
@@ -94,7 +96,13 @@ const catalog = {
   },
   onEvent: () => () => {},
   stop: () => {},
+  scopeSync: (scope) => {
+    syncScoped = scope
+  },
+  syncStatus: async () => ({ paused: false, tiers: { now: tierCount(1), day: tierCount(2), week: tierCount(3) }, stale: 0, copies: null, originals: null }),
 }
+let syncScoped
+const tierCount = (sessions) => ({ sessions, threads: sessions, readable: sessions, held: sessions, whole: sessions, inCloud: sessions, threadsInCloud: sessions })
 
 await writeFile(`${socketPath}.lock`, "99999999")
 const server = await serveCatalog(catalog, socketPath)
@@ -175,6 +183,50 @@ assert.deepEqual(parseDaemonRequest(JSON.stringify({ id: 3, op: "follow", path: 
   assert.deepEqual(parseDaemonRequest(JSON.stringify({ id: 4, op: "records", link })), { id: 4, op: "records", link }, "a records link reaches the catalog")
   assert.deepEqual(parseDaemonRequest(JSON.stringify({ id: 5, op: "records", link: null })), { id: 5, op: "records", link: null }, "and its end")
   assert.equal(parseDaemonRequest(JSON.stringify({ id: 6, op: "records", link: { id: "x", base: "not a url", authorization: "y" } })), null, "a link that isn't one is refused")
+}
+// The sync requests of a host of another build, whose window was 30 days, as they cross the socket; and a request
+// the daemon can't read is answered with why, never dropped for its sender to wait out.
+{
+  const ask = async (frame) => {
+    const socket = createConnection(socketPath)
+    await new Promise((resolve, reject) => {
+      socket.once("connect", resolve)
+      socket.once("error", reject)
+    })
+    const answered = new Promise((resolve, reject) => {
+      setTimeout(() => reject(new Error(`no answer to ${frame.op} ${frame.id}`)), 2_000).unref()
+      let text = ""
+      socket.on("data", (chunk) => {
+        text += chunk
+        const end = text.indexOf("\n")
+        if (end >= 0) resolve(JSON.parse(text.slice(0, end)))
+      })
+    })
+    socket.write(`${JSON.stringify(frame)}\n`)
+    try {
+      return await answered
+    } finally {
+      socket.destroy()
+    }
+  }
+  const session = (tier) => ({ harness: "codex", nativeId: `n-${tier}`, path: `/s/${tier}`, thread: `t-${tier}`, busy: false, tier })
+  await client.scopeSync({ sessions: [session("now"), session("week")], paused: false })
+  assert.deepEqual(syncScoped.sessions.map((each) => each.tier), ["now", "week"], "this build's scope reaches the catalog")
+  assert.deepEqual(await ask({ id: 90, op: "sync-scope", scope: { sessions: [session("day"), session("month")], paused: true } }), { id: 90, ok: true, result: null })
+  assert.deepEqual(syncScoped.sessions.map((each) => each.tier), ["day", "week"], "an earlier build's month is read as the week, the oldest tier this one keeps")
+  const refusedAt = performance.now()
+  const refused = await ask({ id: 91, op: "sync-scope", scope: { sessions: "every one" } })
+  assert.equal(refused.id, 91)
+  assert.equal(refused.ok, false)
+  assert.match(refused.error, /couldn't read this sync-scope request/)
+  assert.ok(performance.now() - refusedAt < 1_000, "answered at once, not left to time out")
+  await assert.rejects(client.scopeSync({ sessions: "every one", paused: false }), /couldn't read this sync-scope request/, "a client hears the refusal as its request's error")
+  const status = await ask({ id: 92, op: "sync-status" })
+  // The status as a build of the 30-day window reads it: all four tiers required.
+  const earlier = CatalogSyncStatusSchema.extend({ tiers: z.object({ now: TierCountSchema, day: TierCountSchema, week: TierCountSchema, month: TierCountSchema }) })
+  assert.ok(earlier.safeParse(status.result).success, "an earlier build's host reads the status: its month is there, empty")
+  assert.equal(status.result.tiers.month.sessions, 0)
+  assert.deepEqual(Object.keys((await client.syncStatus()).tiers), ["now", "day", "week"], "this build reads only its own tiers")
 }
 const oversized = createConnection(socketPath)
 await new Promise((resolve, reject) => {

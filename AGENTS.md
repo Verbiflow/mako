@@ -122,6 +122,20 @@ conversations?.live`) rather than a domain importing another's files.
   `setInterval`: each job is named, runs on an unreferenced timer that varies
   by a tenth either way, skips a run while the last is still going, logs a
   failure as `jobs <name> failed`, and stops with the host.
+- **Follow, don't poll.** What only says where something stands (a line a
+  window shows) reads what each owner already holds, and is woken by the
+  owner's own change (its event or callback). That read never sets off the
+  work it reports (a sign-in check, a harness's store, a network call). What
+  says nothing as it changes gets a slow job that `needs` a demand on only
+  while it's under way, and looks only while a window watches
+  (`CloudTurnOnFollower`).
+- **Two file readers** (`workspaces/file-readers.ts`). `readSignedFile` serves
+  only a `mako-file://asset/…` URL this host signed; it is the one thing the
+  gateway's link (`PortRelay`: phones, other devices, cloud machines) reads
+  files through, and the relay itself passes on nothing but `/file/asset/…`.
+  `readWindowFile` also opens any path in a workspace, absolute ones included,
+  so it is for a window on this Mac alone; handing it to the link lets anyone
+  on the account read the Mac's files.
 - **No module-level state.** What the host holds lives in what `createHost`
   builds, so a test makes the one domain it needs. `check-host-module-state.mjs`
   (in `npm run lint`) fails on any module-level `let` and any empty
@@ -766,6 +780,51 @@ taken when a turn ends, failed or closed included (`settled`), and the merge
 keeps what a cut-off turn streamed where its harness declares its record
 never keeps it (`cutOffTurn`; a turn holding a call that never returned, or
 one Mako's log has stopped, failed or uncertain, `cutOffRequests`).
+A copy the journal keeps is a row per entry (`base_entries`), written by
+identity: a history read again keeps the objects of the entries that say the
+same (`sharedEntries`), so a turn writes, weighs and holds only what it
+added. While the journal keeps no copy its rows stay, written ahead between
+other work (`stageBase`, `writeAhead`), so the next turn names them without
+writing them; the compaction drops them once the journal closes.
+`npm run bench:live-read` fails if reading a huge conversation holds the
+event loop.
+
+The host doesn't hold a conversation's history whole, running or not: its
+finished entries are paged (`packages/host/src/conversations/paged-entries.ts`).
+The journal holds every live block as a row and, while the conversation is
+open, every entry of its history (`base_entries`, kept or written ahead), so
+a paged entry keeps its short fields (type, id, request, status, a call's
+name, a stream's or record's place) and reads its long ones back from its
+row when something reads them. It is still an entry: JSON, spreads, deep
+equality and every reader see what they saw, so nothing that reads history
+needs to know, but a pass that reads all of it at once (a merge) reads it
+back first, a slice at a time (`readBack`). `LiveRecords`' sweep pages each
+conversation in memory but its turn under way and its newest `WARM_CHARS`,
+then weighs what is left; a block only while the journal's rows hold the
+blocks as memory does, a history entry once its row holds it (by identity,
+`LiveJournal.pageBase`). A row is never written over or dropped under a
+paged entry: the journal gives the entry its content back first (`detach`).
+A closed journal's paged entries read through a connection of their own,
+and its rows written ahead stay, and the file isn't compacted, until the last
+is collected (`LiveJournal.released`); a window's views hold the paged copies
+(`LiveHistoryReader.paged`) and go with their conversation. A batch carries a
+changed base only while it's short (`carriesBase`); a long one is the notice
+that the history changed. A journal has one writer, the host holding it: an
+entry paged from a row reads what that row holds now. On 2026-10-30 a running
+conversation of 30,845 blocks and a 157MB history held 422MB here; `npm run
+bench:running-memory` holds one of 150MB to under 72MB while it streams, a
+window reads it back whole, its turn ends and a new host reopens it, and
+fails on a host that keeps it whole, or on any of those (or the sweep's
+measure of a copy) holding the event loop past 50ms. A pass over a whole
+history (a merge, a journal's read, that measure) is written once as `Steps`
+(`packages/host/src/base/slices.ts`) and run `inSlices` wherever the host
+can wait; a turn starts once the history's rows are written ahead
+(`LiveJournal.writtenAhead`), so its first commit writes none of them. `MAKO_PAGING_CHECK=1` pages every field
+of every entry as soon as a commit writes it, the turn running included; run
+the live, transcript and conversation-control suites with it after changing
+paging or anything that reads history (test-live-conversations' crash fixture
+runs two hosts on one journal at once, which breaks that one-writer rule).
+`scripts/test-paged-entries.ts` (in `test:performance`) covers paging.
 
 Mako never writes a session a harness didn't. A conversation goes on in
 another harness as a new real session of that harness, whose first turn
@@ -950,7 +1009,11 @@ conversation's ledger with where each number came from.
 
 Token streaming must never re-send the session. The host emits `stream` with
 only the in-flight message; `messages`, `tree`, and `git` go out only when they
-actually change, and every burst is coalesced into one flush per frame. On the
+actually change. A conversation's first change after a quiet frame flushes at
+once, and the rest of a burst one flush per 33 ms (`BATCH_MS` in
+`live-conversations.ts`): windows, watching devices and the journal get the
+same batches. A batch says `activityAt` only when it moved into another
+second. On the
 renderer side components subscribe through selectors, so a token wakes the one
 turn rendering it — not the rail, the stage strip, or the titlebar's readings.
 
@@ -974,14 +1037,17 @@ Three rules hold this together, and each has a specific failure it prevents:
   prompt identity, prepend anchors and complete answer-copy data. Only actual
   user scrolling may release follow mode; virtualizer size adjustments must not.
 - **Streamed prose is throttled, not debounced.** `useThrottled` in
-  `markdown.tsx` repaints a streaming answer at most once per
-  `STREAM_FRAME_MS`, and a pending frame survives further tokens (cancelling
-  it per token would never fire under a steady stream). Only unmount clears
-  the timer, and clearing must empty the ref: StrictMode's simulated remount
-  once ran that cleanup, re-ran the scheduling effect against a ref that
-  still looked pending, and every answer sat on its first character until the
-  turn ended ("I", then the tool rows). `test-workspace-ui.mjs` streams a
-  reply and requires the prose to catch up while the turn is still running.
+  `markdown.tsx` paints through `StreamFrames` (`src/lib/stream-frames.ts`):
+  the first token of a burst at once, then at most every 50 ms, up to 90 ms
+  for a long piece, whose re-parse costs about 1.2 ms per 1,000 characters.
+  A pending frame survives further tokens (cancelling it per token would
+  never fire under a steady stream). Only unmount stops it, and stopping must
+  forget it was pending: StrictMode's simulated remount once ran that cleanup,
+  re-ran the scheduling effect against a ref that still looked pending, and
+  every answer sat on its first character until the turn ended ("I", then the
+  tool rows). `test-streaming-markdown.ts` holds `StreamFrames` to both, and
+  `test-workspace-ui.mjs` streams a reply and requires the prose to catch up
+  while the turn is still running.
 
 The rail bounds mounted rows through folder pagination and an explicit search
 result cap; it never renders the full catalog. Components that genuinely use
@@ -1166,6 +1232,24 @@ The same rule covers the quieter losses: `buildPrompt` silently omits an
 attachment that is still `pending`, so sending mid-staging drops a file with no
 notice, and `clear()` revokes preview URLs — which is why detaching for a
 possible restore is separate from discarding for good.
+
+The web app's phone composer keeps the same promise across a page the system
+may kill at any moment (`src/web-client/drafts.ts`): each Session's draft and
+New's are kept in `localStorage` by account and place, written a quarter second
+after the last key and at once when the page hides or the composer closes. A
+send mints the message's request ID in the composer; the words leave the field
+at once but stay in the draft under that ID until the host confirms them, and
+the renderer's outbox (`message-outbox.ts`) holds the message under the same ID
+across a reload, so a page that dies mid-send finds it again rather than
+losing it or sending it twice: re-asked under its ID, which the host settles by
+(`LiveConversations.submit`), it lands once. A refused message comes back
+into the field only if the field is empty, else it's kept under the composer
+with Retry (`outbox.ts`). Under each sent message the phone says where it is,
+in a word (`delivery.ts`): Waking…, Sending…, Not confirmed · Retry, Queued,
+Delivered; and the status capsule says Working only once the host started the
+turn. `npm run test:cloud-conversations` (`test-web-client.ts`) covers the
+rules, and the web proof's Mac (`prove-web-client.ts`, `begin`) gives the
+phone's behaviour cases a Thread of their own on each scripted cue.
 
 ## MCP
 
@@ -1916,9 +2000,14 @@ there and are never shortened.
 
 ## Notifications
 
-Three outcomes and no more: an answer is `ready`, the agent must `ask` you
-(a question is an ask with `questions`, not a fourth kind), or the run
-`failed`. Starting, tool calls, and attach/detach never notify. The attention
+Five kinds, the same on every surface (desktop, web app, Web Push), declared
+once in `@mako/protocol/attention` (re-exported by
+`@mako/host/contracts/notifications`): `needs-you`, `question`, `approval`,
+`failed`, `finished`, with one rule (`attentionFact`), one key, one test of
+whether a fact still stands (`factStands`) and one wording table
+(`ATTENTION_WORDS`). A Session's owner says what it waits on in its row
+(`waitingFor`); never read the kind back out of `waitingOn`'s words. Starting,
+tool calls, and attach/detach never notify. The attention
 centre (`src/state/notifications.ts`, React-free; `docs/notifications.md`
 has the full design and the remote-channel plan) decides per outcome from
 four facts: kind, thread on screen, window in front, replay. Watching the
@@ -1953,7 +2042,7 @@ built by `scripts/build-notification-status.mjs` with the bundle id embedded
 as `__info_plist`) beside its executable in `Contents/MacOS`, which is the
 only place `UNUserNotificationCenter` answers from; it is listed for signing.
 `notify` resolves on `show`, `failed`, or a 1.5 s grace, never before.
-`scripts/test-notifications.ts` covers the policy, bursts, retirement,
+`npm run test:notifications` (`scripts/test-notifications.ts`, in CI) covers the policy, bursts, retirement,
 replays, live and external transitions, the readout, and the platform side.
 
 ## Working on the UI
@@ -2017,6 +2106,14 @@ next host reaps what an earlier host left, but only a pid that still runs the
 recorded executable and started when the record says (`provider-children.ts`),
 because a killed or replaced host never reaches `stopAcp()` and four idle
 cursor-agent processes from three earlier hosts were once found a day later.
+A host that stops leaves none running: discovery ends its queries and refuses
+any asked after (`DiscoveryProcesses.stop`), and once every owner has stopped
+its own, whatever is still recorded gets SIGTERM, then SIGKILL, with its process
+group (`ProviderChildren.end`). A Grok sign-in check asked as a host began
+stopping once spawned after it and went on writing into a test's scratch home
+while the test removed it. A test removes a scratch folder with `removeScratch`
+(`scripts/lib/scratch-processes.mjs`), which waits for whatever still runs there
+and names it instead of flaking; `test-isolated-host.mjs` asserts none is left.
 Mako-owned Node children use `headlessNodeExecutable` (`headless-node.ts`):
 on macOS it selects Electron's bundled Helper, whose `LSUIElement` policy
 keeps each Cursor SDK process, managed MCP server, browser native host and
@@ -2045,8 +2142,8 @@ When the host closes for a restart, install or quit it answers every pending
 call with `host-restarting` (`packages/host/src/contracts/host-connection.ts`) instead of
 resetting the connection. The client turns that, and a dropped socket, into
 `RuntimeDisconnectedError`; `packages/host/src/contracts/host-call-recovery.ts`
-repeats a call once
-the event stream reattaches according to one table,
+repeats a call once a host is there to take it (the same one, shown alive, or
+the one the event stream reattached to) according to one table,
 `packages/host/src/contracts/host-call-policy.ts`: `read` channels change nothing;
 `replay` channels are mutations the host settles by a caller-minted id (a
 request, conversation, transfer, action or fork id) or whose repeat reaches
@@ -2062,6 +2159,22 @@ whose content differs. A send the outage swallowed is kept staged as
 host that died with the turn, never for a dropped socket. The renderer
 treats the disconnect as the reconnect banner (`HOST_OUTAGE_MESSAGE`), not a
 toast. `test-runtime-recovery.ts` covers the table and the second attempt.
+
+A window's connection status follows its event stream, never one call
+(`HostLiveness`, `packages/host/src/contracts/host-liveness.ts`, used by
+`client-main.ts` and the web bridge). The stream is open while the host runs
+and carries a heartbeat every 15 s, so the reconnect banner goes up when it
+ends and comes down on the next `ready`, or as soon as the same stream is
+heard again. A dropped call with the stream open asks the host's `/health`
+and listens to the stream; either answering keeps the window connected and
+the call is repeated at once, and only no host at the socket or 35 s of
+silence raises the banner. A call that waits past its deadline is
+`HostCallTimeoutError`: slow, never a disconnect, never repeated, and
+`unconfirmed` for a mutation. Every request to the host opens its own
+connection (`agent: false`): on 2026-10-30 a window kept the banner while its
+host streamed on, because the host, its event loop held past its five-second
+keep-alive, closed a pooled connection a read had just been written to, and
+the reset read as the host leaving. `test-host-liveness.ts` covers these.
 
 Every `live-batch` and `LiveSummary` carries the host's `epoch`, minted per
 `LiveConversations` instance. Revisions climb within one epoch and a
@@ -2291,6 +2404,26 @@ turn. Cursor is not an ACP provider: its ladder is the SDK's own and is
 enforced by the SDK (below). `test-access-modes.ts` covers the placements
 and decisions.
 
+The person's access choice per harness (the mode a new session of it starts
+in) has one owner: their Mako account (`@mako/protocol/access-choices`,
+`GET`/`PATCH /v1/access`, said whole on the account's stream as
+`access-chosen` at a revision). Every surface reads and writes it there: a
+window through its host (`AccessChoiceStore` in
+`packages/host/src/harnesses/access-choices.ts`, `mako:access-choices`,
+`mako:access-choose`), the web app and a phone straight from the account. The
+host keeps the last revision it heard in `<user root>/access-choices.json`,
+with any choice it couldn't send yet laid over it and sent at the next sync,
+so a start offline still has it and a Mac that isn't signed in keeps its own.
+`mako:live-start` without a `modeId` starts a new session (a fresh Thread or
+an added Session, not a resume) in the person's mode for that harness,
+whoever asked: a window, the web app or a phone through the Mac's link. The
+web passes the mode it shows to every start, the cloud's included, since a
+machine acts for no account. A window's old `providerModes` preference is
+handed to the host once (`mako:access-adopt`), taken only for harnesses with
+no choice yet. A move to the cloud carries each session's mode, and a return
+remembers the mode it ran in there (`rememberMode`).
+`scripts/test-access-choices.ts` covers the store.
+
 ### Plan mode
 
 Plan is one composer control (Shift+Tab, the palette's "Toggle plan mode",
@@ -2392,6 +2525,22 @@ sent every Cursor reply to `cursor-agent -p --resume` without a word.
 reopens a stopped session through `session/load` in place. Cursor reopens
 through the SDK's own resume (below); `test-cursor-resume.ts` covers its
 verdicts.
+
+So a send needs a target, not a fresh read. A conversation opened from the
+window's cache (or painted from its record's tail) is on screen while its
+fresh read lands, and the composer sends to it at once (`openingHoldsSend`
+in `thread-viewing.ts`). Only a session the window itself routes from its
+ref (`copyOnly`, `resumeUnavailable`: straight to a move) waits for that
+read, at most four seconds, its send button turning meanwhile. With nothing
+on screen yet the button turns and Enter says nothing. A refresh that
+fails leaves the saved messages on screen under one quiet "Couldn't refresh
+· Retry" line, and they still take a send. An open that fails with nothing
+to show is said by the viewer alone; Enter there says "Could not load this
+conversation" with its reason and Retry loading, one notice however often
+it is pressed. A reconnect reads either again.
+Before this, every Enter on a cached conversation stacked "Wait for this
+conversation to load" while a slow host read it. `test-thread-opening.ts`
+and `test-opening-send-ui.mjs` cover it.
 
 What a session ran under is remembered per user, not per host.
 `packages/host/src/threads/session-memory.ts` keeps `~/.mako/session-memory.sqlite`, keyed by
@@ -2508,6 +2657,158 @@ only for one an older reader would misread. A missing `executions` row is read a
 device at generation 1. `test-thread-execution.ts` and
 `test-thread-execution-host.ts` (six harnesses, round trip, cancel, restart,
 two hosts) run under `test:thread-store`.
+
+What the host holds of its conversations is `LiveRecords`
+(`packages/host/src/conversations/live-records.ts`): a journal is read in
+when something needs it, its finished entries are paged (`paged-entries.ts`,
+above), and it is let go once the memory budget has no room for what is left
+of it and nothing is using it. Everything that lists conversations, every second or
+on every event, reads the listing (`LiveSummary`: the session, its paths and
+native ids, its revision), never a journal: the Sessions report
+(`ownedSessions`), the account's rows, the Thread lifecycle's archive keys
+(`liveArchiveKeys` in `contracts/thread-lifecycle.ts`, the one rule the
+lifecycle and the report share). On 2026-10-28 the report asked the lifecycle
+whether each conversation was archived, the lifecycle read each one's
+snapshot to answer, and the host loaded all 157 journals (1.3 GB) every
+second, swept them, loaded them again, and ran out of heap 90 seconds after
+each start, eight times. So every load from disk is counted to the work
+running (`HostWork.current`, set by `run` for every call, job and domain
+load, and only while it runs: a timer or a process the work set up that fires
+after it ended names the run around it, or none, never work long done), the
+residency lines name it (`by`, `loads`), Settings › Diagnostics
+lists who read what in, and one reader loading `BULK_LOADS` conversations
+between two sweeps is named in the log as a bug. A host whose heap crosses
+`HEAP_PRESSURE` says so once with that readout and writes it whole to
+`logs/memory-pressure.json` (`base/heap-watch.ts`), because an out-of-memory
+report has no JavaScript stack. `scripts/test-live-conversations.ts`
+(`bulkLoadsAreNamed`) holds the report and the lifecycle to loading nothing;
+`scripts/test-event-loop.ts` holds a run's name to the run.
+
+The report reads the Thread store once for all its rows: who executes each
+Session (`ThreadStore.executionsOf`) and each Thread's name (`titlesOf`), one
+query each, answered from memory until any commit, this host's or another's
+(`revision`); `groups()` is one query, kept the same way. Before, each row
+read both alone, about 900 queries a report on this Mac, and `groups()` took
+a query per group and per Session each time the window's rows were read;
+`npm run bench:session-report` measures it against a copy of this Mac's store.
+One link has one reporter: a cloud machine's is its machine runtime's tick,
+and a link the publisher already reported on, served again after a moment
+without one, isn't told everything again. A change a list shows goes out at
+once, on a Mac and a cloud machine alike: each batch is checked against what
+the list shows of its conversation (`conversationShown`, the rule its row is
+made with), and one that moved it (working, waiting, idle, failed, what it
+waits on, its title) is reported on the next turn of the event loop, at most
+every 100 ms, without waiting for the second's pacing or a held foreground.
+A Thread renamed or a Session archived here goes the same way: no batch says
+either, and a rename once waited for whatever next marked the list changed. So
+does a new conversation, once its journal is placed (`opened`), before its
+harness starts and sends a batch; and a turn's last batch comes after its
+"after" checkpoint, so the list reads it at rest.
+On 2026-10-28 status waited for the 1 s tick and took 0.4 to 2.7 s to reach
+a phone. A row's `activityAt` alone is said at most once a minute
+(`ACTIVITY_REPORT_MS`): said with every batch, it was half the account's
+events. A Mac delivers each account event as it's heard, in order, and keeps
+the last one heard (`seen`) a couple of seconds later, with every keychain
+write of the sign-in in one queue. A watched conversation's live
+updates go out through `gatewayEventLine`, as a cloud Thread's events do: a
+batch over `MAX_EVENT_BYTES` goes as the notice that its history changed
+(`historyChangedNotice`, the same one a window's event stream sends for a
+batch over its limit), which the watcher answers by reading it again.
+
+A dropped or stalled link costs a watcher nothing it can see
+(`@mako/protocol/live-tail`, link version 9). The gateway numbers each
+watched conversation's stream itself, from a base above every number it gave
+before, and keeps its last 512 updates (256 KB) in memory (`LiveTail`); a
+stream its last watcher left lingers `LINGER_MS` (30 s), its owner still
+sending. A watcher hears the stream's head first (`streamNotice`), then, when
+it subscribes after the last number it holds, what it missed from the tail,
+or `reread` past it, the one case that reads a snapshot. Followers
+(`CloudConversations.#follow`, the web client's `#run`) keep their place with
+`StreamCursor`: a skipped number is asked for again at once from the tail, a
+stream that ends is followed again at once with jitter (`followAgainInMs`),
+and a conversation at work that goes silent `SILENT_WHILE_WORKING_MS` (3 s)
+has its connection pinged (`probe`) and replaced unless it answers in
+`PROBE_ANSWER_MS`. A gateway that sends no notice is read as before. The
+owner numbers what it sends (`live`'s `n`) and keeps each watched
+conversation's updates (`KEPT_BYTES`): its publisher learns its link when the
+link is served (`linked`), not at the next tick, and a new link's `watch`
+says what the gateway last relayed of each (`after`), so what went into a
+dead link's last moments is sent again, relayed once, or past the bound
+replaced by the notice to read it again. A Mac's runtime link silent while it
+sends what's watched is probed the same way (`CloudLink.probeIfSilent`), and
+a link that worked for `STABLE_MS` (5 s) comes back in a quarter second. A
+cloud Thread's watchers resume its log after the last event heard; the
+account's stream is gap-checked on every device, and a skipped or `lost`
+number reads the list whole again (`onAccountGap`). Before, a dropped watcher
+waited a second, missed what went by and read a snapshot; a lost last batch
+left a turn looking busy on every other device; a stall went unseen for a
+minute.
+
+One update can be followed from its owner to every device. One batch in
+`TRACE_EVERY` (25) of a conversation, and each that starts or ends a turn or
+asks or answers the person, carries `emittedAt` and a trace (`traceOf`,
+`TRACE_PREFIX` `st-`), which rides as the event's correlation ID (a cloud
+Thread's `event`, a watched conversation's `live`): the owner's host logs
+`traced update sent`, the gateway `event trace` or `live trace`, and each
+Mac that hears it `traced update heard` with its lag, all under `sync` and
+the trace. Search one trace across host logs and the gateway's to see
+every hop's time. Each device keeps its readings in memory
+(`SyncRecorder`, `contracts/sync-readings.ts`): for each stream it follows,
+traced lag, skipped numbers asked for again, rereads, probes, and why it
+followed again (`closed`, `silent`, `gap`, `failed`); for the account's
+list, its stream's number, its gaps, and each change's time from its owner
+(`changedAt`); and on a Mac what it sends of its own watched conversations
+(resent, notices). Settings › Diagnostics shows them as Sync
+(`mako:sync-readings`, `SyncReadout`), the phone's Diagnostics in its
+lines, both in the same words (`describeFollow`, `describeList`). Lags are
+each device's clock against its owner's, good to a few milliseconds where
+clocks keep time.
+
+`npm run bench:sync-latency` measures how long another device takes to see
+what one does, on the real code (`scripts/bench-sync-latency.ts`): two
+screenless hosts of the checkout signed in to one account, A running a sealed
+Codex against the stand-in model paced to 50 words a second (`pace` in
+`scripts/scripted-model.ts`), B opening A's conversation as a window does; a
+phone played through the web client's `Gateway`; and a cloud Thread's
+`MachineRuntime`, in process, fed A's batches. Each word is unique, so its
+first arrival anywhere is found by its text, and one clock times every hop.
+Each device's link is a proxy the bench stalls or cuts. Without `--cloud` the
+cloud is the protocol's fake gateway behind the routes a host and a browser
+use (`scripts/lib/sync-bench-cloud.ts`), which keeps no presence, so the quiet
+phase (`--quiet`) needs a real gateway; with `--cloud <url>` a helper on stdin
+and stdout plays the person there (`helperCloud` says the asks). It prints one
+JSON report: live content per hop, status on the phone's list and the second
+Mac, six link disturbances (words missed, time to current, rereads, a stall
+noticed, and with the owner's last batch lost, when the turn's end showed),
+quiet devices, and messages and bytes per token per hop. Past the
+plan's budgets it exits 1 unless `--report-only`; a run that doesn't finish
+exits 2. It takes about two minutes and isn't in CI: it needs a real Codex
+CLI, and today's numbers fail several budgets by design. The first baseline
+is `docs/public-audits/2026-10-28/sync-latency/`.
+
+The account's rows here (`CloudConversations`) take nothing from a catalog that
+isn't read: until `catalog.ready()`, and while a lost reader is replaced,
+`keepsNative` says nothing (undefined), and a row it would decide is left as it
+is, listed or not. A catalog write names its native session
+(`nativeChanged`), and writes are looked at together every 250 ms, one look at
+a time, at the rows naming them alone. An account event is looked at for the
+rows it names alone too (`#named`); a device going quiet or a Thread archived
+looks at every row. Whether a device is quiet is the list's
+to say of every one of its conversations, one a window follows included: a
+quiet device sends no batches, so nothing else ends its working spinner. A Mac
+going to sleep, shutting down, quitting or signing out says so on its runtime's
+link first (`going-quiet`, link version 8; `mako:machine-leaving` from the
+desktop app's `suspend` and `shutdown`), and the link stays closed until the
+wake (`CloudLink.quiet`), so its device is quiet at once rather than after
+missed heartbeats; `test-cloud-account.ts` covers it. A Thread's name is the
+list's to say too: no batch carries it, and a followed conversation once kept
+its old one on a second Mac while the phone showed the rename. The
+account's archived cloud Threads are said only from a list the account
+answered (`archivedChanged`), never as none at a sign-out, and
+`ThreadArchives` keeps their keys by account, so a restart shows them
+archived before the list is read again. `scripts/test-thread-store.ts`
+(`manyAtOnce`), `test-account-threads.ts`, `test-cloud-conversations.ts` and
+`test-thread-lifecycle.ts` cover these.
 
 A ready provider process is a warm cache, not active work. `LiveConversations`
 keeps at most two warm bindings per host and hibernates either the oldest excess
@@ -2966,17 +3267,30 @@ loses the stamp with the host that made the promise. The renderer reads the
 stamp: the footer says "continuing automatically" with the live mark and
 offers no button, presence and the rail keep the row working, and no
 `failed` outcome is announced or marked for a drop Mako is about to pick up.
-Mako's continuation renders as Mako's line where the prompt would be ("Mako
-continued the turn after the connection to Cursor dropped"), never as the
-user's bubble, and so does the person's Continue turn ("You continued the
-turn after Mako closed"): its words are Mako's, not theirs. A store keeps
-only the words, so `continueTurnPrompt(reason, sender)` ends with a
-sentence naming who sent it, and `savedMakoPrompt` reads both back whole,
-as it reads the goal loop's prompts; words from before that sentence
-existed name no one ("The turn continued after …"). `test-live-conversations.ts` (`autoContinuedTurn`),
-`test-prompt-delivery.tsx`, `test-live-controls.tsx` and
-`test-notifications.ts` cover the send, the bound, the declines, the journal
-and the quiet.
+A continuation never reads as a new turn. Its words are Mako's, whether Mako
+sent them or the person pressed Continue turn, so they are never the
+person's bubble, and the turn reads as one run: `toExchanges` puts a
+continuation into the exchange it continues (in the lead exchange when that
+turn is on an earlier page), where it draws nothing. The fold times the
+turn's work without the wait before it went on. How the turn ended is its
+newest part's (`turnRequest`), so the stop it went on from leaves no footer,
+and the provider's own stop marker at that seam is dropped
+(`notesBesideContinuations`). Each part keeps its changes row. The words
+alone mark a continuation, the same live and saved: a store keeps only the
+words, so `continueTurnPrompt(reason, sender)` ends with a sentence naming
+who sent it, and `savedContinuation` reads both back whole; words from
+before that sentence existed name no one. The facts stay one switch away:
+with Settings › Diagnostics' originals on, the seam is a quiet line saying
+why and who ("Mako restarted Claude Code and continued the turn"), opening
+onto the exact words, with their Original. A step a lost machine undid
+changed the person's files, so that seam always says so ("The last step was
+interrupted; Claude Code picked it up again"). Wherever a list names a
+request by its words (Changes' turns, a failure's notice, the queue), a
+continuation is named by the turn it continued (`turnWords`), and the
+composer's recall leaves it out. `test-live-conversations.ts`
+(`autoContinuedTurn`), `test-prompt-delivery.tsx`, `test-live-controls.tsx`,
+`test-transcript-events.tsx` and `test-notifications.ts` cover the send, the
+bound, the declines, the journal, the one turn and the quiet.
 
 A turn whose provider process dies is continued the same way, for every
 harness. Between 2026-09-26 and 09-28 the Cursor SDK child died mid-turn eight
@@ -3298,9 +3612,19 @@ verified installed signer, or an unambiguous signer from existing local release
 artifacts during the first transition; builds to a unique output; asks before
 installation; waits for safe shutdown; installs and reopens Mako; and removes
 the output whether it installed, was declined or failed. It never
-force-stops agents. `npm run update:local -- --check` is read-only, and
-`npm run test:update-local` exercises orchestration and signer selection without
-building or replacing the user's app.
+force-stops agents. It runs under plain node but loads every `@mako/*`
+package from the checkout's source (`scripts/lib/workspace-source.mjs`: tsx
+plus a resolve hook mapping each export's `dist/x.js` to `src/x.ts`), never
+from `packages/*/dist`: that was whatever was last compiled, so the fetch,
+fast-forward and dependency code that ran was stale, and a checkout compiled
+before a module existed failed to import it. Keep its workspace imports
+dynamic and after `useCheckoutSource()`, and its failure handler free of
+imports. Its npm steps stop with their whole process group on Ctrl+C or the
+install's time limit, as Settings' do. `npm run update:local -- --check` is
+read-only, and `npm run test:update-local` exercises orchestration and signer
+selection without building or replacing the user's app;
+`test-update-local-cli.mjs` (in `test:update-source`) covers the source
+loading against a stale and an incomplete dist, and the group stop.
 
 Local installed builds use `npm run package:mac:local`, with
 `MAKO_LOCAL_SIGNING_IDENTITY=<certificate SHA-1>` for the first build. Later
@@ -3458,7 +3782,8 @@ the complete Settings build service against a private profile without installing
 They preserve npm security configuration, run build,
 lint and regression checks, and verify the existing signing identity. Public
 release updates remain separate from local builds. `package-mac.mjs` stamps the
-actual packaged inputs with a build ID, timestamp and source revision.
+actual packaged inputs with a build ID, timestamp and source revision, and
+the uncommitted files the build took (`makoBuild.uncommitted`, below).
 The local installer prepares outside the running bundle, waits for its processes
 to exit, retains the previous app, and rolls back failed replacement verification.
 Never install over a running app or turn Stop into an automatic prompt replay.
@@ -3494,6 +3819,44 @@ the revision already running, and the update read as done. `npm run
 test:update-source` covers it against scratch repositories and a local bare
 remote, and draws every state.
 
+Built as it is, the checkout goes in with every uncommitted file in it, other
+agents' work in progress included, and nobody should be surprised by that.
+`readUncommitted` (`local-update-source.ts`, `git status -z` with renames)
+names each tracked change and untracked, non-ignored file (edited, added,
+deleted, renamed from, untracked, conflicted; the first 200 by name, the rest
+counted), and the reading carries it: Settings › Updates says "Includes 41
+uncommitted changes" on the offer with the files behind a disclosure, and
+`update:local` lists them before it builds. Each updater reads them again as
+the build takes its source and hands that list to packaging
+(`MAKO_BUILD_UNCOMMITTED`); `package-mac.mjs` stamps it into the bundle as
+`makoBuild.uncommitted` beside `dirty` (`buildUncommitted`; packaged by hand
+it reads the checkout itself). That stamp is the one record of what an app
+took: Settings shows it on the ready build and under the installed revision
+("Revision 9a7a5c0c with 41 uncommitted changes"), and the CLI prints it for
+the build it made and the app installed. A build from an older updater has
+`dirty` only and says just "with uncommitted changes". Nothing answers the
+install question for the person: `update:local` takes no `--yes`.
+
+Then the checkout's node_modules must hold what its package-lock.json lists
+(`local-update-dependencies.ts`: each lockfile entry against npm's
+`node_modules/.package-lock.json`, by version; optional and peer entries
+aside). When it doesn't, as after a fast-forward or a pull that changed the
+lockfile, Settings (phase `installing`, "Installing dependencies…") and
+`update:local` run `npm install --no-audit --no-fund --no-save` in the
+checkout with the npm and Node the build uses, before anything is copied:
+never `npm ci` (it deletes node_modules under whatever else reads it), and
+`--no-save` so package.json and package-lock.json stay as Git has them. It's
+refused while any package.json or package-lock.json has uncommitted
+changes, stopped with its process group after 10 minutes, and every failure
+ends with the command to run by hand. Every build step, in Settings and the
+CLI, runs through `runProcessGroup` (`application/process-group.ts`): its
+own process group, SIGTERM to the group then SIGKILL after 5 s, and a
+stopped step settles only once its group is empty, so a rerun never installs
+over an install still running. No dependency install script is
+approved: the build needs none of the ones npm's `allowScripts` would hold
+back, and `test-local-update-dependencies.mjs` (in `test:update-source`)
+names each and fails when one arrives or leaves.
+
 `npm run test:application` covers the lifecycle state machine, draft-close
 acknowledgements, source-copy isolation, replacement rollback, real Electron
 private-socket clients, and the production Settings/dialog/palette components.
@@ -3518,6 +3881,47 @@ same version. A host from another build retires the daemon on first contact
 and respawns it from its own executable, so an update never keeps serving from
 the bundle it replaced. Terminal scrollback is persisted first; live shells
 are reported interrupted.
+
+A request the sync daemon can't read is never dropped: it's logged
+(`mako-syncd: refused a request it couldn't read`) and answered with an error
+its sender shows at once, not at its 3 s timeout. `daemonIsForeign` keeps
+builds apart, but the wire still reads an earlier build's sync words: the
+sync window was 30 days before it was 7 (`SYNC_WINDOW_MS`), so a scope naming
+a `month` tier reads as `week`, and the status carries an empty `month` for a
+host that requires one (`syncStatusOnWire`). The daemon answers requests on
+the thread that writes reading copies, reads exports and captures records, so
+none of those may hold it for long: a copy is written 64 entries at a time as
+the bytes its view keeps (`SessionView.json`), never parsed and drawn again,
+and an export reads its batch in one query (`RecordStore.exportFor`). Before,
+a 146 MB copy held the thread 1.1 to 1.5 s (5 to 7 s on a loaded Mac) and a
+batch of a 342,965-row Cursor chat 1.4 s, and between them they timed out the
+host's 3 s status request 31 times in a day and a half. A copy waits for its
+turn by the work it costs (`MS_PER_MIB`, 100 ms a MiB: 15 s for 146 MB), and a
+Session changed before its turn goes when the turn comes, not at the next look.
+Captures of Sessions outside the scope (the backfill's) look at nothing, and
+captures during a look are looked at together after it, one look at a time.
+The daemon logs each hold of its thread of a second or more (`loop held
+ms=… during=…`, `loop-watch.ts`) with the work under way by name (`copy`,
+`push`, `capture`, `request <op>`). `test/daemon.mjs`,
+`test/reading-copies.mjs` and `test/loop-watch.mjs` cover these, and `npm run
+bench:sync-pipeline` measures write-to-account latency on the real daemon
+(`--daemon <daemon-main.js>` for another build's).
+
+A Session is never out of the account without saying so. A pack the account
+refuses is sent again in sixteen smaller ones, and so on down to the chunks it
+refuses alone (`RecordSync.#isolate`); every other chunk goes, each unit's
+versions go up to the first that names a refused chunk, and the failure names
+it ("The account refused one chunk of this Session (8fd50237a1c4, 40,960
+bytes) and took the rest: …", `RecordChunksRefusedError`), tried again alone
+at a refusal's pace. A capture that fails every retry counts the Session out
+of the cloud and is a failure in the status until one is taken. Every 30
+minutes, and when a link is given, `ScopedUploads` sets the account's list of
+its sessions (`GET …/sessions`) against what the store believes it holds
+(`RecordStore.remoteVersionCounts`); a Session it holds less of is caught up
+from its holdings. Failures a minute old show in the rail ("2 Sessions not
+synced", `SyncRailLine`), opening Settings › Account, which names each
+Session. `test/record-refused-chunks.mjs`, `test/record-reconcile.mjs` and
+`npm run test:sync-status-ui` cover these.
 
 When the sync daemon is not enabled, the host still never reads a store on
 its main thread: `packages/host/src/threads/catalog-worker.ts` runs the catalog on a
@@ -3584,3 +3988,21 @@ prepared build is copied into `/Applications` before the host quits and its
 state lives only in that host, so every one an earlier host left is dead
 weight (four held 3.4 GB). `test-host-idle.ts`, `test-local-update-install.ts`
 and `test-local-build-source.ts` cover these.
+
+The sync reader keeps its own log at `~/.mako/logs/syncd.log`, with the
+user's shared state rather than in a profile's data root, because one reader
+serves every profile's host; Node's
+fatal-error reports go to `~/.mako/logs/syncd-reports` (newest five kept). It
+records its start (pid, role, build, socket, identity), each client, each
+backfill pass's process and how it ended, its memory when it moves 64 MB, what
+it prints, and why it exits: retired (`no clients`, `memory` with the guard's
+samples, `asked`), another reader holding the claim, discovery failed, a
+signal, or an uncaught exception or rejection with its stack, written
+synchronously. Its writer is `@mako/sessions/process-log`, the same format,
+rotation and scrub `host-log.ts` uses. A reader can't log its own SIGKILL or
+out-of-memory abort, so the host that spawned it logs its exit code or signal
+(`catalog-connection.ts`), and every host keeps the last 50 adoptions and
+losses of its reader with the reason it saw (`threads/reader-history.ts`),
+shown in Settings › Diagnostics with the reader's log. Once a reader restarted
+every 20 to 60 s for an hour and nothing said why. `test/syncd-log.mjs` and
+`test-reader-history.ts` cover these.

@@ -1,17 +1,24 @@
 import { GatewayHttpError, describeGatewayFailure } from "@mako/protocol/gateway-http"
-import { CHUNK_HEADER_BYTES, type PackedChunk, type RecordRemote } from "@mako/protocol/records"
+import { CHUNK_HEADER_BYTES, type PackedChunk, type RecordHoldings, type RecordRemote } from "@mako/protocol/records"
 import { z } from "zod"
 import type { RecordStore } from "./record-store.js"
-import { RecordSync, RecordSyncConflictError, describeSync } from "./record-sync.js"
+import { namedWork, type WorkUnderWay } from "./loop-watch.js"
+import { RecordSync, RecordSyncConflictError, describeSync, refusedBy } from "./record-sync.js"
+import type { UploadBudget } from "./upload-budget.js"
 
 /**
  * How recently a Session's Thread was worked in, which sets when its turn comes: `now` while it works or waits, then
- * the last day, the last week, and the rest of the sync window. The device's host decides it (`syncTier`); here it
- * only orders and counts.
+ * the last day, then the rest of the week, which is the whole sync window. The device's host decides it
+ * (`syncTier`); here it only orders and counts.
  */
-export const SyncTierSchema = z.enum(["now", "day", "week", "month"])
+export const SyncTierSchema = z.enum(["now", "day", "week"])
 export type SyncTier = z.infer<typeof SyncTierSchema>
 export const SYNC_TIERS = SyncTierSchema.options
+
+/** One Session of a scope: its native session, where the catalog reads it, its Thread, and its tier. */
+export const SyncScopeSessionSchema = z.object({ harness: z.string().min(1), nativeId: z.string().min(1), path: z.string().min(1), thread: z.string().min(1), busy: z.boolean(), tier: SyncTierSchema })
+/** At most this many Sessions in a scope. */
+export const SYNC_SCOPE_MOST = 10_000
 
 /**
  * The Sessions a device keeps in the account, the most wanted first, each by its native session, where the catalog
@@ -19,7 +26,7 @@ export const SYNC_TIERS = SyncTierSchema.options
  * Session goes up in: its reading copy and its records.
  */
 export const SyncScopeSchema = z.object({
-  sessions: z.array(z.object({ harness: z.string().min(1), nativeId: z.string().min(1), path: z.string().min(1), thread: z.string().min(1), busy: z.boolean(), tier: SyncTierSchema })).max(10_000),
+  sessions: z.array(SyncScopeSessionSchema).max(SYNC_SCOPE_MOST),
   /** Catching up waits: only Sessions at work go meanwhile. */
   paused: z.boolean(),
 })
@@ -34,6 +41,11 @@ export const SyncFailureSchema = z.object({
   correlationId: z.string().optional(),
   /** The account refused it as records that went on in two places: tried again only once something new is captured. */
   conflict: z.boolean().optional(),
+  /**
+   * When the Session's pushes began failing this way: `at` moves with each try, this stays until one goes or the
+   * failure's words change, so a failure tried again is said once.
+   */
+  since: z.number().optional(),
 })
 export type SyncFailure = z.infer<typeof SyncFailureSchema>
 
@@ -77,7 +89,7 @@ export type TierCount = z.infer<typeof TierCountSchema>
  */
 export const CatalogSyncStatusSchema = z.object({
   paused: z.boolean(),
-  tiers: z.object({ now: TierCountSchema, day: TierCountSchema, week: TierCountSchema, month: TierCountSchema }),
+  tiers: z.object({ now: TierCountSchema, day: TierCountSchema, week: TierCountSchema }),
   stale: z.number().int().nonnegative(),
   copies: UploadsStatusSchema.nullable(),
   originals: UploadsStatusSchema.nullable(),
@@ -89,11 +101,27 @@ const FLIGHTS = 2
 /** The first wait after a failed push, doubling to the most. */
 const RETRY_MS = 2_000
 const RETRY_MOST_MS = 5 * 60_000
-/** Failures kept for the status. */
+/**
+ * The most a push the account refused waits: the same records sent again get the same answer, so a refusal is tried
+ * about hourly once it has been tried a dozen times. A refused pack once went again every few seconds for hours.
+ */
+const REFUSED_MOST_MS = 60 * 60_000
+/** Failures kept for the status, one per Session. */
 const FAILURES_KEPT = 5
+/**
+ * How often what the account says it holds is set against what the store believes it holds, and at the first look
+ * after a link is given. One list of the account's sessions, and each one it holds less of than believed is sent again.
+ * Without it, an account that lost records (restored, reset, a push it recorded and dropped) stayed short for good,
+ * the Mac counting the Session in the cloud.
+ */
+const RECONCILE_MS = 30 * 60_000
 
 type Wanted = SyncScope["sessions"][number]
-type Retry = { failures: number; after: number; conflictAt?: number }
+/**
+ * A Session's pushes failing in a row: how many, when the next may go, and the first failure's time and words, which
+ * the next failure keeps when it says the same. `refused`: the account answered and refused what was sent.
+ */
+type Retry = { failures: number; after: number; conflictAt?: number; refused?: boolean; since: number; words: string }
 
 /**
  * One record store kept in step with one remote for a device's scope, the most wanted Session first. What's in the
@@ -103,8 +131,12 @@ type Retry = { failures: number; after: number; conflictAt?: number }
  *
  * At most two pushes go at once and only one of them catching up, so a Session at work goes in the seconds after its
  * capture; catching up is paced to `bytesPerSecond` and waits while the scope is paused. A failed push is tried again
- * later, waiting longer each time, and at once on its next capture; records that went on in two places wait for
- * something new. Idempotent: a push sends only what the remote isn't known to hold, by content-addressed chunks.
+ * later, waiting twice as long after each failure in a row, up to five minutes, or an hour for one the account
+ * refused. The next capture ends the wait after a single failure (a dropped connection), never after a refusal or a
+ * second failure: a Session at work captures every few seconds, and each capture once sent a refused push again.
+ * Records that went on in two places wait for something new. A failure is logged once, when it starts or its words
+ * change, and once more when the Session goes. Idempotent: a push sends only what the remote isn't known to hold, by
+ * content-addressed chunks.
  */
 export class ScopedUploads {
   readonly #store: RecordStore
@@ -125,20 +157,33 @@ export class ScopedUploads {
   #failed = 0
   #stopped = false
   #wake: ReturnType<typeof setTimeout> | undefined
+  /** When what the account holds was last set against what's believed (`#reconcile`); 0 before the first. */
+  #reconciledAt = 0
+  #reconciling: Promise<void> | undefined
+  /** Names each push while it runs, for the watch on the process's loop. */
+  readonly #work: WorkUnderWay | undefined
+  /** The bytes this process's uploads share (`UploadBudget`); while it sheds, no push starts. */
+  readonly #budget: UploadBudget | undefined
+  readonly #unhear: () => void
 
   constructor(
     store: RecordStore,
     remote: RecordRemote,
     log: (level: "info" | "warn", message: string, fields: Record<string, string | number>) => void,
-    options: { now?: () => number; bytesPerSecond?: number } = {}
+    options: { now?: () => number; bytesPerSecond?: number; work?: WorkUnderWay; budget?: UploadBudget } = {}
   ) {
+    this.#work = options.work
     this.#store = store
     this.#remote = remote
     this.#log = log
     this.#now = options.now ?? Date.now
-    this.#urgent = new RecordSync(store, remote)
+    const budget = options.budget
+    this.#budget = budget
+    this.#urgent = new RecordSync(store, remote, budget ? { budget } : {})
     // Paced, one pack in flight: more would only be held in memory waiting for the pace.
-    this.#paced = options.bytesPerSecond ? new RecordSync(store, pacedRemote(remote, options.bytesPerSecond), { uploads: 1 }) : this.#urgent
+    this.#paced = options.bytesPerSecond ? new RecordSync(store, pacedRemote(remote, options.bytesPerSecond), { uploads: 1, ...budget && { budget } }) : this.#urgent
+    // A budget that sheds holds back new pushes (`#pump`); they start once it stops.
+    this.#unhear = budget?.onResumed(() => this.#pump()) ?? (() => {})
   }
 
   get remote(): string {
@@ -161,8 +206,10 @@ export class ScopedUploads {
       else
         for (const [key, capture] of read.heads) {
           this.#heads.set(key, capture)
-          // Something new is captured: a wait after a failure, or after records that went on in two places, ends.
-          this.#retries.delete(key)
+          // Something new is captured: records that went on in two places go again, as does a push that failed once.
+          const retry = this.#retries.get(key)
+          if (retry?.conflictAt !== undefined) delete retry.conflictAt
+          else if (retry && !retry.refused && retry.failures === 1) retry.after = 0
         }
       this.#through = Math.max(this.#through, read.through)
     } catch (error) {
@@ -170,6 +217,53 @@ export class ScopedUploads {
       return
     }
     this.#pump()
+    if (!this.#reconciling && (this.#reconciledAt === 0 || this.#now() - this.#reconciledAt >= RECONCILE_MS)) this.#reconciling = this.#reconcile().finally(() => (this.#reconciling = undefined))
+  }
+
+  /** Once the comparison with the account under way, if any, has ended and the pushes it started have settled. */
+  async reconciled(): Promise<void> {
+    await this.#reconciling
+    await this.settled()
+  }
+
+  /**
+   * Sets what the account says it holds of each Session in scope against what the store believes it holds, and sends
+   * again what it lacks: its holdings, unit by unit, replace what was believed, so the next push carries only that.
+   */
+  async #reconcile(): Promise<void> {
+    this.#reconciledAt = this.#now()
+    let listed: Map<string, number>
+    try {
+      listed = new Map((await this.#remote.sessions()).map((session) => [keyOf(session), session.versions]))
+    } catch (error) {
+      this.#log("info", "couldn't compare with the account", { remote: this.#remote.id, error: error instanceof Error ? error.message : String(error) })
+      return
+    }
+    const believed = this.#store.remoteVersionCounts(this.#remote.id)
+    let short = 0
+    for (const session of this.#scope.sessions) {
+      const key = keyOf(session)
+      const thought = believed.get(key) ?? 0
+      const holds = listed.get(key) ?? 0
+      if (this.#stopped || thought === 0 || holds >= thought || this.#flights.has(key)) continue
+      try {
+        const holdings: RecordHoldings = {}
+        for (let after = ""; ;) {
+          const page = await this.#remote.holdings(session.harness, session.nativeId, after)
+          Object.assign(holdings, page.holdings)
+          if (page.next === null) break
+          after = page.next
+        }
+        await this.#store.remoteHolds(this.#remote.id, session.harness, session.nativeId, { holdings })
+        await this.#store.forgetPushed(this.#remote.id, session.harness, session.nativeId)
+        this.#pushed?.delete(key)
+        short += 1
+        this.#log("warn", "the account held less of a Session than this Mac believed; what it lacks goes again", { remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, believed: thought, held: holds })
+      } catch (error) {
+        this.#log("info", "couldn't compare a Session with the account", { remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    if (short) this.#pump()
   }
 
   /** Whether the store holds the session at all (captured, or for originals taken by the backfill). */
@@ -205,6 +299,7 @@ export class ScopedUploads {
 
   stop(): void {
     this.#stopped = true
+    this.#unhear()
     if (this.#wake) clearTimeout(this.#wake)
   }
 
@@ -217,7 +312,7 @@ export class ScopedUploads {
 
   /** Starts the most wanted pushes due, within the flights: a Session at work has a flight of its own. */
   #pump(): void {
-    if (this.#stopped || !this.#heads) return
+    if (this.#stopped || !this.#heads || this.#budget?.shedding) return
     const now = this.#now()
     let nextRetry = Number.POSITIVE_INFINITY
     for (const session of this.#scope.sessions) {
@@ -245,7 +340,7 @@ export class ScopedUploads {
   #start(session: Wanted, key: string): void {
     // The capture this push is sure to carry whole: whatever lands while it runs is behind it, and goes next.
     const head = this.#heads?.get(key) ?? 0
-    const done = this.#push(session, key, head).finally(() => {
+    const done = namedWork(this.#work, `push ${session.harness} ${session.nativeId.slice(0, 8)}`, () => this.#push(session, key, head)).finally(() => {
       this.#flights.delete(key)
       this.#pump()
     })
@@ -260,7 +355,9 @@ export class ScopedUploads {
       const at = this.#now()
       await this.#store.notePushed(this.#remote.id, session.harness, session.nativeId, head, at)
       this.#pushed?.set(key, { capture: Math.max(head, this.#pushed.get(key)?.capture ?? 0), at })
+      const streak = this.#retries.get(key)
       this.#retries.delete(key)
+      if (streak) this.#log("info", "pushed after failing", { remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, failures: streak.failures, failingMs: at - streak.since })
       if (report.versions || report.chunks) {
         this.#pushes += 1
         this.#bytes += report.bytes
@@ -268,17 +365,28 @@ export class ScopedUploads {
       }
     } catch (error) {
       if (this.#stopped) return
-      const failure = failureOf(error instanceof Error ? error : new Error(String(error)), session, started)
-      const retry = this.#retries.get(key) ?? { failures: 0, after: 0 }
+      const failed = error instanceof Error ? error : new Error(String(error))
+      const failure = failureOf(failed, session, started)
+      const words = failureWords(failed)
+      const before = this.#retries.get(key)
+      const retry: Retry = before?.words === words ? before : { failures: before?.failures ?? 0, after: 0, since: started, words }
       retry.failures += 1
+      failure.since = retry.since
       if (failure.conflict) retry.conflictAt = started
-      else retry.after = this.#now() + Math.min(RETRY_MOST_MS, RETRY_MS * 2 ** (retry.failures - 1))
+      else {
+        retry.refused = refusedBy(failed)
+        retry.after = this.#now() + Math.min(retry.refused ? REFUSED_MOST_MS : RETRY_MOST_MS, RETRY_MS * 2 ** (retry.failures - 1))
+      }
       this.#retries.set(key, retry)
       this.#failed += 1
+      // The Session's newest failure stands for the ones before it.
+      const kept = this.#failures.findIndex((each) => keyOf(each) === key)
+      if (kept >= 0) this.#failures.splice(kept, 1)
       this.#failures.unshift(failure)
       this.#failures.splice(FAILURES_KEPT)
-      this.#log("warn", failure.conflict ? "records went on in two places; the account's stand" : "push failed", {
+      if (retry !== before) this.#log("warn", failure.conflict ? "records went on in two places; the account's stand" : "push failed", {
         remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, tier: session.tier, failures: retry.failures, error: failure.message,
+        ...retry.refused && { retryMostMs: REFUSED_MOST_MS },
         ...failure.correlationId && { correlationId: failure.correlationId },
       })
     }
@@ -292,7 +400,7 @@ const keyOf = (session: { harness: string; nativeId: string }) => `${session.har
  * stores' marks for the status, so the window, the log and the uploads never disagree about a Session.
  */
 export function countTiers(scope: SyncScope, forms: { readable(session: Wanted): boolean; held(session: Wanted): boolean; whole(session: Wanted): boolean }): CatalogSyncStatus["tiers"] {
-  const tiers = { now: emptyTier(), day: emptyTier(), week: emptyTier(), month: emptyTier() }
+  const tiers = { now: emptyTier(), day: emptyTier(), week: emptyTier() }
   const threads = new Map<string, { tier: SyncTier; whole: boolean }>()
   for (const session of scope.sessions) {
     const tier = tiers[session.tier]
@@ -316,7 +424,12 @@ export function countTiers(scope: SyncScope, forms: { readable(session: Wanted):
   return tiers
 }
 
-const emptyTier = (): TierCount => ({ sessions: 0, threads: 0, readable: 0, held: 0, whole: 0, inCloud: 0, threadsInCloud: 0 })
+export const emptyTier = (): TierCount => ({ sessions: 0, threads: 0, readable: 0, held: 0, whole: 0, inCloud: 0, threadsInCloud: 0 })
+
+/** A failure's words without what changes with each try (its correlation ID, its tries): the same failure says the same. */
+function failureWords(error: Error): string {
+  return error instanceof GatewayHttpError ? `${error.status} ${error.message} ${error.call?.method ?? ""} ${error.call?.path ?? ""}` : error.message
+}
 
 function failureOf(error: Error, session: Wanted, at: number): SyncFailure {
   const failure: SyncFailure = { at, harness: session.harness, nativeId: session.nativeId, message: describeGatewayFailure(error) }

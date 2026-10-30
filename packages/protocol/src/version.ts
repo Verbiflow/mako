@@ -12,10 +12,16 @@ export const PROTOCOL_VERSION = 1
  * media (`media.ts`): live streams its clients watch, as binary messages beside the frames. 4 added a `listing` frame
  * keyed by cloud Thread, which a gateway takes and drops. 5 adds the runtime's `sessions` frame: its Sessions as the
  * account's list shows them, keyed by Mako's own IDs under the one-owner rule (`thread-listing.ts`). 6 lets a `sessions` row name its native
- * session, and list one Mako hasn't opened (a terminal's), with how its owner opens it. Every envelope stays at
- * `PROTOCOL_VERSION` on every link version.
+ * session, and list one Mako hasn't opened (a terminal's), with how its owner opens it. 7 adds `port-open`: a request to
+ * an app the runtime serves on one of its ports, answered on a media stream (`ports.ts`). 8 adds `going-quiet`: the runtime
+ * says it's going away on purpose (sleep, quit, sign-out) before it goes. 9 numbers what a runtime sends of a watched
+ * conversation (`live`'s `n`), so a gateway takes a resend once and says on a new link what it last relayed (`watch`'s
+ * `after`), and lets `live` carry a trace (`correlationId`) and `sessions` say when each row changed and when it was
+ * reported (`changedAt`, `reportedAt`). 10 lets a `sessions` row say what a waiting Session waits on the person for
+ * (`waitingFor`: an approval, a question, or anything else). Every envelope stays at `PROTOCOL_VERSION` on every link
+ * version.
  */
-export const LINK_VERSION = 6
+export const LINK_VERSION = 10
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -31,6 +37,22 @@ export const SESSIONS_VERSION = 5
 
 /** The first link version a `sessions` row may carry `nativeId` and `capture` on: a gateway that agreed less refuses them. */
 export const NATIVE_SESSIONS_VERSION = 6
+
+/** The first link version a gateway may send `port-open` on; a runtime that agreed less is never asked. */
+export const PORTS_VERSION = 7
+
+/** The first link version a runtime may send `going-quiet` on; a gateway that agreed less never sees one. */
+export const QUIET_VERSION = 8
+
+/**
+ * The first link version whose `live` frames carry the runtime's number (`n`) and a trace, whose `watch` says what was
+ * last relayed of each conversation (`after`), and whose `sessions` rows say when they changed (`changedAt`) and when the
+ * report went (`reportedAt`). A gateway that agreed less refuses all four.
+ */
+export const NUMBERED_LIVE_VERSION = 9
+
+/** The first link version whose `sessions` rows say what a waiting Session waits on (`waitingFor`); a gateway that agreed less refuses it. */
+export const WAITING_FOR_VERSION = 10
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

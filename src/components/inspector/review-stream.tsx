@@ -24,6 +24,7 @@ import { formatTime } from "@/lib/format"
 import { noteKey, writerNotes, type WriterNote } from "@/lib/turn-writers"
 import { cn } from "@/lib/utils"
 import type { GitCommitEntry, GitDiff, GitFile } from "@/lib/types"
+import { turnWords } from "@/state/prompt-delivery"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import { git as gitActions } from "@/state/git"
@@ -429,7 +430,7 @@ function useTurns(workspace: string): TurnChoice[] {
     requests.forEach((request, index) => {
       const counted = countedChanges(request.changes)
       const before = request.snapshots?.before
-      const words = (request.displayText ?? request.text).replace(/\s+/g, " ").trim()
+      const words = turnWords(requests, request)
       if (counted) {
         if (!counted.files.some((file) => fileRoot(file) === workspace)) return
         // The turn's own, as its line and its header count them; files not sure whose apart.

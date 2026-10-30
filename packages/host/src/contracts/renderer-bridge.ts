@@ -22,6 +22,7 @@ import type { FileReferenceSource, FileResolution } from "./file-references.js"
 import type { MediaChecks, MediaConfirmation } from "./turn-media.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
+import type { AccessChoices } from "./access-choices.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
@@ -65,6 +66,8 @@ import type { LiveHistoryRead, LiveHistoryChunk } from "./live-history.js"
 import type { ProviderConnection, ProviderConnectionAction } from "./provider-connection.js"
 import type { CloudAccount, CloudBrowserSession, CloudDevice } from "./cloud-account.js"
 import type { SyncStatus } from "./sync-status.js"
+import type { SyncReadings } from "./sync-readings.js"
+import type { CloudTurnOn } from "./cloud-turn-on.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { ThreadHarnessCheck } from "./cloud-harnesses.js"
@@ -84,6 +87,7 @@ import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSna
 import type { CrashReport } from "./crash-report.js"
 import type { TranscriptDepth, TranscriptDocument, TranscriptSource } from "./transcript-document.js"
 import type { ProviderResidencySnapshot } from "./provider-residency.js"
+import type { SessionReaderHistory } from "./session-reader.js"
 import type { AccountHarness, AccountLogin, AccountLoginResult, AccountProvider, AccountRemovalOutcome, AccountRemovalPlan, AccountUsage, AccountCatalog, ResetCreditOutcome } from "./accounts.js"
 
 export interface BridgeTransport {
@@ -201,6 +205,11 @@ export function createMakoBridge(transport: BridgeTransport) {
     workspaceMoveOutcome: (conversationId: string) => invokeTrustedHost<MoveOutcome | null>("mako:workspace-move-outcome", conversationId),
     bringStayedChanges: (conversationId: string) => invokeTrustedHost<{ outcome: MoveOutcome; left: string[] }>("mako:workspace-move-bring-stayed", conversationId),
     putBackMovedFiles: (conversationId: string, paths: string[]) => invokeTrustedHost<{ outcome: MoveOutcome; left: string[] }>("mako:workspace-move-put-back", conversationId, paths),
+    /** The person's access choice per harness (`contracts/access-choices.ts`), which every start reads. */
+    accessChoices: () => invokeTrustedHost<AccessChoices>("mako:access-choices"),
+    chooseAccess: (harness: string, mode: string) => invokeTrustedHost<AccessChoices>("mako:access-choose", harness, mode),
+    /** A window's own copy from before the host kept them, handed over once: taken only where no choice is made. */
+    adoptAccessChoices: (modes: Record<string, string>) => invokeTrustedHost<AccessChoices>("mako:access-adopt", modes),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>
@@ -451,6 +460,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     cloudAccount: () => invokeTrustedHost<CloudAccount>("mako:cloud-account"),
     /* How this device's Sessions stand in the account: what's there, what's catching up, and what failed. */
     syncStatus: () => invokeTrustedHost<SyncStatus>("mako:sync-status"),
+    syncReadings: () => invokeTrustedHost<SyncReadings>("mako:sync-readings"),
+    cloudTurnOn: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on"),
+    cloudTurnOnCheck: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on-check"),
+    cloudTurnOnRetryBases: () => invokeTrustedHost<CloudTurnOn>("mako:cloud-turn-on-retry-bases"),
     cloudSignIn: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in"),
     cloudSignInCancel: () => invokeTrustedHost<CloudAccount>("mako:cloud-sign-in-cancel"),
     cloudDevices: () => invokeTrustedHost<{ devices: CloudDevice[]; current: string }>("mako:cloud-devices"),
@@ -892,6 +905,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<ProviderResidencySnapshot>(
         "mako:provider-residency"
       ),
+    /** Each time the reader serving the session list was lost or adopted, and its own log's path. */
+    sessionReaderHistory: () =>
+      invokeTrustedHost<SessionReaderHistory>("mako:session-reader-history"),
     clearCrashes: () => invokeTrustedHost<void>("mako:clear-crashes"),
     reportCrash: (
       kind: "renderer-error" | "renderer-rejection",

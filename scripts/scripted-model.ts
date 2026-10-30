@@ -28,6 +28,8 @@ export interface ScriptedReply {
   fail?: { status: number; message: string }
   /** A Responses `compaction` item's content, which only the provider reads. */
   compaction?: string
+  /** Milliseconds before each streamed delta of this reply, over the model's own `pace`: one answer streamed slowly. */
+  pace?: number
 }
 
 type Wire = "chat" | "messages" | "responses"
@@ -110,6 +112,9 @@ function forcedReply(choice: JsonValue | undefined, tools: readonly JsonValue[] 
   return { call: { id: "call_aside", name, arguments: Object.fromEntries(required.map((field) => [field, aside])) } }
 }
 
+/** A streamed event that carries part of a reply (`response.output_text.delta`, `content_block_delta`), which `pace` spaces out. */
+const DeltaEvent = z.object({ type: z.string().regex(/delta$/) })
+
 export interface ScriptedModelOptions {
   /** GETs whose path starts with a key, answered with its JSON. */
   answers?: ReadonlyMap<string, string>
@@ -123,6 +128,19 @@ export interface ScriptedModelOptions {
   usage?: JsonObject
   /** A bearer token the provider no longer takes (a refresh retired it): its requests are answered 401. */
   refuses?: (bearer: string) => boolean
+  /**
+   * The address it listens on and names in its URL: this computer's loopback unless given. A harness on another machine
+   * (a local cloud machine in Docker) reaches it at an address this computer has on its network.
+   */
+  host?: string
+  /**
+   * Milliseconds before each streamed delta of an OpenAI Responses or Anthropic Messages reply, so it arrives at a
+   * model's pace rather than all at once (20 is 50 tokens a second): `npm run bench:sync-latency` times each word from
+   * here to every device. Unpaced when not given.
+   */
+  pace?: number
+  /** Each streamed event as it is written to the harness, so a caller can time it. */
+  sent?: (event: JsonObject) => void
 }
 
 /** A request a stand-in model received: a conversation's takes a step of the script, and is unscripted when none was left. */
@@ -177,13 +195,20 @@ export async function scriptedModel(options: ScriptedModelOptions) {
       const as: Serving = { model: body.model, usage: options.usage }
       if (!streams) return void json(response, JSON.stringify(served(WHOLE[wire](reply), as)))
       response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" })
-      for (const event of STREAMED[wire](reply).map((event) => served(event, as))) {
+      void paced(STREAMED[wire](reply).map((event) => served(event, as)), (event) => {
         const named = wire === "chat" ? "" : `event: ${z.object({ type: z.string() }).parse(event).type}\n`
         response.write(`${named}data: ${JSON.stringify(event)}\n\n`)
-      }
-      response.end(wire === "chat" ? "data: [DONE]\n\n" : "")
+      }, reply.pace ?? options.pace).then(() => response.end(wire === "chat" ? "data: [DONE]\n\n" : ""))
     })
   })
+  /** Writes a reply's events in order, each delta `pace` ms after the event before it, telling `options.sent` of each. */
+  const paced = async (events: JsonObject[], write: (event: JsonObject) => void, pace = options.pace) => {
+    for (const event of events) {
+      if (pace && DeltaEvent.safeParse(event).success) await new Promise((resolve) => setTimeout(resolve, pace))
+      write(event)
+      options.sent?.(event)
+    }
+  }
   /** The script's next step for a conversation request, the aside for any other. */
   const answer = (path: string, body: { tools?: JsonValue[]; tool_choice?: JsonValue }, heard: string): ScriptedReply => {
     const aside = options.aside ?? "Notes"
@@ -214,14 +239,15 @@ export async function scriptedModel(options: ScriptedModelOptions) {
       if (body.generate === false) return void warmUpAnswer(id).forEach(send)
       const reply = compacting(body.input, answer(`WS ${path}`, { tools: chain.tools, tool_choice: body.tool_choice }, chain.heard))
       if (reply.fail) return void send(JSON.stringify({ type: "error", status: reply.fail.status, error: { type: "server_error", message: reply.fail.message } }))
-      for (const event of responsesStreamed(reply, id)) send(JSON.stringify(served(event, { model: body.model, usage: options.usage })))
+      void paced(responsesStreamed(reply, id).map((event) => served(event, { model: body.model, usage: options.usage })), (event) => send(JSON.stringify(event)), reply.pace ?? options.pace)
     })
   })
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const host = options.host ?? "127.0.0.1"
+  await new Promise<void>((resolve) => server.listen(0, host, resolve))
   // SAFETY: a server listening on a TCP port reports its address as an AddressInfo.
   const { port } = server.address() as AddressInfo
   return {
-    url: `http://127.0.0.1:${port}`,
+    url: `http://${host}:${port}`,
     requests,
     bearers,
     close: () => new Promise<void>((resolve) => {

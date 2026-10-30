@@ -6,7 +6,7 @@ import { holdUntil } from "@/state/acp-queue"
 import { failureKey, revealFailure, useFailureVisibility } from "@/state/failure-visibility"
 import { useLimitReset } from "@/state/limit-reset"
 import { prefsStore, setPref, usePrefs } from "@/state/prefs"
-import { endsOnFailureRow } from "@/state/prompt-delivery"
+import { endsOnFailureRow, turnWords } from "@/state/prompt-delivery"
 import { requestRecovery } from "@/state/request-recovery"
 import { shallowEqual } from "@/state/store"
 
@@ -31,7 +31,8 @@ export function useFailureNotice(): ComposerNotice | null {
     const answered = requests.findLastIndex((request) => request.status === "completed")
     const latest = requests.slice(answered + 1).findLast(endsOnFailureRow)
     const waiting = latest !== undefined && requests.some((request) => request.status === "held" && request.wake?.after === latest.id)
-    return { key: current.key, harness: current.harness, latest, waiting }
+    // Which message, by its words: a continuation's are Mako's, so it is named by the turn it continued.
+    return { key: current.key, harness: current.harness, latest, waiting, words: latest ? turnWords(requests, latest) : "" }
   }, shallowEqual)
   const latest = live?.latest
   const key = live && latest ? failureKey(live.key, latest.id) : ""
@@ -50,7 +51,7 @@ export function useFailureNotice(): ComposerNotice | null {
   const glyph = recoveryGlyph(recovery)
   const Glyph = glyph.icon
   // Which message: its words, since an earlier one may say the same thing on screen.
-  const words = (latest.displayText ?? latest.text).replace(/\s+/g, " ").trim()
+  const words = live.words
   const quoted = words ? `“${words.length > 48 ? `${words.slice(0, 47).trimEnd()}…` : words}”` : "Your last message"
   actions.push({ label: "Show", title: `Show ${quoted} in the conversation`, onClick: () => revealFailure(key) })
   return {

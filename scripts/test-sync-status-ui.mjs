@@ -8,8 +8,8 @@ import { manualDevUpdates } from "../electron/dev-updates.mjs"
 
 /**
  * Settings › Account's Sync against the production components and the mock
- * bridge: what of the last 30 days is in the cloud, by tier (working now,
- * today, this week, earlier this month), as it catches up, once it's all
+ * bridge: what of the last 7 days is in the cloud, by tier (working now,
+ * today, this week), as it catches up, once it's all
  * there, while it waits for power, and when a push failed, in the cloud's
  * words with a copy of the correlation IDs. A Mac without the cloud shows no
  * Sync. Screenshots of each, dark and light, stay in the printed directory.
@@ -121,10 +121,10 @@ async function checkWindow() {
 
   // 1. Catching up: the Thread at work and today's are in; this week's and the rest go, the older sessions read first.
   await openAccount("&cloud=signed-in&invited")
-  await until(`Boolean(document.querySelector('${section} [data-sync-tier="month"]'))`, "the tiers")
+  await until(`Boolean(document.querySelector('${section} [data-sync-tier="week"]'))`, "the tiers")
   await show()
   let said = await text()
-  assert.match(said, /Your last 30 days, in the cloud/)
+  assert.match(said, /Your last 7 days, in the cloud/)
   assert.match(said, /Catching up/)
   assert.match(said, /Working now\n2 Threads · 3 Sessions\n\s*All 2 Threads/)
   assert.match(said, /Today\n9 Threads · 14 Sessions\n\s*All 9 Threads/)
@@ -140,7 +140,7 @@ async function checkWindow() {
   await show()
   said = await text()
   assert.match(said, /In sync/)
-  assert.match(said, /Earlier this month\n74 Threads · 129 Sessions\n\s*All 74 Threads/)
+  assert.match(said, /This week\n31 Threads · 58 Sessions\n\s*All 31 Threads/)
   assert.match(said, /Last sent just now\./)
   assert.doesNotMatch(said, /Reading this Mac's older sessions/, "a finished backfill isn't said")
   await both("sync-in-sync", [section])
@@ -155,21 +155,31 @@ async function checkWindow() {
   assert.match(said, /2 Sessions changed since their last copy, going up in turn\./)
   await both("sync-waiting-for-power", [section])
 
-  // 4. A push failed: said in the cloud's words, with its correlation ID one copy away.
-  await openAccount("&cloud=signed-in&invited&sync=failing")
+  // 4. A push failed: the rail says how many Sessions haven't gone up for a minute and why the first didn't, opening
+  // Settings › Account, where each is said in the cloud's words, with its correlation ID one copy away.
+  await window.loadURL(`${base}?mock&cloud=signed-in&invited&sync=failing`)
+  await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
+  await until(`Boolean(document.querySelector('.composer-input'))`, "the desk")
+  await until(`document.querySelector('[data-sync-rail]') !== null`, "the rail's line")
+  const rail = await evaluate(`document.querySelector('[data-sync-rail]').innerText`)
+  assert.match(rail, /2 Sessions not synced/)
+  assert.match(rail, /Why/)
+  await both("sync-rail", ["[data-sync-rail]"])
+  await evaluate(`document.querySelector('[data-sync-rail]').click(), true`)
   await until(`document.querySelector('[data-sync-failures]') !== null`, "the failures")
   await show()
   const failure = await evaluate(`document.querySelector('[data-sync-failures]').innerText`)
-  assert.match(failure, /2 Sessions didn't go up, the last 2m ago\. Mako tries again on its own\./)
+  assert.match(failure, /2 Sessions haven't gone up, the first since 40m ago\. Mako tries again on its own\./)
+  assert.match(failure, /refused one chunk of this Session \(8fd50237a1c4, 40,960 bytes\)/, "each named with why")
   assert.match(failure, /correlation 6f1c2d3e-8b9a-4c7d-a1e2-f3b4c5d6e7f8/)
   assert.match(failure, /Copy details/)
   await both("sync-failing", [section, "[data-sync-failures]"])
 
   // 5. No cloud on the account: no Sync at all.
   await openAccount("&cloud=signed-in")
-  await until(`document.body.innerText.includes("Mako's cloud is invite-only for now")`, "the account")
+  await until(`document.body.innerText.includes("Invite-only for now")`, "the account")
   assert.equal(await evaluate(`document.querySelector('${section}')`), null)
-  console.log("Sync status UI: catching up by tier with the backfill said, all in sync, waiting for power, a failure in the cloud's words with its correlation ID, and nothing without the cloud")
+  console.log("Sync status UI: catching up by tier with the backfill said, all in sync, waiting for power, Sessions not synced said in the rail and named in Settings in the cloud's words with their correlation IDs, and nothing without the cloud")
   clearTimeout(watchdog)
   app.exit(0)
 }

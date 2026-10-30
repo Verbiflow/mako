@@ -7,6 +7,8 @@ import {
   problemType,
 } from "./envelope.js"
 import { type EventFrame, threadStream } from "./events.js"
+import { readStreamNotice } from "./live-tail.js"
+import { sessionStream } from "./socket.js"
 import { type ClientSession, type GatewayUnderTest, LinkClosedError, type RuntimeLink } from "./gateway.js"
 import type { Json } from "./ids.js"
 import { type MediaWatch, encodeMediaMessage } from "./media.js"
@@ -100,6 +102,121 @@ export function runGatewayConformance(
       assert.equal(refused.problem.outcome, "not-applied")
       await settle()
       assert.equal(link.closed, true)
+    }
+  )
+
+  scenario(
+    "a runtime that says it's going quiet is let go at once: its link closes, and it enrolls again when it's back",
+    async (gateway) => {
+      const link = await gateway.connectRuntime()
+      link.send({ type: "enroll", runtimeId: "rt-a", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+      expect(await link.next(), "enrolled")
+      link.send({ type: "going-quiet", reason: "sleep" })
+      await assert.rejects(link.next(), LinkClosedError, "closed without waiting for missed heartbeats")
+      const back = await gateway.connectRuntime()
+      back.send({ type: "enroll", runtimeId: "rt-a", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+      expect(await back.next(), "enrolled")
+      back.close()
+    }
+  )
+
+  /** A runtime on the newest link, watched by a client of its conversation `c-1` from `after`: the watch it hears. */
+  const watched = async (gateway: GatewayUnderTest, after = 0) => {
+    const runtime = await gateway.connectRuntime()
+    runtime.send({ type: "enroll", runtimeId: "rt-live", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+    expect(await runtime.next(), "enrolled")
+    const client = await gateway.connectClient(phone)
+    const stream = client.subscribe({ stream: sessionStream("rt-live", "c-1"), after })
+    assert.deepEqual(expect(await runtime.next(), "watch").conversations, ["c-1"])
+    return { runtime, client, stream }
+  }
+  const live = (runtime: RuntimeLink, n: number, text = `update ${n}`, correlationId?: string) =>
+    runtime.send({ type: "live", conversation: "c-1", n, event: Payload.encoded(text), ...(correlationId && { correlationId }) })
+  const notice = (frame: EventFrame) => {
+    const said = readStreamNotice(frame.event.text)
+    if (!said) assert.fail(`expected the stream's notice, got ${frame.event.text}`)
+    assert.equal(frame.seq, Math.max(1, said.head))
+    return said
+  }
+
+  scenario(
+    "a watched conversation's updates are numbered by its stream: a watcher hears the head first, then each update with the next number, a trace with the one that carries it",
+    async (gateway) => {
+      const { runtime, stream } = await watched(gateway)
+      const head = notice(await stream.next())
+      assert.equal(head.streamNotice, "head")
+      live(runtime, 7, "first", "st-trace-1")
+      live(runtime, 8, "second")
+      const first = await stream.next()
+      assert.equal(first.seq, head.head + 1)
+      assert.equal(first.event.text, "first")
+      assert.equal(first.correlationId, "st-trace-1")
+      const second = await stream.next()
+      assert.equal(second.seq, head.head + 2)
+      assert.equal(second.correlationId, undefined)
+    }
+  )
+
+  scenario(
+    "a watcher back from a dropped link gets what it missed from what the gateway kept, then live updates, each once",
+    async (gateway) => {
+      const { runtime, stream } = await watched(gateway)
+      // Another device watches throughout, so this one knows when the gateway has relayed what it misses.
+      const other = (await gateway.connectClient(desktop)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: 0 })
+      notice(await stream.next())
+      notice(await other.next())
+      live(runtime, 1)
+      const last = (await stream.next()).seq
+      await other.next()
+      stream.close()
+      // Gone from this device; the runtime still sends, and the gateway keeps what it relays.
+      live(runtime, 2)
+      live(runtime, 3)
+      await other.next()
+      await other.next()
+      // Back on a new connection, as after a dropped link. (On the connection it left, updates relayed before the gateway
+      // read its unsubscribe may still be on their way, and would reach a new subscription there ahead of its notice: a
+      // follower's cursor takes those as the repeats or the gap they are.)
+      const back = (await gateway.connectClient(phone)).subscribe({ stream: sessionStream("rt-live", "c-1"), after: last })
+      const head = notice(await back.next())
+      assert.equal(head.streamNotice, "head")
+      assert.equal(head.head, last + 2)
+      assert.deepEqual([await back.next(), await back.next()].map((frame) => [frame.seq, frame.event.text]), [[last + 1, "update 2"], [last + 2, "update 3"]])
+      live(runtime, 4)
+      const next = await back.next()
+      assert.deepEqual([next.seq, next.event.text], [last + 3, "update 4"])
+    }
+  )
+
+  scenario(
+    "a watcher whose place the gateway no longer keeps is told to read the conversation again",
+    async (gateway) => {
+      const { stream } = await watched(gateway, 1)
+      const said = notice(await stream.next())
+      assert.equal(said.streamNotice, "reread")
+    }
+  )
+
+  scenario(
+    "a runtime on a new link hears what was last relayed of each watched conversation, and what it sends again is relayed once",
+    async (gateway) => {
+      const { runtime, stream } = await watched(gateway)
+      const head = notice(await stream.next()).head
+      live(runtime, 5)
+      live(runtime, 6)
+      assert.equal((await stream.next()).seq, head + 1)
+      assert.equal((await stream.next()).seq, head + 2)
+      runtime.close()
+      const back = await gateway.connectRuntime()
+      back.send({ type: "enroll", runtimeId: "rt-live", versions: SUPPORTED_VERSIONS, build: "conformance", threads: [] })
+      expect(await back.next(), "enrolled")
+      const watch = expect(await back.next(), "watch")
+      assert.deepEqual(watch.conversations, ["c-1"])
+      assert.deepEqual(watch.after, { "c-1": 6 })
+      back.send({ type: "live", conversation: "c-1", n: 6, event: Payload.encoded("update 6 again") })
+      back.send({ type: "live", conversation: "c-1", n: 7, event: Payload.encoded("update 7") })
+      const next = await stream.next()
+      assert.deepEqual([next.seq, next.event.text], [head + 3, "update 7"])
     }
   )
 

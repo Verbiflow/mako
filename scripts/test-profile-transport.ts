@@ -204,6 +204,22 @@ await assert.rejects(processes.run({ ...work, signal: activeAbort.signal }, asyn
 const cancelledPid = abortedPid
 assert.ok(cancelledPid)
 assert.throws(() => process.kill(cancelledPid, 0), { code: "ESRCH" }, "active cancellation cleans up its own process before returning")
+// The host stopping ends every query, its process with it, and refuses any asked after: a sign-in check asked as the
+// host began stopping once started Grok after it, and Grok outlived the host.
+const stopping = new DiscoveryProcesses()
+const runningStarted = Promise.withResolvers<number>()
+const stoppedRun = stopping.run(work, async ({ child, exited }) => {
+  runningStarted.resolve(child.pid!)
+  await exited
+})
+const stoppedRunRefused = assert.rejects(stoppedRun, /Mako is stopping/)
+const stoppedPid = await runningStarted.promise
+let lateStarted = false
+await stopping.stop()
+await stoppedRunRefused
+assert.throws(() => process.kill(stoppedPid, 0), { code: "ESRCH" }, "stopping ends a running query's process before it resolves")
+await assert.rejects(stopping.run(work, async () => { lateStarted = true }), /Mako is stopping/)
+assert.equal(lateStarted, false, "a query asked after stop starts no process")
 console.log(
-  "Profile transport: bounded output/concurrency, queue deadlines, queued and active cancellation, priority reservation, complete frames and confirmed owned process termination verified"
+  "Profile transport: bounded output/concurrency, queue deadlines, queued and active cancellation, priority reservation, complete frames, confirmed owned process termination and ending at stop verified"
 )

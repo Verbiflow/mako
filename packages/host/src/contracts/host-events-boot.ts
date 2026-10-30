@@ -87,7 +87,18 @@ export type HostEventBody =
   | { type: "cloud-start-step"; conversationId: string; step: CloudStartStep; project: string }
   /** A Thread's move to the cloud (`mako:thread-move`), step by step, for the conversation it was asked from. */
   | { type: "thread-move-step"; conversationId: string; move: string; step: ThreadMoveStep }
+  /**
+   * A Thread running in the cloud whose worktree here stopped following it: the person changed it here (`folders`), so
+   * nothing more is laid over it, and the way back merges both. Said for each of its conversations here.
+   */
+  | { type: "thread-follow-stopped"; conversations: string[]; folders: string[]; at: number }
   | { type: "thread-return-step"; conversationId: string; move: string; step: ThreadReturnStep }
+  /**
+   * The cloud's word on a cloud Thread's work, as its object says it in the Thread's stream, only when the person's own
+   * work is affected: changes its machine couldn't keep, or a Thread that can't carry on without them. For each of the
+   * Thread's conversations this host shows; the newest stands.
+   */
+  | { type: "cloud-machine-notice"; conversationIds: string[]; notice: import("@mako/protocol/saves").ThreadMachineNotice }
   /** An agent's tool changed this device's worktrees; windows read them again. */
   | { type: "worktrees-changed" }
   /** An agent's tool pushed, opened or merged a pull request; windows read GitHub and the worktrees' summaries again. */
@@ -96,6 +107,8 @@ export type HostEventBody =
   | { type: "workspace-moves"; moves: WorkspaceMoves }
   /** The host's record of built plans changed; window-wide. */
   | { type: "plan-builds"; builds: PlanBuilds }
+  /** The person's access choices changed, here or on another device (`contracts/access-choices.ts`); window-wide. */
+  | { type: "access-choices"; choices: import("./access-choices.js").AccessChoices }
   /** An agent's allowed move happened: `from` is archived and `to` goes on in the worktree. */
   | {
       type: "workspace-moved"; from: string; to: string; branch?: string; changed: number
@@ -135,6 +148,8 @@ export type HostEventBody =
   | { type: "cloud-account"; account: CloudAccount }
   /** Whether this Mac shares its harnesses' sign-ins with Mako Cloud, and how each stands; window-wide. */
   | { type: "cloud-sign-ins"; signIns: CloudSignInsState }
+  /** Turning Mako Cloud on moved: a step done, stuck or under way (`CloudTurnOn`). */
+  | { type: "cloud-turn-on"; turnOn: import("./cloud-turn-on.js").CloudTurnOn }
   /** The person's choice about handing agents to the cloud as this Mac sleeps changed. */
   | { type: "handoff-settings"; settings: import("./cloud-threads.js").HandOffSettings }
   /** The person's conversation settings changed (`ConversationSettings`). */

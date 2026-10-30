@@ -140,7 +140,7 @@ const CONNECTION_MESSAGE =
   /RetriableError|http\/2|HTTP\/2|RST_STREAM|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|stream closed|network error|fetch failed/i
 
 /**
- * The SDK's words when its own retry loop gives up (1.0.31 through 1.0.40);
+ * The SDK's words when its own retry loop gives up (1.0.31 through 1.2.0);
  * neither carries a code. Each attempt it made already re-ran the turn
  * (without a checkpoint, the whole message), so continuing it repeats that
  * work once more and, in practice, ends on the same error.
@@ -544,12 +544,12 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
   return {
     provider: "cursor",
     launchEnvironment: { kind: "prepared", via: "SDK auth resolves its credential over the admitted account environment." },
-    compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Cursor accepts a summarize request from a local run, but SDK 1.0.40 has no way to send one." },
-    goals: { kind: "mako", reason: "SDK 1.0.40 has no goal to set or read; Cursor's own goal tools stay inside its agent." },
+    compaction: { kind: "automatic", reason: "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. SDK 1.2.0 can ask for one (`Agent.summarize()`), which Mako doesn't send yet." },
+    goals: { kind: "mako", reason: "SDK 1.2.0 has no goal to set or read; Cursor's own goal tools stay inside its agent." },
     review: { kind: "mako", reason: "Cursor's SDK has no review; Bugbot reviews pull requests on Cursor's servers." },
     sideQuestions: {
       kind: "fork",
-      via: "SDK 1.0.40 has no side question, so Mako copies the agent's store to a new agent, resumes it with read-only tools and asks it there; closing the side conversation deletes the copy.",
+      via: "SDK 1.2.0 has no side question, so Mako copies the agent's store to a new agent, resumes it with read-only tools and asks it there; closing the side conversation deletes the copy.",
       async ask(id, { side, question, earlier, stream, signal }) {
         const live = requireLive(id)
         live.sides.set(side, stream)

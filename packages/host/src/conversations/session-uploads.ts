@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises"
+import type { SyncRecorder } from "../contracts/sync-readings.js"
 import { join } from "node:path"
 import type { ReportedSession } from "@mako/protocol/thread-listing"
 import { BACKFILL_PROGRESS, BackfillProgressSchema } from "@mako/sessions/record-backfill"
@@ -36,6 +37,8 @@ export type UploadSources = {
   /** The record store's backfill, as its last pass wrote it beside the store; undefined before the first. */
   backfill(): Promise<Backfill | undefined>
   now(): number
+  /** The status changed (`SessionUploads.status`): what follows it hears so, rather than asking on a timer. */
+  statusChanged?(status: SyncStatus): void
 }
 
 /**
@@ -75,7 +78,11 @@ export class SessionUploads {
   #paused: boolean | undefined
   #power: { reading: PowerReading; at: number } | undefined
   #status: SyncStatus = { state: "off", reason: "signed-out" }
-  /** Failures already logged, by when and what: the catalog keeps the newest few until they're pushed. */
+  #statusText = JSON.stringify(this.#status)
+  /**
+   * Failures already logged, by when they began and what: the catalog keeps each Session's newest until it's pushed,
+   * and one tried again keeps when it began (`since`), so it's logged once rather than at every try.
+   */
   readonly #logged = new Set<string>()
 
   constructor(sources: UploadSources) {
@@ -96,7 +103,7 @@ export class SessionUploads {
         await this.#sources.originals(null)
         hostLog("sync", "this device's Sessions stopped going to the account", { reason: links.reason })
       }
-      this.#status = { state: "off", reason: links.reason }
+      this.#said({ state: "off", reason: links.reason })
       return
     }
     const rows = this.#sources.rows()
@@ -132,11 +139,19 @@ export class SessionUploads {
     ])
     for (const [form, status] of [["copies", catalog?.copies], ["originals", catalog?.originals]] as const)
       for (const failure of status?.failures ?? []) this.#logFailure(form, failure)
-    this.#status = syncStatusOf(scope, catalog, backfill)
+    this.#said(syncStatusOf(scope, catalog, backfill))
+  }
+
+  #said(status: SyncStatus): void {
+    this.#status = status
+    const text = JSON.stringify(status)
+    if (text === this.#statusText) return
+    this.#statusText = text
+    this.#sources.statusChanged?.(status)
   }
 
   #logFailure(form: "copies" | "originals", failure: SyncFailure): void {
-    const key = `${form}\n${failure.at}\n${failure.harness}\n${failure.nativeId}`
+    const key = `${form}\n${failure.since ?? failure.at}\n${failure.harness}\n${failure.nativeId}`
     if (this.#logged.has(key)) return
     this.#logged.add(key)
     if (this.#logged.size > 200) this.#logged.delete(this.#logged.values().next().value ?? key)
@@ -167,7 +182,7 @@ export function syncStatusOf(scope: SyncScope, catalog: CatalogSyncStatus | null
     tiers,
     sending: [...(catalog.copies?.sending ?? []), ...(catalog.originals?.sending ?? [])].length,
     stale: catalog.stale,
-    failures: failures.map(({ at, harness, nativeId, message, correlationId }) => ({ at, harness, nativeId, message, ...correlationId && { correlationId } })),
+    failures: failures.map(({ at, harness, nativeId, message, correlationId, since }) => ({ at, harness, nativeId, message, ...correlationId && { correlationId }, ...since !== undefined && { since } })),
     ...lastSuccessAt > 0 && { lastSuccessAt },
     ...backfill && { backfill },
   }
@@ -189,7 +204,11 @@ export async function readBackfill(records: string): Promise<Backfill | undefine
   return { sessions, done, startedAt, ...endedAt !== undefined && { endedAt } }
 }
 
-/** How this device's Sessions stand in the account, for Settings (`SessionUploads.status`); off where nothing uploads. */
-export function declareSyncMethods(methods: MethodTable, uploads: Pick<SessionUploads, "status"> | undefined): void {
+/**
+ * How this device's Sessions stand in the account, for Settings (`SessionUploads.status`), off where nothing uploads;
+ * and how its sync goes, for Diagnostics (`SyncRecorder.readings`).
+ */
+export function declareSyncMethods(methods: MethodTable, uploads: Pick<SessionUploads, "status"> | undefined, readings: Pick<SyncRecorder, "readings">): void {
   methods.handle("mako:sync-status", () => uploads?.status() ?? { state: "off", reason: "signed-out" })
+  methods.handle("mako:sync-readings", () => readings.readings())
 }
