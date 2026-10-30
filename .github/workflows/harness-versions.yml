@@ -121,7 +121,7 @@ jobs:
           git config user.name "$BOT[bot]"
           git config user.email "$(gh api "/users/$BOT%5Bbot%5D" --jq .id)+$BOT[bot]@users.noreply.github.com"
           git switch -c "$BRANCH"
-          git add -A packages scripts docs/adding-a-harness.md package.json package-lock.json
+          git add -A packages scripts docs/adding-a-harness.md docs/harness-concepts.md package.json package-lock.json
           git commit -m "Move ${{ matrix.harness }} to ${{ matrix.version }}"
           # The branch is this job's alone. One left by a run that couldn't open its
           # pull request (none exists, or the step above would have skipped) is replaced.

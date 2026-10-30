@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Ask me with your question tool, once, whether the release should ship on Friday or Monday, then tell me what I picked. Don't run commands. A question with two options, answered with the first, then the answer.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#flint-cookie",
+      "path": ".local/share/devin/cli/sessions.db#steady-dryer",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/62249014-bf58-4805-84bd-e3eb5914aa5e.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/34f5d961-fc7b-4018-a48b-6073a817c182.db",
       "known": []
     }
   ],

@@ -15,24 +15,39 @@ import { constants, createZstdCompress, createZstdDecompress, zstdDecompressSync
  * header and its blocks' headers, `frameLength`), and give exactly the content size its header names; anything else
  * rejects its call and drops the context, and the next call opens a new one. A whole frame that names no size is read
  * on its own, by `zstdDecompressSync`.
+ *
+ * zlib's encoder, streamed or one-shot (`zstdCompressSync`), writes one more thing: when a frame ends exactly at the
+ * end of its 16 KiB output buffer, zlib asks the encoder again, and zstd answers a frame already ended with an empty
+ * one (`EMPTY_FRAME`, 9 bytes). `compress` drops it. Chunks and views stored before hold it after their frame, so a
+ * frame followed only by empty frames reads as that frame: they add no bytes, as to any zstd decoder.
  */
 export class ZstdFrames {
   readonly #compressing = new FrameStream(() => createZstdCompress({ flush: constants.ZSTD_e_end, params: { [constants.ZSTD_c_compressionLevel]: 3 } }))
   readonly #decompressing = new FrameStream(() => createZstdDecompress())
 
   /** `bytes` as one zstd frame, at level 3. */
-  compress(bytes: Uint8Array): Promise<Buffer> {
-    return this.#compressing.run(bytes)
+  async compress(bytes: Uint8Array): Promise<Buffer> {
+    const made = await this.#compressing.run(bytes)
+    const length = frameLength(made)
+    if (length === made.length) return made
+    if (length === undefined || !emptyFrames(made.subarray(length))) {
+      this.#compressing.close()
+      throw new ZstdFrameError(`The encoder made ${made.length} bytes that aren't one zstd frame`)
+    }
+    // Without the empty frame a full output buffer asked for; copied, so the frame keeps a buffer of its own size.
+    return Buffer.from(made.subarray(0, length))
   }
 
-  /** The bytes of the zstd frame `frame`; rejects unless it is one whole frame. */
+  /** The bytes of the zstd frame `frame`; rejects unless it is one whole frame, followed by nothing but empty frames. */
   async decompress(frame: Uint8Array): Promise<Buffer> {
     const header = frameHeader(frame)
     if (header.kind === "not a frame") throw new ZstdFrameError("Not a zstd frame")
     const length = frameLength(frame)
-    if (length !== frame.byteLength) throw new ZstdFrameError(length === undefined ? "A zstd frame cut short" : `A zstd frame of ${length} bytes, with ${frame.byteLength - length} more after it`)
-    if (header.kind === "no size") return zstdDecompressSync(frame)
-    return this.#decompressing.run(frame, header.size)
+    if (length === undefined) throw new ZstdFrameError("A zstd frame cut short")
+    if (length !== frame.byteLength && !emptyFrames(frame.subarray(length))) throw new ZstdFrameError(`A zstd frame of ${length} bytes, with ${frame.byteLength - length} more after it`)
+    const one = frame.subarray(0, length)
+    if (header.kind === "no size") return zstdDecompressSync(one)
+    return this.#decompressing.run(one, header.size)
   }
 
   /** Frees both contexts; a later call opens new ones. */
@@ -52,6 +67,16 @@ export type FrameHeader = { kind: "not a frame" } | { kind: "no size" } | { kind
 
 /** The magic number every zstd frame opens with. */
 const ZSTD_MAGIC = 0xfd2fb528
+/** A frame holding nothing, as zstd ends one asked for with no input: its header naming 0 bytes, one empty last block. */
+const EMPTY_FRAME = Buffer.from("28b52ffd2000010000", "hex")
+
+/** Whether `bytes` is one or more empty frames (`EMPTY_FRAME`) and nothing else. */
+function emptyFrames(bytes: Uint8Array): boolean {
+  if (!bytes.byteLength || bytes.byteLength % EMPTY_FRAME.length) return false
+  for (let at = 0; at < bytes.byteLength; at += EMPTY_FRAME.length)
+    if (!EMPTY_FRAME.equals(bytes.subarray(at, at + EMPTY_FRAME.length))) return false
+  return true
+}
 
 /** Reads a zstd frame header from the start of `bytes` (RFC 8878, 3.1.1.1). */
 export function frameHeader(bytes: Uint8Array): FrameHeader {

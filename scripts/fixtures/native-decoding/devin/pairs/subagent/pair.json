@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.11.205"
+    "version": "3000.11.234"
   },
   "about": "Start one subagent to read notes.md and docs/plan.md and report which day the release ships and when the branch freezes. Don't read the files yourself; answer with what it reports. A subagent that reads two files and reports back, whose own calls are its progress while it runs, then the answer from its report.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#brook-piper",
+      "path": ".local/share/devin/cli/sessions.db#foam-chess",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/f07f8d8f-a9b4-44ac-abc7-21cedcff9985.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/13092590-6711-4046-8e24-34828970b530.db",
       "known": [
         {
           "side": "-",

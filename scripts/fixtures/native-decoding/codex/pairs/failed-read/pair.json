@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.164.0"
+    "version": "0.166.0"
   },
   "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T02-53-18-01a1727a-930a-7af0-a127-2f564750db10.jsonl",
+      "path": ".codex/sessions/2026/10/30/rollout-2026-10-30T12-57-12-01a18ce2-bdce-7c30-9f38-4e9238536d55.jsonl",
       "known": []
     }
   ]

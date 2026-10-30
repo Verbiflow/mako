@@ -23,7 +23,7 @@ import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
-const VERSION = "1.0.40"
+const VERSION = "1.2.0"
 const MARKER = "/*mako:patched:4*/"
 const ANY_MARKER = "/*mako:patched"
 
@@ -42,11 +42,11 @@ const appendTranscript = writer => [
   "return e.writeFromStateIncremental(t,r,n,c,o)})).then((c=>{s.count=c||0,s.archives=a(),s.last=s.count>0?k(r.rootPromptMessagesJson[s.count-1]):void 0}),(()=>{s.count=0})),s.chain}",
 ].join("")
 
-/** The same in both builds: the module's names didn't differ in 1.0.40. */
+/** The same in the esm and cjs builds: the module's names don't differ between them in 1.2.0. */
 const BLOB_STORE = [
   [
-    "class x{constructor(t){this.persistBlob=t,this.blobs=new Map}",
-    `${MARKER}class x{constructor(t,r){this.persistBlob=t,this.loadBlob=r,this.blobs=new Map}`,
+    "class I{constructor(t){this.persistBlob=t,this.blobs=new Map}",
+    `${MARKER}class I{constructor(t,r){this.persistBlob=t,this.loadBlob=r,this.blobs=new Map}`,
   ],
   [
     "async getBlob(t,r){return this.blobs.get((0,n.nj)(r))}",
@@ -61,8 +61,8 @@ const BLOB_STORE = [
     "return await this.getScopedAgentDocument(t),this.createPersistingBlobStore(t)}",
   ],
   [
-    "createPersistingBlobStore(t){const r=new x(this.createPersistBlob(t));return this.blobStores.set(t,r),r}",
-    "createPersistingBlobStore(t){const r=new x(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(t){return async r=>{const e=await this.localStore.checkpoints.get({agentId:t,blobId:r});return null==e?void 0:T(e)}}",
+    "createPersistingBlobStore(t){const r=new I(this.createPersistBlob(t));return this.blobStores.set(t,r),r}",
+    "createPersistingBlobStore(t){const r=new I(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(t){return async r=>{const e=await this.localStore.checkpoints.get({agentId:t,blobId:r});return null==e?void 0:T(e)}}",
   ],
   [
     "const e=await f(this.localStore,t,r.latestCheckpoint),n=this.setBlobStore(t,e),o=await n.getBlob((0,s.q6)(),k(e.rootBlobId));",
@@ -78,8 +78,11 @@ const BLOB_STORE = [
   ],
 ]
 
-/** `writer` is the transcript writer's class, `store` the transcript store's, `write` its file writer, `fs` node:fs/promises. */
-function transcripts({ writer, store, write, fs }) {
+/**
+ * `writer` is the transcript writer's class, `store` the transcript store's, `write` its file writer, `fs`
+ * node:fs/promises, `child` the variable holding each subagent's state where the writer writes their transcripts.
+ */
+function transcripts({ writer, store, write, fs, child }) {
   const options = `writeText:!1,writeJsonl:!0,appendFile:${fs}.appendFile,streamFullJsonlWrites:!0,`
   return [
     [
@@ -99,8 +102,8 @@ function transcripts({ writer, store, write, fs }) {
       "await this.appendTranscript(this.transcriptStore,e,t,this.conversationId);",
     ],
     [
-      "await this.nestedSubagentTranscriptStore.writeFromStateFull(e,o.conversationState,t)",
-      "await this.appendTranscript(this.nestedSubagentTranscriptStore,e,o.conversationState,t)",
+      `await this.nestedSubagentTranscriptStore.writeFromStateFull(e,${child}.conversationState,t)`,
+      `await this.appendTranscript(this.nestedSubagentTranscriptStore,e,${child}.conversationState,t)`,
     ],
     [
       "await this.transcriptStore.writeFromStateFull(e,t,this.conversationId,{turnEnded:r})",
@@ -116,8 +119,8 @@ function transcripts({ writer, store, write, fs }) {
 export const CURSOR_SDK_PATCHES = [
   { target: "dist/esm/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
   { target: "dist/cjs/index.js", replacements: BLOB_STORE, change: "read-through checkpoint blobs" },
-  { target: "dist/esm/331.js", replacements: transcripts({ writer: "kI", store: "l_", write: "SI", fs: "Os" }), change: "incremental transcripts" },
-  { target: "dist/cjs/331.js", replacements: transcripts({ writer: "CI", store: "d_", write: "EI", fs: "Ns" }), change: "incremental transcripts" },
+  { target: "dist/esm/336.js", replacements: transcripts({ writer: "fO", store: "F$", write: "pO", fs: "Vs", child: "n" }), change: "incremental transcripts" },
+  { target: "dist/cjs/336.js", replacements: transcripts({ writer: "wO", store: "L$", write: "gO", fs: "Js", child: "n" }), change: "incremental transcripts" },
 ]
 
 function assertVersion(read) {

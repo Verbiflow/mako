@@ -85,7 +85,10 @@ const servers = new OpenCodeServers()
  * sandbox's paths replaced by `PAIR_ROOT` and the recording machine's identity
  * by stand-ins (`fixture-privacy.ts`), for `test:decoders` to compare on every
  * run; a pair that still identifies someone isn't kept. A rewritten pair
- * keeps the reasons its known differences had.
+ * keeps the reasons its known differences had. The run fails only on a
+ * difference the kept pair gives no reason for, so a bump's flows say what
+ * changed, not what always differs. A harness whose recorder needs a program
+ * this machine lacks (Devin's, Devin.app) is skipped whole, saying why.
  */
 
 const SANDBOX = "mako-decode-pairs"
@@ -122,6 +125,8 @@ interface Recorder {
   keeps: (file: string) => boolean
   /** The folder `keeps` looks through, when the session needs more than its store's own folder. */
   storeFolder?: (store: string) => string
+  /** Why this machine can't record any of the harness's pairs (a program it needs isn't installed), or undefined when it can. */
+  unavailable?: () => string | undefined
   /** `build` is another build of the harness to run than the installed one (`--native`), for a recorder that takes one. */
   record: (sandbox: Sandbox, scenario: Scenario, build?: string) => Promise<RecordedPair>
   takesBuild?: true
@@ -960,8 +965,8 @@ const devin: Recorder = {
   },
   keeps: (file) => file.endsWith("/devin/cli/sessions.db") || /\/Devin\/User\/(acp-messages\/[^/]+\.db|globalStorage\/state\.vscdb)$/.test(file),
   storeFolder: (store) => store.includes(`/${DEVIN_APP_USER}/`) ? store.slice(0, store.indexOf(`/${DEVIN_APP_USER}/`) + DEVIN_APP_USER.length + 1) : dirname(store),
+  unavailable: () => existsSync(DEVIN_APP) ? undefined : `a Devin pair keeps Devin.app's journal of the session, which only Devin.app's own message store writes, and ${DEVIN_APP} isn't installed here`,
   async record(sandbox, scenario) {
-    if (!existsSync(DEVIN_APP)) throw new Error(`A Devin pair keeps Devin.app's journal of the session, which only Devin.app's own message store writes, and ${DEVIN_APP} isn't installed`)
     const config = sandbox.env.XDG_CONFIG_HOME
     if (!config) throw new Error("The sandbox has no config home")
     const steps = script(scenario, DEVIN_TOOLS, sandbox.project)
@@ -1105,14 +1110,14 @@ const cursor: Recorder = {
     kind: "own",
     why: "Cursor's model is behind Cursor's own service, which the scripted model can't stand in for",
     lacks: {
-      codeMode: "Cursor SDK 1.0.40 reports no tool that runs code calling its other tools (native-tools/cursor-1.0.40.json)",
-      ask: "Cursor offers no `askQuestion` to a local SDK run (1.0.31 not even asked for by name, and 1.0.40 lists none), so Mako declares questions unavailable",
+      codeMode: "Cursor SDK 1.2.0 reports no tool that runs code calling its other tools (native-tools/cursor-1.2.0.json)",
+      ask: "Cursor offers no `askQuestion` to a local SDK run (1.0.31 not even asked for by name, and 1.0.40 and 1.2.0 list none), so Mako declares questions unavailable",
     },
   },
   controls: {
     steer: "driven",
-    rewind: { absent: "Cursor SDK 1.0.40 has no rewind; Mako forks by writing the conversation into a new agent" },
-    compact: { absent: "Cursor summarizes on its server when the context fills; it accepts a summarize request from a local run, but SDK 1.0.40 has no way to send one" },
+    rewind: { absent: "Cursor SDK 1.2.0 has no rewind; Mako forks by writing the conversation into a new agent" },
+    compact: { absent: "Cursor summarizes on its server when the context fills; SDK 1.2.0 can ask for one (`Agent.summarize()`), which Mako doesn't send yet" },
     resume: "driven",
     "still-running": { absent: NO_OTHER_CLIENT },
   },
@@ -1604,12 +1609,41 @@ interface Found {
   replay?: Difference[]
 }
 
+/** Where `scenario`'s pair is kept: `<scenario>@<version>` for another build than the installed one. */
+function pairFolder(harness: string, scenario: Scenario, build?: string): string {
+  return join(FIXTURE_ROOT, harness, PAIRS_FOLDER, build ? `${scenario.name}@${build}` : scenario.name)
+}
+
+/** The pair kept for `scenario`; another build's starts from the installed build's, and the reasons it gives. */
+async function keptPair(harness: string, scenario: Scenario, build?: string): Promise<Pair | undefined> {
+  const at = (folder: string) => readFile(join(folder, "pair.json"), "utf8").then((text) => PairSchema.parse(JSON.parse(text)), () => undefined)
+  return await at(pairFolder(harness, scenario, build)) ?? (build ? await at(pairFolder(harness, scenario)) : undefined)
+}
+
+/** Each known difference's reason, by its side and line. */
+function reasons(known: Known | undefined): Map<string, string> {
+  return new Map(known?.map((difference) => [`${difference.side}${difference.line}`, difference.reason]))
+}
+
+/**
+ * The differences the kept pair doesn't explain: each the pair lists with no
+ * reason or doesn't list at all. A known one (a store that keeps no retry note,
+ * say) is the harness as it is, not news, so only these fail the run.
+ */
+function unexplainedIn(found: Found, before: Pair | undefined, scrub: (line: string) => string): Difference[] {
+  const unexplained = (differences: readonly Difference[], known: Known | undefined) => {
+    const kept = reasons(known)
+    return differences.filter((difference) => !kept.get(`${difference.side}${scrub(difference.line)}`))
+  }
+  return [
+    ...found.stores.flatMap(({ reader, differences }) => unexplained(differences, before?.stores.find((store) => store.reader === reader)?.known)),
+    ...unexplained(found.replay ?? [], before?.replay?.known),
+  ]
+}
+
 async function keep(harness: string, recorder: Recorder, scenario: Scenario, sandbox: Sandbox, pair: RecordedPair, found: Found, build?: string, outside: readonly Replacement[] = []): Promise<string> {
-  const pairs = join(FIXTURE_ROOT, harness, PAIRS_FOLDER)
-  const folder = join(pairs, build ? `${scenario.name}@${pair.version}` : scenario.name)
-  const pairAt = (at: string) => readFile(join(at, "pair.json"), "utf8").then((text) => PairSchema.parse(JSON.parse(text)), () => undefined)
-  // Another build's pair starts from the reasons the installed build's pair gives.
-  const before = await pairAt(folder) ?? (build ? await pairAt(join(pairs, scenario.name)) : undefined)
+  const folder = pairFolder(harness, scenario, build ? pair.version : undefined)
+  const before = await keptPair(harness, scenario, build ? pair.version : undefined)
   await rm(folder, { recursive: true, force: true })
   await mkdir(join(folder, "home"), { recursive: true })
   const replacements = [...outside, ...rootReplacements(sandbox)]
@@ -1645,7 +1679,6 @@ async function keep(harness: string, recorder: Recorder, scenario: Scenario, san
     for (const kept of [own, ...await childFolders(store.reader, sandbox.home, store.path, own)])
       await copyScrubbed(kept, join(folder, "home"), sandbox.home, replacements, recorder.keeps)
   }
-  const reasons = (known: Known | undefined) => new Map(known?.map((difference) => [`${difference.side}${difference.line}`, difference.reason]))
   const explained = (differences: readonly Difference[], known: Known | undefined): Known => {
     const kept = reasons(known)
     return differences.map((difference) => ({ ...difference, line: scrub(difference.line), reason: kept.get(`${difference.side}${scrub(difference.line)}`) ?? "" }))
@@ -1897,6 +1930,12 @@ for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
     console.log(`${harness}: skipped; its pairs run on its own model, which spends usage (${recorder.model.why})`)
     continue
   }
+  const unavailable = recorder.unavailable?.()
+  if (unavailable) {
+    // On stderr too, where the daily bump reads it for its pull request: a harness skipped whole recorded nothing.
+    console.error(`${harness}: skipped; ${unavailable}`)
+    continue
+  }
   for (const scenario of SCENARIOS.filter((candidate) => !scenarios.length || scenarios.includes(candidate.name))) {
     const skipped = unrecordable(recorder, scenario)
     if (skipped) {
@@ -1916,7 +1955,6 @@ for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
       console.log(`${harness} ${pair.version} ${scenario.name}: ${pair.recording.messages.length} wire messages; live draws ${live.length} lines`)
       for (const line of live) console.log(`  live   ${line.slice(0, 180)}`)
       const report = (what: string, found: Difference[]) => {
-        unexplained += found.length
         if (!found.length) return console.log(`  ${what} draws the same`)
         console.log(`  ${what}: ${found.length} differences (- live only, + ${what} only):`)
         for (const difference of found) console.log(`    ${difference.side} ${difference.line}`)
@@ -1932,6 +1970,9 @@ for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
         found.replay = differences(drawing(replayed.live), drawing(replayed.replay))
         report("the replay", found.replay)
       }
+      const news = unexplainedIn(found, await keptPair(harness, scenario, native ? pair.version : undefined), rootedAt(rootReplacements(sandbox)))
+      unexplained += news.length
+      for (const difference of news) console.log(`  not explained by the kept pair: ${difference.side} ${difference.line}`)
       if (write) console.log(`  kept ${relative(process.cwd(), await keep(harness, recorder, scenario, sandbox, pair, found, native))}`)
     })
   }

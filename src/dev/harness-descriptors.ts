@@ -711,7 +711,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "compaction": {
         "state": "default",
-        "reason": "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. Cursor accepts a summarize request from a local run, but SDK 1.0.40 has no way to send one."
+        "reason": "Cursor summarizes the conversation on its server when the context fills, and the summary shows in the thread. SDK 1.2.0 can ask for one (`Agent.summarize()`), which Mako doesn't send yet."
       },
       "planning": {
         "state": "implemented",
@@ -815,7 +815,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "mako": {
           "state": "implemented",
           "through": "mako",
-          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs, or until the goal's tokens reach its budget. Neither SDK 1.0.31 nor 1.0.40, the newest, offers a goal to a local run: its goal tool calls are protocol types the SDK's stream drops, and its API has no goal."
+          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs, or until the goal's tokens reach its budget. Neither SDK 1.0.31 nor 1.2.0, the newest, offers a goal to a local run: its goal tool calls are protocol types the SDK's stream drops, and its API has no goal."
         }
       },
       "review": {
@@ -829,7 +829,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "mako": {
           "state": "implemented",
           "through": "mako",
-          "via": "Mako asks a copy of the session, and discards the copy when the side conversation closes. SDK 1.0.40 has no side question, so Mako asks a read-only copy of the agent."
+          "via": "Mako asks a copy of the session, and discards the copy when the side conversation closes. SDK 1.2.0 has no side question, so Mako asks a read-only copy of the agent."
         }
       },
       "scheduledPrompts": {
@@ -1232,10 +1232,14 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         }
       },
       "imageGeneration": {
+        "native": {
+          "name": "experimental_image_generate",
+          "where": "its `experimental_image_generate` tool"
+        },
         "mako": {
-          "state": "absent",
-          "by": "harness",
-          "reason": "OpenCode has no image generation tool."
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
         }
       },
       "codeMode": {

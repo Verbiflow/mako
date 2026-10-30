@@ -81,6 +81,8 @@ jobs:
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery
       - run: npm run test:live-prompt-delivery
+      # Messages from the Mac, a phone and another Mac at once, with lost replies, cut links and restarts: each lands once.
+      - run: npm run test:send-race
       - run: npm run test:tuning
       # Who is told what, and in which words: the attention centre's policy, and the kinds and wording every surface shares.
       - run: npm run test:notifications
@@ -110,6 +112,8 @@ jobs:
       - run: npm run build:control-runtime
       # The harness definitions, their versions and the pages generated from them (adding-a-harness.md, the descriptors).
       - run: npx tsx --tsconfig tsconfig.app.json scripts/test-harness-definitions.ts
+      # Each harness's concepts against its self-report fixture, Mako's reads against them, and harness-concepts.md.
+      - run: npx tsx scripts/test-harness-concepts.ts
       - run: npm run test:decoders
       - run: npm run test:usage
       # The native-store layer's own suite: every harness's readers, the record store, catalogs and followers.

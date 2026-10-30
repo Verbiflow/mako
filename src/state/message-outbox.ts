@@ -12,6 +12,9 @@ const CommandSchema = z.discriminatedUnion("kind", [
     tuning: SessionSettingsSchema.optional() }),
   z.object({ kind: z.literal("start"), args: hostCallSchema("mako:live-start"), draftKey: z.string() }),
   QueuedSchema,
+  // A message into the running turn, under the composer's request ID (`steerTo`): the steer's action takes that ID.
+  z.object({ kind: z.literal("steer"), conversationId: z.string(), requestId: z.string(),
+    text: z.string(), attachments: z.array(PromptAttachmentSchema) }),
 ])
 const EntrySchema = z.object({ version: z.literal(1), createdAt: z.number(), command: CommandSchema })
 export type OutboxCommand = z.infer<typeof CommandSchema>
@@ -37,10 +40,12 @@ export function saveMessage(command: OutboxCommand): void {
   const previous = globalThis.localStorage?.getItem(key)
   if (previous) {
     const entry = EntrySchema.parse(JSON.parse(previous))
-    if (entry.command.kind === "queued" && command.kind === "prompt" &&
+    // A message waiting for its conversation to start, or a steer with no turn left to steer, goes on as the prompt
+    // of the same ID and words.
+    if ((entry.command.kind === "queued" || entry.command.kind === "steer") && command.kind === "prompt" &&
         entry.command.requestId === command.requestId && entry.command.text === command.text &&
         JSON.stringify(entry.command.attachments) === JSON.stringify(command.attachments) &&
-        JSON.stringify(entry.command.tuning) === JSON.stringify(command.tuning)) {
+        (entry.command.kind === "steer" || JSON.stringify(entry.command.tuning) === JSON.stringify(command.tuning))) {
       globalThis.localStorage.setItem(key, JSON.stringify({ ...entry, command: CommandSchema.parse(command) }))
       known.add(commandId(command))
       return
@@ -60,7 +65,7 @@ export function settleMessage(id: string, receiptOnly = false): void {
   try {
     if (receiptOnly) {
       const entry = EntrySchema.parse(JSON.parse(globalThis.localStorage?.getItem(prefix() + id) ?? "null"))
-      if (entry.command.kind !== "prompt") return
+      if (entry.command.kind !== "prompt" && entry.command.kind !== "steer") return
     }
     globalThis.localStorage?.removeItem(prefix() + id)
     known.delete(id)

@@ -2,7 +2,7 @@ import { reconcileRoster } from "@/lib/native-roster"
 import { acknowledgeComposerSettings } from "@/state/composer-settings"
 import { playFeedback } from "@/state/feedback"
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
+import type { LiveAction, LiveBatch, LiveSnapshot, LiveSummary } from "@/lib/types"
 import { acpStore, carriedFailureSeen, removeAcpConversation, replaceAcpConversation, updateAcpConversation, type AcpConversation } from "@/state/acp-state"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { noteListedOutcome, syncThreadStatus } from "@/state/acp-live"
@@ -73,10 +73,19 @@ function dropsLoadedHistory(existing: AcpConversation | undefined, snapshot: Liv
   return reachesEarlier(held, incoming) && (!covers || reachesEarlier(held, covers))
 }
 
+/**
+ * A steer the host has answered and kept (`steerTo`): its words reached the turn, or may have. One still on its way
+ * stays in the outbox until it's answered, and one refused goes on as a message, kept until that is taken.
+ */
+function steerTaken(action: LiveAction): boolean {
+  return action.state.kind !== "dispatching" && action.state.kind !== "not-accepted"
+}
+
 export function applyLiveSnapshot(snapshot: LiveSnapshot, replyBindingId?: string | null, covers?: LiveHistoryCursor): void {
   restoredLive(snapshot.session.id)
   for (const request of snapshot.requests) settleMessage(request.id, true)
   for (const transfer of snapshot.control?.transfers ?? []) settleMessage(transfer.input.id, true)
+  for (const action of snapshot.control?.actions ?? []) if (steerTaken(action)) settleMessage(action.input.id, true)
   const id = snapshot.session.id
   const existing = acpStore.get().conversations[id]
   const stale = existing?.hydrated && sameEpoch(existing, snapshot) && (existing.revision ?? 0) > snapshot.revision
@@ -310,6 +319,7 @@ function batchHistoryFailure(batch: LiveBatch, current: { historyFailure?: strin
 export function applyLiveBatch(batch: LiveBatch): void {
   for (const request of batch.requests ?? batch.requestChanges ?? []) settleMessage(request.id, true)
   for (const transfer of batch.control?.transfers ?? []) settleMessage(transfer.input.id, true)
+  for (const action of batch.control?.actions ?? []) if (steerTaken(action)) settleMessage(action.input.id, true)
   const current = acpStore.get().conversations[batch.id]
   if (current?.kind === "live" && sameEpoch(current, batch) && batch.revision <= (current.revision ?? 0)) return
   if (

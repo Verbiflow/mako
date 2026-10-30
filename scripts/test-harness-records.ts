@@ -68,6 +68,15 @@ async function version(executable: string, args = ["--version"]): Promise<string
   return /\d+(?:\.\d+)+(?:-[\w.-]+)?/.exec(stdout)?.[0] ?? stdout.trim()
 }
 
+/**
+ * The pending work a remote session's keep-alive waits on, which Claude Code
+ * 2.1.314 lists beside `queued_command`, so the list search above takes it
+ * for attachments. No attachment has these types; `task_notification` is a
+ * `system` record's subtype.
+ */
+const KEEP_ALIVE = "A kind of pending work a remote session's keep-alive waits on, not an attachment type."
+const CLAUDE_KEEP_ALIVE_WORK = { task_notification: KEEP_ALIVE, owed_detached_result: KEEP_ALIVE, eval_tool: KEEP_ALIVE, schedule_wakeup: KEEP_ALIVE }
+
 async function claude(): Promise<void> {
   const binary = builds.get("claude") ?? claudeSdkBinary()
   const text = await build(binary)
@@ -80,7 +89,7 @@ async function claude(): Promise<void> {
     if (names.some((name) => name === "skill_listing" || name === "queued_command" || name === "remote_session_change"))
       for (const name of names) attachments.add(name)
   }
-  compare("claude attachments", attachments, CLAUDE_ATTACHMENT_TYPES)
+  compare("claude attachments", attachments, CLAUDE_ATTACHMENT_TYPES, CLAUDE_KEEP_ALIVE_WORK)
   checked.push(`Claude Code ${await version(binary)}`)
 }
 

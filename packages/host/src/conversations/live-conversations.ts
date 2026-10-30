@@ -102,6 +102,8 @@ export class LiveConversations {
   private readonly stops = new Map<string, { requestId: string; result: Promise<boolean> }>()
   /** Each conversation's last write as `lastMoved` read it, at the revision it read it. */
   private readonly moved = new Map<string, { revision: number; at: number | undefined }>()
+  /** By conversation: when the last message that arrived for it is admitted or refused (`admitInOrder`). */
+  private readonly arrivals = new Map<string, Promise<void>>()
   private settleTimer?: ReturnType<typeof setTimeout>
   private readonly dependencies: Dependencies
   private readonly admission: Admission
@@ -535,6 +537,26 @@ export class LiveConversations {
     this.events.observe(event)
   }
 
+  /**
+   * A message is admitted in the order messages for its conversation arrived, whatever each waits on first. A send
+   * resolves its model's settings before `submit` (a folder's real path, the account's environment, at worst a
+   * discovery), and that takes longer for one send than the next: a phone's message overtook the laptop's sent a moment
+   * before it, and a person's second message could overtake their first. Each send's wait starts as it arrives, so
+   * they overlap; only admission waits for the ones ahead. One refused lets the next go.
+   */
+  admitInOrder<Ready, Admitted>(id: string, ready: Promise<Ready>, admit: (ready: Ready) => Admitted): Promise<Admitted> {
+    // Its refusal is this send's own answer, read once the sends ahead are in; until then nothing else watches it.
+    ready.catch(() => undefined)
+    const ahead = this.arrivals.get(id)
+    const admitted = (ahead ? ahead.then(() => ready) : ready).then(admit)
+    const settled = admitted.then(() => undefined, () => undefined)
+    this.arrivals.set(id, settled)
+    void settled.then(() => {
+      if (this.arrivals.get(id) === settled) this.arrivals.delete(id)
+    })
+    return admitted
+  }
+
   continueBinding(id: string, bindingId: string, requestId: string, text: string,
     attachments: PromptAttachment[] = [], tuning?: SessionSettings, displayText?: string, actor?: Actor): LiveSnapshot {
     const resident = this.records.require(id)
@@ -602,9 +624,12 @@ export class LiveConversations {
         throw new Error(
           "This request ID was already accepted with different content"
         )
-      if (existing.status === "queued") this.dispatch.drain(resident)
+      if (existing.status === "queued") this.release(resident)
       return existing
     }
+    // A message is taken once under its ID, as a steer into a turn or as a message of its own (`steerTo` in the window).
+    if (conversationControl(resident).actions?.some((action) => action.input.id === requestId && action.state.kind !== "not-accepted"))
+      throw new Error("This message already went into the running turn.")
     this.moves.assertAdmits(resident)
     if (this.transfers.pending(resident))
       throw new Error("A provider switch is pending. Wait for it to settle before sending another message.")
@@ -920,8 +945,18 @@ export class LiveConversations {
       resident.snapshot = previous
       throw error
     }
-    if (command.change.kind !== "pause") this.dispatch.drain(resident)
+    if (command.change.kind !== "pause") this.release(resident)
     return resident.snapshot
+  }
+
+  /**
+   * A message waiting here may go: sent now if the harness is connected, or once a sleeping conversation wakes. A
+   * restart leaves its conversations asleep with their queues paused, and Resume, or the message asked for again, has
+   * to wake it: draining alone found no harness and sent nothing.
+   */
+  private release(resident: Resident): void {
+    if (resident.hibernating || (!resident.driver && this.hibernation.reopens(resident))) void this.hibernation.wake(resident)
+    else this.dispatch.drain(resident)
   }
 
   /**
