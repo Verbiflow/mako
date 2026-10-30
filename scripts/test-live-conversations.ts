@@ -1411,7 +1411,9 @@ async function durabilityAndBatching() {
       assert.ok(build?.type === "tool" && build.status === "failed" && build.unfinished, "the dead host's open call is closed")
       assert.equal(build.output, undefined, "the row keeps what the call had produced, here nothing")
       assert.deepEqual(found.requests[0]?.interruption?.closed, ["build"], "the request says which calls Mako closed")
-      assert.equal(found.requests[1]?.status, "queued")
+      // What waited behind it is paused, as a quit pauses it, and the queue offers Resume: queued behind a turn that
+      // will never end, nothing would send it.
+      assert.equal(found.requests[1]?.status, "held")
     } finally {
       afterCrash.stop()
     }
@@ -1425,7 +1427,7 @@ async function durabilityAndBatching() {
       assert.equal(saved.requests[0]?.interruption?.reason, "host-quit")
       assert.match(saved.requests[0]?.error ?? "", /Mako closed/)
       assert.deepEqual(saved.requests[0]?.interruption?.calls, [{ id: "build", title: "Build", result: "none" }])
-      assert.equal(saved.requests[1]?.status, "queued")
+      assert.equal(saved.requests[1]?.status, "held")
       assert.equal(saved.requests[1]?.text, "waiting")
       assert.equal(
         JSON.stringify(saved.blocks),

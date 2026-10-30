@@ -81,6 +81,8 @@ jobs:
       - run: npm run test:live-controls
       - run: npm run test:prompt-delivery
       - run: npm run test:live-prompt-delivery
+      # Messages from the Mac, a phone and another Mac at once, with lost replies, cut links and restarts: each lands once.
+      - run: npm run test:send-race
       - run: npm run test:tuning
       # Who is told what, and in which words: the attention centre's policy, and the kinds and wording every surface shares.
       - run: npm run test:notifications

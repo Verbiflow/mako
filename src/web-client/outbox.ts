@@ -1,7 +1,7 @@
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { acpStore } from "@/state/acp-state"
 import { stagePrompt } from "@/state/acp-pending"
-import { replayUnconfirmedPrompts, sendTo } from "@/state/acp-queue"
+import { replayUnconfirmedPrompts, sendTo, steerTo } from "@/state/acp-queue"
 import { commandId, durableAttachments, pendingMessages, settleMessage } from "@/state/message-outbox"
 import { createHook, createStore } from "@/state/store"
 import { whileBusy } from "./busy"
@@ -111,9 +111,15 @@ export function resumeOutbox(conversation: string): void {
   const live = acpStore.get().conversations[conversation]
   if (live?.kind !== "live") return
   for (const command of pendingMessages()) {
-    if (command.kind !== "prompt" || command.conversationId !== conversation) continue
+    if ((command.kind !== "prompt" && command.kind !== "steer") || command.conversationId !== conversation) continue
     if (live.requests?.some((request) => request.id === command.requestId)) {
       settleMessage(command.requestId)
+      continue
+    }
+    if (command.kind === "steer") {
+      // A steer the host has is settled by its answer; one it refused, or never heard, goes again (`steerTo`).
+      const action = live.control?.actions?.find((each) => each.input.id === command.requestId)
+      if (!action || action.state.kind === "not-accepted") void steerTo(conversation, command.text, command.attachments, command.requestId)
       continue
     }
     stagePrompt(conversation, { id: command.requestId, text: command.text, attachments: command.attachments, ...(command.bindingId && { bindingId: command.bindingId }), delivery: { tuning: command.tuning }, unconfirmed: true })

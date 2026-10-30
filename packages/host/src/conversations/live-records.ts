@@ -664,7 +664,11 @@ function afterRestart(previous: LiveSnapshot, root: string): LiveSnapshot {
               error: restartError,
               failure: "resume-failed" as const,
             }
-          : request
+          // Messages still waiting are paused, as a quit pauses them (`closeForExit`): the queue says so and offers
+          // Resume. Left queued behind a turn the restart cut short, nothing would ever send them and nothing said why.
+          : request.status === "queued"
+            ? { ...request, status: "held" as const }
+            : request
       )
     ),
   }

@@ -502,14 +502,14 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const snapshot = live.snapshot(id)
     const binding = snapshot?.control?.bindings.find((item) => item.id === bindingId)
     if (!snapshot || !binding) throw new Error("The selected native session is unavailable")
-    const selected = await profiles.resolveLaunch(binding.provider, snapshot.session.cwd, tuning ?? binding.tuning)
-    return live.continueBinding(id, bindingId, requestId, text, attachments, selected)
+    return live.admitInOrder(id, profiles.resolveLaunch(binding.provider, snapshot.session.cwd, tuning ?? binding.tuning),
+      (selected) => live.continueBinding(id, bindingId, requestId, text, attachments, selected))
   })
   methods.handle("mako:live-prompt", async (id: string, requestId: string, text: string, attachments?: PromptAttachment[], tuning?: SessionSettings) => {
     const session = live.session(id)
     if (!session) throw new Error("This conversation is no longer available")
-    const selected = await profiles.resolveLaunch(session.harness, session.cwd, tuning)
-    return live.submit(id, requestId, text, attachments, selected)
+    return live.admitInOrder(id, profiles.resolveLaunch(session.harness, session.cwd, tuning),
+      (selected) => live.submit(id, requestId, text, attachments, selected))
   })
   // A failed message sent again at a time: a usage limit's reset.
   methods.handle("mako:live-hold-until", (id: string, requestId: string, input: { after: string; at: number }) =>
