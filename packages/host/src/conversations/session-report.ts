@@ -1,4 +1,4 @@
-import { LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import { LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, type ListedMove, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import type { ThreadRef } from "@mako/sessions"
 import type { LifecycleWork } from "../contracts/app-lifecycle.js"
 import type { ExternalThreadActivity } from "../contracts/host-events-boot.js"
@@ -51,6 +51,8 @@ export type ReportSources = {
   executions(sessions: readonly SessionId[]): ReadonlyMap<SessionId, SessionExecution>
   /** Each of these Threads' names (`ThreadStore.titlesOf`), asked once a report as `executions` is. */
   titles(threads: readonly ThreadId[]): ReadonlyMap<ThreadId, { title?: string; titleSource?: string }>
+  /** A move of this Thread to the cloud under way here (`MovesUnderWay`), said on each of its rows while it goes. */
+  moving?(thread: ThreadId): ListedMove | undefined
   now(): number
 }
 
@@ -62,8 +64,8 @@ export function nativeConversation(session: string): string {
   return namedUuid(`mako native session conversation\0${session}`)
 }
 
-/** Whether a row's Session is at work: it goes first, and is listed whatever its age. */
-export const busyRow = (row: Pick<ReportedSession, "state">) => row.state === "working" || row.state === "waiting" || row.state === "moving"
+/** Whether a row's Session is at work, or its Thread on its way: it goes first, and is listed whatever its age. */
+export const busyRow = (row: Pick<ReportedSession, "state" | "move">) => row.state === "working" || row.state === "waiting" || row.state === "moving" || row.move !== undefined
 
 /** How a list ranks two rows of one Session: one at work over one at rest, then the one that moved last. */
 function preferred(left: ReportedSession, right: ReportedSession): ReportedSession {
@@ -182,6 +184,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     }
     const titled = threadTitle(placed.thread)
     if (titled) row.threadTitle = titled
+    const move = sources.moving?.(placed.thread)
+    if (move) row.move = move
     if (session.cwd) row.folder = session.cwd
     if (session.nativeId) row.nativeId = session.nativeId
     // A harness or ID the protocol can't carry is left out, never the rest.
@@ -215,6 +219,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     }
     const titled = threadTitle(thread)
     if (titled) row.threadTitle = titled
+    const move = sources.moving?.(thread)
+    if (move) row.move = move
     if (ref.title) row.title = line(ref.title)
     if (state === "waiting") {
       // A terminal's harness says only that it waits for input, in its own words when it has some.
@@ -592,6 +598,13 @@ export class SessionPublisher {
     // A Session archived here leaves every device's list, and a Thread renamed here is renamed there: the owner's word
     // is the one that counts, and no batch says either.
     if (event.type === "thread-archives" || event.type === "thread-titles") return this.showsChanged()
+    // A move's steps go to whoever watches the conversation it was asked from, as its window hears them: a device that
+    // has it open follows the move as it goes, each upload's bytes included. The way back's too, to a device that
+    // follows this host for the conversation coming back.
+    if (event.type === "thread-move-step" || event.type === "thread-return-step") {
+      if (this.#watching?.conversations.has(event.conversationId)) this.event("event", { type: event.type, conversation: event.conversationId, payload: JSON.stringify(event) })
+      return
+    }
     if (event.type !== "live-batch") return
     this.#dirty = true
     this.#sawBatch(event.batch.id)

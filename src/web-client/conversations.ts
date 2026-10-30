@@ -1,4 +1,4 @@
-import { LinkClosedError, NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, type Actor, type Json, type Subscription } from "@mako/protocol"
+import { LinkClosedError, NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, sessionStream, type Actor, type Json, type Subscription } from "@mako/protocol"
 import { answerClientCall, isClientCall, openableLink, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
 import { conversationCallId } from "@mako/host/contracts/conversation-calls"
@@ -6,6 +6,7 @@ import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-
 import { createMakoBridge, type MakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { decodeRuntimeValue, splitRuntimeEventLine } from "@mako/host/contracts/runtime-value"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { ThreadMoveStep, ThreadReturnStep } from "@mako/host/contracts/cloud-threads"
 import { listedOwner, type ListedOwner } from "@mako/host/contracts/listed-conversations"
 import type { ListedSession } from "@mako/protocol/thread-listing"
 import { z } from "zod"
@@ -18,6 +19,9 @@ import { CONSOLE_LOG, type Gateway } from "./gateway"
 import { whileBusy } from "./busy"
 import { syncingStore } from "./syncing"
 import { webSync } from "./sync-readings"
+import { answered, macPlace, reachLog, threadPlace } from "./reach"
+import { stepHeard } from "./moves"
+import { accountListStore } from "./account-list"
 import type { WebSession } from "./threads"
 import { harnessDescriptors } from "@/dev/harness-descriptors"
 import type { HarnessDescriptor } from "@/lib/types"
@@ -36,6 +40,9 @@ const FILES_KEPT_MS = 30 * 60_000
  * one paints it at once and only catches up, within a bound a phone's page can hold. Hidden, it keeps only what's open.
  */
 const RECENT_TRANSCRIPTS = { bytes: 32 * 1024 * 1024, recent: 4 }
+
+/** A move's step as its owner's stream carries it (`thread-move-step`, `thread-return-step`): read as far as its kind. */
+const MoveStepEventSchema = z.object({ type: z.enum(["thread-move-step", "thread-return-step"]), move: z.string(), step: z.object({ kind: z.string() }).loose() })
 
 /** The head of an owner's stream line: which conversation's event it carries, and what kind. */
 const LineHeadSchema = z.object({ channel: z.string().optional(), type: z.string().optional(), conversation: z.string().optional() })
@@ -150,8 +157,12 @@ export class WebConversations {
     const owner = listedOwner(row)
     const actor: Actor = { kind: "client", client: "web", deviceId: this.#deviceId }
     const target = owner.kind === "cloud" ? { threadId: owner.threadId } : { runtimeId: owner.runtimeId }
-    const send = gatewayHostCalls(this.#gateway.session, { ...target, actor, history: true, log: CONSOLE_LOG }).call(channel, args)
-    const value = await sendWithRepeats(channel, send, { conversationId: conversation, ...(owner.kind === "cloud" ? { threadId: owner.threadId } : { runtime: owner.runtimeId }), log: CONSOLE_LOG })
+    // What each call met is kept by the place it went to, for the diagnosis to say which hop failed.
+    const place = owner.kind === "cloud" ? threadPlace(owner.threadId) : macPlace(owner.deviceId)
+    const log = reachLog(place)
+    const send = gatewayHostCalls(this.#gateway.session, { ...target, actor, history: true, log }).call(channel, args)
+    const value = await sendWithRepeats(channel, send, { conversationId: conversation, ...(owner.kind === "cloud" ? { threadId: owner.threadId } : { runtime: owner.runtimeId }), log })
+    answered(place)
     return decodeRuntimeValue(value)
   }
 
@@ -209,6 +220,23 @@ export class WebConversations {
     this.#files.set(key, { at: Date.now(), origin })
     origin.catch(() => this.#files.delete(key))
     return origin
+  }
+
+  /**
+   * Follows a conversation's owner without opening it: what a move's card in its place reads, the move's steps as its
+   * owner sends them to whoever watches it. Returns how to let it go.
+   */
+  followSteps(session: WebSession): () => void {
+    return this.#follow(session.owner, session.row.conversation)
+  }
+
+  /**
+   * Follows a Mac for one conversation it doesn't run now: a Thread it brings back from the cloud, whose steps it
+   * sends to whoever watches that conversation there. Returns how to let it go.
+   */
+  followMac(deviceId: string, conversation: string): () => void {
+    const runtimeId = `d-${deviceId}`
+    return this.#follow({ kind: "device", deviceId, runtimeId, stream: sessionStream(runtimeId, conversation) }, conversation)
   }
 
   /** Follows an owner's stream for one conversation's batches; the stream is shared by every open conversation on it. */
@@ -365,6 +393,10 @@ export class WebConversations {
     const parts = splitRuntimeEventLine(line)
     if (!parts) return undefined
     const head = LineHeadSchema.safeParse(JSON.parse(parts.head)).data
+    if (head?.channel === "event" && head.conversation && open.has(head.conversation) && (head.type === "thread-move-step" || head.type === "thread-return-step")) {
+      this.#moveStep(head.conversation, parts.payload)
+      return undefined
+    }
     if (!head || head.channel !== "event" || head.type !== "live-batch" || !head.conversation || !open.has(head.conversation)) return undefined
     // SAFETY: the owner's host encoded this line from its own `live-batch` event, as its windows read it.
     const event = JSON.parse(parts.payload) as Extract<HostEvent, { type: "live-batch" }>
@@ -372,6 +404,24 @@ export class WebConversations {
     for (const listener of this.#listeners) listener(event)
     if (event.batch.trace) CONSOLE_LOG.info("traced update heard", { trace: event.batch.trace, conversation: head.conversation, ...(event.batch.emittedAt !== undefined && { lagMs: Date.now() - event.batch.emittedAt }) })
     return event.batch.emittedAt
+  }
+
+  /** A move's step, as its owner sent it: the Thread's card follows it (`moves.ts`). */
+  #moveStep(conversation: string, payload: string): void {
+    const event = MoveStepEventSchema.safeParse(JSON.parse(payload)).data
+    if (!event) return
+    const row = this.#row(conversation)
+    const deviceId = row?.runsOn.kind === "device" ? row.runsOn.deviceId : undefined
+    const name = deviceId ? accountListStore.get().devices.get(deviceId)?.name : undefined
+    stepHeard({
+      conversation,
+      move: event.move,
+      way: event.type === "thread-move-step" ? "cloud" : "device",
+      // SAFETY: the owner's host encoded this step from its own event, as its windows read it.
+      step: event.step as ThreadMoveStep | ThreadReturnStep,
+      thread: row?.thread,
+      mac: deviceId ? { deviceId, name: name ?? "its Mac" } : undefined,
+    })
   }
 
   /** After a sleep, a return or a network change: every followed stream that went quiet is followed again at once. */

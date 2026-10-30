@@ -11,3 +11,10 @@ export const PromptNoteContext = createContext<((requestId: string | undefined) 
  * question it answered from its dock while the turn ran ("Allowed once · npm test"). The desk adds nothing.
  */
 export const ExchangeNoteContext = createContext<((exchangeId: string) => ReactNode) | null>(null)
+
+/**
+ * Where a move between a Mac and the cloud cut a turn, drawn as a line across the transcript ("Moved to the cloud ·
+ * 4:22") rather than left to Diagnostics: the phone and a laptop's browser, where a move is something the person watched
+ * happen from elsewhere. The desk keeps it quiet.
+ */
+export const MoveDividersContext = createContext(false)

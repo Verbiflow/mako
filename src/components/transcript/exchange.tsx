@@ -8,7 +8,7 @@ import { RewindButton, PromptRewindButton } from "./rewind-button"
 import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
-import { ExchangeNoteContext, PromptNoteContext } from "./transcript-notes"
+import { ExchangeNoteContext, MoveDividersContext, PromptNoteContext } from "./transcript-notes"
 import { CompactPresentationContext } from "./compact-presentation"
 import { acp, useAcp, type ForkAnswer } from "@/state/acp"
 import { descriptorFor } from "@/state/descriptors"
@@ -344,6 +344,20 @@ function continuedTitle({ reason, sender }: SavedContinuation, provider: string)
   }
 }
 
+/** A line across the transcript where a move to the cloud cut the turn: what came before ran here, the rest there. */
+function MovedDivider({ at }: { at: number | undefined }) {
+  return (
+    <div role="separator" aria-label="Moved to the cloud" data-moved-divider className="my-3 flex items-center gap-3 text-label text-faint">
+      <span className="h-px flex-1 bg-hairline" />
+      <span className="flex shrink-0 items-center gap-1.5">
+        <CloudIcon aria-hidden className="size-3.5" />
+        Moved to the cloud{at ? ` · ${formatTime(at)}` : ""}
+      </span>
+      <span className="h-px flex-1 bg-hairline" />
+    </div>
+  )
+}
+
 /**
  * Where a turn that was cut short went on. The words are Mako's, whether
  * Mako sent them on its own or the person pressed Continue turn, and the
@@ -358,6 +372,8 @@ function TurnWentOn({ continued, message, provider }: { continued: SavedContinua
   const { liveId } = useTranscriptSource()
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
   const diagnosing = usePrefs((prefs) => prefs.showOriginals)
+  const dividers = useContext(MoveDividersContext)
+  if (dividers && !diagnosing && continued.reason === "handed-off") return <MovedDivider at={message.timestamp} />
   if (!diagnosing && continued.reason !== "machine-lost") return null
   const agent = provider ?? harness
   const said = textOf(message.blocks).trim()
