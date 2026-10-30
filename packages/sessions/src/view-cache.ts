@@ -126,6 +126,12 @@ export interface SessionView {
   at(index: number): Entry | null
   /** Every entry from `from` on, whole. */
   entries(from?: number): Entry[]
+  /**
+   * The entries from `start` up to `end`, each as the bytes of its JSON, the way the view keeps it: what a reading copy
+   * writes, without reading each entry back into objects and strings and out again, which took two thirds of a 146 MB
+   * copy's time and held as much again in memory.
+   */
+  json(start: number, end: number): Uint8Array[]
   thread(): Thread
 }
 
@@ -167,6 +173,10 @@ export class ThreadView implements SessionView {
 
   entries(from = 0): Entry[] {
     return this.whole.entries.slice(from)
+  }
+
+  json(start: number, end: number): Uint8Array[] {
+    return this.whole.entries.slice(start, end).map((entry) => Buffer.from(JSON.stringify(entry)))
   }
 
   thread(): Thread {
@@ -255,6 +265,11 @@ export class View implements SessionView {
     return row ? decodeEntry(row["body"]) : null
   }
 
+  json(start: number, end: number): Uint8Array[] {
+    if (end <= start) return []
+    return this.prepare("SELECT body FROM entries WHERE seq >= ? AND seq < ? ORDER BY seq").all(start, end).map((row) => bodyBytes(row["body"]))
+  }
+
   /** Whether an entry before `index` has the id of one of `entries`. */
   holdsBefore(entries: readonly Entry[], index: number): boolean {
     const statement = this.prepare("SELECT seq FROM entries WHERE id = ?")
@@ -313,9 +328,14 @@ function encodeBody(entry: Entry): Buffer {
 
 /** A body as `encodeBody` kept it: JSON as written (it opens with `{`), else a zstd frame. */
 function decodeEntry(value: SQLOutputValue | undefined): Entry {
-  if (!(value instanceof Uint8Array)) throw new Error("A view's entry is not a blob")
-  const bytes = value[0] === 0x7b ? value : zstdDecompressSync(value)
+  const bytes = bodyBytes(value)
   return EntrySchema.parse(JSON.parse(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8")))
+}
+
+/** A body's JSON bytes, as `encodeBody` wrote it. */
+function bodyBytes(value: SQLOutputValue | undefined): Uint8Array {
+  if (!(value instanceof Uint8Array)) throw new Error("A view's entry is not a blob")
+  return value[0] === 0x7b ? value : zstdDecompressSync(value)
 }
 
 /** Writes `entries` into `db`, one row each, from `seq`: the whole form, and the brief one when a page would trim it. Returns the characters they hold. */

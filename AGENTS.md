@@ -3852,12 +3852,23 @@ builds apart, but the wire still reads an earlier build's sync words: the
 sync window was 30 days before it was 7 (`SYNC_WINDOW_MS`), so a scope naming
 a `month` tier reads as `week`, and the status carries an empty `month` for a
 host that requires one (`syncStatusOnWire`). The daemon answers requests on
-the thread that writes reading copies, so a copy waits for its turn by its size
-whatever its tier (2 s a MiB, `MS_PER_MIB` in `reading-copies.ts`): a 100 MB
-copy, drawn and written in one go, holds its thread 5 to 7 s. Captures of
-Sessions outside the scope (the backfill's) look at nothing, and captures
-during a look are looked at together after it, one look at a time.
-`test/daemon.mjs` and `test/reading-copies.mjs` cover both.
+the thread that writes reading copies, reads exports and captures records, so
+none of those may hold it for long: a copy is written 64 entries at a time as
+the bytes its view keeps (`SessionView.json`), never parsed and drawn again,
+and an export reads its batch in one query (`RecordStore.exportFor`). Before,
+a 146 MB copy held the thread 1.1 to 1.5 s (5 to 7 s on a loaded Mac) and a
+batch of a 342,965-row Cursor chat 1.4 s, and between them they timed out the
+host's 3 s status request 31 times in a day and a half. A copy waits for its
+turn by the work it costs (`MS_PER_MIB`, 100 ms a MiB: 15 s for 146 MB), and a
+Session changed before its turn goes when the turn comes, not at the next look.
+Captures of Sessions outside the scope (the backfill's) look at nothing, and
+captures during a look are looked at together after it, one look at a time.
+The daemon logs each hold of its thread of a second or more (`loop held
+ms=… during=…`, `loop-watch.ts`) with the work under way by name (`copy`,
+`push`, `capture`, `request <op>`). `test/daemon.mjs`,
+`test/reading-copies.mjs` and `test/loop-watch.mjs` cover these, and `npm run
+bench:sync-pipeline` measures write-to-account latency on the real daemon
+(`--daemon <daemon-main.js>` for another build's).
 
 When the sync daemon is not enabled, the host still never reads a store on
 its main thread: `packages/host/src/threads/catalog-worker.ts` runs the catalog on a

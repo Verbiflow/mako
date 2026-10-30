@@ -43,6 +43,7 @@ import { monitorEventLoopDelay } from "node:perf_hooks"
 import { z } from "zod"
 import { dirname, join } from "node:path"
 import type { SessionCatalog } from "./catalog.js"
+import { namedWork, watchLoop, type WorkUnderWay } from "./loop-watch.js"
 import {
   LineAssembler,
   parseDaemonEvent,
@@ -273,6 +274,8 @@ export interface ServeCatalogOptions {
    * heap limit instead.
    */
   memoryGuard?: boolean
+  /** What the process does, by name: a request is named to it, and a hold of the loop says what was under way. */
+  work?: WorkUnderWay
 }
 
 interface CatalogService {
@@ -290,6 +293,8 @@ function catalogService(
   const startedAt = Date.now()
   const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 })
   eventLoopDelay.enable()
+  // A hold of this thread is a request answered late, or past the host's timeout: said with what held it.
+  const stopWatch = options.log && options.work ? watchLoop(options.work, (ms, during) => options.log?.("warn", "loop held", { ms, during })) : () => {}
   const clients = new Set<DaemonLink>()
   const follows = new Map<DaemonLink, Map<string, () => void>>()
   const retireListeners = new Set<() => void>()
@@ -505,7 +510,7 @@ function catalogService(
     link.onFrame((raw) => {
       const frame = parseDaemonRequest(raw)
       if (frame) {
-        void handle(frame)
+        void namedWork(options.work, `request ${frame.op}`, () => handle(frame))
         return
       }
       // A request this build can't read (another build's, or a malformed one) is said, and answered when it can be:
@@ -533,6 +538,7 @@ function catalogService(
       if (idleTimer) clearTimeout(idleTimer)
       clearInterval(memoryTimer)
       eventLoopDelay.disable()
+      stopWatch()
       stopEvents()
     },
     onRetire: (listener) => void retireListeners.add(listener),

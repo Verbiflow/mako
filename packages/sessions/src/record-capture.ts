@@ -7,6 +7,7 @@ import type { SessionRecords } from "./harness-records.js"
 import type { CaptureReport, RecordStore } from "./record-store.js"
 import { StreamListings, withStreams } from "./record-streams.js"
 import { carriedFiles, carriedStamp, withCarried } from "./record-carried.js"
+import { namedWork, type WorkUnderWay } from "./loop-watch.js"
 
 /** The shortest gap between two captures of one session while it streams. */
 const CAPTURE_GAP_MS = 250
@@ -78,6 +79,8 @@ export interface RecordCaptureOptions {
    * and stamped on what states no version of its own.
    */
   observedInstall?: (harness: string) => string | null
+  /** Names each capture while it runs, for the watch on the process's loop. */
+  work?: WorkUnderWay
 }
 
 /** What a backfill asked of one session came to (`RecordCapture.backfill`). */
@@ -332,7 +335,7 @@ export class RecordCapture {
         const listingOf = this.options.listingOf
         // Only a write heard as it landed was made by what's installed now; a backfill reads what older builds wrote.
         const observed = paced && own.writer?.installed ? this.options.observedInstall?.(ref.harness) ?? null : null
-        const report = await this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path, ...held !== null && { stamp: held }, ...listingOf && { listing: () => listingOf(ref) }, ...observed !== null && { observed } })
+        const report = await namedWork(this.options.work, `capture ${ref.harness} ${ref.nativeId.slice(0, 8)}`, () => this.store.capture({ harness: ref.harness, nativeId: ref.nativeId, home: this.home, records, path: ref.path, ...held !== null && { stamp: held }, ...listingOf && { listing: () => listingOf(ref) }, ...observed !== null && { observed } }))
         took = listed + report.ms
         state.failures = 0
         this.options.onCaptured?.(ref, report)

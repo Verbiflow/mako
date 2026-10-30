@@ -86,11 +86,24 @@ export type CaptureHeads = { heads: Map<string, number>; through: number }
 export type ExportPage = { limit?: number; cursor?: number }
 /** A unit as an export reads it, with what a remote is known to hold of it. */
 const ExportUnitSchema = z.object({ id: z.number(), key: z.string(), role: z.enum(["file", "row", "schema", "lines"]), head: z.number(), seen_path: z.string().nullable(), places: z.string().nullable(), held: z.number().nullable() })
-const ExportVersionSchema = z.object({
+/** A version's columns as an export reads them. */
+const EXPORT_VERSION_COLUMNS = {
   seq: z.number(), kind: z.enum(["append", "replace", "delete"]), at: z.number(), size: z.number(),
   digest: z.instanceof(Uint8Array).nullable(), tail: z.instanceof(Uint8Array).nullable(), chunks: z.instanceof(Uint8Array),
   detail: z.string().nullable(), writer: z.string().nullable(), writer_source: z.enum(["record", "observed"]).nullable(),
-})
+}
+const ExportVersionSchema = z.object(EXPORT_VERSION_COLUMNS)
+/** A version and its unit, as one batch of `RecordStore.exportFor` reads them together. */
+const ExportRowSchema = ExportUnitSchema.omit({ held: true }).extend(EXPORT_VERSION_COLUMNS)
+
+/** A version as it crosses to another store: its bytes in hex. */
+function exportedVersion(version: z.infer<typeof ExportVersionSchema>): RecordVersion {
+  const hex = (bytes: Uint8Array | null) => (bytes ? Buffer.from(bytes).toString("hex") : null)
+  return {
+    seq: version.seq, kind: version.kind, at: version.at, size: version.size, digest: hex(version.digest), tail: hex(version.tail),
+    chunks: Buffer.from(version.chunks).toString("hex"), detail: version.detail, writer: version.writer, writerSource: version.writer_source,
+  }
+}
 /** The most of a deferred file's first line a restore writes (`RestoreInput.files`). */
 const HEAD_BYTES = 1024 * 1024
 /** How many files a restore writes at once. */
@@ -1678,29 +1691,31 @@ export class RecordStore {
     const found = SessionRowSchema.optional().parse(this.prepared("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
     if (!found?.layout) return null
     const limit = page.limit ?? Number.POSITIVE_INFINITY
-    const units = this.prepared(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places, r.head AS held FROM session_units su JOIN units u ON u.id = su.unit
-      LEFT JOIN remote_session_units r ON r.remote = ? AND r.session = su.session AND r.unit = u.id WHERE su.session = ? AND u.id > ? AND u.head > coalesce(r.head, -1) ORDER BY u.id`)
+    // One read for the whole batch, the versions in unit order, and one past it to tell whether a unit or the session
+    // goes on. A version a query, as this was, held the sync daemon 1.4 s for a batch of a Cursor chat's 342,965 rows.
+    const rows = ExportRowSchema.array().parse(this.prepared(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places,
+        v.seq, v.kind, v.at, v.size, v.digest, v.tail, v.chunks, v.detail, v.writer, v.writer_source
+      FROM session_units su JOIN units u ON u.id = su.unit
+      LEFT JOIN remote_session_units r ON r.remote = ? AND r.session = su.session AND r.unit = u.id
+      JOIN versions v ON v.unit = u.id AND v.seq > coalesce(r.head, -1)
+      WHERE su.session = ? AND su.unit > ? AND u.head > coalesce(r.head, -1) ORDER BY su.unit, v.seq LIMIT ?`)
+      .all(remote, found.id, page.cursor ?? 0, Number.isFinite(limit) ? limit + 1 : -1))
+    const more = rows.length > limit ? rows.pop() : undefined
     const bundled: RecordUnit[] = []
-    let taken = 0
-    let cursor: number | null = null
-    let full = false
-    for (const raw of units.iterate(remote, found.id, page.cursor ?? 0)) {
-      const unit = ExportUnitSchema.parse(raw)
-      if (taken >= limit) {
-        full = true
-        break
+    let current: { id: number; unit: RecordUnit } | undefined
+    for (const row of rows) {
+      if (current?.id !== row.id) {
+        current = { id: row.id, unit: { key: row.key, role: row.role, path: row.seen_path, places: row.places, versions: [] } }
+        bundled.push(current.unit)
       }
-      const versions = this.versionsPast(unit.id, unit.held ?? -1, limit - taken)
-      bundled.push({ key: unit.key, role: unit.role, path: unit.seen_path, places: unit.places, versions })
-      taken += versions.length
-      // A unit taken whole moves the cursor past it; one cut short is the next batch's first.
-      if (versions.at(-1)?.seq === unit.head) cursor = unit.id
-      else {
-        full = true
-        break
-      }
+      current.unit.versions.push(exportedVersion(row))
     }
-    return { bundle: { ...this.sessionHead(found.id, harness, nativeId, found.layout), units: bundled }, cursor: full ? (cursor ?? page.cursor ?? 0) : null }
+    if (!more) return { bundle: { ...this.sessionHead(found.id, harness, nativeId, found.layout), units: bundled }, cursor: null }
+    // A unit taken whole moves the cursor past it; one cut short is the next batch's first, taken up past what the
+    // remote holds by then.
+    let whole = current?.id
+    if (more.id === whole) whole = bundled.length > 1 ? rows[rows.length - 1 - (bundled.at(-1)?.versions.length ?? 0)]?.id : undefined
+    return { bundle: { ...this.sessionHead(found.id, harness, nativeId, found.layout), units: bundled }, cursor: whole ?? page.cursor ?? 0 }
   }
 
   private exportPast(harness: string, nativeId: string, remote: string | null, after: (unit: { key: string; held: number | null }) => number): RecordBundle | null {
@@ -1719,13 +1734,9 @@ export class RecordStore {
 
   /** A unit's versions past `after`, in order, at most `most`. */
   private versionsPast(unit: number, after: number, most: number): RecordVersion[] {
-    const hex = (bytes: Uint8Array | null) => (bytes ? Buffer.from(bytes).toString("hex") : null)
     const rows = ExportVersionSchema.array().parse(this.prepared("SELECT seq, kind, at, size, digest, tail, chunks, detail, writer, writer_source FROM versions WHERE unit = ? AND seq > ? ORDER BY seq LIMIT ?")
       .all(unit, after, Number.isFinite(most) ? most : -1))
-    return rows.map((version) => ({
-      seq: version.seq, kind: version.kind, at: version.at, size: version.size, digest: hex(version.digest), tail: hex(version.tail),
-      chunks: Buffer.from(version.chunks).toString("hex"), detail: version.detail, writer: version.writer, writerSource: version.writer_source,
-    }))
+    return rows.map(exportedVersion)
   }
 
   /** What a bundle of the session carries besides its units: its layout, and its marks but the stamp naming one machine's files. */

@@ -83,7 +83,7 @@ class MemoryRemote {
 /** A Session's view as the catalog serves it: entries by index, the decoder build that drew them. */
 function sessionView(nativeId, entries) {
   return {
-    view: { total: entries.length, translator: "t-1", at: (index) => entries[index] ?? null },
+    view: { total: entries.length, translator: "t-1", json: (start, end) => entries.slice(start, end).map((entry) => Buffer.from(JSON.stringify(entry))) },
     ref: { harness: "claude", nativeId, path: `/rail/${nativeId}.jsonl`, title: `Session ${nativeId}`, cwd: "/Users/ana/api" },
   }
 }
@@ -129,13 +129,13 @@ test("reading copies go up as Mako draws each Session, the ones at work first an
     assert.deepEqual(lines.slice(1).map((line) => JSON.parse(line).id), sessions.busy.map((entry) => entry.id), "then an entry a line, in order")
     const chunksBefore = remote.chunks.size
 
-    // A turn at work: copied again once 3 s have gone, and only its new chunks go up.
+    // A turn at work: copied again once a second has gone, and only its new chunks go up.
     sessions.busy.push(turn(40))
     stamps.busy = "n:2"
-    now += 2_999
+    now += 999
     copies.scope(scope())
     await copies.settled()
-    assert.equal(remote.pushed.length, 2, "not within 3 s of the last")
+    assert.equal(remote.pushed.length, 2, "not within a second of the last")
     assert.deepEqual([copies.readable(scope().sessions[0]), copies.current(scope().sessions[0])], [false, false], "changed since its copy: not readable as it is, until its turn")
     now += 1
     copies.scope(scope())
@@ -224,12 +224,12 @@ test("a capture is looked at alone and at once; captures while a look is under w
     assert.deepEqual(drawn.splice(0), ["a", "b"], "then the captured one, once; the uncaptured \"c\" waits for the look over the scope")
     assert.equal(mostAtOnce, 1, "one look at a time")
 
-    // A large copy waits by its size at rest too: one of 40 MiB waits 80 s since it went, not the minute a small one at
-    // rest does. Read after a restart from the copy itself, as its size on disk.
+    // A large copy waits by its size at rest too: one of 800 MiB waits 80 s since it went, not the minute a small one
+    // at rest does. Read after a restart from the copy itself, as its size on disk.
     copies.stop()
     const file = copyFile(folder, "claude", "c")
     const header = CopyHeaderSchema.parse(JSON.parse((await readFile(file, "utf8")).split("\n")[0]))
-    await truncate(file, 40 * 1024 * 1024)
+    await truncate(file, 800 * 1024 * 1024)
     const atRest = { sessions: [{ harness: "claude", nativeId: "c", path: "/rail/c.jsonl", thread: "t-c", busy: false, tier: "week" }], paused: false }
     const later = new ReadingCopies(folder, views, () => {}, { now: () => now, remote: () => remote })
     now = header.at + 61_000
@@ -242,6 +242,74 @@ test("a capture is looked at alone and at once; captures while a look is under w
     await later.settled()
     assert.deepEqual(drawn.splice(0), ["c"], "its size's wait is")
     later.stop()
+  } finally {
+    await rm(folder, { recursive: true, force: true })
+  }
+})
+
+test("a Session changed before its turn goes when its turn comes, unasked; a large copy is written a slice at a time, and one whose view closed under it waits for the next look", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "mako-reading-copies-turn-"))
+  try {
+    const entries = Array.from({ length: 600 }, (_, n) => turn(n))
+    let stamp = "n:1"
+    let closeAfter = Infinity
+    let slices = 0
+    const views = {
+      view: async () => ({
+        view: {
+          total: entries.length,
+          translator: "t-1",
+          json: (start, end) => {
+            if (slices++ >= closeAfter) throw new Error("database is not open")
+            return entries.slice(start, end).map((entry) => Buffer.from(JSON.stringify(entry)))
+          },
+        },
+        ref: { harness: "claude", nativeId: "big", path: "/rail/big.jsonl", title: "Big" },
+      }),
+      stamp: () => stamp,
+      translator: () => "t-1",
+    }
+    let now = 5_000_000
+    const remote = new MemoryRemote("gateway/d-1")
+    const logged = []
+    const copies = new ReadingCopies(folder, views, (level, message) => logged.push(message), { now: () => now, remote: () => remote })
+    const scope = { sessions: [{ harness: "claude", nativeId: "big", path: "/rail/big.jsonl", thread: "t-big", busy: true, tier: "now" }], paused: false }
+    copies.scope(scope)
+    copies.link({ id: "d-1", base: "https://cloud.test/v1/devices/d-1/records", authorization: "Bearer a" })
+    await copies.settled()
+    assert.deepEqual(remote.pushed, ["big"])
+    assert.ok(slices >= 9, `written a slice at a time: ${slices} slices of 600 entries`)
+
+    // A turn lands half a second after the copy: it isn't copied then, and goes once its second has come, with
+    // nothing else asking.
+    entries.push(turn(600))
+    stamp = "n:2"
+    now += 500
+    copies.changed("claude", "big")
+    await copies.settled()
+    assert.deepEqual(remote.pushed, ["big"], "not before its turn")
+    now += 500
+    for (let waited = 0; remote.pushed.length < 2 && waited < 100; waited++) await new Promise((resolve) => setTimeout(resolve, 10))
+    await copies.settled()
+    assert.deepEqual(remote.pushed, ["big", "big"], "once its turn came, unasked")
+
+    // The view is written again under a copy: that copy is left, its file untouched, and the next look writes it.
+    entries.push(turn(601))
+    stamp = "n:3"
+    now += 2_000
+    slices = 0
+    closeAfter = 1
+    copies.changed("claude", "big")
+    await copies.settled()
+    assert.deepEqual(remote.pushed, ["big", "big"], "nothing went from a copy cut short")
+    assert.ok(logged.includes("a copy was left for the next look"))
+    const kept = (await readFile(copyFile(folder, "claude", "big"), "utf8")).trimEnd().split("\n")
+    assert.equal(kept.length, 1 + 601, "the last whole copy stands")
+    closeAfter = Infinity
+    copies.changed("claude", "big")
+    await copies.settled()
+    assert.deepEqual(remote.pushed, ["big", "big", "big"])
+    copies.stop()
   } finally {
     await rm(folder, { recursive: true, force: true })
   }
