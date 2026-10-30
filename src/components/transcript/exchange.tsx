@@ -320,7 +320,7 @@ function AgentByline({ provider, workingSince }: { provider?: string; workingSin
 /* ------------------------------------------------------------------ */
 
 /** What a continuation's line says, by who sent it; one read back from before the words named a sender says only what happened. */
-function continuedTitle({ reason, sender }: SavedContinuation, provider: string): string {
+function continuedTitle({ reason, sender, stayed }: SavedContinuation, provider: string): string {
   const who = sender === "mako" ? "Mako continued the turn" : sender === "person" ? "You continued the turn" : "The turn continued"
   switch (reason) {
     case "connection-lost":
@@ -334,6 +334,7 @@ function continuedTitle({ reason, sender }: SavedContinuation, provider: string)
     case "stopped":
       return `${who} after Mako closed`
     case "handed-off":
+      if (stayed) return "Mako continued the turn here: the move didn't happen"
       return sender === "mako" ? "Mako continued the turn it paused to move" : sender === "person" ? "You continued the turn Mako paused to move" : "The turn Mako paused to move continued"
     case "not-saved":
       return sender === "mako" ? "Mako continued the turn it stopped when it couldn't save" : sender === "person" ? "You continued the turn Mako stopped when it couldn't save" : "The turn Mako stopped when it couldn't save continued"
@@ -373,7 +374,8 @@ function TurnWentOn({ continued, message, provider }: { continued: SavedContinua
   const harness = useAcp((state) => (liveId ? state.conversations[liveId]?.harness : undefined))
   const diagnosing = usePrefs((prefs) => prefs.showOriginals)
   const dividers = useContext(MoveDividersContext)
-  if (dividers && !diagnosing && continued.reason === "handed-off") return <MovedDivider at={message.timestamp} />
+  // Only a turn that went on in the cloud moved: one that stayed, its move refused, goes on as one run.
+  if (dividers && !diagnosing && continued.reason === "handed-off" && !continued.stayed) return <MovedDivider at={message.timestamp} />
   if (!diagnosing && continued.reason !== "machine-lost") return null
   const agent = provider ?? harness
   const said = textOf(message.blocks).trim()

@@ -27,6 +27,16 @@ export class MovesUnderWay {
     return true
   }
 
+  /**
+   * `move` stopped running in this host, however it ended: a step at its end, or a throw that sent none. Whether what a
+   * list shows changed. Once the Thread is in transit its rows say so themselves (`moving`); nothing keeps one listed as
+   * moving that nothing here moves.
+   */
+  ended(move: string): boolean {
+    for (const [thread, held] of this.#moving) if (held.move === move) return this.#moving.delete(thread)
+    return false
+  }
+
   /** The move of `thread` under way, as its rows say it, if one is. */
   of(thread: string): ListedMove | undefined {
     return this.#moving.get(thread)?.listed

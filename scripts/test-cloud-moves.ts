@@ -27,7 +27,7 @@ type Work = {
   background?: { left: string; stopped: string[] }
   waiting: Array<{ id: string; text: string; attachments: PromptAttachment[] }>
   paused: string[]
-  continuedHere: Array<{ conversationId: string; continues: string; requestId: string; stopped?: string[] }>
+  continuedHere: Array<{ conversationId: string; continues: string; requestId: string; stopped?: string[]; stayed?: true }>
   carried: string[]
 }
 
@@ -230,7 +230,7 @@ function setup(name: string, options: { worktree?: boolean; harnesses?: CloudMov
         const requestId = running ?? background?.left
         return requestId ? { requestId, stopped: background?.stopped ?? [] } : undefined
       },
-      continueTurn: (conversationId, input) => void work.continuedHere.push({ conversationId, continues: input.continues, requestId: input.requestId, ...input.stopped?.length && { stopped: [...input.stopped] } }),
+      continueTurn: (conversationId, input) => void work.continuedHere.push({ conversationId, continues: input.continues, requestId: input.requestId, ...input.stopped?.length && { stopped: [...input.stopped] }, ...input.stayed && { stayed: input.stayed } }),
       waitingPrompts: () => [...work.waiting],
       carried: (_conversationId, requestIds) => {
         work.carried.push(...requestIds)
@@ -292,6 +292,18 @@ try {
     assert.deepEqual(await s.moves.move(s.conversation, move()), { kind: "kept-here", reason: "This Thread runs in the cloud already. Bring it back to this Mac first to move it again." }, "a new move of a Thread in the cloud says where it is")
     assert.equal(s.gateway.made.length, made, "and makes nothing")
     assert.equal(s.gateway.calls.filter((call) => call.channel === "mako:live-start").length, 1)
+  }
+
+  // A move that throws after the release (following it here failed) sends no last step, and still says it stopped
+  // running here, so no list keeps the Thread moving with Move to the cloud hidden.
+  {
+    const ended: string[] = []
+    const s = setup("adopt-throws", { make: (base) => ({ ...base, cloud: { ...base.cloud, adopt: async () => { throw new Error("couldn't follow it here") } }, ended: (id) => void ended.push(id) }) })
+    const id = move()
+    await assert.rejects(s.moves.move(s.conversation, id), /couldn't follow it here/)
+    assert.ok(!s.steps.some((step) => step.kind === "moved" || step.kind === "kept-here"), "no step said its end")
+    assert.deepEqual(ended, [id], "its end is said all the same")
+    assert.ok(!s.moves.leaving(s.thread))
   }
 
   // Taking the cloud Thread kept ready: the checkout readiness sent last isn't asked about again, since the cloud keeps
@@ -570,6 +582,7 @@ try {
     const outcome = await s.moves.move(s.conversation, id, { why: "quit" })
     assert.equal(outcome.kind, "kept-here")
     assert.deepEqual(s.work.continuedHere.map((each) => each.continues), [turn], "the paused turn continues here")
+    assert.deepEqual(s.work.continuedHere.map((each) => each.stayed), [true], "saying it stayed: no transcript draws it as moved")
     assert.deepEqual(s.steps.at(-1), { kind: "kept-here", reason: outcome.kind === "kept-here" ? outcome.reason : "", continued: true })
     assert.equal(state(s)?.state, "here")
     assert.ok(!s.gateway.calls.some((call) => call.channel === "mako:live-continue-turn"), "nothing continued in the cloud")

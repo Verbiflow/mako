@@ -1275,15 +1275,31 @@ and asks the Mac, and Copy diagnostics quotes IDs, versions and times, no
 secrets. A read the network failed is asked once more; a change never is
 (`Gateway.rest`). An account whose Mac was never heard from gets Connect your
 Mac (`connect-mac.tsx`), which ticks itself from `device-joined` and the Mac's
-first rows or answer. A Thread's app shows as a card per server and the
-capsule's App running · Open (`previews.ts`, read from `mako:thread-app` while
-the Thread is in front, closely while it starts); loopback links in its
+first rows or answer; a Mac the account calls quiet connected before, and gets
+the diagnosis instead. Only `owner-unavailable`, `unavailable` and `restarting`
+say a place wasn't reached; any other refusal came from one that answered, and
+a Mac's live update is it answering. Mako Cloud's standing is one fact for the
+list and every Thread (`cloudReach`): the live account stream, else the last
+request. A Thread's app is said once per screen (`appShownAs`): the capsule's
+App running · Open on a phone, a card per server with a tablet's or laptop's
+room (`previews.ts`, read from `mako:thread-app` while the Thread is in front,
+closely while it starts, and passively, so a window left open on a cloud
+Thread neither wakes its machine nor keeps it running); loopback links in its
 transcript open there. A move between a Mac and the cloud is watched, not
 waited on: a Mac's rows say it from its first step (`ListedSession.move`,
-link version 11, `MovesUnderWay`), a watched conversation's owner relays each
-`thread-move-step` and `thread-return-step` (`SessionPublisher.own`), packing
-with its upload's bytes (`SentProgress`), and the phone's card
-(`move-card.tsx`) draws a bar that only goes forward (`move-progress.ts`).
+link version 11, `MovesUnderWay`, cleared when the move stops running however
+it ended), a watched conversation's owner relays each `thread-move-step` and
+`thread-return-step` (`SessionPublisher.own`), packing with its upload's bytes
+(`SentProgress`), and a strip above the Thread's transcript, which stays with
+its composer (`move-card.tsx`), draws a bar that only goes forward
+(`move-progress.ts`), written through refs, from the step's start as the list
+said it. After `own-branch` with `to` the forked conversation is followed. A
+move's answer the network lost is `unconfirmed`, never a failure: the Mac is
+asked again under the same move ID (`followAnswer`), and a later step
+overrides it; Retry mints a new move only after the owner's refusal. A turn a
+refused move paused goes on here in words that say it stayed
+(`SavedContinuation.stayed`), so no transcript draws "Moved to the cloud" over
+it.
 
 ## MCP
 

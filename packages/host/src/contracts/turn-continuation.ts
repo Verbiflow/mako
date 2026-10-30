@@ -59,6 +59,19 @@ const SITUATIONS = {
 } as const satisfies Record<InterruptionReason, string>
 
 /**
+ * A turn a handoff paused that goes on where it was, because the move didn't happen (the cloud refused it, or it ran out
+ * of time): the agent is told it stayed, and no transcript draws it as a move. Read back by these words, as every
+ * continuation is (`SavedContinuation.stayed`).
+ */
+const STAYED =
+  "Continue where you left off. Mako paused your work to hand this conversation to another machine, and it stayed on this one instead; the work you did so far is in place. Check the result of any command or edit you were in the middle of before repeating it."
+
+/** What a continuation opens with: its reason's words, or a handoff's that stayed. */
+function situation(reason: InterruptionReason, stayed: boolean): string {
+  return stayed && reason === "handed-off" ? STAYED : SITUATIONS[reason]
+}
+
+/**
  * The sentence that says who sent it. It tells the agent nothing new was
  * asked, and it is how a saved conversation, which keeps no request, tells
  * Mako's continuation from the person's: the store holds only the words.
@@ -98,14 +111,17 @@ function stoppedSentence(reason: InterruptionReason, stopped: readonly string[])
  * agent had left running in the background, which Mako's exit or a handoff stopped (`Interruption.stopped`), named so
  * the agent can start again what it needs.
  */
-export function continueTurnPrompt(reason: InterruptionReason, sender: ContinuationSender, stopped: readonly string[] = []): string {
-  return stopped.length ? `${SITUATIONS[reason]} ${stoppedSentence(reason, stopped)} ${SENDERS[sender]}` : `${SITUATIONS[reason]} ${SENDERS[sender]}`
+export function continueTurnPrompt(reason: InterruptionReason, sender: ContinuationSender, stopped: readonly string[] = [], how: { stayed?: boolean } = {}): string {
+  const opens = situation(reason, how.stayed === true)
+  return stopped.length ? `${opens} ${stoppedSentence(reason, stopped)} ${SENDERS[sender]}` : `${opens} ${SENDERS[sender]}`
 }
 
 /** A continuation read back by its words: what cut the turn short, and who sent it when the words say. */
 export interface SavedContinuation {
   reason: InterruptionReason
   sender?: ContinuationSender
+  /** A handoff's turn that went on where it was, since the move didn't happen: nothing moved. */
+  stayed?: true
 }
 
 /**
@@ -121,12 +137,16 @@ export function savedContinuation(text: string): SavedContinuation | undefined {
   const words = text.trim()
   for (const each of INTERRUPTION_REASONS) {
     const reason = SITUATIONS[each] === SITUATIONS["host-quit"] ? "host-quit" : each
-    if (words === SITUATIONS[reason]) return { reason }
-    for (const sender of CONTINUATION_SENDERS) {
-      if (words === continueTurnPrompt(reason, sender)) return { reason, sender }
-      // With the background work a cut stopped named between the two: Mako's words around commands of the agent's.
-      const middle = words.startsWith(`${SITUATIONS[reason]} `) && words.endsWith(` ${SENDERS[sender]}`) ? words.slice(SITUATIONS[reason].length + 1, -SENDERS[sender].length - 1) : undefined
-      if (middle?.endsWith(STOPPED_CLOSES) && STOPPERS.some((by) => middle.startsWith(stoppedOpens(by)))) return { reason, sender }
+    for (const stayed of reason === "handed-off" ? [false, true] : [false]) {
+      const opens = situation(reason, stayed)
+      const read: SavedContinuation = stayed ? { reason, stayed: true } : { reason }
+      if (words === opens) return read
+      for (const sender of CONTINUATION_SENDERS) {
+        if (words === continueTurnPrompt(reason, sender, [], { stayed })) return { ...read, sender }
+        // With the background work a cut stopped named between the two: Mako's words around commands of the agent's.
+        const middle = words.startsWith(`${opens} `) && words.endsWith(` ${SENDERS[sender]}`) ? words.slice(opens.length + 1, -SENDERS[sender].length - 1) : undefined
+        if (middle?.endsWith(STOPPED_CLOSES) && STOPPERS.some((by) => middle.startsWith(stoppedOpens(by)))) return { ...read, sender }
+      }
     }
   }
   return undefined

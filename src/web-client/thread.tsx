@@ -14,13 +14,14 @@ import { useWebClient } from "./client"
 import { Composer } from "./composer"
 import { threadDraftKey } from "./drafts"
 import { webHarnessLabel } from "./labels"
-import { MoveCard, MoveSheet } from "./move-card"
+import { MoveSheet, ThreadMove } from "./move-card"
 import { startMove, type MoveMac } from "./move-actions"
 import type { MoveWay } from "./move-progress"
-import { listedMove, useMoves, type WebMove } from "./moves"
+import { listedMove, useMoves } from "./moves"
 import { StartSheet, type AddingTo } from "./new-thread"
 import { PreviewSheet, ServerCard } from "./preview"
-import { appKey, askPreview, loopbackTarget, useApps, useThreadApp } from "./previews"
+import { appKey, appShownAs, askPreview, loopbackTarget, useApps, useThreadApp } from "./previews"
+import { useForm } from "./route"
 import { CLOUD_WHERE, openingSession, ownerOf, subtitle, type WebSession, type WebThread } from "./threads"
 import { startingWhere } from "./started"
 import { useThread } from "./use-thread"
@@ -111,49 +112,19 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
   )
 }
 
-/** The Mac a Session runs on, or that a cloud Thread came from as far as this phone can tell: named, by its device. */
-function macOf(session: WebSession, devices: ReadonlyMap<string, { kind: string; name: string }>): MoveMac | undefined {
-  if (session.owner.kind === "device") return { deviceId: session.owner.deviceId, name: session.where }
-  const macs = [...devices.entries()].filter(([, device]) => device.kind === "desktop")
-  return macs.length === 1 ? { deviceId: macs[0]![0], name: macs[0]![1].name } : undefined
-}
-
 /**
- * What a Thread shows under its bar, on a phone, a tablet and a laptop's browser alike: archived, a move in its place
- * while one goes, its Mac asleep or offline (with why, and what still works), or the Session live. Above a live one,
- * what can't be reached, when something can't, and the servers its app runs; links in it to the app's own address open
- * the app here.
+ * What a Thread shows under its bar, on a phone, a tablet and a laptop's browser alike: archived, its Mac asleep or
+ * offline (with why, and what still works), or the Session live. Above it, a move while one goes, the transcript and
+ * composer kept under it; above a live one, what can't be reached, when something can't, and the servers its app runs.
+ * Links in it to the app's own address open the app here.
  */
 export function ThreadBody({ thread, session, desk = false }: { thread: WebThread; session: WebSession; desk?: boolean }) {
   const client = useWebClient()
-  const devices = useAccountList((state) => state.devices)
-  const followed = useMoves((state) => state.moves.get(thread.id))
-  const listed = followed ? undefined : listedMove(thread)
-  const mac = macOf(session, devices)
-  const move: (Pick<WebMove, "way" | "step" | "stepAt" | "handOff" | "mac" | "ours"> & Partial<WebMove>) | undefined =
-    followed ?? (listed && mac ? { ...listed, handOff: session.row.state === "working", mac, ours: false } : undefined)
+  // Only whether one goes: the strip follows its steps itself, so its progress re-renders nothing under it.
+  const moving = useMoves((state) => state.moves.has(thread.id)) || listedMove(thread) !== undefined
   const owner = ownerOf(session)
-  const live = !thread.archived && !session.quietSince && !move
+  const live = !thread.archived && !session.quietSince && !moving
   useThreadApp(client, session.row.conversation, owner, session.row.folder, live)
-  // While a move shows in its place, its owner is followed for the move's steps, as an open Session's would be.
-  const watching = move !== undefined && !move.end && move.way === "cloud" && session.owner.kind === "device"
-  useEffect(() => {
-    if (!watching) return
-    let stop: (() => void) | undefined
-    let left = false
-    void client.conversations().then((conversations) => {
-      if (!left) stop = conversations.followSteps(session)
-    })
-    return () => {
-      left = true
-      stop?.()
-    }
-    // Followed once per conversation while the card shows; the row it was named by changes as the list does.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [client, watching, session.row.conversation])
-  const retry = followed?.end?.kind === "failed" && mac
-    ? () => void startMove(client, { thread, conversation: session.row.conversation, way: followed.way, mac: followed.mac, handOff: session.row.state === "working" })
-    : undefined
   // A link to the app's own address (`localhost:5173/login`) opens the app here, through its owner, not this phone's own.
   const openLinks = (event: React.MouseEvent) => {
     const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>("a[href]") : null
@@ -167,19 +138,22 @@ export function ThreadBody({ thread, session, desk = false }: { thread: WebThrea
     <>
       {thread.archived ? (
         <ArchivedThread thread={thread} />
-      ) : move ? (
-        <MoveCard key={move.move ?? "listed"} thread={thread} move={move} onRetry={retry} />
-      ) : session.quietSince ? (
-        <QuietSession key={session.row.session} session={session} />
       ) : (
         <div className="flex min-h-0 flex-1 flex-col" onClickCapture={openLinks}>
-          <ThreadTrouble session={session} />
-          <ServerCards session={session} />
-          <MoveDividersContext value>
-            <Suspense fallback={<TranscriptLoading />}>
-              <LiveSession key={session.row.conversation} session={session} desk={desk} />
-            </Suspense>
-          </MoveDividersContext>
+          {moving ? <ThreadMove thread={thread} session={session} /> : null}
+          {session.quietSince ? (
+            <QuietSession key={session.row.session} session={session} />
+          ) : (
+            <>
+              <ThreadTrouble session={session} />
+              {moving ? null : <ServerCards session={session} />}
+              <MoveDividersContext value>
+                <Suspense fallback={<TranscriptLoading />}>
+                  <LiveSession key={session.row.conversation} session={session} desk={desk} />
+                </Suspense>
+              </MoveDividersContext>
+            </>
+          )}
         </div>
       )}
       <PreviewSheet conversation={session.row.conversation} owner={owner} folder={session.row.folder} title={thread.title} />
@@ -199,13 +173,17 @@ function ThreadTrouble({ session }: { session: WebSession }) {
   return <DiagnosisCard diagnosis={diagnosis} checking={checking} onTryAgain={tryAgain} compact className="web-trouble-strip" />
 }
 
-/** The servers a live Session's app runs, a card each, while it runs: tap one to open it here. */
+/**
+ * The servers a live Session's app runs, a card each, while it runs: tap one to open it here. Where there's room for
+ * them; a phone says it in the capsule instead (`appShownAs`).
+ */
 function ServerCards({ session }: { session: WebSession }) {
+  const shown = appShownAs(useForm()) === "cards"
   const folder = session.row.folder
   const key = folder ? appKey(ownerOf(session), folder) : undefined
   const servers = useApps((state) => (key ? state.apps.get(key)?.servers : undefined))
   const up = servers?.filter((server) => server.state !== "stopped") ?? []
-  if (!up.length) return null
+  if (!shown || !up.length) return null
   return (
     <div className="web-servers web-scroll" aria-label="Its app">
       {up.map((server) => (
