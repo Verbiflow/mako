@@ -5,7 +5,7 @@ import { install, noteVisit, readOffer, shouldOffer, SNOOZE_MS, useInstallWay, w
 import { Sheet } from "./sheet"
 
 /**
- * The offer to add Mako to the Home Screen, floating at the foot of the list under New, once it has earned it: Chrome's own prompt where
+ * The offer to add Mako to the Home Screen, floating at the foot of the list, once it has earned it: Chrome's own prompt where
  * the browser has one, the two steps of the Share menu on an iPhone. Never inside the installed app.
  */
 export function InstallCard() {
