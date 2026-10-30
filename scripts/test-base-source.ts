@@ -3,9 +3,12 @@ import { randomUUID } from "node:crypto"
 import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
+import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { copiedBaseBytes, LiveJournal } from "@mako/host/conversations/live-journal"
+import { JournalReclaims } from "@mako/host/conversations/journal-reclaim"
 import { baseFromSource, storedBase } from "@mako/host/conversations/base-source"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
@@ -187,6 +190,99 @@ function materializesWhenPartial() {
     assert.ok(copiedBaseBytes(f.journals, id) > 0, "a seeded store's base is only in the journal")
     journal.close()
     console.log("PASS: written back when coverage goes partial or seeded, dropped when covered again")
+  } finally {
+    f.cleanup()
+  }
+}
+
+/**
+ * The copy is kept an entry a row: a turn writes the rows of what changed, the rows stay while the journal keeps no
+ * copy so the next turn writes none, and they go when it closes. A copy an earlier build kept whole reads as before and
+ * is written as rows at the next commit.
+ */
+async function keepsRows() {
+  const f = fixture()
+  const id = randomUUID()
+  const rows = () => {
+    const db = new DatabaseSync(join(f.journals, `${id}.sqlite`), { readOnly: true })
+    try {
+      return z.object({ count: z.number() }).parse(db.prepare("SELECT count(*) AS count FROM base_entries").get()).count
+    } finally {
+      db.close()
+    }
+  }
+  try {
+    const page = f.native.page!
+    const binding = { id, provider: harness, nativeId: "native-1", path: f.path, coveredBlocks: 0, includesBase: true }
+    const kept: LiveSnapshot = {
+      session: { id, harness, nativeId: "native-1", cwd: "/tmp", status: "ready", connection: "disconnected", modes: [], currentMode: null, configOptions: [] },
+      revision: 1, createdAt: Date.now(), threadPath: f.path, base: page, baseCoveredBlocks: 0,
+      blocks: [], permissions: [], requests: [],
+      control: { merges: [], activeBindingId: id, transfers: [], bindings: [binding] },
+    }
+    const journal = new LiveJournal(f.journals, id)
+    journal.commit(kept)
+    assert.equal(rows(), page.entries.length, "an entry a row")
+    const kept2 = copiedBaseBytes(f.journals, id)
+    assert.ok(kept2 > 0)
+
+    // The session gains a turn: the entries it held keep their objects, and the journal reads back the whole.
+    const grown = { ...page, total: page.total + 1, entries: [...page.entries, { type: "text" as const, id: "entry-4", text: "third answer" }] }
+    const longer: LiveSnapshot = { ...kept, revision: 2, base: grown }
+    journal.commit(longer, kept)
+    assert.ok(copiedBaseBytes(f.journals, id) > kept2, "the new entry's row is counted")
+    assert.deepEqual(new LiveJournal(f.journals, id).read()!.base, grown, "a crash now reads the history the turn grew")
+
+    // Held: the base row names no copy; the rows stay for the next turn, and go with the journal.
+    const held: LiveSnapshot = { ...longer, revision: 3, baseSource: { harness, nativeId: "native-1", path: f.path } }
+    journal.commit(held, longer)
+    assert.equal(copiedBaseBytes(f.journals, id), 0, "no copy once the record store holds the session")
+    assert.equal(rows(), grown.entries.length, "the rows stay while the journal is open")
+    const running: LiveSnapshot = { ...held, revision: 4, blocks: [{ type: "text", text: "a live answer" }] }
+    journal.commit(running, held)
+    assert.ok(copiedBaseBytes(f.journals, id) > 0, "a turn keeps the copy again")
+    assert.deepEqual(new LiveJournal(f.journals, id).read()!.base, grown, "from the rows it kept")
+    const covered: LiveSnapshot = { ...running, revision: 5, baseCoveredBlocks: 1, control: { ...running.control!, bindings: [{ ...binding, coveredBlocks: 1 }] } }
+    journal.commit(covered, running)
+    assert.equal(copiedBaseBytes(f.journals, id), 0)
+    journal.close()
+    assert.equal(rows(), 0, "closed with no copy, the journal drops the rows")
+
+    // Opened again, the history read from its session is written ahead, a slice at a time, before a turn needs it.
+    const reopened = new LiveJournal(f.journals, id)
+    const read = reopened.read()!
+    assert.equal(read.base, null, "the base is read from its session")
+    const fromSession = { ...covered, base: grown, revision: 6 }
+    reopened.commit(fromSession, { ...covered, base: null })
+    await waitFor(() => rows() === grown.entries.length, "the rows are written ahead")
+    // Let go by the host, the compaction drops them off its thread.
+    const reclaims = new JournalReclaims()
+    reopened.close((path) => { void reclaims.reclaim(path) })
+    await reclaims.settled()
+    assert.equal(rows(), 0, "the compaction drops rows the base row doesn't name")
+
+    // An earlier build kept the copy whole in the base row.
+    const whole = new LiveJournal(f.journals, id)
+    whole.commit(longer)
+    whole.close()
+    const db = new DatabaseSync(join(f.journals, `${id}.sqlite`))
+    db.prepare("INSERT OR REPLACE INTO base VALUES (1, ?)").run(JSON.stringify(grown))
+    db.exec("DELETE FROM base_entries")
+    db.close()
+    assert.ok(copiedBaseBytes(f.journals, id) > 0, "a whole copy is a copy")
+    const legacy = new LiveJournal(f.journals, id)
+    const old = legacy.read()!
+    assert.deepEqual(old.base, grown, "a whole copy reads as it was")
+    const unchanged = { ...old, revision: old.revision + 1 }
+    legacy.commit(unchanged, old)
+    await waitFor(() => rows() === grown.entries.length, "its rows are written ahead")
+    assert.deepEqual(new LiveJournal(f.journals, id).read()!.base, grown, "the whole copy still reads while it hasn't changed")
+    const longest = { ...grown, total: grown.total + 1, entries: [...old.base!.entries, { type: "user" as const, id: "entry-5", text: "fourth ask" }] }
+    legacy.commit({ ...unchanged, revision: unchanged.revision + 1, base: longest }, unchanged)
+    assert.equal(rows(), longest.entries.length, "changed, it is kept as rows")
+    legacy.close()
+    assert.deepEqual(new LiveJournal(f.journals, id).read()!.base, longest, "and reads back the same")
+    console.log("PASS: the copy is kept an entry a row, written as it changes, ahead of a turn, and read from a whole copy too")
   } finally {
     f.cleanup()
   }
@@ -558,6 +654,7 @@ async function keepsWithoutHold() {
 
 await dropsAndReadsBack()
 materializesWhenPartial()
+await keepsRows()
 await staleViewThenRefresh()
 await readsGrowth()
 await followsMovedSession()

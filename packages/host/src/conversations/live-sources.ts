@@ -1,6 +1,5 @@
 import { statSync } from "node:fs"
 import { join } from "node:path"
-import { isDeepStrictEqual } from "node:util"
 import { z } from "zod"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -15,6 +14,7 @@ import { activeBinding, bindingPath, conversationControl, noteCarriedFolders, re
 import { captureNativeHistory, withSeed } from "./native-history.js"
 import { baseKeptBecause, baseKeptOnceHeld, baseUnread, samePlace, sourceOfPage, spanIds, spanOf } from "./base-source.js"
 import { cutOffRequests, firstLiveStart, mergedBase } from "./stream-merging.js"
+import { sameEntries, samePage, sharedEntries } from "./shared-entries.js"
 import { forkHistory } from "./live-forks.js"
 import { ForkPointSchema } from "../contracts/conversation-control.js"
 import type { Entry } from "@mako/sessions/entries"
@@ -165,6 +165,7 @@ export class LiveSources {
     }
     const journal = new LiveJournal(dependencies.root, id)
     try {
+      await journal.writeAhead(base)
       journal.commit(snapshot)
     } catch (error) {
       journal.close()
@@ -547,15 +548,17 @@ export class LiveSources {
         const baseLiveStart = merged?.liveStart ?? recordStart
         // A fork whose parent can't give its inherited turns back has them as its record does: nothing supplied.
         const baseSupplied = merged?.supplied ?? (recordStart && isFork(before) ? 0 : undefined)
-        const refreshed = merged && merged.base
+        // What the history said before keeps its objects, so the journal writes, the weights measure and the views
+        // hold only the turns it gained, and nothing below compares it whole on one stretch of the loop.
+        const refreshed = merged && (base ? { ...merged.base, entries: await sharedEntries(base.entries, merged.base.entries) } : merged.base)
         if (refreshed && this.access.resident(id) === resident &&
             resident.snapshot === before && resident.generation === generation &&
             !resident.opening && !resident.transferring && !this.access.admission.closed &&
-            ((before.baseCoveredBlocks ?? 0) !== covered || before.baseSupplied !== baseSupplied || !isDeepStrictEqual(base, refreshed))) {
+            ((before.baseCoveredBlocks ?? 0) !== covered || before.baseSupplied !== baseSupplied || !base || !samePage(base, refreshed))) {
           // The journal keeps a new reading until the record store holds what
           // it adds (`holdBase`); the same history, moved or decoded by
           // another build, is still the one it holds.
-          const sameHistory = base !== null && (before.baseCoveredBlocks ?? 0) === covered && isDeepStrictEqual(base.entries, refreshed.entries)
+          const sameHistory = base !== null && (before.baseCoveredBlocks ?? 0) === covered && sameEntries(base.entries, refreshed.entries)
           resident.snapshot = { ...before, base: refreshed, baseCoveredBlocks: covered, baseLiveStart, baseSupplied, baseSource: sameHistory ? before.baseSource : undefined }
           this.access.flush(resident)
           // A block the record held before was compared then; the record standing alone is one finding.

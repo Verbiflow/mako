@@ -21,7 +21,6 @@ import { cutOffRequests, mergedBase } from "@mako/host/conversations/stream-merg
  */
 
 const Session = z.object({ harness: z.string(), executionContext: z.object({ runtime: z.object({ version: z.string().optional() }).passthrough().optional() }).passthrough().optional() }).passthrough()
-const Row = z.object({ value: z.string() })
 
 const folder = process.argv[2] ?? join(homedir(), "Library", "Application Support", "mako", "conversations")
 const ids = (await readdir(folder)).filter((name) => /^[0-9a-f-]{36}\.sqlite$/.test(name)).map((name) => name.slice(0, -".sqlite".length))
@@ -63,7 +62,13 @@ try {
       }
     })()
     const copy = new DatabaseSync(join(scratch, `${id}.sqlite`), { readOnly: true })
-    const row = Row.safeParse(copy.prepare("SELECT value FROM base WHERE id=1").get())
+    const stored = (() => {
+      try {
+        return readBase(copy)
+      } catch {
+        return null
+      }
+    })()
     copy.close()
     journal.close()
     await rm(join(scratch, `${id}.sqlite`), { force: true })
@@ -74,7 +79,6 @@ try {
       continue
     }
     const session = Session.safeParse(snapshot.session)
-    const stored = row.success ? readBase(row.data.value) : null
     // The record's harness, whose declarations the merge reads; a session can run one harness's agent through another's.
     const harness = stored?.base.ref.harness ?? session.data?.harness ?? "unknown"
     const tally = tallies.get(harness) ?? { journals: 0, merged: 0, record: 0, stream: 0, supplied: 0, unaligned: 0, ms: 0, slowest: 0, mismatches: new Map(), versions: new Set() }
