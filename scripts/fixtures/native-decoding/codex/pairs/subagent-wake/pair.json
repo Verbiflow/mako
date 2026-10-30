@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.164.0"
+    "version": "0.166.0"
   },
   "about": "Run exactly one subagent in the background (do not wait for it) whose whole task is to reply with a marker, then end your turn at once. A subagent left running in the background reports after the turn that started it; the harness runs a turn of its own on the report, or takes it into the turn still running.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T12-56-06-01a174a2-7586-73a0-843f-19aab24d963a.jsonl",
+      "path": ".codex/sessions/2026/10/30/rollout-2026-10-30T12-57-20-01a18ce2-dcb0-7c40-9bec-a97d02ee1392.jsonl",
       "known": []
     }
   ]
