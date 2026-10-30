@@ -19,6 +19,7 @@ import { forkHistory } from "./live-forks.js"
 import { ForkPointSchema } from "../contracts/conversation-control.js"
 import type { Entry } from "@mako/sessions/entries"
 import { retainMismatches } from "../base/stream-mismatches.js"
+import { readBack } from "./paged-entries.js"
 
 /**
  * Waits before reading an unread base again after an error: the catalog
@@ -248,8 +249,10 @@ export class LiveSources {
       const recordStart = recordLiveStart(snapshot)
       // The record holds a fork's inherited turns as its harness copied them; its parent's history gives them back what the parent's stream said.
       const inherited = recordStart && isFork(snapshot) ? await this.parentHistory(snapshot) : undefined
+      // The merge reads every block it covers; paged ones are read back first, between other work.
+      const blocks = await readBack(snapshot.blocks.slice(0, snapshot.baseCoveredBlocks ?? 0))
       if (this.access.resident(id) !== resident || resident.snapshot !== snapshot) return
-      const merged = mergedBase(page, snapshot.blocks, snapshot.baseCoveredBlocks ?? 0, recordStart, { inherited, cutOff: cutOffRequests(snapshot.requests) })
+      const merged = mergedBase(page, blocks, snapshot.baseCoveredBlocks ?? 0, recordStart, { inherited, cutOff: cutOffRequests(snapshot.requests) })
       resident.snapshot = {
         ...snapshot, base: merged.base, historyFailure: undefined,
         // Read again, the inherited turns hold what the parent's history gives them now, or nothing when it gives none.
@@ -267,7 +270,7 @@ export class LiveSources {
    * is gone or no longer holds that point; its record then stands alone for
    * the turns it inherited.
    */
-  private async parentHistory(snapshot: LiveSnapshot): Promise<Entry[] | undefined> {
+  private async parentHistory(snapshot: LiveSnapshot): Promise<readonly Entry[] | undefined> {
     const ancestry = snapshot.control?.ancestry
     if (ancestry?.kind !== "fork") return undefined
     const loaded = Boolean(this.access.resident(ancestry.parentId))
@@ -275,7 +278,7 @@ export class LiveSources {
     try {
       if (!parent) throw new Error("its parent's journal can't be opened")
       await this.readBase(parent)
-      return forkHistory(parent.snapshot, ForkPointSchema.parse(JSON.parse(ancestry.point)))
+      return await readBack(forkHistory(parent.snapshot, ForkPointSchema.parse(JSON.parse(ancestry.point))))
     } catch (error) {
       hostLog("live", "a fork's inherited turns read as its record has them", { conversation: snapshot.session.id, parent: ancestry.parentId, error: errorMessage({ error }) })
       return undefined
@@ -348,7 +351,8 @@ export class LiveSources {
     if (!read || read.entries.length < base.total) return keep("its session no longer holds what the history read")
     const entries = read.entries.slice(0, base.total)
     const span: BaseSpan = { entries: base.total, ids: spanIds(entries), heldAt }
-    const rebuilt = mergedBase({ ...read, entries, total: base.total, hasEarlier: false }, snapshot.blocks, snapshot.baseCoveredBlocks ?? 0, recordLiveStart(snapshot), { cutOff: cutOffRequests(snapshot.requests) })
+    const blocks = await readBack(snapshot.blocks.slice(0, snapshot.baseCoveredBlocks ?? 0))
+    const rebuilt = mergedBase({ ...read, entries, total: base.total, hasEarlier: false }, blocks, snapshot.baseCoveredBlocks ?? 0, recordLiveStart(snapshot), { cutOff: cutOffRequests(snapshot.requests) })
     return sameTurns(rebuilt.base.entries, base.entries) ? { span } : keep("its session, read again, holds other turns than the history it keeps")
   }
 
@@ -533,18 +537,20 @@ export class LiveSources {
         const seeded = read && binding?.seeded
           ? withSeed(read, capturedThread(before, 0, true).entries, binding.seeded) ?? read
           : read
+        // The merge reads every block the record covers; paged ones are read back first, between other work.
+        const coveredBlocks = seeded ? await readBack(before.blocks.slice(0, covered)) : []
         // Until the base first covers live blocks, it is the history they
         // continue; a base read from another store says nothing of where.
         const first = (before.baseCoveredBlocks ?? 0) === 0
         const recordStart = !seeded || covered === 0 ? undefined
-          : first ? firstLiveStart(base, seeded, before.blocks.slice(0, covered))
+          : first ? firstLiveStart(base, seeded, coveredBlocks)
             : base?.ref.nativeId === seeded.ref.nativeId ? recordLiveStart(before) : undefined
         // A fork's own record holds the turns it inherited; they merge with
         // its parent's history: the copy it began from, then the reading
         // that merge left (`inheritedOf`).
         const inherited = !recordStart || !base || !isFork(before) ? undefined
-          : first ? base.entries : before.baseSupplied !== undefined ? inheritedOf(before) : await this.parentHistory(before)
-        const merged = seeded && mergedBase(seeded, before.blocks, covered, recordStart, { inherited, cutOff: cutOffRequests(before.requests) })
+          : first ? await readBack(base.entries) : before.baseSupplied !== undefined ? await readBack(inheritedOf(before) ?? []) : await this.parentHistory(before)
+        const merged = seeded && mergedBase(seeded, coveredBlocks, covered, recordStart, { inherited, cutOff: cutOffRequests(before.requests) })
         const baseLiveStart = merged?.liveStart ?? recordStart
         // A fork whose parent can't give its inherited turns back has them as its record does: nothing supplied.
         const baseSupplied = merged?.supplied ?? (recordStart && isFork(before) ? 0 : undefined)
@@ -764,6 +770,9 @@ export class LiveSources {
         )
           return
         const control = conversationControl(resident)
+        // Coverage it already has is no change: writing it again would end a refresh under way for nothing.
+        const known = control.bindings.find((binding) => binding.id === bindingId)
+        if (known?.checkpoint === checkpoint && known.coveredBlocks === blocks.length) return
         resident.snapshot = {
           ...resident.snapshot,
           control: {

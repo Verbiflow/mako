@@ -276,6 +276,13 @@ export interface Dependencies {
   providerWarmLimit?: number
   /** Test override for `CONVERSATION_MEMORY` and the wait before a sweep. */
   conversationMemory?: ResidencyBudget & { sweepMs: number }
+  /**
+   * Entries of conversation `id` were paged (`paged-entries.ts`), or the
+   * conversation was let go: whatever outside the host's records holds its
+   * entries (the history reader's views) holds the paged ones, or lets them go.
+   */
+  historyPaged?(id: string): void
+  historyReleased?(id: string): void
   /** Test clock for deterministic residency decisions. */
   now?: () => number
 }

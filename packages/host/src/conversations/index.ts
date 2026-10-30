@@ -192,6 +192,8 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     driver: (provider) => host.liveDrivers.get(provider),
     accountRemoving: harnesses.accountRemoval.removing,
     history: catalog.page,
+    historyPaged: (id) => history.paged(id),
+    historyReleased: (id) => history.released(id),
     staleHistory: (path, before) => catalog.page(path, before, undefined, { stale: true }),
     holdHistory: catalog.hold,
     historyAsOf: (path, asOf, before) => catalog.page(path, before, undefined, { asOf }),

@@ -40,6 +40,7 @@ import { cutOffRequests, mergedBase } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
 import { sharedBase } from "./shared-entries.js"
+import { EntryPager, type PagedRows, type PagedTable } from "./paged-entries.js"
 
 export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
@@ -504,6 +505,12 @@ export class LiveJournal {
   /** Whether the base row names the rows; unknown until the journal is read or writes it. */
   private rowsNamed?: boolean
   private closed = false
+  /** The entries this journal's rows hold that the host reads back instead of holding (`paged-entries.ts`). */
+  private readonly pager: EntryPager
+  /** A closed journal waiting for its paged entries to go before it tidies its file (`close`). */
+  private closing?: Promise<void>
+  /** `keepFile`: the tidying `closing` waits to do is no longer this journal's. */
+  private untidy = false
   constructor(root: string, id: string) {
     z.string().uuid().parse(id)
     mkdirSync(root, { recursive: true })
@@ -537,6 +544,41 @@ export class LiveJournal {
       this.db.close()
       throw error
     }
+    this.pager = new EntryPager(journalRows(this.db, () => this.appends))
+  }
+
+  /**
+   * Pages `blocks[from, to)` in place, as far as `until` (a `performance.now()`
+   * deadline) lets it: each block's content is read back from its row from
+   * then on. The caller holds that the rows hold these blocks as they are:
+   * this journal's last commit wrote them. Returns where it stopped.
+   */
+  pageBlocks(blocks: Entry[], from: number, to: number, until: number, inlineChars?: number): number {
+    let at = from
+    for (; at < to && performance.now() < until; at++) blocks[at] = this.pager.page(blocks[at]!, "blocks", at, inlineChars)
+    return at
+  }
+
+  /**
+   * Pages the entries of `entries[from, to)` whose row holds them, in place,
+   * as `pageBlocks` does; an entry no row holds yet (written ahead later, or
+   * not at all while the base comes from its source unread) stays.
+   */
+  pageBase(entries: Entry[], from: number, to: number, until: number, inlineChars?: number): number {
+    let at = from
+    for (; at < to && performance.now() < until; at++) {
+      const entry = entries[at]!
+      if (this.closed || this.baseRows[at] !== entry) continue
+      const paged = this.pager.page(entry, "base", at, inlineChars)
+      entries[at] = paged
+      this.baseRows[at] = paged
+    }
+    return at
+  }
+
+  /** How many entries this journal paged are still in memory somewhere: what a closed journal waits on before its rows written ahead go. */
+  pagedCount(): number {
+    return this.pager.pagedCount()
   }
 
   /**
@@ -703,7 +745,9 @@ export class LiveJournal {
         "DELETE FROM block_appends WHERE block_id=?"
       )
       const writeBlock = (index: number) => {
-        upsertBlock.run(index, JSON.stringify(blocks[index]))
+        const value = JSON.stringify(blocks[index])
+        this.pager.detach("blocks", index, blocks[index])
+        upsertBlock.run(index, value)
         clear.run(index)
         counts.set(index, 0)
       }
@@ -715,6 +759,7 @@ export class LiveJournal {
         const count = this.appends.get(index) ?? 0
         const growth = grown?.get(index)
         if (next.session.status === "running" && count < 128 && growth && block.type === "tool" && before?.type === "tool") {
+          this.pager.detach("blocks", index)
           append.run(index, count, JSON.stringify(growth))
           counts.set(index, count + 1)
         } else if (
@@ -726,6 +771,7 @@ export class LiveJournal {
           block.text.length > before.text.length &&
           block.text.startsWith(before.text)
         ) {
+          this.pager.detach("blocks", index)
           append.run(
             index,
             count,
@@ -739,6 +785,7 @@ export class LiveJournal {
           if (index < blocks.length && !counts.has(index)) writeBlock(index)
         }
       if (!previous || blocks.length < previous.blocks.length) {
+        this.pager.detachFrom("blocks", blocks.length)
         this.db.prepare("DELETE FROM blocks WHERE id>=?").run(blocks.length)
         this.db
           .prepare("DELETE FROM block_appends WHERE block_id>=?")
@@ -802,17 +849,21 @@ export class LiveJournal {
     }
     const { entries, ...page } = stored
     // Rows written ahead under a base row that named none: a compaction since (`JournalReclaims`) may have dropped them.
+    // It drops every row the base row doesn't name, so one row written still there says they all are: counting them
+    // read the whole history off disk, 200ms at 150MB, on the commit that starts a turn.
     if (!this.rowsNamed && this.baseRows.length) {
-      const written = this.baseRows.reduce((count, entry) => (entry ? count + 1 : count), 0)
-      const { count } = CountSchema.parse(this.db.prepare("SELECT count(*) AS count FROM base_entries WHERE id < ?").get(this.baseRows.length))
-      if (count < written) {
+      let last = this.baseRows.length - 1
+      while (last >= 0 && !this.baseRows[last]) last--
+      if (last >= 0 && !this.db.prepare("SELECT 1 AS found FROM base_entries WHERE id = ?").get(last)) {
         this.baseRows = []
         this.baseRowsCut = false
       }
     }
     const { rows } = this.writeBaseRows(entries, 0, entries.length)
-    if (this.baseRowsCut === false || this.baseRows.length > entries.length)
+    if (this.baseRowsCut === false || this.baseRows.length > entries.length) {
+      this.pager.detachFrom("base", entries.length)
       this.db.prepare("DELETE FROM base_entries WHERE id >= ?").run(entries.length)
+    }
     this.db.prepare("INSERT OR REPLACE INTO base VALUES (1, ?)").run(JSON.stringify({ ...page, entryRows: entries.length }))
     return { kept: true, rows, length: entries.length }
   }
@@ -825,7 +876,9 @@ export class LiveJournal {
     for (; at < to && (until === undefined || performance.now() < until); at++) {
       const entry = entries[at]!
       if (this.baseRows[at] === entry) continue
-      upsert.run(at, JSON.stringify(entry))
+      const value = JSON.stringify(entry)
+      this.pager.detach("base", at, entry)
+      upsert.run(at, value)
       rows.set(at, entry)
     }
     return { at, rows }
@@ -898,8 +951,10 @@ export class LiveJournal {
       this.db.exec("BEGIN IMMEDIATE")
       const written = this.writeBaseRows(entries, staging.at, entries.length, performance.now() + STAGE_SLICE_MS)
       const done = written.at >= entries.length
-      if (done && (this.baseRowsCut === false || this.baseRows.length > entries.length))
+      if (done && (this.baseRowsCut === false || this.baseRows.length > entries.length)) {
+        this.pager.detachFrom("base", entries.length)
         this.db.prepare("DELETE FROM base_entries WHERE id >= ?").run(entries.length)
+      }
       this.db.exec("COMMIT")
       for (const [index, entry] of written.rows) this.baseRows[index] = entry
       if (!done) {
@@ -926,23 +981,56 @@ export class LiveJournal {
     })
   }
 
-  /** `compact` is handed the closed file when a dropped copy left much of it free (`JournalReclaims`). */
-  close(compact?: (path: string) => void): void {
+  /**
+   * `compact` is handed the closed file when a dropped copy left much of it
+   * free (`JournalReclaims`). Entries paged from its rows (`paged-entries.ts`)
+   * may outlive it, in a window's view or a read under way: they read
+   * through a connection of their own, and the rows written ahead stay, and
+   * the file isn't compacted, until the last of them is collected
+   * (`released`). `abandon` doesn't wait: the host is stopping.
+   */
+  close(compact?: (path: string) => void, abandon = false): void {
+    if (this.closed) return
     this.closed = true
     this.stopStaging()
     // Rows written ahead that the base row doesn't name go with the journal: dropped by the compaction, off this
     // thread, as 150MB of them take a few hundred milliseconds to free.
     const ahead = this.rowsNamed === false && this.rowsAhead()
-    if (ahead && !compact) {
+    const free = compact !== undefined && (ahead || this.mostlyFree())
+    const paged = this.pager.pagedCount() > 0
+    if (ahead && !compact && !paged) {
       try {
         this.db.exec("DELETE FROM base_entries")
       } catch (error) {
         hostWarn("journal", "a journal's history rows couldn't be dropped", { path: this.path, error: errorMessage({ error }) })
       }
     }
-    const free = compact !== undefined && (ahead || this.mostlyFree())
     this.db.close()
-    if (free) compact(this.path)
+    const tidy = () => {
+      if (this.untidy) return
+      if (ahead && !compact && paged) dropRowsAhead(this.path)
+      if (free) compact(this.path)
+    }
+    const freed = this.pager.release(readOnlyRows(this.path))
+    if (!paged || abandon) {
+      tidy()
+      return
+    }
+    this.closing = freed.then(tidy)
+  }
+
+  /** Once the journal closed and what it waited on before tidying its file (`close`) is done. */
+  released(): Promise<void> {
+    return this.closing ?? Promise.resolve()
+  }
+
+  /**
+   * The conversation was read in again before this closed journal tidied its
+   * file: the journal open now owns it, rows written ahead included, and
+   * tidies it when it closes.
+   */
+  keepFile(): void {
+    this.untidy = true
   }
 
   private rowsAhead(): boolean {
@@ -963,6 +1051,69 @@ export class LiveJournal {
       hostWarn("journal", "a journal's free space could not be read", { path: this.path, error: errorMessage({ error }) })
       return false
     }
+  }
+}
+
+/** Rows as the journal at `db` holds them; a block's appends (`appends`, by block) are folded in. */
+function journalRows(db: DatabaseSync, appends: () => ReadonlyMap<number, number>): PagedRows {
+  let base: ReturnType<DatabaseSync["prepare"]> | undefined
+  let block: ReturnType<DatabaseSync["prepare"]> | undefined
+  let tail: ReturnType<DatabaseSync["prepare"]> | undefined
+  return {
+    read(table: PagedTable, row: number): string | undefined {
+      if (table === "base") {
+        base ??= db.prepare("SELECT value FROM base_entries WHERE id=?")
+        return RowSchema.safeParse(base.get(row)).data?.value
+      }
+      block ??= db.prepare("SELECT value FROM blocks WHERE id=?")
+      const value = RowSchema.safeParse(block.get(row)).data?.value
+      if (value === undefined || !appends().get(row)) return value
+      tail ??= db.prepare("SELECT value FROM block_appends WHERE block_id=? ORDER BY sequence")
+      let entry = EntrySchema.parse(JSON.parse(value))
+      for (const part of tail.all(row).map((stored) => AppendValueSchema.parse(JSON.parse(RowSchema.parse(stored).value)))) {
+        if (part.kind === "text" && (entry.type === "text" || entry.type === "thinking")) entry = { ...entry, text: entry.text + part.text }
+        else if (part.kind === "tool" && entry.type === "tool") entry = growTool(entry, part.growth)
+      }
+      return JSON.stringify(entry)
+    },
+  }
+}
+
+/** A closed journal's rows, for the entries paged from them, through a read-only connection opened on the first read. */
+function readOnlyRows(path: string): PagedRows {
+  let open: { db: DatabaseSync; rows: PagedRows } | undefined
+  return {
+    read(table, row) {
+      if (!open) {
+        const db = new DatabaseSync(path, { readOnly: true })
+        const counts = new Map<number, number>()
+        for (const value of db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all()) {
+          const counted = AppendCountSchema.parse(value)
+          counts.set(counted.block_id, counted.count)
+        }
+        open = { db, rows: journalRows(db, () => counts) }
+      }
+      return open.rows.read(table, row)
+    },
+    close() {
+      open?.db.close()
+      open = undefined
+    },
+  }
+}
+
+/** Drops the rows a closed journal wrote ahead (`stageBase`), when its base row names none. */
+function dropRowsAhead(path: string): void {
+  try {
+    const db = new DatabaseSync(path)
+    try {
+      db.exec("PRAGMA busy_timeout=5000")
+      db.exec("DELETE FROM base_entries WHERE NOT EXISTS (SELECT 1 FROM base WHERE id=1 AND json_extract(value, '$.entryRows') IS NOT NULL)")
+    } finally {
+      db.close()
+    }
+  } catch (error) {
+    hostWarn("journal", "a journal's history rows couldn't be dropped", { path, error: errorMessage({ error }) })
   }
 }
 
@@ -1007,7 +1158,6 @@ const BaseHeaderSchema = z.object({
   entries: z.number().nullable(),
 })
 const RowBytesSchema = z.object({ bytes: z.number().nullable() })
-const CountSchema = z.object({ count: z.number() })
 
 /** The base row's page, read without decoding its entries, and the bytes of the copy it names: 0 when it names none. */
 function baseHeader(db: DatabaseSync) {
