@@ -2079,8 +2079,8 @@ When the host closes for a restart, install or quit it answers every pending
 call with `host-restarting` (`packages/host/src/contracts/host-connection.ts`) instead of
 resetting the connection. The client turns that, and a dropped socket, into
 `RuntimeDisconnectedError`; `packages/host/src/contracts/host-call-recovery.ts`
-repeats a call once
-the event stream reattaches according to one table,
+repeats a call once a host is there to take it (the same one, shown alive, or
+the one the event stream reattached to) according to one table,
 `packages/host/src/contracts/host-call-policy.ts`: `read` channels change nothing;
 `replay` channels are mutations the host settles by a caller-minted id (a
 request, conversation, transfer, action or fork id) or whose repeat reaches
@@ -2096,6 +2096,22 @@ whose content differs. A send the outage swallowed is kept staged as
 host that died with the turn, never for a dropped socket. The renderer
 treats the disconnect as the reconnect banner (`HOST_OUTAGE_MESSAGE`), not a
 toast. `test-runtime-recovery.ts` covers the table and the second attempt.
+
+A window's connection status follows its event stream, never one call
+(`HostLiveness`, `packages/host/src/contracts/host-liveness.ts`, used by
+`client-main.ts` and the web bridge). The stream is open while the host runs
+and carries a heartbeat every 15 s, so the reconnect banner goes up when it
+ends and comes down on the next `ready`, or as soon as the same stream is
+heard again. A dropped call with the stream open asks the host's `/health`
+and listens to the stream; either answering keeps the window connected and
+the call is repeated at once, and only no host at the socket or 35 s of
+silence raises the banner. A call that waits past its deadline is
+`HostCallTimeoutError`: slow, never a disconnect, never repeated, and
+`unconfirmed` for a mutation. Every request to the host opens its own
+connection (`agent: false`): on 2026-10-30 a window kept the banner while its
+host streamed on, because the host, its event loop held past its five-second
+keep-alive, closed a pooled connection a read had just been written to, and
+the reset read as the host leaving. `test-host-liveness.ts` covers these.
 
 Every `live-batch` and `LiveSummary` carries the host's `epoch`, minted per
 `LiveConversations` instance. Revisions climb within one epoch and a

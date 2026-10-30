@@ -47,6 +47,25 @@ export class RuntimeDisconnectedError extends Error {
   }
 }
 
+export const HOST_CALL_SLOW_MESSAGE = "Mako's shared host is busy and didn't answer in time. Try again in a moment."
+export const HOST_CALL_SLOW_UNCONFIRMED_MESSAGE =
+  "Mako's shared host is busy and hasn't answered yet. The last action was not confirmed; check its result before repeating it."
+
+/**
+ * A call the host took but didn't answer before its deadline. The host is slow, not gone: whether it is still there
+ * is the event stream's to say, so this never raises the reconnect banner and is never repeated by itself.
+ * `unconfirmed`: a mutation whose outcome is unknown.
+ */
+export class HostCallTimeoutError extends Error {
+  readonly code = "host-call-timeout"
+  readonly unconfirmed: boolean
+  constructor(unconfirmed: boolean) {
+    super(unconfirmed ? HOST_CALL_SLOW_UNCONFIRMED_MESSAGE : HOST_CALL_SLOW_MESSAGE)
+    this.name = "HostCallTimeoutError"
+    this.unconfirmed = unconfirmed
+  }
+}
+
 /**
  * The host a call was for isn't connected: another device's runtime that's off or asleep, as the cloud says when it
  * refuses the call unapplied (`owner-unavailable`). A disconnect like any other to whoever doesn't ask; a reader that

@@ -130,7 +130,27 @@ try {
   assert.equal(store.get().meta?.cwd, root)
   assert.equal(store.get().git, undefined, "The new composer renders while Git is pending")
   assert.equal(gitReads, before + 1, "New requests Git after adopting the tab")
-  console.log("Window boot: held Git cannot block startup or workspace restoration; late replies and reconnections recover; stale attempts cannot overwrite recovery")
+
+  // The host says it is back, but the window's boot fails on the way: the window tries again by itself rather than
+  // keeping the banner up until a reload, since nothing will say the host is back a second time.
+  const until = async (predicate: () => boolean, what: string) => {
+    const deadline = Date.now() + 5_000
+    while (!predicate()) { assert.ok(Date.now() < deadline, what); await delay(10) }
+  }
+  receive({ type: "host-disconnected", message: "fixture outage" })
+  assert.deepEqual(hostConnectionStore.get(), { kind: "disconnected", message: "fixture outage" })
+  answer = Promise.withResolvers<BootPayload>()
+  answer.promise.catch(() => {})
+  answer.reject(new Error("The boot dropped on its way"))
+  receive({ type: "host-reconnected" })
+  await until(() => {
+    const connection = hostConnectionStore.get()
+    return connection.kind === "disconnected" && connection.message === "The boot dropped on its way"
+  }, "the failed boot is shown")
+  answer = Promise.withResolvers<BootPayload>()
+  answer.resolve(payload)
+  await until(() => hostConnectionStore.get().kind === "connected", "a failed reconnect is tried again until the banner clears")
+  console.log("Window boot: held Git cannot block startup or workspace restoration; late replies and reconnections recover; stale attempts cannot overwrite recovery; a reconnect whose boot failed is tried again")
 } finally {
   mock.restoreAll()
 }

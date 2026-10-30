@@ -10,7 +10,7 @@ import { ensureRuntime, invokeRuntime, invokeRuntimeEncoded, probeRuntime, runti
 import { decodeRuntimeValue, encodeRuntimeEvent, type EncodedValue, type RuntimeEvent } from "../contracts/runtime-value.js"
 import { runtimeEventRouting } from "../contracts/runtime.js"
 import { hostReplacementPending } from "../application/index.js"
-import { RuntimeDisconnectedError } from "../contracts/host-connection.js"
+import { HostCallTimeoutError, RuntimeDisconnectedError } from "../contracts/host-connection.js"
 import { hostHistoryPaging } from "../base/host-client.js"
 import { conversationCallId } from "../contracts/conversation-calls.js"
 
@@ -184,7 +184,8 @@ export class SharedConversations {
     return { handled: true, value }
 
     } catch (error) {
-      if (error instanceof RuntimeDisconnectedError)
+      // An owner that didn't answer in time is unavailable to this conversation alone, as one that dropped the call.
+      if (error instanceof RuntimeDisconnectedError || error instanceof HostCallTimeoutError)
         throw new RuntimeDisconnectedError(error.unconfirmed, id)
       throw error
     }
