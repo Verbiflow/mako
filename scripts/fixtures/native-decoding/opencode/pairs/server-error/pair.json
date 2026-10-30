@@ -1,13 +1,13 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.1.4"
+    "version": "2.2.3"
   },
   "about": "Say hello. The model fails with a server error, the harness retries once and the turn fails.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e8d18abdbffeqRoS3G6tTMMaOD",
+      "path": ".local/share/opencode/opencode.db#v2:ses_e731ccad6ffesW3MkCLzHs5uPK",
       "known": [
         {
           "side": "-",
