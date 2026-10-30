@@ -13,6 +13,8 @@ import { namedWork, type WorkUnderWay } from "./loop-watch.js"
 import { ScopedUploads, type SyncScope, type UploadsStatus } from "./scoped-uploads.js"
 import { EntrySchema, type Entry } from "./entries.js"
 import type { SessionView } from "./view-cache.js"
+import { ZstdFrames } from "./zstd-frames.js"
+import type { UploadBudget } from "./upload-budget.js"
 
 /**
  * A device's reading copies: each Session its account lists, as Mako draws it (its view's entries, one JSON line
@@ -139,15 +141,20 @@ export class ReadingCopies {
   #wake: { timer: ReturnType<typeof setTimeout> } | undefined
   /** Names each copy while it's written, for the watch on the process's loop. */
   readonly #work: WorkUnderWay | undefined
+  /** The zstd context a copy reads its view's compressed entries through (`ZstdFrames`). */
+  readonly #frames = new ZstdFrames()
+  /** The bytes this process's uploads share, the originals' included (`UploadBudget`). */
+  readonly #budget: UploadBudget | undefined
   #stopped = false
 
   constructor(
     folder: string,
     views: CopyViews,
     log: (level: "info" | "warn", message: string, fields: Record<string, string | number>) => void,
-    options: { now?: () => number; remote?: (link: { current: RecordsLink }) => RecordRemote; work?: WorkUnderWay } = {}
+    options: { now?: () => number; remote?: (link: { current: RecordsLink }) => RecordRemote; work?: WorkUnderWay; budget?: UploadBudget } = {}
   ) {
     this.#work = options.work
+    this.#budget = options.budget
     this.#folder = folder
     this.#views = views
     this.#log = log
@@ -180,7 +187,7 @@ export class ReadingCopies {
     if (!link || this.#stopped) return
     const store = this.#open()
     const remote = { current: link }
-    this.#uploads = new ScopedUploads(store, this.#remote(remote), this.#log, { bytesPerSecond: COPIES_BYTES_PER_SECOND, ...this.#work && { work: this.#work } })
+    this.#uploads = new ScopedUploads(store, this.#remote(remote), this.#log, { bytesPerSecond: COPIES_BYTES_PER_SECOND, ...this.#work && { work: this.#work }, ...this.#budget && { budget: this.#budget } })
     this.#link = remote
     if (this.#scope) this.#uploads.scope(this.#scope)
     this.#timer = setInterval(() => this.#look(), LOOK_EVERY_MS)
@@ -219,6 +226,7 @@ export class ReadingCopies {
     this.link(null)
     this.#store?.close()
     this.#store = null
+    this.#frames.close()
   }
 
   #open(): RecordStore {
@@ -346,7 +354,7 @@ export class ReadingCopies {
       }
       await write([Buffer.from(JSON.stringify(header)), NEWLINE])
       for (let start = 0; start < view.total; start += COPY_SLICE_ENTRIES) {
-        const lines = view.json(start, Math.min(view.total, start + COPY_SLICE_ENTRIES))
+        const lines = await view.json(start, Math.min(view.total, start + COPY_SLICE_ENTRIES), this.#frames)
         if (lines.length) await write(lines.flatMap((line) => [line, NEWLINE]))
         if (this.#stopped) break
       }

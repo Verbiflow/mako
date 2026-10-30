@@ -4,6 +4,7 @@ import { z } from "zod"
 import { KeptRestoreSchema } from "./kept-restore.js"
 import type { StoredChunk } from "./record-chunks.js"
 import type { ExportPage, RecordStore } from "./record-store.js"
+import { UploadBudget, type UploadReservation } from "./upload-budget.js"
 
 export type { RecordRemote } from "@mako/protocol/records"
 
@@ -153,7 +154,7 @@ export type ReceivedRecords = z.infer<typeof ReceivedRecordsSchema>
 /** The most versions, and chunk hashes, one push carries: a bundle well under a request's size. */
 const PUSH_VERSIONS = 10_000
 const PUSH_HASHES = 65_536
-/** Packs going up at once. */
+/** Packs going up at once, within the budget's bytes. */
 const UPLOADS = 4
 /**
  * A pack the remote refuses is sent again as this many smaller ones, and each of those it refuses the same way, down
@@ -170,17 +171,21 @@ export class RecordSync {
   readonly #uploads: number
   /** Chunks the remote refused alone, by hash: tried alone first at each push, in case it takes them now. */
   readonly #refused = new Map<string, { size: number; refusal: GatewayHttpError }>()
+  readonly #budget: UploadBudget
 
   /**
    * `describesStore`: whether a unit of a harness's records describes its store rather than any session (a database's
    * schema, its migration list), which a pull keeps as this store's own where another store's history of it differs.
    * `uploads`: packs in flight at once (four by default); a paced remote needs one, as more would only be held waiting.
+   * `budget`: the bytes the process's uploads hold at once, shared with its other syncs (`UploadBudget`); one of its
+   * own by default.
    */
-  constructor(store: RecordStore, remote: RecordRemote, options: { describesStore?: (harness: string, key: string) => boolean; uploads?: number } = {}) {
+  constructor(store: RecordStore, remote: RecordRemote, options: { describesStore?: (harness: string, key: string) => boolean; uploads?: number; budget?: UploadBudget } = {}) {
     this.#store = store
     this.#remote = remote
     this.#describesStore = options.describesStore
     this.#uploads = options.uploads ?? UPLOADS
+    this.#budget = options.budget ?? new UploadBudget()
   }
 
   /** Sends what the remote lacks of the session; one push of a session at a time, a later one waiting for the last. */
@@ -243,13 +248,26 @@ export class RecordSync {
    */
   async #pushPart(part: RecordBundle, report: SyncReport, heldBack: Set<string>): Promise<{ answer?: RecordPushAnswer; sent?: RecordBundle }> {
     const hashes = recordChunks(part.units.flatMap((unit) => unit.versions))
-    const small = hashes.some((hash) => this.#refused.has(hash)) ? undefined : await this.#small(hashes)
+    let small: { chunks: PackedChunk[]; bytes: number } | undefined
+    let sent: RecordPushAnswer | { missing: string[] } | undefined
+    if (!hashes.some((hash) => this.#refused.has(hash))) {
+      // A turn's worth, reserved as one: it never waits behind packs for room (`UploadBudget.take`).
+      const reservation = await this.#budget.take(RECORD_PUSH_WITH_BYTES, { turn: true })
+      try {
+        small = await this.#small(hashes)
+        reservation.trim(small?.bytes ?? 0)
+        const carried = small
+        if (carried)
+          sent = await timed(report, "push", (trace) => this.#remote.pushWith(part, carried.chunks, trace)).catch((error: Error) => {
+            // A chunk it refuses, carried with the bundle: found below, a pack at a time.
+            if (refusedBy(error)) return undefined
+            throw error
+          })
+      } finally {
+        reservation.release()
+      }
+    }
     if (small) {
-      const sent = await timed(report, "push", (trace) => this.#remote.pushWith(part, small.chunks, trace)).catch((error: Error) => {
-        // A chunk it refuses, carried with the bundle: found below, a pack at a time.
-        if (refusedBy(error)) return undefined
-        throw error
-      })
       if (sent) {
         report.requests += 1
         report.chunks += small.chunks.length
@@ -312,7 +330,8 @@ export class RecordSync {
   }
 
   /**
-   * The chunks named, read from this store and sent in packs, a few at once; the first failure stops it and is thrown.
+   * The chunks named, read from this store and sent in packs, a few at once, each pack's bytes reserved of the budget
+   * before its chunks are read and given back once its request ends; the first failure stops it and is thrown.
    * A pack the remote refuses is sent again in smaller ones until what it refuses is single chunks, which wait
    * (`#refused`) while every other chunk goes. One it refused before goes alone first, in case it takes it now.
    */
@@ -335,36 +354,61 @@ export class RecordSync {
     }
     const flights = new Set<Promise<void>>()
     let failed: Error | undefined
-    const send = (chunks: PackedChunk[]) => {
+    // Each pack's bytes held of the budget until its request, and any split of it the remote refused, has ended.
+    const send = (chunks: PackedChunk[], reservation: UploadReservation) => {
       const flight: Promise<void> = timed(report, "upload", (trace) => this.#put(chunks, trace))
         .then((error) => (error && refusedBy(error) ? this.#isolate(chunks, report) : error))
         .then((error) => {
+          reservation.release()
           flights.delete(flight)
           if (error) failed ??= error
           else sent.requests += 1
         })
       flights.add(flight)
     }
-    let pack: PackedChunk[] = []
-    let packBytes = 0
-    for (const hash of hashes) {
+    const packLimit = Math.min(RECORD_PACK_BYTES, this.#budget.packBytes)
+    // A chunk read that didn't fit the pack before it: the next pack's first.
+    let carried: PackedChunk | undefined
+    let at = 0
+    while ((carried || at < hashes.length) && !failed) {
+      while (flights.size >= this.#uploads) await Promise.race(flights)
       if (failed) break
-      if (this.#refused.has(hash)) continue
-      const stored = await this.#store.readChunk(hash)
-      if (!stored) throw new Error(`The chunk ${hash} this store's versions name isn't in it`)
-      const chunk = packed(hash, stored)
-      if (pack.length && packBytes + CHUNK_HEADER_BYTES + chunk.body.length > RECORD_PACK_BYTES) {
-        while (flights.size >= this.#uploads) await Promise.race(flights)
-        send(pack)
-        pack = []
-        packBytes = 0
+      // Reserved before the chunks are read, so what a pack holds is in the budget from its first chunk.
+      const reservation = await this.#budget.take(packLimit)
+      const pack: PackedChunk[] = []
+      let packBytes = 0
+      try {
+        for (;;) {
+          let chunk = carried
+          carried = undefined
+          if (!chunk) {
+            const hash = hashes[at]
+            if (hash === undefined) break
+            at += 1
+            if (this.#refused.has(hash)) continue
+            const stored = await this.#store.readChunk(hash)
+            if (!stored) throw new Error(`The chunk ${hash} this store's versions name isn't in it`)
+            chunk = packed(hash, stored)
+          }
+          const bytes = CHUNK_HEADER_BYTES + chunk.body.length
+          if (pack.length && packBytes + bytes > packLimit) {
+            carried = chunk
+            break
+          }
+          pack.push(chunk)
+          packBytes += bytes
+          sent.chunks += 1
+          sent.bytes += chunk.body.length
+        }
+      } catch (error) {
+        reservation.release()
+        await Promise.all(flights)
+        throw error
       }
-      pack.push(chunk)
-      packBytes += CHUNK_HEADER_BYTES + chunk.body.length
-      sent.chunks += 1
-      sent.bytes += chunk.body.length
+      reservation.trim(packBytes)
+      if (pack.length) send(pack, reservation)
+      else reservation.release()
     }
-    if (pack.length && !failed) send(pack)
     await Promise.all(flights)
     if (failed) throw failed
     return sent

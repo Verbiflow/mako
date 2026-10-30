@@ -114,10 +114,10 @@ function installLog(dir: string, role: string): void {
 function watchMemory(): void {
   let logged = 0
   const sample = () => {
-    const { rss, heapUsed } = process.memoryUsage()
+    const { rss, heapUsed, external } = process.memoryUsage()
     if (logged && Math.abs(rss - logged) < MEMORY_STEP_BYTES) return
     logged = rss
-    say("info", "memory", { rssMb: Math.round(rss / MB), heapUsedMb: Math.round(heapUsed / MB) })
+    say("info", "memory", { rssMb: Math.round(rss / MB), heapUsedMb: Math.round(heapUsed / MB), externalMb: Math.round(external / MB) })
   }
   sample()
   setInterval(sample, 60_000).unref()

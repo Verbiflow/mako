@@ -68,6 +68,7 @@ import type { RecordRoot } from "./harness-records.js"
 import { ReadingCopies, ReceivedCopies, type CopyPage } from "./reading-copies.js"
 import { ScopedUploads, countTiers, type CatalogSyncStatus, type SyncScope } from "./scoped-uploads.js"
 import type { WorkUnderWay } from "./loop-watch.js"
+import { UploadBudget } from "./upload-budget.js"
 import { RecordPushes, RecordSync, RecordsLinkRefusedError, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
 import { recordsOverHttp } from "@mako/protocol/records-http"
 import { GatewayHttpError } from "@mako/protocol/gateway-http"
@@ -430,6 +431,11 @@ export class SessionCatalog {
   private readonly harnessStores: NativeStores | null
   /** Names captures, pushes and copies while they run (`WorkUnderWay`); undefined outside the sync daemon. */
   private readonly work: WorkUnderWay | undefined
+  /**
+   * The bytes this catalog's uploads hold at once, its originals' and its copies' together: the one limit on what goes
+   * up in parallel from this process, and what its memory guard sheds (`UploadBudget`).
+   */
+  readonly uploadBudget = new UploadBudget()
   /** Restores running, by path: a second ask shares the first. */
   private readonly restoring = new Map<string, Promise<KeptRestore>>()
 
@@ -1726,7 +1732,7 @@ export class SessionCatalog {
     if (!link || !store || this.stopped) return
     const log = (level: "info" | "warn", message: string, fields: Record<string, string | number>) => (level === "warn" ? console.warn : console.info)(`Session originals: ${message}`, JSON.stringify(fields))
     const current = { current: link }
-    const uploads = new ScopedUploads(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => current.current.authorization }), log, { bytesPerSecond: ORIGINALS_BYTES_PER_SECOND, ...this.work && { work: this.work } })
+    const uploads = new ScopedUploads(store, recordsOverHttp({ id: link.id, base: link.base, authorization: () => current.current.authorization }), log, { bytesPerSecond: ORIGINALS_BYTES_PER_SECOND, budget: this.uploadBudget, ...this.work && { work: this.work } })
     const timer = setInterval(() => uploads.look(), ORIGINALS_LOOK_MS)
     timer.unref?.()
     this.originals = { uploads, link: current, timer }
@@ -1797,7 +1803,7 @@ export class SessionCatalog {
       view: (path) => this.served(path),
       stamp: (path) => this.stampOf(path),
       translator: () => (this.translator ??= translatorBuild()),
-    }, log, this.work ? { work: this.work } : {})
+    }, log, { budget: this.uploadBudget, ...this.work && { work: this.work } })
     return this.readingCopies
   }
 
