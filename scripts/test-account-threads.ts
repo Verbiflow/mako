@@ -5,6 +5,9 @@ import { z } from "zod"
 import { MAX_EVENT_BYTES, NUMBERED_LIVE_VERSION, serveRuntime, type Payload } from "@mako/protocol"
 import { rowsForLink, type ListedSession, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import { AccountSessions } from "@mako/protocol/account-sessions"
+import { MovesUnderWay } from "@mako/host/conversations/moves-under-way"
+import { SENT_EVERY_MS, SentProgress } from "@mako/host/conversations/cloud-moves"
+import type { MoveSent } from "@mako/host/contracts/cloud-threads"
 import { ACTIVITY_REPORT_MS, conversationShown, nativeConversation, ownedSessions, REPORT_WORK, SessionPublisher, SessionReporter, type ConversationShown, type NativeRow, type ReportSources, type SessionLink } from "@mako/host/conversations/session-report"
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
@@ -311,6 +314,74 @@ test("a publisher reports when something changed, sweeps every half minute regar
   const before = sent.length
   older.report({ link: await newLink(), served: served(4) })
   assert.equal(sent.length, before)
+})
+
+test("a Thread moving to the cloud says so on every row of it from the move's first step, each step once, and not after it ends", () => {
+  let now = NOW
+  const moves = new MovesUnderWay(() => now)
+  const thread = uuid(100)
+  const sources = { ...host([summary("c-1", NOW - 60_000), summary("c-2", NOW - 50_000)], { threads: { "c-2": 200 } }), moving: (id: string) => moves.of(id) }
+  assert.equal(moves.stepped(thread, "m-1", { kind: "packing" }), true, "its first step is news to every list")
+  assert.equal(moves.stepped(thread, "m-1", { kind: "packing", sent: { bytes: 10, of: 100 } }), false, "how far its upload got isn't: that goes to whoever watches it")
+  const packing = ownedSessions(sources)
+  assert.deepEqual(packing.find((row) => row.conversation === "c-1")?.move, { to: "cloud", step: "packing", since: new Date(NOW).toISOString() })
+  assert.equal(packing.find((row) => row.conversation === "c-1")?.state, "idle", "its state is still what it was: it's still here")
+  assert.equal(packing.find((row) => row.conversation === "c-2")?.move, undefined, "another Thread's rows say nothing")
+  now += 5_000
+  assert.equal(moves.stepped(thread, "m-1", { kind: "handing-over" }), true)
+  assert.equal(ownedSessions(sources).find((row) => row.conversation === "c-1")?.move?.since, new Date(NOW + 5_000).toISOString(), "a step says when it began")
+  assert.equal(moves.stepped(thread, "m-1", { kind: "moved", conversations: ["c-1"] }), true, "its end is news too")
+  assert.equal(ownedSessions(sources).find((row) => row.conversation === "c-1")?.move, undefined)
+  assert.equal(moves.stepped(thread, "m-1", { kind: "kept-here", reason: "x" }), false, "and only once")
+  assert.equal(moves.stepped(undefined, "m-2", { kind: "packing" }), false, "a conversation the store can't place moves nothing it lists")
+  // A Thread long idle is listed while it moves, as one at work is.
+  moves.stepped(thread, "m-3", { kind: "packing" })
+  const old = { ...sources, summaries: () => [summary("c-1", NOW - SYNC_WINDOW_MS * 3)], lastMoved: () => NOW - SYNC_WINDOW_MS * 3 }
+  assert.equal(ownedSessions(old).length, 1)
+  assert.equal(rowsForLink(ownedSessions(old), 10)[0]?.move, undefined, "a gateway before link version 11 hears the row without it")
+})
+
+test("a move's upload says how much went, a quarter second apart at most, and the whole at its end; a file already there adds nothing", () => {
+  let now = NOW
+  const said: MoveSent[] = []
+  const progress = new SentProgress((sent) => said.push(sent), () => now)
+  const first = progress.adding(4_000_000)
+  first(1_000_000)
+  first(2_000_000)
+  now += SENT_EVERY_MS
+  first(3_000_000)
+  first(4_000_000)
+  const second = progress.adding(1_000_000)
+  now += SENT_EVERY_MS
+  second(500_000)
+  progress.done()
+  assert.deepEqual(said, [
+    { bytes: 1_000_000, of: 4_000_000 },
+    { bytes: 3_000_000, of: 4_000_000 },
+    { bytes: 4_500_000, of: 5_000_000 },
+    { bytes: 5_000_000, of: 5_000_000 },
+  ])
+  const nothing: MoveSent[] = []
+  new SentProgress((sent) => nothing.push(sent)).done()
+  assert.deepEqual(nothing, [], "nothing to send: nothing said")
+})
+
+test("a move's steps go to a device watching the conversation it was asked from, as its window hears them, and nowhere else", async () => {
+  const live: string[] = []
+  const link = { link: await newLink(), served: { version: 11, sessions: () => true, live: (conversation: string, event: Payload) => (live.push(`${conversation} ${JSON.parse(splitRuntimeEventLine(event.text)?.payload ?? "{}").step?.kind}`), true) } }
+  const publisher = new SessionPublisher({ rows: () => [row(1)], now: () => NOW, schedule: () => {} })
+  publisher.report(link)
+  // SAFETY: a host event as the moves emit it.
+  publisher.own({ type: "thread-move-step", conversationId: "c-1", move: "m-1", step: { kind: "packing" } } as never)
+  assert.deepEqual(live, [], "nobody watches")
+  publisher.watch(link.link, ["c-1"])
+  // SAFETY: a host event as the moves emit it.
+  publisher.own({ type: "thread-move-step", conversationId: "c-1", move: "m-1", step: { kind: "packing", sent: { bytes: 1, of: 2 } } } as never)
+  // SAFETY: a host event as the moves emit it.
+  publisher.own({ type: "thread-move-step", conversationId: "c-2", move: "m-2", step: { kind: "packing" } } as never)
+  // SAFETY: a host event as the way back emits it.
+  publisher.own({ type: "thread-return-step", conversationId: "c-1", move: "m-3", step: { kind: "bringing" } } as never)
+  assert.deepEqual(live, ["c-1 packing", "c-1 bringing"])
 })
 
 test("a row whose last activity alone moved is said once it's moved a minute; with anything else a list shows, at once", async () => {

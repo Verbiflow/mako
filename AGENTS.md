@@ -1251,6 +1251,27 @@ turn. `npm run test:cloud-conversations` (`test-web-client.ts`) covers the
 rules, and the web proof's Mac (`prove-web-client.ts`, `begin`) gives the
 phone's behaviour cases a Thread of their own on each scripted cue.
 
+When something can't be reached, the web app says where it stops, never just
+"off" (`src/web-client/diagnosis.ts`): the chain this phone → Mako Cloud →
+the Mac (or the cloud machine) → its harness, each reached, not reached, or
+not checked, from what each call last met (`reach.ts`: the gateway's own
+outcome and correlation ID, kept by the place it went to), the list's word on
+a quiet Mac (last seen, clamped to now) and the open Session's failed start.
+One headline names the first hop that failed; Try again reads the list afresh
+and asks the Mac, and Copy diagnostics quotes IDs, versions and times, no
+secrets. A read the network failed is asked once more; a change never is
+(`Gateway.rest`). An account whose Mac was never heard from gets Connect your
+Mac (`connect-mac.tsx`), which ticks itself from `device-joined` and the Mac's
+first rows or answer. A Thread's app shows as a card per server and the
+capsule's App running · Open (`previews.ts`, read from `mako:thread-app` while
+the Thread is in front, closely while it starts); loopback links in its
+transcript open there. A move between a Mac and the cloud is watched, not
+waited on: a Mac's rows say it from its first step (`ListedSession.move`,
+link version 11, `MovesUnderWay`), a watched conversation's owner relays each
+`thread-move-step` and `thread-return-step` (`SessionPublisher.own`), packing
+with its upload's bytes (`SentProgress`), and the phone's card
+(`move-card.tsx`) draws a bar that only goes forward (`move-progress.ts`).
+
 ## MCP
 
 Mako owns a redacted, provider-neutral MCP registry. Use the current

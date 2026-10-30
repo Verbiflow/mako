@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
-import { ArchiveIcon, ChevronRightIcon, CloudIcon, FolderIcon, LaptopIcon, MoonIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, FolderIcon, LaptopIcon, MoonIcon, PlusIcon, SearchIcon, XIcon } from "lucide-react"
 import { CommandPalette } from "@/components/palette/command-palette"
 import { ROW_SURFACE } from "@/components/rail/thread-row"
 import { ThreadStatusMark } from "@/components/rail/thread-status"
@@ -19,16 +19,18 @@ import { useWebClient } from "./client"
 import { webHarnessLabel } from "./labels"
 import { HarnessMarks } from "./list"
 import { StartForm, StartSheet, type AddingTo } from "./new-thread"
-import { PreviewSheet } from "./preview"
 import type { ScreenRoute, WebRoute } from "./route"
 import type { Started } from "./start"
 import { startingWhere } from "./started"
-import { ArchivedThread, QuietSession, ThreadActions, TranscriptLoading } from "./thread"
+import { ThreadActions, ThreadBody, TranscriptLoading } from "./thread"
 import { CLOUD_WHERE, foldThreads, openingSession, ownerOf, subtitle, type WebSession, type WebThread } from "./threads"
 import { useThread } from "./use-thread"
+import { listedMove, useMoves } from "./moves"
+import { ConnectMac } from "./connect-mac"
+import { macConnection } from "./mac-connection"
+import { macPlace, useReach } from "./reach"
 import { WebHarnessIcon } from "./harness-icon"
 
-const LiveSession = lazy(() => import("./live-session"))
 const Settings = lazy(() => import("./settings").then((module) => ({ default: module.Settings })))
 
 /** The rail's width: the desk's own, as its title strip's left segment is. */
@@ -270,6 +272,10 @@ function DeskRail({ threads, archived, selected, settings, onOpen, onSettings }:
 /** A rail row as the desk draws one: its agents' marks, its title, and its state or its age at the trailing edge. */
 function DeskRow({ thread, lit, onOpen }: { thread: WebThread; lit: boolean; onOpen: () => void }) {
   const quiet = thread.quietSince ? `${thread.where} is off, seen ${copyAge(Date.parse(thread.quietSince))}` : undefined
+  // On its way between a Mac and the cloud: a blinking arrow, up or down, as the phone's row wears.
+  const followed = useMoves((state) => state.moves.get(thread.id))
+  const way = followed && followed.end?.kind !== "failed" ? followed.way : listedMove(thread)?.way
+  const Arrow = way === "device" ? ArrowDownIcon : ArrowUpIcon
   const harnesses = [...new Set(thread.sessions.map((session) => webHarnessLabel(session.row.harness)))].join(", ")
   return (
     <button
@@ -277,6 +283,7 @@ function DeskRow({ thread, lit, onOpen }: { thread: WebThread; lit: boolean; onO
       data-desk-row
       data-thread={thread.id}
       data-standing={thread.standing}
+      data-moving={way}
       data-active={lit || undefined}
       aria-current={lit ? "page" : undefined}
       aria-label={`${thread.title}. ${thread.waitingOn ?? (thread.standing === "idle" ? "" : thread.standing)}${harnesses ? ` ${harnesses}.` : ""}${quiet ? ` ${quiet}.` : ""}`.replace(/\.\s+\./g, ".")}
@@ -287,6 +294,7 @@ function DeskRow({ thread, lit, onOpen }: { thread: WebThread; lit: boolean; onO
       <HarnessMarks thread={thread} size={14} />
       <span className={cn("min-w-0 flex-[1_1_60%] truncate text-ui", lit ? "font-medium text-foreground" : "text-foreground/85")}>{thread.title}</span>
       {quiet ? <MoonIcon aria-hidden className="size-3 shrink-0 text-faint" /> : null}
+      {way ? <Arrow aria-label={way === "cloud" ? "Moving to the cloud" : "Coming back from the cloud"} data-move-mark={way} className="web-move-blink size-3 shrink-0 text-foreground" /> : null}
       <span className="flex shrink-0 items-center pr-1">
         <ThreadStatusMark status={statusOf(thread)} updatedAt={new Date(thread.activityAt).toISOString()} />
       </span>
@@ -296,6 +304,20 @@ function DeskRow({ thread, lit, onOpen }: { thread: WebThread; lit: boolean; onO
 
 /** Nothing open: the fin, and the two keys that start everything. */
 function DeskEmpty({ onNew }: { onNew: () => void }) {
+  // An account with no Mac heard from yet: the checklist that connects one, in the pane, following along on its own.
+  const list = useAccountList((state) => state)
+  const places = useReach((state) => state.places)
+  const needsMac = useMemo(() => list.phase === "live" && list.rows.length === 0 && !macConnection(list, new Set([...list.devices.keys()].filter((id) => places.get(macPlace(id))?.ok))).connected, [list, places])
+  const [connecting, setConnecting] = useState(false)
+  if (needsMac && !connecting) setConnecting(true)
+  if (connecting)
+    return (
+      <div className="web-enter flex min-h-0 flex-1 flex-col items-center justify-center px-6">
+        <div className="w-full max-w-[420px]">
+          <ConnectMac onDone={() => setConnecting(false)} />
+        </div>
+      </div>
+    )
   return (
     <div className="web-enter flex min-h-0 flex-1 flex-col items-center justify-center gap-6 text-center">
       <MakoMark className="size-9 opacity-25" />
@@ -338,7 +360,6 @@ function DeskThread({ threadId, sessionId, onArchived, onSession }: { threadId: 
   const phase = useAccountList((state) => state.phase)
   const client = useWebClient()
   const [adding, setAdding] = useState(false)
-  const [previewing, setPreviewing] = useState(false)
   const [openedOn, setOpenedOn] = useState<string | undefined>(undefined)
   const seenThread = thread?.id
   useEffect(() => {
@@ -376,7 +397,7 @@ function DeskThread({ threadId, sessionId, onArchived, onSession }: { threadId: 
               <Place aria-hidden className="size-3 shrink-0" />
               <span className="truncate">{subtitle(thread, session)}</span>
             </span>
-            {thread.archived ? null : <ThreadActions thread={thread} session={session} onArchived={onArchived} onPreview={() => setPreviewing(true)} onAdd={undefined} />}
+            {thread.archived ? null : <ThreadActions thread={thread} session={session} onArchived={onArchived} onAdd={undefined} />}
           </>
         }
       >
@@ -389,15 +410,7 @@ function DeskThread({ threadId, sessionId, onArchived, onSession }: { threadId: 
           </IconAction>
         ) : null}
       </DeskStrip>
-      {thread.archived ? (
-        <ArchivedThread thread={thread} />
-      ) : session.quietSince ? (
-        <QuietSession key={session.row.session} session={session} />
-      ) : (
-        <Suspense fallback={<TranscriptLoading />}>
-          <LiveSession key={session.row.conversation} session={session} desk />
-        </Suspense>
-      )}
+      <ThreadBody thread={thread} session={session} desk />
       {addingTo ? (
         <StartSheet
           open={adding}
@@ -410,7 +423,6 @@ function DeskThread({ threadId, sessionId, onArchived, onSession }: { threadId: 
           }}
         />
       ) : null}
-      <PreviewSheet open={previewing} onDismiss={() => setPreviewing(false)} owner={owner} folder={session.row.folder} title={thread.title} />
     </div>
   )
 }

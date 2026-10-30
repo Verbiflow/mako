@@ -73,6 +73,7 @@ import {
   LINGER_MS,
   NUMBERED_LIVE_VERSION,
   WAITING_FOR_VERSION,
+  MOVES_VERSION,
   StreamCursor,
   followAgainInMs,
   readStreamNotice,
@@ -96,7 +97,7 @@ describe("versions", () => {
   })
   test("envelopes stay at version 1 on every link version, so a runtime from before link version 2 reads every operation", () => {
     assert.equal(PROTOCOL_VERSION, 1)
-    assert.equal(SUPPORTED_VERSIONS.max, 10)
+    assert.equal(SUPPORTED_VERSIONS.max, 11)
     const operation = { v: 1, id: crypto.randomUUID(), op: "thread.send", target: { kind: "thread", threadId: "th-1" }, input: Payload.of({}), correlationId: crypto.randomUUID(), actor: { kind: "client", client: "desktop", deviceId: "d-1" }, attempt: 1 }
     assert.equal(decodeOperation(encodeOperation(operation)).v, 1)
   })
@@ -1711,6 +1712,18 @@ describe("an account's list of Threads, one row per Session", () => {
     assert.equal(rowsForLink([asking], WAITING_FOR_VERSION)[0].waitingFor, "approval")
     assert.equal(rowsForLink([asking], WAITING_FOR_VERSION - 1)[0].waitingFor, undefined, "a gateway before 10 refuses it, so it goes without")
     assert.equal(rowsForLink([asking], WAITING_FOR_VERSION - 1)[0].waitingOn, "Approve: npm test", "and reads the words it always did")
+    const going = { ...session, state: "working", move: { to: "cloud", step: "packing", since: "2026-10-24T20:06:00.000Z" } }
+    assert.deepEqual(ReportedSessionSchema.parse(going), going, "a Thread on its way says where to and how far, from its first step")
+    assert.throws(() => ReportedSessionSchema.parse({ ...going, move: { ...going.move, to: "phone" } }), "a move goes to a device or the cloud")
+    assert.throws(() => ReportedSessionSchema.parse({ ...going, move: { ...going.move, step: "Packing it up" } }), "a step is the owner's word, not a sentence")
+    assert.deepEqual(rowsForLink([going], MOVES_VERSION)[0].move, going.move)
+    assert.equal(rowsForLink([going], MOVES_VERSION - 1)[0].move, undefined, "a gateway before 11 refuses it, so it goes without")
+    assert.equal(rowsForLink([going], MOVES_VERSION - 1)[0].waitingFor, undefined)
+    assert.equal(rowsForLink([{ ...going, ...asking, move: going.move }], WAITING_FOR_VERSION)[0].waitingFor, "approval", "and at 10 keeps what 10 knows")
+    const listedGoing = { ...going, runsOn: mac, listedAt: listed.listedAt }
+    assert.equal(sameListed(listedGoing, { ...listedGoing, move: { ...going.move, step: "handing-over" } }), false, "a move's next step is news")
+    assert.equal(sameListed(listedGoing, { ...listedGoing, move: { ...going.move, since: "2026-10-24T20:07:00.000Z" } }), true, "its clock alone isn't")
+    assert.equal(sameListed(listedGoing, { ...listedGoing, move: undefined }), false, "nor is its end")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, state: "thinking" }), "a state is one of five")
     assert.throws(() => ListedSessionSchema.parse({ ...listed, title: "x".repeat(201) }), "a title is a row's, not a message's")
     assert.throws(() => SessionsReportSchema.parse({ listed: Array.from({ length: 201 }, () => session), gone: [] }), "at most 200 rows a report")
