@@ -128,18 +128,8 @@ for (const name of (await readdir(CASES_ROOT)).filter((file) => file.endsWith(".
  * because the harness keeps other than it streamed: less, or what came after
  * the wire ended. `-` is reported only live, `+` only from the store.
  */
-const KNOWN: readonly { pair: string; reader: string; side: "-" | "+"; effects: string; reason: string }[] = [
-  {
-    pair: "codex/stopped-shell", reader: "codex", side: "-",
-    effects: '[{"kind":"command","command":"tail -f notes.md","cwd":"/tmp/mako-pair/project"}]',
-    reason: "Codex 0.164.0's app-server sent only the stopped command's start before the turn ended, so live names no exit.",
-  },
-  {
-    pair: "codex/stopped-shell", reader: "codex", side: "+",
-    effects: '[{"kind":"command","command":"tail -f notes.md","cwd":"/tmp/mako-pair/project","exitCode":137}]',
-    reason: "Codex 0.164.0 writes the stopped command's item to its rollout once its process is killed, after the turn's abort: exit 137, killed by signal 9, with what it had printed.",
-  },
-  ...["devin", "devin-ide"].flatMap((reader) => [
+const KNOWN: readonly { pair: string; reader: string; side: "-" | "+"; effects: string; reason: string }[] =
+  ["devin", "devin-ide"].flatMap((reader) => [
     {
       pair: "devin/stopped-shell", reader, side: "-" as const,
       effects: '[{"kind":"command","command":"tail -f notes.md","cwd":"/tmp/mako-pair/project"}]',
@@ -160,8 +150,7 @@ const KNOWN: readonly { pair: string; reader: string; side: "-" | "+"; effects: 
       effects: '[{"kind":"command","command":"sleep 3"}]',
       reason: "What Devin 3000.11.205 keeps of a command moved to the background is the model's word for it, which names neither its folder nor how it ended.",
     },
-  ]),
-]
+  ])
 
 /** A side's calls that report effects, each as its effects' JSON, in order. */
 const effectLines = (blocks: readonly { effects?: ToolEffect[] }[]) => blocks.flatMap((block) => block.effects?.length ? [JSON.stringify(block.effects)] : [])

@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.164.0"
+    "version": "0.166.0"
   },
   "about": "Run `grep -q Monday notes.md` in the shell and tell me from its exit code whether notes.md mentions Monday. A shell command that exits non-zero, which the harness may report as completed.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/10/25/rollout-2026-10-25T02-53-18-01a1727a-94fc-7633-913d-c7c575bd59bc.jsonl",
+      "path": ".codex/sessions/2026/10/30/rollout-2026-10-30T12-57-13-01a18ce2-c03a-71e0-a58f-e1f54794cd13.jsonl",
       "known": []
     }
   ]

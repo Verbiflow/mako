@@ -6,4 +6,8 @@ import type { AdditionalContextKind } from "./AdditionalContextKind.js"
 export type AdditionalContextEntry = {
   value: string
   kind: AdditionalContextKind
+  /**
+   * Optional name for untrusted context, used to label its tool output.
+   */
+  name?: string | null
 }
