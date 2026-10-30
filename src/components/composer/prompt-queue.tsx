@@ -339,10 +339,11 @@ function QueueRow({
             {continuation ? "Continues the turn where it stopped" : body || `${request.attachments.length} attachments`}
           </p>
           <div className="flex shrink-0 items-center gap-0.5 text-faint">
-            {request.status === "held" && !request.signIn ? <button type="button" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 rounded px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
+            {request.status === "held" && !request.signIn ? <button type="button" data-queued-action="resume" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 rounded px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
             {canSteer ? (
               <button
                 type="button"
+                data-queued-action="steer"
                 aria-label="Send now, into the running turn"
                 title="Send now, into the running turn"
                 disabled={!editable || busy}
@@ -354,6 +355,7 @@ function QueueRow({
             ) : null}
             <button
               type="button"
+              data-queued-action="edit"
               aria-label="Edit queued message"
               title="Edit queued message"
               disabled={!editable || busy || continuation}
@@ -365,6 +367,7 @@ function QueueRow({
             </button>
             <button
               type="button"
+              data-queued-action="remove"
               aria-label="Remove queued message"
               title="Remove queued message"
               disabled={!editable || busy}

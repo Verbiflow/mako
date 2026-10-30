@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
-import { ArrowDownIcon, ArrowLeftRightIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
+import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
 import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } from "@mako/host/contracts/live-questions"
 import type { LivePermissionRequest, PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { bareCommand, identifyTool } from "@mako/sessions/tool-identity"
@@ -416,7 +416,7 @@ function QuestionCard({ ask, conversation, harness, answerTyped }: { ask: Extrac
 
 /** A record of an answer given from the dock, at the end of its turn: one muted line. */
 export function AnsweredLine({ entry }: { entry: AnsweredRecord }) {
-  const Icon = entry.kind === "refused" || entry.kind === "not-switched" ? XIcon : entry.kind === "allowed" ? CheckIcon : entry.kind === "switched" ? ArrowLeftRightIcon : CornerDownLeftIcon
+  const Icon = entry.kind === "refused" ? XIcon : entry.kind === "allowed" ? CheckIcon : CornerDownLeftIcon
   return (
     <p data-answered={entry.id} className="web-answered">
       <Icon aria-hidden className="size-3.5 shrink-0" />

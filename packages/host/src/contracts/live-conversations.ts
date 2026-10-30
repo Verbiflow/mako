@@ -263,6 +263,12 @@ export interface LiveRequest {
   /** Its turn was undone (`TurnUndone`): when, how much, and the ref the checkout before it is kept under. */
   undone?: TurnUndone
   tuning?: SessionSettings
+  /**
+   * The access mode its turn was sent under (the session's `currentMode` then), kept from dispatch on: with `tuning`, the
+   * record of what each turn ran with, from which every device draws where the model or access changed. Absent before
+   * dispatch, for a session without modes, and in older journals.
+   */
+  mode?: string
   inputDigest?: string
   nativeRun?: { bindingId: string; runId: string; forkId?: string }
   id: string

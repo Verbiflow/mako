@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
-import { CheckIcon, ChevronDownIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
+import { ArrowLeftRightIcon, CheckIcon, ChevronDownIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
+import { toast } from "sonner"
 import { accessTierInfo } from "@mako/host/contracts/access"
 import { errorMessage } from "@mako/host/contracts/error-message"
 import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
@@ -10,11 +11,10 @@ import { Spinner } from "@/components/ui/spinner"
 import { getMako } from "@/lib/bridge"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
-import { acpStore } from "@/state/acp-state"
 import { chooseComposerModel, chooseComposerOption, resolveComposerSettings, settingsTargetKey } from "@/state/composer-settings"
 import { prefsStore, setPref } from "@/state/prefs"
 import { accessInEffect, chooseAccess, orderedModes, readAccessChoices, type AccessChoices } from "./access"
-import { record, switchedWords } from "./answered"
+import { switchedWords, type RecordedSwitch } from "./answered"
 import { useWebClient } from "./client"
 import { WebHarnessIcon } from "./harness-icon"
 import { webHarnessLabel } from "./labels"
@@ -31,7 +31,8 @@ import { setPending, useSwitching } from "./switching"
  *   is on its way, so the next message runs under it. Refused, the chip stays where the Session is and says why.
  *   Every new session's access is the account's choice (`access.ts`): offered below the Thread's, never changed by it.
  *
- * Each change leaves a line at the end of the turn it was made in, as an answer from the dock does.
+ * A change shows in its chip at once. Where it took effect, the transcript says so from the Session's own record once a
+ * message has gone with it (`SwitchLines`); one refused says why where it was asked, and changes nothing.
  */
 export function ThreadChips({ conversation, harness }: { conversation: string; harness: string }) {
   const view = useComposerSettings(harness)
@@ -65,7 +66,7 @@ export function ThreadChips({ conversation, harness }: { conversation: string; h
           <ChevronDownIcon aria-hidden className="size-3 shrink-0 opacity-50" />
         </button>
       ) : null}
-      <ModelSheet anchor={chip} open={open === "model"} onDismiss={() => setOpen(undefined)} view={view} conversation={conversation} />
+      <ModelSheet anchor={chip} open={open === "model"} onDismiss={() => setOpen(undefined)} view={view} />
       {modes?.length ? <AccessSheet anchor={chip} open={open === "access"} onDismiss={() => setOpen(undefined)} conversation={conversation} harness={harness} modes={modes} current={switching?.mode ?? current ?? undefined} /> : null}
     </>
   )
@@ -84,21 +85,40 @@ function reasoningOf(view: ComposerSettingsView): { option: ModelOption; value: 
   return { option, value: current.value, label: settingValueLabel(option, current.value) }
 }
 
-/** The newest turn's exchange, where a change's line goes. */
-function lastExchange(): string | undefined {
-  return activeLiveAcp(acpStore.get())?.projection?.exchanges.at(-1)?.id
+/** A switch refused, said where it was asked: nothing changed, so the transcript has nothing to keep of it. */
+function refused(what: string, why: string): void {
+  toast.error(switchedWords({ what, refused: true }), { description: why })
 }
 
-function note(conversation: string, kind: "switched" | "not-switched", words: string, detail?: string): void {
-  const exchange = lastExchange()
-  if (exchange) record(conversation, { id: crypto.randomUUID(), exchange, kind, words, ...(detail && { detail }) })
+/**
+ * Where the model, its effort or the access changed after a turn, as the Session's record keeps it (`recordedSwitches`):
+ * one line each, at the end of that turn, in the chips' own words.
+ */
+export function SwitchLines({ harness, switches }: { harness: string; switches: readonly RecordedSwitch[] }) {
+  const view = useComposerSettings(harness)
+  const modes = useAcp((state) => activeLiveAcp(state)?.session.modes)
+  const lines = switches.flatMap((each): { key: string; what: string }[] => {
+    if (each.kind === "model") return [{ key: `model:${each.model}`, what: view.profile?.models.find((model) => model.id === each.model)?.label ?? each.model }]
+    if (each.kind === "mode") {
+      const mode = modes?.find((candidate) => candidate.id === each.mode)
+      return mode ? [{ key: `mode:${each.mode}`, what: modeLabel(mode) }] : []
+    }
+    const option = view.options.find((candidate) => candidate.id === each.option)
+    return option ? [{ key: `option:${each.option}`, what: optionLabel(option, { kind: "known", value: each.value, source: "override" }) }] : []
+  })
+  return lines.map(({ key, what }) => (
+    <p key={key} data-switched={key} className="web-answered">
+      <ArrowLeftRightIcon aria-hidden className="size-3.5 shrink-0" />
+      <span className="min-w-0 truncate">{switchedWords({ what, refused: false })}</span>
+    </p>
+  ))
 }
 
 /**
  * Makes a model or effort choice for this Thread, as the desk's composer does; one the harness refuses (an unavailable
- * model, an option it doesn't take) is put back as it was, and the line says why.
+ * model, an option it doesn't take) is put back as it was, saying why.
  */
-function chooseSetting(view: ComposerSettingsView, conversation: string, choose: () => void, said: string): void {
+function chooseSetting(view: ComposerSettingsView, choose: () => void, said: string): void {
   const key = settingsTargetKey(view.target)
   const before = prefsStore.get().settingsOverrides[key]
   choose()
@@ -108,13 +128,11 @@ function chooseSetting(view: ComposerSettingsView, conversation: string, choose:
     if (before) overrides[key] = before
     else delete overrides[key]
     setPref("settingsOverrides", overrides)
-    note(conversation, "not-switched", switchedWords({ what: said, refused: true }), issues.map((issue) => issue.message).join(" "))
-    return
+    refused(said, issues.map((issue) => issue.message).join(" "))
   }
-  note(conversation, "switched", switchedWords({ what: said, refused: false }), "from your next message")
 }
 
-function ModelSheet({ anchor, open, onDismiss, view, conversation }: { anchor: HTMLElement | null; open: boolean; onDismiss: () => void; view: ComposerSettingsView; conversation: string }) {
+function ModelSheet({ anchor, open, onDismiss, view }: { anchor: HTMLElement | null; open: boolean; onDismiss: () => void; view: ComposerSettingsView }) {
   const harness = view.target.harness
   const models = view.profile?.models ?? []
   const effort = reasoningOf(view)
@@ -139,7 +157,7 @@ function ModelSheet({ anchor, open, onDismiss, view, conversation }: { anchor: H
               className="web-chip web-chip-tab"
               onClick={() => {
                 if (effort.value === choice.value) return
-                chooseSetting(view, conversation, () => chooseComposerOption(view.target, effort.option.id, choice.value), optionLabel(effort.option, { kind: "known", value: choice.value, source: "override" }))
+                chooseSetting(view, () => chooseComposerOption(view.target, effort.option.id, choice.value), optionLabel(effort.option, { kind: "known", value: choice.value, source: "override" }))
               }}
             >
               {choice.label}
@@ -167,7 +185,7 @@ function ModelSheet({ anchor, open, onDismiss, view, conversation }: { anchor: H
               onClick={() => {
                 onDismiss()
                 if (chosen) return
-                chooseSetting(view, conversation, () => chooseComposerModel(view.target, model.id), model.label)
+                chooseSetting(view, () => chooseComposerModel(view.target, model.id), model.label)
               }}
             >
               <span className="flex min-w-0 flex-1 flex-col">
@@ -188,9 +206,8 @@ async function switchAccess(conversation: string, mode: LiveSessionMode): Promis
   setPending(conversation, mode.id)
   try {
     await getMako().liveSetMode(conversation, mode.id)
-    note(conversation, "switched", switchedWords({ what: modeLabel(mode), refused: false }), "access for this Thread")
   } catch (error) {
-    note(conversation, "not-switched", switchedWords({ what: modeLabel(mode), refused: true }), errorMessage({ error }))
+    refused(modeLabel(mode), errorMessage({ error }))
   } finally {
     setPending(conversation, undefined)
   }

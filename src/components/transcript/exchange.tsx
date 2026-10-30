@@ -9,7 +9,7 @@ import { useCopy } from "@/components/ui/use-copy"
 import { completeLiveAnswer } from "@/state/live-history"
 import { copyPromptSelection } from "./prompt-clipboard"
 import { ExchangeNoteContext, MoveDividersContext, PromptNoteContext } from "./transcript-notes"
-import { CompactPresentationContext } from "./compact-presentation"
+import { CompactPresentationContext, type CompactPresentation } from "./compact-presentation"
 import { acp, useAcp, type ForkAnswer } from "@/state/acp"
 import { descriptorFor } from "@/state/descriptors"
 import { threadsStore } from "@/state/thread-store"
@@ -273,7 +273,7 @@ export const Exchange = memo(function Exchange({
             {liveTail ? <LiveRow step={NOTHING_RUNNING} answering={lastSection?.kind === "prose"} /> : null}
           </div>
         ) : null}
-        {exchangeNote?.(exchange.id)}
+        {exchangeNote?.(exchange.id, standing)}
 
         {plan ? (
           <div className="mt-3">
@@ -1169,16 +1169,8 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
   const { copied, copy } = useCopy(text, undefined, () => completeLiveAnswer(liveId, exchange))
   const last = exchange.response.at(-1)
   const compact = useContext(CompactPresentationContext)?.reply
-  const fork = useLiveFork(exchange)
   if (!text && !last?.timestamp && !interrupted) return null
-  if (compact)
-    return (
-      <div className="mt-1.5 flex min-h-6 flex-wrap items-center gap-x-2.5 text-label text-muted-foreground">
-        {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
-        {/* The phone's reply offers what it can be used for; its time and model are the desk's details. */}
-        {streaming ? null : compact({ exchange: exchange.id, text, ...(fork && !interrupted && { branch: fork }) })}
-      </div>
-    )
+  if (compact) return <CompactFooter exchange={exchange} text={text} streaming={streaming} interrupted={interrupted} reply={compact} />
 
   return (
     <div className="mt-1.5 flex min-h-6 items-center gap-2.5 text-label text-muted-foreground">
@@ -1212,6 +1204,18 @@ function Footer({ exchange, streaming, interrupted }: { exchange: ExchangeData; 
       {!streaming && !interrupted ? <ForkButton exchange={exchange} /> : null}
       {!streaming ? <ShowOriginal origins={exchange.response.map((message) => message.origin)} /> : null}
       {last ? <Slot name="transcript.turn.trailing" message={last} /> : null}
+    </div>
+  )
+}
+
+/** The phone's footer: a reply offers what it can be used for; its time and model are the desk's details. */
+function CompactFooter({ exchange, text, streaming, interrupted, reply }: { exchange: ExchangeData; text: string; streaming?: boolean; interrupted?: boolean | TurnStop; reply: NonNullable<CompactPresentation["reply"]> }) {
+  // Asked only here: whether a fork can follow this answer is the phone's Branch, never the desk's footer.
+  const fork = useLiveFork(exchange)
+  return (
+    <div className="mt-1.5 flex min-h-6 flex-wrap items-center gap-x-2.5 text-label text-muted-foreground">
+      {interrupted && !streaming ? <Stopped stop={interrupted} /> : null}
+      {streaming ? null : reply({ exchange: exchange.id, text, ...(fork && !interrupted && { branch: fork }) })}
     </div>
   )
 }
