@@ -1255,9 +1255,13 @@ export class CloudConversations {
   }
 
   /** The cloud conversations of a cloud Thread: their harness and native session, as their machine last said. */
-  threadConversations(threadId: string): Array<{ conversationId: string; harness: string; nativeId: string | undefined }> {
+  /** `mode`: the access mode it runs in there, as its last update said. */
+  threadConversations(threadId: string): Array<{ conversationId: string; harness: string; nativeId: string | undefined; mode?: string }> {
     return [...this.#entries.values()].filter((entry) => entry.threadId === threadId)
-      .map((entry) => ({ conversationId: entry.conversationId, harness: entry.harness, nativeId: entry.summary?.session.nativeId || undefined }))
+      .map((entry) => {
+        const mode = entry.summary?.session.currentMode
+        return { conversationId: entry.conversationId, harness: entry.harness, nativeId: entry.summary?.session.nativeId || undefined, ...mode && { mode } }
+      })
   }
 
   /** An adopted conversation's start on its machine, as the machine answered it: what windows list from now on. */

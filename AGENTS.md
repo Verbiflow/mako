@@ -2325,6 +2325,26 @@ turn. Cursor is not an ACP provider: its ladder is the SDK's own and is
 enforced by the SDK (below). `test-access-modes.ts` covers the placements
 and decisions.
 
+The person's access choice per harness (the mode a new session of it starts
+in) has one owner: their Mako account (`@mako/protocol/access-choices`,
+`GET`/`PATCH /v1/access`, said whole on the account's stream as
+`access-chosen` at a revision). Every surface reads and writes it there: a
+window through its host (`AccessChoiceStore` in
+`packages/host/src/harnesses/access-choices.ts`, `mako:access-choices`,
+`mako:access-choose`), the web app and a phone straight from the account. The
+host keeps the last revision it heard in `<user root>/access-choices.json`,
+with any choice it couldn't send yet laid over it and sent at the next sync,
+so a start offline still has it and a Mac that isn't signed in keeps its own.
+`mako:live-start` without a `modeId` starts a new session (a fresh Thread or
+an added Session, not a resume) in the person's mode for that harness,
+whoever asked: a window, the web app or a phone through the Mac's link. The
+web passes the mode it shows to every start, the cloud's included, since a
+machine acts for no account. A window's old `providerModes` preference is
+handed to the host once (`mako:access-adopt`), taken only for harnesses with
+no choice yet. A move to the cloud carries each session's mode, and a return
+remembers the mode it ran in there (`rememberMode`).
+`scripts/test-access-choices.ts` covers the store.
+
 ### Plan mode
 
 Plan is one composer control (Shift+Tab, the palette's "Toggle plan mode",

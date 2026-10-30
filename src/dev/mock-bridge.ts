@@ -11,6 +11,7 @@ import type { ConversationSettings } from "@mako/host/contracts/turn-continuatio
 import type { TurnUndoScope } from "@mako/host/contracts/turn-review"
 import type { WorkspaceMoves } from "@mako/host/contracts/workspace-moves"
 import type { PlanBuilds } from "@mako/host/contracts/plan-builds"
+import type { AccessChoices } from "@mako/host/contracts/access-choices"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
@@ -716,6 +717,7 @@ export function installMockBridge() {
   let archiveRevision = 0
   let workspaceMoves: WorkspaceMoves = { requests: [], alwaysAllowed: [] }
   let planBuilds: PlanBuilds = {}
+  let accessChoices: AccessChoices = {}
   let mockTelemetry = { usage: true, errors: true }
   window.mako = {
     boot: async () => boot,
@@ -880,6 +882,16 @@ export function installMockBridge() {
     chooseFileReference: async () => undefined,
     lostVersions: async () => [],
     restoreVersion: async () => { throw new Error("The mock bridge keeps no versions") },
+    accessChoices: async () => accessChoices,
+    chooseAccess: async (harness, mode) => {
+      accessChoices = { ...accessChoices, [harness]: { mode } }
+      emit({ type: "access-choices", choices: accessChoices })
+      return accessChoices
+    },
+    adoptAccessChoices: async (modes) => {
+      accessChoices = { ...Object.fromEntries(Object.entries(modes).map(([harness, mode]) => [harness, { mode }])), ...accessChoices }
+      return accessChoices
+    },
     planBuilds: async () => planBuilds,
     recordPlanBuild: async (planId, build) => {
       planBuilds = { ...planBuilds, [planId]: build }

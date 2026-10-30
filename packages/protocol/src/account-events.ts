@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { AccessChoicesSchema } from "./access-choices.js"
 import type { StreamId } from "./events.js"
 import { ThreadIdSchema } from "./ids.js"
 import { ArchivedThreadSchema, LISTED_PER_FRAME, ListedSessionSchema } from "./thread-listing.js"
@@ -9,8 +10,8 @@ import { WAITING_PER_SESSION, WaitingMessageSchema } from "./waiting.js"
  * numbered by the account's one object and kept, so every device following it hears of each in order, and a device
  * that was off hears of what happened meanwhile when it comes back. A device that joined, from where and how; a
  * device that left, and why; Sessions listed or changed, each whole (`sessions-listed`, `thread-listing.ts`), and
- * Sessions that left the list; a device gone quiet, or back. An event of a type a client doesn't know is skipped, never
- * refused.
+ * Sessions that left the list; a device gone quiet, or back; the person's access choices. An event of a type a client
+ * doesn't know is skipped, never refused.
  */
 
 /** Where a request came from, as the cloud read its address: never the address. */
@@ -53,6 +54,8 @@ export const AccountEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread-archived"), thread: ArchivedThreadSchema }),
   /** An archived cloud Thread a Mac took back: it leaves the archived ones, and its Mac lists its Sessions as its own. */
   z.object({ type: z.literal("thread-unarchived"), thread: ThreadIdSchema }),
+  /** The person's access choices changed (`access-choices.ts`): all of them as they stand now, at their revision. */
+  z.object({ type: z.literal("access-chosen"), choices: AccessChoicesSchema, revision: z.number().int().nonnegative() }),
 ])
 export type AccountEvent = z.infer<typeof AccountEventSchema>
 /** An event about the account's devices, as against its Threads. */

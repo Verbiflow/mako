@@ -107,6 +107,8 @@ export type HostEventBody =
   | { type: "workspace-moves"; moves: WorkspaceMoves }
   /** The host's record of built plans changed; window-wide. */
   | { type: "plan-builds"; builds: PlanBuilds }
+  /** The person's access choices changed, here or on another device (`contracts/access-choices.ts`); window-wide. */
+  | { type: "access-choices"; choices: import("./access-choices.js").AccessChoices }
   /** An agent's allowed move happened: `from` is archived and `to` goes on in the worktree. */
   | {
       type: "workspace-moved"; from: string; to: string; branch?: string; changed: number

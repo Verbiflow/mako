@@ -15,6 +15,7 @@ import { refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
+import { applyAccessChoices, loadAccessChoices } from "@/state/access-choices"
 import { chatFoldersStore, chatGroupOf, followChatFolders, refreshChatFolders } from "@/state/chat-folders"
 import { applyCheckoutHeads, refollowCheckouts } from "@/state/checkout-heads"
 import { watchThreadSessions } from "@/state/thread-sessions"
@@ -307,6 +308,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "plan-builds") {
     applyPlanBuilds(event.builds)
+    return
+  }
+  if (event.type === "access-choices") {
+    applyAccessChoices(event.choices)
     return
   }
   if (event.type === "workspace-moved") {
@@ -729,6 +734,7 @@ function adoptBoot(boot: BootPayload) {
   void loadWorktrees()
   void loadWorkspaceMoves().catch(() => {})
   void loadPlanBuilds().catch(() => {})
+  void loadAccessChoices().catch(() => {})
   followChatFolders()
   refollowCheckouts()
   if (!boot.archives) void threadLifecycle.load()
@@ -798,6 +804,7 @@ export const actions = {
       rereadFailedOpening()
       void loadGroups()
       void loadPlanBuilds().catch(() => {})
+      void loadAccessChoices().catch(() => {})
       if (!boot.archives) void threadLifecycle.load()
     } catch (error) {
       if (epoch === connectionEpoch) hostConnectionStore.set({ kind: "disconnected", message: error instanceof Error ? error.message : "The shared host could not be restored" })

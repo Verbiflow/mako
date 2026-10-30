@@ -97,6 +97,7 @@ const reads = [
   "mako:lost-versions",
   "mako:plan-builds",
   "mako:harness-descriptors",
+  "mako:access-choices",
   "mako:thread-continuation-plan",
   "mako:thread-restore-plan",
   /** Weighs a Thread's harnesses against what the cloud says it runs; changes nothing. */
@@ -288,6 +289,10 @@ const replays = [
   "mako:restore-version",
   /** `Attribution.chooseFile`: one row a Thread's spelling; the same pick again writes the same row. */
   "mako:choose-file-reference",
+  /** `AccessChoiceStore.choose`: the same choice again changes nothing. */
+  "mako:access-choose",
+  /** `AccessChoiceStore.adopt`: takes only where no choice is made, so a repeat takes nothing. */
+  "mako:access-adopt",
   /** `PlanBuilds.record`: keyed by plan id, and a build no newer than the recorded one changes nothing. */
   "mako:plan-build-record",
   /** `PlanBuilds.claim`: the claim id; a repeat gets the first answer. */

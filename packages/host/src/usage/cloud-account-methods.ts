@@ -8,6 +8,7 @@ import { CloudAccounts, cloudLegacyFiles, cloudSignInName, type CloudThreadMakin
 import { isAccountListEvent, type AccountListHeard } from "@mako/protocol/account-sessions"
 import type { SessionListings } from "@mako/protocol/thread-listing"
 import type { WaitingInput, WaitingMessage } from "@mako/protocol/waiting"
+import type { AccessChoices as AccountAccessChoices, AccessChoicesAnswer } from "@mako/protocol/access-choices"
 import type { SessionPublishing } from "./machine-runtime.js"
 import type { MoveAnswer, MoveCheckpoint, MoveHandOverRequest, MoveHandOverState, ReturnDeparture, ReturnState } from "@mako/protocol/moves"
 import type { RecordsLink } from "@mako/sessions/record-sync"
@@ -117,6 +118,10 @@ export interface CloudAccount {
   devices?(): Promise<{ devices: Array<{ id: string; name: string }>; current: string }>
   /** The harness versions the cloud's machines run, or null from a cloud that doesn't say (`CloudAccounts.cloudHarnesses`). */
   cloudHarnesses?(): Promise<CloudHarnesses | null>
+  /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
+  accessChoices?(): Promise<AccessChoicesAnswer | null>
+  /** Makes `choices` the account's (with `fill`, only where it has none); all of them after, or null as above. */
+  chooseAccess?(choices: AccountAccessChoices, fill: boolean): Promise<AccessChoicesAnswer | null>
   /** A project's carried files in the account's secret store, by its repository: listed, put and removed, never read. */
   carriedFiles?: {
     list(repository: string): Promise<CloudCarriedFile[]>
@@ -178,6 +183,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   sessions,
   signedFiles,
   jobs,
+  accessChoices,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
@@ -194,6 +200,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   signedFiles?: (request: Request) => Promise<Response>
   /** The host's recurring work: the account's word on whether the person is at this Mac runs there. */
   jobs: Pick<HostJobs, "every">
+  /**
+   * The person's access choices: what the account's stream says of them (`access-chosen`), and when they should be read
+   * again, as this Mac signs in or to another account, or the stream may have missed an event.
+   */
+  accessChoices?: { heard(answer: AccessChoicesAnswer): void; again(): void }
 }): CloudAccount {
   let status: string | undefined
   /** What the sign-ins depend on in the account: who it is and whether it has the cloud. */
@@ -239,6 +250,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       if (standing !== undefined && next !== standing) {
         void sync?.check()
         for (const listener of threadListeners) listener("account-changed")
+        accessChoices?.again()
       }
       standing = next
     },
@@ -251,6 +263,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
         for (const listener of threadListeners) listener({ seq: heard.seq, event })
         return
       }
+      if (event.type === "access-chosen") {
+        accessChoices?.heard({ choices: event.choices, revision: event.revision })
+        return
+      }
       hostLog("cloud", "account event", { seq: heard.seq, type: event.type, mine: heard.mine })
       emit({ type: "cloud-account-event", seq: heard.seq, at: heard.at, event, mine: heard.mine })
     },
@@ -258,6 +274,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onAccountGap: (gap) => {
       hostLog("cloud", "the account's stream skipped; its list is read again", gap)
       for (const listener of threadListeners) listener({ gap })
+      accessChoices?.again()
     },
     onRequest: request,
     sessions,
@@ -340,6 +357,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     liveSent: () => cloud.liveSent(),
     devices: () => cloud.devices(),
     cloudHarnesses: () => cloud.cloudHarnesses(),
+    accessChoices: () => cloud.accessChoices(),
+    chooseAccess: (choices, fill) => cloud.chooseAccess(choices, fill),
     carriedFiles: {
       list: (repository) => cloud.carriedFiles(repository),
       put: (repository, file) => cloud.putCarriedFile(repository, file),

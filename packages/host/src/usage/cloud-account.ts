@@ -6,6 +6,7 @@ import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
 import { basename, join } from "node:path"
 import { AccountEventSchema, accountStream, type AccountEvent } from "@mako/protocol/account-events"
+import { ACCESS_CHOICES_PATH, AccessChoicesAnswerSchema, type AccessChoices as AccountAccessChoices, type AccessChoicesAnswer } from "@mako/protocol/access-choices"
 import { CORRELATION_HEADER } from "@mako/protocol/gateway-http"
 import { SessionListingsSchema, type SessionListings } from "@mako/protocol/thread-listing"
 import { WaitingInputSchema, WaitingMessageSchema, type WaitingInput, type WaitingMessage } from "@mako/protocol/waiting"
@@ -78,7 +79,7 @@ const REQUEST_MS = 15_000
 /** The slowest upload a move waits for before giving up: 100 KB a second. */
 const UPLOAD_BYTES_PER_MS = 100
 /** A call to the cloud: JSON in and out, never redirected, bounded in time. */
-type CloudRequest = { method: "GET" | "HEAD" | "POST" | "PUT" | "DELETE"; headers: Record<string, string>; body?: string | Readable; duplex?: "half"; redirect: "error"; signal: AbortSignal }
+type CloudRequest = { method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"; headers: Record<string, string>; body?: string | Readable; duplex?: "half"; redirect: "error"; signal: AbortSignal }
 
 /** A file's bytes as a request's body, such as a move's checkpoint: read afresh for each attempt, its length given. */
 class FileBody {
@@ -469,6 +470,18 @@ export class CloudAccounts {
   async cloudHarnesses(): Promise<CloudHarnesses | null> {
     const response = await this.#call("cloud.harnesses", "GET", "/v1/cloud/harnesses", undefined, false, [404])
     return response.status === 404 ? null : CloudHarnessesSchema.parse(await response.json())
+  }
+
+  /** The person's access choice per harness, as the account keeps them; null from a cloud that doesn't keep them yet. */
+  async accessChoices(): Promise<AccessChoicesAnswer | null> {
+    const response = await this.#call("access.read", "GET", ACCESS_CHOICES_PATH, undefined, false, [404])
+    return response.status === 404 ? null : AccessChoicesAnswerSchema.parse(await response.json())
+  }
+
+  /** Makes `choices` the account's, or with `fill` only where it has none yet; all of them after, or null as above. */
+  async chooseAccess(choices: AccountAccessChoices, fill: boolean): Promise<AccessChoicesAnswer | null> {
+    const response = await this.#call("access.choose", "PATCH", ACCESS_CHOICES_PATH, { choices, ...fill && { fill } }, false, [404])
+    return response.status === 404 ? null : AccessChoicesAnswerSchema.parse(await response.json())
   }
 
   async devices(): Promise<{ devices: CloudDevice[]; current: string }> {

@@ -63,6 +63,8 @@ const ReturnSessionSchema = z.object({
   /** Begun in the cloud (a `+` tab, a fork): no journal here until the return makes one from its records, at `path`. */
   begun: z.boolean().optional(),
   path: z.string().optional(),
+  /** The access mode it ran in there as the return began: it goes on in it here. */
+  modeId: z.string().optional(),
 })
 
 /** `staying`: the cloud has the Thread again, and its machine is still to be told to take it back. */
@@ -163,8 +165,10 @@ export type CloudReturnsOptions = {
   cloud: {
     callThread(threadId: string, channel: string, args: readonly unknown[], conversationId?: string): Promise<EncodedValue>
     releaseThread(threadId: string): Promise<string[]>
-    threadConversations(threadId: string): Array<{ conversationId: string; harness: string; nativeId: string | undefined }>
+    threadConversations(threadId: string): Array<{ conversationId: string; harness: string; nativeId: string | undefined; mode?: string }>
   }
+  /** The mode a session ran in, remembered here as the session's (`SessionMemory.remember`), so it resumes in it. */
+  rememberMode?(harness: string, nativeId: string, modeId: string): void
   /** A journal here for a conversation begun in the cloud, from its records written back at `path`. */
   capture(conversationId: string, path: string): Promise<void>
   step(conversationId: string, move: string, step: ThreadReturnStep): void
@@ -380,7 +384,8 @@ export class CloudReturns {
       const generation = threads.execution(session)?.generation ?? 1
       const moved = forward.sessions.find((each) => each.session === session)
       if (moved) {
-        sessions.push({ session, conversationId: moved.conversationId, harness: moved.harness, nativeId: moved.nativeId, generation })
+        const modeId = begunThere.find((each) => each.conversationId === moved.conversationId)?.mode
+        sessions.push({ session, conversationId: moved.conversationId, harness: moved.harness, nativeId: moved.nativeId, generation, ...modeId && { modeId } })
         continue
       }
       for (const begun of begunThere.filter((each) => journals.includes(each.conversationId))) {
@@ -388,7 +393,7 @@ export class CloudReturns {
         // there): the machine, which runs it, says.
         // An archived Thread's machine is gone: the archive says what each ran.
         const nativeId = begun.nativeId ?? (archived ? archived.sessions.find((row) => row.conversation === begun.conversationId)?.nativeId : await this.#nativeThere(forward.cloudThread, begun.conversationId))
-        if (nativeId) sessions.push({ session, conversationId: begun.conversationId, harness: begun.harness, nativeId, generation, begun: true })
+        if (nativeId) sessions.push({ session, conversationId: begun.conversationId, harness: begun.harness, nativeId, generation, begun: true, ...begun.mode && { modeId: begun.mode } })
         else left.push(begun.conversationId)
       }
     }
@@ -453,6 +458,8 @@ export class CloudReturns {
         if (outcome) return outcome
       }
       if (plan.phase === "applied") {
+        // Each session goes on here in the mode it ran in there, which the person may have changed meanwhile.
+        for (const session of plan.sessions) if (session.modeId) this.#options.rememberMode?.(session.harness, session.nativeId, session.modeId)
         this.#claim(plan)
         plan.phase = "claimed"
         plan.timings.claimed = Date.now() - plan.began

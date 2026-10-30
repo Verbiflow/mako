@@ -22,6 +22,9 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * Lines on stdin drive it; each answers with one line on stdout:
  * - `start`: a Codex Session in `api` at "Ask first", whose first turn asks to run the payments tests: the first makes its
  *   Thread, each after is a Session added to it. `STARTED <conversation>`
+ * - `access <harness> <mode>`: the person chooses that access for the harness here, as the desk's composer does; it goes
+ *   to their account. `ACCESS <the host's choices>`
+ * - `choices`: the access choices as this host holds them now, after the account's word. `CHOICES <the host's choices>`
  * - `quit` (or stdin's end): signs the host out, so its device leaves the account, stops it, and removes the root unless `--keep`.
  *
  * No harness runs on anything of the person's: the home is the scratch one, Codex's sign-in an API key the stand-in takes.
@@ -251,6 +254,10 @@ for await (const line of createInterface({ input: process.stdin })) {
       await call("mako:live-start", ["codex", api, { ...options, session: placed.session }])
     } else flaky = StartedSchema.parse(await call("mako:live-start", ["codex", api, options])).threadId
     console.log(`STARTED ${conversationId}`)
-  } else if (line.trim() === "quit") break
+  } else if (line.startsWith("access ")) {
+    const [, harness, mode] = line.trim().split(/\s+/)
+    console.log(`ACCESS ${JSON.stringify(await call("mako:access-choose", [harness, mode]))}`)
+  } else if (line.trim() === "choices") console.log(`CHOICES ${JSON.stringify(await call("mako:access-choices", []))}`)
+  else if (line.trim() === "quit") break
 }
 await stop()

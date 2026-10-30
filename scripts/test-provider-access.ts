@@ -3,7 +3,8 @@ import assert from "node:assert/strict"
 // The renderer state layer is React-free, but modules read `window` at load.
 Object.assign(globalThis, {
   window: {
-    mako: {},
+    // The host keeps the choices; this one never answers, so the window's own showing of them is what's checked.
+    mako: { chooseAccess: () => new Promise(() => {}) },
     addEventListener() {},
     removeEventListener() {},
     setInterval() {},
@@ -14,7 +15,7 @@ Object.assign(globalThis, {
 
 const { chooseProviderMode, providerAccessModes, providerDefaultMode, savedProviderMode } =
   await import("../src/state/provider-access.ts")
-const { prefsStore } = await import("../src/state/prefs.ts")
+const { accessChoicesStore } = await import("../src/state/access-choices.ts")
 const { fixtureDeclarations } = await import("../src/dev/harness-fixtures.ts")
 type LiveSessionMode = import("../src/lib/types.ts").LiveSessionMode
 
@@ -53,9 +54,9 @@ assert.equal(providerDefaultMode(state, [], "cursor"), null)
 // Choosing saves per provider and leaves the others alone.
 chooseProviderMode("cursor", "plan")
 chooseProviderMode("codex", "access:edits")
-assert.deepEqual(prefsStore.get().providerModes, { cursor: "plan", codex: "access:edits" })
+assert.deepEqual(accessChoicesStore.get().modes, { cursor: "plan", codex: "access:edits" })
 chooseProviderMode("cursor", "access:full")
-assert.deepEqual(prefsStore.get().providerModes, { cursor: "access:full", codex: "access:edits" })
-assert.equal(savedProviderMode(prefsStore.get().providerModes, modes, "cursor"), "access:full")
+assert.deepEqual(accessChoicesStore.get().modes, { cursor: "access:full", codex: "access:edits" })
+assert.equal(savedProviderMode(accessChoicesStore.get().modes, modes, "cursor"), "access:full")
 
 console.log("provider access: ok")

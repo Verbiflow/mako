@@ -70,6 +70,7 @@ import {
   type StartingAcpConversation,
 } from "@/state/acp-state"
 import { prefsStore, setPref } from "@/state/prefs"
+import { chosenAccessModes } from "@/state/access-choices"
 import { runPlaceStore } from "@/state/run-place"
 import { chooseWorktreeStart, refreshWorktrees, worktreeStartChoices } from "@/state/worktrees"
 import {
@@ -748,11 +749,8 @@ export const acp = {
       const state = threadsStore.get()
       const modes = providerAccessModes(state, harness)
       const modeId =
-        savedProviderMode(
-          prefsStore.get().providerModes,
-          modes,
-          harness
-        ) ?? providerDefaultMode(state, modes, harness)
+        savedProviderMode(chosenAccessModes(), modes, harness) ??
+        providerDefaultMode(state, modes, harness)
       const input: TransferInput = {
         id,
         provider: harness,

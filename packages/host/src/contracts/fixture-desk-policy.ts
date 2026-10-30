@@ -58,6 +58,8 @@ const fixtureReads = [
   "mako:terminal-list",
   "mako:utility-model-settings",
   "mako:harness-order-saved",
+  /** Read from the profile's own file; a fixture desk signs in only to a cloud on loopback. */
+  "mako:access-choices",
   "mako:default-commit-prompt",
   /** Says telemetry is off on a fixture desk; answers from memory. */
   "mako:telemetry",

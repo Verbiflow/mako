@@ -22,6 +22,7 @@ import type { FileReferenceSource, FileResolution } from "./file-references.js"
 import type { MediaChecks, MediaConfirmation } from "./turn-media.js"
 import type { MoveOutcome, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves } from "./workspace-moves.js"
 import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./plan-builds.js"
+import type { AccessChoices } from "./access-choices.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, RoomView, ThreadAppView } from "./thread-app.js"
 import type { ThreadPlacement } from "./thread-identity.js"
@@ -204,6 +205,11 @@ export function createMakoBridge(transport: BridgeTransport) {
     workspaceMoveOutcome: (conversationId: string) => invokeTrustedHost<MoveOutcome | null>("mako:workspace-move-outcome", conversationId),
     bringStayedChanges: (conversationId: string) => invokeTrustedHost<{ outcome: MoveOutcome; left: string[] }>("mako:workspace-move-bring-stayed", conversationId),
     putBackMovedFiles: (conversationId: string, paths: string[]) => invokeTrustedHost<{ outcome: MoveOutcome; left: string[] }>("mako:workspace-move-put-back", conversationId, paths),
+    /** The person's access choice per harness (`contracts/access-choices.ts`), which every start reads. */
+    accessChoices: () => invokeTrustedHost<AccessChoices>("mako:access-choices"),
+    chooseAccess: (harness: string, mode: string) => invokeTrustedHost<AccessChoices>("mako:access-choose", harness, mode),
+    /** A window's own copy from before the host kept them, handed over once: taken only where no choice is made. */
+    adoptAccessChoices: (modes: Record<string, string>) => invokeTrustedHost<AccessChoices>("mako:access-adopt", modes),
     planBuilds: () => invokeTrustedHost<PlanBuilds>("mako:plan-builds"),
     recordPlanBuild: (planId: string, build: PlanBuild) => invokeTrustedHost<void>("mako:plan-build-record", planId, build),
     claimPlanBuild: (claimId: string, planId: string, target: PlanBuildTarget, seen: number | null) =>
