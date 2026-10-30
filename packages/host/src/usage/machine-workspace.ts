@@ -1,16 +1,20 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 
-/** The Thread's folder on a cloud machine, as its agent last said: made at `path`, or why it couldn't be. */
-export type MachineWorkspaceOutcome = { path: string } | { problem: string }
+/**
+ * The Thread's folder on a cloud machine, as its agent last said: made at `path`, or why it couldn't be: `problem` for
+ * the host's own messages (the step, the path and the agent's words), `reason` the agent's words alone.
+ */
+export type MachineWorkspaceOutcome = { path: string } | { problem: string; reason: string }
 
-/** How long a move waits for the agent to make the folder again: a clone that's tried again, with room. */
+/** How long a move or a start waits for the agent to make the folder again: a clone that's tried again, with room. */
 export const WORKSPACE_RETRY_MS = 90_000
 
 /**
  * The Thread's folder on a cloud machine, which its agent makes as the machine boots (a clone of the Thread's
- * repository). A clone can fail on something that passes (the repository's host dropped a fetch), and the machine may
- * wait paused for hours before a move asks for it, so what failed is asked again when a move needs it
- * (`settled`): the agent clones afresh, and the move goes on with the folder or the newest reason it wasn't made.
+ * repository). A clone can fail on something that passes (the repository's host dropped a fetch, its person gave
+ * Mako's GitHub App access since), and the machine may wait paused for hours before a move or a start asks for it, so
+ * what failed is asked again when one needs it (`settled`, `unmade`): the agent clones afresh, and the move or start
+ * goes on with the folder or the newest reason it wasn't made.
  */
 export class MachineWorkspace {
   #outcome: MachineWorkspaceOutcome | undefined
@@ -30,9 +34,9 @@ export class MachineWorkspace {
     this.#settle({ path })
   }
 
-  /** The agent said why it couldn't make the folder. */
-  failed(problem: string): void {
-    this.#settle({ problem })
+  /** The agent said why it couldn't make the folder: `reason` in its own words, `problem` with where it failed. */
+  failed(problem: string, reason = problem): void {
+    this.#settle({ problem, reason })
   }
 
   /** Why the folder wasn't made, as the agent last said; undefined while it's made or still being made. */
@@ -53,7 +57,18 @@ export class MachineWorkspace {
     return this.#again
   }
 
-  async #tryAgain(failed: { problem: string }): Promise<MachineWorkspaceOutcome> {
+  /**
+   * Why the folder isn't made, for a start that would otherwise run outside it: the agent's words after asking it
+   * again (`settled`), or undefined once it's made. Undefined at once while the agent never said it failed: the
+   * Thread has no repository, so its harness works in the host's home.
+   */
+  async unmade(): Promise<string | undefined> {
+    if (this.problem === undefined) return undefined
+    const outcome = await this.settled()
+    return "reason" in outcome ? outcome.reason : undefined
+  }
+
+  async #tryAgain(failed: { problem: string; reason: string }): Promise<MachineWorkspaceOutcome> {
     if (!this.#retry()) return failed
     const began = performance.now()
     hostLog("machine", "asked the agent to make the Thread's folder again", { problem: failed.problem })

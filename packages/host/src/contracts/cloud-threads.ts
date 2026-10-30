@@ -198,6 +198,41 @@ export function bootFolder(boot: EncodedValue): string {
   return cwd
 }
 
+/**
+ * Why a cloud Thread's start stopped before its harness: the machine couldn't make the Thread's folder, a clone of its
+ * repository, even asked again. Its boot fails with these words (`mako:boot`), so no client starts a harness outside
+ * the repository; `reason` is the machine agent's, which names what to do when it knows (Mako's GitHub App to install,
+ * with its page).
+ */
+export function folderUnmade(reason: string): string {
+  return `This Thread's repository couldn't be set up in the cloud, so nothing was started. ${sentence(reason)}`
+}
+
+/** The page where a person gives Mako's GitHub App access to a repository, as GitHub names it for any App. */
+const GITHUB_APP_INSTALL = /\s+at\s+(https:\/\/github\.com\/apps\/[A-Za-z0-9-]+\/installations\/new)(?=[.\s]|$)/
+
+/**
+ * A start's failure as its person reads it: the words, and apart from them the GitHub page where they give Mako's
+ * GitHub App access to the repository, when that's what's missing (the same page the cloud's turn-on card offers).
+ */
+export interface StartFailure {
+  said: string
+  install?: string
+}
+
+/** A start's failure read for its person (`StartFailure`). */
+export function startFailure(message: string): StartFailure {
+  const found = GITHUB_APP_INSTALL.exec(message)
+  if (!found?.[1]) return { said: message }
+  return { said: message.replace(found[0], ""), install: found[1] }
+}
+
+/** The agent's words as a sentence: Git's `fatal:` dropped, a capital first, a stop at the end. */
+function sentence(words: string): string {
+  const said = words.trim().replace(/^(?:fatal|error):\s*/i, "") || "No reason was given."
+  return `${said[0]?.toUpperCase() ?? ""}${said.slice(1)}${/[.!?]$/.test(said) ? "" : "."}`
+}
+
 /** A reason the cloud keeps beside a move or a return: within `MOVE_REASON_MAX`, cut with an ellipsis rather than refused. */
 export function clipReason(reason: string): string {
   const said = reason.trim() || "No reason was given."

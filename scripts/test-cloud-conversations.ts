@@ -36,7 +36,7 @@ import { MoveIdSchema, type RuntimeId } from "@mako/host/contracts/thread-execut
 import { SessionIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
 import { ThreadStore } from "@mako/host/threads/store"
 import type { CloudPrepareLaunch, CloudRepository } from "@mako/host/contracts/cloud-threads"
-import { githubRepositoryUrl } from "@mako/host/contracts/cloud-threads"
+import { folderUnmade, githubRepositoryUrl, startFailure } from "@mako/host/contracts/cloud-threads"
 import { decodeRuntimeEvent, decodeRuntimeValue, encodeRuntimeEvent, encodeRuntimeValue, runtimeEventLine, type RuntimeEvent } from "@mako/host/contracts/runtime-value"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import type { ThreadAppView } from "@mako/host/contracts/thread-app"
@@ -95,6 +95,11 @@ interface MachineApp {
   view: ThreadAppView
 }
 
+/** The machine agent's words when it couldn't clone the Thread's repository: its boot fails with them, as a machine's host does. */
+interface MachineFolder {
+  unmade?: string
+}
+
 /** A cloud machine's host behind the fake gateway: what it was asked, and its Thread's event outbox. */
 /** A stream nobody watches goes at once here unless a test says otherwise, as the runtime's watch set is checked as it changes. */
 async function cloudMachine(reach: Reach = {}, gatewayOptions: FakeGatewayOptions = { lingerMs: 0 }) {
@@ -107,13 +112,17 @@ async function cloudMachine(reach: Reach = {}, gatewayOptions: FakeGatewayOption
   /** Set to make the machine's store file the next forks into this Session, as one was seen to (its parent's). */
   const filing: ForkFiling = { into: undefined, older: false }
   const app: MachineApp = { view: { kind: "ready", project: "Hello-World", phase: "running", address: { host: "t.thread.localhost", port: 20000 }, processes: [], checks: [] } }
+  const folder: MachineFolder = {}
   const host: Parameters<typeof serveHostThroughGateway>[1] = {
     runtimeId,
     build: "test",
     threads,
     invoke: async (channel, args) => {
       calls.push({ channel, args })
-      if (channel === "mako:boot") return JSON.stringify({ activeTabId: "tab-1", tabs: [{ id: "tab-1", session: { meta: { cwd: CLONE } } }] })
+      if (channel === "mako:boot") {
+        if (folder.unmade) throw new Error(folderUnmade(folder.unmade))
+        return JSON.stringify({ activeTabId: "tab-1", tabs: [{ id: "tab-1", session: { meta: { cwd: CLONE } } }] })
+      }
       if (channel === "mako:thread-app") return JSON.stringify(app.view)
       if (channel === "mako:live-start") {
         const [harness, cwd, options] = z.tuple([z.string(), z.string(), z.object({ conversationId: z.string(), session: z.string().optional() }).loose()]).parse(args)
@@ -178,7 +187,7 @@ async function cloudMachine(reach: Reach = {}, gatewayOptions: FakeGatewayOption
     const event = encodeRuntimeEvent({ type: "live-batch", batch: { id: conversation, revision, updates: [], sessionChanges: { status }, ...more } } as never)
     return threads.emit(threadId, Payload.encoded(runtimeEventLine("event", event).slice(0, -1)))
   }
-  return { account, calls, created, asked, machineState, bases, batch, network, served, wake, app, forkSessions, filing, gateway }
+  return { account, calls, created, asked, machineState, bases, batch, network, served, wake, app, forkSessions, filing, gateway, folder }
 }
 
 /**
@@ -394,6 +403,34 @@ test("a cloud start makes the Thread once, starts on the machine in its clone, a
   assert.ok(machine.calls.some((call) => call.channel === "mako:live-prompt" && call.args[0] === conversationId))
   assert.equal((await router.route("mako:live-prompt", ["not-a-cloud-one", "r-3", "x", [], undefined])).handled, false)
   assert.equal((await router.route("mako:live-start", ["claude", "/Users/me/project", { conversationId: randomUUID() }])).handled, false, "a start without cloud is this Mac's")
+})
+
+test("a machine that couldn't clone the Thread's repository starts nothing: the start fails with the agent's words, and the page that gives Mako's GitHub App access, ahead or at the send", async () => {
+  const install = "https://github.com/apps/mako/installations/new"
+  const reason = `Mako can't read octocat/Hello-World on GitHub yet: give Mako's GitHub App access to it for octocat at ${install}.`
+  const machine = await cloudMachine()
+  machine.folder.unmade = reason
+  const { router } = conversations(machine.account, join(scratch, "unmade", "conversations.json"))
+  assert.equal(await prepare(router, 0, { harness: "claude" }), "ready")
+  await until("the boot asked ahead", () => machine.calls.some((call) => call.channel === "mako:boot"))
+  const options = { conversationId: randomUUID(), cloud: { repository: REPOSITORY }, initialRequest: { id: "r-1", text: "hi", attachments: [] } }
+  const failed = await router.route("mako:live-start", ["claude", "/Users/me/project", options]).then(() => assert.fail("the start went on"), (error: Error) => error.message)
+  assert.equal(machine.calls.some((call) => call.channel === "mako:live-start"), false, "no harness started, ahead or at the send, outside the repository")
+  assert.match(failed, /repository couldn't be set up in the cloud, so nothing was started/)
+  const read = startFailure(failed)
+  assert.equal(read.install, install, "the window offers the page that gives access")
+  assert.match(read.said, /give Mako's GitHub App access to it for octocat\.$/, "and says the rest in words, the page apart")
+
+  // A clone that failed for something else says Git's words, with nothing to press.
+  machine.folder.unmade = "fatal: unable to access 'https://github.com/octocat/Hello-World/': Could not resolve host: github.com"
+  const again = await router.route("mako:live-start", ["claude", "/Users/me/project", { ...options, conversationId: randomUUID() }]).then(() => assert.fail("the start went on"), (error: Error) => error.message)
+  assert.deepEqual(startFailure(again), { said: again })
+  assert.match(again, /nothing was started\. Unable to access .*Could not resolve host: github\.com\.$/)
+
+  // Given access since, its next start goes into the clone.
+  delete machine.folder.unmade
+  await router.route("mako:live-start", ["claude", "/Users/me/project", { ...options, conversationId: randomUUID() }])
+  assert.equal(machine.calls.find((call) => call.channel === "mako:live-start")?.args[1], CLONE)
 })
 
 test("a cloud turn's end is heard once however its batches fell: the session stopping, a request ending in a batch of its own, never a list restated", async () => {

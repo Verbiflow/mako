@@ -7,6 +7,7 @@ import type { ThinkingLevel } from "../contracts/conversation-session.js"
 import type { MethodTable } from "../base/methods.js"
 import type { MachineOffer } from "../contracts/machine-offer.js"
 import type { ElsewhereFolder } from "./elsewhere.js"
+import { folderUnmade } from "../contracts/cloud-threads.js"
 
 export interface SessionMethodsDeps {
   archives?(): ThreadArchiveSnapshot
@@ -21,11 +22,20 @@ export interface SessionMethodsDeps {
   onWorkspaceChanged?(cwd: string): void | Promise<void>
   /** A conversation's folder on another host, when the conversation is one whose folder isn't on this Mac. */
   elsewhere?(conversation: string): Promise<ElsewhereFolder | undefined>
+  /**
+   * On a cloud machine: why its Thread's folder, a clone of its repository, isn't made, after asking its agent again;
+   * undefined once it's made, or when the Thread has no repository.
+   */
+  unmadeFolder?(): Promise<string | undefined>
 }
 
 export function declareSessionMethods(methods: MethodTable, context: SessionMethodsDeps): void {
   const { ready, withHost } = context
   methods.handle("mako:boot", async (): Promise<BootPayload> => {
+    // A cloud Thread's every start reads its folder here (its tab in front, `bootFolder`): on a machine whose clone
+    // failed that's the host's home, so the boot fails with why rather than let a harness start outside the repository.
+    const unmade = await context.unmadeFolder?.()
+    if (unmade !== undefined) throw new Error(folderUnmade(unmade))
     const live = await ready()
     const [tabs, models, machine] = await Promise.all([
       live.snapshots(),

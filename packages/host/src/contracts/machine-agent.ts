@@ -58,7 +58,8 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("inspect") }).strict(),
   /**
    * The Thread's folder couldn't be made: the step that failed (asking for it, cloning, fetching) and why, so a call that
-   * needs the folder says why it isn't there. An older host ignores it.
+   * needs the folder says why it isn't there, and no start runs outside it (`mako:boot` fails with `reason`, which is
+   * written for the Thread's person). An older host ignores it.
    */
   z.object({ type: z.literal("workspace-failed"), path: z.string().min(1).max(1024).optional(), step: z.string().min(1).max(40), reason: z.string().min(1).max(2_000) }).strict(),
   /**
@@ -144,8 +145,8 @@ export type HostMessage =
   /** A `prepare` is done, or failed and left to the start. */
   | { type: "prepared"; path: string; ms: number; ok: boolean }
   /**
-   * The Thread's folder wasn't made (`workspace-failed`) and a move asks for it: the agent asks the gateway and clones
-   * again, and says how it went as it did the first time (`workspace`, `workspace-failed`).
+   * The Thread's folder wasn't made (`workspace-failed`) and a move or a start asks for it: the agent asks the gateway
+   * and clones again, and says how it went as it did the first time (`workspace`, `workspace-failed`).
    */
   | { type: "workspace-retry" }
   /**
