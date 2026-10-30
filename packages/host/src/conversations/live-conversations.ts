@@ -186,6 +186,7 @@ export class LiveConversations {
       residents: () => this.records.values(),
       require: (id) => this.records.require(id),
       load: (id) => this.records.load(id),
+      loadSliced: (id) => this.records.loadSliced(id),
       request: (id, requestId) => this.records.request(id, requestId),
       add: (resident) => this.records.add(resident),
       control: conversationControl,
@@ -758,7 +759,7 @@ export class LiveConversations {
    * what reads the history whole or tells its harness something waits for it.
    */
   async historyReady(id: string): Promise<void> {
-    const resident = this.records.load(id)
+    const resident = this.records.has(id) ? this.records.load(id) : await this.records.loadSliced(id)
     if (resident) await this.sources.readBase(resident)
   }
 

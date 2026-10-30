@@ -31,15 +31,18 @@ import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts
 //
 // - opened: the journal read, the history read from the session and merged;
 // - streaming: a turn running, its calls' output growing;
+// - swept: while the turn runs, the host's sweep measures the copy the
+//   journal keeps of the history, to move it onto the session's records;
 // - scrolled: a window reading the whole history back, a page at a time;
 // - ended: the turn in the record, the session read again and merged;
 // - reconnected: a new host, the conversation reopened and running again.
 //
-// Streaming must also leave the event loop free within `MAX_HOLD_MS`. The
-// other phases' longest holds are printed: reading the journal, merging the
-// session with Mako's blocks, and measuring a journal's copy for the sweep
-// that moves copies onto records (which lands among the window's reads)
-// each still run in one stretch.
+// No phase may hold the event loop longer than `MAX_HOLD_MS`: reading the
+// journal, merging the session with Mako's blocks, measuring the copy and
+// the commit that starts a turn each run a slice at a time. At 150MB they
+// held it 0.3s (open), 0.15s (the sweep), 0.34s (the turn's end) and 1.2s
+// (reconnecting), and a window that hears nothing that long decides its host
+// is gone.
 //
 //   npm run bench:running-memory -- [--mb 150] [--account] [--log]
 //
@@ -58,7 +61,7 @@ const ACCOUNT = process.argv.includes("--account")
  * 300 bytes an entry of the rest (85,000 at 150MB), and the history reader's last reads (32MB at most).
  */
 const MAX_RETAINED_MB = argument("max-retained", 72)
-/** The longest streaming may hold the loop. */
+/** The longest any phase may hold the loop. */
 const MAX_HOLD_MS = argument("max-hold", 50)
 const harness = "test-provider"
 const nativeId = "native-1"
@@ -86,6 +89,8 @@ async function watch<Value>(work: () => Promise<Value>): Promise<{ value: Value;
   let last = performance.now()
   let running = true
   const tick = () => {
+    // The tick still due once `work` ended would measure what the bench does next.
+    if (!running) return
     const now = performance.now()
     maxHoldMs = Math.max(maxHoldMs, now - last)
     peak = Math.max(peak, getHeapStatistics().used_heap_size)
@@ -272,11 +277,13 @@ const waitFor = async (check: () => boolean, what: string, ms = 120_000) => {
   }
 }
 
-/** A whole chunked read, parsed. */
+/** A whole chunked read, parsed; each part its own call, as a window's are over IPC, not one stretch of the loop. */
 async function readValue<Value>(reader: LiveHistoryReader, id: string, first: LiveHistoryChunk): Promise<Value> {
   let text = first.data
   let chunk = first
   while (chunk.next !== null) {
+    // The next part's request arrives on a later turn of the loop, as over IPC: timers due meanwhile run first.
+    await new Promise((resolve) => setTimeout(resolve, 0))
     chunk = await reader.read(id, { kind: "part", record: chunk.record, offset: chunk.next }, async () => null)
     text += chunk.data
   }
@@ -323,12 +330,11 @@ const path = join(root, "session.jsonl")
 writeFileSync(path, "")
 const results = new Map<string, number>([["historyMB", MEGABYTES], ["entries", ENTRIES]])
 const failures: string[] = []
-/** `held`: whether the phase's longest hold of the loop is held to `MAX_HOLD_MS`, or only printed. */
-const check = (phase: string, retained: number, hold: number, held = false) => {
+const check = (phase: string, retained: number, hold: number) => {
   results.set(`${phase}RetainedMB`, Math.round(retained))
   results.set(`${phase}MaxHoldMs`, Math.round(hold))
   if (retained > MAX_RETAINED_MB) failures.push(`${phase}: the conversation keeps ${Math.round(retained)}MB; at most ${MAX_RETAINED_MB}MB`)
-  if (held && hold > MAX_HOLD_MS) failures.push(`${phase}: held the loop ${Math.round(hold)}ms; at most ${MAX_HOLD_MS}ms`)
+  if (hold > MAX_HOLD_MS) failures.push(`${phase}: held the loop ${Math.round(hold)}ms; at most ${MAX_HOLD_MS}ms`)
 }
 try {
   const id = randomUUID()
@@ -360,7 +366,16 @@ try {
   })
   assert.equal(live.held(id)?.session.status, "running")
   account("streaming", live, reader, id)
-  check("streaming", heapMB() - baseline, streaming.maxHoldMs, true)
+  check("streaming", heapMB() - baseline, streaming.maxHoldMs)
+
+  // Swept: the host's sweep, here run now rather than a minute after the host started, measures the copy the journal
+  // keeps while the turn runs. It then waits for the turn to end, and goes on during the phases after.
+  assert.ok(live.held(id)?.session.status === "running", "the turn still runs, so the journal keeps a copy")
+  const swept = await watch(async () => {
+    void live.settleHistoryCopies(0)
+    await new Promise((resolve) => setTimeout(resolve, 5_000))
+  })
+  check("swept", heapMB() - baseline, swept.maxHoldMs)
 
   // Scrolled: a window reads the conversation, then every earlier page back to its first prompt.
   let pages = 0
@@ -431,7 +446,7 @@ try {
   await live.stop()
   console.log(JSON.stringify(Object.fromEntries(results), null, 2))
   assert.deepEqual(failures, [], failures.join("\n"))
-  console.log("PASS: a huge running conversation stays within its memory, and its streaming never holds the loop")
+  console.log("PASS: a huge running conversation stays within its memory, and nothing done with it holds the loop")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
