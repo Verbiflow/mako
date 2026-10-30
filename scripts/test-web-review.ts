@@ -8,7 +8,7 @@ import type { TurnFileHunks, TurnFileWriters } from "@mako/host/contracts/turn-r
 import { readMessage } from "@mako/sessions/context-wire"
 import { textHunks } from "@mako/host/conversations/turn-hunks"
 import { changedRequests, commentDetails, hunksDiff, hunksWriters, sessionPath, fileView, hunksFromParsed, largeByRecord, largeByView, rangeLabel, readsAsEdit, reviewFiles, wordRanges, type FileView } from "../src/web-client/review-model"
-import { addReviewNotes, reviewNotes, sendWithReviewNotes, withReviewNotes, type ReviewNote } from "../src/web-client/review-notes"
+import { addReviewNotes, resumeReviewNotes, returnReviewNotes, reviewNotes, sendWithReviewNotes, settleReviewNotes, takeReviewNotes, withReviewNotes, type ReviewNote } from "../src/web-client/review-notes"
 import { evictions, HunksReader, hunksKeyOf, type DeviceStore, type HunksKey, type HunksSource } from "../src/web-client/review-data"
 
 /*
@@ -289,22 +289,43 @@ test("comments leave the draft only with the message that carried them: kept on 
   addReviewNotes("c-send", detail)
   const sent: string[] = []
   // Refused: nothing goes, the comment waits.
-  assert.equal(await sendWithReviewNotes("c-send", "First try", async (message) => (sent.push(message), false)), false)
+  assert.equal(await sendWithReviewNotes("c-send", "m1", "First try", async (message) => (sent.push(message), false)), false)
   assert.equal(reviewNotes("c-send").length, 1)
   // Failed on its way (Finish review's start of a new Session, say): kept as well.
-  await assert.rejects(sendWithReviewNotes("c-send", "Second try", async () => Promise.reject(new Error("offline"))))
+  await assert.rejects(sendWithReviewNotes("c-send", "m2", "Second try", async () => Promise.reject(new Error("offline"))))
   assert.equal(reviewNotes("c-send").length, 1)
-  // Taken: the message carries the comment, and the draft lets go of it; one written meanwhile waits for the next.
-  assert.equal(await sendWithReviewNotes("c-send", "Third try", async (message) => {
+  // On its way, the comment is the message's, not the draft's: a second message sent meanwhile doesn't carry it.
+  let during: readonly ReviewNote[] = []
+  assert.equal(await sendWithReviewNotes("c-send", "m3", "Third try", async (message) => {
     sent.push(message)
+    during = reviewNotes("c-send")
     addReviewNotes("c-send", detail)
     return true
   }), true)
+  assert.equal(during.length, 0)
   assert.equal(readMessage(sent.at(-1)!).items.length, 1)
   assert.match(readMessage(sent.at(-1)!).body, /^Third try/)
+  // Taken: the draft lets go of it; the one written meanwhile waits for the next.
   assert.equal(reviewNotes("c-send").length, 1, "the comment written while it was on its way")
   // Finish review with no words: the comments are the message.
-  assert.equal(await sendWithReviewNotes("c-send", "", async (message) => (sent.push(message), true)), true)
+  assert.equal(await sendWithReviewNotes("c-send", "m4", "", async (message) => (sent.push(message), true)), true)
   assert.equal(readMessage(sent.at(-1)!).items.length, 1)
   assert.equal(reviewNotes("c-send").length, 0)
+})
+
+test("a page killed while a message carried comments never sends them twice: after the reload they go with it, or come back", () => {
+  const detail = commentDetails({ path: "src/retry.ts", base: "the start of that turn", view: fileView(text(" -+", ["one", "two", "new two"])), from: { hunk: 0, row: 2 }, to: { hunk: 0, row: 2 }, comment: "Cap it" })
+  // Three messages, each carrying a comment, on their way when the page went.
+  for (const request of ["held", "asked", "lost"]) {
+    addReviewNotes("c-reload", detail)
+    assert.equal(takeReviewNotes("c-reload", request).length, 1)
+  }
+  assert.equal(reviewNotes("c-reload").length, 0, "none waits in the draft for the next message")
+  // The host has one; the outbox will ask again for another, under its ID; the last it no longer holds.
+  resumeReviewNotes("c-reload", (request) => request === "held", (request) => request === "asked")
+  assert.equal(reviewNotes("c-reload").length, 1, "only the lost message's comment is back in the draft")
+  // The one asked again leaves with its message once the host takes it.
+  settleReviewNotes("c-reload", "asked")
+  returnReviewNotes("c-reload", "asked")
+  assert.equal(reviewNotes("c-reload").length, 1)
 })

@@ -5,6 +5,7 @@ import { replayUnconfirmedPrompts, sendTo, steerTo } from "@/state/acp-queue"
 import { commandId, durableAttachments, pendingMessages, settleMessage } from "@/state/message-outbox"
 import { createHook, createStore } from "@/state/store"
 import { whileBusy } from "./busy"
+import { resumeReviewNotes } from "./review-notes"
 import type { Sending } from "./delivery"
 import { wakeThread, wakingNow } from "./wake"
 
@@ -110,6 +111,10 @@ export function outboxHolds(id: string): boolean {
 export function resumeOutbox(conversation: string): void {
   const live = acpStore.get().conversations[conversation]
   if (live?.kind !== "live") return
+  // Comments a message carried when the page went: gone with it, still on their way with it, or back in the draft.
+  const taken = (request: string) =>
+    live.requests?.some((each) => each.id === request) === true || live.control?.actions?.some((each) => each.input.id === request && each.state.kind !== "not-accepted") === true
+  resumeReviewNotes(conversation, taken, outboxHolds)
   for (const command of pendingMessages()) {
     if ((command.kind !== "prompt" && command.kind !== "steer") || command.conversationId !== conversation) continue
     if (live.requests?.some((request) => request.id === command.requestId)) {

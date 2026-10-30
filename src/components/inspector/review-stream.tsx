@@ -644,9 +644,14 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
     picking.current = selection
   }, [])
   const onLineSelectionEnd = useCallback(() => setPicked(picking.current), [])
+  const stream = useRef<HTMLDivElement>(null)
   const letGo = useCallback(() => {
     setPicked(null)
     handle.current?.clearSelectedLines()
+    // The field held the focus: it goes back to the stream, so J, K and Escape go on working from the keyboard.
+    requestAnimationFrame(() => {
+      if (!document.activeElement || document.activeElement === document.body) stream.current?.focus({ preventScroll: true })
+    })
   }, [])
   const scrollTop = useRef(0)
   const [entries, setEntries] = useState(() => new Map<string, Entry>())
@@ -854,6 +859,7 @@ function ReviewFiles({ files, workspace, staged, scope, picker, bar, load, write
       </div>
       {bar}
       <div
+        ref={stream}
         data-review-stream
         data-file-count={files.length}
         tabIndex={-1}

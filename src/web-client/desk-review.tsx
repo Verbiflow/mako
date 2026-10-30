@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { XIcon } from "lucide-react"
 import type { GitFile } from "@mako/host/contracts/git-workspace-search"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
@@ -83,18 +83,29 @@ export function DeskReview({ open, onClose }: { open: ReviewOpen; onClose: () =>
     return () => cancelAnimationFrame(frame)
   }, [ready, scope?.requestId])
 
-  // Escape is back to the conversation, unless a field, a menu or a dialog of the review's own takes it first.
-  const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (event.key !== "Escape" || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return
-    if (event.target instanceof Element && event.target.closest("input, textarea, select, [contenteditable=true], [role=menu], [role=dialog], [role=listbox]")) return
-    event.preventDefault()
-    onClose()
-    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>("main textarea:not([readonly]):not([disabled])")?.focus())
-  }
+  // Escape is back to the conversation, from anywhere in the review (or nowhere, once a field it held has gone), unless
+  // a field, a menu or a dialog of the review's own takes it first.
+  const close = useRef(onClose)
+  useEffect(() => {
+    close.current = onClose
+  })
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return
+      const target = event.target instanceof Element ? event.target : null
+      if (target && target !== document.body && !pane.current?.contains(target)) return
+      if (target?.closest("input, textarea, select, [contenteditable=true], [role=menu], [role=dialog], [role=listbox]")) return
+      event.preventDefault()
+      close.current()
+      requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>("main textarea:not([readonly]):not([disabled])")?.focus())
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
 
   const picker = scope && turn ? <ScopePicker scope={scope} workspace={turn.root} turnsOnly onChoose={(next) => next.kind === "turn" && openReview({ conversation, scope: { kind: "turn", requestId: next.requestId } })} /> : null
   return (
-    <section ref={pane} aria-label="Changes" data-desk-review={conversation} tabIndex={-1} onKeyDown={onKeyDown} className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface outline-none">
+    <section ref={pane} aria-label="Changes" data-desk-review={conversation} tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface outline-none">
       <div className="flex h-11 shrink-0 items-center gap-2 border-b border-hairline pr-2 pl-3">
         <h2 className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">Changes</h2>
         <IconAction label="Close changes" keys={["Esc"]} onClick={onClose}>

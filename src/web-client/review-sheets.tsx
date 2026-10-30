@@ -121,9 +121,10 @@ export function FinishSheet({ open, conversation, row, harness, mode, running, o
     const owner = listedOwner(row)
     try {
       // The comments leave only once the message carrying them was taken; a refusal keeps every one.
-      await sendWithReviewNotes(conversation, words, async (text) => {
+      const request = crypto.randomUUID()
+      await sendWithReviewNotes(conversation, request, words, async (text) => {
         if (where === "here") {
-          const went = await sendMessage({ conversation, ...(owner.kind === "cloud" && { cloudThread: owner.threadId }) }, crypto.randomUUID(), text, [])
+          const went = await sendMessage({ conversation, ...(owner.kind === "cloud" && { cloudThread: owner.threadId }) }, request, text, [])
           if (!went) throw new Error("The Session didn't take the message. Try again in a moment.")
           return true
         }
