@@ -146,6 +146,8 @@ export function gitRepository(git: Git, root: string, watchGitDir?: (folder: str
       const result = await git.run({ cwd: root, args: ["check-ignore", "-z", "--stdin"], input: `${paths.join("\0")}\0`, codes: [1], read: true })
       return new Set(result.stdout.toString("utf8").split("\0").filter(Boolean))
     },
+    // `--directory` names a folder Git ignores whole once, without reading what's in it.
+    ignoredEntries: () => list(["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"]),
     async read(commit, path) {
       const repository = await opened
       const found = repository ? await repository.objects.contents(`${commit}:${path}`) : null
